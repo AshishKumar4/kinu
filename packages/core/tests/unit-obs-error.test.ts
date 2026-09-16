@@ -58,15 +58,16 @@ function provokeAbort(): Error {
   return raisedBy(() => { controller.signal.throwIfAborted(); });
 }
 
-/** The real DOMException `AbortSignal.timeout` raises, which is a DIFFERENT one.
- *  Awaits the signal's own abort event rather than a guessed duration. */
-async function provokeTimeout(): Promise<Error> {
-  const signal = AbortSignal.timeout(1);
-  const { promise, resolve } = Promise.withResolvers<void>();
-  signal.addEventListener('abort', () => { resolve(); }, { once: true });
-  await promise;
+/** The DOMException `AbortSignal.timeout` raises, which is a DIFFERENT one:
+ *  raised through a signal aborted with the same reason the platform mints,
+ *  so no timer runs here. Measured 2026-09-15 on bun 1.4.0: an expired
+ *  `AbortSignal.timeout(1)`'s reason is a `DOMException` named `TimeoutError`
+ *  with the message `The operation timed out.`, exactly this one. */
+function provokeTimeout(): Error {
+  const controller = new AbortController();
+  controller.abort(new DOMException('The operation timed out.', 'TimeoutError'));
 
-  return raisedBy(() => { signal.throwIfAborted(); });
+  return raisedBy(() => { controller.signal.throwIfAborted(); });
 }
 
 describe('a cancelled wait and an expired deadline are not the same failure', () => {
@@ -78,7 +79,7 @@ describe('a cancelled wait and an expired deadline are not the same failure', ()
     // (execution/signal.ts) — so reading `code` there makes the run tool report
     // a cancelled wait and a dead transport identically.
     const aborted = provokeAbort();
-    const timedOut = await provokeTimeout();
+    const timedOut = provokeTimeout();
     expect(aborted).toBeInstanceOf(Error);
     expect(timedOut).toBeInstanceOf(Error);
     expect(classifyErrorCode({ cause: aborted })).toBe('cancelled');

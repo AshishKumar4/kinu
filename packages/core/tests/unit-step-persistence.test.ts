@@ -229,7 +229,7 @@ describe('a completed step is durable at the moment it completes', () => {
       await provider.stop();
       db.close();
     }
-  }, 20_000);
+  });
 
   test('a turn cut after step 2 leaves steps 1..2 durable and correctly paired', async () => {
     const provider = scriptedProvider([
@@ -269,7 +269,7 @@ describe('a completed step is durable at the moment it completes', () => {
       await provider.stop();
       db.close();
     }
-  }, 20_000);
+  });
 
   test('the durable rows survive the process: a fresh recorder over the same file reads them', async () => {
     const provider = scriptedProvider([
@@ -302,7 +302,7 @@ describe('a completed step is durable at the moment it completes', () => {
     } finally {
       await provider.stop();
     }
-  }, 20_000);
+  });
 
   test('a provider throw mid-turn keeps the steps that finished', async () => {
     const provider = scriptedProvider([
@@ -328,7 +328,7 @@ describe('a completed step is durable at the moment it completes', () => {
       await provider.stop();
       db.close();
     }
-  }, 20_000);
+  });
 });
 
 describe('the durable record and the history the caller persists are one construction', () => {
@@ -352,7 +352,7 @@ describe('the durable record and the history the caller persists are one constru
       await provider.stop();
       db.close();
     }
-  }, 20_000);
+  });
 
   test('a cut turn: the log holds every COMPLETED step, and history adds only the step the cut interrupted', async () => {
     const provider = scriptedProvider([
@@ -404,7 +404,7 @@ describe('the durable record and the history the caller persists are one constru
       await provider.stop();
       db.close();
     }
-  }, 20_000);
+  });
 });
 
 describe('ordering and idempotency', () => {
@@ -435,7 +435,7 @@ describe('ordering and idempotency', () => {
       await provider.stop();
       db.close();
     }
-  }, 20_000);
+  });
 
   test('a re-driven turn writes a second record, never a doubled first one', async () => {
     const script = [() => toolStep('call_a', 'a'), () => textStep('done')];
@@ -461,7 +461,7 @@ describe('ordering and idempotency', () => {
       await second.stop();
       db.close();
     }
-  }, 20_000);
+  });
 
   test('a step boundary reporting no response array cannot rewind the cursor', () => {
     // The scaffold seam yields a step-finish for a scaffold-authored step, which

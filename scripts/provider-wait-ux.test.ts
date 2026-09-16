@@ -11,8 +11,8 @@ import { withGallery } from './gallery-harness';
  * "told to wait" — and only `provider_wait` carries it.
  */
 test('a turn sleeping out a provider wait says who it is waiting on, not working', async () => {
-  await withGallery(async ({ browser, origin }) => {
-    const page = await browser.newPage();
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
     await page.setViewport({ width: 1280, height: 800 });
     await page.goto(`${origin}/gallery.html?frame=providerwait`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('.p-workbench');
@@ -37,4 +37,4 @@ test('a turn sleeping out a provider wait says who it is waiting on, not working
 
     await page.close();
   });
-}, 120_000);
+});

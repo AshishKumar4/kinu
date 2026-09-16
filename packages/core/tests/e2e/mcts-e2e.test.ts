@@ -166,5 +166,5 @@ describe.skipIf(!isE2EConfigured())('E2E MCTS with real LLM', () => {
 
     if (result.converged) expect(memory).toContain('Successful approach');
     else expect(memory).toContain('Failed task');
-  }, 600_000); // 10 min — reasoning models take 10-30s per call, AI Gateway has variable latency
+  }); // 10 min — reasoning models take 10-30s per call, AI Gateway has variable latency
 });

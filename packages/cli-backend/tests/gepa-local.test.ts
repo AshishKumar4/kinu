@@ -170,7 +170,7 @@ describe('GEPA runs on the local backend', () => {
     if (!candidates) throw new Error('GEPA candidate count row is missing');
     expect(candidates.c).toBeGreaterThan(0);
     db.close();
-  }, 60_000);
+  });
 
   test('the pass refuses when the ledger has no failure to optimise toward', async () => {
     const { db, rt, session } = await setup(risingJudge(0));
@@ -194,5 +194,5 @@ describe('GEPA runs on the local backend', () => {
     if (!runs) throw new Error('GEPA run count row is missing');
     expect(runs.c).toBe(0);
     db.close();
-  }, 30_000);
+  });
 });

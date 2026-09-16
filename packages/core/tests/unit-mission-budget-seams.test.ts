@@ -184,7 +184,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     const [mission] = governor.snapshot('nightly');
     expect(mission?.spent.tokens).toBe(RUN_TOKENS);
     expect(mission?.spawns).toBe(1);
-  }, 60_000);
+  });
 
   test('a search that declares its own cap nests under the mission and both are charged', async () => {
     const governor = newGovernor();
@@ -197,7 +197,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     expect(governor.snapshot('sweep')[0]?.spent.tokens).toBe(RUN_TOKENS);
     expect(governor.snapshot('sweep')[0]?.parent).toBe('nightly');
     expect(governor.snapshot('nightly')[0]?.spent.tokens).toBe(RUN_TOKENS);
-  }, 60_000);
+  });
 
   test('the search returns its own ledger position so a script can steer on it', async () => {
     const governor = newGovernor();
@@ -212,7 +212,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
 
     expect(out.mission_budget?.label).toBe('sweep');
     expect(out.mission_budget?.remaining.tokens).toBe(1_000 - RUN_TOKENS);
-  }, 60_000);
+  });
 
   test('an exhausted mission refuses every spawn without touching the substrate', async () => {
     const governor = newGovernor();
@@ -267,7 +267,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     expect(withoutGovernor).not.toHaveProperty('mission_budget');
     expect(withGovernorNoScope).not.toHaveProperty('mission_budget');
     expect(governor.snapshot()).toEqual([]);
-  }, 60_000);
+  });
 });
 
 describe('spawn seam — the run charges its own calls and the spawn charges no tokens', () => {
@@ -308,7 +308,7 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
     // can see WHICH calls the number is made of.
     expect(mission?.calls).toBe(2);
     expect(mission?.spawns).toBe(1);
-  }, 60_000);
+  });
 
   test('a run whose provider reported NO usage is charged none of it, and the spawn still records', async () => {
     // An unmeasured search is not a free one. No reported usage means the run
@@ -327,7 +327,7 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
     const [mission] = governor.snapshot('nightly');
     expect(mission?.spent.tokens).toBe(0);
     expect(mission?.spawns).toBe(1);
-  }, 60_000);
+  });
 
   test('a TOOLLESS node charges its one call too, so removing the lump under-charges nothing', async () => {
     // THE MIRROR DEFECT. A toolless node has no loop to debit between steps: its whole
@@ -354,7 +354,7 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
     expect(mission?.spent.tokens).toBe(RUN_TOKENS);
     expect(mission?.calls).toBe(2);
     expect(mission?.spawns).toBe(1);
-  }, 60_000);
+  });
 });
 
 describe('model-call seam — the step pipeline declines the next request', () => {

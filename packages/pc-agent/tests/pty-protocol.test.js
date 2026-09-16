@@ -35,8 +35,6 @@ const {
 
 const { createSessions, TERMINAL_NAME } = require('../src/pty.js');
 
-const TEST_MS = 60_000;
-
 const SETTLE_MS = 15_000;
 
 async function until(predicate, what, budgetMs = SETTLE_MS) {
@@ -126,7 +124,7 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
 
     handle({ type: PTY_CLOSE_FRAME, session: 'pane-a' }, ws, ctx);
     await until(() => ws.frames.some((f) => f.type === PTY_EXIT_FRAME), 'the session reported its exit');
-  }, TEST_MS);
+  });
 
   test('a session runs the plan a command runs, with the terminal named in it', async () => {
     const { ctx, plans } = context();
@@ -142,7 +140,7 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
     // environment allow-list rather than assumed by the program.
     expect(plans[0].env.TERM).toBe(TERMINAL_NAME);
     expect(plans[0].env.PATH).toBeTruthy();
-  }, TEST_MS);
+  });
 
   test('a frame for a terminal this machine does not hold is dropped, not answered', () => {
     const { ctx } = context();
@@ -182,7 +180,7 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
     handle({ type: PTY_INPUT_FRAME, session: 'pane-e', data: Buffer.from('exit 0\r').toString('base64') }, ws, ctx);
     await until(() => ws.frames.some((f) => f.type === PTY_EXIT_FRAME), 'the session reported its exit');
     expect(ws.frames.some((f) => f.type === PTY_OUTPUT_FRAME)).toBe(false);
-  }, TEST_MS);
+  });
 });
 
 describe('a terminal is confined exactly as a command is', () => {
@@ -249,5 +247,5 @@ describe('a terminal is confined exactly as a command is', () => {
     // pty frame carries the same field, so the same absence means the same
     // thing here. The assertion observes the argv the daemon built.
     expect(plans[0].argv[0]).toBe('bash');
-  }, TEST_MS);
+  });
 });

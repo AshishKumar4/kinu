@@ -211,5 +211,5 @@ describe('cli backend conformance', () => {
     expect(observed.planes['agents-action']!.has('msg')).toBe(true);
     expect(JSON.stringify(captured.find((tool) => tool.name === 'agents') ?? {}))
       .toContain('event_id');
-  }, 30_000);
+  });
 });

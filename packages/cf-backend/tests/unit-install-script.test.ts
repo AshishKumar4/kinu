@@ -282,7 +282,7 @@ describe('install.sh terminal handling', () => {
     expect(result.output).not.toContain('STUB-SETUP-RAN');
     expect(result.output).not.toContain('/dev/tty');
     expect(result.exitCode).toBe(0);
-  }, 30_000);
+  });
 
   // The command handed to a user is one pipeline. Getting `kinu` onto the
   // calling shell with a `KINU_PARENT_ACTIVATES=1` prefix and an
@@ -305,7 +305,6 @@ describe('install.sh terminal handling', () => {
       'printf "BEFORE=%s\\n" "$(command -v kinu)"',
     ].join('\n')], {
       encoding: 'utf8',
-      timeout: 30_000,
       env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash' },
     });
 
@@ -323,14 +322,13 @@ describe('install.sh terminal handling', () => {
     // The hint is not decoration: running it is what activates the CLI.
     const activated = spawnSync('bash', ['-c', [hint ?? '', 'command -v kinu', 'kinu --help'].join('\n')], {
       encoding: 'utf8',
-      timeout: 30_000,
       env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash' },
     });
 
     expect(activated.status, activated.stderr).toBe(0);
     expect(activated.stdout).toContain(join(home, '.kinu/bin/kinu'));
     expect(activated.stdout).toContain('setup   connect your account');
-  }, 40_000);
+  });
 
   test('nothing in the served installer reads KINU_PARENT_ACTIVATES', async () => {
     const script = await installScript();
@@ -356,7 +354,6 @@ describe('install.sh terminal handling', () => {
 
     const run = spawnSync('bash', ['-c', install], {
       encoding: 'utf8',
-      timeout: 30_000,
       env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash' },
     });
 
@@ -366,7 +363,7 @@ describe('install.sh terminal handling', () => {
     // The hint is last: a user reads it after the flow it belongs to finishes.
     expect(run.stdout.indexOf('STUB-CONNECT-RAN'))
       .toBeLessThan(run.stdout.indexOf('To use kinu in this shell now'));
-  }, 40_000);
+  });
 
   test('interactive steps gate on actually opening /dev/tty and restore the terminal on failure', async () => {
     const script = await installScript();
@@ -407,7 +404,6 @@ describe('install.sh terminal handling', () => {
 
     const run = spawnSync(python, [harnessPath, scriptPath], {
       encoding: 'utf8',
-      timeout: 40_000,
       env: {
         ...process.env,
         HOME: home,
@@ -429,7 +425,7 @@ describe('install.sh terminal handling', () => {
     expect(result.output).toContain('STUB-SETUP-DIED');
     expect(result.exitcode).not.toBe(0); // setup failure still surfaces
     expect(result.post).toEqual({ icanon: true, echo: true, isig: true });
-  }, 45_000);
+  });
 });
 
 /**
@@ -518,7 +514,7 @@ describe('the CLI installs as a prebuilt artifact', () => {
     )).toBe(true);
     // The source checkout the old install left behind is not created at all.
     expect(existsSync(join(home, '.kinu/source'))).toBe(false);
-  }, 40_000);
+  });
 });
 
 /**
@@ -616,18 +612,18 @@ describe('Bun runtime resolution is one source of truth', () => {
       ['1.4.0-canary.20260101', '1004000'],
       ['2.0.13', '2000013'],
     ]) {
-      const run = spawnSync('bash', ['-c', script, 'kinu', version!], { encoding: 'utf8', timeout: 20_000 });
+      const run = spawnSync('bash', ['-c', script, 'kinu', version!], { encoding: 'utf8' });
       expect(run.status, `${version}: ${run.stderr}`).toBe(0);
       expect(run.stdout.trim()).toBe(key);
     }
 
     // A version it must refuse to score rather than guess at.
     for (const bad of ['1.4', 'not-a-version', '']) {
-      const run = spawnSync('bash', ['-c', script, 'kinu', bad], { encoding: 'utf8', timeout: 20_000 });
+      const run = spawnSync('bash', ['-c', script, 'kinu', bad], { encoding: 'utf8' });
       expect(run.status, `${bad} should not be comparable`).toBe(1);
       expect(run.stdout.trim()).toBe('');
     }
-  }, 30_000);
+  });
 
   test('a candidate that is not an absolute path is refused', () => {
     // `command -v bun` answers with a path for anything on PATH, but a shell
@@ -647,14 +643,14 @@ describe('Bun runtime resolution is one source of truth', () => {
       bunResolutionShell(),
       'if kinu_bun_compatible bun; then echo TOOK-RELATIVE; else echo REFUSED; fi',
       'if kinu_bun_compatible "$PWD/bun"; then echo TOOK-ABSOLUTE; else echo REFUSED-ABSOLUTE; fi',
-    ].join('\n')], { cwd, encoding: 'utf8', timeout: 20_000 });
+    ].join('\n')], { cwd, encoding: 'utf8' });
 
     expect(probe.stdout).toContain('REFUSED');
     expect(probe.stdout).not.toContain('TOOK-RELATIVE');
     // The same file BY ABSOLUTE PATH still qualifies: the rule is about how a
     // candidate is named, not about distrusting the user's own binaries.
     expect(probe.stdout).toContain('TOOK-ABSOLUTE');
-  }, 30_000);
+  });
 
   test('an existing compatible Bun is used as it is, and nothing is downloaded', async () => {
     const script = await installScript();
@@ -666,7 +662,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     expect(result.output).not.toContain('Installing Bun');
     expect(existsSync(managedBun)).toBe(false);
     expect(result.exitCode).toBe(0);
-  }, 30_000);
+  });
 
   test('a Bun older than the approved one is not accepted, and the approved one is installed once', async () => {
     const script = await installScript();
@@ -680,7 +676,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     // Once. A second install path is how the two sides drifted apart before.
     expect(result.output.split(`Installing Bun ${approvedBun()}...`).length - 1).toBe(1);
     expect(result.exitCode).toBe(0);
-  }, 30_000);
+  });
 
   test('KINU_INSTALL_BUN=0 names the version it needs instead of installing one', async () => {
     const script = await installScript();
@@ -690,7 +686,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     expect(result.output).toContain(`Bun ${approvedBun()} or newer is required.`);
     expect(existsSync(managedBun)).toBe(false);
     expect(result.exitCode).toBe(1);
-  }, 30_000);
+  });
 
   test('the launcher runs the Bun the installer verified, in a later shell with no bun on PATH', async () => {
     const script = await installScript();
@@ -708,7 +704,6 @@ describe('Bun runtime resolution is one source of truth', () => {
     // exactly the shell a PATH-resolved Bun would tell "Bun is required."
     const later = spawnSync(join(home, '.kinu/bin/kinu'), ['--help'], {
       encoding: 'utf8',
-      timeout: 30_000,
       env: {
         HOME: home,
         KINU_HOME: join(home, '.kinu'),
@@ -725,7 +720,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     const invocations = readFileSync(bunLog, 'utf8').trim().split('\n');
     expect(invocations.length).toBeGreaterThan(1);
     expect(invocations.filter((path) => path !== managedBun)).toEqual([]);
-  }, 60_000);
+  });
 });
 
 /** Runs `bash < install.sh` in its own session with a PTY controlling

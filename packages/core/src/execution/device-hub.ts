@@ -20,7 +20,7 @@
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
 import type { JsonValue } from '../utils/json';
-import { DeviceTunnel, isDeviceUnknownMethodError, type TunnelSocket } from './device-tunnel';
+import { DeviceTunnel, isDeviceUnknownMethodError, REAL_TUNNEL_TIMERS, type TunnelSocket } from './device-tunnel';
 import { deviceToolchainAnswer, freshDeviceToolchain, type DeviceToolchain } from './device-status';
 import { TOOLCHAIN_PROBE_BINARIES } from './toolchain';
 import { EXECUTOR_CAPABILITIES } from './types';
@@ -304,7 +304,7 @@ export class DeviceSocketHub {
     const ws = this.liveSocket(deviceId);
 
     if (!ws) return null;
-    const tunnel = new DeviceTunnel(ws);
+    const tunnel = new DeviceTunnel(ws, undefined, undefined, REAL_TUNNEL_TIMERS);
     this.tunnels.set(deviceId, { tunnel, ws });
 
     return tunnel;

@@ -125,8 +125,8 @@ interface Scenario {
 }
 
 async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
-  const { browser, origin } = gallery;
-  const page = await browser.newPage();
+  const { newPage, origin } = gallery;
+  const page = await newPage();
   const served = { count: 0 };
   const pageErrors: string[] = [];
   let navigations = 0;
@@ -202,7 +202,7 @@ beforeAll(async () => {
     spent = await drive(gallery, { skew: true, claimSpent: true });
     appError = await drive(gallery, { skew: true, appFailure: true });
   });
-}, 600_000);
+});
 
 describe('a stale chunk with the origin on a new build', () => {
   test('the page reloads, exactly once', () => {

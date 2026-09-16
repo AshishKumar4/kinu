@@ -6,7 +6,7 @@ import {
   BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, withSpawnDetach,
   isBackgroundHandle, serializeJobResult, BACKGROUND_POLICY, readSpawnStarted, SPAWN_STARTED_OPTION,
 } from '../src/jobs/index';
-import { isBackgroundOutcomeText } from '../src/jobs/threshold';
+import { isBackgroundOutcomeText, type ThresholdSchedule } from '../src/jobs/threshold';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 
@@ -17,7 +17,36 @@ function newStore() {
   return new BackgroundJobStore(makeSql(db), createTestActorsOver(db).main);
 }
 
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** A threshold timer the test fires by hand: the D19 pattern — time inside
+ *  the subject is a clock the subject is handed, so "the work outran the
+ *  window" is a call here and never a real timer racing real work. */
+function handTimer() {
+  let armed: (() => void) | undefined;
+  let cancelled = false;
+
+  const schedule: ThresholdSchedule = (fire) => {
+    armed = fire;
+
+    return () => { cancelled = true; };
+  };
+
+  return { schedule, fire: () => { armed?.(); }, cancelled: () => cancelled };
+}
+
+/** Work that ends when the test says: the promise the subject is handed, and
+ *  the release the test holds. */
+function heldWork<T>(value: T) {
+  const { promise, resolve } = Promise.withResolvers<void>();
+
+  return {
+    work: async () => {
+      await promise;
+
+      return value;
+    },
+    release: resolve,
+  };
+}
 
 describe('BackgroundJobStore', () => {
   test('create → running, settle → completed (idempotent)', () => {
@@ -248,13 +277,12 @@ describe('withBackgroundThreshold', () => {
 
   test('slow work returns a BackgroundHandle + detaches the live promise', async () => {
     const detached: Array<Promise<unknown>> = [];
+    const timer = handTimer();
+    const slow = heldWork('slow-result');
 
-    const out = await withBackgroundThreshold('heads', async () => {
-      await delay(80);
-
-      return 'slow-result';
-    }, {
+    const pending = withBackgroundThreshold('heads', slow.work, {
       thresholdMs: 20,
+      schedule: timer.schedule,
       onThreshold: (_kind, p) => {
         detached.push(p);
 
@@ -262,35 +290,50 @@ describe('withBackgroundThreshold', () => {
       },
     });
 
+    timer.fire();
+    const out = await pending;
+
     expect(isBackgroundHandle(out)).toBe(true);
 
     if (isBackgroundHandle(out)) { expect(out.jobId).toBe('job-7'); expect(out.kind).toBe('heads'); }
 
     // The detached promise is the SAME live work and still resolves.
+    slow.release();
     await expect(detached[0]).resolves.toBe('slow-result');
   });
 
   test('a refused detach keeps the same live work foreground-owned through completion', async () => {
-    const out = await withBackgroundThreshold('run', async () => {
-      await delay(80);
+    const timer = handTimer();
+    const slow = heldWork('completed after the capacity refusal');
 
-      return 'completed after the capacity refusal';
-    }, {
+    const pending = withBackgroundThreshold('run', slow.work, {
       thresholdMs: 20,
+      schedule: timer.schedule,
       onThreshold: () => ({ detached: false, reason: 'too many jobs already running' }),
     });
 
-    expect(out).toBe('completed after the capacity refusal');
+    timer.fire();
+    slow.release();
+
+    expect(await pending).toBe('completed after the capacity refusal');
   });
 
   test('a refused detach preserves a later tool failure', async () => {
-    await expect(withBackgroundThreshold('run', async () => {
-      await delay(40);
+    const timer = handTimer();
+    const { promise: held, resolve: release } = Promise.withResolvers<void>();
+
+    const pending = withBackgroundThreshold('run', async () => {
+      await held;
       throw new Error('failed after the capacity refusal');
     }, {
       thresholdMs: 20,
+      schedule: timer.schedule,
       onThreshold: () => ({ detached: false, reason: 'too many jobs already running' }),
-    })).rejects.toThrow('failed after the capacity refusal');
+    });
+
+    timer.fire();
+    release();
+    await expect(pending).rejects.toThrow('failed after the capacity refusal');
   });
 
   test('fast rejection propagates inline (no background)', async () => {
@@ -331,13 +374,15 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
     let explored = false;
     let exploringAtDetach: boolean | undefined;
 
+    const exploration = heldWork('merged fork answer');
+
     const out = await withSpawnDetach('agents', async (spawnStarted) => {
       // The spawn is validated fast; the actual exploration is what's slow.
       spawnStarted();
-      await delay(80);
+      const answer = await exploration.work();
       explored = true;
 
-      return 'merged fork answer';
+      return answer;
     }, {
       onThreshold: (_kind, p) => {
         exploringAtDetach = !explored;
@@ -360,6 +405,7 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
     // under load cannot fail it.
     expect(exploringAtDetach).toBe(true);
     // The detached promise is the SAME live exploration and still resolves.
+    exploration.release();
     await expect(detached[0]).resolves.toBe('merged fork answer');
   });
 
@@ -387,7 +433,6 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
   test('a refused detach keeps the spawned work foreground-owned through completion', async () => {
     const out = await withSpawnDetach('agents', async (spawnStarted) => {
       spawnStarted();
-      await delay(50);
 
       return 'completed after the capacity refusal';
     }, {
@@ -403,7 +448,6 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
   test('the detach message is terse and promises the wake; the docstring carries the doctrine', async () => {
     const out = await withSpawnDetach('agents', async (spawnStarted) => {
       spawnStarted();
-      await delay(20);
 
       return 'x';
     }, {

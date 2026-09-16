@@ -6,8 +6,8 @@ const frames = '/tmp/workspace-planes-2026-09-06';
 
 test('Files recovers current workspace data after a failed read and reconnect', async () => {
   mkdirSync(frames, { recursive: true });
-  await withGallery(async ({ browser, origin }) => {
-    const page = await browser.newPage();
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
     await page.setViewport({ width: 1920, height: 1100 });
     await page.goto(`${origin}/gallery.html?frame=workspacepage&workspaceFault=1`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('[data-composer-root]');
@@ -30,7 +30,7 @@ test('Files recovers current workspace data after a failed read and reconnect', 
       document.documentElement.dataset.workspaceRevision = 'current';
       window.dispatchEvent(new Event('gallery-reconnect'));
     });
-    await page.waitForFunction(() => document.querySelector('[data-files-surface]')?.textContent?.includes('current.txt'), { timeout: 10_000 });
+    await page.waitForFunction(() => document.querySelector('[data-files-surface]')?.textContent?.includes('current.txt'));
     const recovered = await page.$eval('[data-files-surface]', (el) => el.textContent);
     expect(recovered).not.toContain('before.txt');
     expect(recovered).not.toContain('Network connection lost');
@@ -41,4 +41,4 @@ test('Files recovers current workspace data after a failed read and reconnect', 
     await page.screenshot({ path: `${frames}/04-memory-recovered.png`, fullPage: true });
     await page.close();
   });
-}, 120_000);
+});
