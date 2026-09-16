@@ -92,6 +92,10 @@ export interface ActorExecutionInput {
 
 export interface ActorExecutionResult {
   readonly text: string;
+  /** How many steps the turn finished in this process. A continuation reads
+   *  it to tell whether the answer is the cut step it resumed (one step) or a
+   *  later step whose narration the cut text belongs to. */
+  readonly steps: number;
   readonly failure: Error | null;
   readonly interrupted: boolean;
   /** Null when preparation failed before any program was selected. */
@@ -483,6 +487,7 @@ export class ActorSession {
     extensions.register(this.orchestrator.turnExtension);
     const pending: Array<Extract<ChatEvent, { type: 'tool-call' }>> = [];
     let text = '';
+    let steps = 0;
     let completed = false;
     let program: ActorTurnProgram | null = null;
     let failure: Error | null = null;
@@ -542,6 +547,7 @@ export class ActorSession {
           case 'tool-result': this.recordToolResult(pending, event); break;
 
           case 'step-finish':
+            steps += 1;
             this.orchestrator.acc.recordStep({
               text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
               response: { messages: event.responseMessages }, usage: event.usage,
@@ -617,7 +623,7 @@ export class ActorSession {
     }
 
     return {
-      text, failure, program, claim: active.claim,
+      text, steps, failure, program, claim: active.claim,
       admittedMessages: active.claim === null ? [] : this.options.claims.admittedFor(active.claim).messages,
       interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
     };

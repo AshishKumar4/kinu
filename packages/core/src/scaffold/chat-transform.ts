@@ -129,7 +129,11 @@ async function* scaffoldTurn(
         if (inner.type === 'done') {
           responses.push(...inner.responseMessages);
 
-          if (!text.trim()) text = inner.text;
+          // The delegated turn's `done` already carries the one answer rule
+          // (chat.ts answerFromSteps); the deltas relayed above are what a
+          // client watched and stay the fallback for a turn that answered
+          // nothing.
+          if (inner.text.trim()) text = inner.text;
         } else {
           if (inner.type === 'text-delta') text += inner.delta;
           yield inner;
@@ -149,7 +153,7 @@ async function* scaffoldTurn(
         if (inner.type === 'done') {
           responses.push(...inner.responseMessages);
 
-          if (!text.trim()) text = inner.text;
+          if (inner.text.trim()) text = inner.text;
           break;
         }
 

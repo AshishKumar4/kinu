@@ -3516,7 +3516,7 @@ export class LocalAgentSession implements BackendHost {
       stopWhen: stepCountIs(1),
     })) {
       if (ev.type === 'text-delta') text += ev.delta;
-      else if (ev.type === 'done' && !text.trim()) text = ev.text;
+      else if (ev.type === 'done' && ev.text.trim()) text = ev.text;
     }
 
     return text;

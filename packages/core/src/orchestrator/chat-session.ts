@@ -80,7 +80,7 @@ import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
-import type { ActorSession, ActorTurnLease, ActorExecutionInput } from './actor-session';
+import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
 import type { LandedSteerRow, PendingSendRow, PendingSendStore, UserSteer } from './inbox';
 import type { OwedEffect } from './terminal-effects';
@@ -268,6 +268,27 @@ interface TurnContinuation {
  *  continuation: the outcome is stated, never dropped, so the model knows the
  *  call never ran to completion and can decide to make it again. */
 const INTERRUPTED_TOOL_OUTPUT = 'This tool call was interrupted before it produced a result; the process running it stopped. Make the call again if its result is still needed.';
+
+/**
+ * A continuation's answer row. The cut step's text the last process left is
+ * the answer's own head only when the step this process resumed IS the answer:
+ * the cut step issued no tool call and this process finished it in one step
+ * (or was cut again, and the streamed text stands). A cut inside a NARRATION
+ * step — one that went on to call tools before the turn answered — leaves text
+ * that belongs to that step, already in the client's rendering of it, and not
+ * in front of the answer. The finished steps' text is never joined: it is in
+ * the ledger as those steps' own messages.
+ */
+function continuedAnswer(
+  continuation: TurnContinuation | undefined,
+  execution: Pick<ActorExecutionResult, 'text' | 'steps' | 'interrupted'>,
+): string {
+  const partial = continuation?.partial;
+
+  if (partial === undefined || partial === null || partial.toolCalls.length > 0) return execution.text;
+
+  return execution.interrupted || execution.steps <= 1 ? partial.text + execution.text : execution.text;
+}
 
 /**
  * The assistant's prior output for a re-opened turn, as model messages: every
@@ -1281,12 +1302,7 @@ export class ChatSession {
       if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') this.emit(event);
     });
 
-    // A continuation's answer is what the client streamed as ONE message: the
-    // cut step's text the last process left, then what this one produced. The
-    // finished steps' text is already in the ledger as those steps' own
-    // messages and in the client's rendering of them; it is not part of the
-    // answer row twice.
-    const fullText = (item.continuation?.partial?.text ?? '') + execution.text;
+    const fullText = continuedAnswer(item.continuation, execution);
     const interrupted = execution.interrupted;
     let runError: string | null = null;
     let overflowRetry = false;
