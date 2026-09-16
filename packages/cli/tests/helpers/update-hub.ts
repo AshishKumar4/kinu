@@ -85,6 +85,10 @@ export interface HubSocket {
    *  sent before the question has been handled too — the positive signal for
    *  "nothing else happened". */
   settle(): Promise<void>;
+  /** Drop the socket from the hub's side with an ordinary close — a hub
+   *  restart, as the daemon sees one — so the daemon reconnects and HELLOs
+   *  again. Recorded as 'hub'. */
+  drop(): void;
 }
 
 export interface UpdateHub {
@@ -154,6 +158,10 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
           frames: [],
           closed: null,
           send: (out) => { ws.send(JSON.stringify(out)); },
+          drop: () => {
+            socket.closed = 'hub';
+            ws.close(1012, 'hub restart');
+          },
           settle: async () => {
             asked += 1;
             const id = `rpc-settle0000-${asked}`;

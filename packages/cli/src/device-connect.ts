@@ -162,58 +162,22 @@ export interface DaemonStatus {
   daemonPid: number | null;
   /** Whether this CLI process has a live session daemon child. */
   sessionActive: boolean;
-  /** This read found a self-update whose successor died before connecting,
-   *  put the previous build back, and started it. */
-  restoredPreviousBuild: boolean;
 }
 
+/** A read, and only a read: a status that renamed files or started a
+ *  process was the one door a failed self-update had, and it opened only
+ *  when a human typed the command. The daemon owns that outcome now — a
+ *  successor that dies before connecting is rolled back by the daemon it
+ *  would have replaced (`pc-agent/src/update.js`). */
 export function daemonStatus(): DaemonStatus {
-  const restoredPreviousBuild = restartFromPreviousBuild();
-
   return {
     deviceConfigPresent: existsSync(DEVICE_CONFIG_PATH),
     logPresent: existsSync(DAEMON_LOG_PATH),
     daemonPid: runningDaemonPid(),
     sessionActive: sessionDaemon !== null && sessionDaemon.exitCode === null && !sessionDaemon.killed,
-    restoredPreviousBuild,
   };
 }
 
-/** The daemon files a self-update lands, in landing order: siblings, the
- *  daemon, its stamp. Each keeps a `.prev` beside it. */
-function updatedDaemonFiles(): string[] {
-  return [...DAEMON_SIBLINGS.map((sibling) => join(AGENT_HOME, sibling.name)), SCRIPT_PATH, VERSION_STAMP_PATH];
-}
-
-/**
- * The one failure a self-update cannot recover on its own: a successor that
- * claimed the machine, then died before the hub marked it connected. Nothing
- * restarts a daemon today, so this does — from `.prev`, the build that last
- * ran, restored daemon-first so no moment leaves a newer daemon beside older
- * siblings. Answers whether it did. A live pidfile, no marker, or no `.prev`
- * means nothing to recover.
- */
-function restartFromPreviousBuild(): boolean {
-  const recorded = recordedDaemonPid();
-
-  if (recorded === null || processAlive(recorded)) return false;
-
-  if (!existsSync(UPDATE_PENDING_PATH) || !existsSync(`${SCRIPT_PATH}.prev`)) return false;
-
-  try {
-    for (const file of [SCRIPT_PATH, ...updatedDaemonFiles().filter((file) => file !== SCRIPT_PATH)]) {
-      if (existsSync(`${file}.prev`)) renameSync(`${file}.prev`, file);
-    }
-
-    syncAgentDirectory();
-  } catch (cause) {
-    throw toKinuError({ doing: 'restoring the previous device daemon build', cause, otherwise: 'io' });
-  }
-
-  startInstalledDaemon(false);
-
-  return true;
-}
 
 // ── Connect prompt policy ────────────────────────────────────────
 

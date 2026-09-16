@@ -10,7 +10,6 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
-import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
 import { tolerate } from '@kinu.run/core/obs';
 import type { JsonObject } from '@kinu.run/core';
@@ -250,6 +249,40 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
   });
 
+  test('HELLO names the build this process IS, not the stamp on disk now', async () => {
+    // An update lands its stamp before the successor connects; a daemon that
+    // re-read the file at each HELLO would report the new build from old
+    // code after a successor died, and the hub would never push that
+    // version again.
+    const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    const daemon = startDaemon(home);
+    const first = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    expect(first.hello.version).toBe(OLD);
+
+    writeFileSync(join(home, 'pc-agent.version'), `${NEW}\n`, { mode: 0o600 });
+    first.drop();
+    const again = await until(() => served.sockets[1], 'the second HELLO', daemon.log);
+
+    expect(again.hello.version).toBe(OLD);
+  });
+
+  test('a hostile frame — an off-origin url, or a checksum that is not one — lands nothing', async () => {
+    const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    const daemon = startDaemon(home);
+    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    const sha256 = 'a'.repeat(64);
+
+    socket.send({ type: 'UPDATE', version: NEW, urls: { tarball: 'https://evil.invalid/cli.tar.gz', checksum: `${PLATFORM_ARTIFACT}.sha256` }, sha256 });
+    socket.send({ type: 'UPDATE', version: NEW, urls: { tarball: PLATFORM_ARTIFACT, checksum: `${PLATFORM_ARTIFACT}.sha256` }, sha256: 'not-a-digest' });
+    await socket.settle();
+
+    expect(daemon.log().match(/device\.update_ignored reason=malformed_frame/g)).toHaveLength(2);
+    expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
+    expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
+  });
+
   test('a daemon without a stamp sends no version and is left alone', async () => {
     const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, null);
@@ -262,62 +295,59 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   });
 });
 
-describe('daemonStatus restarts from .prev after a successor died', () => {
-  /** A pid no process has: a child that already exited. */
-  async function deadPid(): Promise<number> {
-    const proc = Bun.spawn({ cmd: ['true'] });
-    await proc.exited;
+/** A build whose daemon passes its selftest and then dies as a daemon: the
+ *  one failure a self-update used to leave for a human to notice. */
+const DYING_DAEMON = [
+  "const fs = require('fs'); const path = require('path');",
+  "if (process.argv.includes('--selftest')) {",
+  "  console.log(fs.readFileSync(path.join(process.env.KINU_HOME, 'pc-agent.version'), 'utf8').trim());",
+  '} else {',
+  '  process.exit(9);',
+  '}',
+  '',
+].join('\n');
 
-    return proc.pid;
-  }
+describe('a successor that dies before connecting is the old daemon\'s to undo', () => {
+  test('the old daemon re-takes the pidfile, rolls the files back, clears the marker and keeps serving', async () => {
+    // Before: the pidfile named the dead successor, the landed files stayed,
+    // and the only recovery was `kinu desktop status` — which then started a
+    // SECOND daemon beside the living old one.
+    const served = hub({ served: NEW, archive: daemonArchive({ ...NEW_FILES, 'pc-agent.js': DYING_DAEMON }, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    const daemon = startDaemon(home);
+    const oldPid = await until(() => (existsSync(join(home, 'pc-agent.pid')) ? pidfile(home) : null), 'the pidfile', daemon.log);
 
-  test('a stale pidfile beside the pending marker restores .prev, starts it, and it clears the marker', async () => {
-    const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
-    const home = installedMachine(served.origin, NEW);
-    // What a landed-then-crashed update leaves: the new files in place, the
-    // old ones as .prev, the marker, and a pidfile naming the dead successor.
-    writeFileSync(join(home, 'pc-agent.js'), 'process.exit(9);\n', { mode: 0o700 });
+    await until(() => (daemon.log().includes('device.update_rolled_back') ? true : null), 'the rollback', daemon.log);
 
-    for (const [name, source] of Object.entries(DAEMON_FILES)) writeFileSync(join(home, `${name}.prev`), source, { mode: 0o700 });
-    writeFileSync(join(home, 'pc-agent.version.prev'), `${OLD}\n`, { mode: 0o600 });
-    writeFileSync(join(home, 'pc-agent.update-pending'), `${NEW}\n`, { mode: 0o600 });
-    writeFileSync(join(home, 'pc-agent.pid'), `${await deadPid()}\n`, { mode: 0o600 });
+    // The machine is still the old daemon's, by its own claim.
+    expect(pidfile(home)).toBe(oldPid);
+    expect(alive(oldPid)).toBe(true);
+    // The files are the build that runs: no .prev, no marker, the old stamp.
+    expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
+    expect(installed(home, 'pc-agent.version').trim()).toBe(OLD);
+    expect(existsSync(join(home, 'pc-agent.js.prev'))).toBe(false);
+    expect(existsSync(join(home, 'pc-agent.update-pending'))).toBe(false);
+    // The socket the hub gave this daemon was never replaced: the successor
+    // never connected, and the old daemon never disconnected.
+    expect(served.sockets[0]?.closed).toBeNull();
+    expect(served.sockets).toHaveLength(1);
 
+    // A status read is a read: it names the live daemon and starts nothing.
     const proc = Bun.spawn({
       cmd: [process.execPath, '-e', `
         import { daemonStatus } from './packages/cli/src/device-connect.ts';
-        const status = daemonStatus();
-        console.log(JSON.stringify(status));
-        process.exit(0);
+        console.log(JSON.stringify(daemonStatus()));
       `],
       cwd: repoRoot,
-      env: { ...process.env, KINU_HOME: home, KINU_INFLIGHT_ROOT: join(home, 'inflight') },
+      env: { ...process.env, KINU_HOME: home },
       stdout: 'pipe',
       stderr: 'pipe',
     });
 
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
-    ]);
-
-    if (exitCode !== 0) throw new Error(`daemonStatus failed (${exitCode}): ${stderr}`);
-
-    const status = v.parse(v.object({ daemonPid: v.nullable(v.number()), restoredPreviousBuild: v.boolean() }), JSON.parse(stdout.trim()));
-    expect(status.restoredPreviousBuild).toBe(true);
-    expect(status.daemonPid).not.toBeNull();
-    ownedPids.push(status.daemonPid ?? 0);
-
-    // The previous build is back, and its .prev copies are consumed.
-    expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
-    expect(installed(home, 'pc-agent.version').trim()).toBe(OLD);
-    expect(existsSync(join(home, 'pc-agent.js.prev'))).toBe(false);
-
-    // The restored daemon connects — the hub marks it connected — and that
-    // is what clears the marker.
-    const socket = await until(() => served.sockets[0], 'the restored daemon\'s HELLO', () => readFileSync(join(home, 'pc-agent.log'), 'utf-8'));
-    expect(socket.hello).toMatchObject({ version: OLD });
-    await until(() => !existsSync(join(home, 'pc-agent.update-pending')), 'the marker to clear');
-    expect(pidfile(home)).toBe(status.daemonPid ?? 0);
+    const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout.trim())).toMatchObject({ daemonPid: oldPid });
+    expect(pidfile(home)).toBe(oldPid);
   });
 
   test('a live pidfile means nothing to recover, marker or not', async () => {
@@ -341,7 +371,7 @@ describe('daemonStatus restarts from .prev after a successor died', () => {
 
     const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     expect(exitCode).toBe(0);
-    expect(JSON.parse(stdout.trim())).toMatchObject({ restoredPreviousBuild: false, daemonPid: daemon.proc.pid });
+    expect(JSON.parse(stdout.trim())).toMatchObject({ daemonPid: daemon.proc.pid });
     expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
     expect(existsSync(join(home, 'pc-agent.js.prev'))).toBe(true);
   });
