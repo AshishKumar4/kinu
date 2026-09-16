@@ -2356,6 +2356,11 @@ export {
 } from './http/deployed-assets';
 
 export {
+  RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, SignedReleaseSchema,
+  signRelease, verifyRelease, generateReleaseSigningKey, type ReleaseChecksums, type SignedRelease,
+} from './http/release-signing';
+
+export {
   DEVICE_UPDATE, DEVICE_UPDATE_STATES, cliArtifactPath, deviceUpdateState, isSameBuild,
   type DeviceUpdateFrame, type DeviceUpdateState,
 } from './http/device-update';

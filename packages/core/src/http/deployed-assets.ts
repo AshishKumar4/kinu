@@ -29,17 +29,24 @@ export const CLI_DIST_PATHS: string[] = [
 
 export const CLI_VERSION_PATH = '/downloads/kinu-version.json';
 
-/** Identity of the build that produced the deployed asset bundle. */
+/** Identity of the build that produced the deployed asset bundle, and — on
+ *  a build the lane signed — every artifact's checksum with the signature
+ *  over them (`http/release-signing.ts`). Absent on a manifest an older
+ *  build wrote, which no verifier accepts. */
 export interface BuildStamp {
   version: string;
   sha: string;
   builtAt: string;
+  checksums?: Record<string, string>;
+  signature?: string;
 }
 
 const BuildStampSchema = v.object({
   version: v.pipe(v.string(), v.trim(), v.minLength(1)),
   sha: v.pipe(v.string(), v.trim(), v.minLength(1)),
   builtAt: v.pipe(v.string(), v.trim(), v.minLength(1)),
+  checksums: v.optional(v.record(v.string(), v.string())),
+  signature: v.optional(v.string()),
 });
 
 /** The slice of the static-assets binding this module needs, declared

@@ -21,6 +21,10 @@ const LINUX_X64 = '/downloads/kinu-cli-linux-x64.tar.gz';
 
 const CHECKSUM = 'a'.repeat(64);
 
+/** The hub RELAYS the build lane's signature; it never mints one, so any
+ *  well-formed value stands in here — the daemon is what verifies it. */
+const SIGNATURE = 'c2ln'.repeat(21) + 'c2ln';
+
 const open: TestUserDO[] = [];
 
 afterEach(() => {
@@ -32,7 +36,7 @@ afterEach(() => {
 async function connected(served: string | null = SERVED): Promise<TestUserDO & { deviceId: string }> {
   const harness = createTestUserDO(served === null
     ? {}
-    : { servedBuild: { version: served, checksums: { [LINUX_X64]: CHECKSUM } } });
+    : { servedBuild: { version: served, checksums: { [LINUX_X64]: CHECKSUM }, signature: SIGNATURE } });
 
   open.push(harness);
   const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio');
@@ -57,8 +61,19 @@ describe('the UPDATE frame a HELLO earns', () => {
       version: SERVED,
       urls: { tarball: LINUX_X64, checksum: `${LINUX_X64}.sha256` },
       sha256: CHECKSUM,
+      checksums: { [LINUX_X64]: CHECKSUM },
+      signature: SIGNATURE,
       device: harness.deviceId,
     }]);
+  });
+
+  test('a build that shipped no signature pushes nothing: the daemon would refuse it', async () => {
+    const harness = createTestUserDO({ servedBuild: { version: SERVED, checksums: { [LINUX_X64]: CHECKSUM } } });
+    open.push(harness);
+    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio');
+    harness.attachDevice(deviceId);
+    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
+    expect(harness.devicePushes).toEqual([]);
   });
 
   test('a daemon on the served build gets nothing', async () => {
@@ -196,7 +211,7 @@ describe('a UserDO opened over storage from before the self-update lane', () => 
     const db = new Database(':memory:');
     db.run(SHIPPED_USER_DEVICES);
 
-    const harness = createTestUserDO({ storage: db, servedBuild: { version: SERVED, checksums: { [LINUX_X64]: CHECKSUM } } });
+    const harness = createTestUserDO({ storage: db, servedBuild: { version: SERVED, checksums: { [LINUX_X64]: CHECKSUM }, signature: SIGNATURE } });
     open.push(harness);
 
     const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio');
@@ -211,6 +226,8 @@ describe('a UserDO opened over storage from before the self-update lane', () => 
       version: SERVED,
       urls: { tarball: LINUX_X64, checksum: `${LINUX_X64}.sha256` },
       sha256: CHECKSUM,
+      checksums: { [LINUX_X64]: CHECKSUM },
+      signature: SIGNATURE,
       device: deviceId,
     }]);
 
