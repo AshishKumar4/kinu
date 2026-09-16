@@ -1915,18 +1915,27 @@ export abstract class ActorAgent extends Think<Env> {
     // had already decided it had nothing to recover.
     await this.jobRunner.recoverDueResumes();
 
-    if (sweepsUnfinished || recoveryUnfinished) {
+    // What the registry holds after this tick is decided by the ledgers, not
+    // by the laps. UNTIMED owed work — a turn the run ledger holds open, a
+    // job running with no resume instant, an open drain lease — names no
+    // instant, so the pessimistic row is KEPT at the lap pace: the isolate may
+    // die at any point of that work, and a registry with no row would sleep
+    // until an external event (which is exactly what the turn-open arm exists
+    // to prevent, and a finished pass that released the row undid it one tick
+    // later). The pace climbs like an unfinished pass, so a long turn costs a
+    // wake at the ceiling and never a two-second loop. A TIMED obligation
+    // waits for its own instant, folded in soonest-wins; with only timed work
+    // left the pessimistic row is released for that instant, so a lone
+    // deferred job costs ONE wake at its instant, not a chain that arrives
+    // early and does nothing. Nothing owed at all sleeps empty.
+    const nextOwed = this.nextOwedAt();
+
+    if (sweepsUnfinished || recoveryUnfinished || this.owedUntimedWork()) {
       this.#maintenanceLaps = this.#maintenanceLaps + 1;
+
+      if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
     } else {
       this.#maintenanceLaps = 0;
-
-      // The pass is finished, so the pessimistic row's insurance has paid
-      // out. What it owes next is decided by the ledgers, not by the laps:
-      // a timed obligation waits for its own instant (a lone deferred job
-      // costs ONE wake at the instant, not a chain that arrives early and
-      // does nothing), and nothing owed at all sleeps empty — either way
-      // the row this tick wrote is released, never kept on suspicion.
-      const nextOwed = this.nextOwedAt();
       await this.cancelSchedule(armedRowId);
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
@@ -1968,11 +1977,20 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
 
-  /** Whether anything anywhere still owes this actor a wake. The base owns
-   *  none of the rosters the predicate reads, so it answers false; the
-   *  subclass that knows its owed surfaces overrides and the tick asks this,
-   *  never a flattened copy of the roster, for its end-of-tick cancel. */
+  /** Whether anything anywhere still owes this actor a wake: untimed work,
+   *  or a timed obligation with an instant. The activation asks this to arm
+   *  at all; the tick asks the two halves separately, because they decide
+   *  different things about the row it armed. */
   protected owedWorkExists(): boolean {
+    return this.owedUntimedWork() || this.nextOwedAt() !== null;
+  }
+
+  /** Whether work that names NO instant still owes this actor a wake — an
+   *  open turn, a running job with no resume instant, an open drain lease.
+   *  The tick keeps its lap-paced row while this answers true. The base owns
+   *  none of the rosters the predicate reads, so it answers false; the
+   *  subclass that knows its owed surfaces overrides. */
+  protected owedUntimedWork(): boolean {
     return false;
   }
 
@@ -2546,8 +2564,9 @@ export abstract class ActorAgent extends Think<Env> {
           // The workspace UI IS the review surface: a plan turn is admitted.
           planTurnRefusal: () => null,
           // The turn's own wake at its open: a kill mid-turn leaves the run
-          // row AND the wake that re-drives what it owed, at the lap-0 delay.
-          armTurnWake: async () => { await this.scheduleTerminalRetry(Date.now() + recoveryBackoffMs(0)); },
+          // row AND the wake that re-drives what it owed. The loop names the
+          // instant; the tick keeps a row while the turn is open.
+          armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
           modelWindow: () => ({
             contextWindow: this.sessionContextWindow(),
             modelOutputLimit: this.modelCatalog.modelOutputLimit(),

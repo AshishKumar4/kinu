@@ -31,7 +31,11 @@
  * first term, and a non-finite count waits the ceiling.
  */
 export function recoveryBackoffMs(attempts: number): number {
-  if (!Number.isFinite(attempts)) return 60_000;
+  if (!Number.isFinite(attempts)) return RECOVERY_BACKOFF_CEILING_MS;
 
-  return Math.min(1000 * 2 ** Math.min(Math.max(0, Math.trunc(attempts)), 6), 60_000);
+  return Math.min(1000 * 2 ** Math.min(Math.max(0, Math.trunc(attempts)), 6), RECOVERY_BACKOFF_CEILING_MS);
 }
+
+/** The curve's ceiling: the longest a durable lane waits between attempts,
+ *  and the instant a wake armed "for a kill, not for a pass" lands at. */
+export const RECOVERY_BACKOFF_CEILING_MS = 60_000;

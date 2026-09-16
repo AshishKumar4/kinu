@@ -1242,11 +1242,17 @@ export class OrchestratorAgent extends ActorAgent {
    * takes the transcript join in {@link owedDeliveryWork}, under the wake,
    * because every dispatch is external mail and an activation launches none.
    */
-  protected override owedWorkExists(): boolean {
+  protected override owedUntimedWork(): boolean {
     return this.eventLog.hasOpenDrainLease()
-      || this.terminal.nextRetryAt() !== null || this.terminal.hasIncomplete()
+      // An interrupted terminal sequence with no retry instant of its own; one
+      // waiting on a refused effect's retry is timed, read by `nextOwedAt`.
+      || (this.terminal.hasIncomplete() && this.terminal.nextRetryAt() === null)
       || this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms()
-      || this.jobs.hasLiveJobsInWorkspace() || this.workspaceActors().hasRetirements()
+      // A job running with no resume instant: live in some process, or
+      // orphaned by one that died. A job WAITING on an instant is timed and
+      // read by `nextOwedAt` instead, so a lone deferred job costs one wake
+      // at its instant rather than a lap-paced chain.
+      || this.jobs.hasUntimedLiveJobsInWorkspace() || this.workspaceActors().hasRetirements()
       || this.subordinateRoster.hasPendingBirths() || this.subordinateRoster.hasPendingDeletions()
       // An unsettled hosted claim, asked at limit 1 because presence is the
       // whole question. Without this the recovery arm of `maintenanceWork` is
@@ -1264,9 +1270,9 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** The soonest instant a TIMED ledger owes a wake — the terminal retry and
    *  the job runner's deferred resumes — or null when nothing timed waits.
-   *  Untimed owed work is excluded on purpose: an unfinished pass arms at the
-   *  lap pace, and a finished one with nothing timed releases its row, so the
-   *  only read this needs is the minimum the two timed stores already keep. */
+   *  Untimed owed work is excluded on purpose: it is {@link owedUntimedWork},
+   *  which keeps the tick's lap-paced row, so the only read this needs is the
+   *  minimum the two timed stores already keep. */
   protected override nextOwedAt(): number | null {
     const at = Math.min(this.terminal.nextRetryAt() ?? Infinity, this.jobRunner.nextResumeAt() ?? Infinity);
 
@@ -1282,7 +1288,7 @@ export class OrchestratorAgent extends ActorAgent {
    * would make the object sleep through a hired child's admitted task — the
    * same failure as the local daemon sleeping through a subordinate's due
    * trigger, which is why `nextTriggerAt` takes a bare database and
-   * `hasLiveJobsInWorkspace`/`countRunningInWorkspace` are workspace-wide by
+   * `hasUntimedLiveJobsInWorkspace`/`countRunningInWorkspace` are workspace-wide by
    * contract. Bounded at one row, exactly as `resumable(1)` beside it is:
    * presence is the whole question, and materializing the queue to answer it
    * would read every child's backlog on every activation.
