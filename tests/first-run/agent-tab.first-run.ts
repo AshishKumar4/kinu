@@ -16,15 +16,17 @@
  * server's grammar over string literals the test writes itself. Nothing opened
  * a hosted actor's own socket path the way the browser does and read back what
  * it serves, so a client that builds a dead facet path is invisible to all of
- * it — and the client builds one: `useKinu` opens the tab through the Agents
- * SDK's `sub` facet option, whose address the transport refuses as foreign.
- * The owner's report is the other half: "Disconnected · Untitled agent" over a
- * skeleton, with both mount reads never answering.
+ * it — and the client did build one: `useKinu` opened the tab through the
+ * Agents SDK's `sub` facet option, whose address the transport refuses as
+ * foreign. The owner's report is the other half: "Disconnected · Untitled
+ * agent" over a skeleton, with both mount reads never answering.
  *
- * THIS ROW ASSERTS THE CORRECT BEHAVIOUR and is expected RED until the address
- * is fixed: the actor path upgrades, both mount reads answer, and one message
- * gets one answer. What the row measures is what the deployment did, so the
- * defect register claims no sha this row has not itself run against.
+ * THIS ROW ASSERTS THE CORRECT BEHAVIOUR, and its address comes from the
+ * product's own `hostedActorSocketPath` rather than a literal this file
+ * spells, so it tracks whatever the client computes. Green needs the actor
+ * path to upgrade, both mount reads to answer, and one message to get one
+ * answer — against a DEPLOYED build, which is why a green here and a green in
+ * the source tree are different claims.
  *
  * THE SAME PUBLIC SURFACE THE BROWSER USES, and nothing narrower: both sockets
  * are the web client's own transport — a header-carrying WebSocket under
@@ -40,7 +42,9 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 
-import { ORCHESTRATOR_AGENT_SLUG, type JsonValue } from '../../packages/core/src/index';
+import {
+  hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG, type JsonValue,
+} from '../../packages/core/src/index';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
@@ -272,8 +276,11 @@ describe(SUITE, () => {
           const name = created.output.name;
 
           // ── The tab's own socket, on the actor's own path. ──────────────
+          // The address the CLIENT computes, read from the product's own
+          // helper rather than restated here: a row that spelled the segment
+          // itself would pass while the browser built something else.
           tabSocket = openPublicSocket(
-            plan.origin, plan.identity, `${room}/actor/${encodeURIComponent(name)}`, budget,
+            plan.origin, plan.identity, `${room}/${hostedActorSocketPath(name)}`, budget,
           );
 
           const upgraded = await tabSocket.opened;
