@@ -66,7 +66,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   queuedConversation(mode: QueueProbeMode): Promise<HttpCall[]>;
   prepareQueuedConversation(mode: QueueProbeMode): Promise<PreparedConversation>;
   replayQueuedConversation(prepared: PreparedConversation): Promise<{ steers: PendingSteer[]; steerFiles: PendingSteerFile[] }>;
-  completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[]; transcript: Array<{ id: string; role: string }> }>;
+  completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[]; transcript: Array<{ id: string; role: string }>; runEnds: Array<{ runId: string; reason: string }> }>;
   pendingSteersFor(workspace: string): Promise<PendingSteer[]>;
   claimEventWorkspace(): Promise<{ workspace: string; owner: string }>;
   agentLogEventsFor(workspace: string): Promise<AgentLogEvent[]>;

@@ -1925,6 +1925,7 @@ export class LocalAgentSession implements BackendHost {
       inbox: this.actorSession.orchestrator.inbox,
       search: this.mctsSearchStore,
       runEvents: this.eventRecorder,
+      liveRuns: () => this.chat.drivenRuns(),
       resume: jobRedriveResumeGate({
         recoverOrphans: () => this.jobRunner.recoverOrphans(),
         inputOf: (jobId) => this.jobs.getInput(jobId),

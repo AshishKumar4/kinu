@@ -117,25 +117,26 @@ describe('two real turns over the HTTP model seam', () => {
     // and the row drains once the turn settles, so nothing durable remains here.
   });
 
-  it('a durable programmatic submission excludes a later pending chat from its provider prefix', async () => {
+  it('a peer event that arrives mid-genesis rides the rerun of the sends genesis could not land', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('peer-queue-driver'));
 
     const calls = v.parse(HttpSchema, await root.queuedConversation('peer'))
       .filter((call) => call.model === 'probe-queue');
 
-    expect(calls).toHaveLength(3);
+    // Two turns. Genesis answered on its one step, so A, B and C could not
+    // land in it and rerun as ONE user turn after it. The peer event's drain
+    // was sent while that rerun was queued and not yet open, and a message
+    // arriving behind a queued user turn rides that turn's first step rather
+    // than queueing a turn of its own behind it — so the drain's brief is the
+    // rerun's second user message, after the operator's own words.
+    expect(calls).toHaveLength(2);
     const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
-    const programmatic = calls[2]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'));
+    const rerun = calls[1]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'));
 
-    // Under the splice rule A, B and C merged into the held genesis turn, so
-    // the programmatic peer event drives the THIRD call — its own turn, ahead
-    // of the completed merged-turn prefix.
-    expect(programmatic).toEqual([
+    expect(rerun).toEqual([
       { role: 'user', content: genesis },
       { role: 'assistant', content: `echo:${genesis}` },
-
       { role: 'user', content: 'QUEUE-A\n\nQUEUE-B\n\nQUEUE-C' },
-      { role: 'assistant', content: expect.stringContaining('echo:QUEUE-A\n\nQUEUE-B\n\nQUEUE-C') },
       { role: 'user', content: expect.stringContaining('QUEUE-PROGRAMMATIC') },
     ]);
   });
@@ -174,29 +175,31 @@ describe('two real turns over the HTTP model seam', () => {
       .filter((m) => m.role === 'user' && !m.content.startsWith('<') && !m.content.startsWith('Continue your previous response'))
       .map((m) => m.content);
 
-    // The recovered turn drove with B's text and spliced C at its step
-    // boundary — the model saw them in order, on one turn, after the reset.
-    const first = calls.find((call) => realUsers(call)[0] === 'QUEUE-B');
-
-    expect(first).toBeDefined();
-
-    const spliced = calls.find((call) => {
-      const users = realUsers(call);
-
-      return users.length >= 2 && users.includes('QUEUE-B') && users.includes('QUEUE-C');
-    });
-
-    expect(spliced).toBeDefined();
+    // The re-opened genesis turn continued after the reset and landed B and
+    // C at its first step — the boundary both were waiting for — as one
+    // spliced message after the genesis text, in order, on ONE model call
+    // (the held call died with the object; the fake's log is per process).
+    expect(calls).toHaveLength(1);
+    expect(realUsers(calls[0]!)).toHaveLength(2);
+    expect(realUsers(calls[0]!)[1]).toBe('QUEUE-B\n\nQUEUE-C');
 
     // Each admitted send landed exactly once under its own id — the
     // reservation survived the reset, the replay re-bound it rather than
     // minting a second, and the drain that landed it retired it: one
-    // transcript row per client id, and nothing left reserved.
+    // transcript row per client id, chained under the turn's own opening
+    // row, and nothing left reserved.
     expect(done.steers).toHaveLength(0);
+    expect(done.transcript.map((row) => row.role)).toEqual(['user', 'user', 'user', 'assistant']);
 
     for (const id of ['input-QUEUE-B', 'input-QUEUE-C']) {
       expect(done.transcript.filter((row) => row.role === 'user' && row.id === id)).toHaveLength(1);
     }
+
+    // The run the loop continued closed ONCE, by the loop. The wake's
+    // reconcile seals runs a dead activation left open; a run the loop has
+    // re-opened is open on purpose, and a seal under it recorded a second,
+    // contradictory close and a fleet row for a turn still running.
+    expect(done.runEnds).toEqual([{ runId: expect.any(String), reason: 'completed' }]);
   });
 
   it('splices a mid-turn attachment into the next model call as a file part', async () => {
