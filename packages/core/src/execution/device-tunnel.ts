@@ -380,11 +380,36 @@ export function nextDeviceRequestId(): string {
   return `rpc-${requestEpoch}-${requestSeq}`;
 }
 
+/** The tunnel's clock: a one-shot deadline, a repeating probe, and the time
+ *  frames are stamped with. Real timers in production; a test hands one it
+ *  advances itself, so "well past the control deadline" is a step the test
+ *  takes rather than a sleep racing a timer. */
+export interface TunnelTimers {
+  after(fire: () => void, ms: number): () => void;
+  every(fire: () => void, ms: number): () => void;
+  now(): number;
+}
+
+export const REAL_TUNNEL_TIMERS: TunnelTimers = {
+  after: (fire, ms) => {
+    const timer = setTimeout(fire, ms);
+
+    return () => { clearTimeout(timer); };
+  },
+  every: (fire, ms) => {
+    const timer = setInterval(fire, ms);
+
+    return () => { clearInterval(timer); };
+  },
+  now: () => Date.now(),
+};
+
 export class DeviceTunnel {
   private pending = new Map<string, Pending>();
   /** Calls running with no work deadline — the set the heartbeat guards. */
   private readonly openEnded = new Set<string>();
-  private heartbeat: ReturnType<typeof setInterval> | null = null;
+  /** The cancel for the armed heartbeat, or null while none runs. */
+  private heartbeat: (() => void) | null = null;
   /** When the device last said anything at all. Any frame counts. */
   private lastFrameAt = 0;
   /** When the last unanswered liveness probe went out, or 0 for none. */
@@ -395,6 +420,7 @@ export class DeviceTunnel {
     private readonly timeoutMs: number = DEFAULT_RPC_TIMEOUT_MS,
     /** Heartbeat cadence for deadline-free calls. */
     private readonly probeMs: number = LIVENESS_PROBE_MS,
+    private readonly timers: TunnelTimers = REAL_TUNNEL_TIMERS,
   ) {}
 
   isConnected(): boolean {
@@ -447,11 +473,9 @@ export class DeviceTunnel {
       let stop: () => void;
 
       if (deadline > 0) {
-        const timer = setTimeout(() => settle(new Error(
+        stop = this.timers.after(() => settle(new Error(
           `device RPC timeout after ${deadline}ms: ${method} — the call may still be running on the device`,
         )), deadline);
-
-        stop = () => clearTimeout(timer);
       } else {
         // No work deadline: the shared heartbeat guards this call instead, so
         // it ends when the DEVICE goes away rather than when the work gets long.
@@ -505,7 +529,7 @@ export class DeviceTunnel {
     const msg = parsed.output;
     // Any well-formed frame — a result, an error, the daemon's HELLO — is the
     // device speaking, which is the only thing liveness actually asks about.
-    this.lastFrameAt = Date.now();
+    this.lastFrameAt = this.timers.now();
 
     if (msg.id === undefined) return;
     const p = this.pending.get(msg.id);
@@ -537,12 +561,12 @@ export class DeviceTunnel {
   private armHeartbeat(): void {
     if (this.heartbeat) return;
     this.probeSentAt = 0;
-    this.heartbeat = setInterval(() => this.probeLiveness(), this.probeMs);
+    this.heartbeat = this.timers.every(() => this.probeLiveness(), this.probeMs);
   }
 
   private disarmIdleHeartbeat(): void {
     if (this.openEnded.size > 0 || !this.heartbeat) return;
-    clearInterval(this.heartbeat);
+    this.heartbeat();
     this.heartbeat = null;
     this.probeSentAt = 0;
   }
@@ -575,7 +599,7 @@ export class DeviceTunnel {
       return;
     }
 
-    this.probeSentAt = Date.now();
+    this.probeSentAt = this.timers.now();
     // Fire-and-forget: the answer is irrelevant, its ARRIVAL is the signal,
     // and handleMessage records that for any frame. A rejection is not itself
     // proof of death — an error frame rejects the call and PROVES life, already

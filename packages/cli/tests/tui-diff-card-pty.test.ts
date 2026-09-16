@@ -47,5 +47,5 @@ describe('the file diff card on a real terminal', () => {
     // not before the whole `− export…` string.
     expect(inkBefore(run.raw, 'export const ready = false;')).toBe(theme.colors.well.danger);
     expect(inkBefore(run.raw, 'export const ready = true;')).toBe(theme.colors.well.success);
-  }, 60_000);
+  });
 });

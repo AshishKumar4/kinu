@@ -52,7 +52,7 @@ export default defineConfig({
     // Its completion is decided by the episode, never by elapsed wall time. `0`
     // is Vitest's documented disabled-timeout value.
     testTimeout: 0,
-    hookTimeout: 300_000,
+    hookTimeout: 0,
     // One account, one deployment, and two cases that attach machines to it.
     // Concurrency here would have two cases racing each other's device fleet,
     // which is the very state the fleet case is measuring.

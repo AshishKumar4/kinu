@@ -165,7 +165,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
     expect(daemon.log()).not.toContain('device.update_started');
     expect(existsSync(join(home, 'pc-agent.js.prev'))).toBe(false);
-  }, 30_000);
+  });
 
   test('a behind build is landed, selftested, started as a successor; the old daemon stays until replaced', async () => {
     const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW) });
@@ -203,7 +203,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     // The successor's own HELLO earned no second UPDATE: it is the served build.
     await successor.settle();
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toHaveLength(2);
-  }, 45_000);
+  });
 
   test('a corrupt archive (checksum mismatch) lands nothing; the old daemon keeps the machine', async () => {
     const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW), corrupt: true });
@@ -220,7 +220,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(served.sockets).toHaveLength(1);
     expect(served.sockets[0]?.closed).toBeNull();
     expect(alive(pidfile(home))).toBe(true);
-  }, 30_000);
+  });
 
   test('a landed daemon that fails its selftest is rolled back to .prev; no successor starts', async () => {
     const broken = { ...DAEMON_FILES, 'pc-agent.js': 'process.exit(7);\n' };
@@ -236,7 +236,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(existsSync(join(home, 'pc-agent.update-pending'))).toBe(false);
     expect(served.sockets).toHaveLength(1);
     expect(alive(pidfile(home))).toBe(true);
-  }, 30_000);
+  });
 
   test('updateCheck: false — HELLO says so, and an UPDATE pushed anyway is refused', async () => {
     const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW), pushAlways: true });
@@ -248,7 +248,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     await until(() => daemon.log().includes('device.update_ignored reason=updateCheck_false'), 'the refusal', daemon.log);
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
     expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
-  }, 30_000);
+  });
 
   test('a daemon without a stamp sends no version and is left alone', async () => {
     const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW) });
@@ -259,7 +259,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect('version' in socket.hello).toBe(false);
     await socket.settle();
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
-  }, 30_000);
+  });
 });
 
 describe('daemonStatus restarts from .prev after a successor died', () => {
@@ -318,7 +318,7 @@ describe('daemonStatus restarts from .prev after a successor died', () => {
     expect(socket.hello).toMatchObject({ version: OLD });
     await until(() => !existsSync(join(home, 'pc-agent.update-pending')), 'the marker to clear');
     expect(pidfile(home)).toBe(status.daemonPid ?? 0);
-  }, 30_000);
+  });
 
   test('a live pidfile means nothing to recover, marker or not', async () => {
     const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
@@ -344,5 +344,5 @@ describe('daemonStatus restarts from .prev after a successor died', () => {
     expect(JSON.parse(stdout.trim())).toMatchObject({ restoredPreviousBuild: false, daemonPid: daemon.proc.pid });
     expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
     expect(existsSync(join(home, 'pc-agent.js.prev'))).toBe(true);
-  }, 30_000);
+  });
 });

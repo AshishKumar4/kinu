@@ -105,9 +105,22 @@ export type DetachOutcome =
   | { readonly detached: true; readonly jobId: string }
   | { readonly detached: false; readonly reason: string };
 
+/** How the threshold's timer is scheduled: `setTimeout` in production, a
+ *  hand-fired timer in a test. Returns the cancel for a race the work won. */
+export type ThresholdSchedule = (fire: () => void, afterMs: number) => () => void;
+
+export const REAL_SCHEDULE: ThresholdSchedule = (fire, afterMs) => {
+  const timer = setTimeout(fire, afterMs);
+
+  return () => { clearTimeout(timer); };
+};
+
 export interface ThresholdDeps {
   /** Override the surface's detach threshold. */
   thresholdMs?: number;
+  /** The threshold's clock. A test hands one it fires itself, so "the work
+   *  outran the window" is a call rather than a real timer racing real work. */
+  schedule?: ThresholdSchedule;
   /** The threshold elapsed. Either mint a background job and keep `promise`
    *  alive durably (settling the job and waking the agent when it resolves), or
    *  refuse the detach. A refusal leaves this live promise foreground-owned, so
@@ -124,11 +137,8 @@ export async function withBackgroundThreshold<T>(
 ): Promise<T | BackgroundHandle> {
   const thresholdMs = deps.thresholdMs ?? BACKGROUND_POLICY.interactive.detachAfterMs;
   const promise = exec();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
-  const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
-    timer = setTimeout(() => resolve(TIMED_OUT), thresholdMs);
-  });
+  const { promise: timeout, resolve: expire } = Promise.withResolvers<typeof TIMED_OUT>();
+  const cancel = (deps.schedule ?? REAL_SCHEDULE)(() => { expire(TIMED_OUT); }, thresholdMs);
 
   // Wrap with a lexical settlement boundary so the abandoned race branch is observed.
   const settled = (async () => {
@@ -141,7 +151,7 @@ export async function withBackgroundThreshold<T>(
 
   const winner = await Promise.race([settled, timeout]);
 
-  if (timer) clearTimeout(timer);
+  cancel();
 
   if (winner !== TIMED_OUT) {
     if ('error' in winner) throw winner.error;

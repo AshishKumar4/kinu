@@ -1260,7 +1260,7 @@ for (const [name, open] of armEntries) {
         if (known !== undefined) {
           throw new Error(`the bug list names ${name} ${cell.id} as red since ${known.since}, and it passed: record the win by removing the row`);
         }
-      }, 120_000);
+      });
     }
   });
 }
@@ -1334,7 +1334,7 @@ describe('red direction — every new cell fails against a deliberately broken a
     const broken = blankWakeArm();
     const outcome = await runCellOn(cell, () => broken);
     expect(outcome.kind).toBe('fail');
-  }, 120_000);
+  });
 
   test('6.20 fails when the store loses a reachable key', async () => {
     const arm = CONFORMANCE_ARMS['snapshot-chain']();
@@ -1394,7 +1394,7 @@ describe('red direction — every new cell fails against a deliberately broken a
     });
     const outcome = await runCellOn(cell, () => broken);
     expect(outcome.kind).toBe('fail');
-  }, 120_000);
+  });
 
   test.each([
     { label: 'bytes at the strict bound', mutation: { bytesPut: 196_608 }, reason: '196608 bytes' },

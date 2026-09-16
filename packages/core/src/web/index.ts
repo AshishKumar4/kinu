@@ -1,5 +1,6 @@
 export {
   createDefaultWebSearchProvider,
+  REAL_WEB_SCHEDULE,
   createWebCodemodeProvider,
   TAVILY_CRED_KEY,
   parseDuckDuckGoHtml,

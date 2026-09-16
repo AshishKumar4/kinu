@@ -302,7 +302,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(2);
     expect(listScaffoldArchive(rt.storage.sql, rt.actor, 10).find((e) => e.version === 2)?.status).toBe('current');
     expect(events.some((e) => e.type === 'evolution' && e.event === 'scaffold_promotion')).toBe(true);
-  }, 30_000);
+  });
 
   test('a losing pending is rolled back, which also clears the block', async () => {
     const { rt, session } = await setup('the default loop answered');
@@ -328,7 +328,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(1);
     expect(listScaffoldArchive(rt.storage.sql, rt.actor, 10).find((e) => e.version === 2)?.status).toBe('rolled_back');
-  }, 30_000);
+  });
 
   test('opening a session heals a scaffold-less workspace (DO onStart parity)', async () => {
     // A workspace created before scaffold bootstrap landed has no
@@ -406,7 +406,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
 
     expect(claims).toHaveLength(1);
     expect(claims[0]?.normalized_call_id).toBe(`${trialId}#0`);
-  }, 30_000);
+  });
 });
 
 test('Plan does not run a promoted native scaffold, but Build still can', async () => {

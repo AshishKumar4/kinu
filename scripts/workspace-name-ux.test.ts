@@ -81,8 +81,8 @@ describe('the workspace sidebar names a workspace and addresses it separately', 
   let untitled: SidebarRow | undefined;
 
   beforeAll(async () => {
-    rows = await withGallery(async ({ browser, origin }) => {
-      const page = await browser.newPage();
+    rows = await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=shell`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('aside a[href^="/workspace/"]');
@@ -90,9 +90,7 @@ describe('the workspace sidebar names a workspace and addresses it separately', 
       return readSidebar(page);
     });
     untitled = rows.find((row) => row.href === `/workspace/${SLUG}`);
-    // A vite build and a chromium launch, the same bound its sibling gates
-    // state: bun's default 5 s hook deadline is shorter than a cold build.
-  }, 240_000);
+  });
 
   test('the fixture really renders the untitled row (guards the guard)', () => {
     // A row nobody rendered is absent from every assertion below and proves
@@ -134,15 +132,15 @@ describe('the workspace frame names an untitled workspace the same way', () => {
   let renamePlaceholder: string | null;
 
   beforeAll(async () => {
-    ({ headerText, headerLabels, renamePlaceholder } = await withGallery(async ({ browser, origin }) => {
-      const page = await browser.newPage();
+    ({ headerText, headerLabels, renamePlaceholder } = await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&ws=${SLUG}`, { waitUntil: 'networkidle0' });
 
       // The title is a button that opens the rename field; wait for the text.
       await page.waitForFunction(
         (untitled) => document.body.innerText.includes(untitled),
-        { timeout: 60_000 }, UNTITLED,
+        {}, UNTITLED,
       );
 
       const partial = await page.evaluate(() => {
@@ -166,12 +164,12 @@ describe('the workspace frame names an untitled workspace the same way', () => {
         const title = [...document.querySelectorAll('button')].find((button) => button.textContent?.includes(untitled));
         title?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       }, UNTITLED);
-      await page.waitForSelector('input[placeholder]', { timeout: 60_000 });
+      await page.waitForSelector('input[placeholder]');
       const renamePlaceholder = await page.$eval('input[placeholder]', (input) => input.getAttribute('placeholder'));
 
       return { ...partial, renamePlaceholder };
     }));
-  }, 240_000);
+  });
   test('the workspace frame says Untitled workspace, never the slug', () => {
     expect(headerText).toContain(UNTITLED);
     expect(headerText).not.toContain(SLUG);
@@ -194,8 +192,8 @@ describe('the Workspaces page roster names an untitled workspace the same way', 
   let text: string;
 
   beforeAll(async () => {
-    text = await withGallery(async ({ browser, origin }) => {
-      const page = await browser.newPage();
+    text = await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspaces`, { waitUntil: 'networkidle0' });
       await page.waitForSelector(`a[href="/workspace/${SLUG}"]`);
@@ -206,7 +204,7 @@ describe('the Workspaces page roster names an untitled workspace the same way', 
         return (row?.textContent ?? '').replace(/\s+/g, ' ').trim();
       }, SLUG);
     });
-  }, 240_000);
+  });
 
   test('the roster row reads Untitled workspace, never the slug', () => {
     expect(text).toContain(UNTITLED);

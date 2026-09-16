@@ -134,4 +134,4 @@ test('actual owner approval admits the real Think program and attributes its nat
   if (!foreign.ok) throw new Error(foreign.error);
   expect(await agent.inspectSubordinate({ path: [], view: 'planTasks', id: foreign.plan.id, revision: foreign.plan.revision })).toMatchObject({ view: 'missing' });
   expect((await planTasks()).map(task => task.id)).toEqual(['t1']);
-}, 15000);
+});

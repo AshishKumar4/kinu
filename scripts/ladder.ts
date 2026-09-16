@@ -172,7 +172,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'reads the machine — inode tables, temp roots, stray project markers — none of which a hash over the tree stands for.' },
   },
   {
-    run: 'bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts',
+    run: 'bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts',
     label: 'Pattern census and parser self-tests',
     tier: 'push',
     seconds: 0.2, // Measured 2026-09-06 on the 24-thread workstation.
@@ -206,7 +206,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', imports: ['tools/oxlint/anti-slop/rules/'] },
   },
   {
-    run: 'bun test packages/agent-core/drift.test.ts',
+    run: 'bun test --timeout=0 packages/agent-core/drift.test.ts',
     label: 'Vendored runtime drift',
     tier: 'commit',
     // Measured 2026-09-15 on the 24-thread workstation, quiet: 0.1 s solo.
@@ -825,6 +825,31 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
+    run: 'bun run gate:test-clocks',
+    label: 'Wall-clock waits in tests',
+    tier: 'push',
+    // Measured 2026-09-15 on the 24-thread workstation: 1.4 s over 1,130 test
+    // files, one oxc parse each.
+    seconds: 1.5,
+    catches: 'a test that waits on a duration instead of an end condition — a timer call '
+      + '(`setTimeout`, `Bun.sleep`, `timers/promises`, `AbortSignal.timeout`), a comparison '
+      + 'against `Date.now()`/`performance.now()` or a binding made from one, a per-test '
+      + 'duration handed to `test`/`describe`/a hook or to `setDefaultTimeout`, and a `{ timeout }` '
+      + 'handed to a puppeteer wait or a `child_process` call. Five deploy runs on 2026-09-15 '
+      + 'went red on five such tests that pass alone and lose the race under the deploy wave; '
+      + 'the framework per-test clock is off everywhere (preload, every vitest config and '
+      + '`--timeout=0` on every bun test row, pinned by the self-test) and this row\'s own '
+      + 'deadline is the one hang detector. The sites found on the day it landed are in a '
+      + 'shrink-only lock keyed by file and kind: a file outside the lock or a count above it '
+      + 'is red, and `--lock` refuses a higher total.',
+    blind: 'a clock value reaching a comparison through a parameter or a return value; a timer '
+      + 'wrapped by a module outside the test corpus and called by the wrapper\'s name; a '
+      + 'duration handed as a bare positional number to a helper the gate does not know; '
+      + '`setImmediate` and `queueMicrotask`, which yield a turn without a duration; a clock '
+      + 'read used as a value and never compared. All printed on the green path.',
+    inputs: { kind: 'derived' },
+  },
+  {
     run: 'bun scripts/secret-scan.ts',
     label: 'Secret scan',
     tier: 'push',
@@ -867,7 +892,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts',
+    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -937,7 +962,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts',
+    run: 'bun test --timeout=0 scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts',
     label: 'Skip ratchet and typecheck coverage self-tests',
     tier: 'push',
     seconds: 0.1,
@@ -953,7 +978,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts',
+    run: 'bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts',
     label: 'Gate ladder wiring and cache soundness',
     tier: 'push',
     // Measured 2026-09-16 on the 24-thread workstation (load 8.1): 1.25/1.20 s
@@ -972,7 +997,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/deploy.test.ts',
+    run: 'bun test --timeout=0 scripts/deploy.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
@@ -985,7 +1010,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts',
+    run: 'bun test --timeout=0 scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts',
     label: 'Gate self-tests: secrets, corpus, preflight',
     tier: 'push',
     // 1.0 s declared 2026-08-24; the gallery-harness case adds 0.13 s, measured 2026-09-05.
@@ -1011,7 +1036,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/gate-set-equality.test.ts',
+    run: 'bun test --timeout=0 scripts/gate-set-equality.test.ts',
     label: 'Set-equality gate self-tests',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 1.2/1.0s. Replaces 0.4s.
@@ -1029,7 +1054,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/wired.test.ts',
+    run: 'bun test --timeout=0 scripts/wired.test.ts',
     label: 'Wired gate self-tests',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 5.1/4.5s (31 tests). Replaces 3.8s.
@@ -1116,7 +1141,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test packages/devbox/',
+    run: 'bun test --timeout=0 packages/devbox/',
     label: 'Devbox durability decisions',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 75.2/73.2s (961 tests). The 0.3s
@@ -1136,7 +1161,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { ...AMBIENT_BY_NAME, corpus: true },
   },
   {
-    run: 'bun test packages/test-utils/',
+    run: 'bun test --timeout=0 packages/test-utils/',
     label: 'Test-utils suite',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 6.9/6.8s (229 tests, mostly the
@@ -1152,7 +1177,7 @@ export const LADDER: readonly Gate[] = [
     // Measured 2026-08-22: 6.43s, four isolated workers. Re-measured 2026-09-05 on the
     // 24-thread box: 12.8/13.1s (3,031 tests across 220 files) — the suite doubled.
     // Replaces 7s.
-    run: 'bun test --parallel=4 packages/cf-backend/',
+    run: 'bun test --timeout=0 --parallel=4 packages/cf-backend/',
     label: 'Cloudflare backend and conformance suite',
     tier: 'push',
     seconds: 13,
@@ -1212,7 +1237,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     // Measured 2026-08-22: 18.42s, four isolated workers.
-    run: 'bun test --parallel=4 packages/cli-backend/',
+    run: 'bun test --timeout=0 --parallel=4 packages/cli-backend/',
     label: 'CLI backend and conformance suite',
     tier: 'ci',
     seconds: 19,
@@ -1242,7 +1267,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test packages/pc-agent/',
+    run: 'bun test --timeout=0 packages/pc-agent/',
     label: 'Local-device daemon suite',
     tier: 'ci',
     seconds: 0.3,
@@ -1271,7 +1296,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test ./tests/',
+    run: 'bun test --timeout=0 ./tests/',
     label: 'Root end-to-end lifecycle suites',
     tier: 'ci',
     seconds: 1.3,
@@ -1346,7 +1371,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'spends live model turns as the eval identity; its evidence is behavioural and dated, never a function of the tree alone.' },
   },
   {
-    run: 'bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts',
+    run: 'bun test --timeout=0 scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts',
     label: 'Evaluation gate logic',
     tier: 'ci',
     seconds: 1,
@@ -1379,7 +1404,7 @@ export const LADDER: readonly Gate[] = [
     // and the r2-bench deploy substrate. Not one of their names starts with
     // `bench`, so all of them shipped tracked, passing by hand, and claimed by NO
     // tier: 89 tests that ran in no pipeline.
-    run: 'bun test scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
+    run: 'bun test --timeout=0 scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
     label: 'Benchmark harness guarantees',
     tier: 'ci',
     // 5.42s: 420 tests over 21 files, median of 5.53 / 5.42 / 4.89 on the
@@ -1410,7 +1435,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/*-ux.test.ts scripts/computed-style.test.ts',
+    run: 'bun test --timeout=0 scripts/*-ux.test.ts scripts/computed-style.test.ts',
     label: 'UI gate self-tests',
     tier: 'ci',
     // Measured 2026-09-14 with both the app-background and the account-ux
@@ -1498,7 +1523,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts',
+    run: 'bun test --timeout=0 scripts/public-pages.test.ts scripts/plan-demo-film.test.ts',
     label: 'Public pages render',
     tier: 'ci',
     // Measured 2026-08-24 after the bug-fix drive and six-width clipping sweep: 51.28s.
@@ -1524,7 +1549,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/react-runtime-identity.test.ts',
+    run: 'bun test --timeout=0 scripts/react-runtime-identity.test.ts',
     label: 'React runtime identity',
     tier: 'ci',
     // Runs the real client build twice, then drives three routes in Chromium.
@@ -1543,7 +1568,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/nested-container-resolution.test.ts',
+    run: 'bun test --timeout=0 scripts/nested-container-resolution.test.ts',
     label: 'Nested container resolution',
     tier: 'ci',
     // Walks the deployed module graph with the bundler as a pure resolver.
@@ -1561,7 +1586,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/swarm-tree-geometry.test.ts',
+    run: 'bun test --timeout=0 scripts/swarm-tree-geometry.test.ts',
     label: 'Swarm-tree geometry',
     tier: 'ci',
     seconds: 29,
@@ -1589,7 +1614,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/chat-scroll.test.ts',
+    run: 'bun test --timeout=0 scripts/chat-scroll.test.ts',
     label: 'Chat infinite scroll',
     tier: 'ci',
     seconds: 34,
@@ -1771,7 +1796,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts',
+    run: 'bun test --timeout=0 scripts/hammer.test.ts scripts/mutation-fences.test.ts',
     label: 'Hammer and fence gate self-tests',
     tier: 'push',
     seconds: 0.4,

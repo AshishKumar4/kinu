@@ -109,7 +109,7 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
       // A refused proposal mints no version at all.
       expect(await rt.identity.scaffold.version()).toBe(0);
     }
-  }, 60_000);
+  });
 
   test('full scaffold lifecycle: bootstrap -> modify -> rollback', async () => {
     const { primary } = loadAIGatewayProviders();
@@ -153,5 +153,5 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
     const missing = await rollbackScaffold(rt, 99);
     expect(missing.ok).toBe(false);
     expect(missing.error).toContain('99');
-  }, 60_000);
+  });
 });

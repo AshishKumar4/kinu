@@ -416,12 +416,11 @@ export default defineConfig({
     // default per-file parallelism would have two of them contend for the same
     // runtime and turn a latency assertion into a flake.
     fileParallelism: false,
-    // Condition-bound diagnostic deadlines have to expire INSIDE the test so the
-    // assertion can name the state actually reached: steer-chain waits 15s for a
-    // client frame, and do-eviction-recovery waits 90s for chat recovery, which
-    // the SDK schedules on the object's own alarm with backoff rather than
-    // immediately. A passing run spends neither — every wait stops at its
-    // condition.
-    testTimeout: 120_000,
+    // No per-test clock: every wait in these suites ends on its condition or on
+    // the runtime's own terminal signal, and a hang is killed by the deploy
+    // ladder at the gate's deadline, which names the gate. `0` is Vitest's
+    // documented disabled-timeout value; `gate:test-clocks` pins it.
+    testTimeout: 0,
+    hookTimeout: 0,
   },
 });

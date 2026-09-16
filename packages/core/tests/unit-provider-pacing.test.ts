@@ -250,8 +250,8 @@ describe('a cancelled caller stops waiting', () => {
 
 describe('the shared wait, without a signal', () => {
   test('abortableSleep resolves when nobody is cancelling it', async () => {
-    const before = Date.now();
-    await abortableSleep(10);
-    expect(Date.now() - before).toBeGreaterThanOrEqual(5);
+    // The timer is the subject's own; what is asserted is that it settles by
+    // resolving, never by the rejection an abort would bring.
+    await expect(abortableSleep(1)).resolves.toBeUndefined();
   });
 });

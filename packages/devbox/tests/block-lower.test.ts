@@ -77,13 +77,13 @@ test('real squashfuse and overlay compose indexed bytes with zero payload read a
 
   const result = spawnSync('docker', ['run', '--rm', '--privileged', '--device', '/dev/fuse',
     '-v', `${root}:/fixture:ro`, '-v', `${join(import.meta.dir, 'support/block-lower-probe.sh')}:/probe.sh:ro`,
-    '--entrypoint', '/bin/sh', image, '/probe.sh'], { encoding: 'utf8', timeout: 60_000 });
+    '--entrypoint', '/bin/sh', image, '/probe.sh'], { encoding: 'utf8' });
 
   expect(result.status, result.stdout + result.stderr).toBe(0);
   expect(result.stdout).toContain('attach-payload-bytes=0');
   expect(result.stdout).toContain('matrix-composed-witness=marker-readable,upper-absent,sidecar-mounted,block-mounted');
   expect(result.stdout).toContain('composed-read=exact copyup=file-local');
-}, 360_000);
+});
 
 test('a renamed replacement directory checkpoints and restores without the old lower children', () => {
   const fixture = `${root}/opaque`;
@@ -97,7 +97,7 @@ test('a renamed replacement directory checkpoints and restores without the old l
   const script = join(import.meta.dir, 'support/opaque-namespace-probe.sh');
 
   const run = (phase: string) => spawnSync('docker', ['run', '--rm', '--privileged', '--device', '/dev/fuse',
-    '-v', `${fixture}:/fixture`, '-v', `${script}:/probe.sh:ro`, '--entrypoint', '/bin/sh', image, '/probe.sh', phase], { encoding: 'utf8', timeout: 60_000 });
+    '-v', `${fixture}:/fixture`, '-v', `${script}:/probe.sh:ro`, '--entrypoint', '/bin/sh', image, '/probe.sh', phase], { encoding: 'utf8' });
 
   const prepared = run('prepare');
   expect(prepared.status, prepared.stdout + prepared.stderr).toBe(0);
@@ -115,7 +115,7 @@ test('a renamed replacement directory checkpoints and restores without the old l
   const missing = run('missing-marker');
   expect(missing.status).not.toBe(0);
   expect(missing.stdout + missing.stderr).toContain('missing delta source');
-}, 60_000);
+});
 
 test('moving the checkpoint session out of the workspace reseats the base and publishes only the overwrite', () => {
   const fixture = `${root}/reseat`;
@@ -128,7 +128,7 @@ test('moving the checkpoint session out of the workspace reseats the base and pu
   const script = join(import.meta.dir, 'support/reseat-cwd-probe.sh');
 
   const run = (phase: string) => spawnSync('docker', ['run', '--rm', '--privileged', '--device', '/dev/fuse',
-    '-v', `${fixture}:/fixture`, '-v', `${script}:/probe.sh:ro`, '--entrypoint', '/bin/bash', image, '/probe.sh', phase], { encoding: 'utf8', timeout: 60_000 });
+    '-v', `${fixture}:/fixture`, '-v', `${script}:/probe.sh:ro`, '--entrypoint', '/bin/bash', image, '/probe.sh', phase], { encoding: 'utf8' });
 
   const prepared = run('prepare');
   expect(prepared.status, prepared.stdout + prepared.stderr).toBe(0);
@@ -144,4 +144,4 @@ test('moving the checkpoint session out of the workspace reseats the base and pu
   expect(restored.status, restored.stdout + restored.stderr).toBe(0);
   expect(Number(readFileSync(`${fixture}/delta-bytes`, 'utf8'))).toBeLessThan(196608);
   expect(restored.stdout).toContain('reseat=outside-workspace delta=small restored=exact payload=0 index-pages=0');
-}, 60_000);
+});

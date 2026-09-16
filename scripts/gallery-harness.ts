@@ -38,7 +38,18 @@ const TcpAddressSchema = v.object({
 });
 
 export interface Gallery {
+  /** The launched browser. A page opened here directly carries puppeteer's
+   *  30 s per-wait default; `newPage` below is the seam every suite opens
+   *  pages through, and `gate:test-clocks` lists the one suite still on this
+   *  handle. */
   readonly browser: Browser;
+  /** A page with no clock: puppeteer's per-page and navigation defaults are 0,
+   *  so every `waitFor*` ends on its condition or on the target closing, never
+   *  on a duration. A wait that can genuinely hang is killed with the browser
+   *  at `withGallery`'s teardown or by the deploy ladder at the gate's
+   *  deadline, which names the gate; `gate:test-clocks` refuses a per-call
+   *  `{ timeout }` in the suites. */
+  newPage(): Promise<Page>;
   /** `http://127.0.0.1:<port>` — this run's server, never another worktree's. */
   readonly origin: string;
 }
@@ -285,13 +296,27 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, bro
         '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
         ...browserArgs,
       ],
+      // No clock on a CDP round trip either: puppeteer's 180 s default is a
+      // wall under load, and `0` disables it (puppeteer 25.10 guards every
+      // timer with `if (timeout)`). A protocol call that never answers ends
+      // when the browser is closed below.
+      protocolTimeout: 0,
     };
 
     if (executablePath) launchOptions.executablePath = executablePath;
     const browser = await puppeteer.launch(launchOptions);
 
+    const newPage = async (): Promise<Page> => {
+      const page = await browser.newPage();
+
+      page.setDefaultTimeout(0);
+      page.setDefaultNavigationTimeout(0);
+
+      return page;
+    };
+
     try {
-      return await body({ browser, origin });
+      return await body({ browser, newPage, origin });
     } finally {
       await browser.close();
     }

@@ -147,11 +147,6 @@ test("a genuinely unreadable workspace names its cause instead of hiding it", ()
   expect(diagnostic.cause).toContain('not a database');
 });
 
-/** Every test here spawns real `kinu` processes (several of them, some
- *  reaching the live model catalog), so the 5s default is not a meaningful
- *  budget — matching the import-hygiene probe's explicit allowance. */
-const CLI_SPAWN_TIMEOUT_MS = 30_000;
-
 describe("CLI inspection commands", () => {
   test("inspect local durable state without model credentials", async () => {
     const home = scratchDir("cli-inspect");
@@ -176,7 +171,7 @@ describe("CLI inspection commands", () => {
     const executors = runCli(home, ["executors", "localtest"]);
     expect(executors.exitCode).toBe(0);
     expect(executors.stdout.toString()).toContain("laptop");
-  }, CLI_SPAWN_TIMEOUT_MS);
+  });
 
   test("kinu model normalizes specs through the provider resolver", async () => {
     const home = scratchDir("cli-model");
@@ -204,7 +199,7 @@ describe("CLI inspection commands", () => {
       : undefined;
 
     expect(globalModel).toBeUndefined();
-  }, CLI_SPAWN_TIMEOUT_MS);
+  });
 
   test("kinu effort updates the active profile authority and appears in status", async () => {
     const home = scratchDir("cli-effort");
@@ -248,7 +243,7 @@ describe("CLI inspection commands", () => {
     const invalid = runCli(home, ["effort", "localtest", "extreme"]);
     expect(invalid.exitCode).toBe(1);
     expect(invalid.stderr.toString()).toContain("none, minimal, low, medium, high, xhigh, max");
-  }, CLI_SPAWN_TIMEOUT_MS);
+  });
 
   test("kinu model validates known, uncatalogued, and unknown-provider specs", async () => {
     const home = scratchDir("cli-model-validation");
@@ -279,7 +274,7 @@ describe("CLI inspection commands", () => {
     expect(unknownProvider.stderr.toString()).toContain('Unknown model provider "unknown"');
     expect(unknownProvider.stderr.toString()).toContain("workers-ai");
     expect(unknownProvider.stdout.toString()).not.toContain("set unknown/model");
-  }, CLI_SPAWN_TIMEOUT_MS);
+  });
 
   // `jobs` and `triggers` branch on opts.json in their command bodies but were
   // never given the flag, so commander rejected the documented invocation.
@@ -292,7 +287,7 @@ describe("CLI inspection commands", () => {
       expect([args, run.exitCode, run.stderr.toString()]).toEqual([args, 0, ""]);
       expect(JSON.parse(run.stdout.toString())).toEqual([]);
     }
-  }, CLI_SPAWN_TIMEOUT_MS);
+  });
 
   // The local one-shot registration wrote its fire time into the spec
   // (`atMs`) where core keeps it in next_fire_at only. Both halves are
@@ -319,7 +314,7 @@ describe("CLI inspection commands", () => {
     } finally {
       db.close();
     }
-  }, CLI_SPAWN_TIMEOUT_MS);
+  });
 
   /**
    * `kinu spend` must say the dollar total is a floor when it is one.
@@ -396,7 +391,7 @@ describe("CLI inspection commands", () => {
     expect(out).toContain("The dollar total is a floor");
     expect(out).toContain("1 measured call carried no models.dev rate");
     expect(out).toContain("1 priced call wrote cache at a retention tier the catalog does not rate");
-  }, CLI_SPAWN_TIMEOUT_MS);
+  });
 });
 
 /**
@@ -449,7 +444,7 @@ describe("kinu events rendering", () => {
     expect(local.stdout).toContain("event-1 chat chat_ws");
     expect([cloud.exitCode, cloud.stderr]).toEqual([0, ""]);
     expect(cloud.stdout).toBe(local.stdout);
-  }, CLI_SPAWN_TIMEOUT_MS);
+  });
 
   test("an enveloped answer is refused by name rather than dumped as raw JSON", async () => {
     const home = scratchDir("cli-events-envelope");
@@ -459,5 +454,5 @@ describe("kinu events rendering", () => {
     expect(enveloped.exitCode).toBe(1);
     expect(enveloped.stderr).toContain("list of rows");
     expect(enveloped.stdout).toBe("");
-  }, CLI_SPAWN_TIMEOUT_MS);
+  });
 });

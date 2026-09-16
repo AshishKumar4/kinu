@@ -35,7 +35,7 @@ function enterSubmits(label: string, enterBytes: string) {
     });
 
     expect(run.screen).toContain('agent prose reply');
-  }, 60_000);
+  });
 }
 
 describe('the composer on a real terminal', () => {
@@ -61,7 +61,7 @@ describe('the composer on a real terminal', () => {
     expect(readFileSync(received, 'utf8')).toBe('draft survives editor failure');
     expect(JSON.parse(readFileSync(sent, 'utf8'))).toBe('draft survives editor failure');
     expect(run.screen).toContain('agent prose reply');
-  }, 60_000);
+  });
 
   test('an external editor receives the draft and returns its edits to the composer', () => {
     const script = scratchPath('composer-editor', 'edit.sh');
@@ -85,7 +85,7 @@ describe('the composer on a real terminal', () => {
     expect(readFileSync(received, 'utf8')).toBe('draft before editor');
     expect(JSON.parse(readFileSync(sent, 'utf8'))).toBe('edited in external editor');
     expect(run.screen).toContain('agent prose reply');
-  }, 60_000);
+  });
 
   test('legacy Ctrl+- bytes undo a deletion', () => {
     const run = runTuiInPty(entry, {
@@ -101,7 +101,7 @@ describe('the composer on a real terminal', () => {
     });
 
     expect(run.screen).not.toContain('agent prose reply');
-  }, 60_000);
+  });
 
   test('an image path paste uses the existing attachment resolver', () => {
     const sent = scratchPath('composer-image-path', 'sent.json');
@@ -124,7 +124,7 @@ describe('the composer on a real terminal', () => {
     expect(JSON.parse(readFileSync(sent, 'utf8'))).toEqual({
       text: path, files: [{ filename: 'shot.png', mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' }],
     });
-  }, 60_000);
+  });
 
   test('OSC 5522 receives image chunks and attaches them on send', () => {
     const sent = scratchPath('composer-image-osc', 'sent.json');
@@ -148,7 +148,7 @@ describe('the composer on a real terminal', () => {
       text: expect.stringContaining('/clipboard/'),
       files: [{ filename: expect.stringMatching(/\.png$/), mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' }],
     });
-  }, 60_000);
+  });
 
   test('a twelve-line bracketed paste collapses and expands exactly on send', () => {
     const sent = scratchPath('composer-paste', 'sent.json');
@@ -167,7 +167,7 @@ describe('the composer on a real terminal', () => {
 
     expect(run.screen).toContain('agent prose reply');
     expect(JSON.parse(readFileSync(sent, 'utf8'))).toBe(text);
-  }, 60_000);
+  });
 
   test('embedded newlines in a short bracketed paste never submit', () => {
     const run = runTuiInPty(entry, {
@@ -180,7 +180,7 @@ describe('the composer on a real terminal', () => {
 
     expect(run.screen).toContain('first pasted line');
     expect(run.screen).not.toContain('agent prose reply');
-  }, 60_000);
+  });
 
   enterSubmits('Enter as CR', '\r');
   enterSubmits('Enter as LF (the tty translated it)', '\n');
@@ -199,5 +199,5 @@ describe('the composer on a real terminal', () => {
 
     expect(run.screen).toContain('line two');
     expect(run.screen).not.toContain('agent prose reply');
-  }, 60_000);
+  });
 });
