@@ -292,6 +292,30 @@ describe('two real turns over the HTTP model seam', () => {
     expect(rebound?.turnId).not.toBe('evt-seeded-dead');
   });
 
+  it('two clients delivering the same message at once are one turn, one provider request, one row', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('twin-driver'));
+    const out = await root.twinSends();
+    const calls = v.parse(HttpSchema, out.http).filter((call) => call.model === 'probe-queue');
+
+    // Idempotent admission under concurrent delivery: the second socket's
+    // frame is the same admitted message, not a second turn.
+    expect(calls).toHaveLength(1);
+    expect(out.transcript.filter((row) => row.role === 'user' && row.id === 'input-TWIN')).toHaveLength(1);
+    expect(out.transcript.filter((row) => row.role === 'assistant')).toHaveLength(1);
+    expect(out.steers).toHaveLength(0);
+    expect(out.runEnds).toEqual([{ runId: expect.any(String), reason: 'completed' }]);
+  });
+
+  it('the eval-only abort ends the activation and the object comes back over the same storage', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('eval-abort-driver'));
+    const out = await root.evalAbort();
+
+    // The platform rejects the call the abort was in flight on — the receipt
+    // the route answers 202 with — and a fresh stub finds a live object.
+    expect(out.receipt).not.toBeNull();
+    expect(out.alive).toBe(true);
+  });
+
   it('a fresh workspace\'s first chat reaches the model and the turn closes', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('first-chat-driver'));
 

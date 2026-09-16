@@ -11,11 +11,15 @@
  * is how half-swapped launchers happen, so `bin/kinu` stays `kinu update`'s.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
-import { CLI_RUNTIME_PATH, cliArtifactPath, isSameBuild } from '@kinu.run/core';
-import { KinuError, toKinuError } from '@kinu.run/core/obs';
+import {
+  CLI_RUNTIME_PATH, CLI_VERSION_PATH, cliArtifactPath, isSameBuild,
+  RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, SignedReleaseSchema, verifyRelease, type SignedRelease,
+} from '@kinu.run/core';
+import * as v from 'valibot';
+import { KinuError, toKinuError, tolerate } from '@kinu.run/core/obs';
 import { AGENT_HOME } from './config';
 
 const CLI_ROOT = join(AGENT_HOME, 'cli');
@@ -25,6 +29,12 @@ export const CLI_CURRENT = join(CLI_ROOT, 'current');
 const CLI_PREV = join(CLI_ROOT, 'prev');
 
 const STAGED_PREFIX = 'next-';
+
+/** The one lock every writer of `cli/` takes — this refresh, another child
+ *  the same probe window started, and the launcher's own refresh — as a
+ *  directory, which `mkdir` creates atomically or refuses. The holder's pid
+ *  sits inside so a lock a dead process left is taken over, not waited on. */
+const CLI_LOCK = join(CLI_ROOT, '.lock');
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -56,17 +66,39 @@ function platformArtifactPath(): string {
  * for the launcher: an incomplete deploy answers a download path with the SPA
  * shell, and unpacking an HTML page as a tarball fails without saying why.
  */
-async function fetchVerified(origin: string, pathname: string, into: string, fetchImpl: FetchLike): Promise<void> {
+/**
+ * The served build's signed manifest, verified against the pinned key: the
+ * one authority for which bytes are Kinu's. Refused — nothing downloaded —
+ * when the manifest carries no signature, one that does not verify, or one
+ * that does not cover the artifact asked for (SECURITY-devices C1).
+ */
+async function signedRelease(origin: string, served: string, fetchImpl: FetchLike): Promise<SignedRelease> {
+  const res = await fetchImpl(`${origin}${CLI_VERSION_PATH}`, { cache: 'no-store' });
+
+  if (!res.ok) throw new KinuError('unavailable', `could not download the release manifest: HTTP ${res.status}`);
+  const parsed = v.safeParse(SignedReleaseSchema, await res.json());
+
+  if (!parsed.success) throw new KinuError('denied', 'the release manifest carries no signature; nothing is downloaded');
+
+  if (!isSameBuild(parsed.output.version, served)) throw new KinuError('io', `the release manifest names ${parsed.output.version}, not the served ${served}`);
+  const publicKey = process.env[RELEASE_SIGNING_PUBLIC_KEY_ENV] ?? RELEASE_SIGNING_PUBLIC_KEY;
+
+  if (!await verifyRelease(parsed.output, publicKey)) throw new KinuError('denied', 'the release signature does not verify against the pinned key; nothing is downloaded');
+
+  return parsed.output;
+}
+
+/** Download one published artifact and prove it whole against the SIGNED
+ *  checksum — the manifest's, never the origin's own `.sha256` file, which
+ *  the origin chooses. */
+async function fetchVerified(origin: string, pathname: string, into: string, release: SignedRelease, fetchImpl: FetchLike): Promise<void> {
+  const expected = release.checksums[pathname];
+
+  if (expected === undefined) throw new KinuError('denied', `the signed release names no ${pathname}; nothing is downloaded`);
   const res = await fetchImpl(`${origin}${pathname}`, { cache: 'no-store' });
 
   if (!res.ok) throw new KinuError('unavailable', `could not download ${pathname}: HTTP ${res.status}`);
   const bytes = new Uint8Array(await res.arrayBuffer());
-  const checksum = await fetchImpl(`${origin}${pathname}.sha256`, { cache: 'no-store' });
-
-  if (!checksum.ok) throw new KinuError('unavailable', `could not download the checksum for ${pathname}: HTTP ${checksum.status}`);
-  const expected = (await checksum.text()).trim().split(/\s+/)[0] ?? '';
-
-  if (!/^[0-9a-f]{64}$/i.test(expected)) throw new KinuError('io', `the checksum published for ${pathname} is not a sha256`);
   const actual = createHash('sha256').update(bytes).digest('hex');
 
   if (actual !== expected.toLowerCase()) throw new KinuError('io', `checksum mismatch for ${pathname}`);
@@ -95,8 +127,9 @@ function stagedVersion(tree: string): Promise<string> {
 }
 
 /**
- * Stage the served build into `cli/next-<stamp>` and prove it: both archives
- * verified against their checksums, unpacked over one tree, and that tree's
+ * Stage the served build into `cli/next-<stamp>` and prove it: the release
+ * manifest's signature verified against the pinned key, both archives
+ * verified against the checksums it signed, unpacked over one tree, and that tree's
  * `cli.js --version` equal to the stamp the origin published. A failed stage
  * leaves nothing behind but `current`, byte for byte as it was.
  */
@@ -109,8 +142,11 @@ async function stageServedBuild(origin: string, served: string, seams: RefreshSe
   mkdirSync(work, { recursive: true });
 
   try {
-    await fetchVerified(origin, platformArtifactPath(), join(work, 'cli.tar.gz'), fetchImpl);
-    await fetchVerified(origin, CLI_RUNTIME_PATH, join(work, 'runtime.tar.gz'), fetchImpl);
+    // The signed manifest first, before any download: a refused signature
+    // costs one small read and lands nothing.
+    const release = await signedRelease(origin, served, fetchImpl);
+    await fetchVerified(origin, platformArtifactPath(), join(work, 'cli.tar.gz'), release, fetchImpl);
+    await fetchVerified(origin, CLI_RUNTIME_PATH, join(work, 'runtime.tar.gz'), release, fetchImpl);
     mkdirSync(join(work, 'extract'));
     await extractTarball(join(work, 'cli.tar.gz'), join(work, 'extract'));
     await extractTarball(join(work, 'runtime.tar.gz'), join(work, 'extract'));
@@ -133,17 +169,87 @@ async function stageServedBuild(origin: string, served: string, seams: RefreshSe
 }
 
 /**
- * Make a staged tree the current one: `current → prev`, `next → current`.
- * Two renames, nothing else — the one atomicity-sensitive step, and the same
- * order the daemon install uses. `prev` is kept for one launch; the launcher
- * removes it after `current` answers `--version`, or restores it when it does
- * not.
+ * Make a staged tree the current one. The last-known-good `prev` is kept
+ * until the new tree is in place: `prev → prev.old`, `current → prev`,
+ * `next → current`, then `prev.old` goes. A crash between any two lines
+ * leaves a runnable tree for the launcher to find — a proven `next-*` when
+ * `current` is missing, else `prev` — which is what its launch check
+ * recovers from without a download. `prev` is kept for one launch; the
+ * launcher removes it after `current` answers `--version`, or restores it
+ * when it does not.
  */
 function adoptStagedBuild(next: string): void {
-  rmSync(CLI_PREV, { recursive: true, force: true });
+  const retired = `${CLI_PREV}.old`;
+  rmSync(retired, { recursive: true, force: true });
 
-  if (existsSync(CLI_CURRENT)) renameSync(CLI_CURRENT, CLI_PREV);
+  if (existsSync(CLI_CURRENT)) {
+    if (existsSync(CLI_PREV)) renameSync(CLI_PREV, retired);
+    renameSync(CLI_CURRENT, CLI_PREV);
+  }
+
   renameSync(next, CLI_CURRENT);
+  rmSync(retired, { recursive: true, force: true });
+}
+
+/** The build `cli/current` answers for, or null when there is none or it
+ *  does not launch — the re-check every refresh makes under the lock, so a
+ *  second child of one probe window adopts nothing over the first's work. */
+async function installedBuild(): Promise<string | null> {
+  if (!existsSync(join(CLI_CURRENT, 'cli.js'))) return null;
+
+  try {
+    return await stagedVersion(CLI_CURRENT);
+  } catch (cause) {
+    if (cause instanceof KinuError) return null;
+    throw cause;
+  }
+}
+
+/** Take the `cli/` lock, or answer null when another live process holds it. */
+function takeCliLock(): (() => void) | null {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const taken = tolerate(() => {
+      mkdirSync(CLI_LOCK);
+
+      return true;
+    }, 'eexist');
+
+    if (taken === true) {
+      writeFileSync(join(CLI_LOCK, 'pid'), `${String(process.pid)}\n`);
+
+      return () => { rmSync(CLI_LOCK, { recursive: true, force: true }); };
+    }
+
+    // The directory is there: a live holder keeps it; a holder that died
+    // between its mkdir and its exit left it, and the lock is taken over.
+    const holder = readLockHolder();
+
+    if (holder !== null && processAlive(holder)) return null;
+    rmSync(CLI_LOCK, { recursive: true, force: true });
+  }
+
+  return null;
+}
+
+/** The pid inside the lock, or null when no pid file is there — a holder
+ *  that died between the mkdir and the write, or a lock nobody wrote into. */
+function readLockHolder(): number | null {
+  const text = tolerate(() => readFileSync(join(CLI_LOCK, 'pid'), 'utf-8'), 'enoent');
+
+  if (text === undefined) return null;
+  const pid = Number(text.trim());
+
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+function processAlive(pid: number): boolean {
+  // `kill 0` answers ESRCH for a pid nobody holds. Any other refusal is a
+  // process this user cannot signal in this user's own home, and propagates.
+  return tolerate(() => {
+    process.kill(pid, 0);
+
+    return true;
+  }, 'esrch') === true;
 }
 
 /**
@@ -187,9 +293,24 @@ function sweepStagedBuilds(keep: string | null): void {
  */
 export async function refreshCliTree(origin: string, served: string, seams: RefreshSeams = {}): Promise<void> {
   mkdirSync(CLI_ROOT, { recursive: true });
-  const staged = await verifiedStagedBuild(served);
-  sweepStagedBuilds(staged);
-  adoptStagedBuild(staged ?? await stageServedBuild(origin, served, seams));
+  const release = takeCliLock();
+
+  // Another live refresh holds `cli/`: it lands the same served build, or a
+  // newer probe's. This one has nothing to add and exits without a word — the
+  // startup throttle is read-then-fetch-then-write, so two commands inside
+  // one probe window both spawn a child.
+  if (release === null) return;
+
+  try {
+    const installed = await installedBuild();
+
+    if (installed !== null && isSameBuild(installed, served)) return;
+    const staged = await verifiedStagedBuild(served);
+    sweepStagedBuilds(staged);
+    adoptStagedBuild(staged ?? await stageServedBuild(origin, served, seams));
+  } finally {
+    release();
+  }
 }
 
 /**

@@ -216,10 +216,13 @@ tar -czf "$OUT_DIR/$CPYTHON_ARTIFACT" -C "$tmp" "kinu/$CPYTHON_PATH"
 publish "$CPYTHON_ARTIFACT"
 
 # Publish the served build's version alongside the artifacts so an installed
-# CLI can ask "is there anything newer?" without downloading one. Written from
-# the SAME stamp the bundle carries — one stamping site, one source.
-"$BUN" -e '
-  const [path, version, sha] = process.argv.slice(1);
-  const stamp = { version, sha, builtAt: new Date().toISOString() };
-  require("fs").writeFileSync(path, `${JSON.stringify(stamp)}\n`);
-' "$OUT_DIR/kinu-version.json" "$version" "$sha"
+# CLI can ask "is there anything newer?" without downloading one — SIGNED:
+# the manifest carries every artifact's checksum and the build lane's
+# signature over them, which is what a daemon, the launcher and the CLI
+# verify against the public key pinned in their bundles before any download
+# reaches a live path. Written from the SAME stamp the bundle carries — one
+# stamping site, one source. A build without the signing key is refused.
+"$BUN" "$ROOT/scripts/sign-release.ts" "$OUT_DIR" "$version" "$sha" || {
+  echo "build-cli-dist: the release could not be signed" >&2
+  exit 1
+}

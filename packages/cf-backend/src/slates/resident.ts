@@ -411,6 +411,10 @@ function rewriteModuleSpecifiers(source: string): string {
 
 export class ResidentSlateProcesses {
   private readonly bundlers = new Map<string, EsbuildService>();
+  /** The image digests each process this activation started still names,
+   *  by pid: the set a sweep keeps beside the boot it is running for. A
+   *  restart the manager drives from its recipe reads these paths again. */
+  private readonly imagesInUse = new Map<number, ReadonlySet<string>>();
 
   constructor(private readonly deps: ResidentSlateDeps) {}
 
@@ -596,13 +600,39 @@ export class ResidentSlateProcesses {
       artifacts.shell = shell;
     }
 
+    // The images this boot wrote are kernel-owned files that nothing else
+    // sweeps: fabric's own sweep covers only images it persisted itself, and
+    // `application.js` changes with every source edit, so a workspace that
+    // iterates on a slate accumulated one image per edit for the life of its
+    // SQLite. Swept here, after a boot that succeeded, keeping what every
+    // process this activation started still names — a re-drive after a
+    // hibernation rewrites its images through this same boot.
+    this.imagesInUse.set(pid, new Set(Object.values(images)));
+    this.sweepFacetImages(kernelVfs);
+
     return {
       id: String(pid), port: input.app?.port ?? null, methods, artifacts,
       request: (request) => spawned.facet.fetch(request),
       connect: (request) => spawned.facet.connect(request),
       isRunning: async () => session.processes.get(pid)?.state === 'running',
-      stop: async () => { manager.kill(pid); },
+      stop: async () => { manager.kill(pid); this.imagesInUse.delete(pid); },
     };
+  }
+
+  /** Remove every facet image no process this activation started still
+   *  names. Content-addressed, so a boot of the same source finds its images
+   *  in place and an edited source's old image goes with the process that
+   *  ran it. */
+  private sweepFacetImages(kernelVfs: ReturnType<WorkspaceSession['vfs']['as']>): void {
+    const keep = new Set<string>();
+
+    for (const digests of this.imagesInUse.values()) for (const digest of digests) keep.add(facetImagePath(digest));
+
+    for (const entry of kernelVfs.readdir(`/${FACET_IMAGE_DIR}`)) {
+      const path = `/${FACET_IMAGE_DIR}/${entry.name}`;
+
+      if (entry.type === 'file' && !keep.has(path)) kernelVfs.unlink(path);
+    }
   }
 
   /** The kernel-owned `kinu:slate` modules every slate's VFS carries. Written

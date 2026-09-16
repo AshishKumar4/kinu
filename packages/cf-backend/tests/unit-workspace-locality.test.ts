@@ -595,6 +595,10 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
   });
 
   test('a launch a hibernation interrupted is re-driven through the slate host on the next wake', async () => {
+    // VENDOR-FORMAT COUPLING: the journal row seeded below copies worker 0.7's
+    // own `resident-launch:<n>` recipe shape. A worker that changes the row
+    // shape makes the manager ignore the row and this test fail — the right
+    // direction, and the one place to update when the vendor moves.
     const actor = actorObject();
     const kv = new Map<string, JsonValue>();
     Object.assign(actor.ctx.storage, kvBackedStorage(kv));

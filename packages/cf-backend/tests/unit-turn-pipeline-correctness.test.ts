@@ -12,7 +12,7 @@ import {
 } from '@kinu.run/core';
 import {
   declareShadowCandidate, hostedExplorationHarness, hostedMainActor, orchestratorHarness,
-  reactivateOrchestratorHarness, thinkTurns,
+  reactivateOrchestratorHarness, chatSessionTurns,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { createHeadRuntime } from '../src/head-runtime';
@@ -35,7 +35,7 @@ import * as v from 'valibot';
 async function stepMessages(
   agent: HarnessOrchestratorAgent, stepNumber: number, messages: readonly ModelMessage[],
 ): Promise<ModelMessage[]> {
-  return [...await thinkTurns(agent).step(stepNumber, messages)];
+  return [...await chatSessionTurns(agent).step(stepNumber, messages)];
 }
 
 /** The turn-local block the ledger weaves into every step's request. */
@@ -167,7 +167,7 @@ describe('turn-pipeline correctness wiring', () => {
     const admit = (effort: ReasoningEffort) => {
       agent.harnessInstallCatalog({ tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC, reasoningEffort: effort } } });
 
-      return thinkTurns(agent).prepare({ messages: [{ role: 'user', content: effort }],
+      return chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: effort }],
         tools });
     };
 
@@ -179,7 +179,7 @@ describe('turn-pipeline correctness wiring', () => {
     const invoke = toolExecute<Record<string, never>, unknown>(probe);
     const detached = invoke({});
     await started.promise;
-    await thinkTurns(agent).settle({ messageId: 'profile-A', text: 'detached', requestId: 'profile-A' });
+    await chatSessionTurns(agent).settle({ messageId: 'profile-A', text: 'detached', requestId: 'profile-A' });
     expect(agent.observeResolvedTurnProfile()).toBeNull();
     await admit('high');
     expect(agent.observeResolvedTurnProfile()?.tier.reasoningEffort).toBe('high');
@@ -196,7 +196,7 @@ describe('turn-pipeline correctness wiring', () => {
     const agent = harness.agent;
     agent.setObservedSoul('You are Atlas. Preserve the owner\'s exact requirements.');
 
-    const config = await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'summarise this file' }] });
+    const config = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'summarise this file' }] });
 
     expect(config?.system ?? '').toContain('You are Atlas. Preserve the owner\'s exact requirements.');
   });
@@ -217,13 +217,13 @@ describe('turn-pipeline correctness wiring', () => {
 
     const turn = (messages: ModelMessage[]) => ({ messages });
 
-    const opening = await thinkTurns(agent).prepare(turn([first]));
+    const opening = await chatSessionTurns(agent).prepare(turn([first]));
 
     expect(opening?.messages?.filter((message) => message.role === 'user')).toEqual([first]);
 
-    await thinkTurns(agent).settle({ messageId: 'a-1', text: 'execute_tools, run, file', requestId: 'req-1' });
+    await chatSessionTurns(agent).settle({ messageId: 'a-1', text: 'execute_tools, run, file', requestId: 'req-1' });
 
-    const following = await thinkTurns(agent).prepare(turn([first, reply, second]));
+    const following = await chatSessionTurns(agent).prepare(turn([first, reply, second]));
     const request = following?.messages ?? [];
 
     // Both halves: the message that started this turn is in the request, and
@@ -243,15 +243,15 @@ describe('turn-pipeline correctness wiring', () => {
 
     const turn = (messages: ModelMessage[]) => ({ messages });
 
-    await thinkTurns(agent).prepare(turn([first]));
-    await thinkTurns(agent).settle({ messageId: 'edited-answer-1', text: 'answer', requestId: 'edited-req-1' });
+    await chatSessionTurns(agent).prepare(turn([first]));
+    await chatSessionTurns(agent).settle({ messageId: 'edited-answer-1', text: 'answer', requestId: 'edited-req-1' });
     const document = v.parse(v.string(), await runtime.storage.vfs.readFile('/context/working.jsonl', { encoding: 'utf8' }));
     await runtime.storage.vfs.writeFile('/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
     await expect(runtime.storage.vfs.writeFile('/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
     declareShadowCandidate(runtime);
     runtime.actor.config.setShadowSampleRate(1);
-    const prepared = await thinkTurns(agent).prepare(turn([first, reply, next]));
-    await thinkTurns(agent).settle({ messageId: 'edited-answer-2', text: 'second answer', requestId: 'edited-req-2' });
+    const prepared = await chatSessionTurns(agent).prepare(turn([first, reply, next]));
+    await chatSessionTurns(agent).settle({ messageId: 'edited-answer-2', text: 'second answer', requestId: 'edited-req-2' });
     const trial = listQueuedShadowTrials(runtime.storage.sql, runtime.actor, 1)[0];
 
     if (trial === undefined || prepared?.messages === undefined) throw new Error('the turn did not retain its request and trial');
@@ -282,7 +282,7 @@ describe('turn-pipeline correctness wiring', () => {
     });
 
     unreachable.agent.setObservedSoul('You are Vesta. Answer on the tools you hold.');
-    const config = await thinkTurns(unreachable.agent).prepare(turn);
+    const config = await chatSessionTurns(unreachable.agent).prepare(turn);
     expect(config?.system ?? '').toContain('You are Vesta. Answer on the tools you hold.');
 
     const denied = orchestratorHarness({
@@ -290,7 +290,7 @@ describe('turn-pipeline correctness wiring', () => {
       failDescriptors: new KinuError('denied', 'the caller holds no capability'),
     });
 
-    await expect(thinkTurns(denied.agent).prepare(turn)).rejects.toMatchObject({ code: 'denied' });
+    await expect(chatSessionTurns(denied.agent).prepare(turn)).rejects.toMatchObject({ code: 'denied' });
   });
 
   test('client RPC policy runs before SDK dispatch and defaults to allow', () => {
@@ -341,7 +341,7 @@ describe('turn-pipeline correctness wiring', () => {
     const pinned = await agent.setModel('workers-ai/pinned-model');
     expect(pinned).toEqual({ ok: true, spec: 'workers-ai/pinned-model' });
 
-    const config = await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'hello' }] });
+    const config = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'hello' }] });
 
     expect(agent.observeResolvedTurnProfile()?.tier).toEqual({
       id: 'default', source: 'workspace', model: 'workers-ai/pinned-model',
@@ -444,7 +444,7 @@ describe('turn-pipeline correctness wiring', () => {
     const { agent } = orchestratorHarness();
     const handed: ModelMessage[] = [{ role: 'user', content: 'deploy the api' }];
 
-    const turn = await thinkTurns(agent).prepare({ messages: handed });
+    const turn = await chatSessionTurns(agent).prepare({ messages: handed });
 
     const admitted = turn?.messages ?? handed;
 
@@ -474,7 +474,7 @@ describe('turn-pipeline correctness wiring', () => {
       agent.modelFactory = () => model;
       const handed: ModelMessage[] = [{ role: 'user', content: `Run the ${mode} turn` }];
 
-      const turn = await thinkTurns(agent).prepare({ messages: handed, tools: installed ? agent.getTools() : {} });
+      const turn = await chatSessionTurns(agent).prepare({ messages: handed, tools: installed ? agent.getTools() : {} });
 
       if (!turn) throw new Error('the root turn must prepare a configuration');
       const messages = await stepMessages(agent, 0, turn.messages ?? handed);
@@ -493,16 +493,16 @@ describe('turn-pipeline correctness wiring', () => {
     const { agent } = orchestratorHarness();
     const handed: ModelMessage[] = [{ role: 'user', content: 'prepare one turn' }];
     const context = { system: 'sys', messages: handed, tools: {}, model: 'harness-model', continuation: false, body: {} };
-    const turn = await thinkTurns(agent).prepare(context);
+    const turn = await chatSessionTurns(agent).prepare(context);
     const admitted = turn?.messages ?? handed;
 
     expect((await stepMessages(agent, 0, admitted)).filter(isDynamicContextBlock)).toHaveLength(1);
     // The prepared turn settles first: the loop runs one turn at a time, and a
     // NEW preparation is a new turn. Cut at its admission, it is refused.
-    await thinkTurns(agent).settle({ messageId: 'prepared-answer', text: 'done' });
+    await chatSessionTurns(agent).settle({ messageId: 'prepared-answer', text: 'done' });
     const abort = new AbortController();
     abort.abort(new Error('rejected preparation'));
-    await expect(thinkTurns(agent).prepare({ ...context, signal: abort.signal })).rejects.toThrow('rejected preparation');
+    await expect(chatSessionTurns(agent).prepare({ ...context, signal: abort.signal })).rejects.toThrow('rejected preparation');
     await expect(stepMessages(agent, 0, admitted)).rejects.toThrow('a model step requires a prepared profile and tool surface');
   });
 
@@ -709,8 +709,8 @@ describe('turn-pipeline correctness wiring', () => {
     // shape no workspace has, and every pane read would pass against it while
     // failing on the real one. The rows are the loop's own: the turn it opened
     // under the user's id, and the answer it was streaming when it was cut.
-    thinkTurns(harness.agent).open('u-live');
-    await thinkTurns(harness.agent).settle({ messageId: 'a-live', text: 'partial answer', requestId: 'req-interrupted', status: 'aborted' });
+    chatSessionTurns(harness.agent).open('u-live');
+    await chatSessionTurns(harness.agent).settle({ messageId: 'a-live', text: 'partial answer', requestId: 'req-interrupted', status: 'aborted' });
 
     // No projection row anywhere.
     const mirrored = harness.db.prepare<{ c: number }, []>(
@@ -743,7 +743,7 @@ describe('turn-pipeline correctness wiring', () => {
     // fact into the recording rather than asking the host that recovers it.
     harness.agent.declareTurnEvolutionGate();
 
-    await thinkTurns(harness.agent).settle({ messageId: 'a-cut', text: 'partial', requestId: 'req-cut', status: 'aborted' });
+    await chatSessionTurns(harness.agent).settle({ messageId: 'a-cut', text: 'partial', requestId: 'req-cut', status: 'aborted' });
 
     // The outcome-review buffer core's recordTurn appends to, and the turn's own
     // partial answer inside it — a row for some other turn would pass a bare
@@ -801,7 +801,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     test('a completed build turn claims them', async () => {
       const harness = settleOneTurn('build');
-      await thinkTurns(harness.agent).settle({ messageId: settled.id, parts: settled.parts, requestId: 'req-build' });
+      await chatSessionTurns(harness.agent).settle({ messageId: settled.id, parts: settled.parts, requestId: 'req-build' });
       expect(harness.db.query('SELECT turn_id, session_id FROM alternate_takes').get())
         .toMatchObject({ turn_id: 'a-1', session_id: 'default' });
     });
@@ -813,7 +813,7 @@ describe('turn-pipeline correctness wiring', () => {
       // `actor_id` key change produced — would purge nothing and still read 0.
       expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
         .toMatchObject({ n: 1 });
-      await thinkTurns(harness.agent).settle({ messageId: settled.id, parts: settled.parts, requestId: 'req-plan' });
+      await chatSessionTurns(harness.agent).settle({ messageId: settled.id, parts: settled.parts, requestId: 'req-plan' });
       expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
         .toMatchObject({ n: 0 });
     });
@@ -899,7 +899,7 @@ describe('turn-pipeline correctness wiring', () => {
       boundDelivery(harness, 'evt-spliced');
       await spliceDrain(harness, 'evt-spliced');
 
-      await thinkTurns(harness.agent).settle({ messageId: 'a-1', text: 'the answer', requestId: 'req-spliced' });
+      await chatSessionTurns(harness.agent).settle({ messageId: 'a-1', text: 'the answer', requestId: 'req-spliced' });
 
       // Answered: the lease is closed and the BINDING is kept, so no drain can
       // select it again either.
@@ -920,7 +920,7 @@ describe('turn-pipeline correctness wiring', () => {
       // having happened, and the delivery is still owed. The loop does not
       // leave it owed: the seam re-queues the absorbed drain as a turn of its
       // own, which runs at once and answers it.
-      await expect(thinkTurns(harness.agent).settle({ messageId: 'a-nodurable', text: 'the answer', requestId: 'req-nodurable', persistFails: true }))
+      await expect(chatSessionTurns(harness.agent).settle({ messageId: 'a-nodurable', text: 'the answer', requestId: 'req-nodurable', persistFails: true }))
         .rejects.toThrow('could not be written');
 
       const runs = harness.db.query('SELECT run_id, type, payload FROM run_events WHERE type IN (\'run_start\', \'run_end\') ORDER BY rowid').all()
@@ -939,7 +939,7 @@ describe('turn-pipeline correctness wiring', () => {
       boundDelivery(harness, 'evt-failed');
       await spliceDrain(harness, 'evt-failed');
 
-      await thinkTurns(harness.agent).settle({ messageId: 'a-3', requestId: 'req-failed', status: 'error', error: 'provider exploded' });
+      await chatSessionTurns(harness.agent).settle({ messageId: 'a-3', requestId: 'req-failed', status: 'error', error: 'provider exploded' });
 
       expect(await settledLease(harness)).toEqual({
         turn_id: 'evt-failed', consumed_at: LEASE_TAKEN_AT,
@@ -972,9 +972,9 @@ describe('turn-pipeline correctness wiring', () => {
     // and its answer is the model's.
     const drained = orchestratorHarness();
     drained.agent.harnessDrivingUserMessage('the drain text', { kinuEvent: 'event_drain', drainTurnId: 'drain-1' });
-    const parked = await thinkTurns(drained.agent).prepare({ messages: [{ role: 'user', content: 'the drain text' }] });
+    const parked = await chatSessionTurns(drained.agent).prepare({ messages: [{ role: 'user', content: 'the drain text' }] });
     expect(parked?.messages.at(-1)).toEqual({ role: 'user', content: 'the drain text' });
-    await thinkTurns(drained.agent).settle({ messageId: 'a-9', text: 'the answer' });
+    await chatSessionTurns(drained.agent).settle({ messageId: 'a-9', text: 'the answer' });
     const rows = drained.agent.harnessTranscript.history();
     expect(rows.at(-2)).toMatchObject({ role: 'user', parts: [{ type: 'text', text: 'the drain text' }], metadata: expect.objectContaining({ drainTurnId: 'drain-1' }) });
     expect(rows.at(-1)).toMatchObject({ role: 'assistant', parts: expect.arrayContaining([expect.objectContaining({ type: 'text', text: 'the answer' })]) });
@@ -1025,14 +1025,14 @@ describe('turn-pipeline correctness wiring', () => {
     expect(onStart).toContain('sweepsTruncated || this.owedWorkExists()');
     expect(onStart).toContain('this.scheduleTerminalRetry(Date.now())');
 
-    // …and that predicate is EXISTENCE READS AND NOTHING ELSE — the init ruling
-    // covers spawned work too, so the lease join, the stale sweep and every
-    // dispatch belong to the wake's frame. Behaviour:
+    // …and that predicate's untimed half is EXISTENCE READS AND NOTHING ELSE —
+    // the init ruling covers spawned work too, so the lease join, the stale
+    // sweep and every dispatch belong to the wake's frame. Behaviour:
     // unit-durable-terminal-recovery.test.ts drives an activation over an owed
     // lease and asserts both halves — the classification answers true and the
     // lease is untouched until the tick runs.
     const classify = memberBody(
-      source, 'protected override owedWorkExists(): boolean', 'orchestrator.ts',
+      source, 'protected override owedUntimedWork(): boolean', 'orchestrator.ts',
     );
 
     expect(classify).toContain('hasOpenDrainLease()');
@@ -1122,7 +1122,7 @@ describe('turn-pipeline correctness wiring', () => {
   test('the role rides the cacheable prefix; provenance never does', async () => {
     const { agent } = orchestratorHarness();
 
-    const config = await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'summarise this file' }] });
+    const config = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'summarise this file' }] });
 
     const system = config?.system ?? '';
     // The turn's resolved role is a prefix fact: it changes on a deliberate
@@ -1142,7 +1142,7 @@ describe('turn-pipeline correctness wiring', () => {
     // ladder's middle rung.
     const { agent } = orchestratorHarness();
 
-    const config = await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'summarise this file' }] });
+    const config = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'summarise this file' }] });
 
     expect(config?.system ?? '').toContain('`hire` with `lifetime:"task"` runs one agent for one question');
   });
@@ -1151,7 +1151,7 @@ describe('turn-pipeline correctness wiring', () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
 
-    const turn = (content: string) => thinkTurns(agent).prepare({ messages: [{ role: 'user' as const, content }] });
+    const turn = (content: string) => chatSessionTurns(agent).prepare({ messages: [{ role: 'user' as const, content }] });
 
     await turn('open the turn');
     const setMode = toolExecute<{ action: 'mode'; role: string }, unknown>(agent.getTools().tasks);
@@ -1159,7 +1159,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(result.role).toBe('auditor');
     // The NEXT prompt: the open turn settles first, since the loop runs one
     // turn at a time and a second message while it runs would splice into it.
-    await thinkTurns(agent).settle({ messageId: 'role-set-answer', text: 'switched' });
+    await chatSessionTurns(agent).settle({ messageId: 'role-set-answer', text: 'switched' });
     const config = await turn('audit this change');
     expect(config?.system).toContain('## Role: Auditor (auditor)');
   });
@@ -1176,7 +1176,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     if (!prepare) throw new Error('Expected turn steering prepareStep extension');
 
-    await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'add caching to the api and update the docs' }] });
+    await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'add caching to the api and update the docs' }] });
     const messages = [{ role: 'user' as const, content: 'add caching to the api and update the docs' }];
     const stepped = await prepare.call(orch.turnExtension, { stepNumber: 0, messages });
     const rendered = JSON.stringify(stepped ?? messages);
@@ -1269,7 +1269,7 @@ describe('a recoverable rollout claims its tool calls on the rollout', () => {
 
   test('the scope is the claim identity, not whatever turn is ambient', async () => {
     const harness = orchestratorHarness();
-    const live = await thinkTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });
+    const live = await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });
 
     await harness.agent.harnessScaffoldCallTool('trial-7')('memory', RECALL);
 
@@ -1286,7 +1286,7 @@ describe('a recoverable rollout claims its tool calls on the rollout', () => {
    */
   test('a cold replay is answered from the first attempt row', async () => {
     const harness = orchestratorHarness();
-    await thinkTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });
+    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });
     harness.agent.harnessFacts().upsert('trial-probe', 'as the trial saw it');
     const first = await harness.agent.harnessScaffoldCallTool('trial-7')('memory', RECALL);
 
@@ -1303,7 +1303,7 @@ describe('a recoverable rollout claims its tool calls on the rollout', () => {
    *  scope that would claim to be recoverable. */
   test('an unscoped rollout still claims against the live turn', async () => {
     const harness = orchestratorHarness();
-    const live = await thinkTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });
+    const live = await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });
 
     await harness.agent.harnessScaffoldCallTool()('memory', RECALL);
 

@@ -1868,7 +1868,7 @@ function readConversationTail(entry: HostEntry): SerializedMessage[] {
  * state — it is the daemon's own timer, and the daemon hosts every actor in
  * the file. Scoping it to the root would make the process sleep through a
  * hired subordinate's due trigger, which is the failure this fold exists to
- * prevent. The same contract as `hasLiveJobsInWorkspace()`: workspace-wide by
+ * prevent. The same contract as `hasUntimedLiveJobsInWorkspace()`: workspace-wide by
  * design, not by omission. It takes a bare `Database` for exactly that reason
  * — there is no one actor whose handle would be the right one to hold here.
  */

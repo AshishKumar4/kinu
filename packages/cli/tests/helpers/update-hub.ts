@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
+import { generateReleaseSigningKey, signRelease, type SignedRelease } from '@kinu.run/core';
 import DAEMON_SOURCE from '../../../pc-agent/src/index.js' with { type: 'text' };
 import SANDBOX_SOURCE from '../../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PTY_SOURCE from '../../../pc-agent/src/pty.js' with { type: 'text' };
@@ -69,7 +70,7 @@ export type HubFrame = v.InferOutput<typeof FrameSchema>;
 /** What this hub pushes: the daemon's own frame vocabulary. */
 export type HubPush =
   | { type: 'ROTATE'; token: string }
-  | { type: 'UPDATE'; version: string; urls: { tarball: string; checksum: string }; sha256: string }
+  | { type: 'UPDATE'; version: string; urls: { tarball: string; checksum: string }; sha256: string; checksums?: Record<string, string>; signature?: string }
   | { id: string; method: string; params: unknown[] };
 
 export interface HubSocket {
@@ -85,6 +86,10 @@ export interface HubSocket {
    *  sent before the question has been handled too — the positive signal for
    *  "nothing else happened". */
   settle(): Promise<void>;
+  /** Drop the socket from the hub's side with an ordinary close — a hub
+   *  restart, as the daemon sees one — so the daemon reconnects and HELLOs
+   *  again. Recorded as 'hub'. */
+  drop(): void;
 }
 
 export interface UpdateHub {
@@ -97,6 +102,22 @@ export interface UpdateHub {
   close(): Promise<void>;
 }
 
+/**
+ * The key the test hub signs releases with, minted once per process. A daemon
+ * under test pins its PUBLIC half through its environment
+ * ({@link RELEASE_SIGNING_ENV}), the way a machine's own operator would; the
+ * production pin never signs anything here.
+ */
+const signingKey = generateReleaseSigningKey();
+
+export const RELEASE_SIGNING_ENV = 'KINU_RELEASE_SIGNING_PUBLIC_KEY';
+
+/** The environment a daemon under test is started with, so it verifies the
+ *  hub's signatures against the test key. */
+export async function releaseSigningEnv(): Promise<Record<string, string>> {
+  return { [RELEASE_SIGNING_ENV]: (await signingKey).publicKeyHex };
+}
+
 export interface UpdateHubOptions {
   served: string;
   archive: Uint8Array;
@@ -105,12 +126,24 @@ export interface UpdateHubOptions {
   /** Push UPDATE regardless of the HELLO's version and opt-out — the
    *  daemon's own gates are then what the test reads. */
   pushAlways?: boolean;
+  /** The hostile hub: a frame whose checksums the test key never signed —
+   *  none at all, or a signature by a key of the hub's own. */
+  signing?: 'none' | 'foreign';
 }
 
 export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
   const sockets: HubSocket[] = [];
   const hits: string[] = [];
   const digest = createHash('sha256').update(opts.corrupt ? new Uint8Array([0]) : opts.archive).digest('hex');
+  const checksums = { [PLATFORM_ARTIFACT]: digest };
+
+  const manifest: Promise<SignedRelease | null> = (async () => {
+    if (opts.signing === 'none') return null;
+    const key = opts.signing === 'foreign' ? await generateReleaseSigningKey() : await signingKey;
+
+    return signRelease(opts.served, checksums, key.privateKeyPkcs8Base64);
+  })();
+
   const bySocket = new WeakMap<ServerWebSocket<unknown>, HubSocket>();
   const openSockets = new Set<ServerWebSocket<unknown>>();
 
@@ -131,7 +164,7 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
       return new Response('not found', { status: 404 });
     },
     websocket: {
-      message(ws, message) {
+      async message(ws, message) {
         const text = String(message);
 
         if (text === 'ping') return;
@@ -154,6 +187,10 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
           frames: [],
           closed: null,
           send: (out) => { ws.send(JSON.stringify(out)); },
+          drop: () => {
+            socket.closed = 'hub';
+            ws.close(1012, 'hub restart');
+          },
           settle: async () => {
             asked += 1;
             const id = `rpc-settle0000-${asked}`;
@@ -181,11 +218,15 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
         const allowed = hello.updateCheck !== false;
 
         if (opts.pushAlways || (behind && allowed)) {
+          const signed = await manifest;
           socket.send({
             type: 'UPDATE',
             version: opts.served,
             urls: { tarball: PLATFORM_ARTIFACT, checksum: `${PLATFORM_ARTIFACT}.sha256` },
             sha256: digest,
+            // A hub that signs nothing sends the frame the audit's trojan
+            // probe sent: checksums it chose, and no signature over them.
+            ...(signed === null ? { checksums } : { checksums: signed.checksums, signature: signed.signature }),
           });
         }
       },

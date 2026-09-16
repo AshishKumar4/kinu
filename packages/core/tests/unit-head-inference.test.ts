@@ -91,6 +91,35 @@ describe('runHeadInference — report assembly', () => {
     expect(report.id).toBe('h1');
   });
 
+  test('a head summary is the turn\'s answer as the runner selects it, not the last step it saw', async () => {
+    // The runner's one answer rule JOINS a step the provider cut at its output
+    // limit with the continuation that finished it. A head that kept "the last
+    // non-empty step" reported only the continuation's tail as its summary.
+    let calls = 0;
+
+    const model = scriptedTurnModel({
+      provider: 'fake', modelId: 'fake-head',
+      doGenerate: () => {
+        const step = calls++;
+
+        return {
+          content: [{ type: 'text', text: step === 0 ? 'The lexer handles ' : 'UTF-8 correctly.' }],
+          finishReason: { unified: step === 0 ? 'length' : 'stop', raw: undefined },
+          usage: {
+            inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 20, text: 20, reasoning: undefined },
+          },
+          warnings: [],
+        };
+      },
+    });
+
+    const report = await runHeadInference(headInput(), await deps(model));
+    expect(report.status).toBe('completed');
+    expect(calls).toBe(2);
+    expect(report.summary).toBe('The lexer handles UTF-8 correctly.');
+  });
+
   test('budget already exhausted → status budget_exceeded', async () => {
     const input = headInput({ budget: { maxDepth: 2, maxWallClockMs: 1, spawnedAt: 1 } });
     const report = await runHeadInference(input, await deps(fakeHeadModel('partial')));

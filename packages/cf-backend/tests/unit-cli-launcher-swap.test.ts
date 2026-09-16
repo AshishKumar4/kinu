@@ -101,6 +101,47 @@ describe('the launcher launch check', () => {
     expect(existsSync(join(home, 'cli', 'current', 'cli.js'))).toBe(true);
   });
 
+  test('a swap killed after current moved out is finished from the proven next-* tree, no download', async () => {
+    // The state a kill between the swap's renames leaves: no current, prev is
+    // the build that last ran, next-<pid> is the tree the refresh had already
+    // proven. The origin here answers nothing (port 9), so a launch that
+    // reached for a download would fail as itself.
+    const { home, launcher } = await launcherHome();
+    cliTree(home, 'prev', '1.0.0+old');
+    cliTree(home, 'next-4242', '2.0.0+new');
+
+    const run = await launch(home, launcher, '--version');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toBe('2.0.0+new');
+    expect(readFileSync(join(home, 'cli', 'current', 'cli.js'), 'utf-8')).toContain('2.0.0+new');
+    // The prev the killed swap had moved aside was proven by this launch and dropped.
+    expect(existsSync(join(home, 'cli', 'next-4242'))).toBe(false);
+  });
+
+  test('a missing current with only prev beside it runs prev, no download', async () => {
+    const { home, launcher } = await launcherHome();
+    cliTree(home, 'prev', '1.0.0+old');
+
+    const run = await launch(home, launcher, '--version');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toBe('1.0.0+old');
+    expect(readFileSync(join(home, 'cli', 'current', 'cli.js'), 'utf-8')).toContain('1.0.0+old');
+    expect(existsSync(join(home, 'cli', 'prev'))).toBe(false);
+  });
+
+  test('a launcher that cannot take the tree lock runs what is installed', async () => {
+    const { home, launcher } = await launcherHome();
+    cliTree(home, 'current', '1.0.0+old');
+    mkdirSync(join(home, 'cli', '.lock'), { recursive: true });
+    writeFileSync(join(home, 'cli', '.lock', 'pid'), `${String(process.pid)}\n`);
+
+    const run = await launch(home, launcher, '--version');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toBe('1.0.0+old');
+    // The live holder's lock is left in place.
+    expect(existsSync(join(home, 'cli', '.lock'))).toBe(true);
+  });
+
   test('the launcher no longer intercepts update: the installed CLI owns it', async () => {
     const { home, launcher } = await launcherHome();
     cliTree(home, 'current', '2.0.0+new');

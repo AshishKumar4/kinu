@@ -20,7 +20,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { AssistantModelMessage, ModelMessage, ToolModelMessage } from 'ai';
 import { isPortableToolCallId } from '@kinu.run/core';
-import { orchestratorHarness, thinkTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 /** What the SOURCE provider named this call — Anthropic's own grammar, which no
  *  other family mints, so its presence on a request is unambiguous. */
@@ -67,7 +67,7 @@ const HISTORY: ModelMessage[] = [
 async function stepMessages(
   agent: HarnessOrchestratorAgent, messages: readonly ModelMessage[],
 ): Promise<ModelMessage[]> {
-  return [...await thinkTurns(agent).step(0, messages)];
+  return [...await chatSessionTurns(agent).step(0, messages)];
 }
 
 /** Both halves of every tool call on a request, in wire order. */
@@ -93,7 +93,7 @@ describe('a hosted step whose history came from another provider', () => {
     const { agent } = orchestratorHarness();
     // beforeStep refuses an unprepared turn: open it through beforeTurn, the
     // way production does, so the step reads a real snapshot.
-    await thinkTurns(agent).prepare({ messages: [...HISTORY] });
+    await chatSessionTurns(agent).prepare({ messages: [...HISTORY] });
 
     const carried = pairing(await stepMessages(agent, [...HISTORY]));
 
@@ -110,7 +110,7 @@ describe('a hosted step whose history came from another provider', () => {
 
   test('converts source reasoning to portable text and removes its signature', async () => {
     const { agent } = orchestratorHarness();
-    await thinkTurns(agent).prepare({ messages: [...HISTORY] });
+    await chatSessionTurns(agent).prepare({ messages: [...HISTORY] });
 
     const messages = await stepMessages(agent, [...HISTORY]);
 
@@ -129,7 +129,7 @@ describe('a hosted step whose history came from another provider', () => {
 
   test('pairs the same way on every step, so a re-issued request is stable', async () => {
     const { agent } = orchestratorHarness();
-    await thinkTurns(agent).prepare({ messages: [...HISTORY] });
+    await chatSessionTurns(agent).prepare({ messages: [...HISTORY] });
 
     const first = pairing(await stepMessages(agent, [...HISTORY]));
     const second = pairing(await stepMessages(agent, [...HISTORY]));

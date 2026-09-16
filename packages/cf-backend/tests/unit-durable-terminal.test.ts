@@ -20,7 +20,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   declareShadowCandidate,
-  orchestratorHarness, thinkTurns,
+  orchestratorHarness, chatSessionTurns,
   reactivateOrchestratorHarness,
   type ActorHarness,
   type HarnessOrchestratorAgent,
@@ -34,7 +34,7 @@ import { openTurnRun, TERMINAL_EFFECT_RETRY_CEILING_MS } from '@kinu.run/core';
 /** One settled assistant response, as Think reports it. */
 /** The one way this suite runs a turn: the turn seam over the harness root. */
 function turns(harness: ActorHarness<HarnessOrchestratorAgent>): TurnHarness {
-  return thinkTurns(harness.agent);
+  return chatSessionTurns(harness.agent);
 }
 
 const OVERFLOW_ERROR = 'prompt is too long: 210000 tokens > 200000 maximum';

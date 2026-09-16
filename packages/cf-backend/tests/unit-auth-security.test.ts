@@ -614,9 +614,12 @@ async function cloudflareSignIn(env: Env, tokenJson: JsonValue, userResult: Json
     expect(script).toContain('/downloads/kinu-runtime-cpython.tar.gz');
     expect(script).not.toContain('github.com');
     expect(script).not.toContain('Kinu-main');
-    // Verification against the published .sha256 is the only path, and both
-    // downloads take it.
-    expect(script).toContain('"$url.sha256"');
+    // Verification against the SIGNED release is the only path: the manifest's
+    // signature is checked against the pinned key before any download, both
+    // downloads take fetch_verified, and no .sha256 the origin chooses for
+    // itself is ever asked for (SECURITY-devices C1).
+    expect(script).toContain('verify_release "$tmp/kinu-version.json"');
+    expect(script).not.toContain('"$url.sha256"');
     expect(script.split('fetch_verified "$').length - 1).toBe(2);
     expect(script).toContain('Checksum mismatch for $url.');
     const syntaxCheck = Bun.spawnSync(['bash', '-n'], { stdin: Buffer.from(script) });

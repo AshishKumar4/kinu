@@ -21,7 +21,7 @@ import { turnAuthor, type ProgrammaticTurn } from '@kinu.run/core';
 import type { ModelMessage } from 'ai';
 import type { SessionMessage } from 'agents/experimental/memory/session';
 import * as v from 'valibot';
-import { orchestratorHarness, reactivateOrchestratorHarness, thinkTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 const SteerFrameSchema = v.object({
   type: v.literal('steer_status'),
@@ -72,8 +72,8 @@ function steerHarness(): SteerHarness {
     appended: () => agent.harnessTranscript.history()
       .filter((message) => message.role === 'user' && v.is(v.object({ metadata: v.object({ kinuSteer: v.literal(true) }) }), message)),
     startTurn: async (liveTurnId) => {
-      if (liveTurnId !== undefined) thinkTurns(agent).open(liveTurnId);
-      await thinkTurns(agent).prepare({ messages: [...HISTORY] });
+      if (liveTurnId !== undefined) chatSessionTurns(agent).open(liveTurnId);
+      await chatSessionTurns(agent).prepare({ messages: [...HISTORY] });
     },
   };
 }
@@ -95,7 +95,7 @@ const DynamicContextSchema = v.object({
 async function stepMessages(
   agent: HarnessOrchestratorAgent, stepNumber: number, messages: readonly ModelMessage[],
 ): Promise<ModelMessage[]> {
-  const carried = await thinkTurns(agent).step(stepNumber, messages);
+  const carried = await chatSessionTurns(agent).step(stepNumber, messages);
 
   return carried.filter((m) => !v.is(DynamicContextSchema, m));
 }
@@ -131,7 +131,7 @@ describe('a message typed while the agent is working', () => {
     // splice — the step hands the model exactly the conversation the turn was
     // admitted over. The prepared turn is the one production opens, so the
     // step reads its prepared snapshot.
-    const turn = await thinkTurns(h.agent).prepare({ messages: [...HISTORY] });
+    const turn = await chatSessionTurns(h.agent).prepare({ messages: [...HISTORY] });
 
     expect(await stepMessages(h.agent, 0, turn.messages)).toEqual([...turn.messages]);
   });
@@ -181,6 +181,30 @@ describe('a message typed while the agent is working', () => {
     // Same id through both announcements, so a surface tracking one steer never
     // renders it twice under two names.
     expect(landed[1]!.steerId).toBe(landed[0]!.steerId);
+  });
+
+  test('a steer that names a skill the turn does not carry brings its body to the next step', async () => {
+    // Skills are resolved when the turn opens, from the opening message. A
+    // send spliced mid-turn that names one — "build me a slate" typed while
+    // the genesis turn runs — used to reach the model as bare words: the
+    // first-run slate row on build cba44dcb9 read the ask at step 1 with no
+    // slates body in the prompt, the model hunted skills/slates.md at five
+    // paths, and wrote a server class with no fetch method.
+    const h = steerHarness();
+    await h.startTurn();
+
+    expect(await h.agent.send('now build a slate that answers GET /ping')).toEqual({ landed: 'mid-turn' });
+
+    const carried = await stepMessages(h.agent, 0, HISTORY);
+    // The steer's words verbatim and durable, then the skill it activated as
+    // this step's reference — after it, not merged into it.
+    expect(carried[HISTORY.length]).toEqual({ role: 'user', content: 'now build a slate that answers GET /ping' });
+    const reference = carried[HISTORY.length + 1];
+    expect(reference?.role).toBe('user');
+    expect(JSON.stringify(reference?.content)).toContain('### slates');
+    expect(JSON.stringify(reference?.content)).toContain('fetch(request)');
+    // Only the steer is a durable row; the reference rides the step.
+    expect(h.appended().filter((row) => row.role === 'user')).toHaveLength(1);
   });
 
   test('restores a reset-lost steer from SQL before the resumed turn reaches its next step', async () => {
@@ -266,7 +290,7 @@ describe('a message typed while the agent is working', () => {
     ).run(actorId);
 
     const restarted = await reactivateOrchestratorHarness(h.db);
-    const rerun = await thinkTurns(restarted.agent).resume();
+    const rerun = await chatSessionTurns(restarted.agent).resume();
 
     // The orphan reruns as a user-origin turn — and its file rides with real
     // fields, not the field-less `[{}]` a shadowed file read produced: the
@@ -278,7 +302,7 @@ describe('a message typed while the agent is working', () => {
         { type: 'text', text: 'attach this too' },
       ],
     });
-    await thinkTurns(restarted.agent).settle({ messageId: 'a-rerun-file', text: 'attached' });
+    await chatSessionTurns(restarted.agent).settle({ messageId: 'a-rerun-file', text: 'attached' });
     expect(restarted.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get()!.c).toBe(0);
   });
 });
@@ -319,7 +343,7 @@ describe('stopping a turn with a steer still pending', () => {
     await h.agent.send('second');
     await h.agent.cancelCurrentWork();
 
-    await thinkTurns(h.agent).settle({ messageId: 'assistant-stop', text: 'partial', requestId: 'req-stop', status: 'aborted' });
+    await chatSessionTurns(h.agent).settle({ messageId: 'assistant-stop', text: 'partial', requestId: 'req-stop', status: 'aborted' });
     await h.agent.harnessJoinDetachedFibers();
 
     expect(h.enqueued).toHaveLength(1);
@@ -337,7 +361,7 @@ describe('a steer that never saw a step boundary', () => {
     // Typed while the model was already writing its final answer: there is no
     // further step for it to land on.
     await h.agent.send('one more thing');
-    const settled = await thinkTurns(h.agent).settle({ messageId: 'assistant-1', text: 'deployed', requestId: 'req-1' });
+    const settled = await chatSessionTurns(h.agent).settle({ messageId: 'assistant-1', text: 'deployed', requestId: 'req-1' });
 
     expect(h.enqueued).toHaveLength(1);
     // The rerun key names the turn it interrupts and the steer it re-runs,
@@ -368,8 +392,8 @@ describe('a steer that never saw a step boundary', () => {
     await h.agent.send('plan next', [], 'plan');
     await h.agent.send('second build', [], 'build');
 
-    await thinkTurns(h.agent).settle({ messageId: 'assistant-groups', text: 'ok', requestId: 'req-groups' });
-    await thinkTurns(h.agent).settle({ messageId: 'assistant-groups', text: 'ok', requestId: 'req-groups-duplicate' });
+    await chatSessionTurns(h.agent).settle({ messageId: 'assistant-groups', text: 'ok', requestId: 'req-groups' });
+    await chatSessionTurns(h.agent).settle({ messageId: 'assistant-groups', text: 'ok', requestId: 'req-groups-duplicate' });
 
     // One turn, the words in typed order. Plan is the narrower grant, so one
     // plan-mode message makes the whole rerun plan: merging never widens what
@@ -388,8 +412,8 @@ describe('a steer that never saw a step boundary', () => {
     await h.startTurn();
     await h.agent.send('one more thing');
 
-    await thinkTurns(h.agent).settle({ messageId: 'assistant-1', text: 'ok', requestId: 'req-1' });
-    await thinkTurns(h.agent).settle({ messageId: 'assistant-1', text: 'ok', requestId: 'req-2' });
+    await chatSessionTurns(h.agent).settle({ messageId: 'assistant-1', text: 'ok', requestId: 'req-1' });
+    await chatSessionTurns(h.agent).settle({ messageId: 'assistant-1', text: 'ok', requestId: 'req-2' });
     expect(h.enqueued).toHaveLength(1);
   });
 });
@@ -421,7 +445,7 @@ describe('an eviction with acknowledged steers', () => {
     // loop re-opens the live turn from its ledger, restores ITS rows for the
     // continuation's first step, and sweeps the dead turn's.
     const restarted = await reactivateOrchestratorHarness(h.db);
-    const resumed = await thinkTurns(restarted.agent).resume();
+    const resumed = await chatSessionTurns(restarted.agent).resume();
     expect(resumed.identity.turnId).toBe('u-live');
 
     // The live turn's next step splices ITS words only — the dead turn's stay
@@ -432,7 +456,7 @@ describe('an eviction with acknowledged steers', () => {
       { role: 'user', content: 'deploy the api' },
       { role: 'user', content: 'the live turn keeps me' },
     ]);
-    await thinkTurns(restarted.agent).settle({ messageId: 'a-live-again', text: 'kept' });
+    await chatSessionTurns(restarted.agent).settle({ messageId: 'a-live-again', text: 'kept' });
 
     // The dead turn's rows rerun as ONE user-origin turn, the words in typed
     // order, mode-stamped by their narrower grant: plan.

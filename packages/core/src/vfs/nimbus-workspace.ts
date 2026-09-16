@@ -414,14 +414,25 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           // below `generation * PID_GEN_STRIDE`, so a supervisor left at zero
           // would hand out pids whose write authority the boot has withdrawn.
           // Fabric's allocator swallows a storage failure and stays on the
-          // previous value; a read of the counter first lets the storage's
-          // own error surface, and zero after the adopt means the bump could
-          // not be persisted — a floor that cannot be trusted is refused.
-          await opts.generation.storage.get(GENERATION_KEY);
+          // previous value — a first boot at zero, a later one at the last
+          // incarnation's floor, which is the pid repeat the counter exists
+          // to prevent. So the counter is read BEFORE the adopt (the read
+          // also lets the storage's own error surface, which fabric would
+          // hide) and the adopted value must be the bump of it: fabric takes
+          // the bump only after its put resolved, so anything else is a bump
+          // that did not persist, and the open is refused whatever the
+          // previous value was.
+          // Fabric adopts once per isolate: a boot retried in the same
+          // isolate (the first open failed after the adopt) keeps the
+          // generation it already holds, and that is the expected value.
+          const adopted = generation(opts.generation);
+          const before = adopted !== 0 ? null : v.parse(v.optional(v.number()), await opts.generation.storage.get(GENERATION_KEY)) ?? 0;
           await adoptGeneration(opts.generation);
           const generationNow = generation(opts.generation);
+          const expected = before === null ? adopted : before + 1;
 
-          if (generationNow === 0) throw new KinuError('unavailable', 'the workspace generation counter could not be persisted');
+          if (generationNow !== expected) throw new KinuError('unavailable', 'the workspace generation counter could not be persisted');
+
           processes.setPidBase(generationNow * PID_GEN_STRIDE);
 
           const workspace = await NimbusWorkspace.create({

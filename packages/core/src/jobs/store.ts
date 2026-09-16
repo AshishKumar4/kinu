@@ -312,16 +312,21 @@ export class BackgroundJobStore {
    * arming because this actor happened to be idle would strand every sibling's
    * interrupted work until something else woke the workspace.
    */
-  hasLiveJobsInWorkspace(): boolean {
+  hasUntimedLiveJobsInWorkspace(): boolean {
     // `assertCurrent` here checks that THIS BINDING is still live; it is not a
     // claim that the statement below is actor-scoped. It deliberately is not —
     // see the reason above — and the `InWorkspace` in the name is the contract.
     // Stated because the opposite inference has already been drawn once: an
     // actor-bound store whose method asserts its handle reads as scoped.
+    //
+    // UNTIMED: a running job with no resume instant is live in some process
+    // or orphaned by one that died, and either way names no time a wake could
+    // be armed at. A job waiting on `resume_after` is the timed half, read by
+    // {@link nextResumeAtInWorkspace}.
     this.actor.assertCurrent();
 
     return this.sql<{ present: number }>`
-      SELECT 1 AS present FROM background_jobs WHERE status = 'running' LIMIT 1`.length > 0;
+      SELECT 1 AS present FROM background_jobs WHERE status = 'running' AND resume_after IS NULL LIMIT 1`.length > 0;
   }
 
   /** Remove THIS actor's settled jobs. Running jobs are kept, and a sibling's

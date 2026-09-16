@@ -15,7 +15,7 @@ import { describe, expect, test } from 'bun:test';
 import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { createTestSql } from '@kinu.run/test-utils';
-import type { SendLanding, SessionEvent } from '@kinu.run/core';
+import { INTERRUPTED_TURN, type SendLanding, type SessionEvent } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { Connection } from 'agents';
 import { ChatWireTransport, type ChatWire } from '../src/chat-transport';
@@ -307,6 +307,33 @@ describe('ChatWireTransport', () => {
     const replayed = h.connectionFrames('c2').slice(2).map((frame) => v.parse(FrameSchema, JSON.parse(frame)));
     expect(replayed.slice(0, 3).map((f) => [JSON.parse(f.body ?? '{}').type, f.replay])).toEqual([['start', true], ['text-start', true], ['text-delta', true]]);
     expect(replayed.at(-1)).toMatchObject({ done: false, replay: true });
+  });
+
+  test('an interrupted turn closes with the abort chunk and no error frame; a failure still carries one', async () => {
+    // A Stop is the operator's own act, not a failure of the turn: the SDK's
+    // client reads an `error: true` frame as the stream's error and the hook
+    // paints an error card, which every Stop showed after the switch. The
+    // abort chunk the model stream carries is the whole report of a cut.
+    const h = harness('turn');
+    const conn = h.connection('c1');
+    await h.transport.onMessage(conn, chatRequest('req-1', 'hello'));
+    h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'abort' }]));
+    h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN });
+    h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 0, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+
+    const frames = h.responses();
+    expect(frames.filter((f) => f.error === true)).toEqual([]);
+    expect(frames.slice(0, 2).map((f) => JSON.parse(f.body ?? '{}').type)).toEqual(['start', 'abort']);
+    expect(frames.at(-1)).toEqual({ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true });
+
+    // A turn that FAILED still tells the tab so, before it closes.
+    const failed = harness('turn');
+    const tab = failed.connection('c1');
+    await failed.transport.onMessage(tab, chatRequest('req-2', 'hello'));
+    failed.transport.deliver(turnStart('input-req-2', 'msg-2'));
+    failed.transport.deliver({ type: 'error', message: 'the provider refused the request' });
+    expect(failed.responses().at(-1)).toMatchObject({ id: 'req-2', done: false, error: true, body: 'the provider refused the request' });
   });
 
   test('cancel interrupts the loop; clear resets the store and tells the other tabs', async () => {

@@ -90,6 +90,7 @@ export const FIRST_RUN_CASES = [
   'public-share',
   'device-link',
   'background-settle',
+  'background-wake',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -298,6 +299,24 @@ export const FIRST_RUN_DEFECTS = {
       + 'public-failure-recovery/events.jsonl) shows the same shape: the detached handle at '
       + 'event 20 and a ledger that closed over a still-running job.',
   },
+  'background-wake': {
+    id: 'background-wake',
+    found: 'A multi-step turn whose activation ended mid-turn — an isolate killed, an alarm-boundary '
+      + 'reset — sat un-driven: the run row stayed open with nothing scheduled to notice it. The '
+      + 'turn-open wake added at 346bdced7 was released by the first tick that fired inside the turn, '
+      + 'so an ordinary turn held a wake for about one second (REVIEW-chat-loop C2).',
+    missedBecause: 'the wake-chain suite listed schedules right after a turn opened and never fired a '
+      + 'tick with the turn parked; the workerd background-wake case holds the turn in-process and '
+      + 'ends no activation; and the deployed product had no way to end one, so no row could ask it.',
+    provedRedAt: 'cba44dcb9',
+    redDirection: 'RED by reading on build cba44dcb9: `_kinuTerminalRetryTick` cancelled its armed row '
+      + 'whenever `nextOwedAt()` was null, and an open run row is untimed, so every mid-turn tick left '
+      + 'the registry empty (packages/cf-backend/src/actor-agent.ts:1929-1932 at that build). '
+      + 'Unit red: unit-alarm-wake-chain "a tick that fires inside a parked turn keeps a wake row" '
+      + 'found 0 rows before 154893baa. This row is the live proof; it needs the eval-only abort '
+      + '(ARCHITECTURE-DECISIONS C3) to end an activation on the deployed build, so its first live '
+      + 'run is on the build that carries both.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
 
@@ -403,6 +422,7 @@ const SHORT_SUBJECT = {
   'public-share': 'public',
   'device-link': 'link',
   'background-settle': 'wake',
+  'background-wake': 'bgwake',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */
@@ -418,6 +438,10 @@ export interface FirstRunPlan<Session extends FirstRunSession> {
 export interface FirstRunRun<Session extends FirstRunSession = KinuPublicSession, Plan = PublicSessionPlan> {
   readonly session: Session;
   readonly plan: Plan;
+  /** Aborted when the case's `budgetMs` is spent: a wait the product may
+   *  never end reads this and stops, so the verdict is read off the ledger
+   *  as found rather than lost to the runner's own timeout. */
+  readonly budget: AbortSignal;
 }
 
 export interface FirstRunCaseSpec<Session extends FirstRunSession = KinuPublicSession, Plan = PublicSessionPlan> {
@@ -431,6 +455,10 @@ export interface FirstRunCaseSpec<Session extends FirstRunSession = KinuPublicSe
    *  vacuous tier this suite was rebuilt to remove; `none` records a measured
    *  zero and fails the case if the store disagrees. */
   readonly modelCalls: 'expected' | 'none';
+  /** The most wall time the case may take once its session is open. When it
+   *  is spent the evidence is retained as it stands and the case fails on
+   *  the budget, with `failure.json` saying so. */
+  readonly budgetMs?: number;
   /** The case, driven the way a user drives it. Returns the subgoals it
    *  checked; every one of them is asserted by {@link runFirstRunCase}. */
   run(input: FirstRunRun<Session, Plan>): Promise<readonly EvalSubgoal[]>;
@@ -483,9 +511,9 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
       opened = await plan.open({ subject: spec.id, purpose: spec.purpose, genesis: spec.genesis });
 
       return opened;
-    }, { transcripts: TRANSCRIPTS, taskId: episode, modelCalls: spec.modelCalls }, async (session, collect) => {
+    }, { transcripts: TRANSCRIPTS, taskId: episode, modelCalls: spec.modelCalls, ...(spec.budgetMs !== undefined && { budgetMs: spec.budgetMs }) }, async (session, collect, budget) => {
     console.warn(`    [first-run] ${spec.id} on ${session.describe}`);
-    const subgoals = await spec.run({ session, plan });
+    const subgoals = await spec.run({ session, plan, budget });
 
     const { events, history } = await collect();
     observedModels.note(events);

@@ -831,8 +831,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   let failure: KinuError | undefined;
 
   const onStep = async (step: StepResult<ToolSet>): Promise<void> => {
-    if (step.text.trim()) lastText = step.text;
-
     if (step.reasoningText?.trim()) lastReasoning = step.reasoningText;
     const traced = toHeadStep(step);
 
@@ -964,9 +962,14 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
           failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: outcome.failure, otherwise: 'unavailable' });
         }
 
-        // A promoted loop's answer is its own final text: the builtin arm
-        // accumulates prose per step, a scaffold reports one result.
-        if (outcome.program?.kind === 'scaffold' && outcome.text.trim()) lastText = outcome.text;
+        // The turn's answer as the runner selected it (chat.ts
+        // answerFromSteps), whatever program ran the turn: a head that kept
+        // the last non-empty step it saw reported only the continuation's
+        // tail of an output-limit-joined answer. The ANSWER, not `text`: a
+        // turn that ended on tool calls with no prose has a stand-in text
+        // the runner synthesized, and this report synthesizes its own from
+        // what the head recorded.
+        if (outcome.answer !== null) lastText = outcome.answer;
 
         if (!turnFailed && !outcome.interrupted && session.orchestrator.improvementLanesOpen('completed', input.mode)) {
           const turn = snapshotCompletedTurn(session.orchestrator.acc, {

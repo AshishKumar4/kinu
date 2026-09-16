@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { ActorClaimStore } from '@kinu.run/core';
 import { makeSql, SDK_SESSION_DDL } from '../../core/tests/helpers';
-import { orchestratorHarness, thinkTurns, reactivateOrchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 const GENESIS = { role: 'user', content: 'Read your standing brief and ask what to do first.' } satisfies ModelMessage;
 
@@ -13,13 +13,13 @@ function claims(harness: Harness): ActorClaimStore {
 }
 
 async function settle(harness: Harness, id: string, text: string): Promise<void> {
-  await thinkTurns(harness.agent).settle({ messageId: id, text, requestId: `response-${id}` });
+  await chatSessionTurns(harness.agent).settle({ messageId: id, text, requestId: `response-${id}` });
 }
 
 async function opening(): Promise<Harness> {
   const harness = orchestratorHarness();
   harness.db.run(SDK_SESSION_DDL);
-  await thinkTurns(harness.agent).prepare({ messages: [GENESIS] });
+  await chatSessionTurns(harness.agent).prepare({ messages: [GENESIS] });
 
   return harness;
 }

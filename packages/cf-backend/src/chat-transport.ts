@@ -38,7 +38,7 @@ import type { SessionMessage } from 'agents/experimental/memory/session';
 import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import {
-  partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, isWorkMode,
+  partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, isWorkMode, INTERRUPTED_TURN,
   type ChatTransport, type PromptFile, type SendLanding, type SessionEvent, type SqlExecutor, type WorkMode,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
@@ -369,6 +369,12 @@ export class ChatWireTransport implements ChatTransport {
         const live = this.live;
 
         if (live === null) return;
+
+        // A Stop is the operator's own act, not a failure: the abort chunk
+        // the model stream carried is the whole report, and an `error` frame
+        // here is what the SDK's client surfaces as the stream's error (the
+        // hook painted an error card on every Stop after the switch).
+        if (event.message === INTERRUPTED_TURN) return;
 
         this.resumable.markError(live.streamId);
         this.wire.broadcast(JSON.stringify({
