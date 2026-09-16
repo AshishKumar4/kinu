@@ -1256,6 +1256,39 @@ export class KinuPublicSession {
     return v.parse(v.object({ ports: v.array(v.object({ port: v.number(), url: v.string() })) }), answer).ports;
   }
 
+  /**
+   * Close the socket and nothing else: the product keeps running the turn
+   * with no client connected, which is the state the `background-wake` row
+   * measures. A turn submitted before this is abandoned here — its promise
+   * never settles and the row reads the ledger instead — so nothing rejects
+   * into a case that stopped listening on purpose. The ledger and history
+   * reads are HTTP and need no socket; `connect()` opens a new one.
+   */
+  disconnect(): void {
+    this.turns.clear();
+    this.midTurnLandings.clear();
+    this.socket?.close();
+    this.socket = null;
+  }
+
+  /**
+   * EVAL-ONLY: end the workspace object's activation on the deployed build,
+   * through the route only the eval-service identity may call
+   * (`cf-backend/src/eval/abort-route.ts`). The next request over the same
+   * storage is a fresh activation; what it re-drives is what the ledger shows.
+   */
+  async abortActivation(): Promise<void> {
+    await infraBoundary(`POST ${this.input.origin}/api/workspaces/${this.workspace}/eval/abort`, async () => {
+      const response = await fetch(
+        `${this.input.origin}/api/workspaces/${encodeURIComponent(this.workspace)}/eval/abort`,
+        { method: 'POST', headers: webHeaders(this.input.identity) },
+      );
+
+      const body = await readJson(response, `abort the activation of ${this.workspace}`);
+      v.parse(v.object({ aborted: v.literal(true) }), body);
+    });
+  }
+
   /** The durable transcript the web pane is seeded from. */
   /** The one read the web app makes on open, `getWorkspaceSnapshot`, reduced to
    *  what a first-run case asserts: that it answered, that it counts the turns

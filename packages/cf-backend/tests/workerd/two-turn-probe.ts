@@ -497,7 +497,7 @@ export class FakeAI extends WorkerEntrypoint {
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp'>
+  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'>
   & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'>;
 
 /** How long the wake proof's command sleeps: past the interactive detach
@@ -1579,6 +1579,29 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       for (const socket of sockets) socket.close(1000, 'twin probe complete');
       restore();
     }
+  }
+
+  /**
+   * THE EVAL-ONLY ABORT ends an activation the way the platform does: the
+   * stub call that asked rejects (that rejection is the receipt), and the
+   * next request over a fresh stub finds the object alive again over the same
+   * storage. Measured here because the first-run `background-wake` row rests
+   * on it and the deployed build cannot be driven by `abortAllDurableObjects`.
+   */
+  async evalAbort(): Promise<{ receipt: string | null; alive: boolean }> {
+    const { target, workspace } = await this.claimQueueWorkspace('twin');
+    let receipt: string | null = null;
+
+    try {
+      await target.evalAbortActivation();
+    } catch (cause) {
+      receipt = cause instanceof Error ? cause.message : String(cause);
+    }
+
+    const fresh: QueueTarget = await this.queueTarget(workspace);
+    await fresh.workspaceTitle();
+
+    return { receipt, alive: true };
   }
 
   /** The first-run regression: a workspace born with a mission (genesis turn
