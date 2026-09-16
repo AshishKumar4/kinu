@@ -23,8 +23,8 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { classifyRunEnd, TOOL_CALLS_PENDING } from '@kinu.run/core';
-import { TOOL_CALLING_STEPS, type TurnObservation } from './step-cap-probe';
-import type { CappedTurnProbeDO, UnboundedTurnProbeDO } from './step-cap-probe';
+import { TOOL_CALLING_STEPS, type TurnObservation } from '../step-cap-probe';
+import type { CappedTurnProbeDO, UnboundedTurnProbeDO } from '../step-cap-probe';
 
 
 const DEADLINE_MS = 60_000;
