@@ -5,7 +5,7 @@ Both backends use one hook path. CLI uses `runChat`. Cloud uses `ActorAgent`'s T
 bridge. Internal consumers and plugins use the same path.
 
 [EXTENSIBILITY.md](./EXTENSIBILITY.md) lists the plug-in points. This document
-specifies this one: hook signatures, order, internal registrants, and cloud
+covers that path: hook signatures, order, internal registrants, and the cloud
 bridge. The source is `packages/core/src/extension.ts`, exported from `@kinu.run/core`.
 
 `packages/core/src/extension.ts` defines `KinuExtension` and `ExtensionHost`.
@@ -88,9 +88,9 @@ Both backends register these in order.
 2. `kinu.inbox` (`AgentOrchestrator.turnExtension` in
    `core/src/orchestrator/agent-orchestrator.ts`; registered per turn in
    `core/src/orchestrator/actor-session.ts` on the CLI, forwarded on cloud in
-   `cf-backend/src/actor-agent.ts`) observes calls for mechanical steering and
+   `cf-backend/src/actor-agent.ts`) watches calls for mechanical steering. It
    splices a mid-turn send into the running turn's next step
-   (`core/src/orchestrator/inbox.ts`): pending user messages drain as ONE
+   (`core/src/orchestrator/inbox.ts`). Pending user messages drain as ONE
    durable user message, before the event text in the same splice. Core marks
    landed rows with `STEER_METADATA_KEY` (`kinuSteer`) and
    `STEER_STEP_METADATA_KEY` (`kinuSteerAtStep`).
@@ -101,10 +101,10 @@ replayed history.
 ## The cloud bridge
 
 `ActorAgent` hosts one persistent `ExtensionHost` per activation.
-`OrchestratorAgent` and `SubordinateAgent` extend it. Both get the same
-hooks, compaction, and event injection. `packages/cf-backend/package.json`
-depends on `@cloudflare/think` at `^0.17.0`, resolved to 0.17.0 in this
-worktree.
+`OrchestratorAgent` extends it. Every other actor is a logical row on the same
+host and receives the same hooks, compaction, and event injection.
+`packages/cf-backend/package.json` depends on `@cloudflare/think` at
+`^0.17.0`, resolved to 0.17.0 in this worktree.
 
 | Think hook | ExtensionHost |
 | --- | --- |
@@ -132,4 +132,6 @@ allowed names.
   character budget passes unchanged. Otherwise the render keeps both ends and
   names the omitted middle.
 - Only the mutable scaffold replaces inference. It works through
-  `core/src/scaffold/inference-transform.ts` and Think's `_transformInferenceResult`.
+  `scaffoldChatTransform` in `core/src/scaffold/chat-transform.ts` (the
+  `_transformInferenceResult` seam), called from `core/src/orchestrator/actor-turn.ts`.
+  from `core/src/orchestrator/actor-turn.ts`.

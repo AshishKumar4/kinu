@@ -18,7 +18,7 @@ is the reference. The source of truth is `packages/core/src/obs/`. For suites, s
 | `Logger` / `ReservedLogField`: the typed logger and its ban | built | `obs/log.ts` |
 | `classifyRunEnd` / `RunEndReason`: the three words a finished run can carry | built, with a tripwire for the state they exclude | `orchestrator/turn-lifecycle.ts` |
 | `gate:silent-drop`: the census of what the lint rules cannot see | built, ratcheted; 72 sites locked, 87 instances over 76 sites measured 2026-08-24 | `scripts/silent-drop.ts` |
-| Analytics Engine fleet metrics | built, three datasets | `cf-backend/src/analytics/` |
+| Analytics Engine fleet metrics | built, three datasets | `core/src/obs/analytics/` |
 | Control-plane audit and exact feedback index | built | `cf-backend/src/control-plane/` |
 | Feedback screenshot objects | built, stored in R2 | `cf-backend/src/feedback/` |
 | `Result<T, KinuError>` via `neverthrow` | rejected, see below | none |
@@ -29,8 +29,8 @@ is the reference. The source of truth is `packages/core/src/obs/`. For suites, s
 aggregates: turns, tools, models, errors, latency, spend, feedback markers,
 control actions.
 
-Writes enforce one index, 20 blobs, 20 doubles, 16 KiB of blob data and
-250 per Worker invocation. They store digested identifiers only. They never store prompts,
+Writes enforce one index, 20 blobs, 20 doubles, 16 KiB of blob data, and
+250 writes per Worker invocation. They store digested identifiers only. They never store prompts,
 messages, notes, email addresses, credentials, or headers.
 
 Analytics Engine retains samples three months. Control-plane queries weight
@@ -61,22 +61,22 @@ I re-grepped `this.tracing.invocation` on 2026-08-24: still six, same sites.
 | `cf-backend/src/actor-agent.ts` | `rpc` | `rpc.swarm.arbitrate` | `ActorAgent.nodeArbitrate` |
 
 `InvocationKind` declares `fetch`, `alarm`, `rpc`, `websocket`
-(`obs/agent-tracing.ts`). Only `alarm` and `rpc` run. The class distinguishes an
+(`core/src/obs/agent-tracing.ts`). Only `alarm` and `rpc` run. The class distinguishes an
 uncontended `alarm` from client-holding `fetch`. Methods outlast line numbers.
 
 THREE ROWS ARE GONE, and their absence is the point. `rpc.mcts.branch`,
 `rpc.head.run` and `rpc.swarm.node` were `tracing.invocation('rpc', …)` call
-sites because a branch, a head and a swarm node each ran in a SEPARATE object
+sites. A branch, a head and a swarm node each ran in a SEPARATE object
 with its own storage, reached across an RPC. They are logical actors of one
 workspace object now (`core/src/state/actor-host.ts`), hosted by
-`cf-backend/src/exploration-hosting.ts`, so those operations run inside the
-invocation that asked for them: an in-object function call has no RPC boundary
+`cf-backend/src/exploration-hosting.ts`. Those operations run inside the
+invocation that asked for them. An in-object function call has no RPC boundary
 to name, and labelling one `rpc` would be exactly the mislabelling this table
-exists to prevent. Their child phases go with them — including `head.home` and
+exists to prevent. Their child phases go with them, including `head.home` and
 `swarm.node.home`, which were the facet-home provisioning spans.
 
 AND THE DISCRIMINATOR IS THE ACTOR, which is the more useful half.
-`SPAN_ATTR_SELF_PATH` is the SDK's `[...parentPath, {className, name}]` — a
+`SPAN_ATTR_SELF_PATH` is the SDK's `[...parentPath, {className, name}]`, a
 DURABLE OBJECT path. With one object per workspace it is constant for every span
 the workspace emits, so it separates no two forks. Nor can a Durable
 Object id: an old SDK facet's id resolved to the root's `durableObjectId`
@@ -136,8 +136,8 @@ failures marked nothing because only `fail()` wrote fields.
 `cf-backend/tests/unit-alarm-tracing.test.ts` pins both paths, including a
 planted credential reaching no attribute.
 
-Never wrap a pipelined RPC stub in a span. Rejection marking derives a
-non-stub promise, making pipelining a round trip (`obs/tracer.ts:79-94`).
+Never wrap a pipelined RPC stub in a span. Rejection marking needs
+a non-stub promise. Wrapping the stub would make pipelining a round trip (`obs/tracer.ts:79-94`).
 
 ## The rules
 
@@ -187,9 +187,9 @@ occurrences, 7 classes searched, 87 instances over 76 sites. The lock holds
 | `handler_drops_cause` | 0 |
 | `floating_rejection` | 0 |
 
-The count is a floor (`scripts/silent-drop.ts:46-59`): the script cannot
+The count is a floor (`scripts/silent-drop.ts:46-59`). The script cannot
 resolve named handlers, unawaited stored promises, or internal factory
-chaining; the `parent.ts` `makeVfsError` chains. It excludes `readSources()`
+chaining. The `parent.ts` `makeVfsError` chains. It excludes `readSources()`
 outsiders, including fixtures.
 
 It ratchets because a zero-demanding gate over a non-zero population would sit
@@ -237,21 +237,21 @@ What the window cost, measured. The CLI 2,000-row window returned 2,001 of
 2,600-step local workspace reported 4,080,000 tokens and $4.20. Truth was
 5,304,000 and $5.46, leaving 20.8% of tokens and 23% of dollars behind a
 caveat. SQL costs 62 ms versus 55 ms for two windowed reads, on 31 MiB and
-20,000 rows. `tests/workerd/long/do-spend-aggregate.test.ts` proves `WITH` and
+20,000 rows. `packages/cf-backend/tests/workerd/long/do-spend-aggregate.test.ts` proves `WITH` and
 `json_extract` on Durable Object SQLite. `bun:sqlite` does not support that proof.
 
 `offTurnShare` is tokens no agent turn spent. The panel and
 `kinu spend <name>` use one local/cloud model. "Mission budgets" died with
 `ActivitySnapshot.budgets`: same ledger, narrower question, two figures.
 
-1. `MissionGovernor` guards review spend. `govern(llm, labels)`
-   (`delegation/agents-tool.ts:1218`) is reached from `EvolutionEngine.reviewLlm`
-   (`evolution/engine.ts:338`). `AgentOrchestrator.recordTurn` stamps
+1. `MissionGovernor` guards review spend. `EvolutionEngine.reviewLlm`
+   (`evolution/engine.ts:338`) reaches `govern(llm, labels)`
+   (`delegation/agents-tool.ts:1218`). `AgentOrchestrator.recordTurn` stamps
    `CompletedTurn.missionLabels` from the active scope. It persists in the
    session window and deferred row because a drainer has no scope or a later
    one. It is wired at `cli-backend/src/local-session.ts:558`,
-   `cf-backend/src/orchestrator.ts:579`, and — for every hosted logical actor,
-   through the one orchestration builder each of them gets —
+   `cf-backend/src/orchestrator.ts:579`, and, for every hosted logical actor,
+   through the one orchestration builder each of them gets,
    `cf-backend/src/actor-hosting.ts`.
 
    No labels means an unwrapped `LLM`. A spent cap throws
@@ -359,7 +359,7 @@ imports only `obs/`. Provenance literals are checked by
 
 Measured with bun on 2026-08-17: an aborted `AbortController` gives
 `AbortError`, `code: 20`. `AbortSignal.timeout()` gives `TimeoutError`,
-`code: 23`. Both names are the platform own, minted at runtime by the
+`code: 23`. Both names are the platform's own, minted at runtime by the
 browser and workerd engines. No identifier in this repository spells them.
 Names are stable. Numeric codes fall through.
 
@@ -457,7 +457,7 @@ channels, not a predicate for arbitrary tool output.
 | `sandbox.ts` | Admission control apart from a transport fault. 503 at the ten-instance concurrency ceiling, 429 on the container start-rate burst, and the eviction disconnect window arrive as one prose string with a genuine transport fault. `TRANSIENT_MARKERS` lists them and `sandboxFailure` reads that list, so the first is `unavailable` and a platform gap while the second is `io` and a candidate defect. Plus `unavailable` for an absent binding. |
 | `nimbus.ts` | An absent binding (`unavailable`) apart from a session handle that has no such surface (`unsupported`). A retry against a permanence, and on the CF backend Nimbus *is* the workspace, so this is every call. |
 | `device-tunnel-executor.ts` | No device attached (`unavailable`) apart from the device answering "no" (`io`). The starkest of the five: a prose string in place of either code reaches no reader as a failure at all. |
-| `inline.ts` | `denied` for the misevolution veto — a gate refusing, not a defect in the tool it protected. And `bad_input` for arguments that never described an operation. Its `exec` throws a shell failure with the chain intact, which is the right answer for a shell failure. |
+| `inline.ts` | `denied` for the misevolution veto (a gate refusing, not a defect in the tool it protected). And `bad_input` for arguments that never described an operation. Its `exec` throws a shell failure with the chain intact, which is the right answer for a shell failure. |
 | `parent.ts` | Nothing new. `makeVfsError` puts the parent's `code` on the error and `classifyErrorCode` reads errnos, so `ENOENT` already arrives as `missing` without this file naming anything, and everything both backends collapse into `EIO` arrives as the catch site's `otherwise`, which is `io` for every caller it has. A code here would be one whose value never varies. The exception is `cancelled`: the abort signal races the RPC, and a signal parsed and dropped instead leaves one class of the nine unreachable on one of the five tools. |
 
 Four fixed defects are pinned by `core/tests/unit-tool-failure-census.test.ts`:
@@ -476,7 +476,7 @@ Four fixed defects are pinned by `core/tests/unit-tool-failure-census.test.ts`:
 swallowing its error. `workspace.readdir` returned `[]`. Each now refuses.
 
 Without observed execution metadata, `refused` holds `bad_input`, `denied`,
-`unsupported` and the file plane's refusal verdicts; `runtimeMissing` holds
+`unsupported` and the file plane's refusal verdicts. `runtimeMissing` holds
 `unavailable`. Other classes belong to `broke` unless execution evidence
 establishes that the work itself failed. An observed nonzero process exit is
 classified from its numeric field: ordinary failing commands count as
@@ -490,7 +490,7 @@ The Executors terminal uses the structural command result and forwards its
 ## What is not converted
 
 - Namespace operation results and returned child/verifier/report verdicts remain
-  values. The caller may handle them; they do not make an enclosing codemode
+  values. The caller may handle them. They do not make an enclosing codemode
   invocation fail unless its program raises an unhandled exception.
 - `ExecutorProvider` ports. Typed `{ supported, reason }` differs from parsed
   strings. `sandbox.listExposedPorts` and `nimbus.listExposedPorts` still use
