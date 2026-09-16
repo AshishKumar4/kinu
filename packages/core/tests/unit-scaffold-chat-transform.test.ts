@@ -154,6 +154,31 @@ describe('scaffoldChatTransform', () => {
     expect(done.responseMessages).toEqual([{ role: 'assistant', content: 'default answer' }]);
   });
 
+  test('a delegated narrated turn answers with the answer its done carries, not every delta', async () => {
+    // The runner's `done` already applies the one answer rule (the final
+    // step's text). A seam that preferred the deltas it relayed rebuilt the
+    // narration-plus-answer concatenation the rule exists to prevent.
+    const narrated: ChatEvent[] = [
+      { type: 'text-delta', delta: 'Looking at the workspace first.' },
+      { type: 'tool-call', toolName: 'search', toolCallId: 'call-1', args: { q: 'x' } },
+      { type: 'tool-result', toolName: 'search', toolCallId: 'call-1', result: '{"hits":2}', output: { hits: 2 }, success: true },
+      { type: 'step-finish', stepIndex: 0, responseMessages: [] },
+      { type: 'text-delta', delta: 'FAIL' },
+      { type: 'step-finish', stepIndex: 1, responseMessages: [] },
+      { type: 'done', text: 'FAIL', responseMessages: [{ role: 'assistant', content: 'FAIL' }] },
+    ];
+
+    const { chat } = defaultTurn(narrated);
+    const events = await collect(scaffoldChatTransform({ chat, ...await selected(2, DELEGATING_SCAFFOLD) }));
+    const done = events.at(-1);
+
+    if (done?.type !== 'done') throw new Error('expected a trailing done');
+    // The deltas still stream, in order; the answer is the done's.
+    expect(events.filter((e) => e.type === 'text-delta').map((e) => e.type === 'text-delta' ? e.delta : ''))
+      .toEqual(['Looking at the workspace first.', 'FAIL']);
+    expect(done.text).toBe('FAIL');
+  });
+
   test('delegating scaffold accepts optional SDK fields that are explicitly undefined', async () => {
     const responseMessage = {
       role: 'assistant' as const,
