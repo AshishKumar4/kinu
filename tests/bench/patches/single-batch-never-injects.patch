@@ -1,10 +1,10 @@
 diff --git a/packages/core/src/orchestrator/inbox.ts b/packages/core/src/orchestrator/inbox.ts
-index 562ffdc86..1b8e817df 100644
+index 3113268f2..b0d2e9a76 100644
 --- a/packages/core/src/orchestrator/inbox.ts
 +++ b/packages/core/src/orchestrator/inbox.ts
-@@ -365,7 +365,7 @@ export class Inbox implements AgentInbox {
+@@ -597,7 +597,7 @@ export class Inbox implements AgentInbox {
  
-     const bodies = [...events, ...steering].map(stepBody);
+     if (activated !== null && activated !== undefined) bodies.unshift(activated);
  
 -    if (bodies.length > 0) {
 +    if (bodies.length > 1) {
