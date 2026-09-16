@@ -312,15 +312,32 @@ export function initUserTables(sql: SqlExec): void {
       -- Revocation found a command it could not confirm stopped. This owner-
       -- visible fact survives removal of its active in-flight row; reconnection
       -- cannot clear it because a revoked device never reconnects.
-      unstopped_at    INTEGER,
-      -- The build the daemon reported on its last HELLO, and whether its owner
-      -- lets the hub push a newer one (updateCheck in the CLI config). NULL
-      -- version is a daemon too old to say; NULL update_check reads as yes.
-      version         TEXT,
-      update_check    INTEGER
+      unstopped_at    INTEGER
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token_hash ON user_devices (token_hash)`);
+
+  // A device's reported build is a table of its own rather than columns on
+  // `user_devices`: the genesis lock refuses a new column on a shipped table,
+  // and `CREATE TABLE IF NOT EXISTS` is a no-op on storage that already has
+  // `user_devices` — the two columns this table carries threw `no such
+  // column` on every pre-lane account while they lived there. A one-row table
+  // reaches every existing account on its next activation; an absent row is
+  // the "unreported" answer.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_device_builds (
+      -- The device whose daemon reported. Cascade-declared so the row is a
+      -- property of the device, not of the storage that outlives it.
+      device_id    TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE,
+      -- The build the daemon reported on its last HELLO (NULL only for a row
+      -- written before the field existed), and whether its owner lets the hub
+      -- push a newer one (updateCheck in the CLI config).
+      version      TEXT,
+      update_check INTEGER NOT NULL DEFAULT 1,
+      -- When this row was last written, so "reported" is a fact with a time.
+      reported_at  INTEGER NOT NULL
+    )
+  `);
 
   // Device commands whose request reached a daemon but has not reached a
   // terminal response. The table and every statement over it live in
