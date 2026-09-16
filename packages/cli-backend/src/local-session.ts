@@ -4294,8 +4294,6 @@ export class LocalAgentSession implements BackendHost {
     const deps: ActorToolsetDeps = {
       rt: this.rt,
       workMode: mode,
-      // cliLocal has no device runtime: the machine is the workspace.
-      cliLocal: true,
       // The once-only boundary for tools whose effects leave this process.
       effectClaims: { sql: this.rt.storage.sql, actor: this.rt.actor, turnId },
       // No shellApprovalMode/requestShellApproval here — the gate lives at the

@@ -1,5 +1,5 @@
 import { DefaultExecutionRouter, createAgentStores, contextMount, createInlineExecutor, observeWrites, withApprovalGatedShell, withMountTable, standardMounts } from '@kinu.run/core';
-import type { ActorHandle, AgentRuntime, ExecutorProvider, NodeWorkspace, ShellApprovalPolicy, WriteObserver } from '@kinu.run/core';
+import type { ActorHandle, AgentRuntime, NodeWorkspace, ShellApprovalPolicy, WriteObserver } from '@kinu.run/core';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
 import type { CLIRuntime } from './runtime';
 import { requireLocalActorWorkspace } from './actor-identity';
@@ -9,7 +9,6 @@ export interface LocalNodeRuntimeDeps {
   readonly origin: CLIRuntime;
   readonly approvalPolicy: ShellApprovalPolicy;
   readonly inline: Parameters<typeof createInlineExecutor>[0];
-  readonly device: ExecutorProvider | null;
 }
 
 /**
@@ -55,11 +54,10 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
         if (provider) ownRouter.register(provider);
       }
 
-      if (deps.device && !ownRouter.getProvider(deps.device.name)) ownRouter.register(deps.device);
       router = ownRouter;
     } else {
       // Sharing the origin's plane still means NOT sharing its context. The
-      // origin's table already resolves `/pc` and `/sandbox`; this one layer
+      // origin's table already answers every mount point; this one layer
       // re-answers `/context` as the node's and delegates everything else,
       // rather than re-declaring a table the node has no different answer for.
       vfs = withMountTable(vfs, [ownContext]);

@@ -53,8 +53,8 @@ const CLI_BIN = join(REPO_ROOT, 'packages/cli/bin/cli.ts');
  * own harness) plus core's spill directories `.kinu/tool-output/` and
  * `attachments/` in the repository root.
  *
- * The in-process suites close this with `hostRoot: null`, which a spawned CLI has
- * no flag for; the equivalent is to hand the child a cwd it may own. A
+ * The in-process suites close this by binding no directory, which a spawned
+ * CLI cannot do; the equivalent is to hand the child a cwd it may own. A
  * subdirectory of the scratch home rather than the home itself, so the agent's
  * files cannot land beside `config.json` and the workspace stores the driver
  * reads its ledgers from — and because `canonicalProjectRoot` derives a project

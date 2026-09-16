@@ -121,6 +121,10 @@ export interface InlineExecutorDeps {
    * the same list that decides which commands get registered.
    */
   toolchain?: readonly ExecutorCapability[];
+  /** What the host can neither claim nor rule out (`docker`, `gpu` on a bare
+   *  PATH probe). Declared rather than dropped: an omission reads to the
+   *  model exactly like a measured absence. */
+  unmeasured?: readonly ExecutorCapability[];
   /** The owning workspace's slate operations; absent when this backend has no slate host. */
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
 }
@@ -590,6 +594,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
   if (resourceLimits !== undefined) {
     Object.assign(provider, { resourceLimits });
+  }
+
+  if (deps.unmeasured !== undefined) {
+    Object.assign(provider, { unmeasuredCapabilities: new Set(deps.unmeasured) });
   }
 
   return provider;

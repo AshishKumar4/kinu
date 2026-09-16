@@ -241,7 +241,7 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
       const seedDb = new Database(dbPath);
 
       try {
-        const { rt } = await openWorkspaceCLI(seedDb, dbPath, { llm: LLM, hostRoot: null });
+        const { rt } = await openWorkspaceCLI(seedDb, dbPath, { llm: LLM });
         // Before anything is spent: a runtime that cannot execute is not a
         // measurement of an agent that can, and one that can execute on the
         // developer's machine is not a measurement either. The verifier's own
@@ -290,7 +290,7 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
     // The OUTCOME, measured over the workspace the agent left behind and
     // nothing else — no transcript, no model, no judge. Measured through a
     // freshly opened runtime because the verifier runs commands in its shell.
-    const { rt: verifyRt } = await openWorkspaceCLI(db, dbPath, { llm: LLM, hostRoot: null });
+    const { rt: verifyRt } = await openWorkspaceCLI(db, dbPath, { llm: LLM });
     const shell = requireVerifierShell(TASK_ID, verifyRt);
 
     const outcome = await verifyHardTask(hard, {

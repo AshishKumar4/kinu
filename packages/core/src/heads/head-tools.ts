@@ -70,8 +70,6 @@ export interface HeadToolDeps {
    *  replaces `eval` in it — the hosted sandbox declares every tool
    *  of that surface as `tools.*`, so it needs the surface first. */
   codemodeTool: unknown;
-  /** cliLocal mode offers no device runtime: the machine is the workspace. */
-  cliLocal?: boolean;
   webSearch: WebSearchProvider;
   /** Recursive split. The backend owns the spawn substrate; the budget gate in
    *  front of it lives here, with the rest of the head's policy. */
@@ -170,7 +168,6 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
   return buildToolSurface({
     rt: deps.rt,
     workMode: input.mode,
-    cliLocal: deps.cliLocal,
     webSearch: deps.webSearch,
     admitted: HEAD_BUILTIN_TOOLS,
     wrapAdmitted: (admitted) => withHeadCaptureRecording(admitted, capture),

@@ -39,7 +39,7 @@ const SANDBOX: PromptExecutorInfo = {
   name: 'sandbox', kind: 'sandbox', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active',
 };
 
-const LAPTOP: PromptExecutorInfo = {
+const DEVICE: PromptExecutorInfo = {
   name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active',
 };
 
@@ -110,7 +110,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: {
       soulOverride: 'You are Kinu.',
       availableTools: ALL_TOOLS,
-      executors: [WORKSPACE, SANDBOX, LAPTOP],
+      executors: [WORKSPACE, SANDBOX, DEVICE],
       backend: 'cf',
       temporaryAsk: true,
       model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
@@ -136,7 +136,9 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: {
       soulOverride: 'You are Kinu.',
       availableTools: ALL_TOOLS,
-      executors: [WORKSPACE, SANDBOX, LAPTOP],
+      // The CLI registers one executor: the machine is the workspace, and
+      // there is no device runtime and no container there.
+      executors: [WORKSPACE],
       backend: 'cli-local',
       temporaryAsk: true,
       model: { id: 'gpt-5-codex', provider: 'openai' },
@@ -216,10 +218,6 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   {
     name: 'executors-unnamed-namespace',
     opts: { availableTools: ['shell'], executors: [WORKSPACE, CUSTOM], backend: 'cf' },
-  },
-  {
-    name: 'executors-cli-local-device',
-    opts: { availableTools: ['shell'], executors: [WORKSPACE, LAPTOP], backend: 'cli-local' },
   },
   {
     name: 'delegation-swarm-only',

@@ -230,7 +230,7 @@ async function openRuntimeProbe(name: string): Promise<{
     llm: LLM,
   });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM, hostRoot: null });
+  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM });
   requireSandboxedExecutors(name, rt);
   const surface = buildEvalAgentSurface({ rt, model: scripted([]), llm: LLM });
 
@@ -656,18 +656,18 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
  * A live run left `scratch-add/{add.js,add.test.js}` in a worktree ROOT and two
  * committed stray files (`report.txt`, `todos.txt`) in the repo root, and
  * `gate:typecheck-coverage` refused the commit that swept them up. The cause is
- * not the corpus: `createCLIRuntime` registers a `device` ExecutorProvider
- * rooted at `process.cwd()` unless told otherwise (cli-backend/src/runtime.ts),
- * so every episode opened without `hostRoot: null` can write anywhere the
- * developer can.
+ * not the corpus: in the CLI the machine is the workspace, so a runtime opened
+ * with a bound `cwd` runs its workspace shell in that directory
+ * (cli-backend/src/runtime.ts), and every episode opened that way can write
+ * anywhere the developer can.
  *
- * WHY THE PLANE HAS TO BE ABSENT RATHER THAN RE-ROOTED. `device.writeFile`
- * resolves its argument with `resolve(cwd, path)`, which passes an ABSOLUTE path
- * straight through, and `device.exec` runs a real shell that can `cd` anywhere.
- * Rooting that provider at the episode's temp directory would contain neither.
- * Containment on the host plane needs a sandbox the CLI does not have, so an
- * eval episode gets no host plane at all and works in the workspace filesystem
- * — which is what the harness header already says it measures.
+ * WHY THE DIRECTORY HAS TO BE UNBOUND RATHER THAN RE-ROOTED. A bound
+ * workspace shell is a real shell that can `cd` anywhere, and absolute paths
+ * pass through the plane whole. Binding the episode's temp directory would
+ * contain neither. Containment on the host needs a sandbox the CLI does not
+ * have, so an eval episode binds no directory and works in the in-SQLite
+ * workspace filesystem — which is what the harness header already says it
+ * measures.
  */
 describe('episode isolation — no plane outside the episode sandbox', () => {
   test('an episode that tries to write on the host writes nothing and is refused', async () => {
@@ -709,16 +709,16 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
     await createWorkspace(db, { name: 'unsandboxed', purpose: 'host plane probe', llm: LLM });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
-    // The default — what every interactive CLI surface wants, and what omitting
-    // `hostRoot` gives. `listExecutors` is the read that carries
-    // `kind`; the codemode surface drops it (execution/router.ts:38-52).
-    const hosted = await openWorkspaceCLI(db, dbPath, { llm: LLM });
-    expect(hosted.rt.executionRouter?.listExecutors().map((e) => e.kind)).toContain('device');
+    // What every interactive CLI session binds: the directory it was started
+    // in, whose shell is the developer's own. The executor list still says
+    // `workspace` — the kind cannot tell the two apart, the binding can.
+    const hosted = await openWorkspaceCLI(db, dbPath, { llm: LLM, cwd: process.cwd() });
+    expect(hosted.rt.executionRouter?.listExecutors().map((e) => e.kind)).toEqual(['workspace']);
     expect(() => requireSandboxedExecutors('probe', hosted.rt)).toThrow(UnsandboxedRuntimeError);
 
     // What the harness asks for, and what the cases above prove still executes:
-    // the workspace plane, and no host plane.
-    const sandboxed = await openWorkspaceCLI(db, dbPath, { llm: LLM, hostRoot: null });
+    // the in-SQLite workspace plane, no directory bound, no other executor.
+    const sandboxed = await openWorkspaceCLI(db, dbPath, { llm: LLM });
     expect(sandboxed.rt.executionRouter?.listExecutors().map((e) => e.kind)).toEqual(['workspace']);
     expect(sandboxed.rt.executionRouter?.getProviders().map((p) => p.name)).toEqual(['workspace']);
     expect(() => requireSandboxedExecutors('probe', sandboxed.rt)).not.toThrow();
@@ -1439,15 +1439,14 @@ describe('infra-vs-behavioural — a provider failure is not the agent doing not
 /**
  * THE SPAWNED CLI DOES NOT GET THIS REPOSITORY AS ITS WORKSPACE.
  *
- * `createCLIRuntime` roots the host `device` executor at `cwd ?? process.cwd()`
- * unless a caller passes `hostRoot: null` (`cli-backend/src/runtime.ts:545`), and
- * a spawned CLI has no flag for that — so the driver's `cwd` IS the child
- * agent's own filesystem. Both spawns used `cwd: REPO_ROOT`, and the eval runs of
+ * In the CLI the machine is the workspace: a session binds the directory it
+ * was started in (`cli-backend/src/runtime.ts`), and a spawned CLI has no flag
+ * against that — so the driver's `cwd` IS the child agent's own filesystem. Both spawns used `cwd: REPO_ROOT`, and the eval runs of
  * 2026-08-24 left `reference.mjs`, `solution.mjs` and `test-eval.mjs` (a corpus
  * task's seed files and the agent's own harness) plus core's spill directories
  * `.kinu/tool-output/` and `attachments/` in the repository root. The in-process
- * suites had closed the same hazard with `hostRoot: null`; the spawned families
- * reopened it.
+ * suites had closed the same hazard by binding no directory; the spawned
+ * families reopened it.
  *
  * `kinu create --mode local` RECORDS the placement it was given
  * (`cli/src/config.ts` `placedRef`: "the directory its file and shell plane binds

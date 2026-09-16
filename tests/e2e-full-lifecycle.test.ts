@@ -313,7 +313,7 @@ describe('E2E Full Lifecycle', () => {
     db.close();
 
     const db2 = new Database(DB_PATH);
-    const { rt: rt2, info } = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG, hostRoot: null });
+    const { rt: rt2, info } = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG });
     // Hand over the reopened database and runtime before any assertion can
     // throw. Otherwise, an assertion failure leaves later steps holding the
     // closed database: step 7 reports unrelated `bun:sqlite` prepare errors,
