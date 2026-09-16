@@ -14,7 +14,8 @@
 import type { Schedule } from '../types/primitives';
 import type { AgentSignal, AgentInbox, SignalUndeliveredReason } from '../types/signals';
 import type { EventLog } from '../events/hub/log';
-import { BACKGROUND_POLICY, REAL_SCHEDULE, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
+import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
+import { REAL_CLOCK } from '../types/clock';
 import type { DeviceRequestOwnership } from './device-ownership';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store';
 import { nanoid } from '../utils/nanoid';
@@ -383,7 +384,7 @@ export class BackgroundJobRunner {
   ): ThresholdDeps {
     return {
       thresholdMs: this.policy.detachAfterMs,
-      schedule: REAL_SCHEDULE,
+      clock: REAL_CLOCK,
       onThreshold: async (k, promise) =>
         await this.onThreshold(k, input, mode, controller, promise, ownership),
     };

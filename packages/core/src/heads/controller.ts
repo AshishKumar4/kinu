@@ -16,6 +16,7 @@
 
 import * as v from 'valibot';
 import { nanoid } from '../utils/nanoid';
+import { REAL_CLOCK, type Clock } from '../types/clock';
 import { jsonObjectOnlyInstruction } from '../prompts/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import {
@@ -179,7 +180,7 @@ export class HeadController {
     private readonly journal: HeadJournalPort,
     /** The wall-clock budget's clock. Real time in production; a test hands
      *  one it advances, so "the budget ran out" is a step it takes. */
-    private readonly clock: HeadClock = REAL_HEAD_CLOCK,
+    private readonly clock: Clock = REAL_CLOCK,
   ) {}
 
   /**
@@ -372,7 +373,7 @@ export class HeadController {
           : parentBudget.maxWallClockMs - (this.clock.now() - startedAt);
 
         try {
-          const report = await raceWithTimeout(h, remainingMs, this.clock.after);
+          const report = await raceWithTimeout(h, remainingMs, this.clock);
           await this.journal.recordReport(report);
 
           return report;
@@ -701,23 +702,8 @@ export class HeadController {
  *  `undefined` — the default — means the head runs until it is done, the same
  *  envelope the turn that forked it gets. Shared with the Steer-as-Branch
  *  single-head runner (steer-branch.ts). */
-/** The head budget's clock: what time it is, and a deadline that fires. */
-export interface HeadClock {
-  now(): number;
-  after(fire: () => void, ms: number): () => void;
-}
-
-export const REAL_HEAD_CLOCK: HeadClock = {
-  now: () => Date.now(),
-  after: (fire, ms) => {
-    const timer = setTimeout(fire, ms);
-
-    return () => { clearTimeout(timer); };
-  },
-};
-
 export async function raceWithTimeout(
-  h: SpawnedHead, timeoutMs: number | undefined, after: HeadClock['after'] = REAL_HEAD_CLOCK.after,
+  h: SpawnedHead, timeoutMs: number | undefined, clock: Clock = REAL_CLOCK,
 ): Promise<HeadReport> {
   if (timeoutMs === undefined) return h.run();
 
@@ -728,7 +714,7 @@ export async function raceWithTimeout(
 
   const expiry = Promise.withResolvers<never>();
 
-  const cancel = after(async () => {
+  const cancel = clock.after(timeoutMs, async () => {
     // The deadline first owns the abort, then rejects the caller-visible race:
     // this timer must not leave a live head after it has declared a timeout.
     try {
@@ -746,7 +732,7 @@ export async function raceWithTimeout(
     }
 
     expiry.reject(new Error(`wall-clock budget exceeded after ${timeoutMs}ms`));
-  }, timeoutMs);
+  });
 
   try {
     return await Promise.race([h.run(), expiry.promise]);

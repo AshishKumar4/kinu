@@ -11,6 +11,7 @@ import {
   type DeviceRpcOptions,
 } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
+import { handClock } from '@kinu.run/test-utils';
 
 const FAKE_CALLER = { workspaceToken: 'pwc_test' } as const;
 
@@ -43,13 +44,6 @@ function requiredCall(calls: RpcCall[], index: number): RpcCall {
   return call;
 }
 
-/** The transport's status clock, advanced by hand (D19): the 5 s TTL passes
- *  when the test says so, never on a wall clock the suite sleeps through. */
-function handClock() {
-  let at = 0;
-
-  return { now: () => at, advance: (ms: number) => { at += ms; } };
-}
 
 describe('createHubDeviceTransport', () => {
   test('refreshStatus is authoritative: a device that connected mid-session becomes visible', async () => {
@@ -58,7 +52,7 @@ describe('createHubDeviceTransport', () => {
     const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      now: clock.now,
+      clock,
       hub: () => fakeHub(() => ({ connected, registered: true, toolchain: null })),
       caller,
       agentName: 'agent-1',
@@ -85,27 +79,38 @@ describe('createHubDeviceTransport', () => {
     };
 
     const clock = handClock();
+    // Every re-check begins by resolving the caller, synchronously inside the
+    // kick; the hub list itself comes one await later. So the caller count is
+    // the read that can see a kick BEFORE anything else could list.
+    let callerCalls = 0;
 
     const transport = createHubDeviceTransport({
-      now: clock.now,
+      clock,
       hub: () => hub, agentName: 'agent-1', cliCwd: () => null,
-      caller,
+      caller: () => {
+        callerCalls += 1;
+
+        return caller();
+      },
     });
 
     await transport.refreshStatus();
     expect(listCalls).toBe(1);
     transport.status();
     transport.status();
-    expect(listCalls).toBe(1);          // fresh — no background re-check
+    expect(callerCalls).toBe(1);        // fresh — no background re-check
     // Past the 5 s status TTL, on the transport's own clock.
     clock.advance(5_100);
     transport.status();                 // stale — kicks ONE background re-check
     transport.status();
+    // Read here, before `refreshStatus`: awaited first, it would begin a
+    // re-check of its own and hide a missing kick behind the same count.
+    expect(callerCalls).toBe(2);
     // `refreshStatus` dedupes against the in-flight slot, so awaiting it here
-    // is awaiting the kicked re-check itself — and a second call would show
-    // as a third list.
+    // is awaiting the kicked re-check itself — a second list would show as 3.
     await transport.refreshStatus();
     expect(listCalls).toBe(2);
+    expect(callerCalls).toBe(2);
   });
 
   test('no owner hub → the workspace is unattached, which is not an unlinked machine', async () => {
@@ -117,7 +122,7 @@ describe('createHubDeviceTransport', () => {
     const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      now: clock.now,
+      clock,
       hub: () => null, agentName: 'agent-1', cliCwd: () => null,
       caller,
     });
@@ -139,7 +144,7 @@ describe('createHubDeviceTransport', () => {
     // The denominator: a hub that answers, with no device on it, is the OTHER
     // condition and must not read as unattached.
     const unlinked = createHubDeviceTransport({
-      now: clock.now,
+      clock,
       hub: () => fakeHub(() => NO_DEVICE), agentName: 'agent-1', cliCwd: () => null, caller,
     });
 
@@ -164,7 +169,7 @@ describe('createHubDeviceTransport', () => {
     const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      now: clock.now,
+      clock,
       hub: () => (hubUp ? hub : failingHub),
       caller,
       agentName: 'agent-1',
@@ -195,7 +200,7 @@ describe('createHubDeviceTransport', () => {
     const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      now: clock.now,
+      clock,
       hub: () => hub, caller, agentName: 'agent-1', cliCwd: () => null,
     });
 
@@ -217,7 +222,7 @@ describe('createHubDeviceTransport', () => {
     const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      now: clock.now,
+      clock,
       hub: () => hub, caller, agentName: 'agent-1', cliCwd: () => '/home/me/project',
     });
 
@@ -241,7 +246,7 @@ describe('createHubDeviceTransport', () => {
     const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      now: clock.now,
+      clock,
       hub: () => hub,
       caller,
       agentName: 'agent-1',
@@ -264,14 +269,14 @@ describe('createHubDeviceTransport', () => {
 
   test('no checkpoint hint outside a turn or when the meta seam is unwired', async () => {
     const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
-    const unwired = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'a', cliCwd: () => null, now: handClock().now });
+    const unwired = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'a', cliCwd: () => null, clock: handClock() });
     await unwired.rpc('exec', ['ls']);
     expect(requiredCall(hub.rpcCalls, 0)[2]?.checkpoint).toBeUndefined();
 
     const clock = handClock();
 
     const outsideTurn = createHubDeviceTransport({
-      now: clock.now,
+      clock,
       hub: () => hub, agentName: 'a', cliCwd: () => null, checkpointMeta: () => null,
       caller,
     });
@@ -286,7 +291,7 @@ describe('createHubDeviceTransport', () => {
     const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      now: clock.now,
+      clock,
       hub: () => hub, agentName: 'agent-1', cliCwd: () => "/home/u/my proj",
       caller,
     });
@@ -313,7 +318,7 @@ describe('createHubDeviceTransport', () => {
     const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      now: clock.now,
+      clock,
       hub: () => denying, caller, agentName: 'agent-1', cliCwd: () => null,
     });
 
@@ -326,7 +331,7 @@ describe('createHubDeviceTransport', () => {
     const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      now: clock.now,
+      clock,
       hub: () => fakeHub(() => ({ connected: true, registered: true, toolchain: null })),
       caller: async () => { throw new Error('This workspace has not been issued a capability token yet.'); },
       agentName: 'agent-1',

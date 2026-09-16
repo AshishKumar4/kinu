@@ -12,6 +12,7 @@
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
 import { DeviceRequestOwnership, type DeviceRequestChannel } from './device-ownership';
+import { REAL_CLOCK, type Clock } from '../types/clock';
 import {
   BACKGROUND_POLICY, type BackgroundPolicy, type InvocationSurface,
 } from '../types/jobs';
@@ -105,22 +106,13 @@ export type DetachOutcome =
   | { readonly detached: true; readonly jobId: string }
   | { readonly detached: false; readonly reason: string };
 
-/** How the threshold's timer is scheduled: `setTimeout` in production, a
- *  hand-fired timer in a test. Returns the cancel for a race the work won. */
-export type ThresholdSchedule = (fire: () => void, afterMs: number) => () => void;
-
-export const REAL_SCHEDULE: ThresholdSchedule = (fire, afterMs) => {
-  const timer = setTimeout(fire, afterMs);
-
-  return () => { clearTimeout(timer); };
-};
-
 export interface ThresholdDeps {
   /** Override the surface's detach threshold. */
   thresholdMs?: number;
-  /** The threshold's clock. A test hands one it fires itself, so "the work
-   *  outran the window" is a call rather than a real timer racing real work. */
-  schedule?: ThresholdSchedule;
+  /** The threshold's clock. A test hands one it advances itself, so "the
+   *  work outran the window" is a step rather than a real timer racing real
+   *  work. */
+  clock?: Clock;
   /** The threshold elapsed. Either mint a background job and keep `promise`
    *  alive durably (settling the job and waking the agent when it resolves), or
    *  refuse the detach. A refusal leaves this live promise foreground-owned, so
@@ -138,7 +130,7 @@ export async function withBackgroundThreshold<T>(
   const thresholdMs = deps.thresholdMs ?? BACKGROUND_POLICY.interactive.detachAfterMs;
   const promise = exec();
   const { promise: timeout, resolve: expire } = Promise.withResolvers<typeof TIMED_OUT>();
-  const cancel = (deps.schedule ?? REAL_SCHEDULE)(() => { expire(TIMED_OUT); }, thresholdMs);
+  const cancel = (deps.clock ?? REAL_CLOCK).after(thresholdMs, () => { expire(TIMED_OUT); });
 
   // Wrap with a lexical settlement boundary so the abandoned race branch is observed.
   const settled = (async () => {

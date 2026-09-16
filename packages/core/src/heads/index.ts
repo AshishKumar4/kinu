@@ -66,8 +66,6 @@ export {
 
 export {
   HeadController,
-  REAL_HEAD_CLOCK,
-  type HeadClock,
   type HeadRuntime,
   type HeadGrounding,
   type SpawnedHead,

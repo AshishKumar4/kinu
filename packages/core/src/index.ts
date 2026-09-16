@@ -283,6 +283,8 @@ export {
 // Types
 export type * from './types/primitives';
 
+export { REAL_CLOCK, waitOn, every, type Clock } from './types/clock';
+
 export type * from './types/agent-runtime';
 
 export type * from './types/backend-host';
@@ -1748,7 +1750,7 @@ export {
   type ReportHeadDelta, type PublishHeadStream,
   reconcileInterruptedForks, forkInterruptedWake, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
-  HeadController, REAL_HEAD_CLOCK, type HeadClock, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
+  HeadController, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
   type SplitPhaseEvent,
   type HeadJournalPort,
   MergeOutputSchema, DecisionSchema, type MergeOutput,

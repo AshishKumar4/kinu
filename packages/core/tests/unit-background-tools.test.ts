@@ -10,27 +10,12 @@
 // 'result'-shaped and always ride the timed race, on every surface.
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
-import { toolExecute } from '@kinu.run/test-utils';
+import { handClock, toolExecute } from '@kinu.run/test-utils';
 import { BACKGROUNDABLE_TOOLS } from '../src/orchestrator/background-tools';
 import { wrapToolsForBackground } from '../src/jobs/background-wrap';
 import { readSpawnStarted, BACKGROUND_POLICY, invocationBackgroundPolicy, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
-import type { ThresholdSchedule } from '../src/jobs/threshold';
+import type { Clock } from '../src/types/clock';
 
-/** The threshold's timer, fired by hand (D19: time inside the subject is a
- *  clock the subject is handed), and work that ends when the test releases
- *  it. "Outran the window" is then an ordering the test states, never a real
- *  timer racing real work. */
-function handTimer() {
-  let armed: (() => void) | undefined;
-
-  const schedule: ThresholdSchedule = (fire) => {
-    armed = fire;
-
-    return () => { armed = undefined; };
-  };
-
-  return { schedule, fire: () => { armed?.(); } };
-}
 
 function gate() {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -50,11 +35,11 @@ interface ShellToolInput { command: string }
 function fakeJobRunner(
   policy: BackgroundPolicy,
   onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome,
-  schedule?: ThresholdSchedule,
+  clock?: Clock,
 ) {
   return {
     policy,
-    thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold, schedule }),
+    thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold, clock }),
   };
 }
 
@@ -151,7 +136,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
     const crossings: string[] = [];
     const detached: Promise<unknown>[] = [];
 
-    const timer = handTimer();
+    const timer = handClock();
 
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY['one-shot'], detachAfterMs: 10 },
@@ -161,7 +146,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
 
         return { detached: true, jobId: 'job-fork-osh' };
       },
-      timer.schedule,
+      timer,
     );
 
     expect(jobRunner.policy.wakesAfterTurn).toBe(false);
@@ -172,7 +157,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
     const raw: ToolSet = { agents: fakeForkTool(exploration.held) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const pending = executeTool<ForkInput>(wrapped, 'agents')({ action: 'fork', task: 't' });
-    timer.fire();
+    timer.tick();
     exploration.release();
     const out = await pending;
 
@@ -188,7 +173,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
     const crossings: string[] = [];
     const detached: Promise<unknown>[] = [];
 
-    const timer = handTimer();
+    const timer = handClock();
 
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY['one-shot'], detachAfterMs: 10 },
@@ -198,13 +183,13 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
 
         return { detached: true, jobId: 'job-run' };
       },
-      timer.schedule,
+      timer,
     );
 
     const command = gate();
     const wrapped = wrapToolsForBackground({ shell: fakeShellTool(command.held) }, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const pending = executeTool<ShellToolInput>(wrapped, 'shell')({ command: 'serve' });
-    timer.fire();
+    timer.tick();
     const out = await pending;
 
     expect(crossings).toEqual(['shell']);
@@ -244,7 +229,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
     const crossings: string[] = [];
     const detached: Promise<unknown>[] = [];
 
-    const timer = handTimer();
+    const timer = handClock();
 
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY.interactive, detachAfterMs: 20 },
@@ -254,14 +239,14 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
 
         return { detached: true, jobId: 'job-run' };
       },
-      timer.schedule,
+      timer,
     );
 
     const command = gate();
     const raw: ToolSet = { shell: fakeShellTool(command.held) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const pending = executeTool<ShellToolInput>(wrapped, 'shell')({ command: 'sleep 1' });
-    timer.fire();
+    timer.tick();
     const out = await pending;
 
     // Crossed via the TIMED race (the window fired while the command was
@@ -277,7 +262,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY.interactive, detachAfterMs: 1000 },
       () => { throw new Error('must not cross for fast work'); },
-      handTimer().schedule,
+      handClock(),
     );
 
     // The window never fires: fast work is work that settles first.

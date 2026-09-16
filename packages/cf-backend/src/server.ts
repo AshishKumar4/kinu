@@ -38,7 +38,7 @@
  */
 
 import { routeAgentRequest } from "agents";
-import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
+import { ORCHESTRATOR_AGENT_SLUG, REAL_CLOCK } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
@@ -47,7 +47,7 @@ import {
 } from "@kinu.run/core";
 import { firstResponse, handlePcRequest } from "@kinu.run/core";
 import { servePreviewRequest } from "./preview-proxy";
-import { handleRunEventsRequest, handleWorkspaceOverviewRequest, REAL_SSE_PACING } from "./run-events-routes";
+import { handleRunEventsRequest, handleWorkspaceOverviewRequest } from "./run-events-routes";
 import { handleMcpRequest } from "./mcp-server";
 import { handleHealthRequest } from "@kinu.run/core";
 import { handleClientErrorRequest } from "./client-error/route";
@@ -729,7 +729,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
     const eventsResp = await firstResponse(reqWithId, [
       (req) => handleWorkspaceOverviewRequest(req, () => agent.getWorkspaceOverview()),
-      (req) => handleRunEventsRequest(req, env, REAL_SSE_PACING),
+      (req) => handleRunEventsRequest(req, env, REAL_CLOCK),
     ]);
 
     if (eventsResp) return eventsResp;
