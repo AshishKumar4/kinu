@@ -2210,10 +2210,33 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
     try {
       for (const mode of ['light', 'dark']) {
         await page.evaluateOnNewDocument((theme) => localStorage.setItem('theme', theme), mode);
-        await page.goto(`${origin}/gallery.html?frame=coderendering`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-code-sample="js"] code');
+        await page.goto(`${origin}/gallery.html?frame=chatcode`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-chat-row="ca1"] code');
         await page.waitForFunction(() => document.fonts.status === 'loaded');
-        await page.waitForFunction(() => [...document.querySelectorAll('[data-code-sample]')].every((sample) => sample.getAttribute('data-code-sample') === 'unknown-language' || sample.querySelectorAll('code span').length > 1));
+        await page.waitForFunction(() => [...document.querySelectorAll('[data-chat-row="ca1"] .p-code')].every((block) => block.querySelectorAll('code span').length > 1));
+
+        const chatFences = await page.$$eval('[data-chat-row="ca1"] .p-code', (blocks) => blocks.map((block) => {
+          const code = block.querySelector('code');
+          const walker = document.createTreeWalker(code ?? block, NodeFilter.SHOW_TEXT);
+          const ink = new Set<string>();
+
+          while (walker.nextNode()) {
+            const parent = walker.currentNode.parentElement;
+
+            if (parent !== null && walker.currentNode.textContent?.trim()) ink.add(getComputedStyle(parent).color);
+          }
+
+          return { tokens: block.querySelectorAll('code span').length, colors: [...ink] };
+        }));
+
+        expect(chatFences.length).toBe(3);
+
+        for (const fence of chatFences) {
+          expect(fence.tokens, `${mode} chat fence token spans`).toBeGreaterThan(1);
+          expect(fence.colors.length, `${mode} chat fence token colors`).toBeGreaterThan(1);
+        }
+
+        await page.goto(`${origin}/gallery.html?frame=coderendering`, { waitUntil: 'networkidle0' });
 
         const colors = await page.evaluate(() => [...document.querySelectorAll('[data-code-sample]')].map((sample) => {
           const code = sample.querySelector('code');
@@ -2237,12 +2260,14 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
           const link = row.querySelector('a[href^="/workspace/"]');
           const age = link?.lastElementChild;
 
-          if (age === null || age === undefined) return [];
+          if (age === null || age === undefined || !(age instanceof HTMLElement)) return [];
           const range = document.createRange();
           range.selectNodeContents(age);
 
-          return [{ text: age.textContent, right: range.getBoundingClientRect().right, rowRight: row.getBoundingClientRect().right }];
+          return [{ text: age.textContent, align: getComputedStyle(age).textAlign, right: range.getBoundingClientRect().right, rowRight: row.getBoundingClientRect().right }];
         }));
+
+        for (const age of ages) expect(age.align).toBe('right');
 
         expect(new Set(ages.map((age) => age.text?.length)).size).toBeGreaterThan(1);
 
