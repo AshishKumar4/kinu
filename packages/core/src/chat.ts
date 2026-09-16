@@ -41,7 +41,7 @@ import { describeProviderError, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './prompts/evidence-window';
 import * as v from 'valibot';
-import { JsonObjectSchema, type JsonObject } from './utils/json';
+import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES } from './providers/rate-limit-retry';
 import { diagnostics, toKinuError, type KinuError } from './obs/index';
@@ -64,10 +64,13 @@ export type ChatEvent =
    *  concurrent calls to the same tool. */
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: JsonObject }
   /** A tool call settled. `result` is the stringified output on success or the
-   *  error text on failure; `success`/`error` carry the discriminator the
-   *  evolution signal reads (hadError, outcome review) — matching the cf
-   *  backend's afterToolCall. */
-  | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string; error?: string } & ToolOutcome)
+   *  error text on failure, for every reader that renders; `output` is the
+   *  VALUE the tool returned on success, projected to JSON, for the ledger —
+   *  the run ledger records what a tool returned, never a rendering of it, so
+   *  a reader that asks a row for `action` finds a field and not a string.
+   *  `success`/`error` carry the discriminator the evolution signal reads
+   *  (hadError, outcome review). */
+  | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string; output?: JsonValue; error?: string } & ToolOutcome)
   /** `usage` is what the provider reported for THIS step's request, and only
    *  that: a field it did not mention stays absent, a zero it did report stays
    *  a zero. `usage.input` doubles as the caller's measured compaction signal
@@ -712,7 +715,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             const input = parseToolArgs(chunk.input);
             const outcome = successfulToolOutcome(chunk.toolName, raw);
             await extensions?.emitToolResult({ toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: input, result: rendered, ...outcome });
-            yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: rendered, ...outcome };
+            yield {
+              type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: rendered,
+              ...(raw !== undefined && { output: projectJsonValue({ value: raw }) }),
+              ...outcome,
+            };
             break;
           }
 
