@@ -5,7 +5,7 @@ import {
   JsonValueSchema,
   ChatHistoryEntrySchema, type ChatHistoryEntry,
   ORCHESTRATOR_AGENT_SLUG,
-  SUBORDINATE_AGENT_SLUG,
+  hostedActorSocketPath,
   decodeJsonValue,
   parseJsonValue,
   type JsonObject,
@@ -911,10 +911,16 @@ export class CloudAgentClient implements AgentClient {
 
     if (this.closed) throw new Error('Cloud workspace client closed while creating its connect ticket.');
 
+    // One definition of a hosted actor's chat address, shared with the browser
+    // and with the edge that admits it: the actor segment under the
+    // workspace's room. The SDK's facet hop is refused by that transport —
+    // there is no child Durable Object to hop to — so a client that built one
+    // got 404 and no socket.
+    const room = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`;
+
     const actorPath = this.subordinateName
-      ? `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`
-        + `/sub/${SUBORDINATE_AGENT_SLUG}/${encodeURIComponent(this.subordinateName)}`
-      : `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`;
+      ? `${room}/${hostedActorSocketPath(this.subordinateName)}`
+      : room;
 
     const url = new URL(actorPath, this.origin.replace(/\/+$/, ''));
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';

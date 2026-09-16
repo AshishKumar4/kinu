@@ -67,6 +67,7 @@ import * as v from 'valibot';
 import {
   SleepTimeUpdateSchema,
   parseWorkspaceTitle,
+  hostedActorSocketPath, JsonValueSchema,
 } from '@kinu.run/core';
 import {
   createCompositeLogger,
@@ -497,7 +498,8 @@ export class FakeAI extends WorkerEntrypoint {
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'>
+  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
+  | 'createSubordinateAgent'>
   & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'>;
 
 /** How long the wake proof's command sleeps: past the interactive detach
@@ -1602,6 +1604,67 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     await fresh.workspaceTitle();
 
     return { receipt, alive: true };
+  }
+
+  /**
+   * THE AGENT TAB, as the browser opens one: the workspace mints a hired
+   * actor the way the tab strip's "+" does (`createSubordinateAgent`), then a
+   * socket is opened on that actor's OWN chat path and the two reads the tab
+   * makes on mount are asked over it — `getActorSnapshot` and
+   * `listAgentTasks`.
+   *
+   * The path is the point. On build cba44dcb9 the client built
+   * a facet hop instead (the Agents SDK's `sub` option), which this transport
+   * refuses, so the socket never opened and both reads timed out at the SDK's
+   * 30 s backstop. Here the request goes to the object exactly as the edge
+   * hands it over, and the answers are the proof.
+   */
+  async hostedActorTab(): Promise<{ name: string; snapshot: string; tasks: string; frames: number }> {
+    const { target, workspace } = await this.claimQueueWorkspace('twin');
+    const created = v.parse(v.object({ name: v.string() }), await target.createSubordinateAgent());
+    const path = `https://probe/agents/orchestrator-agent/${workspace}/${hostedActorSocketPath(created.name)}`;
+    const response = await target.fetch(new Request(path, { headers: { Upgrade: 'websocket' } }));
+    const socket = response.webSocket;
+
+    if (response.status !== 101 || socket === null) throw new Error(`the hosted actor path answered ${String(response.status)}, not a socket`);
+    socket.accept();
+    // The answers are carried back as their JSON text: a stub return of the
+    // recursive JsonValue type is a type the compiler cannot instantiate
+    // through the RPC boundary, and the reads under test are what the frames
+    // say, which the text holds exactly.
+    const answers = new Map<string, string>();
+    const arrived = Promise.withResolvers<void>();
+    let frames = 0;
+
+    socket.addEventListener('message', (event) => {
+      frames += 1;
+      const raw = v.is(v.string(), event.data) ? event.data : '';
+
+      const frame = v.safeParse(v.looseObject({ type: v.string(), id: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.string()) }),
+        raw.startsWith('{') ? JSON.parse(raw) : {});
+
+      if (!frame.success || frame.output.type !== 'rpc') return;
+      answers.set(frame.output.id, frame.output.error === undefined
+        ? JSON.stringify(frame.output.result ?? null)
+        : `ERROR ${frame.output.error}`);
+
+      if (answers.size === 2) arrived.resolve();
+    });
+
+    try {
+      socket.send(JSON.stringify({ type: 'rpc', id: 'tab-snapshot', method: 'getActorSnapshot', args: [created.name] }));
+      socket.send(JSON.stringify({ type: 'rpc', id: 'tab-tasks', method: 'listAgentTasks', args: [] }));
+      await arrived.promise;
+
+      return {
+        name: created.name,
+        snapshot: answers.get('tab-snapshot') ?? '',
+        tasks: answers.get('tab-tasks') ?? '',
+        frames,
+      };
+    } finally {
+      socket.close(1000, 'agent tab probe complete');
+    }
   }
 
   /** The first-run regression: a workspace born with a mission (genesis turn
