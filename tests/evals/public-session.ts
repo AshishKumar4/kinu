@@ -1245,6 +1245,14 @@ export class KinuPublicSession {
 
     return v.parse(SlatePreviewSchema, answer);
   }
+  /** One slate operation through the socket RPC the slate tab drives. */
+  async slateOp(operation: JsonValue): Promise<JsonValue> {
+    return infraBoundary(
+      'slate on ' + this.input.origin + '/' + this.workspace,
+      () => this.rpc('slate', [operation]),
+    );
+  }
+
 
   /** Read existing preview endpoints without starting the app under test. */
   async exposedPorts(executor: string): Promise<readonly { port: number; url: string }[]> {
