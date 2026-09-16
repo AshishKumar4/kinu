@@ -543,6 +543,41 @@ const CASES: readonly TrajectoryCase[] = [
       ];
     },
   },
+  {
+    id: 'public-delegation-across-turns',
+    purpose: 'A lead that has one helper answer one question, then relays what it said.',
+    seed: [],
+    turns: [
+      'Hire one helper with your agents tool: action hire, lifetime task, role task, mission '
+      + '"Research exactly one fact: the number of relays the BLUEBIRD protocol requires before '
+      + 'failover is three. Reply with exactly that number as one word and nothing else." '
+      + 'When the hire answers, reply with only DONE.',
+      'Reply with one line: RELAYED <what your helper said>.',
+    ],
+    budget: { ...PUBLIC_BUDGET },
+    async verify({ events, history, absorbedBy }) {
+      const hires = promptToolCalls(events, this.turns[0], absorbedBy)
+        .filter((call) => call.name === 'agents');
+
+      requireMeasuredToolOutcomes(hires);
+
+      const answers = history.filter((row) => row.role === 'assistant');
+      const lastAnswer = answers.at(-1)?.text ?? '';
+
+      return [
+        {
+          what: 'hired-first-turn',
+          reached: hires.length > 0,
+          detail: `${String(hires.length)} agents call(s) in the first prompt's run`,
+        },
+        {
+          what: 'relayed-second-turn',
+          reached: lastAnswer.includes('RELAYED') && lastAnswer.includes('three'),
+          detail: `the second answer: ${JSON.stringify(lastAnswer.slice(0, 160))}`,
+        },
+      ];
+    },
+  },
 ];
 
 const DECLARED = CASES.map((entry) => entry.id);
