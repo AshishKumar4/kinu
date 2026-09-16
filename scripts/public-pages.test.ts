@@ -1007,10 +1007,12 @@ describe('the standalone landing runs', () => {
       expect(after.time).toBeGreaterThanOrEqual(landed.time ?? 0);
 
       // The path that ran, asserted: a WebGPU landing had a device and it
-      // was destroyed (the full real-device path); a canvas landing had none
-      // and proves the resting renderer. A destroy on a canvas landing, or a
-      // WebGPU landing with no captured device, is a harness fault.
-      expect(destroyed).toBe(landed.renderer === 'webgpu');
+      // was destroyed — the full real-device path, and a landing there with
+      // no captured device is a harness fault. A canvas landing proves the
+      // resting renderer; a device may still have been captured (SwiftShader
+      // hands one out and the start fails after), so nothing is claimed of
+      // the destroy there.
+      if (landed.renderer === 'webgpu') expect(destroyed).toBe(true);
       console.log(`hero loss path: landed=${landed.renderer ?? 'none'} destroyed=${destroyed}`);
 
       await page.close();
