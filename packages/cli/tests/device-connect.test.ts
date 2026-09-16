@@ -9,6 +9,7 @@
 // Env-dependent paths (KINU_HOME) run in subprocesses like config.test.ts.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
@@ -319,8 +320,10 @@ describe('device-connect prompt policy', () => {
     expect(stub.hits.list).toBe(1);
   });
 
-  test('a connected device suppresses the offer without re-fetching', async () => {
-    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+  test('THIS machine connected suppresses the offer without re-fetching', async () => {
+    // The hub stamps the device row's hostname from the daemon's HELLO, so a
+    // row carrying this machine's hostname IS this machine.
+    const stub = startStubCloud({ devices: () => [connectedDevice(true, { hostname: hostname() })] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
     const out = await runScript(home, `
@@ -329,6 +332,23 @@ describe('device-connect prompt policy', () => {
     `);
 
     expect(JSON.parse(out.trim())).toEqual([false, false]);
+    expect(stub.hits.list).toBe(1);
+  });
+
+  test("another machine's connected device still leaves this PC to offer", async () => {
+    // The card asks about THIS PC. A person whose other laptop is linked has
+    // as much to link here as one with nothing connected, and suppressing on
+    // any connected row is how the offer vanished for every session on a
+    // machine whose account already had a daemon somewhere else.
+    const stub = startStubCloud({ devices: () => [connectedDevice(true, { hostname: 'some-other-box' })] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const out = await runScript(home, `
+      import { shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
+      console.log(JSON.stringify([await shouldOfferDeviceConnect(), await shouldOfferDeviceConnect()]));
+    `);
+
+    expect(JSON.parse(out.trim())).toEqual([true, false]);
     expect(stub.hits.list).toBe(1);
   });
 

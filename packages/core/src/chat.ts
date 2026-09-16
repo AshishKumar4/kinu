@@ -41,7 +41,7 @@ import { describeProviderError, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './prompts/evidence-window';
 import * as v from 'valibot';
-import { JsonObjectSchema, type JsonObject } from './utils/json';
+import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES } from './providers/rate-limit-retry';
 import { diagnostics, toKinuError, type KinuError } from './obs/index';
@@ -64,10 +64,13 @@ export type ChatEvent =
    *  concurrent calls to the same tool. */
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: JsonObject }
   /** A tool call settled. `result` is the stringified output on success or the
-   *  error text on failure; `success`/`error` carry the discriminator the
-   *  evolution signal reads (hadError, outcome review) — matching the cf
-   *  backend's afterToolCall. */
-  | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string; error?: string } & ToolOutcome)
+   *  error text on failure, for every reader that renders; `output` is the
+   *  VALUE the tool returned on success, projected to JSON, for the ledger —
+   *  the run ledger records what a tool returned, never a rendering of it, so
+   *  a reader that asks a row for `action` finds a field and not a string.
+   *  `success`/`error` carry the discriminator the evolution signal reads
+   *  (hadError, outcome review). */
+  | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string; output?: JsonValue; error?: string } & ToolOutcome)
   /** `usage` is what the provider reported for THIS step's request, and only
    *  that: a field it did not mention stays absent, a zero it did report stays
    *  a zero. `usage.input` doubles as the caller's measured compaction signal
@@ -456,7 +459,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // schema payload that rides it every step.
   opts.meter?.openTurn({ system: cache.system, tools });
 
-  /** The turn's text, across every provider call the turn takes. */
+  /** The text the turn STREAMED, across every provider call it takes: what a
+   *  client watching saw, and the fallback for a turn whose steps carry no
+   *  text of their own. The turn's ANSWER is narrower — see below. */
   let allText = '';
 
   /**
@@ -712,7 +717,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             const input = parseToolArgs(chunk.input);
             const outcome = successfulToolOutcome(chunk.toolName, raw);
             await extensions?.emitToolResult({ toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: input, result: rendered, ...outcome });
-            yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: rendered, ...outcome };
+            yield {
+              type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: rendered,
+              ...(raw !== undefined && { output: projectJsonValue({ value: raw }) }),
+              ...outcome,
+            };
             break;
           }
 
@@ -891,6 +900,31 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     steps = [...steps, ...continued.steps];
     responseMessages = [...responseMessages, ...continued.produced];
     interrupted = continued.interrupted;
+  }
+
+  // THE ANSWER IS THE FINAL STEP'S TEXT, not everything the turn said.
+  //
+  // A multi-step turn narrates: each step may emit prose before its tool
+  // calls ("I'll look at the workspace first…"), and that prose is the step's,
+  // recorded on its own `step_finish` row and streamed to whoever was
+  // watching. The turn's answer is what it said when it stopped. Joining every
+  // step's text made the durable reply a wall of narration with the answer
+  // buried at its end and no boundary in front of it — measured 2026-09-16 on
+  // the deployed build: the stored reply for a ten-step slate turn was the
+  // nine narrations plus the answer, concatenated, so a reader asking for the
+  // answer's own first line found narration instead.
+  //
+  // Two steps join: a step the provider cut at its output limit and the
+  // continuation above that finishes it are one answer in two requests. And an
+  // INTERRUPTED turn keeps what it streamed — the cut answer is what the
+  // operator saw, and the last finished step is not it.
+  if (!interrupted && steps.length > 0) {
+    let from = steps.length - 1;
+
+    while (from > 0 && steps[from - 1]?.finishReason === OUTPUT_LIMIT_REACHED) from -= 1;
+    const answer = steps.slice(from).map((step) => step.text ?? '').join('');
+
+    if (answer.trim()) allText = answer;
   }
 
   // If the model produced no text (ended on a tool call), gather from steps
