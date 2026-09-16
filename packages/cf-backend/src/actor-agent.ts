@@ -6434,6 +6434,13 @@ export abstract class ActorAgent extends Think<Env> {
     // which is the population the one-shot policy was measured on.
     const programmatic = this.turnUserMessageEvent() !== null;
 
+    // A human typed into this turn while it ran: from that step on someone
+    // IS watching the stream, whatever drove the turn. The first-run
+    // background-settle row on build cba44dcb9 landed its ask as a steer
+    // inside the genesis turn, and the run tool kept the one-shot window, so
+    // a 45 s sleep ran inline and no wake ever engaged.
+    if (this.actorSession.landedSteers.length > 0) return 'interactive';
+
     return programmatic || this._turnContinuity === 'independent_task' ? 'one-shot' : 'interactive';
   }
 
