@@ -29,7 +29,7 @@ import * as v from 'valibot';
 import type { ChatEvent } from '../chat';
 import type { ActorTurnProgram } from '../orchestrator/actor-program';
 import { currentWorkMode } from '../execution/work-mode';
-import { JsonObjectSchema } from '../utils/json';
+import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
 import { ToolOutcomeSchema } from '../tools/outcome';
 import { renderToolResult } from '../prompts/evidence-window';
 import { FAILURE_WITHOUT_ERROR } from '../events/types';
@@ -57,9 +57,11 @@ const ChatEventSchema: v.GenericSchema<ChatEvent> = v.variant('type', [
   }),
   v.variant('success', [
     v.object({ type: v.literal('tool-result'), toolName: v.string(), toolCallId: v.string(),
-      result: v.string(), error: v.optional(v.string()), ...ToolOutcomeSchema.options[0].entries }),
+      result: v.string(), output: v.optional(JsonValueSchema), error: v.optional(v.string()), durationMs: v.optional(v.number()),
+      ...ToolOutcomeSchema.options[0].entries }),
     v.object({ type: v.literal('tool-result'), toolName: v.string(), toolCallId: v.string(),
-      result: v.string(), error: v.optional(v.string()), ...ToolOutcomeSchema.options[1].entries }),
+      result: v.string(), output: v.optional(JsonValueSchema), error: v.optional(v.string()), durationMs: v.optional(v.number()),
+      ...ToolOutcomeSchema.options[1].entries }),
   ]),
   v.object({
     type: v.literal('step-finish'),
@@ -171,8 +173,10 @@ async function* scaffoldTurn(
         toolNames.set(ev.toolCallId, ev.name);
         yield { type: 'tool-call', toolName: ev.name, toolCallId: ev.toolCallId, args: ev.args };
         break;
-      case 'tool_result':
-        yield {
+      case 'tool_result': {
+        // The rendering for readers that render, the VALUE for the ledger:
+        // the row records what the tool returned, never a string of it.
+        const settled: Extract<ChatEvent, { type: 'tool-result' }> = {
           type: 'tool-result',
           toolName: toolNames.get(ev.toolCallId) ?? 'unknown',
           toolCallId: ev.toolCallId,
@@ -180,7 +184,13 @@ async function* scaffoldTurn(
           error: ev.error,
           ...ev.outcome,
         };
+
+        if (ev.outcome.success && ev.result !== undefined) settled.output = ev.result;
+
+        yield settled;
         break;
+      }
+
       case 'step_finish':
         // A scaffold-authored step: the scaffold IS the loop here, so there is
         // no SDK response array behind this boundary. Empty rather than

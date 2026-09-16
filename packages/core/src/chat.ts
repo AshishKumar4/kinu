@@ -69,8 +69,10 @@ export type ChatEvent =
    *  the run ledger records what a tool returned, never a rendering of it, so
    *  a reader that asks a row for `action` finds a field and not a string.
    *  `success`/`error` carry the discriminator the evolution signal reads
-   *  (hadError, outcome review). */
-  | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string; output?: JsonValue; error?: string } & ToolOutcome)
+   *  (hadError, outcome review). `durationMs` is how long the call ran, from
+   *  the SDK's dispatch of it to its settled part; absent for a call the SDK
+   *  never dispatched here (a client-side tool). */
+  | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string; output?: JsonValue; error?: string; durationMs?: number } & ToolOutcome)
   /** `usage` is what the provider reported for THIS step's request, and only
    *  that: a field it did not mention stays absent, a zero it did report stays
    *  a zero. `usage.input` doubles as the caller's measured compaction signal
@@ -587,8 +589,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     let stepContent: Array<TextPart | ToolCallPart> = [];
     // Tool execution can begin before fullStream publishes its tool-call part.
     // Keep dispatched calls until the SDK completes their step, so cancellation
-    // cannot erase work already admitted by the tool boundary.
-    let dispatchedCalls: Map<string, ToolCallPart> | undefined;
+    // cannot erase work already admitted by the tool boundary. The dispatch
+    // instant rides along: the settled part's `durationMs` is measured from it.
+    let dispatchedCalls: Map<string, { readonly call: ToolCallPart; readonly startedAt: number }> | undefined;
 
     /** This call's cumulative generated array as of its last finished step. The
      *  SDK accumulates `step.response.messages` within the call and never
@@ -658,8 +661,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       onError: ({ error }) => { streamError = error; },
       experimental_onToolCallStart: ({ toolCall }) => {
         dispatchedCalls ??= new Map();
-        dispatchedCalls.set(toolCall.toolCallId, { type: 'tool-call',
-          toolCallId: toolCall.toolCallId, toolName: toolCall.toolName, input: toolCall.input });
+        dispatchedCalls.set(toolCall.toolCallId, { startedAt: Date.now(), call: { type: 'tool-call',
+          toolCallId: toolCall.toolCallId, toolName: toolCall.toolName, input: toolCall.input } });
       },
       onAbort: ({ steps }) => {
         // The caller's abort interrupts the TURN. This callback is the only
@@ -696,6 +699,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // is classified by type; a cut is classified by the state that caused it;
     // anything else is recorded, because a deferred rejecting on a turn that
     // finished naturally would be a defect here and must be visible.
+    /** How long a settled call ran, from the SDK's dispatch of it. Absent when
+     *  the SDK never announced a dispatch — a call it did not execute here. */
+    const toolDuration = (toolCallId: string): { durationMs: number } | undefined => {
+      const dispatched = dispatchedCalls?.get(toolCallId);
+
+      return dispatched === undefined ? undefined : { durationMs: Date.now() - dispatched.startedAt };
+    };
+
     const ignoreDeferred = (error: Error): void => {
       if (NoOutputGeneratedError.isInstance(error)) return;
 
@@ -771,7 +782,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             await extensions?.emitToolResult({ toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: input, result: rendered, ...outcome });
             yield {
               type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: rendered,
-              ...toolOutput(raw), ...outcome,
+              ...toolOutput(raw), ...toolDuration(chunk.toolCallId), ...outcome,
             };
             break;
           }
@@ -784,7 +795,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             const error = describeProviderError({ cause: chunk.error });
             const input = parseToolArgs(chunk.input);
             await extensions?.emitToolResult({ toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: input, result: error, ...outcome });
-            yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, error, ...outcome };
+            yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, error, ...toolDuration(chunk.toolCallId), ...outcome };
             break;
           }
 
@@ -896,7 +907,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // assemble EVERY later request from that history — including the
     // continuation request below, whose prefix IS this array.
     if (cut && dispatchedCalls) {
-      for (const call of dispatchedCalls.values()) {
+      for (const { call } of dispatchedCalls.values()) {
         if (!stepContent.some(part => part.type === 'tool-call' && part.toolCallId === call.toolCallId)) stepContent.push(call);
       }
     }

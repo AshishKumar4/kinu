@@ -644,10 +644,11 @@ export class ActorSession {
     // The VALUE the tool returned is what the ledger records; the rendered
     // text is for readers that render. A tool that returned nothing records
     // the text it rendered to, which is what such a tool's row has always read.
+    const timed = event.durationMs === undefined ? {} : { durationMs: event.durationMs };
     this.orchestrator.acc.recordToolCall(event.success
-      ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, failures: event.failures, output: event.output ?? event.result }
+      ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, failures: event.failures, output: event.output ?? event.result, ...timed }
       : { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: false, reason: event.reason, failures: event.failures,
-          execution: event.execution, error: event.error ?? event.result });
+          execution: event.execution, error: event.error ?? event.result, ...timed });
   }
 
   private requireTurn(lease: ActorTurnLease): ActiveTurn {

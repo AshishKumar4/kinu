@@ -223,13 +223,35 @@ describe('scaffoldChatTransform', () => {
     expect(call).toEqual({
       type: 'tool-call', toolName: 'search', toolCallId: expect.any(String), args: { q: 'the task' },
     });
+    // The rendering for readers that render; the VALUE for the ledger — a
+    // scaffold-authored call's row records what the tool returned, not a
+    // string of it, exactly as the builtin loop's row does.
     expect(result).toEqual({
       type: 'tool-result', toolName: 'search', toolCallId: expect.any(String),
-      result: '{"hits":2}', success: true,
+      result: '{"hits":2}', output: { hits: 2 }, success: true,
     });
     // The pair carries the dispatch's own call id, so a surface reporting the
     // call out of band can settle the right one.
     expect(result?.toolCallId).toBe(call?.toolCallId);
+  });
+
+  test('a tool result relayed as an authored chunk keeps its value and its duration', async () => {
+    // A scaffold that relays a delegated tool result as a JSON `ui_chunk`
+    // crosses the wire schema; a schema that dropped `output` or `durationMs`
+    // would hand the ledger a rendering and a row with no cost.
+    const relaying = `async function run() {
+      await host.emit({ type: 'ui_chunk', chunk: { type: 'tool-result', toolName: 'search', toolCallId: 'c1',
+        result: '{"hits":2}', output: { hits: 2 }, durationMs: 7, success: true } });
+      await host.emit({ type: 'text_delta', text: 'done' });
+    }`;
+
+    const { chat } = defaultTurn(DEFAULT_EVENTS);
+    const events = await collect(scaffoldChatTransform({ chat, ...await selected(1, relaying) }));
+    const result = events.find((e) => e.type === 'tool-result');
+
+    expect(result).toEqual({
+      type: 'tool-result', toolName: 'search', toolCallId: 'c1', result: '{"hits":2}', output: { hits: 2 }, durationMs: 7, success: true,
+    });
   });
 
   test('a failing tool dispatch is reported as an unsuccessful tool-result', async () => {
