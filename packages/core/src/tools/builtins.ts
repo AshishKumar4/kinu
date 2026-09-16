@@ -76,6 +76,9 @@ import type { ProfileCatalogEnvelope } from '../types/profile';
 import { TaskListStore, TASK_STATUSES } from '../tasks/store';
 import { clampToolResult, withClampedToolResult } from './clamp';
 import { codemodeInputSchema } from './sandbox-contract';
+import { connectedDevices } from '../execution/device-status';
+import { deviceMountSegment } from '../execution/device-tunnel-executor';
+import { referenceRoots } from '../vfs/references';
 import { dispatchReport, reportHandoffProperties, type ReportToolInput } from '../delegation/report-tool';
 import {
   SUBORDINATE_REPORT_STATUSES,
@@ -614,6 +617,17 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     ledger: deps.fileLedger ?? new TurnFileLedger(),
     budget,
     memory,
+    // The live table at the moment a result is rendered: a machine that
+    // connected mid-turn names its files by its own segment from then on.
+    roots: () => {
+      const fleet = rt.deviceTransport?.status().devices;
+
+      return referenceRoots({
+        devices: connectedDevices(fleet).map((device) => deviceMountSegment(device, fleet)),
+        sandbox: router?.getProvider('sandbox') !== undefined,
+        local: false,
+      });
+    },
   });
 
   // ── 5. memory — the ONE durable-state tool ────────────────────────────────

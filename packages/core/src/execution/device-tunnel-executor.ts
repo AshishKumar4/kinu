@@ -56,6 +56,7 @@ import {
   nextDeviceRequestId,
 } from './device-tunnel';
 import { readDeviceOwnershipContext, readExecSignal } from './signal';
+import { RESERVED_REFERENCE_ROOTS } from '../vfs/mounts';
 import {
   isJsonObject,
   JsonValueSchema,
@@ -957,7 +958,9 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
  */
 export function deviceMountSegment(device: DeviceFleetEntry, fleet: readonly DeviceFleetEntry[] | undefined): string {
   const name = device.name.trim();
-  const usable = name.length > 0 && !name.includes('/') && name !== '.' && name !== '..';
+  // A reference root the table reserves (`vfs`, `sandbox`, `local`) is never
+  // a machine's segment, so the alias can never shadow a device.
+  const usable = name.length > 0 && !name.includes('/') && name !== '.' && name !== '..' && !RESERVED_REFERENCE_ROOTS.includes(name);
 
   if (!usable) return device.id;
   const others = connectedDevices(fleet).filter((d) => d.id !== device.id && d.name.trim() === name);

@@ -14,6 +14,7 @@
  * one error vocabulary, one read ledger, one durable outcome counter.
  */
 
+import { formatReference, type ReferenceRoot } from '../vfs/references';
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
@@ -44,6 +45,9 @@ export interface FileToolDeps {
    *  `workspace.writeFile` does. Without it the FTS index would silently go
    *  stale for the one directory whose whole purpose is being searchable. */
   memory?: Memory;
+  /** The live reference roots (`vfs/references.ts`), so a result that names
+   *  a file names it the way a person reads it: `root://path`. */
+  roots?: () => readonly ReferenceRoot[];
 }
 
 export interface FileToolInput {
@@ -322,7 +326,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
           return failure(vfsFail.reason, vfsFail.error);
         }
 
-        return { ok: true, path, bytes: args.content.length, action: existing === null ? 'created' : 'replaced' };
+        return { ok: true, path, reference: formatReference(path, deps.roots?.() ?? []), bytes: args.content.length, action: existing === null ? 'created' : 'replaced' };
       }
 
       case 'edit': {
@@ -389,6 +393,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         return {
           ok: true,
           path,
+          reference: formatReference(path, deps.roots?.() ?? []),
           applied: outcome.applied.map((a) => ({ line: a.line, removed_lines: a.removedLines, added_lines: a.addedLines })),
         };
       }
