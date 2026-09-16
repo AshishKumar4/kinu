@@ -2810,6 +2810,23 @@ export class OrchestratorAgent extends ActorAgent {
     return { workspace: await this.workspaceTitle() };
   }
 
+  /**
+   * EVAL-ONLY: end this activation, now, the way the platform ends one — the
+   * object is reset, every in-flight invocation rejects, the next request
+   * builds a fresh activation over the same storage, and the schedule rows
+   * stand. Nothing in the product can ask for this; it exists so the
+   * first-run `background-wake` row can measure the continuation of a
+   * multi-step turn across activations on the deployed build, which no other
+   * surface can force (the platform's own idle eviction is neither forcible
+   * nor repeatable). Sealed in `rpc-surface.ts`: stub-reachable from this
+   * Worker only, never `@callable`, and the one route that calls it refuses
+   * every caller but the eval-service identity (`eval/abort-route.ts`).
+   * ARCHITECTURE-DECISIONS C3.
+   */
+  evalAbortActivation(): void {
+    this.ctx.abort('eval-service: the activation was aborted on request');
+  }
+
   /** Commit one display name to the ROOT registry, then refresh the activation
    *  cache and live clients. An auto-title is refused if the owner has claimed
    *  the naming — decided at the root, in the same write. */

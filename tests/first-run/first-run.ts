@@ -90,6 +90,7 @@ export const FIRST_RUN_CASES = [
   'public-share',
   'device-link',
   'background-settle',
+  'background-wake',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -298,6 +299,24 @@ export const FIRST_RUN_DEFECTS = {
       + 'public-failure-recovery/events.jsonl) shows the same shape: the detached handle at '
       + 'event 20 and a ledger that closed over a still-running job.',
   },
+  'background-wake': {
+    id: 'background-wake',
+    found: 'A multi-step turn whose activation ended mid-turn — an isolate killed, an alarm-boundary '
+      + 'reset — sat un-driven: the run row stayed open with nothing scheduled to notice it. The '
+      + 'turn-open wake added at 346bdced7 was released by the first tick that fired inside the turn, '
+      + 'so an ordinary turn held a wake for about one second (REVIEW-chat-loop C2).',
+    missedBecause: 'the wake-chain suite listed schedules right after a turn opened and never fired a '
+      + 'tick with the turn parked; the workerd background-wake case holds the turn in-process and '
+      + 'ends no activation; and the deployed product had no way to end one, so no row could ask it.',
+    provedRedAt: 'cba44dcb9',
+    redDirection: 'RED by reading on build cba44dcb9: `_kinuTerminalRetryTick` cancelled its armed row '
+      + 'whenever `nextOwedAt()` was null, and an open run row is untimed, so every mid-turn tick left '
+      + 'the registry empty (packages/cf-backend/src/actor-agent.ts:1929-1932 at that build). '
+      + 'Unit red: unit-alarm-wake-chain "a tick that fires inside a parked turn keeps a wake row" '
+      + 'found 0 rows before 154893baa. This row is the live proof; it needs the eval-only abort '
+      + '(ARCHITECTURE-DECISIONS C3) to end an activation on the deployed build, so its first live '
+      + 'run is on the build that carries both.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
 
@@ -403,6 +422,7 @@ const SHORT_SUBJECT = {
   'public-share': 'public',
   'device-link': 'link',
   'background-settle': 'wake',
+  'background-wake': 'bgwake',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */

@@ -195,6 +195,24 @@ Think switch, on both backends. Decided 2026-09-16, pinned by
 `unit-chat-transport` and `turn-answer-row`. Both changes were hidden by the
 parity re-record at a49c1edfa.
 
+C3. The deployed product carries one eval-only surface that ends a workspace
+object's activation: `POST /api/workspaces/<name>/eval/abort`, answered only
+for the eval-service identity (`DEV_USER_EMAIL` + `DEV_IDENTITY_SECRET`,
+`provider: 'dev'` after `authenticateRequest`) and 404 for every other
+caller; it calls `OrchestratorAgent.evalAbortActivation`, which is
+`ctx.abort` and nothing else, sealed in `rpc-surface.ts` as stub-reachable
+from the Worker and never `@callable`. It exists because the continuation of
+a multi-step turn across activations is a property of the deployed build
+that nothing else can force: every callable, the control plane and the CLI
+gate cancel a turn or delete a workspace, `abortAllDurableObjects` is the
+test runtime's, and the platform's idle eviction is neither forcible nor
+repeatable. The first-run `background-wake` row is its one caller. Measured
+2026-09-16 under workerd (`two-turn` "the eval-only abort ends the
+activation"): the stub call rejects with the abort reason and a fresh stub
+finds the object alive over the same storage. Decided 2026-09-16; the owner
+may veto it, in which case the row is retired with it and the property is
+held by the workerd wake case alone.
+
 ## Delegation
 
 D1. One delegation surface, `agents`, with `hire` (durable or task lifetime),
