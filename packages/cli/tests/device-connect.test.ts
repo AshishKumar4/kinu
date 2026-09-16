@@ -13,7 +13,7 @@ import { hostname } from 'node:os';
 
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import {
   DEVICE_SANDBOX_CAPABILITIES,
   DEVICE_SANDBOX_REASONS,
@@ -31,7 +31,7 @@ import DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
 import UPDATE_SOURCE from '../../pc-agent/src/update.js' with { type: 'text' };
-import { daemonArchive, startUpdateHub, until, type UpdateHub } from './helpers/update-hub';
+import { daemonArchive, releaseSigningEnv, startUpdateHub, until, type UpdateHub } from './helpers/update-hub';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -950,11 +950,15 @@ describe('device daemon single-instance lock', () => {
   }
 
   /** The daemon as anything but the CLI starts it: the installed file, run. */
+  let signing: Record<string, string> = {};
+  beforeAll(async () => { signing = await releaseSigningEnv(); });
+
   function startDaemon(home: string) {
     const proc = Bun.spawn({
       cmd: [process.execPath, join(home, 'pc-agent.js')],
       cwd: newProjectDir(),
-      env: { ...process.env, KINU_HOME: home, KINU_INFLIGHT_ROOT: join(home, 'inflight') },
+      // The hub helper signs its release with the test key; the daemon pins it.
+      env: { ...process.env, KINU_HOME: home, KINU_INFLIGHT_ROOT: join(home, 'inflight'), ...signing },
       stdout: 'pipe',
       stderr: 'pipe',
     });

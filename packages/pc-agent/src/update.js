@@ -453,6 +453,7 @@ function createUpdater(opts) {
 }
 
 module.exports = {
+  RELEASE_SIGNING_PUBLIC_KEY,
   VERSION_STAMP,
   UPDATE_PENDING_MARKER,
   PREDECESSOR_ENV,
