@@ -60,7 +60,7 @@ interface MountVerdicts {
 
 function probe(kind: 'overlay' | 'direct-io'): MountVerdicts {
   const ran = spawnSync('docker', [
-    'shell', '--rm', '--privileged', '--device', '/dev/fuse',
+    'run', '--rm', '--privileged', '--device', '/dev/fuse',
     '--entrypoint', '/probe/run.sh', IMAGE, kind,
   ], { encoding: 'utf8' });
 
