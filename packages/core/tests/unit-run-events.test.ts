@@ -13,6 +13,7 @@ import {
 import { testActorHandle } from '@kinu.run/test-utils';
 import { isBackgroundHandle } from '../src/jobs/threshold';
 import { makeSql, makeExecRaw } from './helpers';
+import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/log';
 
 function setup() {
   const db = new Database(':memory:');
@@ -797,6 +798,37 @@ describe('RunEventRecorder.openTurn — the continuation ledger', () => {
     const { recorder } = setup();
     recorder.emit('run-1', { type: 'run_start', agentId: 'a' });
     expect(recorder.openTurn()).toBeNull();
+  });
+
+  test('an open run whose start row cannot be read is said so, by run id, not silently passed over', () => {
+    // The process will never re-open this turn and the wake reconcile will
+    // seal it as interrupted: exactly the case a reader wants to hear about.
+    const { recorder, sql, actor } = setup();
+    const log = createRecordingLogger();
+    const restore = setDiagnosticsSink(log);
+
+    try {
+      expect(sql`INSERT INTO run_events (actor_id, run_id, event_index, type, ts, payload)
+          VALUES (${actor.actorId}, ${'run-unreadable'}, ${1}, ${'run_start'}, ${new Date().toISOString()}, ${'{"type":"run_start"'})`).toEqual([]);
+
+      expect(() => recorder.openTurn()).toThrow();
+    } finally {
+      restore();
+    }
+
+    // A readable start row that names no turn is a side lane, and the ledger
+    // says which run it passed over.
+    const side = setup();
+    const sideLog = createRecordingLogger();
+    const restoreSide = setDiagnosticsSink(sideLog);
+
+    try {
+      side.recorder.emit('run-side', { type: 'run_start', agentId: 'a' });
+      expect(side.recorder.openTurn()).toBeNull();
+      expect(sideLog.emitted.map((line) => [line.event, line.fields.run])).toEqual([['run.open_without_turn', 'run-side']]);
+    } finally {
+      restoreSide();
+    }
   });
 
   test('the open run answers its turn, the finished steps and the cut step\'s newest partial', () => {
