@@ -237,6 +237,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
             </button>
           ))}
         </div>
+        {/* Icons inside the strip's own rule: the row is one flex line with
+            one bottom rule, so the gauge and the collapse chevron sit on the
+            same edge the tabs underline — never a ruled strip beside an
+            unruled icon column with a visible break between them. */}
+        <div className={`flex shrink-0 items-center border-b p-border ${tabStripH}`}>
         <ShareSlateControl workspace={props.workspace} slate={openSlateSummary} rpc={props.rpc} />
         {chip !== null && (
           <button
@@ -270,6 +275,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             <CaretRightIcon size={14} />
           </button>
         )}
+        </div>
       </div>
 
       <div className={`flex-1 min-h-0 ${surface === "Diffs" ? "hidden" : previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6"}`}>
