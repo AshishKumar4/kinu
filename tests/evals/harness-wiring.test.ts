@@ -783,7 +783,7 @@ describe('tool-failure attribution over a real turn', () => {
     expect(keys['file·read·missing']).toBe(1);
     expect(keys['shell·unavailable']).toBe(1);
     expect(census.failures).toHaveLength(3);
-    expect(census.failures.some((failure) => failure.tool === 'execute_tools')).toBe(false);
+    expect(census.failures.some((failure) => failure.tool === 'eval')).toBe(false);
   });
 
   test('every failure is attributed to its tool, action and reason, split three ways', async () => {
