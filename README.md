@@ -41,16 +41,16 @@
 
 ## What Kinu is
 
-I'm building Kinu as a general agent platform and software factory. Give a
+I'm building Kinu as a general agent platform and software factory. You give a
 workspace a mission: research a question, build a live app, fix a codebase, or
 check something on a schedule. A cloud workspace keeps working while you are
-away, and you can return to its conversation, files and pending decisions.
+away. You return to its conversation, files, and pending decisions.
 
 You can use it for:
 
 - Research. The `web` tool searches and fetches pages with no keys. A
-  `research` swarm runs several angles on one question at once, and a
-  `researcher` role can be hired for the long reads.
+  `research` swarm covers several angles of one question at once, and you
+  can hire a `researcher` role for the long reads.
 - Live apps. Ask for a dashboard and the agent writes a slate: a small Worker
   under `/home/user/slates/<id>/` that opens in its own tab on a preview URL.
   A slate reads live data through bindings you declare: workspace files, a
@@ -60,11 +60,11 @@ You can use it for:
   reads and researches without changing project code, then submits a plan
   for you to review before a Build turn starts.
 - Schedules and triggers. A cron timer, a one-shot timer, or a webhook wakes a
-  cloud workspace with nobody at the keyboard.
-- Work while you are away. Long commands and searches move to the background
-  and wake the agent when they settle. Anything that needs your decision, a
+  cloud workspace when nobody sits at the keyboard.
+- Work while you are away. Long commands and searches move to the background.
+  They wake the agent when they settle. Anything that needs your decision, a
   shell approval or a release approval, appears under "Needs you". Plans open
-  for review in the same Work tab; settled work stays in its journal.
+  for review in the same Work tab. Settled work stays in its journal.
 - Cloud or your own devices. A cloud workspace lives in a Durable Object on
   Cloudflare and keeps running when your laptop is closed. A local workspace
   runs on your machine over `bun:sqlite`. It is the same agent either way.
@@ -77,7 +77,7 @@ You can use it for:
   workspace can also drive your Claude Code or opencode login.
 
 The agent writes tools for itself and scores them with use. When you correct
-it, it records a provisional lesson. For a hard task it can run a swarm: a
+it, it records a provisional lesson. For a hard task it runs a swarm: a
 tree search whose nodes are whole agents, scored by a workspace verifier.
 
 ## Using it
@@ -103,8 +103,8 @@ fits scripts and CI. `kinu acp` serves a workspace to Zed, JetBrains, neovim or
 Marimo.
 
 `--mode cloud` runs on Cloudflare. `--mode local` runs on your machine and needs
-no account. `kinu export` archives either one and `kinu import` restores it
-locally. [QUICKSTART.md](QUICKSTART.md) is the short path and
+no account. `kinu export` archives either one, and `kinu import` restores it
+locally. [QUICKSTART.md](QUICKSTART.md) is the short path.
 [docs/USER-GUIDE.md](docs/USER-GUIDE.md) covers daily use.
 
 ### Lending your machine to a cloud workspace
@@ -131,11 +131,12 @@ device serves every workspace you grant. It works like this:
   the agent's own workspace or container runs without asking. The same
   recognized destructive command on your machine waits for you. Force-pushes
   and package publishing need approval on any executor. A standing approval
-  is a rule you grant once, listed in Settings and revocable there. Known
-  dangerous patterns, such as wiping the filesystem root, are refused.
+  is a rule you grant once. It stays listed in Settings, and you can revoke
+  it there. The agent refuses known dangerous patterns, such as wiping the
+  filesystem root.
 
-The shell checks catch known command patterns. They are an accident guard,
-not protection against a hostile program. If the device cannot sandbox a
+The shell checks catch known command patterns. They guard against accidents.
+They do not stop a hostile program. If the device cannot sandbox a
 command, it refuses execution unless you explicitly turn Sandbox off.
 
 [docs/EXECUTION-LAYER-SPEC.md](docs/EXECUTION-LAYER-SPEC.md) has the whole
@@ -160,29 +161,28 @@ previews, an AI Gateway, and OAuth applications for sign-in. Provisioning
 prints that list every run. [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) lists each
 prerequisite and every secret. [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md)
 walks an empty account end to end. I have not measured the monthly cost of a
-fresh self-host as of 2026-09-13; model use, storage and containers affect it.
+fresh self-host as of 2026-09-13. Model use, storage, and containers affect it.
 
 ## Features
 
 | | |
 |---|---|
-| One real filesystem | A durable POSIX filesystem with a shell, coreutils and git, over Nimbus's WASM OS. Choose an executor that supports the runtime your project needs. |
-| Four executors | The workspace, a Linux container, your own machine over a consented tunnel, or the workspace a fork came from. The prompt tells the model what each one can do. |
-| Container recovery | `@kinu.run/devbox` persists workspace files and records supervised processes and ports for restoration after a recycle. Storage uses an immutable base plus one cumulative delta and a read-only block layer. Preview addresses can change. Full live strategy admission remains refused; see the [decision log](docs/DEVBOX-DECISIONS.md). |
+| One real filesystem | A durable POSIX filesystem with a shell, coreutils, and git, over the Nimbus WASM OS. Pick an executor that supports the runtime your project needs. |
+| Four executors | The workspace, a Linux container, your own machine over a consented tunnel, or the workspace a fork came from. The prompt tells the model what each one does. |
+| Container recovery | `@kinu.run/devbox` persists workspace files and records supervised processes and ports for restoration after a recycle. Storage uses an immutable base plus one cumulative delta and a read-only block layer. Preview addresses can change. Full live strategy admission remains refused. See the [decision log](docs/DEVBOX-DECISIONS.md). |
 | Slates | Live apps the agent writes as small Workers, previewed on their own hostname, reading your data through declared bindings. |
-| Plan mode | The agent reads and researches, then submits a Markdown plan. You annotate lines or approve, and only then does a Build turn start. |
+| Plan mode | The agent reads and researches. Then it submits a Markdown plan. You annotate lines or approve. Only then does a Build turn start. |
 | Swarms | A search whose nodes are whole tool-calling agents. Six named presets plus `custom`, six axes, and a workspace verifier that reports the number that picks the winner. The Swarms tab shows the tree as it grows. |
-| Delegation | One `agents` tool: `swarm`, `hire`, `msg`, `list`, `dismiss`. A hire is durable or a single task, and runs as `task`, `researcher`, `planner`, `auditor` or `designer`. |
+| Delegation | One `agents` tool: `swarm`, `hire`, `msg`, `list`, `dismiss`. A hire lasts or runs one task. It runs as `task`, `researcher`, `planner`, `auditor`, or `designer`. |
 | Crafted tools | The agent writes tools, scores them with use, and finds them again over FTS5. |
 | A mutable scaffold | The agent loop is code the agent can rewrite. Structural gates validate a mutation before it runs. |
 | Evolution | Four timescales: step, turn, session, lifetime. An optional advisor reviews finished turns. `kinu evolve` searches over the scaffold itself. |
-| Prompts as Markdown | Prompt prose lives under `packages/core/src/prompts/`. The builder selects sections and fills their slots; indexed sections can be evolved individually. |
-| Triggers | Timers and webhooks wake cloud workspaces. Local timers need `kinu daemon` running. Email requires domain onboarding; the last recorded live check, 2026-08-20, found it incomplete on `kinu.run` ([email setup](docs/EMAIL-INGRESS.md)). |
+| Prompts as Markdown | Prompt prose lives under `packages/core/src/prompts/`. The builder selects sections and fills their slots. Indexed sections evolve on their own. |
+| Triggers | Timers and webhooks wake cloud workspaces. Local timers need `kinu daemon` running. Email requires domain onboarding. The last recorded live check, 2026-08-20, found it incomplete on `kinu.run` ([email setup](docs/EMAIL-INGRESS.md)). |
 | Web search | The `web` tool works with no keys. A Tavily key adds ranked search. |
-| Model choice | Your Cloudflare account through one sign-in, or your keys: OpenAI, Anthropic, OpenRouter, a Codex subscription, any OpenAI-compatible endpoint, and locally a Claude Code or opencode login. |
+| Model choice | Your Cloudflare account through one sign-in, or your keys: OpenAI, Anthropic, OpenRouter, a Codex subscription, any OpenAI-compatible endpoint. Locally it also drives a Claude Code or opencode login. |
 | A control plane | Operators get `/control`: users, workspaces, incidents, feedback, fleet metrics, an audit log. |
-| Headless | Scoped tokens keep webhooks and consent interactive-only; `kinu exec` fits scripts and CI. |
-
+| Headless | Scoped tokens keep webhooks and consent interactive-only. `kinu exec` fits scripts and CI. |
 [docs/TOOLS.md](docs/TOOLS.md) covers the eight built-in tools.
 [docs/EXPLORATION.md](docs/EXPLORATION.md) covers the axes, presets and records.
 [docs/LIVE-UI.md](docs/LIVE-UI.md) covers slates.
@@ -195,13 +195,12 @@ fresh self-host as of 2026-09-13; model use, storage and containers affect it.
 
 ## Packages
 
-A Bun workspace. Platform-agnostic code lives in `core/`; the two backends are
+A Bun workspace. Platform-agnostic code lives in `core/`. The two backends are
 adapters over it.
 
 | Package | What it holds | On its own |
 |---|---|---|
-| `devbox/` | Container lifecycle, activity leases, supervised processes, ports, and snapshot-chain storage with the block layer | Yes. A standalone SDK over `@cloudflare/sandbox`; it depends on no other package here |
-| `core/` | The turn pipeline, canonical VFS and execution router, swarm and MCTS engines, evolution, the advisor, CraftStore, scaffold, the eight tools, slates, the event log | Needs a backend to host it |
+| `devbox/` | Container lifecycle, activity leases, supervised processes, ports, and snapshot-chain storage with the block layer | Yes, as a standalone SDK over `@cloudflare/sandbox`. It depends on no other package here |
 | `agent-utils/` | MemoryStore and CraftStore over FTS5, shared VFS types, path addressing | Yes, as small libraries |
 | `compaction/` | The default context transformer: the better-compact ladder and its codec | Yes |
 | `agent-core/` | The vendored slate runtime, digest-pinned to its upstream | Private |
@@ -213,9 +212,9 @@ adapters over it.
 
 ## Extending
 
-Kinu agents are platform agnostic and implemented in `packages/core`, and can
-be extended to run on any backend. Two interfaces carry the platform.
-`AgentRuntime` provides storage, memory, models and scheduling. `BackendHost`
+Kinu agents stay platform agnostic and live in `packages/core`. They
+run on any backend through two interfaces.
+`AgentRuntime` provides storage, memory, models, and scheduling. `BackendHost`
 provides what a turn loop needs from its host. I implement the pair twice: on
 Cloudflare Durable Objects built on [Think](https://github.com/cloudflare/agents),
 and on POSIX over `bun:sqlite` and real processes.
@@ -227,7 +226,7 @@ and on POSIX over `bun:sqlite` and real processes.
 
 To add a backend, implement those interfaces and connect its available services.
 Keep the shared turn and tool logic in core. A turn arrives from a person, a
-schedule or a finished background job. Core assembles its context, then reads
+schedule, or a finished background job. Core assembles its context. Then it reads
 live workspace state between model steps.
 
 <picture>
@@ -238,14 +237,14 @@ live workspace state between model steps.
 Three extension points live inside that loop: an actor kind, a `ModelProvider`,
 and the inference loop itself.
 [docs/EXTENSIBILITY.md](docs/EXTENSIBILITY.md) works each one through with a real
-example. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the object model, message
-flow, events and ingress.
+example. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) holds the object model, message
+flow, events, and ingress.
 
 ## Documentation
 
-Start with [Quick start](QUICKSTART.md), then the
-[User guide](docs/USER-GUIDE.md). [CLI reference](docs/CLI.md) is generated from the
-command registry, and [Configuration](docs/CONFIG.md) documents every
+Start with [Quick start](QUICKSTART.md). Then read the
+[User guide](docs/USER-GUIDE.md). [CLI reference](docs/CLI.md) comes generated from the
+command registry. [Configuration](docs/CONFIG.md) documents every
 `~/.kinu/config.json` field.
 
 <details>
@@ -253,7 +252,7 @@ command registry, and [Configuration](docs/CONFIG.md) documents every
 
 | Document | What is in it |
 |---|---|
-| [Workspaces](docs/WORKSPACES.md) | The object model: a workspace is the container, agents are actors inside it |
+| [Workspaces](docs/WORKSPACES.md) | The object model: a workspace is the container, and agents are actors inside it |
 | [Architecture](docs/ARCHITECTURE.md) | System design, message flow, package structure, Think lifecycle |
 | [Product spec](docs/PRODUCT-SPEC.md) | The requested contract, current behaviour against it, and the product diagrams |
 | [Exploration](docs/EXPLORATION.md) | The six axes, the node contract, the publication seal, settle and merge-back |
@@ -261,7 +260,7 @@ command registry, and [Configuration](docs/CONFIG.md) documents every
 | [Evolution](docs/EVOLUTION.md) | The four timescales, CraftStore lifecycle, scaffold mutation |
 | [MCTS](docs/MCTS.md) | UCT formula, branch isolation, convergence |
 | [Tools](docs/TOOLS.md) | The eight built-ins, the file plane, the `agents` surface, the codemode sandbox |
-| [Live UI](docs/LIVE-UI.md) | Slates: authoring, the one codemode operation, bindings and the resident preview |
+| [Live UI](docs/LIVE-UI.md) | Slates: authoring, the one codemode operation, bindings, and the resident preview |
 | [Execution layer](docs/EXECUTION-LAYER-SPEC.md) | The four executors, mounts, device consent, what runs where |
 | [Context budget](docs/CONTEXT-BUDGET.md) | Where bulk spills, the turn-cumulative clamp, the trip counters |
 | [Observability](docs/OBSERVABILITY.md) | Failure classification, the typed logger, what is wired and what is not |
