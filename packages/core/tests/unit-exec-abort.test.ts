@@ -189,16 +189,16 @@ describe('remote executor exec abort', () => {
    * and anything it started — running on the user's machine after the turn
    * reports stopped.
    */
-  interface LaptopCall { method: string; params: JsonValue[]; requestId?: string }
+  interface DeviceCall { method: string; params: JsonValue[]; requestId?: string }
 
   function cancellableTransport(
     cancelAnswer: (requestId: string) => Promise<JsonValue | undefined>,
   ) {
-    const calls: LaptopCall[] = [];
+    const calls: DeviceCall[] = [];
 
     const transport: DeviceTransport = {
       rpc: async (method, params, opts) => {
-        const call: LaptopCall = { method, params };
+        const call: DeviceCall = { method, params };
 
         if (opts?.requestId !== undefined) call.requestId = opts.requestId;
         calls.push(call);
@@ -373,7 +373,7 @@ describe('remote executor exec abort', () => {
     // The completion/cancel boundary from the caller's side: the command had
     // already finished on the machine (so the daemon holds no control entry),
     // and its result frame arrives after the abort was reported.
-    const calls: LaptopCall[] = [];
+    const calls: DeviceCall[] = [];
     const held = Promise.withResolvers<JsonValue>();
 
     const transport: DeviceTransport = {
