@@ -49,13 +49,21 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { assertMeasured, finding } from './gate-ratchet';
-import { claims } from './ladder';
+import { claims, LADDER } from './ladder';
 import { trackedFiles } from './sources';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
-/** The suite under the hammer, spelled exactly as the ladder declares it. */
-export const HAMMER_SUITE = 'bun test --parallel=4 packages/cf-backend/';
+/** The ladder row the hammer runs: the cf-backend suite, found by its label
+ *  so the command is the row's own spelling and cannot drift from it. */
+export const HAMMER_ROW_LABEL = 'Cloudflare backend and conformance suite';
+
+const hammerRow = LADDER.find((gate) => gate.label === HAMMER_ROW_LABEL);
+
+if (hammerRow === undefined) throw new Error(`hammer: no ladder row is labelled ${JSON.stringify(HAMMER_ROW_LABEL)}`);
+
+/** The suite under the hammer: the row's command, verbatim. */
+export const HAMMER_SUITE = hammerRow.run;
 
 /** How many times, by default. Six is the smallest N that has caught a 1-in-3
  *  flake here with margin; it is a floor on confidence, never a proof of
@@ -161,7 +169,8 @@ export function spawnContention(workers: number, ms: number): Burner[] {
 async function hammerOnce(index: number, deadlineMs: number): Promise<HammerRun> {
   const started = performance.now();
 
-  const child = Bun.spawn(['bun', 'test', '--timeout=0', '--parallel=4', 'packages/cf-backend/'], {
+  // `Bun.spawn` runs no shell, and the row's command is bare words.
+  const child = Bun.spawn(HAMMER_SUITE.split(' '), {
     cwd: root, stdout: 'pipe', stderr: 'pipe',
   });
 
