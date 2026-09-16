@@ -139,8 +139,6 @@ export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
 export interface BuiltinToolDeps {
   /** Fixed authority of this constructed tool surface. */
   workMode?: WorkMode;
-  /** cliLocal mode offers no device runtime: the machine is the workspace. */
-  cliLocal?: boolean;
   rt: AgentRuntime;
   /** Filter cutoff override (default: DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection). */
   minEffectiveScore?: number;
@@ -389,15 +387,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const router = rt.executionRouter;
   const shell = rt.shell;
 
-  // cliLocal has no device runtime: the machine is the workspace, so
-  // the enum omits device nicknames there. The resolver below agrees: with
-  // no fleet and no device executor, a nickname is an unknown runtime.
-  const listed = router?.listExecutors().map(({ name }) => name) ?? [];
-  // cliLocal has no device runtime: the machine is the workspace, so the
-  // device name never reaches the enum — but the parent executor (a fork's
-  // canonical workspace) still does.
-  const deviceExecutors = deps.cliLocal === true ? listed.filter((name) => name !== 'device') : listed;
-  const shellRuntimes = [...new Set(['workspace', ...deviceExecutors])];
+  // The enum lists the registered executors; device nicknames are not in
+  // it (the live prompt lists them), and the resolver below routes any other
+  // value to the device executor, which resolves the name itself.
+  const shellRuntimes = [...new Set(['workspace', ...(router?.listExecutors().map(({ name }) => name) ?? [])])];
 
   // A toolset built without a budget still budgets — a fresh one, scoped to
   // whatever root owns this toolset. Never absent, so there is one policy.

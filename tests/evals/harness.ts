@@ -767,10 +767,11 @@ const SANDBOXED_EXECUTOR_KINDS: readonly string[] = ['workspace'];
  * The escape it catches was measured, not imagined. A live run left
  * `scratch-add/{add.js,add.test.js}` in a worktree ROOT and `report.txt` /
  * `todos.txt` in the repo root, and the commit that swept them up was refused by
- * `gate:typecheck-coverage`. `createCLIRuntime` registers a `device`
- * ExecutorProvider rooted at `process.cwd()` unless told not to, and an episode
- * reaches every registered provider through `eval` — so the harness
- * that omitted `hostRoot: null` handed each episode the developer's filesystem.
+ * `gate:typecheck-coverage`. In the CLI the machine is the workspace: a
+ * runtime opened with a bound `cwd` runs its workspace shell in that
+ * directory, and an episode reaches every registered provider through
+ * `eval` — so a harness that bound the repo handed each episode the
+ * developer's filesystem.
  */
 export class UnsandboxedRuntimeError extends Error {
   constructor(readonly taskId: string, readonly executor: string) {
@@ -778,9 +779,9 @@ export class UnsandboxedRuntimeError extends Error {
       + 'developer\'s own machine. The eval must not run: an episode reaches every '
       + 'registered provider through `eval`, and a corpus task that writes '
       + 'files then writes them into the repo the harness was launched from. Open the '
-      + 'workspace with `hostRoot: null` (cli-backend/src/open.ts) — re-rooting the '
-      + 'provider is not enough, because `device.writeFile` passes an absolute path '
-      + 'through and `device.exec` can `cd` anywhere.');
+      + 'workspace with no `cwd` (cli-backend/src/open.ts) so its plane is the '
+      + 'in-SQLite workspace filesystem — re-rooting a bound directory somewhere '
+      + 'harmless contains nothing, because the workspace shell can `cd` anywhere.');
     this.name = 'UnsandboxedRuntimeError';
   }
 }
@@ -797,7 +798,20 @@ export class UnsandboxedRuntimeError extends Error {
  * refusal costs nothing, and discovering it afterwards costs a paid run plus
  * whatever the episode wrote.
  */
+/** The directory a CLI runtime bound its workspace plane to, or null. Read
+ *  through a parse of the runtime's own shape rather than a cast: core's
+ *  `AgentRuntime` does not declare `cwd`, the CLI's runtime does. */
+function boundDirectory(rt: AgentRuntime): string | null {
+  const parsed = v.safeParse(v.object({ cwd: v.optional(v.nullable(v.string())) }), rt);
+
+  return parsed.success ? parsed.output.cwd ?? null : null;
+}
+
 export function requireSandboxedExecutors(taskId: string, rt: AgentRuntime): void {
+  // A bound directory makes the `workspace` executor the developer's own
+  // shell, so the kind alone does not settle the question there.
+  if (boundDirectory(rt) !== null) throw new UnsandboxedRuntimeError(taskId, 'workspace');
+
   for (const executor of rt.executionRouter?.listExecutors() ?? []) {
     if (!SANDBOXED_EXECUTOR_KINDS.includes(executor.kind)) {
       throw new UnsandboxedRuntimeError(taskId, executor.name);
@@ -972,10 +986,9 @@ export async function runBehaviourTask(
     llm: opts.llm,
   });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  // `hostRoot: null`: no `device` executor, so the episode's only filesystem is
-  // the workspace one this runtime owns. The default plane is rooted at
-  // `process.cwd()` — the repo the suite was launched from.
-  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: opts.llm, hostRoot: null });
+  // No `cwd`: the episode's only filesystem is the in-SQLite workspace this
+  // runtime owns, never the repo the suite was launched from.
+  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: opts.llm });
 
   // Before anything is driven or spent: a runtime that cannot execute is not a
   // measurement of an agent that can, and one that can execute on the

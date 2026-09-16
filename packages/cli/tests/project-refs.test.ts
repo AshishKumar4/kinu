@@ -14,6 +14,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createCliAgent, renameLocalAgent, type CreatedCliAgent } from '../src/agent-create';
 import { resolveAgentTarget } from '../src/agent-target';
+import { openWorkspaceCLI } from '@kinu.run/cli-backend';
 import {
   AGENT_HOME,
   adoptUnplacedLocalAgent,
@@ -309,6 +310,25 @@ describe('a backend is stated, not inferred from a file', () => {
     expect(target.mode).toBe('local');
     expect(target.cwd).toBe(cwd);
     expect(target.workspaceId).toBe('bound');
+  });
+
+  test('the machine is the workspace: a placed ref opens its shell in the placement, and offers no other machine', async () => {
+    const cwd = project();
+    const created = await create('placed-shell', cwd);
+    const local = resolveLocalAgent('placed-shell');
+    const db = new Database(createdDbPath(created));
+
+    try {
+      // Exactly what `createAgentClient` binds: the recorded placement, never
+      // the invocation directory.
+      const { rt } = await openWorkspaceCLI(db, createdDbPath(created), { llm: null, cwd: local.cwd });
+      expect(rt.cwd).toBe(cwd);
+      expect(rt.executionRouter?.listExecutors().map((e) => e.name)).toEqual(['workspace']);
+      const pwd = await rt.shell?.exec('pwd');
+      expect(pwd?.stdout.trim()).toBe(cwd);
+    } finally {
+      db.close();
+    }
   });
 });
 

@@ -40,10 +40,6 @@ interface CLIOpenOptions {
   /** The canonical physical directory every agent in this virtual workspace
    *  shares as its file and shell plane. See CLIRuntimeConfig.cwd. */
   cwd?: string | null;
-  /** Where the `device` executor is rooted, or `null` for a runtime with no
-   *  host plane at all. See CLIRuntimeConfig.hostRoot — a measurement harness
-   *  passes `null` so an episode cannot write into the developer's repo. */
-  hostRoot?: string | null;
   /** Shadow-git checkpoints kept per working directory. */
   checkpointKeep?: number;
 }

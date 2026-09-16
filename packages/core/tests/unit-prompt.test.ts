@@ -909,18 +909,21 @@ describe('buildSystemPromptSync', () => {
     expect(render({})).toBe(render({ label: 'ashish@studio', granted: true }));
   });
 
-  test('cli-local has no device row: the machine is the workspace', () => {
+  test('cli-local renders the workspace as the machine, rooted where the session started', () => {
+    // The CLI registers one executor and the row says what it is: the
+    // machine the CLI runs on. No device row exists to render there because
+    // the runtime constructs none — the prompt has no per-backend filter.
     const { rt } = createTestRuntime();
 
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cli-local',
       executors: [
-        { name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active' },
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
       ],
     });
 
     expect(prompt).not.toContain('device.***');
+    expect(prompt).not.toMatch(/separate machines/i);
     expect(prompt).toContain('the machine the CLI runs on');
     expect(prompt).toContain('rooted in the directory the session was started in');
   });

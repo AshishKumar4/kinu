@@ -51,7 +51,7 @@ const stubWeb: WebSearchProvider = {
  */
 type LocalParent = CLIRuntime & { readonly db: Database };
 
-function makeParent(): LocalParent {
+function makeParent(cwd?: string): LocalParent {
   const dbPath = scratchPath('head-runtime-parent', 'parent.db');
   const db = new Database(dbPath);
   // THE PRODUCTION INITIALIZER, before the runtime opens over it. Every head
@@ -62,10 +62,14 @@ function makeParent(): LocalParent {
   // on its own first touch, because a branch worker legitimately has no more.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
-  return Object.assign(createCLIRuntime(db, {
+  const config: Parameters<typeof createCLIRuntime>[1] = {
     dbPath,
     llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' },
-  }), { db });
+  };
+
+  if (cwd !== undefined) config.cwd = cwd;
+
+  return Object.assign(createCLIRuntime(db, config), { db });
 }
 
 /** A governor over its own scratch ledger. A local head charges through this
@@ -558,10 +562,9 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     expect(String(await parentExec.tools.exec.execute('cat hello.txt')))
       .toContain('from the parent workspace');
 
-    // Real commands run through the parent's shared device executor.
-    const device = rt.executionRouter!.getProvider('device')!;
-    const out = await device.tools.exec!.execute(`cat ${join(dir, 'hello.txt')}`);
-    expect(String(out)).toContain('from the real machine');
+    // No device runtime: the machine is the workspace, and an unbound parent
+    // offers no machine at all.
+    expect(rt.executionRouter!.getProvider('device')).toBeUndefined();
 
     // Its own filesystem is PRIVATE scratch — not the host, not the parent.
     await rt.storage.vfs.writeFile(`/home/head-${rt.actor.storageKey}/scratch.txt`, 'head-only');
@@ -573,10 +576,10 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     expect(rt.actor.actorId).not.toBe(parent.actor.actorId);
   });
 
-  test('the head run tool reaches the real host with runtime=device', async () => {
+  test('a head of a parent bound to a directory runs its shell there: the machine is the workspace', async () => {
     const dir = scratchDir('head-runtime-cwd');
     writeFileSync(join(dir, 'note.txt'), 'real file content');
-    const rt = await createHeadRuntime(makeParent(), 'h2');
+    const rt = await createHeadRuntime(makeParent(dir), 'h2');
     const capture = new HeadCapture();
 
     const tools = buildHeadToolSet({
@@ -586,9 +589,10 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
       split: async () => ({ narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }),
     });
 
-    const run = toolExecute<{ command: string; runtime: string }, string>(tools.shell);
-    const out = await run({ command: `cat ${join(dir, 'note.txt')}`, runtime: 'device' });
-    expect(String(out)).toContain('real file content');
+    const run = toolExecute<{ command: string; runtime?: string }, string>(tools.shell);
+    expect(String(await run({ command: 'cat note.txt' }))).toContain('real file content');
+    // No second shell over the same tree: a machine name is refused, not routed.
+    await expect(run({ command: 'cat note.txt', runtime: 'device' })).rejects.toMatchObject({ code: 'unavailable' });
   });
 
   /**

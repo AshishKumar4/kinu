@@ -6,9 +6,9 @@
  * (core `prompting/volatile-context.ts` — `— runs: …`), so it is where the model
  * decides to send work: a capability declared but absent routes work to a
  * machine that cannot do it, and one present but undeclared means the work never
- * goes there at all. The `device` row here is the user's own host, and the only
- * way the agent reaches it is `device.exec` — a PATH lookup. So PATH is exactly
- * the right evidence, and `Bun.which` asks the very machine in question instead
+ * goes there at all. The `workspace` row of a session bound to a directory is
+ * the user's own host, and the only way the agent reaches it is the shell — a
+ * PATH lookup. So PATH is exactly the right evidence, and `Bun.which` asks the very machine in question instead
  * of inferring a toolchain from the fact that developers usually have one.
  *
  * Counterpart of core's `workspaceToolchainCapabilities`, which answers the same

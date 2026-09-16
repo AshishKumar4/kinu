@@ -120,7 +120,7 @@ const EventVariantSchema = v.picklist([
 
 export interface LocalExecutorInfo {
   name: string;
-  kind: 'workspace' | 'device';
+  kind: 'workspace';
   status: 'connected';
   capabilities: string[];
 }
@@ -729,23 +729,18 @@ export function getLocalGepaRun(name: string, runId: string): LocalGepaRunDetail
   });
 }
 
+/** The CLI's one executor: the machine is the workspace. Its toolchain is
+ *  the same probe the live provider declares from, not a copy of its row —
+ *  this listing is what `kinu inspect` shows for the machine it is running
+ *  on, so a hardcoded `git`/`npm` here would contradict the row the agent
+ *  is actually given. */
 export function listLocalExecutors(): LocalExecutorInfo[] {
   return [
     {
       name: 'workspace',
       kind: 'workspace',
       status: 'connected',
-      capabilities: ['shell', 'fs', 'memory', 'craft'],
-    },
-    {
-      name: 'device',
-      kind: 'device',
-      status: 'connected',
-      // The same probe the live provider declares from, not a copy of its row:
-      // this listing is what `kinu inspect` shows for the machine it is
-      // running on, so a hardcoded `git`/`npm` here would contradict the row the
-      // agent is actually given.
-      capabilities: [...hostToolchainCapabilities()],
+      capabilities: [...new Set(['shell', 'fs', 'memory', 'craft', ...hostToolchainCapabilities()])],
     },
   ];
 }
