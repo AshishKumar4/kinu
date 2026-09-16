@@ -82,16 +82,26 @@ export class AssistantMessagesTranscript implements TranscriptStore {
     if (streamed === undefined || streamed === null) return { id, role: 'assistant', parts: [{ type: 'text', text }] };
 
     // The answer rides the streamed message's OWN last text part, text
-    // replaced: that part carries what the client rendered it as (`state`,
-    // and whatever the SDK adds next), and a hand-built part would drop it.
-    const streamedText = streamed.parts.filter((part) => part.type === 'text').at(-1);
+    // replaced, left where that part streamed: that part carries what the
+    // client rendered it as (`state`, and whatever the SDK adds next), and a
+    // hand-built part would drop it. A turn whose answer came after its calls
+    // already holds it last; one that stopped on its calls holds its streamed
+    // narration first, and moving that sentence after the calls is what put
+    // the tool card ahead of it on reload.
+    let lastText: { readonly index: number; readonly part: SessionMessage['parts'][number] } | null = null;
+
+    for (const [index, part] of streamed.parts.entries()) {
+      if (part.type === 'text') lastText = { index, part };
+    }
+
+    if (lastText === null) return { ...streamed, parts: [...streamed.parts, { type: 'text', text }] };
+
+    const found = lastText;
 
     return {
       ...streamed,
-      parts: [
-        ...streamed.parts.filter((part) => part.type !== 'text'),
-        streamedText === undefined ? { type: 'text', text } : { ...streamedText, text },
-      ],
+      parts: streamed.parts.flatMap((part, index) =>
+        part.type !== 'text' || index === found.index ? [index === found.index ? { ...found.part, text } : part] : []),
     };
   }
 
