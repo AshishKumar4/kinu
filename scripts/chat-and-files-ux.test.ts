@@ -1324,6 +1324,53 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.close();
     });
   });
+
+  test('the workspace panel does not remount or refetch when the agent tab changes', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('nav[aria-label="Workspace agents"]');
+      await page.waitForSelector('[aria-label="Work"]');
+
+      await page.waitForFunction(() => [...document.querySelectorAll('section')]
+        .some((section) => (section.textContent ?? '').includes('Journal')));
+
+      const before = await page.evaluate(() => {
+        const sections = [...document.querySelectorAll('section')];
+        const journal = sections.find((section) => (section.textContent ?? '').includes('Journal'));
+
+        if (journal === undefined || journal.parentElement === null) return null;
+
+        const marker = document.createElement('span');
+        marker.setAttribute('data-b6-probe', '1');
+        journal.appendChild(marker);
+
+        return {
+          plans: (document.body.innerText.match(/Plans/g) ?? []).length,
+          scroll: journal.parentElement.scrollTop,
+        };
+      });
+
+      expect(before).not.toBeNull();
+
+      await page.click('[aria-label="New agent"]');
+      await page.waitForFunction(() => (
+        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
+      ));
+      await page.waitForSelector('[aria-label="Work"]');
+
+      const after = await page.evaluate(() => ({
+        probe: document.querySelector('[data-b6-probe]') !== null,
+        plans: (document.body.innerText.match(/Plans/g) ?? []).length,
+      }));
+
+      expect(after.probe).toBe(true);
+      expect(after.plans).toBe(before === null ? -1 : before.plans);
+      await page.close();
+    });
+  });
 });
 
 describe('the shell rails collapse and reopen, and the choice survives a reload', () => {

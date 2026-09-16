@@ -275,7 +275,10 @@ export function WorkSurface(props: WorkSurfaceProps) {
       <div className={`flex-1 min-h-0 ${surface === "Diffs" ? "hidden" : previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6"}`}>
         <div className={surface === "Work" ? "" : "hidden"}>
           <ErrorBoundary label="Work">
-            <WorkTab key={props.planOwner ?? "main"}
+            {/* Keyed by workspace, never by agent: Work is the workspace's own
+                plan, journal and jobs, and a chat-tab switch must not remount
+                or refetch it — only Agent and Activity are per agent. */}
+            <WorkTab key="workspace"
               plan={props.plan}
               planOwner={props.planOwner}
               workspacePlanArrival={props.workspacePlanArrival}
