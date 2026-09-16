@@ -196,6 +196,12 @@ import { galleryServerPush, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
+// The gallery is the one page that steps the app background by hand (the
+// mesh readbacks in scripts/app-background-ux.test.ts): declared before the
+// shell mounts, so the background attaches its stepping controls here and
+// nowhere the shipped app runs.
+window.__kinuGalleryStepping = true;
+
 const squareButtonVariant = "square";
 
 const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
