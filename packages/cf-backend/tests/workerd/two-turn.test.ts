@@ -292,6 +292,20 @@ describe('two real turns over the HTTP model seam', () => {
     expect(rebound?.turnId).not.toBe('evt-seeded-dead');
   });
 
+  it('two clients delivering the same message at once are one turn, one provider request, one row', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('twin-driver'));
+    const out = await root.twinSends();
+    const calls = v.parse(HttpSchema, out.http).filter((call) => call.model === 'probe-queue');
+
+    // Idempotent admission under concurrent delivery: the second socket's
+    // frame is the same admitted message, not a second turn.
+    expect(calls).toHaveLength(1);
+    expect(out.transcript.filter((row) => row.role === 'user' && row.id === 'input-TWIN')).toHaveLength(1);
+    expect(out.transcript.filter((row) => row.role === 'assistant')).toHaveLength(1);
+    expect(out.steers).toHaveLength(0);
+    expect(out.runEnds).toEqual([{ runId: expect.any(String), reason: 'completed' }]);
+  });
+
   it('a fresh workspace\'s first chat reaches the model and the turn closes', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('first-chat-driver'));
 

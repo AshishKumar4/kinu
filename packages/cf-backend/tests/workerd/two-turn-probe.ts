@@ -748,7 +748,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
   /** Real socket intake and Think queue; only the remote model response is
    * held. Peer ingress queues a durable event-drain submission while both
    * socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt'>): Promise<HttpCall[]> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'twin'>): Promise<HttpCall[]> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1526,6 +1526,60 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     }
   }
 
+
+  /**
+   * TWO CLIENTS, ONE MESSAGE, AT ONCE: two sockets on one conversation each
+   * put the same chat frame — the same client message id — on the wire with
+   * no await between them. The property is the object's, not the browser's:
+   * a message admitted once is one turn, one provider request and one row,
+   * however many sockets delivered it. `send-admission.test.ts` proved this
+   * on the retired submission surface; the loop's admission (`admitted` on
+   * the wire, the pending-send ledger) owns it now.
+   */
+  async twinSends(): Promise<{ http: HttpCall[]; transcript: SocketHistory; steers: PendingSteer[]; runEnds: Array<{ runId: string; reason: string }> }> {
+    const { target, workspace } = await this.claimQueueWorkspace('twin');
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+    const sockets: WebSocket[] = [];
+
+    try {
+      for (const tab of ['a', 'b']) {
+        const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}`, {
+          headers: { Upgrade: 'websocket' },
+        }));
+
+        if (response.status !== 101 || response.webSocket === null) throw new Error(`twin probe tab ${tab} did not receive a real WebSocket`);
+        response.webSocket.accept();
+        sockets.push(response.webSocket);
+      }
+
+      const wire = JSON.stringify({
+        type: 'cf_agent_use_chat_request', id: 'TWIN',
+        init: { method: 'POST', body: JSON.stringify({
+          messages: [{ id: 'input-TWIN', role: 'user', parts: [{ type: 'text', text: 'TWIN' }] }],
+          trigger: 'submit-message',
+        }) },
+      });
+
+      for (const socket of sockets) socket.send(wire);
+
+      // The turn's own settle is the end condition; a second admitted turn
+      // would compress its facts too, so the count below is the count that
+      // discriminates.
+      await awaitFactsCompressed(recording, 1);
+      await awaitQuiet(recording);
+
+      return {
+        http: await this.httpCalls(),
+        transcript: await this.socketHistory(target, workspace),
+        steers: await target.pendingSteers(),
+        runEnds: await target.runEnds(),
+      };
+    } finally {
+      for (const socket of sockets) socket.close(1000, 'twin probe complete');
+      restore();
+    }
+  }
 
   /** The first-run regression: a workspace born with a mission (genesis turn
    *  running) receives its owner's first chat — which lands as a mid-turn
