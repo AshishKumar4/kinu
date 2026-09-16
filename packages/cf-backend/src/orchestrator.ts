@@ -5346,12 +5346,12 @@ export class OrchestratorAgent extends ActorAgent {
     };
   }
 
-  @callable() async dismissSubordinate(name: string): Promise<{
+  @callable() async dismissSubordinate(name: string, keepHistory = true): Promise<{
     ok: true;
     name: string;
     historyKept: boolean;
   }> {
-    return this.getTeamToolDeps().dismiss({ name, requestedBy: 'user' });
+    return this.getTeamToolDeps().dismiss({ name, requestedBy: 'user', keepHistory });
   }
 
   /**

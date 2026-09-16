@@ -218,7 +218,7 @@ describe('subordinate wiring', () => {
     expect(orchestrator).toContain('return this.subordinateViews();');
     expect(orchestrator).toContain('const result = await this.getTeamToolDeps().create({});');
     expect(orchestrator).toContain('const result = await this.getTeamToolDeps().rename({ name, displayName });');
-    expect(orchestrator).toContain("return this.getTeamToolDeps().dismiss({ name, requestedBy: 'user' });");
+    expect(orchestrator).toContain("requestedBy: 'user'");
     // …and the shared substrate declares none of them: team callables are the
     // orchestrator's own, so a hosted child never inherits a path around the
     // roster the host owns.

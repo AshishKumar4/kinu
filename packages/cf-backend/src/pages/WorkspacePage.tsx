@@ -1203,7 +1203,7 @@ export default function WorkspacePage() {
               activeName={subName}
               onCreate={createAndOpenAgent}
               creating={creatingAgent}
-              onDismiss={(name) => state.dismissSubordinate(name).then(() => {})}
+              onDismiss={(name, keepHistory) => state.dismissSubordinate(name, keepHistory).then(() => {})}
               trailing={!subName && state.messages.length > 0 && (
                 <Button variant="ghost" {...SQUARE_BUTTON_PROPS} size="sm"
                   onClick={() => setShowClearConfirm(true)}
