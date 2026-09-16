@@ -16,10 +16,11 @@
  *      is what let two machines take turns answering as one.
  *
  *   2. Files mount per machine. `deviceFleetFiles` is the composite plane:
- *      `/pc` still serves a one-machine account byte-for-byte as before, and
- *      each machine of a fleet appears under `/pc/<name>` by the name every
- *      surface renders. A path that names no live machine refuses with the
- *      connected names — a stated absence, never an empty directory.
+ *      `/pc` is the roster, and every machine — a fleet of one included —
+ *      appears under `/pc/<name>` by the name every surface renders, so a
+ *      path stays valid when a second machine joins. A path that names no
+ *      live machine refuses with the connected names — a stated absence,
+ *      never an empty directory.
  *
  * When no tunnel is connected, all operations return a clear message
  * telling the user how to connect.
@@ -562,7 +563,18 @@ export function createDeviceTunnelExecutor(
   const provider: ExecutorProvider = {
     name: 'device',
     files,
-    homeDir: async () => deviceFiles(transport, consent, connectedDevices(transport.status().devices)[0]?.id).homeDir(),
+    // The plane is always routed by segment, so where it OPENS is the roster
+    // (`/`, the machine list) — never one machine's home picked for the fleet.
+    // Named, it is that machine's own opening dir, asked of that machine.
+    homeDir: async (segment?: string) => {
+      if (segment === undefined) return '/';
+      const fleet = transport.status().devices;
+      const named = connectedDevices(fleet).find((device) => deviceMountSegment(device, fleet) === segment);
+
+      if (named === undefined) throw noSuchDevice(fleet, segment);
+
+      return deviceFiles(transport, consent, named.id).homeDir();
+    },
     kind: 'device',
     // The set is rendered into the model's execution block ("— runs: …",
     // prompting/volatile-context.ts), which is where work is routed: a
@@ -953,6 +965,18 @@ export function deviceMountSegment(device: DeviceFleetEntry, fleet: readonly Dev
   return others.length === 0 ? name : device.id;
 }
 
+/** The stated absence for a path under no live machine: which machines ARE
+ *  connected, so the reader has the exact segments to type. */
+function noSuchDevice(fleet: readonly DeviceFleetEntry[] | undefined, first: string): Error {
+  const segments = connectedDevices(fleet).map((d) => deviceMountSegment(d, fleet)).join(', ');
+
+  const reason = first === ''
+    ? `several machines are connected — each is mounted at /pc/<name>: ${segments}`
+    : `no connected machine is named "${first}" — connected: ${segments}`;
+
+  return makeVfsError('ENXIO', reason, `/pc${first === '' ? '' : `/${first}`}`);
+}
+
 /** One route of the composite plane: the segment, and the machine it serves. */
 interface DeviceRoute {
   readonly segment: string;
@@ -962,13 +986,14 @@ interface DeviceRoute {
 /**
  * The fleet's composite file plane.
  *
- * A one-machine account keeps the exact shape the mount table has always
- * served: the provider's `files` is THAT machine's view, so `/pc/home/me/x`
- * is the machine's own `/home/me/x` and nothing about existing paths moves.
- * A fleet adds one segment per machine: `/pc/<segment>/...`, where the
- * segment is the machine's name (its id when the name is shared or not a
- * usable path segment). The segment lives beside the name in every surface
- * that renders the fleet, so the model always has the exact bytes to type.
+ * One segment per live machine: `/pc/<segment>/...` is that machine's own
+ * `/...`, where the segment is the machine's name (its id when the name is
+ * shared or not a usable path segment). A fleet of one is served the same
+ * way, so a path a saved tool or a slate names never moves when a second
+ * machine joins. The segment lives beside the name in every surface that
+ * renders the fleet, so the model always has the exact bytes to type. The
+ * plane's root is the roster. With no fleet snapshot at all there is no
+ * segment vocabulary, and the unnamed view goes to the hub as it always did.
  *
  * A path whose first segment names no live machine refuses with the connected
  * names — the stated absence the mount law requires, never an empty listing
@@ -996,17 +1021,6 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     return route ? { view: route.view, rest } : null;
   };
 
-  const noSuchDevice = (path: string): Error => {
-    const fleet = transport.status().devices;
-    const first = path.replace(/^\/+/, '').split('/')[0] ?? '';
-    const segments = connectedDevices(fleet).map((d) => deviceMountSegment(d, fleet)).join(', ');
-
-    const reason = first === ''
-      ? `several machines are connected — each is mounted at /pc/<name>: ${segments}`
-      : `no connected machine is named "${first}" — connected: ${segments}`;
-
-    return makeVfsError('ENXIO', reason, `/pc${first === '' ? '' : `/${first}`}`);
-  };
 
   /** One operation, dispatched by first segment: the mount is always
    *  /pc/<name>, so a path that names no live machine refuses with the
@@ -1022,7 +1036,7 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
 
     const route = routeOf(path);
 
-    if (!route) throw noSuchDevice(path);
+    if (!route) throw noSuchDevice(transport.status().devices, path.replace(/^\/+/, '').split('/')[0] ?? '');
 
     return op(route.view, route.rest);
   };
@@ -1059,6 +1073,11 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
 
       const route = routeOf(path);
 
+      // A live machine's own root is an entry of the roster: a directory by
+      // construction, answered here so listing /pc never asks each machine
+      // to stat a `/` its consent boundary would refuse.
+      if (route?.rest === '/') return { size: 0, mtimeMs: 0, isDir: true };
+
       return route ? route.view.stat(route.rest) : null;
     },
     async unlink(path) {
@@ -1075,6 +1094,8 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
       }
 
       const route = routeOf(path);
+
+      if (route?.rest === '/') return true;
 
       return route ? route.view.exists(route.rest) : false;
     },

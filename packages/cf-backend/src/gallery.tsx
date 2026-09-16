@@ -4850,11 +4850,13 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
   ]);
 
   if (!offlineDevice) {
-    // The device tree BELOW its consented root. `/pc` and `/pc/home` are
-    // deliberately absent: the machine's own path guard refuses everything
-    // outside `PC_CONSENTED_ROOT`, and a fixture that listed them could not
-    // fail the way the owner's report failed.
-    tree.set("/pc/home/dev", [
+    // `/pc` is the roster: one entry per live machine, by its mount segment.
+    // The machine's tree BELOW its consented root follows; `/pc/<name>` and
+    // `/pc/<name>/home` are deliberately absent: the machine's own path guard
+    // refuses everything outside `PC_CONSENTED_ROOT`, and a fixture that
+    // listed them could not fail the way the owner's report failed.
+    tree.set("/pc", [{ name: PC_SEGMENT, type: "dir", mtimeMs: NOW - 36e5 }]);
+    tree.set(PC_CONSENTED_ROOT, [
       { name: "quarterly-report.txt", type: "file", size: 8_412, mtimeMs: NOW - 2 * 36e5 },
       { name: "shot.png", type: "file", size: 1_204_002, mtimeMs: NOW - 5 * 36e5 },
       { name: "notes.html", type: "file", size: 402, mtimeMs: NOW - 36e5 },
@@ -4864,19 +4866,26 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
   return tree;
 }
 
+/** The machine's mount segment under `/pc`: its own name, as
+ *  `deviceMountSegment` keys a fleet of one. */
+const PC_SEGMENT = "Ashish's MacBook";
+
+/** The machine's mount point: every machine sits at `/pc/<name>`. */
+const PC_MOUNT = `/pc/${PC_SEGMENT}`;
+
 /**
  * The device's consented directory. Production learns it from the machine
- * (`deviceFiles`' homeDir), and a bare `/pc` lands here instead of on the
- * device root nobody consented to.
+ * (`deviceFiles`' homeDir), and a bare `/pc/<name>` lands here instead of on
+ * the device root nobody consented to.
  */
-const PC_CONSENTED_ROOT = "/pc/home/dev";
+const PC_CONSENTED_ROOT = `${PC_MOUNT}/home/dev`;
 
 const FILES_TEXT = {
   "/home/user/notes.md": "# Checkout coupon regression\n\n- kind:null rows come from the 0412 migration\n- the serializer guards only percentage coupons\n- fix drafted in packages/checkout/src/apply-coupon.ts\n",
   "/home/user/SOUL.md": "I keep this workspace's changes small and proven.\n",
   "/home/user/AGENTS.md": "## Working agreements\n\nRun the checkout suite before claiming a fix.\n",
-  "/pc/home/dev/quarterly-report.txt": "Q3 numbers, draft 2 — do not circulate.\n",
-  "/pc/home/dev/notes.html": "<h1>Q3 close</h1><p>Signed off by finance.</p>\n",
+  [`${PC_CONSENTED_ROOT}/quarterly-report.txt`]: "Q3 numbers, draft 2 — do not circulate.\n",
+  [`${PC_CONSENTED_ROOT}/notes.html`]: "<h1>Q3 close</h1><p>Signed off by finance.</p>\n",
   "/sandbox/workspace/build.log": "$ bun run build\nbundled 412 modules in 1.9s\nok\n",
 } satisfies Record<string, string>;
 
@@ -4940,19 +4949,20 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
 
       if (execName !== "workspace") return rpcResult({ error: `Executor "${execName}" has no listing here` }).json<T>();
       const asked = path === "" ? "/" : path;
-      // A bare mount point lands on the machine's consented root, exactly as
-      // `read-models/files.ts` mountLanding resolves it server-side.
-      const dir = asked === "/pc" ? PC_CONSENTED_ROOT : asked;
+      // A bare machine root lands on that machine's consented root, exactly
+      // as `read-models/files.ts` mountLanding resolves it server-side; the
+      // fleet root `/pc` is the roster and lands on itself.
+      const dir = asked === PC_MOUNT ? PC_CONSENTED_ROOT : asked;
       const entries = store.get(dir);
 
       if (entries !== undefined) return rpcResult({ path: dir, entries }).json<T>();
 
-      // Inside the mount but outside the consented root: the device's own
-      // refusal, in the words `deviceFiles`' path guard uses.
-      const error = dir.startsWith("/pc")
-        ? `EACCES: '${dir.slice("/pc".length) || "/"}' is outside the consented device directory `
-          + `'${PC_CONSENTED_ROOT.slice("/pc".length)}' — grant this agent the full-filesystem `
-          + `consent tier to reach it, list '${dir.slice("/pc".length) || "/"}'`
+      // Inside the machine's mount but outside the consented root: the
+      // device's own refusal, in the words `deviceFiles`' path guard uses.
+      const error = dir.startsWith(PC_MOUNT)
+        ? `EACCES: '${dir.slice(PC_MOUNT.length) || "/"}' is outside the consented device directory `
+          + `'${PC_CONSENTED_ROOT.slice(PC_MOUNT.length)}' — grant this agent the full-filesystem `
+          + `consent tier to reach it, list '${dir.slice(PC_MOUNT.length) || "/"}'`
         : `ENOENT: ${dir}`;
 
       return rpcResult({ error }).json<T>();
