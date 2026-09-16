@@ -60,12 +60,34 @@ export class AssistantMessagesTranscript implements TranscriptStore {
     this.streamed = source.streamed;
   }
 
-  /** The assistant row as it WILL be persisted under this id: the streamed
-   *  message when the transport accumulated one, else the text alone. The
-   *  roster records this very shape as the turn-end announcement's input, so
-   *  a replay reads what the row holds. */
+  /**
+   * The assistant row as it WILL be persisted under this id: what the client
+   * was streamed — its tool calls, its step markers, its reasoning — carrying
+   * the turn's ANSWER as its one text part, else the text alone. The roster
+   * records this very shape as the turn-end announcement's input, so a replay
+   * reads what the row holds.
+   *
+   * The streamed message's own text parts are the turn's narration, one per
+   * step; the loop hands this the answer the turn stopped on. A row that kept
+   * both read as the narration and the answer concatenated to every reader
+   * that projects a row to text (`uiMessageText`: the history page, search,
+   * inherited context), which is how the deployed build's stored reply for a
+   * ten-step turn began with "I'll take a quick look…". The narration is not
+   * lost: it is on each step's own `step_finish` row in the run ledger, and it
+   * reached whoever was watching live.
+   */
   recordedAssistant(id: string, text: string): SessionMessage {
-    return this.streamed?.(id) ?? { id, role: 'assistant', parts: [{ type: 'text', text }] };
+    const streamed = this.streamed?.(id);
+
+    if (streamed === undefined || streamed === null) return { id, role: 'assistant', parts: [{ type: 'text', text }] };
+
+    return {
+      ...streamed,
+      parts: [
+        ...streamed.parts.filter((part) => part.type !== 'text'),
+        { type: 'text', text },
+      ],
+    };
   }
 
   has(id: string): boolean {
