@@ -14,6 +14,7 @@ import { describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { LADDER } from './ladder';
 import { auditCorpus, auditFile, CLOCK_KINDS, type ClockKind } from './test-clocks';
 import { readTests } from './sources';
 
@@ -78,6 +79,18 @@ describe('test-clocks gate', () => {
       expect(text, config).toMatch(/testTimeout: 0\b/u);
       expect(text, config).toMatch(/hookTimeout: 0\b/u);
     }
+  });
+
+  test('every bun test row on the ladder runs with the per-test clock off', () => {
+    // A preload's `setDefaultTimeout(0)` reaches the first file of a run only
+    // (measured 2026-09-15 on bun 1.4.0: the second of two files timed out at
+    // 5000 ms under it), so the flag on the invocation is the switch that
+    // covers every file, and the rows are where the deploy's invocations live.
+    const rows = LADDER.filter((row) => row.run.startsWith('bun test '));
+
+    expect(rows.length).toBeGreaterThan(10);
+
+    for (const row of rows) expect(row.run, row.label).toContain('bun test --timeout=0 ');
   });
 
   test('the live corpus is the one sources.ts enumerates, and it is not empty', () => {

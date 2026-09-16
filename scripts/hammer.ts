@@ -161,7 +161,7 @@ export function spawnContention(workers: number, ms: number): Burner[] {
 async function hammerOnce(index: number, deadlineMs: number): Promise<HammerRun> {
   const started = performance.now();
 
-  const child = Bun.spawn(['bun', 'test', '--parallel=4', 'packages/cf-backend/'], {
+  const child = Bun.spawn(['bun', 'test', '--timeout=0', '--parallel=4', 'packages/cf-backend/'], {
     cwd: root, stdout: 'pipe', stderr: 'pipe',
   });
 
