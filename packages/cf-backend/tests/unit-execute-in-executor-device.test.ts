@@ -16,7 +16,7 @@ import {
   type DeviceFrame, type FakeDaemon, type TestUserDO,
 } from './helpers/user-do';
 import type { UserCaller } from '@kinu.run/core';
-import { createHubDeviceTransport } from '@kinu.run/core';
+import { createHubDeviceTransport, REAL_CLOCK } from '@kinu.run/core';
 import { orchestratorHarness } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 
@@ -78,7 +78,7 @@ async function orchestratorOnFleet(fleet: Fleet) {
     caller: async () => fleet.workspace,
     agentName: WORKSPACE,
     cliCwd: () => null,
-    now: () => Date.now(),
+    clock: REAL_CLOCK,
   });
 
   await transport.refreshStatus();

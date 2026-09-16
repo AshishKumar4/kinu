@@ -19,7 +19,7 @@ import {
   type DeviceFrame, type FakeDaemon, type TestUserDO,
 } from './helpers/user-do';
 import type { UserCaller } from '@kinu.run/core';
-import { createHubDeviceTransport } from '@kinu.run/core';
+import { createHubDeviceTransport, REAL_CLOCK } from '@kinu.run/core';
 
 const WORKSPACE = 'workspace-a';
 
@@ -173,7 +173,7 @@ describe('two daemons connected at once', () => {
       caller: async () => fleet.workspace,
       agentName: WORKSPACE,
       cliCwd: () => null,
-      now: () => Date.now(),
+      clock: REAL_CLOCK,
     });
 
     await expect(transport.rpc('exec', ['make'])).rejects.toMatchObject({ code: 'bad_input' });

@@ -14,6 +14,7 @@ import * as v from 'valibot';
 import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { renderThrownChain, tolerate } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
+import { every, REAL_CLOCK, type Clock } from '../types/clock';
 
 /** Minimal socket surface — platform WebSocket or any send()/readyState impl. */
 export interface TunnelSocket {
@@ -380,30 +381,6 @@ export function nextDeviceRequestId(): string {
   return `rpc-${requestEpoch}-${requestSeq}`;
 }
 
-/** The tunnel's clock: a one-shot deadline, a repeating probe, and the time
- *  frames are stamped with. Real timers in production; a test hands one it
- *  advances itself, so "well past the control deadline" is a step the test
- *  takes rather than a sleep racing a timer. */
-export interface TunnelTimers {
-  after(fire: () => void, ms: number): () => void;
-  every(fire: () => void, ms: number): () => void;
-  now(): number;
-}
-
-export const REAL_TUNNEL_TIMERS: TunnelTimers = {
-  after: (fire, ms) => {
-    const timer = setTimeout(fire, ms);
-
-    return () => { clearTimeout(timer); };
-  },
-  every: (fire, ms) => {
-    const timer = setInterval(fire, ms);
-
-    return () => { clearInterval(timer); };
-  },
-  now: () => Date.now(),
-};
-
 export class DeviceTunnel {
   private pending = new Map<string, Pending>();
   /** Calls running with no work deadline — the set the heartbeat guards. */
@@ -420,7 +397,9 @@ export class DeviceTunnel {
     private readonly timeoutMs: number = DEFAULT_RPC_TIMEOUT_MS,
     /** Heartbeat cadence for deadline-free calls. */
     private readonly probeMs: number = LIVENESS_PROBE_MS,
-    private readonly timers: TunnelTimers = REAL_TUNNEL_TIMERS,
+    // The tunnel's clock (D19): a test hands one it advances, so a deadline
+    // and a probe fire when the test steps past them, never beside a sleep.
+    private readonly clock: Clock = REAL_CLOCK,
   ) {}
 
   isConnected(): boolean {
@@ -473,9 +452,9 @@ export class DeviceTunnel {
       let stop: () => void;
 
       if (deadline > 0) {
-        stop = this.timers.after(() => settle(new Error(
+        stop = this.clock.after(deadline, () => settle(new Error(
           `device RPC timeout after ${deadline}ms: ${method} — the call may still be running on the device`,
-        )), deadline);
+        )));
       } else {
         // No work deadline: the shared heartbeat guards this call instead, so
         // it ends when the DEVICE goes away rather than when the work gets long.
@@ -529,7 +508,7 @@ export class DeviceTunnel {
     const msg = parsed.output;
     // Any well-formed frame — a result, an error, the daemon's HELLO — is the
     // device speaking, which is the only thing liveness actually asks about.
-    this.lastFrameAt = this.timers.now();
+    this.lastFrameAt = this.clock.now();
 
     if (msg.id === undefined) return;
     const p = this.pending.get(msg.id);
@@ -561,7 +540,7 @@ export class DeviceTunnel {
   private armHeartbeat(): void {
     if (this.heartbeat) return;
     this.probeSentAt = 0;
-    this.heartbeat = this.timers.every(() => this.probeLiveness(), this.probeMs);
+    this.heartbeat = every(this.clock, this.probeMs, () => this.probeLiveness());
   }
 
   private disarmIdleHeartbeat(): void {
@@ -599,7 +578,7 @@ export class DeviceTunnel {
       return;
     }
 
-    this.probeSentAt = this.timers.now();
+    this.probeSentAt = this.clock.now();
     // Fire-and-forget: the answer is irrelevant, its ARRIVAL is the signal,
     // and handleMessage records that for any frame. A rejection is not itself
     // proof of death — an error frame rejects the call and PROVES life, already

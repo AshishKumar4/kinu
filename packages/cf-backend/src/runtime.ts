@@ -55,7 +55,7 @@ import {
   type VectorStore,
 } from "@kinu.run/core";
 import type { SandboxHandle } from "@kinu.run/core";
-import { withHostedNodeExecution } from '@kinu.run/core';
+import { withHostedNodeExecution, REAL_CLOCK } from '@kinu.run/core';
 import type { HostedNodeHome } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
@@ -759,7 +759,7 @@ export function createCFRuntime(
     agentName: actor.workspaceName,
     cliCwd: cliCwdForDevice,
     checkpointMeta: () => access.getCheckpointMetaForDevice?.() ?? null,
-    now: () => Date.now(),
+    clock: REAL_CLOCK,
   };
 
   const deviceTransport = createHubDeviceTransport(deviceTransportOptions);
