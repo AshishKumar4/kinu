@@ -1205,7 +1205,7 @@ describe('an additional agent, as an ordinary conversation', () => {
 
       await page.click('[aria-label="New agent"]');
       await diagnosticsSettled(diagnostics, 1);
-      expect(diagnostics).toEqual([{
+      expect([...diagnostics]).toEqual([{
         event: 'subordinates.create_failed', code: 'io',
         cause: `create a subordinate agent: ${CREATE_REFUSAL_CHAIN}`, fields: {},
       }]);
@@ -2956,7 +2956,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // That is a claim about a write that must never come, and geometry
       // cannot synchronize the read (panels reflow through plain CSS ahead
       // of the commit pipeline), so the end condition is the pipeline's own:
-      // the panel counts the layout commits the hook has classified, and the
+      // the group counts the layout commits the hook has classified, and the
       // storage is read once the second tweak's commit has been counted —
       // after which the hook has either persisted or adopted, and nothing
       // more is scheduled.
