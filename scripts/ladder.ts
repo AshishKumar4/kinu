@@ -837,8 +837,11 @@ export const LADDER: readonly Gate[] = [
       + 'duration handed to `test`/`describe`/a hook or to `setDefaultTimeout`, and a `{ timeout }` '
       + 'handed to a puppeteer wait or a `child_process` call. Five deploy runs on 2026-09-15 '
       + 'went red on five such tests that pass alone and lose the race under the deploy wave; '
-      + 'the framework per-test clock is off everywhere (preload and every vitest config, '
-      + 'pinned by the self-test) and this row\'s own deadline is the one hang detector.',
+      + 'the framework per-test clock is off everywhere (preload, every vitest config and '
+      + '`--timeout=0` on every bun test row, pinned by the self-test) and this row\'s own '
+      + 'deadline is the one hang detector. The sites found on the day it landed are in a '
+      + 'shrink-only lock keyed by file and kind: a file outside the lock or a count above it '
+      + 'is red, and `--lock` refuses a higher total.',
     blind: 'a clock value reaching a comparison through a parameter or a return value; a timer '
       + 'wrapped by a module outside the test corpus and called by the wrapper\'s name; a '
       + 'duration handed as a bare positional number to a helper the gate does not know; '
