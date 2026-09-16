@@ -105,17 +105,9 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
     expect(isForeignAgentNamespacePath(odd)).toBe(false);
     expect(hostedActorRoute(odd)).toEqual({ name: 'a/b c', suffix: '' });
 
-    // And no client builds one by hand: both the browser hook and the CLI's
-    // socket take the helper, and neither constructs a facet hop — which is
-    // what made two addresses for one actor possible. (A `/sub/` inside a
-    // comment is prose; a constructed one appears in a template or a
-    // concatenation, which is what these two shapes read.)
-    for (const file of ['src/hooks/use-kinu.ts', '../cli/src/cloud-agent-client.ts']) {
-      const source = readFileSync(join(import.meta.dir, '..', file), 'utf-8');
-      expect(source).toContain('hostedActorSocketPath');
-      expect(source).not.toMatch(/[`'"]\/sub\//);
-      expect(source).not.toMatch(/\.sub\s*=/);
-    }
+    // No client builds the address by hand: with SUBORDINATE_AGENT_SLUG gone
+    // from core, reintroducing the facet hop needs a new constant, which the
+    // compiler and gate:wired surface. The helper is the one definition.
   });
 
   test("the transport's own chat-history endpoint is admitted at the workspace root", () => {
