@@ -186,25 +186,37 @@ describe(SUITE, () => {
 
         const memory = calls.filter((call) => call.name === 'memory');
 
-        // `save` or `remember`: both write a fact the search must find, and the
-        // prompt says "save the fact" — an agent that remembers it wrote what it
-        // was asked. The search renders facts by their STORED key — folded
-        // lowercase, whitespace to underscores — never the spelling the call
-        // carried, so the match is on `normalizeFactKey(TASK_TITLE)`. Measured
-        // live (post-publish-ac73ffc5e): the turn wrote via `remember` and the
-        // search answered `[fact: every-tool_probe] … ok`.
+        // `save` or `remember`: the prompt says "save the fact", and the tool
+        // takes both words — `save` appends a note to MEMORY.md, `remember`
+        // writes a keyed fact (`memory-tool.ts` `case 'save'` vs
+        // `runFactAction`). WHAT THE SEARCH MUST NAME therefore depends on
+        // which the turn used, and the two render differently: a fact hit as
+        // `[fact: <stored key>]` — folded lowercase, whitespace to
+        // underscores, never the spelling the call carried — and a note hit as
+        // its `MEMORY.md` chunk carrying the written line. Requiring the fact
+        // rendering alone made this subgoal unreachable for a turn that chose
+        // `save`: measured 2026-09-16 on build cba44dcb9, the turn saved the
+        // note and the search answered with it
+        // (`[memory/MEMORY.md:1-4] … every-tool probe: ok`) and the row still
+        // read "search naming the fact missing".
         const saved = memory.find((call) =>
           (actionOf(call) === 'save' || actionOf(call) === 'remember') && answered(call));
 
+        const names = (result: JsonValue | undefined): boolean => {
+          const text = textOf(result);
+
+          return text.includes(`[fact: ${normalizeFactKey(TASK_TITLE)}]`) || text.includes(FACT);
+        };
+
         const found = memory.find((call) =>
-          actionOf(call) === 'search' && answered(call) && textOf(call.result).includes(`[fact: ${normalizeFactKey(TASK_TITLE)}]`));
+          actionOf(call) === 'search' && answered(call) && names(call.result));
 
         subgoals.push({
           what: 'memory-saved-and-found', reached: saved !== undefined && found !== undefined,
           detail: saved !== undefined && found !== undefined
             ? `memory#${saved.toolCallId} (${actionOf(saved) || '?'}) wrote, search memory#${found.toolCallId} answered with `
               + excerpt(textOf(found.result))
-            : `write ${saved === undefined ? 'missing' : 'ok'}, search naming the fact `
+            : `write ${saved === undefined ? 'missing' : 'ok'}, search naming what was written `
               + `${found === undefined ? 'missing' : 'ok'}; memory calls: `
               + (memory.length === 0 ? 'none' : memory.map((call) =>
                 `${actionOf(call) || '?'} ${describeFailure(call)} result=${excerpt(textOf(call.result), 80)}`).join('; ')),
