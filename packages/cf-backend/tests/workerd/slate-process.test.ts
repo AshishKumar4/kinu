@@ -50,6 +50,37 @@ it('the durable application keeps this.sql and this.storage across a process res
   }
 });
 
+it('a slate edited and rebooted leaves no image of the source it no longer runs', async () => {
+  // Every boot writes its module texts as content-addressed images in the
+  // kernel VFS; `application.js` changes with every source edit and Nimbus
+  // sweeps only images it persisted itself, so a workspace iterating on a
+  // slate grew one image per edit for the life of its SQLite.
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('image-sweep'));
+
+  const version = (n: number) => [
+    'import { SlateObject } from "kinu:slate";',
+    'export class Slate extends SlateObject {',
+    `  async which() { return ${String(n)}; }`,
+    '}',
+  ].join('\n');
+
+  try {
+    await subject.start(version(1));
+    const first = await subject.facetImages();
+    expect(first.length).toBeGreaterThan(0);
+
+    await subject.start(version(2));
+    const second = await subject.facetImages();
+    expect(await subject.call('which', [])).toEqual({ ok: true, value: '2' });
+    // The same count of images as one boot: the edited application's old
+    // image went with the process that ran it; the stable ones stay.
+    expect(second.length).toBe(first.length);
+    expect(second).not.toEqual(first);
+  } finally {
+    await subject.stop();
+  }
+});
+
 it('a private process gets an ephemeral facet: this.storage survives, this.sql does not', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('storage-survival-private'));
 

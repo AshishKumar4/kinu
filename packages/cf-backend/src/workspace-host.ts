@@ -46,7 +46,7 @@ import type {
   JsonValue,
   NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, WorkspacePreviewUrl,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, tolerate, type Refusal } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, tolerate, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
@@ -293,6 +293,15 @@ function previewUnavailable(refusal: Refusal): Response {
  * null. An interpreter resident (`recipe.resident`) is the session's own
  * launch and never an embedder's; the guard keeps that true here.
  */
+/** A thrown re-drive inside `waitUntil` would otherwise vanish: the refusal
+ *  value is the slate's own answer, this is the host failing to ask. Named so
+ *  the rejection arm has a typed parameter. */
+const redriveFailed = (owner: string) => <Failure>(cause: Failure): void => {
+  diagnostics.failure('workspace.facet.redrive_failed', toKinuError({
+    doing: 're-driving a slate launch a hibernation interrupted', cause, otherwise: 'io',
+  }), { owner });
+};
+
 function resolveSlateLaunch(deps: HostedWorkspaceDeps, recipe: WorkerRecipe): Promise<null> {
   if (recipe.resident !== undefined || deps.ensureSlate === undefined) return Promise.resolve(null);
 
@@ -300,7 +309,7 @@ function resolveSlateLaunch(deps: HostedWorkspaceDeps, recipe: WorkerRecipe): Pr
     if (refusal !== null) {
       diagnostics.event('workspace.facet.redrive_refused', { owner: recipe.owner, reason: refusal.reason, error: refusal.error });
     }
-  }));
+  }, redriveFailed(recipe.owner)));
 
   return Promise.resolve(null);
 }
