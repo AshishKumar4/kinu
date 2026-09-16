@@ -445,6 +445,10 @@ export interface ChatSessionPorts {
   armTurnWake(atMs: number): Promise<void>;
   /** The model window the transcript restore is budgeted against. */
   modelWindow(): ModelWindow;
+  /** The skill bodies a mid-turn send activates that the running turn does
+   *  not already carry, rendered for the next step, or null
+   *  (`steerSkillsBlock`). */
+  steerSkills(text: string): Promise<string | null>;
   /** Why a programmatic PLAN turn cannot be admitted here, or null when it
    *  can: a plan turn ends in a review the operator decides on, and a backend
    *  with no review surface refuses the turn at admission rather than run a
@@ -543,6 +547,7 @@ export class ChatSession {
       onAccept: (steer) => { this.pendingSends.reserve({ ...steer, turnId: this.steerTurnId() }); },
       onDrain: (rows) => { this.commitLandedSteers(rows); },
       turnId: () => this.steerTurnId(),
+      skills: (text) => this.ports.steerSkills(text),
     });
     this.restoreOpenTurn();
     this.restorePendingSends();

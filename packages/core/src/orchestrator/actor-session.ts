@@ -164,6 +164,7 @@ export class ActorSession {
     readonly onAccept?: (steer: AcceptedSteer) => void;
     readonly onDrain?: (rows: readonly LandedSteerRow[], atStep: number) => void | Promise<void>;
     readonly turnId?: () => string | null;
+    readonly skills?: (text: string) => Promise<string | null>;
   }): void {
     this.orchestrator.inbox.bindSteerDeps({
       onAccept: deps.onAccept,
@@ -173,6 +174,7 @@ export class ActorSession {
         this.landed.push(...rows);
       },
       turnId: () => deps.turnId?.() ?? this.active?.lease.turnId ?? null,
+      skills: deps.skills,
     });
   }
 
