@@ -1,9 +1,9 @@
 {
-  "reason": "every bun test row carries --timeout=0: a preload's setDefaultTimeout(0) reaches the first file only (measured 2026-09-15, bun 1.4.0)",
+  "reason": "the workerd tier is three rows measured as split 2026-09-16 beside the parallel cf-backend suite: cf-backend 335 s, its long suites under tests/workerd/long 169 s, devbox 3 s; the one row took 485 s under that load, past the 480 s gate deadline",
   "tiers": {
     "commit": {
       "seconds": 78.74,
-      "measuredAt": "2026-09-15",
+      "measuredAt": "2026-09-16",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
@@ -36,7 +36,7 @@
     },
     "push": {
       "seconds": 399.15,
-      "measuredAt": "2026-09-15",
+      "measuredAt": "2026-09-16",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,

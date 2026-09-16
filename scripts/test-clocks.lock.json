@@ -44,14 +44,18 @@
     "packages/cf-backend/tests/workerd/do-init-gate.test.ts": {
       "clock-compare": 3
     },
-    "packages/cf-backend/tests/workerd/do-retention.test.ts": {
-      "clock-compare": 2,
-      "sleep": 2
-    },
     "packages/cf-backend/tests/workerd/do-socket-attachment.test.ts": {
       "sleep": 1
     },
     "packages/cf-backend/tests/workerd/do-terminal-effect-eviction.test.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/cf-backend/tests/workerd/long/do-retention.test.ts": {
+      "clock-compare": 2,
+      "sleep": 2
+    },
+    "packages/cf-backend/tests/workerd/long/step-cap.test.ts": {
       "clock-compare": 1,
       "sleep": 1
     },
@@ -62,10 +66,6 @@
       "sleep": 1
     },
     "packages/cf-backend/tests/workerd/steer-chain.test.ts": {
-      "clock-compare": 1,
-      "sleep": 1
-    },
-    "packages/cf-backend/tests/workerd/step-cap.test.ts": {
       "clock-compare": 1,
       "sleep": 1
     },
