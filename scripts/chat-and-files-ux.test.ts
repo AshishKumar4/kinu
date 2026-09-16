@@ -1326,6 +1326,50 @@ describe('an additional agent, as an ordinary conversation', () => {
   });
 });
 
+describe('the shell rails collapse and reopen, and the choice survives a reload', () => {
+  test('rail and inspector each collapse then reopen by role and state, persisted across reload', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=app&path=/`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-rail-collapse]');
+
+      const railVisible = () => page.evaluate(() => {
+        const rail = document.querySelector('aside [aria-label="Primary"]');
+
+        return rail instanceof HTMLElement && rail.offsetParent !== null;
+      });
+
+      expect(await railVisible()).toBe(true);
+      await page.click('[data-rail-collapse]');
+      await page.waitForSelector('[data-rail-expand]');
+      expect(await railVisible()).toBe(false);
+      expect(await page.evaluate(() => localStorage.getItem('kinu:rail-open'))).toBe('0');
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-rail-expand]');
+      expect(await railVisible()).toBe(false);
+
+      await page.click('[data-rail-expand]');
+      await page.waitForSelector('[data-rail-collapse]');
+      expect(await railVisible()).toBe(true);
+      expect(await page.evaluate(() => localStorage.getItem('kinu:rail-open'))).toBe('1');
+
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('nav[aria-label="Workspace agents"]');
+      await page.waitForSelector('[data-inspector-collapse]');
+      await page.click('[data-inspector-collapse]');
+      await page.waitForSelector('[data-inspector-expand]');
+      expect(await page.evaluate(() => localStorage.getItem('kinu:rail-open'))).toBe('1');
+      await page.click('[data-inspector-expand]');
+      await page.waitForSelector('[data-inspector-collapse]');
+
+      await page.close();
+    });
+  });
+});
+
 /**
  * KINU-071. The fixture mounts the exact ConversationStartBoundary used by both
  * WorkspacePage columns over the real paged-scroll hook. Its first page is held
