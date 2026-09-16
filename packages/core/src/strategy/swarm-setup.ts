@@ -8,6 +8,7 @@
  * before any node expands, where a refusal is free and a mistake would spend a whole
  * search. The loop and the settle barrier live elsewhere; nothing here reads loop state.
  */
+import type { Clock } from '../types/clock';
 import {
   KinuError, refusalOf, type Refusal,
 } from '../obs/error';
@@ -1141,6 +1142,7 @@ export function buildNodeDeps(input: {
   readonly journal: HeadJournal;
   readonly logger: Logger;
   readonly signal?: AbortSignal;
+  readonly clock?: Clock;
   readonly reportModelCall?: ModelCallSink;
   readonly publishHeadStream?: PublishHeadStream;
   readonly maxWallClockMs?: number;
@@ -1160,6 +1162,8 @@ export function buildNodeDeps(input: {
   };
 
   if (deps.signal !== undefined) nodeDeps.signal = deps.signal;
+
+  if (deps.clock !== undefined) nodeDeps.clock = deps.clock;
 
   if (deps.reportModelCall !== undefined) nodeDeps.reportModelCall = deps.reportModelCall;
 

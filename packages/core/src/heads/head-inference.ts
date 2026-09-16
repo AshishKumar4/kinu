@@ -103,6 +103,7 @@ export class HeadCapture {
 }
 
 import { permitInPlan } from '../execution/work-mode';
+import { REAL_CLOCK, type Clock } from '../types/clock';
 
 /** The two accumulator tools every head has — record_evidence / record_decision,
  *  pushing into the shared HeadCapture. Backend scratch tools are merged on top. */
@@ -532,6 +533,10 @@ export interface HeadInferenceDeps {
    * flag can never observe it.
    */
   signal?: AbortSignal;
+  /** The clock the report's wall time is measured on (D19): real unless a
+   *  test hands one it advances per step, so "how long the work took" is a
+   *  figure the test can make non-zero without pausing. */
+  clock?: Clock;
   /** Abort reason, surfaced in errorMessage. */
   abortReason?: () => string | null;
   /**
@@ -736,7 +741,8 @@ function classifyHeadOutcome(
  */
 export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
   const { capture, mission } = deps;
-  const startedAt = Date.now();
+  const clock = deps.clock ?? REAL_CLOCK;
+  const startedAt = clock.now();
 
   // The mission refusal that stopped this head, if one did. Held so the report
   // says which budget ran out rather than reporting a bare stop.
@@ -1031,7 +1037,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   }
 
   if (refusal) {
-    return exhaustedMissionReport(input, capture, refusal, Date.now() - startedAt, recorded);
+    return exhaustedMissionReport(input, capture, refusal, clock.now() - startedAt, recorded);
   }
 
   const { status, stopReason } = classifyHeadOutcome(input.budget, deps, failure);
@@ -1054,7 +1060,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     toolCalls: [...capture.toolCalls],
     stepCount: recorded,
     usage: capture.usage,
-    wallClockMs: Date.now() - startedAt,
+    wallClockMs: clock.now() - startedAt,
     errorMessage: status === 'completed' ? undefined : stopReason ?? undefined,
   };
 }
