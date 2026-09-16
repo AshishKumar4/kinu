@@ -241,7 +241,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             one bottom rule, so the gauge and the collapse chevron sit on the
             same edge the tabs underline — never a ruled strip beside an
             unruled icon column with a visible break between them. */}
-        <div className={`flex shrink-0 items-center border-b p-border ${tabStripH}`}>
+        <div className={`flex shrink-0 items-center -mb-px ${tabStripH}`}>
         <ShareSlateControl workspace={props.workspace} slate={openSlateSummary} rpc={props.rpc} />
         {chip !== null && (
           <button
