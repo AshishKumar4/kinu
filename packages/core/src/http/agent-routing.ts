@@ -107,6 +107,27 @@ const HOSTED_ACTOR_PATH = new RegExp(
  * name through its own directory and receives the request path unchanged.
  * Physical storage keys are not part of the client-visible address.
  */
+/**
+ * The transport path tail a CLIENT connects a hosted actor's chat on, relative
+ * to its workspace room — the other half of {@link hostedActorRoute}, so the
+ * address the browser builds and the address the edge admits are one
+ * definition.
+ *
+ * It exists because they were two. The client built its socket path from the
+ * Agents SDK's `sub` option, which renders `/sub/<class>/<name>` — a facet hop
+ * this transport deliberately refuses (`isForeignAgentNamespacePath`) since
+ * there is no child Durable Object to hop to. Measured on the deployed build
+ * cba44dcb9: opening a hired agent's tab asked
+ * `wss://kinu.run/agents/orchestrator-agent/<ws>/sub/subordinate-agent/<name>`,
+ * got 404 with no 101, and every RPC on that dead socket — `getActorSnapshot`,
+ * `listAgentTasks` — timed out at the SDK's 30 s backstop, which is what the
+ * owner saw as "Disconnected · Untitled agent" over a skeleton. The same
+ * calls on `/actor/<name>` answer at once.
+ */
+export function hostedActorSocketPath(name: string): string {
+  return `${HOSTED_ACTOR_SEGMENT}/${encodeURIComponent(name)}`;
+}
+
 export function hostedActorRoute(pathname: string): { name: string; suffix: string } | null {
   if (isForeignAgentNamespacePath(pathname)) return null;
   const match = pathname.match(HOSTED_ACTOR_PATH);
