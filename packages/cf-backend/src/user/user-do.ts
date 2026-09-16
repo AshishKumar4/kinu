@@ -5178,7 +5178,9 @@ export class UserDO extends Agent<Env> {
     const mgr = this.userMcp();
 
     const rows = this.sqlx<McpHydrationRow>(
-      `SELECT id, name, server_url, transport, headers, preset_id FROM user_mcp_servers`,
+      `SELECT s.id, s.name, s.server_url, s.transport, s.headers, p.preset_id
+         FROM user_mcp_servers s
+         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id`,
     );
 
     const configured = new Set(rows.map((row) => row.id));
@@ -5359,8 +5361,11 @@ export class UserDO extends Agent<Env> {
       allowed_tools: string | null; preset_id: McpPresetId | null;
       created_at: number; updated_at: number;
     }>(
-      `SELECT id, name, server_url, transport, allowed_tools, preset_id, created_at, updated_at
-       FROM user_mcp_servers ORDER BY name`,
+      `SELECT s.id, s.name, s.server_url, s.transport, s.allowed_tools,
+              p.preset_id, s.created_at, s.updated_at
+         FROM user_mcp_servers s
+         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
+        ORDER BY s.name`,
     );
 
     // Hydrate so the live view of connection state is real, and unconditionally
@@ -5464,11 +5469,21 @@ export class UserDO extends Agent<Env> {
     this.claimMcpServerName(cfg.name, id, () => {
       this.ctx.storage.sql.exec(
         `INSERT INTO user_mcp_servers
-           (id, name, server_url, transport, headers, allowed_tools, preset_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
-        sealedHeaders, allowedJson, cfg.presetId ?? null, now, now,
+        sealedHeaders, allowedJson, now, now,
       );
+
+      // A preset add tags the server one table over — `user_mcp_servers` is
+      // the shipped shape this storage already holds, so the tag has to live
+      // where a row of its own can reach it.
+      if (cfg.presetId !== undefined) {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO user_mcp_server_presets (server_id, preset_id) VALUES (?, ?)`,
+          id, cfg.presetId,
+        );
+      }
     });
 
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;

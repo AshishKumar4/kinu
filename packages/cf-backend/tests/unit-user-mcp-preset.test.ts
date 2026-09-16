@@ -3,6 +3,7 @@
 // opens. The manager and the OAuth provider are the same fakes the lifecycle
 // suite runs against — `queueMcpAuthUrl` is the only new seam, standing in for
 // the authorization redirect the harness cannot perform.
+import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import {
   createTestUserDO, sqlExec, testOwner,
@@ -36,7 +37,10 @@ describe('an MCP preset add', () => {
     expect(added.authUrl).toBe('https://mcp.cloudflare.com/authorize?test');
 
     const [row] = sqlExec(h.db).exec(
-      `SELECT name, server_url, transport, preset_id FROM user_mcp_servers WHERE id = ?`,
+      `SELECT s.name, s.server_url, s.transport, p.preset_id
+         FROM user_mcp_servers s
+         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
+        WHERE s.id = ?`,
       added.id,
     ).toArray();
 
@@ -64,7 +68,10 @@ describe('an MCP preset add', () => {
     expect(added.authUrl).toBeNull();
 
     const [row] = sqlExec(h.db).exec(
-      `SELECT name, server_url, preset_id, headers FROM user_mcp_servers WHERE id = ?`,
+      `SELECT s.name, s.server_url, p.preset_id, s.headers
+         FROM user_mcp_servers s
+         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
+        WHERE s.id = ?`,
       added.id,
     ).toArray();
 
@@ -124,7 +131,10 @@ describe('an MCP preset add', () => {
     expect(added.authUrl).toBe('https://github.com/login/oauth/authorize?test');
 
     const [row] = sqlExec(h.db).exec(
-      `SELECT name, preset_id FROM user_mcp_servers WHERE id = ?`, added.id,
+      `SELECT s.name, p.preset_id
+         FROM user_mcp_servers s
+         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
+        WHERE s.id = ?`, added.id,
     ).toArray();
 
     expect(row?.preset_id).toBe('github');
@@ -183,9 +193,14 @@ describe('an MCP preset add', () => {
     );
 
     const [row] = sqlExec(h.db).exec(
-      `SELECT preset_id FROM user_mcp_servers WHERE id = ?`, added.id,
+      `SELECT p.preset_id
+         FROM user_mcp_servers s
+         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
+        WHERE s.id = ?`, added.id,
     ).toArray();
 
+    // A custom add leaves NO row in the presets table — the join's NULL is
+    // the "no preset" answer, not a stored NULL.
     expect(row?.preset_id).toBeNull();
     const [listed] = await h.userDO.userMcp_list(await testOwner());
     expect(listed?.presetId).toBeNull();
@@ -203,6 +218,62 @@ describe('an MCP preset add', () => {
       { id: 'google', appConfigured: false },
     ]);
     h.close();
+  });
+});
+
+describe('a UserDO opened over storage from before the MCP presets lane', () => {
+  // The shipped user_mcp_servers DDL — every column the table carried before
+  // the lane, and none it does now. `CREATE TABLE IF NOT EXISTS` inside
+  // `initUserTables` is a no-op on this storage, so the object under test runs
+  // against exactly the shape a pre-lane account holds in production.
+  const SHIPPED_USER_MCP_SERVERS = `
+    CREATE TABLE IF NOT EXISTS user_mcp_servers (
+      id            TEXT PRIMARY KEY,
+      name          TEXT NOT NULL,
+      server_url    TEXT NOT NULL,
+      transport     TEXT NOT NULL,
+      headers       TEXT,
+      allowed_tools TEXT,
+      created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      updated_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    )
+  `;
+
+  test('list, a custom add and a preset add all run on the old user_mcp_servers shape', async () => {
+    const db = new Database(':memory:');
+    db.run(SHIPPED_USER_MCP_SERVERS);
+
+    const h = createTestUserDO({ storage: db });
+
+    // The production failure was `no such column: preset_id` on this read.
+    expect(await h.userDO.userMcp_list(await testOwner())).toEqual([]);
+
+    await h.userDO.userMcp_add(
+      await testOwner(), { name: 'linear', serverUrl: 'https://mcp.linear.example/sse' },
+      'https://kinu.example',
+    );
+    await h.userDO.userMcp_add(
+      await testOwner(),
+      { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } },
+      'https://kinu.example',
+    );
+
+    const rows = sqlExec(db).exec(
+      `SELECT s.name, p.preset_id
+         FROM user_mcp_servers s
+         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
+        ORDER BY s.name`,
+    ).toArray();
+
+    expect(rows.map((r) => [r.name, r.preset_id])).toEqual([
+      ['GitHub', 'github'],
+      ['linear', null],
+    ]);
+
+    const listed = await h.userDO.userMcp_list(await testOwner());
+    expect(listed.map((r) => r.presetId)).toEqual(['github', null]);
+
+    db.close();
   });
 });
 
