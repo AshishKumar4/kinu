@@ -35,7 +35,6 @@ import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import type { FacetManagerHostHooks } from '@nimbus-sh/worker/workspace-host';
 import { diagnostics } from '@kinu.run/core/obs';
 import type * as programmaticModule from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
-import type * as portCapabilityModule from '@nimbus-sh/worker/port-capability';
 import type * as gitModule from '@nimbus-sh/worker/git';
 
 // The per-port reservation record is Nimbus-owned storage: the owner that holds
@@ -43,31 +42,18 @@ import type * as gitModule from '@nimbus-sh/worker/git';
 // and the owner-gated re-adoption stay usable on a cold route without
 // importing the runtime graph.
 export {
-  clearPortCapability,
   listPortReservations,
   readPortExposure,
   readPortReservationByOwner,
   releasePortReservation,
-  restoreReservedPortCapability,
 } from '@nimbus-sh/worker/port-capability';
-
-// A durable application's facet name, pinned per owner in Durable Object
-// storage so its SQLite is the same store on every launch.
-export {
-  acquireDurableFacetSlot,
-  freeDurableFacetSlot,
-} from '@nimbus-sh/worker/durable-slots';
 
 export type {
   ProgrammaticExecOptions,
   ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
 
-export type { ResidentAppSummary, ResidentIdentity } from '@nimbus-sh/worker/workspace-host';
-
 type Programmatic = typeof programmaticModule;
-
-type Ports = typeof portCapabilityModule;
 
 type Git = typeof gitModule;
 
@@ -88,11 +74,6 @@ export interface NimbusProgrammatic {
   readonly rpcRunCode: Programmatic['rpcRunCode'];
   readonly rpcStartProcess: Programmatic['rpcStartProcess'];
   readonly rpcUnexposePort: Programmatic['rpcUnexposePort'];
-  /** The interactive session's fetch route for a capability-bearing port. Used
-   *  for WebSocket previews only: `rpcRouteCapabilityPort` answers an upgrade
-   *  with 409 because a 101 cannot cross a Durable Object RPC boundary, and
-   *  this one keeps fetch semantics. */
-  readonly routeCapabilityPort: Ports['routeCapabilityPort'];
   /** `git` over a Nimbus filesystem — isomorphic-git against SqliteVFS, with no
    *  child process and nothing reaching a host's git. The session registers
    *  the command itself; the workspace host does the same here, because Kinu
@@ -104,9 +85,8 @@ let loading: Promise<NimbusProgrammatic> | null = null;
 
 export function nimbusProgrammatic(): Promise<NimbusProgrammatic> {
   loading ??= (async () => {
-    const [programmatic, ports, git] = await Promise.all([
+    const [programmatic, git] = await Promise.all([
       import('../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js'),
-      import('@nimbus-sh/worker/port-capability'),
       import('@nimbus-sh/worker/git'),
     ]);
 
@@ -127,7 +107,6 @@ export function nimbusProgrammatic(): Promise<NimbusProgrammatic> {
       rpcRunCode: programmatic.rpcRunCode,
       rpcStartProcess: programmatic.rpcStartProcess,
       rpcUnexposePort: programmatic.rpcUnexposePort,
-      routeCapabilityPort: ports.routeCapabilityPort,
       runGitCommand: git.runGitCommand,
     };
   })();

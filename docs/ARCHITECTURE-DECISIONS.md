@@ -164,7 +164,13 @@ floor zero. Measured 2026-09-15 by `unit-nimbus-workspace-executor`'s "each
 open of the same database adopts the next generation": two opens over one
 `bun:sqlite` file hand out pids a million apart and leave the row at 2; the
 revocation invariant is pinned by workerd `slate-durability` and the
-workspace-reset case of `unit-node-home-wiring`.
+workspace-reset case of `unit-node-home-wiring`. Amended 2026-09-16: the
+guard read `generation === 0`, which refused only a first boot whose put
+failed — a later boot whose put failed ran on the previous incarnation's
+floor, fabric having kept `prev`. The guard is now the counter read before
+the adopt against the value after it (`before + 1`, which fabric takes only
+once its put resolved); measured by "a bump that did not persist refuses the
+open, on a boot that is not the first" in the same suite.
 
 ## Chat loop
 
