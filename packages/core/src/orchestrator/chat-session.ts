@@ -92,6 +92,8 @@ import {
 } from './turn-lifecycle';
 import { olderHistoryNotice, type TranscriptStore } from './transcript-store';
 import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
+import { subordinateTurnContext } from '../subordinates/support';
+import { inheritedAsModelMessage } from '../heads/head-inference';
 
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
 
@@ -269,6 +271,20 @@ interface TurnContinuation {
  *  continuation: the outcome is stated, never dropped, so the model knows the
  *  call never ran to completion and can decide to make it again. */
 const INTERRUPTED_TOOL_OUTPUT = 'This tool call was interrupted before it produced a result; the process running it stopped. Make the call again if its result is still needed.';
+
+/** A turn's input as the model message the working history carries: the
+ *  attachments as file parts — the shape ai's convertToModelMessages emits
+ *  for FileUIParts, so multimodal models receive them natively — then the
+ *  text. */
+function turnInputMessage(item: Pick<ChatTurnInput, 'text' | 'files'>): ModelMessage {
+  const fileParts = (item.files ?? []).map((f) => ({
+    type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
+  }));
+
+  return fileParts.length > 0
+    ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
+    : { role: 'user', content: item.text };
+}
 
 /**
  * A continuation's answer row. The cut step's text the last process left is
@@ -1294,18 +1310,34 @@ export class ChatSession {
   }
 
   private async runTurn(item: QueueItem, event: string | undefined, startedAt: number, lease: ActorTurnLease): Promise<void> {
-    const prepared = await this.ports.prepareTurn(
-      item.continuation === undefined ? item : { ...item, priorOutput: priorOutputOf(item.continuation) },
-      lease,
-    );
+    const input: ChatTurnInput = item.continuation === undefined ? item : { ...item, priorOutput: priorOutputOf(item.continuation) };
+
+    // The one rule for where the turn's conversation comes from, on both
+    // backends: a delivery's reply turn opens on the settled working revision
+    // (born from the delivery's conversation when this actor has none), every
+    // other turn appends, and prior output follows either. The message shape
+    // is a function of the input alone, so it is built here and not in each
+    // backend's prepareTurn.
+    this.actorSession.openTurnInput(lease, {
+      item: input,
+      message: turnInputMessage(input),
+      birthContext: (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
+    });
+
+    const prepared = await this.ports.prepareTurn(input, lease);
 
     const partial = this.partialLedger(item.continuation);
+    /** Whether this process streamed anything of the answer at all — a token
+     *  or a call. A Stop before that leaves the operator's row alone. */
+    let streamed = item.continuation?.partial !== null && item.continuation?.partial !== undefined;
 
     const execution = await this.actorSession.execute(lease, {
       task: item.text,
       ...prepared.execution,
     }, (event) => {
       partial.observe(event);
+
+      if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;
 
       if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') this.emit(event);
     });
@@ -1334,6 +1366,10 @@ export class ChatSession {
       event,
       startedAt,
       assistantText: fullText,
+      // A turn cut before its first token has no answer row: the operator's
+      // row stands alone, on both backends, as it did before the switch — an
+      // empty assistant row was an empty bubble on every reload.
+      assistantRow: streamed || !interrupted,
       runError,
       interrupted,
       trialContext: execution.admittedMessages,
@@ -1453,6 +1489,9 @@ export class ChatSession {
     readonly event: string | undefined;
     readonly startedAt: number;
     readonly assistantText: string;
+    /** Whether an assistant row is written at all. False only for a turn
+     *  interrupted before it streamed anything. */
+    readonly assistantRow: boolean;
     readonly runError: string | null;
     readonly interrupted: boolean;
     /** The turn's inference history, for the shadow trial's recorded replay. */
@@ -1549,7 +1588,7 @@ export class ChatSession {
           // what the durable row's parent chain is ordered by. The rows
           // themselves were written by their own drains, at the step boundary.
           this.actorSession.landedSteers,
-          input.assistantText,
+          input.assistantRow ? input.assistantText : null,
           // The opening row already carries the operator's message's facts;
           // a programmatic turn's row is written here, with the producer's
           // stamp and event.
@@ -1609,7 +1648,7 @@ export class ChatSession {
     assistantId: string,
     userText: string,
     steers: ReadonlyArray<{ id: string; text: string; atStep: number }>,
-    assistantText: string,
+    assistantText: string | null,
     metadata?: JsonObject,
   ): void {
     this.transcript.appendUser({
@@ -1621,7 +1660,7 @@ export class ChatSession {
     // turn's opening row.
     const parentId = steers.length > 0 ? steers[steers.length - 1]!.id : turnId;
 
-    this.transcript.appendAssistant({ id: assistantId, parentId, text: assistantText });
+    if (assistantText !== null) this.transcript.appendAssistant({ id: assistantId, parentId, text: assistantText });
   }
 
   // ─── The pending-send ledger ─────────────────────────────────────────────
@@ -1748,8 +1787,10 @@ export class ChatSession {
     // that owned that turn died before its settle, and this one re-opened a
     // different turn or none. Swept per dead turn into ONE user-origin rerun,
     // the words in the order they were accepted, under the narrower mode any
-    // of them was typed in: merging never widens what a message was typed
-    // under. Their reservations are spent by that rerun's own row.
+    // of them was typed in — plan, which admits reads and a review but no
+    // effect, so a message typed for review is never run for effect because
+    // it was merged with one that was: merging never widens what a message
+    // was typed under. Their reservations are spent by that rerun's own row.
     const dead = new Map<string, PendingSendRow[]>();
     let queued = 0;
 

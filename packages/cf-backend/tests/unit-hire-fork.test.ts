@@ -5,7 +5,7 @@ import {
   hireForkModel, hireConversation,
   hireRetentionModel, HIRE_FORK_FOLLOWUP_REQUEST, HIRE_FORK_FOLLOWUP, HIRE_CHILD_CONTEXT,
 } from '../../test-utils/src/hire-fork';
-import { orchestratorHarness, thinkTurns, reactivateOrchestratorHarness } from './helpers/actor-harness';
+import { orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness } from './helpers/actor-harness';
 
 for (const context of ['inherit', 'fresh', undefined] as const) {
   test(`a cf hire context=${String(context)} starts from its birth-time conversation`, async () => {
@@ -19,8 +19,8 @@ for (const context of ['inherit', 'fresh', undefined] as const) {
       resolveModel: () => model,
       normalizeSpecSync: (spec) => spec ?? 'test/model',
     });
-    await thinkTurns(agent).run(HIRE_FORK_PARENT);
-    await thinkTurns(agent).run(HIRE_FORK_REQUEST);
+    await chatSessionTurns(agent).run(HIRE_FORK_PARENT);
+    await chatSessionTurns(agent).run(HIRE_FORK_REQUEST);
     expect(model.doStreamCalls.flatMap(hireConversation)).toContainEqual(HIRE_FORK_PREFIX[2]);
     await agent._kinuTerminalRetryTick();
     expect(childRequests).toHaveLength(1);
@@ -57,8 +57,8 @@ for (const cold of [false, true]) {
     initial.agent.modelFactory = () => model;
     await initial.agent.onStart();
     configure(initial.agent);
-    await thinkTurns(initial.agent).run(HIRE_FORK_PARENT);
-    await thinkTurns(initial.agent).run(HIRE_FORK_REQUEST);
+    await chatSessionTurns(initial.agent).run(HIRE_FORK_PARENT);
+    await chatSessionTurns(initial.agent).run(HIRE_FORK_REQUEST);
     await initial.agent._kinuTerminalRetryTick();
     expect(childRequests).toHaveLength(2);
     const first = childRequests[1];
@@ -76,7 +76,7 @@ for (const cold of [false, true]) {
       : initial;
 
     if (cold) await agent.onStart();
-    await thinkTurns(agent).run(HIRE_FORK_FOLLOWUP_REQUEST);
+    await chatSessionTurns(agent).run(HIRE_FORK_FOLLOWUP_REQUEST);
     await agent._kinuTerminalRetryTick();
     const followup = childRequests[2];
 

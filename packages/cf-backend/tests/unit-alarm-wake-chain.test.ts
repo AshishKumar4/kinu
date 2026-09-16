@@ -18,7 +18,7 @@ import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { openWorkspaceMainActor } from '@kinu.run/core';
 import { makeSql } from '../../core/tests/helpers';
-import { hostedSubordinateHarness, orchestratorHarness, thinkTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 /**
  * The actor these rows belong to.
@@ -652,7 +652,7 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     expect(await agent.listSchedules()).toEqual([]);
 
-    const turns = thinkTurns(agent);
+    const turns = chatSessionTurns(agent);
     const request = await turns.prepare({ messages: [{ role: 'user', content: 'a turn that opens' }] });
 
     const armed = (await agent.listSchedules())
@@ -676,7 +676,7 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     expect(await agent.listSchedules()).toEqual([]);
 
-    const turns = thinkTurns(agent);
+    const turns = chatSessionTurns(agent);
     const request = await turns.prepare({ messages: [{ role: 'user', content: 'a turn the tick fires inside' }] });
 
     const wakes = async (): Promise<number[]> => (await agent.listSchedules())
@@ -709,7 +709,7 @@ describe('the workspace keeps exactly one wake row', () => {
     const { agent } = orchestratorHarness();
     await agent.activateActor();
 
-    const turns = thinkTurns(agent);
+    const turns = chatSessionTurns(agent);
     const armedAtSec = Math.floor(Date.now() / 1000);
     const request = await turns.prepare({ messages: [{ role: 'user', content: 'a turn that opens' }] });
 

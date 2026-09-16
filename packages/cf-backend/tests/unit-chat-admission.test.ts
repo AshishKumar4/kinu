@@ -18,7 +18,7 @@ import type { SessionMessage } from 'agents/experimental/memory/session';
 import type { LanguageModel } from 'ai';
 import { AwaitedList, scriptedTurnModel } from '@kinu.run/test-utils';
 import { fleetEnvForTest } from './helpers/analytics-plane';
-import { makeEnv, orchestratorHarness, reactivateOrchestratorHarness, thinkTurns } from './helpers/actor-harness';
+import { makeEnv, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
 
 /** A turn the suite runs end to end answers one scripted line: no provider,
  *  no harness UserDO credential, so the admission is what the test measures
@@ -147,7 +147,7 @@ describe('a chat request through the production gate', () => {
     // reads busy off this open turn — so the splice below takes the mid-turn
     // arm exactly as a message typed while the agent works does. Nothing of
     // the live turn itself runs here: its text is the step's input below.
-    await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
+    await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
     const [liveRow] = userRows(agent);
 
     // Admit the splice first, then drive the step it lands in: the drain
@@ -172,7 +172,7 @@ describe('a chat request through the production gate', () => {
     // A turn the session opened but the loop never ran — the inbox reads
     // busy off it, so both sends take the mid-turn arm. The loop's own terms
     // for a message typed while the agent works, without spending a turn.
-    await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
+    await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
     await gate(wire, chatRequest('req-steer', 'check staging'));
     await gate(wire, chatRequest('req-steer', 'check staging'));
 
@@ -194,7 +194,7 @@ describe('a chat request through the production gate', () => {
     // gives the step the prepared snapshot it refuses without, and the inbox
     // reads busy off this open turn. The LIVE text is the step's input; the
     // gold is what the SECOND socket sees while the turn is still running.
-    await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
+    await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
     await gate(wire, chatRequest('req-live', 'the long job'));
     const [liveRow] = agent.harnessTranscript.history().filter((m) => m.role === 'user').map((m) => m.id);
 

@@ -87,7 +87,7 @@ import {
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
   DynamicContextLedger, turnLocalContextMessage, unverifiedInstructionsMessage,
-  observeSystemPromptHash, subordinateTurnContext, inheritedAsModelMessage,
+  observeSystemPromptHash,
   type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
@@ -5932,25 +5932,9 @@ export abstract class ActorAgent extends Think<Env> {
     // Each run opens a new analytics write window.
     openAnalyticsWindow(this.env);
 
-    // Attachments ride as ModelMessage file parts, the shape ai's
-    // convertToModelMessages emits for FileUIParts, so multimodal models
-    // receive them natively.
-    const fileParts = (item.files ?? []).map((f) => ({
-      type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
-    }));
-
-    // The one rule for where the turn's conversation comes from, shared with
-    // the local backend: a delivery's reply turn opens on the settled working
-    // revision (born from the delivery's conversation when this actor has
-    // none), every other turn appends, and prior output follows either.
-    this.actorSession.openTurnInput(lease, {
-      item,
-      message: fileParts.length > 0
-        ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
-        : { role: 'user', content: item.text },
-      birthContext: (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
-    });
-
+    // The turn's input is already on the working history: the loop placed it
+    // there (core's one rule for where a turn's conversation comes from)
+    // before handing the turn here.
     const history = this.actorSession.history;
     // The conversation this turn was opened over, its own message included —
     // what a hire with context:'inherit' is born from, frozen here so a

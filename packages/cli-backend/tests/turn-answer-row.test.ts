@@ -75,6 +75,7 @@ function parkedModel(delta: string): TestLanguageModelV2 {
           controller.enqueue({ type: 'text-start', id: '0' });
           controller.enqueue({ type: 'text-delta', id: '0', delta });
           await new Promise<void>((resolve) => { abortSignal?.addEventListener('abort', () => resolve(), { once: true }); });
+          controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
         },
       }),
       response: { headers: {} },
@@ -94,6 +95,63 @@ function openSession(name: string) {
 
   return { db, rt };
 }
+
+/** Parks before any token until aborted. */
+function silentModel(): TestLanguageModelV2 {
+  return new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doStream: async ({ abortSignal }) => ({
+      stream: new ReadableStream({
+        async start(controller) {
+          controller.enqueue({ type: 'stream-start', warnings: [] });
+          await new Promise<void>((resolve) => { abortSignal?.addEventListener('abort', () => resolve(), { once: true }); });
+          controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        },
+      }),
+      response: { headers: {} },
+    }),
+  });
+}
+
+describe('an interrupted turn', () => {
+  test('cut before its first token leaves no assistant row; cut after one keeps the cut text', async () => {
+    // Pre-switch shape on both backends: a Stop before anything streamed is
+    // the operator's row alone, never an empty bubble on reload.
+    const silent = openSession('silent');
+    const opened = Promise.withResolvers<void>();
+
+    const a = new LocalAgentSession({
+      rt: silent.rt, db: silent.db, model: silentModel(), noAutoEvolve: true,
+      onEvent: (event) => { if (event.type === 'run-event' && event.event.type === 'model_operation') opened.resolve(); },
+    });
+
+    const turn = a.send('say nothing');
+    await opened.promise;
+    a.interrupt();
+    await turn;
+    await a.end();
+    expect(assistantRows(silent.db)).toEqual([]);
+    expect(silent.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM actor_messages WHERE role = 'user'").get()?.n).toBe(1);
+    silent.db.close();
+
+    const cut = openSession('cut');
+    const streamed = Promise.withResolvers<void>();
+
+    const b = new LocalAgentSession({
+      rt: cut.rt, db: cut.db, model: parkedModel('part-'), noAutoEvolve: true,
+      onEvent: (event) => { if (event.type === 'text-delta') streamed.resolve(); },
+    });
+
+    const cutTurn = b.send('say part');
+    await streamed.promise;
+    b.interrupt();
+    await cutTurn;
+    await b.end();
+    expect(assistantRows(cut.db)).toEqual(['part-']);
+    cut.db.close();
+  });
+});
 
 describe('the assistant row holds the answer', () => {
   test('a narrated multi-step turn stores its final step; the deltas still stream', async () => {

@@ -453,9 +453,6 @@ export class Inbox implements AgentInbox {
     private steers: UserSteerDeps = {},
   ) {}
 
-  /** Whether a message sent now rides a turn that already exists — running,
-   *  or admitted by this inbox and not yet open. The same read {@link send}
-   *  makes, for a backend that must decide before it hands a message over. */
   /** The event deliveries the running turn has answered so far — every
    *  absorbed signal's reply turn. Read at the commit, before `settle` decides
    *  what re-delivers, because the roster that owes those replies is frozen
@@ -475,6 +472,9 @@ export class Inbox implements AgentInbox {
     return this.absorbed.map((signal) => signal.kind);
   }
 
+  /** Whether a message sent now rides a turn that already exists — running,
+   *  or admitted by this inbox and not yet open. The same read {@link send}
+   *  makes, for a backend that must decide before it hands a message over. */
   get busy(): boolean {
     return this.starting !== null || this.host.turnInFlight();
   }

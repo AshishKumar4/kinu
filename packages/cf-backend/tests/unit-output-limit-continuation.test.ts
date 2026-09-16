@@ -20,7 +20,7 @@ import {
   OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OUTPUT_LIMIT_REACHED,
   type AgentSignal,
 } from '@kinu.run/core';
-import { orchestratorHarness, thinkTurns, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, chatSessionTurns, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 
 /** One settled assistant response, as Think reports it. */
@@ -42,7 +42,7 @@ async function settle(
 
     return 'queued';
   });
-  await thinkTurns(harness.agent).settle({ turnId, messageId, text: 'the answer so far', finishReason: reason });
+  await chatSessionTurns(harness.agent).settle({ turnId, messageId, text: 'the answer so far', finishReason: reason });
   // The sequence's rows, read while the sequence is still open: once every
   // effect has settled and the close is reported, the rows are pruned.
   const effects = harness.agent.harnessTerminalEffects(turnId, messageId);

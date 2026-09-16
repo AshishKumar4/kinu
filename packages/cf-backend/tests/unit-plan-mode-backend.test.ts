@@ -10,7 +10,7 @@ import {
 import {
   hostedSubordinateHarness,
   orchestratorHarness,
-  thinkTurns,
+  chatSessionTurns,
   type ActorHarness,
   type HarnessOrchestratorAgent,
   type HostedActorHarness,
@@ -173,7 +173,7 @@ describe('Plan mode tool lifecycle', () => {
     const agent = harness.agent;
     setMode(agent, 'plan');
     // A Plan turn RUNNING: admitted in that mode and parked at its model call.
-    const turns = thinkTurns(agent);
+    const turns = chatSessionTurns(agent);
     await turns.prepare({ messages: [{ role: 'user', content: 'plan this change' }], body: { kinuMode: 'plan' } });
 
     await expect(agent.branchTurn('implement this in parallel')).resolves.toEqual({
