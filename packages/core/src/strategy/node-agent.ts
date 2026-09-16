@@ -45,6 +45,7 @@
  * else does.
  */
 
+import type { Clock } from '../types/clock';
 import { jsonSchema, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { HEAD_BUILTIN_TOOLS } from '../heads/types';
 import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../heads/head-inference';
@@ -256,6 +257,8 @@ export interface NodeAgentDeps {
   journal: HeadJournal;
   logger: Logger;
   signal?: AbortSignal;
+  /** The clock a node's wall time is measured on; see HeadInferenceDeps.clock. */
+  clock?: Clock;
   reportModelCall?: ModelCallSink;
   publishHeadStream?: PublishHeadStream;
   mission?: MissionScope;
@@ -351,6 +354,7 @@ export interface NodeLoopDeps {
   model: LanguageModel;
   logger: Logger;
   signal?: AbortSignal;
+  clock?: Clock;
   mission?: MissionScope;
   /** Where each finished step lands WHILE the node still runs. */
   reportStep?: (seq: number, step: HeadStep) => Promise<void> | void;
@@ -810,6 +814,8 @@ async function runNodeLoop(
 
   if (deps.signal !== undefined) inference.signal = deps.signal;
 
+  if (deps.clock !== undefined) inference.clock = deps.clock;
+
   try {
     const report = await runHeadInference(spec.headInput, inference);
 
@@ -1039,6 +1045,8 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
   };
 
   if (deps.signal !== undefined) loop.signal = deps.signal;
+
+  if (deps.clock !== undefined) loop.clock = deps.clock;
   // The run-level channel, bound to THIS node's id — the same binding
   // `reportStep` above makes for its durable rows.
   const publish = deps.publishHeadStream;
