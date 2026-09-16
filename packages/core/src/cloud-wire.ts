@@ -6,8 +6,6 @@
 // builder must all agree on this slug, so it lives once here.
 export const ORCHESTRATOR_AGENT_SLUG = 'orchestrator-agent';
 
-export const SUBORDINATE_AGENT_SLUG = 'subordinate-agent';
-
 // The user-device daemon dials this path for its reverse-WebSocket tunnel.
 // The worker route, the auth bypass list, and the UserDO's in-fetch matcher
 // must all agree on it — it lives once here.

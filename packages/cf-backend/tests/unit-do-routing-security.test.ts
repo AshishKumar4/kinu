@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
+  hostedActorRoute,
+  hostedActorSocketPath,
   isForeignAgentNamespacePath,
 } from '@kinu.run/core';
 import { deriveUserId } from '../src/auth/store';
@@ -87,6 +89,35 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
    * endpoint set is enumerated, and the negative half below is the thing that
    * stops either direction regressing.
    */
+  test('every client builds a hosted actor\'s address through the one helper the edge admits', () => {
+    // The defect the owner met on build cba44dcb9: the browser built its
+    // socket path from the Agents SDK's `sub` option, which renders
+    // `/sub/<class>/<name>` — a facet hop this transport refuses, so the
+    // socket 404'd and every RPC on it timed out at 30 s ("Disconnected ·
+    // Untitled agent" over a skeleton). One helper now answers the address,
+    // and it is the admitted one.
+    const path = `/agents/orchestrator-agent/my-workspace/${hostedActorSocketPath('researcher')}`;
+    expect(path).toBe('/agents/orchestrator-agent/my-workspace/actor/researcher');
+    expect(isForeignAgentNamespacePath(path)).toBe(false);
+    expect(hostedActorRoute(path)).toEqual({ name: 'researcher', suffix: '' });
+    // A name with a slash or a space cannot escape its own segment.
+    const odd = `/agents/orchestrator-agent/my-workspace/${hostedActorSocketPath('a/b c')}`;
+    expect(isForeignAgentNamespacePath(odd)).toBe(false);
+    expect(hostedActorRoute(odd)).toEqual({ name: 'a/b c', suffix: '' });
+
+    // And no client builds one by hand: both the browser hook and the CLI's
+    // socket take the helper, and neither constructs a facet hop — which is
+    // what made two addresses for one actor possible. (A `/sub/` inside a
+    // comment is prose; a constructed one appears in a template or a
+    // concatenation, which is what these two shapes read.)
+    for (const file of ['src/hooks/use-kinu.ts', '../cli/src/cloud-agent-client.ts']) {
+      const source = readFileSync(join(import.meta.dir, '..', file), 'utf-8');
+      expect(source).toContain('hostedActorSocketPath');
+      expect(source).not.toMatch(/[`'"]\/sub\//);
+      expect(source).not.toMatch(/\.sub\s*=/);
+    }
+  });
+
   test("the transport's own chat-history endpoint is admitted at the workspace root", () => {
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/get-messages')).toBe(false);
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/get-messages')).toBe('my-workspace');
