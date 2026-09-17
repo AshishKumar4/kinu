@@ -187,6 +187,15 @@ const slateDurabilityProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
+const publicSurfaceProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/public-surface-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/public-surface-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
 let forbiddenEgressHits = 0;
 
 export default defineConfig({
@@ -373,7 +382,52 @@ export default defineConfig({
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
+        }, {
+          // The production Worker entry, reached from the runner over the
+          // `PUBLIC_SURFACE` service binding below: `public-surface.test.ts`
+          // drives `route()` itself — the REST create, the chat socket, the
+          // transcript read — so the door the product is used through runs under
+          // workerd rather than only against a deployment.
+          //
+          // Same model seam as two-turn-probe, and the flag for the same reason:
+          // the direct Workers AI adapter hands `request.signal` to
+          // `binding.run`, which workerd marshals only under
+          // `enable_abortsignal_rpc`.
+          name: 'public-surface-probe',
+          compatibilityDate: workerCompatibility.compatibilityDate,
+          compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
+          workerLoaders: { LOADER: {} },
+          modules: publicSurfaceProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          // `DEV_USER_EMAIL` is what makes `env.AI` the development inference
+          // plane AND what the loopback identity is synthesized from; the
+          // encryption key is the owner capability `ownerCaller` derives.
+          bindings: { DEV_USER_EMAIL: 'probe@local', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'FakeAI' } },
+          // The turn's model plane, and the same handler the two-turn probe
+          // uses: compat requests fall back to the global fetch, which this
+          // worker's outboundService routes to the Node-side fake. Unmatched
+          // hosts throw there, so nothing in a public-surface turn reaches a
+          // network unnamed.
+          outboundService: probeOutbound,
+          durableObjects: {
+            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+            UserDO: { className: 'UserDO', useSQLite: true },
+          },
         }],
+        // The runner's door to the production route table. A miniflare service
+        // binding carries a WebSocket upgrade — measured 2026-09-16: 101 with a
+        // live `response.webSocket` and a round-trip frame — which is what lets
+        // the test speak the product's chat protocol in-pool rather than
+        // re-entering through a Durable Object stub.
+        serviceBindings: {
+          PUBLIC_SURFACE: { name: 'public-surface-probe' },
+          // The model fake's captured log is one Node-side module shared by
+          // every worker bound to it; this is how the test hands it back empty.
+          SURFACE_CONTROL: { name: 'public-surface-probe', entrypoint: 'SurfaceControl' },
+        },
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
           NEIGHBOUR: { className: 'NeighbourDO', useSQLite: true },

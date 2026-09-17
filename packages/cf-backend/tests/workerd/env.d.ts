@@ -46,6 +46,13 @@ interface PlanAnnounceRpc extends Rpc.DurableObjectBranded {
   }>;
 }
 
+/** `public-surface-probe`'s control entrypoint. Declared here rather than
+ *  imported: that file is compiled by the cf-backend project against the
+ *  production `Env`, and a type import would drag the whole worker in here. */
+interface SurfaceControlRpc extends Rpc.WorkerEntrypointBranded {
+  resetModelLog(): Promise<void>;
+}
+
 interface UserSocketProbeRpc extends Rpc.DurableObjectBranded {
   deliverBareFrame(): Promise<'handled' | { readonly threw: string }>;
 }
@@ -174,6 +181,12 @@ declare global {
   DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
+      /** The production Worker entry, hosted by `public-surface-probe`: the
+       *  public route table as a peer of this runner, WebSocket upgrades
+       *  included. */
+      PUBLIC_SURFACE: Fetcher;
+      /** That worker's one test-only entrypoint, for the shared model log. */
+      SURFACE_CONTROL: Service<SurfaceControlRpc>;
     }
 
     /** The test worker re-exports the production egress entrypoint, so
