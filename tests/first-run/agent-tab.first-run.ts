@@ -67,6 +67,24 @@ const liveTest = test.skipIf(PLAN === null);
 
 const observations: EvalObservation[] = [];
 
+/**
+ * Say what each subgoal measured, from inside the case.
+ *
+ * `runFirstRunCase` prints the same lines AFTER it collects the episode's
+ * evidence, and that collection can refuse first: this row's reads are RPCs,
+ * so a deployment that never opens the tab socket produces no model call and
+ * the model-call contract fails with one line that names no subgoal. Measured
+ * on the first live drive, which reported only "expected model calls
+ * expected, observed 0" over four decided subgoals.
+ */
+function announce(subgoals: readonly EvalSubgoal[]): readonly EvalSubgoal[] {
+  for (const subgoal of subgoals) {
+    console.warn(`    [agent-tab] ${subgoal.what}: ${subgoal.reached ? 'ok' : 'MISSED'} — ${subgoal.detail}`);
+  }
+
+  return subgoals;
+}
+
 afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 /** One RPC in flight on a public socket. */
@@ -255,7 +273,7 @@ describe(SUITE, () => {
               detail: `the workspace room ${rootSocket.path} refused the upgrade, so the "+" call had no socket`,
             });
 
-            return subgoals;
+            return announce(subgoals);
           }
 
           // ── The "+" path: one call, identity only, no form. ─────────────
@@ -272,7 +290,7 @@ describe(SUITE, () => {
                 : `createSubordinateAgent answered foreign bytes: ${excerpt(createdAnswer.value)}`,
           });
 
-          if (created === null || !created.success) return subgoals;
+          if (created === null || !created.success) return announce(subgoals);
           const name = created.output.name;
 
           // ── The tab's own socket, on the actor's own path. ──────────────
@@ -294,7 +312,7 @@ describe(SUITE, () => {
                 + 'after which every RPC on it can only time out',
           });
 
-          if (!upgraded) return subgoals;
+          if (!upgraded) return announce(subgoals);
 
           // ── The two reads the tab makes on mount. ──────────────────────
           const snapshotAnswer = await ask(tabSocket, 'getActorSnapshot', [name]);
@@ -344,7 +362,7 @@ describe(SUITE, () => {
               : `no answer on the tab socket: ${replyFailure.slice(0, 300)}`,
           });
 
-          return subgoals;
+          return announce(subgoals);
         } finally {
           tabSocket?.close('the row is done');
           rootSocket.close('the row is done');

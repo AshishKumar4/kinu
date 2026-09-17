@@ -343,11 +343,12 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'every-tool deliberately EXCLUDES hire and asserts the agents tool was never '
       + 'called; the unit proofs drive that tool against fixtures the test author wrote. Nothing '
       + 'asked the deployed agent to hire and then read back the settle, the relay, and the retire.',
-    provedRedAt: null,
-    redDirection: 'Written before its first live run, so no sha is claimed: the row fails until '
-      + 'the task hire settles with its answer in the call result, the root relays the one word, '
-      + 'the durable hire appears on the roster and leaves it after dismiss, and the conversation '
-      + 'holds at most two system rows. The card ceiling is the half the owner reported unbounded.',
+    provedRedAt: 'cba44dcb9',
+    redDirection: 'RED by reading on build cba44dcb9, measured 2026-09-17: the workspace\'s '
+      + 'opening turn never closed inside the 20-minute case budget, no `hire` call ever '
+      + 'settled, no model call was accounted, and the ledger reads hung on the unresponsive '
+      + 'object until the row\'s own test bound ended it. The card ceiling never reached '
+      + 'counting — the product was dead before a second turn could be sent.',
   },
   'agent-tab': {
     id: 'agent-tab',
@@ -357,12 +358,14 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'the workerd proof drives hosted actors through the object and the routing '
       + 'pin proves the grammar over literals the test writes; nothing opens the actor\'s own '
       + 'socket path the way the browser does, so a client-built dead facet path stayed invisible.',
-    provedRedAt: null,
-    redDirection: 'Written before its first live run, so no sha is claimed: the owner\'s report '
-      + 'and the client\'s address (the Agents SDK `sub` facet hop, a path shape the transport '
-      + 'refuses as foreign) both point at a socket that never upgrades, after which every RPC on '
-      + 'it can only fail. The row is green only when the actor path upgrades, both mount reads '
-      + 'answer, and one message gets one answer.',
+    provedRedAt: 'cba44dcb9',
+    redDirection: 'RED by reading on build cba44dcb9, measured 2026-09-17, on a different link of '
+      + 'the chain than reported: the transport-admitted actor path `/actor/<name>` upgraded and '
+      + 'BOTH mount reads answered — proving the socket grammar was never the server\'s defect and '
+      + 'B1 lives entirely in the client\'s address — but the hosted actor was already inside a '
+      + 'turn when the tab\'s message landed, the send spliced mid-turn and was never answered, '
+      + 'and the ledger recorded zero model calls. That is B10\'s self-feeding reactor keeping a '
+      + 'hosted actor permanently busy, which is also why the owner\'s tab showed a skeleton.',
   },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 

@@ -63,6 +63,24 @@ const liveTest = test.skipIf(PLAN === null);
 
 const observations: EvalObservation[] = [];
 
+/**
+ * Say what each subgoal measured, from inside the case.
+ *
+ * `runFirstRunCase` prints the same lines AFTER it collects the episode's
+ * evidence, and that collection can itself refuse — a row whose product never
+ * called a model fails on the model-call contract before any verdict is
+ * printed, which is how the first live drive of this row lost its subgoals to
+ * a one-line budget error. Printing here costs one line per subgoal and keeps
+ * the measurement readable whatever the harness decides afterwards.
+ */
+function announce(subgoals: readonly EvalSubgoal[]): readonly EvalSubgoal[] {
+  for (const subgoal of subgoals) {
+    console.warn(`    [delegation] ${subgoal.what}: ${subgoal.reached ? 'ok' : 'MISSED'} — ${subgoal.detail}`);
+  }
+
+  return subgoals;
+}
+
 afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
@@ -123,14 +141,19 @@ describe(SUITE, () => {
   // owes no more of; the harness retains the ledger as found and the verdict
   // reads it. No wall clock of this row's own: no setTimeout, no Date
   // comparison, no per-test timeout beyond this shared shape.
-  liveTest(`MEASURED: ${CASE}`, { timeout: 12 * 60_000 }, async () => {
+  liveTest(`MEASURED: ${CASE}`, { timeout: 24 * 60_000 }, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
     await runFirstRunCase(PLAN, {
       id: CASE,
       modelCalls: 'expected',
       purpose: 'A lead that has one helper answer one word, shows a second on the roster, and retires it.',
-      budgetMs: 10 * 60_000,
+      // Three live turns on the product's own path, each of which may splice
+      // into the workspace's opening turn and wait for it. Sized from the
+      // first live drive, where the opening turn alone had not closed at ten
+      // minutes: a row that only ever fails on its own budget has measured
+      // nothing about delegation.
+      budgetMs: 20 * 60_000,
       async run({ session }) {
         const subgoals: EvalSubgoal[] = [];
 
@@ -219,7 +242,7 @@ describe(SUITE, () => {
             + 'user rows over this session — see the header)',
         });
 
-        return subgoals;
+        return announce(subgoals);
       },
     }, observations);
   });
