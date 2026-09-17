@@ -793,7 +793,7 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
     }
 
     const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
-    expect(packageJson).toContain('"test:core": "bun test --timeout=0 --parallel=4 packages/core/"');
+    expect(packageJson).toContain('"test:core": "bun scripts/ladder.ts --run bun test --timeout=0 --parallel=4 packages/core/"');
     // The root script still fans out to every spine package, so `bun run test`
     // stays the most-typed command and `claims()` keeps resolving it whole.
     expect(packageJson).toContain('"test": "bun run test:core && bun run test:spine"');

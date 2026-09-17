@@ -23,7 +23,7 @@ const interruptedHistory: ModelMessage[] = [
   { role: 'user', content: 'check the repo' },
   { role: 'assistant', content: [
     { type: 'text', text: 'checking the tree' },
-    { type: 'tool-call', toolCallId: ORPHAN_ID, toolName: 'run', input: { command: 'git status' } },
+    { type: 'tool-call', toolCallId: ORPHAN_ID, toolName: 'shell', input: { command: 'git status' } },
   ] },
   { role: 'user', content: 'hello?' },
 ];
@@ -61,7 +61,7 @@ describe('the cf turn over an interrupted history', () => {
     // request is re-keyed for its destination provider before the model sees
     // it, and the pairing rides the new ids.
     const orphan = assembled.flatMap((message) => message.role === 'assistant' && Array.isArray(message.content)
-      ? message.content.flatMap((part) => part.type === 'tool-call' && part.toolName === 'run' ? [part] : []) : []);
+      ? message.content.flatMap((part) => part.type === 'tool-call' && part.toolName === 'shell' ? [part] : []) : []);
 
     expect(orphan).toHaveLength(1);
 

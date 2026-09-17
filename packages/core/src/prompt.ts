@@ -40,8 +40,8 @@ import {
   EXECUTORS_SECTION,
   EXTERNAL_TOOL_LINE,
   GENERIC_EXECUTOR_LINE,
-  LAPTOP_EXECUTOR_LINE,
-  OFFLINE_LAPTOP_LINE,
+  DEVICE_EXECUTOR_LINE,
+  OFFLINE_DEVICE_LINE,
   OPERATING_GUIDANCE,
   ROLE_SECTION,
   OUTPUT_FORMAT_SECTION,
@@ -213,7 +213,7 @@ function renderToolsSection(surface: PromptSurface, render: RenderSection): stri
 const WORKSPACE_MEMORY_MB = PLATFORM_CATALOG['worker.isolate.memory'].limit.value / (1000 * 1000);
 
 /** How the device row names the machine. The user's own name for it when they
- *  gave one; otherwise the neutral phrase, because a row that says "laptop"
+ *  gave one; otherwise the neutral phrase, because a row that says "device"
  *  names an API namespace and not a computer anyone owns. */
 function deviceDisplayName(exec: PromptExecutorInfo): string {
   return exec.label?.trim() || "your user's PC";
@@ -234,34 +234,35 @@ function renderExecutorLine(
         return render(WORKSPACE_EXECUTOR_LINE, { cliLocal, memoryMb: String(WORKSPACE_MEMORY_MB) });
       case 'sandbox':
         return render(SANDBOX_EXECUTOR_LINE, {});
-      case 'laptop':
-        return render(LAPTOP_EXECUTOR_LINE, { cliLocal });
+      case 'device':
+        return render(DEVICE_EXECUTOR_LINE, {});
       default:
         return render(GENERIC_EXECUTOR_LINE, { name: exec.name });
   }
 }
 
-function offlineLaptop(executors: readonly PromptExecutorInfo[]): PromptExecutorInfo | undefined {
+function offlineDevice(executors: readonly PromptExecutorInfo[]): PromptExecutorInfo | undefined {
   return executors.find((exec) =>
-    exec.name === 'laptop' && exec.configured === true && !executorIsSelectable(exec));
+    exec.name === 'device' && exec.configured === true && !executorIsSelectable(exec));
 }
 
 function renderExecutorSection(surface: PromptSurface, render: RenderSection): string {
   const tools = surface.builtinTools;
 
-  if (!hasTool(tools, 'execute_tools') && !hasTool(tools, 'run')) return '';
+  if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
 
   const executors = surface.selectableExecutors;
-  const laptopOffline = offlineLaptop(surface.executors);
+  const deviceOffline = offlineDevice(surface.executors);
 
-  if (executors.length === 0 && !laptopOffline) return '';
+  if (executors.length === 0 && !deviceOffline) return '';
 
   const workspace = executors.find((exec) => exec.name === 'workspace');
+
   const devices = executors.filter((exec) => exec.name !== 'workspace');
 
   const lines = [
-    ...devices.map((exec) => renderExecutorLine(exec, render, surface.backend)),
-    ...(laptopOffline ? [render(OFFLINE_LAPTOP_LINE, { deviceName: deviceDisplayName(laptopOffline) })] : []),
+    ...devices.map((exec) => renderExecutorLine(exec, render, surface.backend)).filter((line) => line !== ''),
+    ...(deviceOffline ? [render(OFFLINE_DEVICE_LINE, { deviceName: deviceDisplayName(deviceOffline) })] : []),
     ...(workspace ? [renderExecutorLine(workspace, render, surface.backend)] : []),
   ];
 
@@ -291,7 +292,7 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
   const tools = surface.builtinTools;
   const parts: string[] = [render(PERSISTENCE_SECTION, {})];
 
-  if (hasTool(tools, 'execute_tools')) {
+  if (hasTool(tools, 'eval')) {
     parts.push(render(CODE_EXECUTION_SECTION, { craftedNamespace: CRAFTED_TOOL_NAMESPACE }));
   }
 
@@ -307,18 +308,18 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
       hasHire: has('hire'),
       // Both backends build the `agents.*` codemode provider from the deps that
       // produced surface.agentsActions, so the namespace exists exactly when
-      // they do and execute_tools is on the surface.
-      rungsInCode: actions.length > 0 && hasTool(tools, 'execute_tools'),
+      // they do and eval is on the surface.
+      rungsInCode: actions.length > 0 && hasTool(tools, 'eval'),
       hasReport: hasTool(tools, 'report'),
     }));
   }
 
-  if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools') || hasTool(tools, 'agents')) {
+  if (hasTool(tools, 'shell') || hasTool(tools, 'eval') || hasTool(tools, 'agents')) {
     parts.push(render(BACKGROUND_WORK_SECTION, {}));
   }
 
   parts.push(render(VERIFICATION_SECTION, {
-    hasShell: hasTool(tools, 'run') || hasTool(tools, 'execute_tools'),
+    hasShell: hasTool(tools, 'shell') || hasTool(tools, 'eval'),
   }));
   parts.push(render(OUTPUT_FORMAT_SECTION, {}));
 

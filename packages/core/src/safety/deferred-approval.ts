@@ -118,7 +118,7 @@ export interface DeferredApproval {
   /** The exact command the agent asked to run. */
   readonly command: string;
   /** The machine it was bound for. Half the question: the same string on the
-   *  owner's laptop and in the agent's own workspace are different asks, and a
+   *  owner's device and in the agent's own workspace are different asks, and a
    *  grant given for one must not answer for the other. */
   readonly executor: string;
   /** Why the gate stopped it — `formatApproval` of the review that fired. */
@@ -132,7 +132,7 @@ export interface DeferredApproval {
 /**
  * What the gate learns when it consults the queue about a command.
  *
- * `run` is the ONLY verdict that lets execution proceed, and reaching it has
+ * `shell` is the ONLY verdict that lets execution proceed, and reaching it has
  * already spent the grant — so a second attempt at the same command parks
  * again rather than riding one approval twice. It names the spend it made,
  * because the gate has to close that spend once it knows whether the command
@@ -209,7 +209,7 @@ export class DeferredApprovalStore {
    *  rather than re-asked. A grant that is out with a running command is
    *  'spent' and is deliberately NOT here: while it is out it answers for
    *  nobody. The executor is part of the key because an approval for the
-   *  agent's own workspace is not an approval for the owner's laptop.
+   *  agent's own workspace is not an approval for the owner's device.
    *
    *  A DECISION outranks a pending ask, and only then does the newest win. One
    *  key can hold both once a refund puts a grant back while a second re-issue

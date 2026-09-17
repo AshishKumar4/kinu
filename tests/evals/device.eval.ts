@@ -21,7 +21,7 @@
  *                  starts it, and confirms it connected.
  *   listed         the new device is in the list with `connected: true`.
  *   command        a fresh workspace runs `echo` ON THE MACHINE through
- *                  `executeInExecutor('laptop', …)`, the RPC the Env tab's
+ *                  `executeInExecutor('device', …)`, the RPC the Env tab's
  *                  terminal is bound to, after the owner grants consent through
  *                  the route Account settings uses.
  *   revoked        `DELETE /api/user/devices/:id` lands, the deployment stops
@@ -305,7 +305,7 @@ describe('Device evals — one machine, linked and driven through the deployed A
       // RPC the Env tab's terminal is bound to.
       const session = await PLAN.open({
         subject: TASK_ID,
-        purpose: 'Run one command on a linked device through the laptop executor.',
+        purpose: 'Run one command on a linked device through the device executor.',
       });
 
       state.session = session;
@@ -315,12 +315,12 @@ describe('Device evals — one machine, linked and driven through the deployed A
       }
 
       state.execCalls += 1;
-      const answer = readDeviceCommand(await session.execute('laptop', `echo ${ROUNDTRIP_MARKER}`));
+      const answer = readDeviceCommand(await session.execute('device', `echo ${ROUNDTRIP_MARKER}`));
 
       if (!note('command', answer.kind === 'output' && answer.stdout.includes(ROUNDTRIP_MARKER),
         answer.kind === 'output'
-          ? `laptop echo → ${JSON.stringify(answer.stdout.slice(0, 200))}`
-          : `laptop echo refused (${answer.reason}): ${answer.text.slice(0, 300)}`)) return;
+          ? `device echo → ${JSON.stringify(answer.stdout.slice(0, 200))}`
+          : `device echo refused (${answer.reason}): ${answer.text.slice(0, 300)}`)) return;
 
       // ── revoked ────────────────────────────────────────────────────────
       const revocation = state.deviceId === null
@@ -350,12 +350,12 @@ describe('Device evals — one machine, linked and driven through the deployed A
       state.execCalls += 1;
 
       const after = readDeviceCommand(
-        await session.execute('laptop', `echo ${ROUNDTRIP_MARKER}`),
+        await session.execute('device', `echo ${ROUNDTRIP_MARKER}`),
       );
 
       note('refused', after.kind === 'refused' && !after.text.includes(ROUNDTRIP_MARKER),
         after.kind === 'refused'
-          ? `laptop echo refused (${after.reason}): ${after.text.slice(0, 300)}`
+          ? `device echo refused (${after.reason}): ${after.text.slice(0, 300)}`
           : `THE COMMAND STILL RAN on a revoked machine: ${after.stdout.slice(0, 300)}`);
     };
 
@@ -431,7 +431,7 @@ describe('Device evals — one machine, linked and driven through the deployed A
 
     observations.push({
       taskId: TASK_ID, repetition: 0, outcome: 'scored', scores,
-      turns: 0, toolCalls: state.execCalls, toolNames: ['laptop.exec'],
+      turns: 0, toolCalls: state.execCalls, toolNames: ['device.exec'],
       tokensIn: 0, tokensOut: 0, ms: Date.now() - startedAt,
     });
 

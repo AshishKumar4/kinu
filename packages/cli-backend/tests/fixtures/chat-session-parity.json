@@ -93,7 +93,7 @@
                   "key": "probe"
                 },
                 "result": {
-                  "error": "Model tried to call unavailable tool 'fact'. Available tools: execute_tools, run, file, memory, tasks, web, agents."
+                  "error": "Model tried to call unavailable tool 'fact'. Available tools: eval, shell, file, memory, tasks, web, agents."
                 },
                 "outcome": {
                   "success": false,
@@ -158,7 +158,7 @@
                   "key": "probe"
                 },
                 "result": {
-                  "error": "Model tried to call unavailable tool 'fact'. Available tools: execute_tools, run, file, memory, tasks, web, agents."
+                  "error": "Model tried to call unavailable tool 'fact'. Available tools: eval, shell, file, memory, tasks, web, agents."
                 },
                 "outcome": {
                   "success": false,
@@ -193,7 +193,7 @@
                     "key": "probe"
                   },
                   "result": {
-                    "error": "Model tried to call unavailable tool 'fact'. Available tools: execute_tools, run, file, memory, tasks, web, agents."
+                    "error": "Model tried to call unavailable tool 'fact'. Available tools: eval, shell, file, memory, tasks, web, agents."
                   },
                   "outcome": {
                     "success": false,
@@ -215,8 +215,8 @@
               }
             },
             "reachable": [
-              "execute_tools",
-              "run",
+              "eval",
+              "shell",
               "file",
               "memory",
               "tasks",
@@ -594,8 +594,8 @@
               }
             },
             "reachable": [
-              "execute_tools",
-              "run",
+              "eval",
+              "shell",
               "file",
               "memory",
               "tasks",
@@ -1132,7 +1132,7 @@
           {
             "type": "tool-result",
             "toolCallId": "kinu-i-1",
-            "output": "Model tried to call unavailable tool 'fact'. Available tools: execute_tools, run, file, memory, tasks, web, agents."
+            "output": "Model tried to call unavailable tool 'fact'. Available tools: eval, shell, file, memory, tasks, web, agents."
           }
         ]
       },
@@ -1201,7 +1201,7 @@
           {
             "type": "tool-result",
             "toolCallId": "kinu-i-1",
-            "output": "Model tried to call unavailable tool 'fact'. Available tools: execute_tools, run, file, memory, tasks, web, agents."
+            "output": "Model tried to call unavailable tool 'fact'. Available tools: eval, shell, file, memory, tasks, web, agents."
           }
         ]
       },
@@ -1283,7 +1283,7 @@
           {
             "type": "tool-result",
             "toolCallId": "kinu-i-1",
-            "output": "Model tried to call unavailable tool 'fact'. Available tools: execute_tools, run, file, memory, tasks, web, agents."
+            "output": "Model tried to call unavailable tool 'fact'. Available tools: eval, shell, file, memory, tasks, web, agents."
           }
         ]
       },
@@ -1352,7 +1352,7 @@
           {
             "type": "tool-result",
             "toolCallId": "kinu-i-1",
-            "output": "Model tried to call unavailable tool 'fact'. Available tools: execute_tools, run, file, memory, tasks, web, agents."
+            "output": "Model tried to call unavailable tool 'fact'. Available tools: eval, shell, file, memory, tasks, web, agents."
           }
         ]
       },

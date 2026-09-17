@@ -58,13 +58,13 @@ function exchange(i: number, outputChars: number): ModelMessage[] {
       role: 'assistant',
       content: [
         { type: 'text', text: `Running step ${i} now.` },
-        { type: 'tool-call', toolCallId: id, toolName: 'run', input: { command: `step-${i}.sh` } },
+        { type: 'tool-call', toolCallId: id, toolName: 'shell', input: { command: `step-${i}.sh` } },
       ],
     },
     {
       role: 'tool',
       content: [{
-        type: 'tool-result', toolCallId: id, toolName: 'run',
+        type: 'tool-result', toolCallId: id, toolName: 'shell',
         output: { type: 'text', value: `output-${i} ${'x'.repeat(outputChars)}` },
       }],
     },

@@ -78,11 +78,11 @@
  * The blind spot, worth knowing before trusting a green run: reachability is a
  * whole-repo union, so a symbol still referenced by ONE backend reads as live
  * even when the other backend dropped the wire. That is the "X never worked on
- * Y backend" class, and it has a confirmed live instance: `execute_tools` passed
+ * Y backend" class, and it has a confirmed live instance: `eval` passed
  * no description at all to `@cloudflare/codemode` on cf-backend, so the model
  * received the vendor's generic "Execute code to achieve a goal." instead of
- * `BUILTIN_TOOL_SPECS.execute_tools` — while the CLI kept
- * `BUILTIN_TOOL_DESCRIPTIONS.execute_tools` referenced, which is exactly what
+ * `BUILTIN_TOOL_SPECS.eval` — while the CLI kept
+ * `BUILTIN_TOOL_DESCRIPTIONS.eval` referenced, which is exactly what
  * kept this gate quiet. Closing it needs per-backend reachability (one
  * production entry set per backend, then a diff), not a wider scope here.
  */

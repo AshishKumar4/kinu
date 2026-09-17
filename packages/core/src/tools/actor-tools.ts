@@ -22,7 +22,7 @@
  */
 
 import type { ToolSet } from 'ai';
-import { buildToolSurface, type BuiltinToolDeps, type ExecuteToolsBuilder } from './builtins';
+import { buildToolSurface, type BuiltinToolDeps, type CodemodeBuilder } from './builtins';
 import { createAgentsTool, type AgentsToolDeps } from '../delegation/agents-tool';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 
@@ -39,11 +39,11 @@ export interface ActorToolsetDeps extends BuiltinToolDeps {
    *  `claimed` tool with no replay protection at all, which is the state this
    *  seam exists to end. */
   effectClaims: EffectClaimDeps;
-  /** Builds `execute_tools` over this actor's FINISHED surface (every builtin
+  /** Builds `eval` over this actor's FINISHED surface (every builtin
    *  plus `agents`), because the sandbox declares each of them as
    *  `tools.<name>`. Runs before the effect-claim wrap, so the built entry
    *  keeps its clamp and its claim. */
-  executeTools?: ExecuteToolsBuilder;
+  codemode?: CodemodeBuilder;
 }
 
 /**

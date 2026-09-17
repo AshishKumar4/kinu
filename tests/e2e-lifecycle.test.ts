@@ -185,7 +185,7 @@ describe('E2E Lifecycle', () => {
     // is the mislabelling the skip above refuses.
     if (!IN_PROCESS) return;
     // PROVISIONED THROUGH THE SEAM. Birth, the whole-schema init, `openWorkspaceCLI`
-    // with `hostRoot: null`, the executor-surface and sandbox guards and
+    // with no directory bound, the executor-surface and sandbox guards and
     // `installPreTurnProfile` were spelled out here and identically in three sibling
     // suites. Each step has a measured failure behind it — a hand-picked schema
     // subset that omitted `initShadowTables` and killed a sibling mid-run, a birth

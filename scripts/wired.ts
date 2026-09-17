@@ -557,7 +557,7 @@ function buildsATool(value: SyntaxNode | undefined): boolean {
   return callee === 'tool' || (callee !== undefined && TOOL_FACTORY.test(callee));
 }
 
-/** A factory whose product is a tool. `createExecuteToolsTool`,
+/** A factory whose product is a tool. `createCodemodeTool`,
  *  `withClampedToolResult` and the like — named by convention here, and the
  *  convention is what the assembly in `tools/builtins.ts` uses throughout. */
 const TOOL_FACTORY = /Tool(s)?(\b|$)|^with[A-Z]/;
@@ -845,7 +845,7 @@ export function findEntrypoints(
         }
       }
 
-      // `tools.run = tool({…})` and `{ run: tool({…}) }` — a handler bound under
+      // `tools.shell = tool({…})` and `{ run: tool({…}) }` — a handler bound under
       // a name the model sends. The VALUE has to be a built tool: `run` and
       // `file` are ordinary property names, and keying on the name alone found
       // 164 entrypoints where 8 tools exist, rooting files at random.

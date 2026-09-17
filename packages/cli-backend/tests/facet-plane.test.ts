@@ -18,7 +18,7 @@ function rootRuntime(state: string, cwd?: string): LocalRoot {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
 
-  return { rt: createCLIRuntime(db, { dbPath, llm: null, hostRoot: null, cwd, agentName: 'parent' }), db, dbPath };
+  return { rt: createCLIRuntime(db, { dbPath, llm: null, cwd, agentName: 'parent' }), db, dbPath };
 }
 
 /**
@@ -29,7 +29,7 @@ function rootRuntime(state: string, cwd?: string): LocalRoot {
 async function childRuntime(parent: CLIRuntime, root: LocalRoot, name: string): Promise<CLIRuntime> {
   const binding = registerLocalActor(parent.actor, { name, creationId: crypto.randomUUID(), kind: 'subordinate', lifetime: 'durable' });
   const facet = subordinateAgentName(binding.storageKey);
-  const child = createCLIRuntime(root.db, { dbPath: root.dbPath, llm: null, hostRoot: null, cwd: parent.cwd, facet, actorBinding: binding });
+  const child = createCLIRuntime(root.db, { dbPath: root.dbPath, llm: null, cwd: parent.cwd, facet, actorBinding: binding });
 
   return shareLocalWorkspacePlane(child, parent, facet);
 }

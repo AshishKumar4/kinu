@@ -1,5 +1,5 @@
 /**
- * The Node-style conveniences a program run by `execute_tools` gets, as the
+ * The Node-style conveniences a program run by `eval` gets, as the
  * source of a module the dynamic Worker loads beside the model's program.
  *
  * Plain JavaScript in a string, because it runs INSIDE the sandbox isolate and

@@ -718,7 +718,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
     const runs = await safe('runs', source.runs(runLimit), []);
 
     for (const run of runs) {
-      writer.write({ t: 'run', ...run });
+      writer.write({ t: 'shell', ...run });
       const events: DebugRunEvent[] = [];
       let since = 0;
 

@@ -19,7 +19,7 @@
  * Nothing here guesses. Every reason is one the producing code computed and
  * wrote: `file` puts its `FileToolFailureReason` on the result (tools/
  * file-tool.ts), the `agents` fork puts `bad_input` on a call whose arguments do
- * not describe a fork (delegation/agents-tool.ts), the `run` tool puts an `ErrorCode`
+ * not describe a fork (delegation/agents-tool.ts), the `shell` tool puts an `ErrorCode`
  * on every refusal it returns (tools/builtins.ts), and an exec-shaped result
  * carries its exit code in the `Error (exit N)` prefix this codebase's own
  * renderer produced (execution/exec-result.ts:72). A row that fits none of those
@@ -28,7 +28,7 @@
  * more than an absent one.
  *
  * The reason vocabulary is SHARED with `obs/error.ts` rather than restated here.
- * A local picklist would cost immediately: the `run` tool's unprovisioned-runtime
+ * A local picklist would cost immediately: the `shell` tool's unprovisioned-runtime
  * refusal carries no reason such a list recognises, so a runtime that was never
  * there — a platform gap the agent did nothing to cause — would be reported as
  * `returned_error` with `refused: false`, in the `broke` bucket, indicting the
@@ -88,7 +88,7 @@ const EXEC_REASON_BY_EXIT = new Map([
  * (`preinstall`/`install`/`ensure`) and Kinu never asks for one, so `bun`,
  * `npm`, `git`, `python3`, `sh`, `bash`, `make`, `tsc` and `jq` all exit 127 in
  * every workspace the agent has ever had. Measured through the agent's own
- * `run` tool over 19 commands: only `node` (v20.0.0, /usr/local/bin/node) and
+ * `shell` tool over 19 commands: only `node` (v20.0.0, /usr/local/bin/node) and
  * coreutils answered.
  *
  * Counting these as broken tools blames the model for a platform omission, and
@@ -153,11 +153,11 @@ function attribute(reason: string): Pick<ToolFailure, 'reason' | 'refused' | 'wo
 export interface ToolFailure {
   readonly tool: string;
   /** The dispatcher action, from the call's own args. Null for a tool that has
-   *  no actions (`run`) or a call whose args did not survive as an object. */
+   *  no actions (`shell`) or a call whose args did not survive as an object. */
   readonly action: string | null;
   /**
    * Why. An `ErrorCode` when the tool classified its own failure (`file`'s
-   * reasons, the `run` tool's refusals — obs/error.ts); `exit_<N>` is a command
+   * reasons, the `shell` tool's refusals — obs/error.ts); `exit_<N>` is a command
    * that ran and exited N; `command_not_found` / `not_executable` / `timeout` are
    * the shell's own codes; `threw` is a tool that raised out of its own execute;
    * `returned_error` is a tool that answered with an error body carrying no
@@ -241,7 +241,7 @@ export function toolFailurePartOfKey(key: string): ToolFailurePart {
 
 /**
  * `tool·action·reason` — the grouping key a distribution is counted over.
- * Action is omitted when the tool has none, so `run` does not read `run·null`.
+ * Action is omitted when the tool has none, so `shell` does not read `shell·null`.
  */
 export function toolFailureKey(f: ToolFailure): string {
   return f.action === null ? `${f.tool}·${f.reason}` : `${f.tool}·${f.action}·${f.reason}`;

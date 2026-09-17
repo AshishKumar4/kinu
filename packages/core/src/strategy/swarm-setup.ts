@@ -8,6 +8,7 @@
  * before any node expands, where a refusal is free and a mistake would spend a whole
  * search. The loop and the settle barrier live elsewhere; nothing here reads loop state.
  */
+import type { Clock } from '../types/clock';
 import {
   KinuError, refusalOf, type Refusal,
 } from '../obs/error';
@@ -1141,13 +1142,14 @@ export function buildNodeDeps(input: {
   readonly journal: HeadJournal;
   readonly logger: Logger;
   readonly signal?: AbortSignal;
+  readonly clock?: Clock;
   readonly reportModelCall?: ModelCallSink;
   readonly publishHeadStream?: PublishHeadStream;
   readonly maxWallClockMs?: number;
   readonly mission?: MissionScope;
   readonly provisionHome?: NodeWorkspaceProvisioner;
   readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
-  readonly executeTool?: unknown;
+  readonly codemodeTool?: unknown;
   readonly webSearch?: WebSearchProvider;
 }): NodeAgentDeps {
   const deps = input;
@@ -1161,6 +1163,8 @@ export function buildNodeDeps(input: {
 
   if (deps.signal !== undefined) nodeDeps.signal = deps.signal;
 
+  if (deps.clock !== undefined) nodeDeps.clock = deps.clock;
+
   if (deps.reportModelCall !== undefined) nodeDeps.reportModelCall = deps.reportModelCall;
 
   if (deps.publishHeadStream !== undefined) nodeDeps.publishHeadStream = deps.publishHeadStream;
@@ -1173,7 +1177,7 @@ export function buildNodeDeps(input: {
 
   if (deps.runtimeForWorkspace !== undefined) nodeDeps.runtimeForWorkspace = deps.runtimeForWorkspace;
 
-  if (deps.executeTool !== undefined) nodeDeps.executeTool = deps.executeTool;
+  if (deps.codemodeTool !== undefined) nodeDeps.codemodeTool = deps.codemodeTool;
 
   if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
 

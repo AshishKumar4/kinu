@@ -10,7 +10,7 @@
 //     malformed field is a value the script can read rather than a throw —
 //     nothing here has the AI SDK's schema validation behind it;
 //   - the declaration the model reads, including the non-resumable warning
-//     that is the honest cost of searching from inside execute_tools.
+//     that is the honest cost of searching from inside eval.
 //
 // Real sandbox execution (node `new Function`, cf `createCodeTool`) is covered
 // in the two backend suites; here the surface itself is the subject.
@@ -573,7 +573,7 @@ describe('agents.* codemode namespace — declared types', () => {
   test('the search docstring states the non-resumable cost of searching in-sandbox', () => {
     const types = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
     expect(types).toContain('NOT resumable from here');
-    expect(types).toContain('execute_tools declines background resume');
+    expect(types).toContain('eval declines background resume');
     expect(types).toContain('top-level `agents` tool');
   });
 

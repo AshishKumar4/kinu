@@ -41,7 +41,7 @@ function baseInput(overrides: Partial<Parameters<typeof resolveTurnProfile>[0]> 
     provider: PROVIDER,
     roleId: 'task',
     workMode: 'build' as const,
-    availableTools: ['file', 'run', 'agents', 'mcp_github_search'],
+    availableTools: ['file', 'shell', 'agents', 'mcp_github_search'],
     activeSkills: [],
     ...overrides,
   };
@@ -194,7 +194,7 @@ describe('durable role change', () => {
         },
         generalist: {
           description: 'wide', instructions: 'go wide.', tier: 'default',
-          preset: 'ideate', allowedTools: ['file', 'run', 'web'],
+          preset: 'ideate', allowedTools: ['file', 'shell', 'web'],
         },
       },
       tiers: { ...BUILTIN_PROFILE_CATALOG.tiers },

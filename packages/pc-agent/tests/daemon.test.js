@@ -706,7 +706,7 @@ describe('daemon checkpoint protocol', () => {
 /**
  * The device half of the toolchain probe. The hub sends the binary names from
  * core's single table and this answers which of THOSE the machine has; the
- * answer becomes the `laptop` capability row the model routes work by.
+ * answer becomes the `device` capability row the model routes work by.
  */
 describe('daemon toolchain probe', () => {
   function withPath(dir, fn) {

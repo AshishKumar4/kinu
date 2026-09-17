@@ -15,10 +15,10 @@ describe('TurnAccumulator', () => {
   test('reset clears all accounting + stamps startedAt', () => {
     const a = new TurnAccumulator();
     a.recordStep({ usage: { input: 5, output: 3 } });
-    a.recordToolCall({ toolCallId: 'fixture-1', toolName: 'run', success: true, output: 'ok' });
+    a.recordToolCall({ toolCallId: 'fixture-1', toolName: 'shell', success: true, output: 'ok' });
     // A failed call first, so the hadError assertion below is not vacuous —
     // a reset that forgot the flag would leak the previous turn's failure.
-    a.recordToolCall({ toolCallId: 'fixture-2', toolName: 'run', success: false, reason: null, error: 'boom' });
+    a.recordToolCall({ toolCallId: 'fixture-2', toolName: 'shell', success: false, reason: null, error: 'boom' });
     a.onFirstChunk();
     expect(a.hadError).toBe(true);
     a.reset(1000);
@@ -42,10 +42,10 @@ describe('TurnAccumulator', () => {
   test('recordToolCall — success records the output as the core ToolCallRecord', () => {
     const toolEvents: Array<{ name: string; toolCallId: string; args?: unknown }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
-    a.recordToolCall({ toolCallId: 'fixture-3', toolName: 'execute_tools', input: { code: '1+1' }, success: true, output: { result: 2 }, durationMs: 12 });
-    expect(a.toolCalls).toEqual([{ toolCallId: 'fixture-3', name: 'execute_tools', args: { code: '1+1' }, result: { result: 2 }, outcome: { success: true } }]);
+    a.recordToolCall({ toolCallId: 'fixture-3', toolName: 'eval', input: { code: '1+1' }, success: true, output: { result: 2 }, durationMs: 12 });
+    expect(a.toolCalls).toEqual([{ toolCallId: 'fixture-3', name: 'eval', args: { code: '1+1' }, result: { result: 2 }, outcome: { success: true } }]);
     expect(a.hadError).toBe(false);
-    expect(toolEvents[0]).toMatchObject({ name: 'execute_tools', toolCallId: 'fixture-3' });
+    expect(toolEvents[0]).toMatchObject({ name: 'eval', toolCallId: 'fixture-3' });
   });
 
   test('recordToolCall — the durable event carries WHAT the call was asked to do', () => {
@@ -77,11 +77,11 @@ describe('TurnAccumulator', () => {
   test('recordToolCall — failure records {error}, flips hadError, passes error to the sink', () => {
     const toolEvents: Array<{ error?: string }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
-    a.recordToolCall({ toolCallId: 'fixture-6', toolName: 'run', success: false, reason: null, error: new Error('boom') });
+    a.recordToolCall({ toolCallId: 'fixture-6', toolName: 'shell', success: false, reason: null, error: new Error('boom') });
     // ONE description of the failure in both ledgers. `.message` in the core record
     // against `String(error)` at the sink makes them disagree — the same call reads
     // as `boom` in the evolution signal and `Error: boom` in the run-event log.
-    expect(a.toolCalls[0]).toEqual({ toolCallId: 'fixture-6', name: 'run', args: {}, result: { error: 'boom' }, outcome: { success: false, reason: null } });
+    expect(a.toolCalls[0]).toEqual({ toolCallId: 'fixture-6', name: 'shell', args: {}, result: { error: 'boom' }, outcome: { success: false, reason: null } });
     expect(a.hadError).toBe(true);
     expect(toolEvents[0].error).toBe('boom');
   });
@@ -96,17 +96,17 @@ describe('TurnAccumulator', () => {
     for (const error of [undefined, null, '']) {
       const toolEvents: Array<{ error?: string }> = [];
       const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
-      a.recordToolCall({ toolCallId: 'fixture-7', toolName: 'execute_tools', success: false, reason: null, error });
+      a.recordToolCall({ toolCallId: 'fixture-7', toolName: 'eval', success: false, reason: null, error });
       expect(a.hadError).toBe(true);
       expect(toolEvents[0].error).toBe(FAILURE_WITHOUT_ERROR);
       expect(a.toolCalls[0]).toEqual({
         toolCallId: 'fixture-7',
-        name: 'execute_tools', args: {}, result: { error: FAILURE_WITHOUT_ERROR }, outcome: { success: false, reason: null },
+        name: 'eval', args: {}, result: { error: FAILURE_WITHOUT_ERROR }, outcome: { success: false, reason: null },
       });
       // And the census reads it back as its own reason rather than as `threw`.
       expect(classifyToolFailure({
         type: 'tool_call_end', eventIndex: 0, runId: 'r', timestamp: new Date().toISOString(),
-        name: 'execute_tools', toolCallId: 'tc-1', error: toolEvents[0].error,
+        name: 'eval', toolCallId: 'tc-1', error: toolEvents[0].error,
       })).toMatchObject({ reason: 'failed_without_error' });
     }
   });
@@ -114,7 +114,7 @@ describe('TurnAccumulator', () => {
   test('recordStep sums the turn field by field, leaving unreported fields absent', () => {
     const steps: number[] = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => steps.push(e.stepIndex) });
-    a.recordStep({ usage: { input: 100, output: 40, cacheRead: 10 }, finishReason: 'tool-calls', toolCalls: [{ toolName: 'run' }] });
+    a.recordStep({ usage: { input: 100, output: 40, cacheRead: 10 }, finishReason: 'tool-calls', toolCalls: [{ toolName: 'shell' }] });
     a.recordStep({ usage: { input: 50, output: 20, cacheWrite: 30 }, finishReason: 'stop' });
     expect(a.stepCount).toBe(2);
     // A field only ONE step reported carries that step's number; a field no step

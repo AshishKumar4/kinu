@@ -4,14 +4,13 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
-import { AwaitedList } from '@kinu.run/test-utils';
-import type { SsePacing } from '../src/run-events-routes';
+import { AwaitedList, handClock } from '@kinu.run/test-utils';
 
 mockAgentsSdk();
 
 const { handleRunEventsRequest } = await import('../src/run-events-routes');
 
-function sseEnv(wire: () => string = () => '[]') {
+function sseEnv(wire: (read: number) => string = () => '[]') {
   // Every DO read the stream makes, as an event the test can await.
   const polled = new AwaitedList<number>();
 
@@ -19,7 +18,7 @@ function sseEnv(wire: () => string = () => '[]') {
     async getRunEventsWire() {
       polled.push(polled.items.length + 1);
 
-      return wire();
+      return wire(polled.items.length);
     },
   };
 
@@ -37,55 +36,22 @@ function sseEnv(wire: () => string = () => '[]') {
   return { env, pollCount: () => polled.items.length, polled: (count: number) => polled.until((items) => items.length >= count) };
 }
 
-/**
- * The stream's pacing, driven by hand (D19): each poll interval is a wait the
- * test releases with `tick`, so "a couple of poll iterations" is two releases
- * and "no further DO request" is a release nobody polls after.
- */
-function handPacing(): SsePacing & { tick(): void } {
-  let parked: (() => void) | undefined;
-  // A tick issued before the loop reaches its next wait releases that wait
-  // when it arrives: the test's continuation runs before the loop's after
-  // a DO read, so the order of the two is not the test's to assume.
-  let owed = 0;
-
-  return {
-    now: () => 0,
-    wait: () => {
-      if (owed > 0) {
-        owed -= 1;
-
-        return Promise.resolve();
-      }
-
-      const { promise, resolve } = Promise.withResolvers<void>();
-      parked = resolve;
-
-      return promise;
-    },
-    tick: () => {
-      if (parked === undefined) {
-        owed += 1;
-
-        return;
-      }
-
-      parked();
-      parked = undefined;
-    },
-  };
-}
-
 describe('run-events SSE client disconnect', () => {
   test('aborting the request stops the DO poll loop', async () => {
-    const { env, pollCount, polled } = sseEnv();
+    // The fourth DO read — the one only a loop that missed the abort makes —
+    // answers run_end, so a missed abort ENDS the stream with one extra read
+    // and a run_end in the body instead of hanging: both are red below.
+    const { env, pollCount, polled } = sseEnv((read) => read < 4 ? '[]' : JSON.stringify([{
+      eventIndex: 3, runId: 'run-1', type: 'run_end', timestamp: new Date(0).toISOString(),
+    }]));
+
     const aborter = new AbortController();
-    const pacing = handPacing();
+    const clock = handClock();
 
     const res = await handleRunEventsRequest(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
       { signal: aborter.signal },
-    ), env, pacing);
+    ), env, clock);
 
     expect(res?.status).toBe(200);
     expect(res?.headers.get('content-type')).toContain('text/event-stream');
@@ -95,40 +61,61 @@ describe('run-events SSE client disconnect', () => {
     // The replay, then two poll iterations, each released by hand and each
     // awaited on the DO read it makes.
     await polled(1);
-    pacing.tick();
+    await clock.whenArmed(1);
+    clock.tick();
     await polled(2);
-    pacing.tick();
+    await clock.whenArmed(2);
+    clock.tick();
     await polled(3);
 
     aborter.abort();
-    // The loop is parked on its wait; releasing it after the abort must end
-    // it without another DO read, so a read here could only come from a loop
-    // that missed the abort.
+    // The abort lands before the third read returns (`polled` resolves at the
+    // read, not its answer), so a loop that saw it ends at its next check and
+    // arms no further wait. A loop that MISSED it parks on a third wait; that
+    // wait is released so the miss shows as a fourth read and a run_end in
+    // the body. The stream's own end is what is awaited — never a cancel()
+    // from here, which would end the loop whether or not it saw the abort.
     const after = pollCount();
-    pacing.tick();
-    await res?.body?.cancel();
+
+    if (!res?.body) throw new Error('Expected an SSE response body');
+    const text = new Response(res.body).text();
+
+    const released = clock.whenArmed(3).then(() => {
+      clock.tick();
+
+      return text;
+    });
+
+    const body = await Promise.race([text, released]);
     expect(pollCount()).toBe(after); // loop is dead — no further DO requests
+    expect(body).not.toContain('run_end');
+    expect(clock.armed()).toBe(0);    // and it armed no wait after the abort
   });
 
   test('cancelling the response stream stops the DO poll loop', async () => {
     const { env, pollCount, polled } = sseEnv();
-    const pacing = handPacing();
+    const clock = handClock();
 
     const res = await handleRunEventsRequest(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
-    ), env, pacing);
+    ), env, clock);
 
     if (!res?.body) throw new Error('Expected an SSE response body');
     const reader = res.body.getReader();
     await polled(1);
-    pacing.tick();
+    await clock.whenArmed(1);
+    clock.tick();
     await polled(2);
-    pacing.tick();
+    await clock.whenArmed(2);
+    clock.tick();
     await polled(3);
 
     await reader.cancel();
+    // The cancel lands before the third read returns, so a loop that saw it
+    // ends at its next check with no wait armed; one that missed it is parked
+    // on a third wait — the armed count is the read that tells them apart.
     const after = pollCount();
-    pacing.tick();
+    expect(clock.armed()).toBe(0);
     expect(pollCount()).toBe(after);
   });
 
@@ -146,7 +133,7 @@ describe('run-events SSE client disconnect', () => {
     // the stream.
     const res = await handleRunEventsRequest(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
-    ), env, handPacing());
+    ), env, handClock());
 
     if (!res?.body) throw new Error('Expected an SSE response body');
     const reader = res.body.getReader();

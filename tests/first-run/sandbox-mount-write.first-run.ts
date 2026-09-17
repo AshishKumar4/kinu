@@ -54,7 +54,7 @@ const ASK = `This turn is identified by ${MARK}. Do all of this, in order, witho
   `1. With the file tool, list ${TARGET.slice(0, TARGET.lastIndexOf('/'))} — it should be empty.\n` +
   `2. With the file tool, write ${TARGET} containing exactly these bytes:\n${BYTES}` +
   '3. With the file tool, read that path back.\n' +
-  `4. With execute_tools, run: const ls = await sandbox.listFiles(''); return ls;\n` +
+  `4. With eval, run: const ls = await sandbox.listFiles(''); return ls;\n` +
   'Then answer with one line naming the file you wrote.';
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
@@ -116,9 +116,9 @@ describe(SUITE, () => {
           && v.is(v.string(), read.result) && read.result.includes(BYTES.trim());
 
         // The namespace listing of the working directory through an EMPTY
-        // path — the second half of the defect — inside an execute_tools call.
+        // path — the second half of the defect — inside an eval call.
         const program = calls.find((call) =>
-          call.name === 'execute_tools' && answered(call)
+          call.name === 'eval' && answered(call)
           && JSON.stringify(call.args ?? {}).includes("listFiles('')")
           && JSON.stringify(call.result ?? '').includes('first-run-mount.mjs'));
 
@@ -141,8 +141,8 @@ describe(SUITE, () => {
             what: 'empty-path-listing',
             reached: program !== undefined,
             detail: program === undefined
-              ? 'no execute_tools call ran sandbox.listFiles(\'\') and returned the file\'s name'
-              : `sandbox.listFiles('') inside execute_tools named the written file`,
+              ? 'no eval call ran sandbox.listFiles(\'\') and returned the file\'s name'
+              : `sandbox.listFiles('') inside eval named the written file`,
           },
         ] satisfies EvalSubgoal[];
       },

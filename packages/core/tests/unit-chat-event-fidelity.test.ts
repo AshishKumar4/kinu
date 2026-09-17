@@ -104,7 +104,7 @@ describe('ChatEvent tool success/error fidelity', () => {
 
     const { rt } = createTestRuntime();
     const tools = buildBuiltinTools({ rt: { ...rt, shell: { exec: async () => ({ stdout, stderr: '', exitCode: 0 }) } } });
-    const model = toolThenTextModel({ toolName: 'run', input: JSON.stringify({ command: 'cat incident.json' }) });
+    const model = toolThenTextModel({ toolName: 'shell', input: JSON.stringify({ command: 'cat incident.json' }) });
     const events = await collect(model, tools, new ExtensionHost().register(extension));
     expect(failures).toEqual([false]);
     expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ result: stdout, success: true });
@@ -117,7 +117,7 @@ describe('ChatEvent tool success/error fidelity', () => {
       exec: async () => ({ stdout: 'tests failed', stderr: 'detail', exitCode: 7 }),
     } } });
 
-    const model = toolThenTextModel({ toolName: 'run', input: JSON.stringify({ command: 'test' }) });
+    const model = toolThenTextModel({ toolName: 'shell', input: JSON.stringify({ command: 'test' }) });
     const events = await collect(model, tools);
     expect(events.find((event) => event.type === 'tool-result')).toMatchObject({
       success: false, reason: 'io', execution: { exitCode: 7 }, result: expect.stringContaining('tests failed'),

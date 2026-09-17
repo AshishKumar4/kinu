@@ -71,7 +71,7 @@ export type { DynamicApproval, MissingCapability } from '../types/dynamic-contex
  *  background-job registry (jobs/store.ts), never a second copy of it. */
 export interface DynamicJob {
   readonly id: string;
-  /** The producing tool surface — `think_heads`, `execute_tools`, … */
+  /** The producing tool surface — `think_heads`, `eval`, … */
   readonly kind: string;
   readonly label: string | null;
 }
@@ -339,7 +339,7 @@ const BACKGROUND_RESUME_NOTICE =
  *  device connect/disconnect and sandbox activation), so it renders in the
  *  dynamic-context block — never in the cacheable system prefix. */
 export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
-  if (exec.name === 'laptop') return exec.active || exec.status === 'active' ? 'connected' : 'available';
+  if (exec.name === 'device') return exec.active || exec.status === 'active' ? 'connected' : 'available';
 
   if (exec.active || exec.status === 'active') return 'active';
 
@@ -374,7 +374,7 @@ function executorLimitsSuffix(exec: PromptExecutorInfo): string {
 /**
  * What the environment declares it can run, as a status suffix.
  *
- * The `run` tool's own description tells the model that "available binaries and
+ * The `shell` tool's own description tells the model that "available binaries and
  * process features are listed in this workspace provider's capabilities"
  * (packages/core/src/execution/inline.ts). Until this rendered, that sentence pointed at a list the
  * model was never given: the field was declared on PromptExecutorInfo,
@@ -516,14 +516,13 @@ function renderDeviceLine(device: DeviceFleetEntry, fleet: readonly DeviceFleetE
     return `- ${device.name}${platform}: registered, offline. The user can reconnect it with \`kinu connect\``;
   }
 
-  const live = connectedDevices(fleet);
-  const mount = live.length > 1 ? `/pc/${deviceMountSegment(device, fleet)}` : '/pc';
+  const mount = `/pc/${deviceMountSegment(device, fleet)}`;
   const parts = [`- ${device.name}${platform}: connected, files at ${mount}`];
 
   if (device.granted === true) parts.push('this workspace holds its grant');
   else if (device.granted === false) parts.push('no grant yet for this workspace: the first call asks once');
 
-  if (device.sandbox !== undefined) parts.push(executorSandboxSuffix({ name: 'laptop', sandbox: device.sandbox }).replace(/^, /, ''));
+  if (device.sandbox !== undefined) parts.push(executorSandboxSuffix({ name: 'device', sandbox: device.sandbox }).replace(/^, /, ''));
   // The hub re-asks a machine whose answer aged out, so what arrives here is
   // fresh or null by the hub's clock — no clock is consulted in a render.
   const present = device.toolchain?.present ?? [];
@@ -595,12 +594,12 @@ const EMPTY_ROSTER: ActiveRoster<never> = { items: [], total: 0 };
 
 const DYNAMIC_SECTION_TITLES = {
   mode: '## Work mode',
-  craftedTools: '## Crafted tools available through execute_tools',
+  craftedTools: '## Crafted tools available through eval',
   factsBlock: '## World model (facts you remembered)',
   memoryTail: '## Memory (newest MEMORY.md lessons and reflections)',
   recoveries: '## Proven by execution (environment evidence: calls that kept failing until a changed call ran clean)',
   executors: '## Execution status',
-  devices: '## Your user\'s machines (the `laptop` runtime)',
+  devices: '## Your user\'s machines (the `device` runtime)',
   tasks: '## Your task list: what is still open (you keep this with the `tasks` tool)',
   jobs: '## Background work still running (collect it before you finish)',
   delegates: '## Delegates working for you',
@@ -670,8 +669,8 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, s
     // one live machine needs no name; several do, and the ask says so in the
     // same words the refusal uses.
     const doctrine = live.length > 1
-      ? 'Several machines are connected: name the machine each `laptop` call and `run { runtime: "laptop" }` is for, with `device: "<name>"`. The runtime refuses a call that names none.'
-      : 'One machine is connected: `laptop` calls reach it with no `device` needed.';
+      ? 'Several machines are connected: name the machine each `shell { runtime: "<nickname>" }` call is for. The runtime refuses a call that names none.'
+      : 'One machine is connected: `shell { runtime: "<nickname>" }` reaches it, and `shell { runtime: "device" }` reaches the sole machine.';
 
     add('devices', [
       DYNAMIC_SECTION_TITLES.devices,

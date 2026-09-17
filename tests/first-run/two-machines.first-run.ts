@@ -120,7 +120,7 @@ describe(SUITE, () => {
           // fan-out hatch; the executor's own refusal names both machines, so
           // a model that asks on its own cannot reach both names any other way.
           const unnamed = await session.prompt(
-            'Run hostname on my laptop and reply with exactly what it printed. '
+            'Run hostname on my device and reply with exactly what it printed. '
             + 'Do not run it on more than one machine: if my words do not settle which one, '
             + 'ask me which one.',
           );

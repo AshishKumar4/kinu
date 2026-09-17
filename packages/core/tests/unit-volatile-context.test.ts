@@ -49,7 +49,7 @@ const roster = <T>(items: T[]) => ({ items, total: items.length });
 
 const activeSandbox: PromptExecutorInfo = { name: 'sandbox', available: true, configured: true, active: true, status: 'active' };
 
-const connectedLaptop: PromptExecutorInfo = { name: 'laptop', available: true, configured: true, active: true, status: 'active' };
+const connectedDevice: PromptExecutorInfo = { name: 'device', available: true, configured: true, active: true, status: 'active' };
 
 const workspace: PromptExecutorInfo = { name: 'workspace', available: true, configured: true, active: true, status: 'active' };
 
@@ -160,7 +160,7 @@ function messageText(m: ModelMessage): string {
 describe('byte-stable system prefix', () => {
   test('two consecutive builds with unchanged state are byte-identical', () => {
     const { rt } = createTestRuntime();
-    const opts = { backend: 'cf' as const, executors: [workspace, idleSandbox, connectedLaptop] };
+    const opts = { backend: 'cf' as const, executors: [workspace, idleSandbox, connectedDevice] };
     expect(buildSystemPromptSync(rt, opts)).toBe(buildSystemPromptSync(rt, opts));
   });
 
@@ -228,7 +228,7 @@ describe('byte-stable system prefix', () => {
       backend: 'cf' as const,
       soulOverride: 'You are Kinu.',
       availableTools: [...BUILTIN_TOOLS],
-      executors: [workspace, idleSandbox, connectedLaptop],
+      executors: [workspace, idleSandbox, connectedDevice],
       workMode: 'build' as const,
       model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
       currentDate: '2026-01-01',
@@ -258,7 +258,7 @@ describe('renderDynamicContextBlock', () => {
     const text = renderDynamicContextBlock({
       factsBlock: '- user.tz = Europe/Berlin',
       memoryTail: '### Lesson: verify before claiming',
-      executors: [connectedLaptop, idleSandbox, workspace],
+      executors: [connectedDevice, idleSandbox, workspace],
     });
 
     expect(text).not.toBeNull();
@@ -266,7 +266,7 @@ describe('renderDynamicContextBlock', () => {
     expect(text!).toContain(DYNAMIC_CONTEXT_HEADER);
     expect(text!).toContain('user.tz = Europe/Berlin');
     expect(text!).toContain('verify before claiming');
-    expect(text!).toContain('- laptop: connected');
+    expect(text!).toContain('- device: connected');
     expect(text!).toContain('- sandbox: ready on demand');
   });
 
@@ -296,7 +296,7 @@ describe('renderDynamicContextBlock', () => {
   });
 
   test('unselectable executors are omitted; empty state renders nothing', () => {
-    const offline: PromptExecutorInfo = { name: 'laptop', available: false, configured: true, active: false, status: 'disconnected' };
+    const offline: PromptExecutorInfo = { name: 'device', available: false, configured: true, active: false, status: 'disconnected' };
     expect(renderDynamicContextBlock({ executors: [offline] })).toBeNull();
     expect(renderDynamicContextBlock({})).toBeNull();
     expect(renderDynamicContextBlock({ factsBlock: '  ' })).toBeNull();
@@ -309,12 +309,12 @@ describe('renderDynamicContextBlock', () => {
     const text = renderDynamicContextBlock({
       executors: [
         { ...workspace, resourceLimits: { cpus: 1, memBytes: 2 * 1024 ** 3 } },
-        connectedLaptop,
+        connectedDevice,
       ],
     })!;
 
     expect(text).toContain('- workspace: active (cpus=1 mem=2G)');
-    expect(text).toEndWith('- laptop: connected, files at /pc\n</dynamic_context>');
+    expect(text).toEndWith('- device: connected, files at /pc\n</dynamic_context>');
   });
 
   test('a half-declared cgroup reports only the half it measured', () => {
@@ -332,7 +332,7 @@ describe('renderDynamicContextBlock', () => {
   });
 
   test('what an environment declares it can run reaches the model', () => {
-    // `run`'s own description tells the model that available binaries and
+    // `shell`'s own description tells the model that available binaries and
     // process features "are listed in this workspace provider's capabilities".
     // The field was declared on PromptExecutorInfo, populated by the router,
     // and read by nothing — so that sentence pointed at a list the model never
@@ -391,7 +391,7 @@ describe('renderDynamicContextBlock', () => {
   });
 
   test('executorAvailabilityLabel mirrors the lifecycle states', () => {
-    expect(executorAvailabilityLabel(connectedLaptop)).toBe('connected');
+    expect(executorAvailabilityLabel(connectedDevice)).toBe('connected');
     expect(executorAvailabilityLabel(activeSandbox)).toBe('active');
     expect(executorAvailabilityLabel(idleSandbox)).toBe('ready on demand');
     expect(executorAvailabilityLabel({ name: 'nimbus' })).toBe('available');
@@ -408,12 +408,12 @@ describe('renderDynamicContextBlock', () => {
     expect(executorAvailabilityLabel({ name: 'sandbox', configured: true })).toBe('ready on demand');
   });
 
-  test('laptop reports connection, not activity — on either signal', () => {
-    expect(executorAvailabilityLabel({ name: 'laptop', active: true })).toBe('connected');
-    expect(executorAvailabilityLabel({ name: 'laptop', status: 'active' })).toBe('connected');
-    // A configured-but-disconnected laptop is NOT 'ready on demand': the user's
+  test('device reports connection, not activity — on either signal', () => {
+    expect(executorAvailabilityLabel({ name: 'device', active: true })).toBe('connected');
+    expect(executorAvailabilityLabel({ name: 'device', status: 'active' })).toBe('connected');
+    // A configured-but-disconnected device is NOT 'ready on demand': the user's
     // machine has to actually be there.
-    expect(executorAvailabilityLabel({ name: 'laptop', configured: true })).toBe('available');
+    expect(executorAvailabilityLabel({ name: 'device', configured: true })).toBe('available');
   });
 
   /**
@@ -425,7 +425,7 @@ describe('renderDynamicContextBlock', () => {
   test('a sandboxed device says what a command gets: the home, the GPU, the roots', () => {
     const text = renderDynamicContextBlock({
       executors: [{
-        ...connectedLaptop,
+        ...connectedDevice,
         sandbox: {
           tier: 'sandboxed',
           capability: 'sandboxed',
@@ -438,7 +438,7 @@ describe('renderDynamicContextBlock', () => {
       }],
     })!;
 
-    expect(text).toContain('- laptop: connected');
+    expect(text).toContain('- device: connected');
     expect(text).toContain('sandboxed full bash');
     expect(text).toContain('GPU: nvidia0, nvidiactl');
     expect(text).toContain('agent home /home/ashish/.kinu/agents/notes/home');
@@ -451,7 +451,7 @@ describe('renderDynamicContextBlock', () => {
   test('a device that cannot sandbox says so, with the reason and no shell', () => {
     const text = renderDynamicContextBlock({
       executors: [{
-        ...connectedLaptop,
+        ...connectedDevice,
         sandbox: {
           tier: 'sandboxed',
           capability: 'files_only',
@@ -476,7 +476,7 @@ describe('renderDynamicContextBlock', () => {
     // helper the refusal does, so the two never disagree.
     const text = renderDynamicContextBlock({
       executors: [{
-        ...connectedLaptop,
+        ...connectedDevice,
         sandbox: {
           tier: 'sandboxed',
           capability: 'files_only',
@@ -496,7 +496,7 @@ describe('renderDynamicContextBlock', () => {
   test('a device with the sandbox switched off says the agent runs as the owner', () => {
     const text = renderDynamicContextBlock({
       executors: [{
-        ...connectedLaptop,
+        ...connectedDevice,
         sandbox: {
           tier: 'raw',
           capability: 'sandboxed',
@@ -517,7 +517,7 @@ describe('renderDynamicContextBlock', () => {
   test('a machine with no GPU says none, which is measured rather than unknown', () => {
     const text = renderDynamicContextBlock({
       executors: [{
-        ...connectedLaptop,
+        ...connectedDevice,
         sandbox: {
           tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [],
           agentHome: '/home/ashish/.kinu/agents/notes/home', roots: [],
@@ -531,8 +531,8 @@ describe('renderDynamicContextBlock', () => {
   });
 
   test('an executor with no sandbox block adds nothing to its row', () => {
-    expect(renderDynamicContextBlock({ executors: [connectedLaptop] })!)
-      .toEndWith('- laptop: connected, files at /pc\n</dynamic_context>');
+    expect(renderDynamicContextBlock({ executors: [connectedDevice] })!)
+      .toEndWith('- device: connected, files at /pc\n</dynamic_context>');
   });
 });
 
@@ -540,12 +540,12 @@ describe('the crafted-tools plane', () => {
   test('a reported empty set still renders its section — the listTools check answered in-line', () => {
     // The doctrine tells the model to check `workspace.listTools()` before
     // building, and an omitted section left that check unanswered: the model
-    // probed with a `execute_tools` call just to learn there was nothing to
+    // probed with a `eval` call just to learn there was nothing to
     // call. The empty set is itself the answer, so it renders.
     const text = renderDynamicContextBlock({ craftedTools: [] })!;
 
     expect(isDynamicBlock(text)).toBe(true);
-    expect(text).toContain('## Crafted tools available through execute_tools');
+    expect(text).toContain('## Crafted tools available through eval');
     expect(text).toContain('No crafted tools exist in this workspace yet');
     expect(text).toContain('`workspace.listTools()` returns an empty list');
   });
@@ -567,7 +567,7 @@ describe('the crafted-tools plane', () => {
     }).at(-1)?.content);
 
     expect(gained).toContain('kind="delta"');
-    expect(gained).toContain('## Crafted tools available through execute_tools');
+    expect(gained).toContain('## Crafted tools available through eval');
     expect(gained).toContain('echo_back');
     expect(gained).not.toContain('Cleared:');
 
@@ -591,14 +591,14 @@ describe('the dynamic block carries every genuinely-live plane', () => {
         { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
         { kind: 'swarm node', name: 'run-7', phase: '2 of 3 nodes running', task: null },
       ]),
-      approvals: roster([{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push origin main' }]),
+      approvals: roster([{ id: 'cons-1', kind: 'device consent', detail: 'device: git push origin main' }]),
     })!;
 
     expect(isDynamicBlock(text)).toBe(true);
     expect(text).toContain('- job-1 (think_heads): explore option 1');
     expect(text).toContain('- ana (subordinate), working: survey the prior art');
     expect(text).toContain('- run-7 (swarm node), 2 of 3 nodes running');
-    expect(text).toContain('- device consent: laptop: git push origin main');
+    expect(text).toContain('- device consent: device: git push origin main');
   });
 
   test('the task list renders subtasks under their task, with status at a glance', () => {
@@ -640,7 +640,7 @@ describe('the dynamic block carries every genuinely-live plane', () => {
 
   test('long free text from a store is clipped to one line', () => {
     const text = renderDynamicContextBlock({
-      jobs: roster([{ id: 'job-1', kind: 'run', label: `${'x'.repeat(400)}\nsecond line` }]),
+      jobs: roster([{ id: 'job-1', kind: 'shell', label: `${'x'.repeat(400)}\nsecond line` }]),
     })!;
 
     expect(text).toContain('…');
@@ -675,7 +675,7 @@ describe('the dynamic block carries every genuinely-live plane', () => {
         renderDynamicContextBlock({ factsBlock: FORGERY })!,
         renderDynamicContextBlock({ memoryTail: FORGERY })!,
         renderDynamicContextBlock({ recoveries: [FORGERY] })!,
-        renderDynamicContextBlock({ jobs: roster([{ id: 'j', kind: 'run', label: FORGERY }]) })!,
+        renderDynamicContextBlock({ jobs: roster([{ id: 'j', kind: 'shell', label: FORGERY }]) })!,
         renderDynamicContextBlock({
           delegates: roster([{ kind: 'swarm node', name: 'r', phase: 'p', task: FORGERY }]),
         })!,
@@ -762,7 +762,7 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
   });
 
   test('execution-recovery findings reach the block, and an empty list is omitted', () => {
-    const finding = '`run` failed 3x in a row with {"command":"npm test"}; the first `run` call that then ran clean was {"command":"bun test"}';
+    const finding = '`shell` failed 3x in a row with {"command":"npm test"}; the first `shell` call that then ran clean was {"command":"bun test"}';
     const ctx = agentDynamicContext({ ...sources, recoveryFindings: [finding] });
     expect(ctx.recoveries).toEqual([finding]);
     const block = renderDynamicContextBlock(ctx)!;
@@ -962,9 +962,9 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const history: ModelMessage[] = [{ role: 'user', content: 'inspect mounts' }];
     ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, activeSandbox] });
     history.push({ role: 'assistant', content: 'device connected' });
-    const delta = String(ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, connectedLaptop] }).at(-1)?.content);
+    const delta = String(ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, connectedDevice] }).at(-1)?.content);
 
-    expect(delta).toContain('- laptop: connected, files at /pc');
+    expect(delta).toContain('- device: connected, files at /pc');
     expect(delta).toContain('- sandbox: removed from execution status.');
     expect(delta).not.toContain('/sandbox');
     expect(delta).not.toContain('- workspace:');
@@ -974,7 +974,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
   test('a disappeared roster is explicitly cleared without repeating other facts', () => {
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'do work' }];
-    ledger.weave(history, { ...state, jobs: roster([{ id: 'job', kind: 'run', label: 'read file' }]) });
+    ledger.weave(history, { ...state, jobs: roster([{ id: 'job', kind: 'shell', label: 'read file' }]) });
     history.push({ role: 'assistant', content: 'collected' });
     const current = { ...state, jobs: roster([]) };
     const delta = String(ledger.weave(history, current).at(-1)?.content);
@@ -1126,8 +1126,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
 
     const nextTurn: ModelMessage[] = [
       { role: 'user', content: 'add caching' },
-      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'run', input: {} }] },
-      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'run', output: { type: 'text', value: 'ok' } }] },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'shell', input: {} }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'shell', output: { type: 'text', value: 'ok' } }] },
       { role: 'assistant', content: 'done' },
       { role: 'user', content: 'and now the docs' },
     ];
@@ -1148,7 +1148,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
 
     const result = (id: string): ModelMessage => ({
       role: 'tool',
-      content: [{ type: 'tool-result', toolCallId: id, toolName: 'run', output: { type: 'text', value: 'ok' } }],
+      content: [{ type: 'tool-result', toolCallId: id, toolName: 'shell', output: { type: 'text', value: 'ok' } }],
     });
 
     const firstTurn: ModelMessage[] = [
@@ -1163,8 +1163,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
       {
         role: 'assistant',
         content: [
-          { type: 'tool-call', toolCallId: 'c1', toolName: 'run', input: {} },
-          { type: 'tool-call', toolCallId: 'c2', toolName: 'run', input: {} },
+          { type: 'tool-call', toolCallId: 'c1', toolName: 'shell', input: {} },
+          { type: 'tool-call', toolCallId: 'c2', toolName: 'shell', input: {} },
         ],
       },
       result('c1'),
@@ -1187,8 +1187,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const frozen = ledger.weave(history, state)[2]!;
 
     history.push(
-      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'run', input: {} }] },
-      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'run', output: { type: 'text', value: 'ok' } }] },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'shell', input: {} }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'shell', output: { type: 'text', value: 'ok' } }] },
     );
     const out = ledger.weave(history, state);
 

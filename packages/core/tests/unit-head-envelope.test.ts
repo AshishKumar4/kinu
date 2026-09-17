@@ -11,6 +11,7 @@
  * by the spawner.
  */
 
+import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import type { LanguageModel } from 'ai';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
@@ -171,7 +172,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
 
     const report = await runHeadInference(loopInput({ maxDepth: 0 }), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 100, outputTokens: 10, text: 'Leaf work complete.', stopAfterSteps: 3 }),
     tools: buildHeadAccumulatorTools(capture), capture,
-    workspaceLayout: 'shared-workspace', isAborted: () => false, });
+    workspaceLayout: 'shared-workspace', clock: REAL_CLOCK, isAborted: () => false, });
 
     expect(report.status).toBe('completed');
     expect(report.stepCount).toBe(4);
@@ -188,7 +189,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
       text: 'Here is what I found.', stopAfterSteps: 60,
     }),
     tools: buildHeadAccumulatorTools(capture), capture,
-    workspaceLayout: 'shared-workspace', isAborted: () => false, });
+    workspaceLayout: 'shared-workspace', clock: REAL_CLOCK, isAborted: () => false, });
 
     expect(report.status).toBe('completed');
     expect(report.stepCount).toBe(61);
@@ -204,7 +205,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
     // output tokens; no fan-out-divided token pool stops the head.
     const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 20_000, outputTokens: 3_200, stopAfterSteps: 8 }),
     tools: buildHeadAccumulatorTools(capture), capture,
-    workspaceLayout: 'shared-workspace', isAborted: () => false, });
+    workspaceLayout: 'shared-workspace', clock: REAL_CLOCK, isAborted: () => false, });
 
     expect(report.status).toBe('completed');
     expect(report.usage.output).toBe(3_200 * 9);
@@ -215,7 +216,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
 
     const report = await runHeadInference(loopInput({ spawnedAt: Date.now() - 60 * 60_000 }), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 1_000, outputTokens: 100, text: 'Done.', stopAfterSteps: 3 }),
     tools: buildHeadAccumulatorTools(capture), capture,
-    workspaceLayout: 'shared-workspace', isAborted: () => false, });
+    workspaceLayout: 'shared-workspace', clock: REAL_CLOCK, isAborted: () => false, });
 
     expect(report.status).toBe('completed');
   });
@@ -225,7 +226,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
 
     const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 20_000, outputTokens: 400, stopAfterSteps: 9 }),
     tools: buildHeadAccumulatorTools(capture), capture,
-    workspaceLayout: 'shared-workspace', isAborted: () => false, });
+    workspaceLayout: 'shared-workspace', clock: REAL_CLOCK, isAborted: () => false, });
 
     expect(report.usage.input).toBe(20_000 * 10);
     expect(report.usage.output).toBe(400 * 10);
@@ -241,7 +242,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
     const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 4_000, outputTokens: 1 }),
     tools: buildHeadAccumulatorTools(capture), capture,
     workspaceLayout: 'shared-workspace',
-    isAborted: () => capture.evidence.length >= 40,
+    clock: REAL_CLOCK, isAborted: () => capture.evidence.length >= 40,
     abortReason: () => 'the parent stopped the head after 40 findings', });
 
     expect(report.stepCount).toBe(40);
@@ -262,7 +263,7 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
     const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 4_000, outputTokens: 1_000, text: SPECULATION }),
     tools: buildHeadAccumulatorTools(capture), capture,
     workspaceLayout: 'shared-workspace',
-    isAborted: () => capture.evidence.length >= 4,
+    clock: REAL_CLOCK, isAborted: () => capture.evidence.length >= 4,
     abortReason: () => 'the parent cancelled this head', });
 
     expect(report.status).toBe('aborted');
@@ -276,7 +277,7 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
     const capture = new HeadCapture();
 
     const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 1_000, outputTokens: 10, text: SPECULATION }),
-    tools: {}, capture, workspaceLayout: 'shared-workspace', isAborted: () => true, abortReason: () => 'the parent turn was cancelled', });
+    tools: {}, capture, workspaceLayout: 'shared-workspace', clock: REAL_CLOCK, isAborted: () => true, abortReason: () => 'the parent turn was cancelled', });
 
     expect(report.status).toBe('aborted');
     expect(report.evidence).toHaveLength(0);
@@ -292,7 +293,7 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
       promptTokens: 500, outputTokens: 10, text: 'Here is what I found.', stopAfterSteps: 3,
     }),
     tools: buildHeadAccumulatorTools(capture), capture,
-    workspaceLayout: 'shared-workspace', isAborted: () => false, });
+    workspaceLayout: 'shared-workspace', clock: REAL_CLOCK, isAborted: () => false, });
 
     expect(report.status).toBe('completed');
     expect(report.summary).toBe('Here is what I found.');
@@ -327,7 +328,7 @@ describe('buildHeadSystemPrompt — the head is told the truth about its envelop
     // tool-derived conventions say plainly that recursion is unavailable.
     const prompt = buildHeadSystemPrompt(
       loopInput({ maxDepth: 0 }),
-      ['record_evidence', 'record_decision', 'run'],
+      ['record_evidence', 'record_decision', 'shell'],
     );
 
     expect(prompt).not.toContain('more level(s) deep');

@@ -1285,7 +1285,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
 // each policy decides; these prove a real settle goes THROUGH it, because a merge-back
 // nobody calls leaves a settled swarm's work exactly as stranded as no merge-back at all.
 //
-// Driven through `runSwarm` directly rather than the shared `run` helper, because these
+// Driven through `runSwarm` directly rather than the shared `shell` helper, because these
 // assert the WORKSPACE and need the runtime the helper keeps to itself.
 describe('merge-back at the settle barrier', () => {
   test("the winner's answer reaches the origin through apply-winner", async () => {

@@ -50,7 +50,7 @@ describe('getWorkspaceOverview', () => {
     const rt = agent.observeRuntime();
 
     const consent = agent.awaitDeviceConsent({
-      deviceId: 'dev-1', deviceLabel: 'laptop', method: 'shell', command: 'git push',
+      deviceId: 'dev-1', deviceLabel: 'device', method: 'shell', command: 'git push',
     });
 
     const parked = new DeferredApprovalStore(rt.storage.sql, rt.actor).create({

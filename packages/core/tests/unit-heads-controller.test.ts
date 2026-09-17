@@ -27,10 +27,10 @@ import {
   type MergeStrategy,
   initHeadsTables,
 } from '../src/heads/index';
-import type { HeadClock } from '../src/heads/controller';
 import type { SqlValue } from '../src/types/primitives';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
+import { handClock } from '@kinu.run/test-utils';
 
 // ── Test runtime wiring ──────────────────────────────────────────────
 
@@ -72,59 +72,6 @@ function fakeMergeOutput(narrative: string): MergeOutput {
   };
 }
 
-/**
- * The budget's clock, advanced by hand (D19): the controller's wall-clock
- * deadline fires when the test steps past it, never on a real timer racing a
- * fake head's real sleep.
- */
-function handClock(): HeadClock & { advance(ms: number): void; armed(count: number): Promise<void> } {
-  interface Armed { readonly at: number; readonly fire: () => void }
-
-  let now = 0;
-  let everArmed = 0;
-  const armed = new Set<Armed>();
-  const waiting: { readonly count: number; readonly resolve: () => void }[] = [];
-
-  return {
-    now: () => now,
-    after: (fire, ms) => {
-      const entry: Armed = { at: now + ms, fire };
-      armed.add(entry);
-      everArmed += 1;
-
-      for (const waiter of waiting.splice(0)) {
-        if (everArmed >= waiter.count) waiter.resolve();
-        else waiting.push(waiter);
-      }
-
-      return () => { armed.delete(entry); };
-    },
-    /** Resolves once `count` deadlines have been armed: the controller has
-     *  spawned its heads and is racing them, so a step past the budget now
-     *  fires a deadline that exists. */
-    armed: (count) => {
-      if (everArmed >= count) return Promise.resolve();
-      const { promise, resolve } = Promise.withResolvers<void>();
-      waiting.push({ count, resolve });
-
-      return promise;
-    },
-    advance: (ms) => {
-      const until = now + ms;
-
-      for (;;) {
-        const next = [...armed].filter((entry) => entry.at <= until).sort((a, b) => a.at - b.at)[0];
-
-        if (next === undefined) break;
-        now = next.at;
-        armed.delete(next);
-        next.fire();
-      }
-
-      now = until;
-    },
-  };
-}
 
 function buildRuntime(opts: {
   reports?: Record<string, HeadReport>;
@@ -366,7 +313,7 @@ describe('HeadController.run', () => {
       },
     });
 
-    await clock.armed(1);
+    await clock.whenArmed(1);
     clock.advance(51);
     const result = await run;
 
@@ -406,7 +353,7 @@ describe('HeadController.run', () => {
       parentBudget: { maxDepth: 2, maxWallClockMs: 50, spawnedAt: clock.now() },
     });
 
-    await clock.armed(2);
+    await clock.whenArmed(2);
     clock.advance(51);
     const result = await run;
 
@@ -446,7 +393,7 @@ describe('HeadController.run', () => {
       parentBudget: { maxDepth: 2, maxWallClockMs: 50, spawnedAt: clock.now() },
     });
 
-    await clock.armed(2);
+    await clock.whenArmed(2);
     clock.advance(51);
     const result = await run;
 

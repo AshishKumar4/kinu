@@ -36,7 +36,7 @@ export interface TimelineSpan {
   elapsedMs?: number;
   /** Preserved structured payload (e.g. evolution_events.data) for drill-in. */
   data?: JsonValue;
-  source: 'run' | 'evolution' | 'mcts' | 'background';
+  source: 'shell' | 'evolution' | 'mcts' | 'background';
   /** Id for driving the work surface (node id, run-event id, root id…). */
   refId?: string;
   /** Original backend event type, for finer affordances. */
@@ -58,7 +58,7 @@ export function safeJsonParse(s: string): JsonValue {
  *  arguments to tell a fork from a hire/ask); fork runs still surface as
  *  exploration through their head_split / head_merge spans. */
 export function toolKindFor(name: string): TimelineKind {
-  if (name === 'run') return 'runtime-exec';
+  if (name === 'shell') return 'runtime-exec';
 
   if (name === 'think') return 'mcts';
 
@@ -110,7 +110,7 @@ function turnUsageDetail(usage: Usage | undefined): string | undefined {
 /** Project a durable RunEvent onto a unified TimelineSpan. */
 export function runEventToSpan(e: RunEvent): TimelineSpan {
   const ts = Date.parse(e.timestamp) || Date.now();
-  const base = { ts, source: 'run' as const, rawType: e.type };
+  const base = { ts, source: 'shell' as const, rawType: e.type };
 
   switch (e.type) {
     case 'run_start':

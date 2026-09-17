@@ -453,7 +453,7 @@ describe('OpenCode provider', () => {
     const body: JsonObject = {
       model: 'openai/gpt-5.6-sol',
       input: [
-        { type: 'function_call', id: 'fc_server', call_id: 'call_abc', name: 'run', arguments: '{}' },
+        { type: 'function_call', id: 'fc_server', call_id: 'call_abc', name: 'shell', arguments: '{}' },
         { type: 'function_call_output', call_id: 'call_abc', output: 'ok' },
       ],
     };
@@ -461,7 +461,7 @@ describe('OpenCode provider', () => {
     rewriteOpenCodeResponsesBody(body);
 
     expect(body.input).toEqual([
-      { type: 'function_call', call_id: 'call_abc', name: 'run', arguments: '{}' },
+      { type: 'function_call', call_id: 'call_abc', name: 'shell', arguments: '{}' },
       { type: 'function_call_output', call_id: 'call_abc', output: 'ok' },
     ]);
   });

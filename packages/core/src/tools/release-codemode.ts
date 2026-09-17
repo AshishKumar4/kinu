@@ -13,7 +13,7 @@
  * working copy, apply/runChecks/preview/deploy/rollback earn their results
  * from real command output and the record_* ledger twins are refused as
  * assertions of what was never run. Where no engine is wired, the agent runs
- * the commands itself with `run`/`execute_tools` and recordCheck/
+ * the commands itself with `shell`/`eval` and recordCheck/
  * recordDeployment are the only way the ledger learns what happened. Which
  * half exists is selected by `releaseToolActions(!!deps().engine)`: the
  * namespace members and their declarations. The dispatcher enforces engine

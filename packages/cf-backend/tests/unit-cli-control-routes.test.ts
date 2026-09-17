@@ -99,7 +99,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     async getToolDescriptions() {
       calls.push('tools');
 
-      return { builtIn: [{ name: 'run', description: 'Run command' }], crafted: [], executors: [] };
+      return { builtIn: [{ name: 'shell', description: 'Run command' }], crafted: [], executors: [] };
     },
     async getChatHistoryPage(request: { limit?: number }) {
       calls.push(`messages:${request.limit}`);
@@ -145,7 +145,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     async listBackgroundJobs(limit: number) {
       calls.push(`jobs:list:${limit}`);
 
-      return [{ id: 'job_1', kind: 'run', status: 'running' }];
+      return [{ id: 'job_1', kind: 'shell', status: 'running' }];
     },
     async cancelBackgroundJob(id: string) {
       calls.push(`jobs:cancel:${id}`);
@@ -266,7 +266,7 @@ describe('CLI control routes', () => {
     const { env, calls } = setupEnv();
 
     expect(await rpcResult(env, 'getAgentStatus')).toMatchObject({ name: 'jarvis', messageCount: 3 });
-    expect(await rpcResult(env, 'getToolDescriptions')).toMatchObject({ builtIn: [{ name: 'run' }] });
+    expect(await rpcResult(env, 'getToolDescriptions')).toMatchObject({ builtIn: [{ name: 'shell' }] });
     expect(await rpcResult(env, 'getChatHistoryPage', [{ limit: 17 }])).toEqual({
       status: 'end',
       items: [
@@ -283,7 +283,7 @@ describe('CLI control routes', () => {
     expect(await rpcResult(env, 'setReasoningEffort', ['high'])).toEqual({ ok: true, effort: 'high' });
     expect(await rpcResult(env, 'createTimerTrigger', [{ atMs: 123, label: 'wake', trust: 'owner' }]))
       .toMatchObject({ id: 'trg_1', nextFireAt: 123 });
-    expect(await rpcResult(env, 'listBackgroundJobs', [7])).toEqual([{ id: 'job_1', kind: 'run', status: 'running' }]);
+    expect(await rpcResult(env, 'listBackgroundJobs', [7])).toEqual([{ id: 'job_1', kind: 'shell', status: 'running' }]);
     expect(await rpcResult(env, 'cancelBackgroundJob', ['job_1'])).toEqual({ ok: true });
     expect(await rpcResult(env, 'cancelCurrentWork')).toMatchObject({ ok: true, abortedTools: 1 });
     expect(await rpcResult(env, 'searchMemoryHybrid', ['repo', 3])).toEqual([{ path: 'memory/MEMORY.md', snippet: 'hit', score: 1 }]);

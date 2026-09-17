@@ -93,7 +93,7 @@ function buildSurface(opts?: {
   const { rt } = createTestRuntime();
   const capture = new HeadCapture();
 
-  const executeTool = tool({ description: 'execute_tools', inputSchema: jsonSchema<{ code: string }>({
+  const codemodeTool = tool({ description: 'eval', inputSchema: jsonSchema<{ code: string }>({
     type: 'object', properties: { code: { type: 'string' } }, required: ['code'],
   }), execute: async () => 'ran' });
 
@@ -101,7 +101,7 @@ function buildSurface(opts?: {
     input: opts?.input ?? headInput(),
     capture,
     rt,
-    executeTool,
+    codemodeTool,
     webSearch: noopWebSearch,
     split: opts?.split ?? (async () => ({
       narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0,
@@ -135,13 +135,13 @@ describe('head tool surface — containment', () => {
     ].sort());
   });
 
-  test('a head reaches the real workspace: execute_tools and run are present', () => {
+  test('a head reaches the real workspace: eval and run are present', () => {
     const { tools } = buildSurface();
-    expect(tools.execute_tools).toBeDefined();
-    expect(tools.run).toBeDefined();
+    expect(tools.eval).toBeDefined();
+    expect(tools.shell).toBeDefined();
 
     // The tools that lied about being a sandbox are gone — the real planes
-    // are reached through execute_tools/run instead.
+    // are reached through eval/run instead.
     for (const gone of ['sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list']) {
       expect(Object.keys(tools)).not.toContain(gone);
     }
@@ -220,15 +220,15 @@ describe('head tool surface — containment', () => {
   });
 
   test('allowedTools narrows the surface further, never widens it', () => {
-    const { tools } = buildSurface({ input: headInput({ allowedTools: ['run', 'record_evidence', 'think'] }) });
-    expect(Object.keys(tools).sort()).toEqual(['record_evidence', 'run']);
+    const { tools } = buildSurface({ input: headInput({ allowedTools: ['shell', 'record_evidence', 'think'] }) });
+    expect(Object.keys(tools).sort()).toEqual(['record_evidence', 'shell']);
   });
 
   test('builtin tool calls land in the HeadCapture so the report keeps them', async () => {
     const { tools, capture } = buildSurface();
-    const execute = toolExecute<{ code: string }, string>(tools.execute_tools);
+    const execute = toolExecute<{ code: string }, string>(tools.eval);
     await execute({ code: 'return 1' });
-    expect(capture.toolCalls).toEqual([{ toolCallId: 'test-tool-call', name: 'execute_tools', args: { code: 'return 1' }, result: 'ran', outcome: { success: true } }]);
+    expect(capture.toolCalls).toEqual([{ toolCallId: 'test-tool-call', name: 'eval', args: { code: 'return 1' }, result: 'ran', outcome: { success: true } }]);
   });
 
   test('the head prompt describes the real workspace it was given', () => {

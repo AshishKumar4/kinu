@@ -204,7 +204,7 @@ export interface LocalAgentClientDeps {
   /** How to reach the naming model, for the first-message title of an agent
    *  that was added without one. */
   naming: SuggestAgentIdentityOptions;
-  /** Which surface this process is. 'one-shot' (`kinu exec`/`run`) both
+  /** Which surface this process is. 'one-shot' (`kinu exec`/`shell`) both
    *  selects the background detach/grace policy AND decides turn continuity
    *  for the outcome ledger, keeping the cadence-heavy evolution pass off the
    *  exit path. One fact, one field. */
@@ -271,7 +271,7 @@ export class LocalAgentClient implements AgentClient {
    * This process's claim on the one durable conversation in that database.
    *
    * Held for the CLIENT's lifetime rather than per turn, and that is the point:
-   * `kinu chat`, `run` and the TUI all auto-start the resident scheduler daemon,
+   * `kinu chat`, `shell` and the TUI all auto-start the resident scheduler daemon,
    * so the daemon and this process are BOTH live over one SQLite file. They
    * drive the same durable work — the pending event drain, the trigger
    * registry, the queued-turn pump — and `EventLog.markConsumed` has no

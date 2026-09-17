@@ -4,7 +4,7 @@
  *
  * Two subjects:
  *
- *   1. The tool the model reads. `createExecuteToolsFactory` is the real one:
+ *   1. The tool the model reads. `createCodemodeToolFactory` is the real one:
  *      @cloudflare/codemode composes the sandbox type block from each
  *      provider's declaration, so the assertions here are on what the model is
  *      literally told it can call — and on the actor kinds that are told
@@ -25,7 +25,7 @@ import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import {
   decodeJsonValue,
-  BUILTIN_TOOL_DESCRIPTIONS, EXECUTE_TOOLS_CODE_DESCRIPTION,
+  BUILTIN_TOOL_DESCRIPTIONS, CODEMODE_CODE_DESCRIPTION,
   createAgentsCodemodeProvider,
   parseJsonValue,
   type AgentsToolDeps,
@@ -53,7 +53,7 @@ mockAgentsSdk();
 // imported after the mock is registered.
 const { resolveProvider } = await import('@cloudflare/codemode/ai');
 
-const { createExecuteToolsFactory } = await import('../src/execute-tools');
+const { createCodemodeToolFactory } = await import('../src/codemode-tool');
 
 /** A search's answer, narrowed to what the round-trip is read back off. */
 const SearchResultSchema = v.object({
@@ -83,11 +83,11 @@ function webSearchProvider(): WebSearchProvider {
   };
 }
 
-/** The cf construction with only the pieces `createExecuteToolsFactory` reaches:
+/** The cf construction with only the pieces `createCodemodeToolFactory` reaches:
  *  a craft store with nothing in it, no executors, and stub model/web seams.
  *  The native surface handed to `toolFor` is one `file` tool, so the `tools`
  *  declaration has a native member to assert on. */
-function buildExecuteTools(agents?: () => AgentsToolDeps) {
+function buildCodemode(agents?: () => AgentsToolDeps) {
   const { rt, testSql } = createTestRuntime();
   initCraftedToolsTables(testSql.sql);
 
@@ -113,14 +113,14 @@ function buildExecuteTools(agents?: () => AgentsToolDeps) {
   };
 
   return agents
-    ? createExecuteToolsFactory({ ...options, agents }).toolFor(native)
-    : createExecuteToolsFactory(options).toolFor(native);
+    ? createCodemodeToolFactory({ ...options, agents }).toolFor(native)
+    : createCodemodeToolFactory(options).toolFor(native);
 }
 
-function executeToolsDescription(agents?: () => AgentsToolDeps): string {
-  const built = buildExecuteTools(agents);
+function codemodeDescription(agents?: () => AgentsToolDeps): string {
+  const built = buildCodemode(agents);
 
-  if (!built.description) throw new Error('execute_tools description is missing');
+  if (!built.description) throw new Error('eval description is missing');
 
   return built.description;
 }
@@ -195,19 +195,19 @@ function fullDeps(): AgentsToolDeps {
   };
 }
 
-// ── The execute_tools docstring itself ──────────────────────────────────────
+// ── The eval docstring itself ──────────────────────────────────────
 // The description the model receives is the REGISTRY's, not
 // @cloudflare/codemode's DEFAULT_DESCRIPTION. Passing none leaves the model with
 // "Execute code to achieve a goal." and NOTHING from
-// BUILTIN_TOOL_SPECS.execute_tools — no Use-when, no Avoid-when, no workspace
+// BUILTIN_TOOL_SPECS.eval — no Use-when, no Avoid-when, no workspace
 // doctrine, no Returns — plus a worked example calling `codemode.searchWeb(...)`,
 // a member no sandbox here binds. Both halves are asserted: the registry's
 // doctrine, and the namespace declarations it wraps.
 
-describe('the execute_tools docstring the model receives', () => {
+describe('the eval docstring the model receives', () => {
   test('carries the registry doctrine, not the vendor default', () => {
-    const description = executeToolsDescription();
-    expect(description).toContain(BUILTIN_TOOL_DESCRIPTIONS.execute_tools);
+    const description = codemodeDescription();
+    expect(description).toContain(BUILTIN_TOOL_DESCRIPTIONS.eval);
     expect(description).toContain('Use when:');
     expect(description).toContain('Avoid when:');
     expect(description).toContain('Returns:');
@@ -220,7 +220,7 @@ describe('the execute_tools docstring the model receives', () => {
   });
 
   test('states what the sandbox is: a Node-like isolate with every tool under tools.*', () => {
-    const description = executeToolsDescription();
+    const description = codemodeDescription();
     expect(description).toContain('fresh JavaScript isolate per program, written like a Node script');
     expect(description).toContain('`require()` resolves the Node builtins');
     expect(description).toContain('Type annotations do not parse there');
@@ -235,7 +235,7 @@ describe('the execute_tools docstring the model receives', () => {
     // Without an explicit `types`, codemode generates `search: (input:
     // SearchInput) => Promise<SearchOutput>` from an absent input schema — an
     // object-argument signature, while the implementation reads String(args[0]).
-    const description = executeToolsDescription();
+    const description = codemodeDescription();
     expect(description).toContain('export declare const web: {');
     expect(description).toContain('search(query: string, opts?: { limit?: number })');
     expect(description).toContain('fetch(url: string)');
@@ -245,9 +245,9 @@ describe('the execute_tools docstring the model receives', () => {
   test('the code field is labelled as the script body it actually is', () => {
     // createCodeTool ships `code` as "JavaScript async arrow function to
     // execute" — a shape neither sandbox accepts. The built tool's inputSchema
-    // is core's (executeToolsInputSchema) so the field and the docstring above
+    // is core's (codemodeInputSchema) so the field and the docstring above
     // cannot disagree.
-    const built = buildExecuteTools();
+    const built = buildCodemode();
 
     const schema = v.parse(v.object({
       jsonSchema: v.object({
@@ -256,7 +256,7 @@ describe('the execute_tools docstring the model receives', () => {
       }),
     }), built.inputSchema).jsonSchema;
 
-    expect(schema.properties.code.description).toBe(EXECUTE_TOOLS_CODE_DESCRIPTION);
+    expect(schema.properties.code.description).toBe(CODEMODE_CODE_DESCRIPTION);
     expect(schema.required).toEqual(['code']);
   });
 });
@@ -265,7 +265,7 @@ describe('the execute_tools docstring the model receives', () => {
 
 describe('agents.* in the cf codemode tool', () => {
   test('the namespace is declared in the sandbox types the model reads', () => {
-    const description = executeToolsDescription(fullDeps);
+    const description = codemodeDescription(fullDeps);
     expect(description).toContain('export declare const agents: {');
 
     for (const member of ['swarm(input', 'hire(input', 'msg(input', 'list(input', 'dismiss(input']) {
@@ -278,7 +278,7 @@ describe('agents.* in the cf codemode tool', () => {
 
   test('a search-only actor is told about swarm and nothing else', () => {
     const deps = searchOnlyDeps();
-    const description = executeToolsDescription(() => deps);
+    const description = codemodeDescription(() => deps);
     expect(description).toContain('swarm(input');
     expect(description).not.toContain('hire(input');
     expect(description).not.toContain('dismiss(input');
@@ -287,9 +287,9 @@ describe('agents.* in the cf codemode tool', () => {
   });
 
   test('an actor with no delegation deps has no agents namespace at all', () => {
-    // The head shape: `createExecuteToolsFactory` without `agents`. Containment
+    // The head shape: `createCodemodeToolFactory` without `agents`. Containment
     // is the absent dep, exactly as it is for the top-level tool.
-    const description = executeToolsDescription();
+    const description = codemodeDescription();
     expect(description).not.toContain('const agents');
     expect(description).toContain('export declare const web: {');
   });

@@ -242,7 +242,7 @@ test('S6: revoking between two calls refuses the second and stops new admissions
   } finally { world.close(); }
 });
 
-test('S1: agent-control and execute_tools bindings surface as problems and admit no members', async () => {
+test('S1: agent-control and eval bindings surface as problems and admit no members', async () => {
   const world = await ownerWorld();
 
   try {
@@ -251,7 +251,7 @@ test('S1: agent-control and execute_tools bindings surface as problems and admit
       name: 'issues', main: 'src/server.ts',
       slate: { title: 'Issue triage', bindings: {
         CONTROL: { kind: 'namespace', namespace: 'agents' },
-        TOOLS: { kind: 'tool', name: 'execute_tools' },
+        TOOLS: { kind: 'tool', name: 'eval' },
         HIRE: { kind: 'tool', name: 'agents' },
       } },
     }));

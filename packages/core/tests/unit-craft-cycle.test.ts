@@ -2,7 +2,7 @@
  * The in-episode craft loop, through its public seam.
  *
  * The cycle only ever sees what a backend's tool hooks hand it — an
- * `execute_tools` call with its code, and that call's result — so every test
+ * `eval` call with its code, and that call's result — so every test
  * here drives it exactly as `AgentOrchestrator.turnExtension` does, and
  * asserts on the durable ledger and the turn's run record rather than on
  * anything internal.
@@ -39,11 +39,11 @@ function fakeLedger(initial: string[] = [], dropped: string[] = []): CraftLedger
   };
 }
 
-/** One settled `execute_tools` call, as the tool-result hook delivers it —
+/** One settled `eval` call, as the tool-result hook delivers it —
  *  the call's own args ride along, which is why no pairing is needed. */
 function block(cycle: CraftCycle, code: string, opts: { fails?: boolean; result?: string } = {}): void {
   cycle.onToolResult({
-    toolName: 'execute_tools',
+    toolName: 'eval',
     args: { code },
     result: opts.result ?? (opts.fails ? 'Error: something broke' : '{"result":"ok"}'),
     ...(opts.fails ? { success: false, reason: null } satisfies ToolOutcome : { success: true } satisfies ToolOutcome),
@@ -82,7 +82,7 @@ describe('CraftCycle — the trigger', () => {
     const cycle = new CraftCycle(ledger, new TurnAccumulator());
     cycle.reset(true);
     block(cycle, 'return await tools.slow(1)', {
-      result: JSON.stringify({ background: true, jobId: 'j1', kind: 'execute_tools', message: 'still running' }),
+      result: JSON.stringify({ background: true, jobId: 'j1', kind: 'eval', message: 'still running' }),
     });
     expect(ledger.observations).toEqual([]);
     expect(cycle.snapshot()).toBeNull();
@@ -96,10 +96,10 @@ describe('CraftCycle — the trigger', () => {
     expect(cycle.snapshot()).toBeNull();
   });
 
-  test('tools other than execute_tools are not the craft surface', () => {
+  test('tools other than eval are not the craft surface', () => {
     const cycle = new CraftCycle(fakeLedger(['sum']), new TurnAccumulator());
     cycle.reset(true);
-    cycle.onToolResult({ toolName: 'run', args: { command: 'tools.sum(1)' }, result: 'ok', success: true });
+    cycle.onToolResult({ toolName: 'shell', args: { command: 'tools.sum(1)' }, result: 'ok', success: true });
     expect(cycle.snapshot()).toBeNull();
   });
 
@@ -212,7 +212,7 @@ describe('CraftCycle — the fitness signal', () => {
   });
 
   test('a failure a tool caught and RETURNED still counts as a failure', () => {
-    // The `run`-tool shape: success:true with an error payload. The repo's one
+    // The `shell`-tool shape: success:true with an error payload. The repo's one
     // definition of a failing result (isFailingToolResult) is what decides.
     const ledger = fakeLedger(['sum']);
     const cycle = new CraftCycle(ledger, new TurnAccumulator());
@@ -259,7 +259,7 @@ describe('CraftCycle — what it refuses to guess at', () => {
     const ledger = fakeLedger(['sum']);
     const cycle = new CraftCycle(ledger, new TurnAccumulator());
     cycle.reset(true);
-    cycle.onToolResult({ toolName: 'execute_tools', args: { code: 42 }, result: 'ok', success: true });
+    cycle.onToolResult({ toolName: 'eval', args: { code: 42 }, result: 'ok', success: true });
     expect(ledger.observations).toEqual([]);
   });
 
@@ -301,7 +301,7 @@ describe('CraftCycle — what the turn reports as crafted-tool use', () => {
 
   test('a crafted tool called from a submitted block is the turn\'s craft usage', () => {
     expect(turnUsage(fakeLedger(['sum', 'fmt']), [
-      { toolName: 'execute_tools', code: 'const a = await tools.sum(1); return tools.fmt(a)' },
+      { toolName: 'eval', code: 'const a = await tools.sum(1); return tools.fmt(a)' },
     ])).toEqual(['sum', 'fmt']);
   });
 
@@ -312,20 +312,20 @@ describe('CraftCycle — what the turn reports as crafted-tool use', () => {
     expect(turnUsage(fakeLedger(['sum']), [
       { toolName: 'mcp__github__create_issue' },
       { toolName: 'some_extension_tool' },
-      { toolName: 'run' },
+      { toolName: 'shell' },
     ])).toEqual([]);
   });
 
   test('usage is deduped and accumulated across the turn\'s blocks', () => {
     expect(turnUsage(fakeLedger(['sum', 'fmt']), [
-      { toolName: 'execute_tools', code: 'await tools.sum(1)' },
-      { toolName: 'execute_tools', code: 'await tools.sum(2); await tools.fmt(3)' },
+      { toolName: 'eval', code: 'await tools.sum(1)' },
+      { toolName: 'eval', code: 'await tools.sum(2); await tools.fmt(3)' },
     ])).toEqual(['sum', 'fmt']);
   });
 
   test('a turn with evolution off records no craft usage — a craft score is evolution state', () => {
     expect(turnUsage(fakeLedger(['sum']), [
-      { toolName: 'execute_tools', code: 'await tools.sum(1)' },
+      { toolName: 'eval', code: 'await tools.sum(1)' },
     ], false)).toEqual([]);
   });
 });

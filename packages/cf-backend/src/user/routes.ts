@@ -246,7 +246,7 @@ export async function handleUserRequest(
     catch (e) { return err(400, renderThrownChain({ cause: e })); }
   }
 
-  // ── Devices (user-level laptop/PC tunnel) ──────────────────────────
+  // ── Devices (user-level device/PC tunnel) ──────────────────────────
   if (path === '/devices' && method === 'GET') {
     return json(await stub.listDevices(await ownerCaller(env)));
   }
