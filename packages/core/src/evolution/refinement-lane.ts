@@ -41,7 +41,8 @@ import {
   describeSplitDegeneracy, listTurnOutcomes, type TurnOutcomeRow,
 } from './outcomes';
 import {
-  REFINEMENT_EDIT_KINDS, RefinementProposalSchema, createRefinementStore, evolutionDebt,
+  MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, REFINEMENT_PROPOSAL_EXAMPLE,
+  RefinementProposalSchema, createRefinementStore, evolutionDebt,
   refinementRequestView,
   type RefinementClaim, type RefinementDeps,
   type EvolutionDebt, type RefinementEdit, type RefinementProposal, type RefinementRequest,
@@ -54,7 +55,8 @@ import { PROMPT_SECTIONS } from '../prompting/section-templates';
 import { routeSkill, settleSkillApproval } from './refinement-skill';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
-import { renderThrownChain, tolerate } from '../obs/index';
+import { renderIssues } from '../utils/json';
+import { renderThrownChain, tolerate, type ErrorCode } from '../obs/index';
 import type { TemporaryRunRequest } from '../subordinates/temporary';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -401,6 +403,11 @@ type RefinerAnswer =
   | { readonly ok: true; readonly proposal: RefinementProposal }
   | { readonly ok: false; readonly error: string };
 
+/** What an answer the schema rejects IS, in this repository's own vocabulary:
+ *  the input was malformed. Typed rather than spelled inline so the word in an
+ *  owner-visible refusal is one of the nine codes and not a synonym. */
+const OFF_SCHEMA_ANSWER: ErrorCode = 'bad_input';
+
 /** Workspace instruction files a refiner may read ITSELF, when this workspace
  *  has them.
  *
@@ -469,10 +476,15 @@ async function askRefiner(
   );
 
   if (!parsed.success) {
+    // The class belongs in the detail, because the detail is the whole record a
+    // refused request leaves: the child answered, and what it answered does not
+    // parse — a bad input to this lane, not a fault of it. `renderIssues` puts
+    // each issue's PATH in front of its message, so a refusal names the keys to
+    // fix rather than repeating "Invalid key" four times.
     return {
       ok: false,
-      error: 'the refiner\'s answer is not a valid refinement proposal — '
-        + parsed.issues.map((issue) => issue.message).join('; '),
+      error: `the refiner's answer is not a valid refinement proposal (${OFF_SCHEMA_ANSWER}) — `
+        + renderIssues(parsed.issues),
     };
   }
 
@@ -502,6 +514,14 @@ async function askRefiner(
  * Every section is BOUNDED by the same `EVIDENCE_BUDGETS` every other reader of
  * this ledger uses, so a refiner cannot be handed more of a turn than the judge
  * that graded it saw.
+ *
+ * THE ANSWER SHAPE IS NOT DESCRIBED, IT IS PRINTED — `REFINEMENT_PROPOSAL_EXAMPLE`
+ * serialized, so the brief asks for a document `RefinementProposalSchema`
+ * accepts and the two cannot say different things. What the prose adds is the
+ * part a shape cannot show: that every level is strict, so a fifth key refuses
+ * the whole proposal instead of being ignored, and that the rationale floor
+ * holds for every kind. A brief that described the shape instead is what
+ * answered `{"see_rpi":"…"}` on 2026-09-16.
  */
 function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest, contextRefs: readonly string[]): string {
   const sql = deps.control.sql;
@@ -537,6 +557,12 @@ function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest, co
     .map((prior) => `  - ${prior.id} (${prior.trigger}, ${prior.stage}): ${prior.detail || '(no detail)'}`
       + prior.routes.map((r) => `\n      ${r.kind} → ${r.owner || 'no owner'} ${r.target} [${r.disposition}]`).join(''))
     .join('\n');
+
+  // The answer shape is PRINTED FROM A VALUE the schema accepts, at this
+  // request's own scope — the one field of it that is a fact about the request
+  // rather than a slot, and the one `plan` refuses a mismatch on.
+  const answer: RefinementProposal = { ...REFINEMENT_PROPOSAL_EXAMPLE, scope: request.scope };
+  const answerKeys = Object.keys(answer).map((key) => `\`${key}\``).join(', ');
 
   return [
     'You are reviewing this agent\'s own recent failures to propose the SMALLEST typed edits',
@@ -578,21 +604,24 @@ function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest, co
     '',
     '## Your answer',
     '',
-    'One JSON object:',
+    `One JSON object carrying exactly these keys — ${answerKeys} — and no others. Every level is`,
+    'strict: a key that is not named here refuses the whole proposal rather than being dropped, so',
+    'anything you want to say that is not one of these fields has no place to go. Each edit object',
+    `carries exactly the keys its \`kind\` shows below, and every \`rationale\` is `
+      + `${String(MIN_EDIT_RATIONALE)} characters or longer, whatever the kind.`,
     '',
-    '{"scope":"workspace","summary":"<one sentence>","edits":[',
-    '  {"kind":"fact","key":"<dotted.key>","value":<json>,"quote":"<the user\'s exact words>",'
-      + '"rationale":"<why, at least 40 characters>"},',
-    '  {"kind":"prompt_section","sectionId":"<registered id>","source":"<the whole replacement '
-      + 'section, same template slots>","rationale":"..."},',
-    '  {"kind":"skill","path":"/workspace/skills/<name>.md","source":"<the whole file>",'
-      + '"rationale":"..."},',
-    '  {"kind":"subagent_spec","role":"<role id>","spec":"<the change>","rationale":"..."}',
+    `\`scope\` is ${JSON.stringify(answer.scope)} — the scope this request was opened at. A proposal`,
+    'at any other scope is refused without being routed.',
+    '',
+    `{"scope":${JSON.stringify(answer.scope)},"summary":${JSON.stringify(answer.summary)},"edits":[`,
+    ...answer.edits.map((edit, index) =>
+      `  ${JSON.stringify(edit)}${index === answer.edits.length - 1 ? '' : ','}`),
     ']}',
     '',
-    `Valid \`kind\` values: ${REFINEMENT_EDIT_KINDS.join(', ')}. Propose the fewest edits that address`,
-    'the pattern you actually found. An empty `edits` array is a legitimate answer when the',
-    'trajectory shows no addressable pattern.',
+    `Valid \`kind\` values: ${REFINEMENT_EDIT_KINDS.join(', ')}. The four edits above are every shape`,
+    'this accepts, one object per edit — not a checklist. Propose the fewest edits that address the',
+    'pattern you actually found. An empty `edits` array is a legitimate answer when the trajectory',
+    'shows no addressable pattern.',
     '',
     jsonObjectOnlyInstruction(),
   ].join('\n');

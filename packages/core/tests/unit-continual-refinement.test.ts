@@ -52,10 +52,12 @@ import type {
   TemporaryAgentPort, TemporaryRunOutcome, TemporaryRunRequest,
 } from '../src/subordinates/temporary';
 import {
-  RefinementProposalSchema,
+  MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, RefinementProposalSchema,
   createRefinementStore, evolutionDebt, initRefinementTables, refinementStagingPath,
   type RefinementDeps, type RefinementEdit, type RefinementProposal, type RefinementRoute,
 } from '../src/evolution/refinement';
+import { extractJsonObject } from '../src/prompts/structured';
+import { renderIssues } from '../src/utils/json';
 
 /**
  * The failure count a refinement opens at.
@@ -631,6 +633,77 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const step = await advanceRefinementLane(deps);
     expect(step.step).toBe('idle');
     expect(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)?.stage).toBe('requested');
+  });
+});
+
+/**
+ * THE BRIEF AND THE SCHEMA ARE ONE CONTRACT.
+ *
+ * OWNER, 2026-09-16: a refinement was refused with `Invalid key: Expected
+ * "scope" but received undefined; … Expected never but received "see_rpi"` —
+ * the refiner answered a shape the parse has no slot for. The brief DESCRIBED
+ * the answer in a template that was not a valid document (`"value":<json>`, a
+ * three-character rationale under a forty-character floor) and never said that
+ * an extra key refuses the whole proposal, so obeying it was not sufficient.
+ */
+describe('the brief and the schema are one contract', () => {
+  test('the answer shape the brief prints is a document the schema accepts', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+
+    const { port, requests } = scriptedRefiner(proposalText({
+      scope: 'workspace', summary: 'none', edits: [],
+    }));
+
+    const deps = fx.deps(port);
+    await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+
+    const brief = requests[0]!.task;
+    const section = brief.slice(brief.indexOf('## Your answer'));
+    expect(section).toContain('## Your answer');
+
+    // The bytes the refiner is shown, read back through the parse it will be
+    // held to. A placeholder left in place is a legal value of its field, so
+    // there is a document in the brief a refiner can copy and be accepted for.
+    const printed = extractJsonObject(section);
+    const parsed = v.safeParse(RefinementProposalSchema, printed);
+    expect(parsed.success ? 'accepted' : renderIssues(parsed.issues)).toBe('accepted');
+    expect(parsed.success && JSON.stringify(parsed.output)).toBe(JSON.stringify(printed));
+
+    // Every kind the router can route is shown, at this request's own scope…
+    for (const kind of REFINEMENT_EDIT_KINDS) expect(section).toContain(`"kind":"${kind}"`);
+    expect(section).toContain('"scope":"workspace"');
+    // …and the two rules a shape cannot show are stated: strictness, and the
+    // rationale floor that holds for every kind rather than for `fact` alone.
+    expect(section).toContain('and no others');
+    expect(section).toContain(`\`rationale\` is ${String(MIN_EDIT_RATIONALE)} characters or longer`);
+  });
+
+  test('an answer missing the required keys is refused, classified, naming every key', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    // The shape the owner's journal caught: one key with no slot, and all three
+    // required keys absent.
+    const { port } = scriptedRefiner('{"see_rpi":"connected a session to my rpi 5"}');
+    const deps = fx.deps(port);
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!;
+
+    expect(row.stage).toBe('refused');
+
+    for (const key of ['scope', 'summary', 'edits', 'see_rpi']) {
+      expect(row.detail).toContain(`${key}: Invalid key`);
+    }
+
+    // A classified refusal: the answer was the bad input, and this lane wrote
+    // nothing on the way to saying so.
+    expect(row.detail).toContain('bad_input');
+    expect(row.proposal).toBeNull();
+    expect(row.routes).toEqual([]);
+    expect(fx.facts.all()).toEqual([]);
   });
 });
 
