@@ -3,7 +3,7 @@
  *
  * Each executor carries its OWN file view over its OWN raw handle
  * (`ExecutorProvider.files`), in that environment's native paths: the workspace
- * is Nimbus, the sandbox is its container, `laptop` is the user's machine. The
+ * is Nimbus, the sandbox is its container, `device` is the user's machine. The
  * browser shows them one row at a time, never merged. (The AGENT-facing merge
  * is the workspace plane's mount table, `vfs/mounts.ts` — a different surface
  * with a different reader; nothing here rewrites one environment's paths into
@@ -27,7 +27,7 @@ import { PLATFORM_CATALOG } from '../platform-catalog';
 /** Just enough of the router to find one executor's files, and to ask that
  *  environment where its own relative paths resolve. */
 export interface ExecutorFileLookup {
-  getProvider(name: string): { files?: VFS; homeDir(): Promise<string> } | undefined;
+  getProvider(name: string): { files?: VFS; homeDir(segment?: string): Promise<string> } | undefined;
 }
 
 /**
@@ -56,7 +56,7 @@ interface RuntimeConsistency {
 }
 
 const CONSISTENCY: RuntimeConsistency = {
-  workspace: 'durable', parent: 'durable', sandbox: 'ephemeral', nimbus: 'ephemeral', laptop: 'live-shared',
+  workspace: 'durable', parent: 'durable', sandbox: 'ephemeral', nimbus: 'ephemeral', device: 'live-shared',
 };
 
 /** Enough of the router to list environments. Listing is a roster read and
@@ -324,24 +324,30 @@ export function sortDirEntries(entries: DirEntry[]): DirEntry[] {
 /**
  * Where a mount point's own tree starts.
  *
- * A mount is a faithful window on the machine's REAL absolute paths, so `/pc`
- * strips to the device's `/` (`vfs/mounts.ts` routeOf). The device's consent
- * boundary refuses that, and the first click on a connected machine's files
- * answered `EACCES: '/' is outside the consented device directory
- * '/home/kinu'`. The directory a person means by "open /pc" is the one they
- * consented to, and the mounted plane already reports it: `homeDir()` IS the
- * consented root the path guard measures against.
+ * A mount is a faithful window on the machine's REAL absolute paths, so
+ * `/pc/<name>` strips to that machine's `/` (`vfs/mounts.ts` routeOf). The
+ * device's consent boundary refuses that, and the first click on a connected
+ * machine's files answered `EACCES: '/' is outside the consented device
+ * directory '/home/kinu'`. The directory a person means by "open this machine"
+ * is the one they consented to, and the mounted plane already reports it:
+ * `homeDir(segment)` IS the consented root the path guard measures against.
+ * Bare `/pc` is the roster of machines and lands on itself.
  *
  * Nothing widens. The same guard still decides the listing, every path under
  * the mount stays the machine's own, and the reachable set only narrows —
- * `/pc` stops naming a directory the owner never consented to.
+ * `/pc/<name>` stops naming a directory the owner never consented to.
  *
  * A plane that cannot say where it starts keeps the bare mount point, so the
  * refusal the reader sees is the plane's own — a disconnected device states its
  * absence rather than reporting whatever broke while asking it for a home.
  */
 async function mountLanding(router: ExecutorFileLookup, dir: string): Promise<string> {
-  const executor = MOUNT_EXECUTORS[dir];
+  // Bare /pc is the fleet root: the roster, which the plane lists itself.
+  // /pc/<name> with no rest is one machine's root — not a directory anyone
+  // means — so it lands on THAT machine's opening dir (consented root or
+  // reported home), asked of that machine by its segment.
+  const machine = /^\/pc\/([^/]+)\/?$/.exec(dir)?.[1];
+  const executor = MOUNT_EXECUTORS[machine === undefined ? dir : '/pc'];
 
   if (executor === undefined) return dir;
   const provider = router.getProvider(executor);
@@ -359,14 +365,16 @@ async function mountLanding(router: ExecutorFileLookup, dir: string): Promise<st
   let home: string | null;
 
   try {
-    home = await provider.homeDir();
+    home = await provider.homeDir(machine);
   } catch (cause) {
     diagnostics.event('files.mount_home_unavailable',
       { executor, mount: dir, error: renderThrownChain({ cause }) });
     home = null;
   }
 
-  return home !== null && home.startsWith('/') && home !== '/' ? `${dir}${home}` : dir;
+  const landing = dir.replace(/\/+$/, '');
+
+  return home !== null && home.startsWith('/') && home !== '/' ? `${landing}${home}` : landing;
 }
 
 /**

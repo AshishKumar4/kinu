@@ -78,7 +78,7 @@ describe('subordinate wiring', () => {
     expect(actor).not.toContain('workspace_temporary_agents');
 
     // The port is built ONCE PER ACTOR, and that is load-bearing rather than a
-    // caching nicety: `run` parks a waiter on it and the report ingress resolves
+    // caching nicety: `shell` parks a waiter on it and the report ingress resolves
     // that waiter, and those are two different calls on the same isolate. A port
     // rebuilt per call would hand the ingress an empty waiter map and leave
     // every ask hanging on an answer that had already arrived.
@@ -97,12 +97,12 @@ describe('subordinate wiring', () => {
    *  and from its prompt flags — one delegation surface, no second lane. */
   test('no rlm provider, model spec or prompt flag survives in the cf composition', () => {
     const actor = source('actor-agent.ts');
-    const execTools = source('execute-tools.ts');
+    const execTools = source('codemode-tool.ts');
     const hosting = source('subordinate-hosting.ts');
 
     for (const [name, text] of [
       ['actor-agent.ts', actor],
-      ['execute-tools.ts', execTools],
+      ['codemode-tool.ts', execTools],
       ['subordinate-hosting.ts', hosting],
     ] as const) {
       expect({ name, hit: /createRLMProvider|rlmAvailable|rlm\.query/u.test(text) })
@@ -112,11 +112,11 @@ describe('subordinate wiring', () => {
     // The sandbox factory takes no model registry: nothing in it calls a model
     // directly. Pinned on the options interface's member list, not on a
     // syllable's absence from the file — `modelSpecForSource` (spend
-    // attribution) and core's `registry.renderExecuteToolsDescription` (a
+    // attribution) and core's `registry.renderCodemodeDescription` (a
     // docstring renderer) legitimately use those syllables elsewhere.
     const options = execTools.slice(
-      execTools.indexOf('export interface ExecuteToolsFactoryOptions {'),
-      execTools.indexOf('export function createExecuteToolsFactory'),
+      execTools.indexOf('export interface CodemodeFactoryOptions {'),
+      execTools.indexOf('export function createCodemodeToolFactory'),
     );
 
     expect(options.length).toBeGreaterThan(0);
@@ -194,9 +194,9 @@ describe('subordinate wiring', () => {
     expect(observedActionEnum(subTools.agents)).not.toContain('reply');
     expect(observedActionEnum(subTools.agents)).toContain('hire');
     // …and the report lane it gets lives in the sandbox too: the delegated
-    // execute_tools declares the report namespace the root's never does.
-    expect(subTools.execute_tools?.description).toContain('declare const report:');
-    expect(orchTools.execute_tools?.description).not.toContain('declare const report:');
+    // eval declares the report namespace the root's never does.
+    expect(subTools.eval?.description).toContain('declare const report:');
+    expect(orchTools.eval?.description).not.toContain('declare const report:');
   });
 
   test('every deps-gated tool core declares is answered by this backend', () => {

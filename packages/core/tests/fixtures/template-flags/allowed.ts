@@ -22,14 +22,14 @@ const slotsOnly = definePromptSection('fixture/slots-only', 'a {{value}}');
 
 const noSlots = definePromptSection('fixture/none', 'plain prose');
 
-const tools: readonly string[] = ['run'];
+const tools: readonly string[] = ['shell'];
 
 // Both slot kinds, inline.
 verification.render({ hasShell: true, shellNote: 'run the check' });
 
 // A flag computed from a real expression at the call site — where the unions
 // are exhaustive, which is the whole argument for keeping logic in TypeScript.
-verification.render({ hasShell: tools.includes('run'), shellNote: 'run the check' });
+verification.render({ hasShell: tools.includes('shell'), shellNote: 'run the check' });
 
 // The slot object held in a variable. An annotated-variable argument skips the
 // excess-property check, so this is the case a `keyof`-based contract can break

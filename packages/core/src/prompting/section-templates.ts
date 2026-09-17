@@ -29,8 +29,8 @@ import roleSection from "../prompts/role-section.md" with { type: 'text' };
 import toolsSection from "../prompts/tools-section.md" with { type: 'text' };
 import workspaceExecutorLine from "../prompts/workspace-executor-line.md" with { type: 'text' };
 import sandboxExecutorLine from "../prompts/sandbox-executor-line.md" with { type: 'text' };
-import laptopExecutorLine from "../prompts/laptop-executor-line.md" with { type: 'text' };
-import offlineLaptopLine from "../prompts/offline-laptop-line.md" with { type: 'text' };
+import deviceExecutorLine from "../prompts/device-executor-line.md" with { type: 'text' };
+import offlineDeviceLine from "../prompts/offline-device-line.md" with { type: 'text' };
 import genericExecutorLine from "../prompts/generic-executor-line.md" with { type: 'text' };
 import executorsSection from "../prompts/executors-section.md" with { type: 'text' };
 import persistenceSection from "../prompts/persistence-section.md" with { type: 'text' };
@@ -193,18 +193,18 @@ export const SANDBOX_EXECUTOR_LINE = definePromptSection(
  * name, every step. This line carries only what never changes — what the
  * namespace is and how a call names its machine.
  */
-export const LAPTOP_EXECUTOR_LINE = definePromptSection(
-  "executors/laptop",
-  "{{#if cliLocal}}{{/if}}",
-  laptopExecutorLine.trimEnd(),
+export const DEVICE_EXECUTOR_LINE = definePromptSection(
+  "executors/device",
+  "",
+  deviceExecutorLine.trimEnd(),
 );
 
 /** A registered-but-offline device is still listed (the user can bring it
  *  back), unlike other unavailable executors, which are omitted entirely. */
-export const OFFLINE_LAPTOP_LINE = definePromptSection(
-  "executors/laptop-offline",
+export const OFFLINE_DEVICE_LINE = definePromptSection(
+  "executors/device-offline",
   "{{deviceName}}",
-  offlineLaptopLine.trimEnd(),
+  offlineDeviceLine.trimEnd(),
 );
 
 export const GENERIC_EXECUTOR_LINE = definePromptSection(
@@ -274,8 +274,8 @@ export const PERSISTENCE_SECTION = definePromptSection(
  * declaration it cannot read is free to disagree with it. The codemode
  * declarations own that documentation — every symbol with its doc comment in
  * the `agent.*` type block (tools/agent-self.ts TYPES), shipped to the model
- * in the same request inside the execute_tools description
- * (registry.ts renderExecuteToolsDescription), including scaffold gates,
+ * in the same request inside the eval description
+ * (registry.ts renderCodemodeDescription), including scaffold gates,
  * export shape, host-bridge restriction and rationale floor — and are emitted
  * only for wired providers. Both backends wire agent-self today (cf
  * orchestrator.ts, cli local-session.ts). A duplicate bullet list here would

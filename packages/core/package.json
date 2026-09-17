@@ -18,7 +18,8 @@
     "./web/connectome": "./src/web/connectome.ts",
     "./web/ground-text": "./src/web/ground-text.ts",
     "./web/hero-art": "./src/web/hero-art.ts",
-    "./web/hero-canvas": "./src/web/hero-canvas.ts"
+    "./web/hero-canvas": "./src/web/hero-canvas.ts",
+    "./web/inspector-layout": "./src/web/inspector-layout.ts"
   },
   "dependencies": {
     "@agent-core/core": "workspace:*",

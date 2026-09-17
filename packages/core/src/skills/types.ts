@@ -167,7 +167,7 @@ export type ActivationReason =
   | { kind: 'keyword'; matched_keyword: string }
   | { kind: 'always_active'; via: 'config' };
 
-// Skill CRUD uses ordinary workspace file operations inside `execute_tools`.
+// Skill CRUD uses ordinary workspace file operations inside `eval`.
 // Discovery is the ambient index from `renderSkillsIndexSection`, and
 // `resolveTurnSkills` decides activation once at turn start rather than
 // through a mid-turn call.

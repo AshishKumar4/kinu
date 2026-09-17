@@ -43,7 +43,7 @@ import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-
 
 /**
  * The ONE declaration of the `agent.*` contract — the codemode type block that
- * reaches the model inside the execute_tools description.
+ * reaches the model inside the eval description.
  *
  * The prompt's Code-execution section points at this namespace instead of
  * restating its signatures, so a test that pins a signature pins it HERE,
@@ -148,12 +148,12 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
 
     const both = buildSystemPromptSync(rt, {
-      availableTools: ['agents', 'execute_tools'],
+      availableTools: ['agents', 'eval'],
       agentsActions: ['swarm'],
       registeredExecutors: [],
     });
 
-    expect(both).toContain('callable inside execute_tools as `agents.<action>`');
+    expect(both).toContain('callable inside eval as `agents.<action>`');
 
     // No sandbox → no namespace to advertise.
     const noSandbox = buildSystemPromptSync(rt, {
@@ -166,7 +166,7 @@ describe('buildSystemPromptSync', () => {
 
     // No delegation deps → the section is not rendered at all.
     const noDelegation = buildSystemPromptSync(rt, {
-      availableTools: ['execute_tools'],
+      availableTools: ['eval'],
       registeredExecutors: [],
     });
 
@@ -525,7 +525,7 @@ describe('buildSystemPromptSync', () => {
     const registeredExecutors: string[] = [];
 
     const opts = {
-      availableTools: ['run', 'memory'] as const,
+      availableTools: ['shell', 'memory'] as const,
       externalTools: [{ name: 'tool_docs_search', source: 'mcp' as const, description: 'Search docs.' }],
       registeredExecutors,
     };
@@ -546,7 +546,7 @@ describe('buildSystemPromptSync', () => {
     // request. A summary here is the duplicate — 942 chars of it across the
     // eight builtins (measured 2026-08-25). Both directions are asserted, so
     // neither the example going missing nor a summary appearing is silent.
-    expect(kimi).toContain(`- **run**: \`${BUILTIN_TOOL_SPECS.run.example}\``);
+    expect(kimi).toContain(`- **shell**: \`${BUILTIN_TOOL_SPECS.shell.example}\``);
     expect(kimi).toContain(`- **memory**: \`${BUILTIN_TOOL_SPECS.memory.example}\``);
 
     for (const name of BUILTIN_TOOLS) {
@@ -570,15 +570,15 @@ describe('buildSystemPromptSync', () => {
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).toContain('workspace.createTool');
     expect(prompt).toContain('workspace.listTools()');
-    expect(prompt).toMatch(/next execute_tools call/);            // freshness, not "when injected"
+    expect(prompt).toMatch(/next eval call/);            // freshness, not "when injected"
     // The self-improvement lane is REACHABLE and named, but its signatures are
     // not restated here. Until 2026-08-25 this asserted `agent.proposeCurriculum`
     // in the prompt, which pinned a hand-written copy of a declaration that
     // ships in the same request (tools/agent-self.ts TYPES, carried into the
-    // execute_tools description by renderExecuteToolsDescription) — and the copy
+    // eval description by renderCodemodeDescription) — and the copy
     // was the weaker of the two. The pin now proves the same capability is
     // discoverable AND that its contract has exactly one home.
-    expect(prompt).toContain('`agent.*` namespace inside execute_tools');
+    expect(prompt).toContain('`agent.*` namespace inside eval');
     expect(prompt).toMatch(/curriculum/);
     expect(prompt).not.toContain('agent.proposeCurriculum(');
     expect(agentSelfTypes()).toContain('proposeCurriculum');
@@ -627,7 +627,7 @@ describe('buildSystemPromptSync', () => {
     // that is what this half of the test is for. It is advertised as the
     // NAMESPACE now rather than as a copied signature (see the note in the craft
     // test above); the signature itself is asserted against its one declaration.
-    expect(withoutTemporary).toContain('`agent.*` namespace inside execute_tools');
+    expect(withoutTemporary).toContain('`agent.*` namespace inside eval');
     expect(withoutTemporary).toMatch(/scaffold proposals/);
     expect(withoutTemporary).not.toContain('agent.proposeScaffold(');
     expect(agentSelfTypes()).toContain('proposeScaffold');
@@ -774,28 +774,25 @@ describe('buildSystemPromptSync', () => {
     expect(containerPreviewsOnly).not.toMatch(/is a Worker slate/);
   });
 
-  test('every runtime is its own machine, on every backend, with mounts named', () => {
-    // The workspace is its own durable filesystem on BOTH backends, so this is
-    // unconditional — no per-backend exception for a cli-local host shell
-    // shared with the laptop executor, which is the one shape that would make
-    // "separate filesystems" false.
+  test('every runtime is its own machine, with mounts named', () => {
+    // The workspace is its own durable filesystem, so this is unconditional.
     // The mount doctrine rides beside it: a live machine's files also appear
-    // in the agent's own plane at /pc (and /sandbox where a container binds),
-    // while the shell stays over workspace bytes only.
+    // in the agent's own plane at /pc/<name> (and /sandbox where a container
+    // binds), while the shell stays over workspace bytes only.
+    // cli-local is excluded: it offers no device runtime — the machine IS the
+    // workspace, so no device row and no separate-machines paragraph there.
     const { rt } = createTestRuntime();
 
     const executors: PromptExecutorInfo[] = [
       { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-      { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+      { name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active' },
     ];
 
-    for (const backend of ['cli-local', 'cf'] as const) {
-      const prompt = buildSystemPromptSync(rt, { backend, executors });
-      expect(prompt).toMatch(/separate machines/i);
-      expect(prompt).not.toContain('the same machine and see the same files');
-      expect(prompt).toContain('/pc');
-      expect(prompt).toMatch(/cannot see mount points/);
-    }
+    const prompt = buildSystemPromptSync(rt, { backend: 'cf', executors });
+    expect(prompt).toMatch(/separate machines/i);
+    expect(prompt).not.toContain('the same machine and see the same files');
+    expect(prompt).toContain('/pc');
+    expect(prompt).toMatch(/cannot see mount points/);
   });
 
   test('renders only selectable executors when lifecycle facts are supplied', () => {
@@ -804,14 +801,14 @@ describe('buildSystemPromptSync', () => {
     const prompt = buildSystemPromptSync(rt, {
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        { name: 'laptop', kind: 'laptop', available: false, configured: false, active: false, status: 'not_configured' },
+        { name: 'device', kind: 'device', available: false, configured: false, active: false, status: 'not_configured' },
         { name: 'sandbox', kind: 'sandbox', available: false, configured: false, active: false, status: 'not_configured' },
       ],
     });
 
     expect(prompt).not.toContain('nimbus.*');
     expect(prompt).toContain('workspace.*');
-    expect(prompt).not.toContain('laptop');
+    expect(prompt).not.toContain('device.*');
     expect(prompt).not.toContain('**sandbox.***');
     expect(prompt).not.toMatch(/Showing a running app/);
   });
@@ -842,25 +839,25 @@ describe('buildSystemPromptSync', () => {
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
         {
-          name: 'laptop', kind: 'laptop', available: false, configured: true, active: false,
+          name: 'device', kind: 'device', available: false, configured: true, active: false,
           status: 'disconnected', label: 'ashish@studio',
         },
       ],
     });
 
     expect(prompt).toContain('currently offline');
-    // The row names the machine its owner named. "laptop" is the namespace.
+    // The row names the machine its owner named. "device" is the namespace.
     expect(prompt).toContain('ashish@studio');
     // Calling an offline device is how the owner gets ASKED for it — the hub
     // raises a connect request on that call — so the row names the way back
     // rather than forbidding the call.
     expect(prompt).toContain('asks the user to bring it back');
     expect(prompt).toContain('kinu connect');
-    // Offline ≠ selectable: no laptop.* namespace advertised for calls.
-    expect(prompt).not.toContain('laptop.***');
+    // Offline ≠ selectable: no device.* namespace advertised for calls.
+    expect(prompt).not.toContain('device.***');
   });
 
-  test('the online laptop line names no machine and no grant: the fleet is volatile', () => {
+  test('the online device line names no machine and no grant: the fleet is volatile', () => {
     // The user may have several machines live at once, and which they are,
     // which are connected and whether THIS workspace holds each one's grant
     // change under a session. All of that renders in the dynamic-context
@@ -874,28 +871,28 @@ describe('buildSystemPromptSync', () => {
         backend: 'cf',
         executors: [
           {
-            name: 'laptop', kind: 'laptop', available: true, configured: true, active: true,
+            name: 'device', kind: 'device', available: true, configured: true, active: true,
             status: 'active', label: 'ashish@studio', granted,
           },
         ],
       });
 
-      expect(prompt).toContain('laptop.*');
+      expect(prompt).toContain('device.*');
       expect(prompt).not.toContain('ashish@studio');
       expect(prompt).not.toContain('NO grant yet');
       expect(prompt).not.toContain('holds its access grant already');
       // What the line DOES teach: grants are per machine, the first call asks
       // once, and a fleet of several needs the machine named on every call.
       expect(prompt).toContain('Grants are per machine');
-    expect(prompt).toContain('the runtime asks the user once');
-      expect(prompt).toContain('device: "<name>"');
+      expect(prompt).toContain('the runtime asks the user once');
+      expect(prompt).toContain('runtime: "<nickname>"');
       expect(prompt).toContain('The runtime refuses a call that names none');
       // The live-state framing replaces "assume absent forever".
       expect(prompt).toContain('live state at the start of this turn');
     }
   });
 
-  test('the online laptop line renders the same bytes whatever the fleet looks like', () => {
+  test('the online device line renders the same bytes whatever the fleet looks like', () => {
     // The whole reason names left the prefix: two fleets, one prefix. A
     // connect or a rename must not re-prefill the conversation.
     const { rt } = createTestRuntime();
@@ -903,7 +900,7 @@ describe('buildSystemPromptSync', () => {
     const render = (identity: { label?: string; granted?: boolean }) => buildSystemPromptSync(rt, {
       backend: 'cf',
       executors: [{
-        name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active',
+        name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active',
         ...identity,
       }],
     });
@@ -912,20 +909,23 @@ describe('buildSystemPromptSync', () => {
     expect(render({})).toBe(render({ label: 'ashish@studio', granted: true }));
   });
 
-  test('the cli-local laptop is the CLI host machine — direct, no consent prompt', () => {
+  test('cli-local renders the workspace as the machine, rooted where the session started', () => {
+    // The CLI registers one executor and the row says what it is: the
+    // machine the CLI runs on. No device row exists to render there because
+    // the runtime constructs none — the prompt has no per-backend filter.
     const { rt } = createTestRuntime();
 
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cli-local',
       executors: [
-        { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
       ],
     });
 
-    expect(prompt).toContain('laptop.*');
-    expect(prompt).toContain('the local machine the Kinu CLI is running on');
-    expect(prompt).toContain('no tunnel or consent prompt');
-    expect(prompt).not.toContain('device tunnel');
+    expect(prompt).not.toContain('device.***');
+    expect(prompt).not.toMatch(/separate machines/i);
+    expect(prompt).toContain('the machine the CLI runs on');
+    expect(prompt).toContain('rooted in the directory the session was started in');
   });
 
   test('omits executor section when no executors registered', () => {
@@ -943,7 +943,7 @@ describe('buildSystemPromptSync', () => {
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
         { name: 'sandbox', kind: 'sandbox', available: true, configured: true, active: true, status: 'active' },
-        { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+        { name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active' },
       ],
     });
 
@@ -955,7 +955,7 @@ describe('buildSystemPromptSync', () => {
     // Every other environment is a namespace, never a directory of this one.
     expect(prompt).toContain('`sandbox.*`');
     expect(prompt).not.toContain('`nimbus.*`');
-    expect(prompt).toContain('`laptop.*`');
+    expect(prompt).toContain('`device.*`');
     expect(prompt).not.toContain('Nimbus for quick cloud execution');
     expect(prompt).toMatch(/paths native to each machine/);
     // The mount doctrine is part of the naming: a live machine's files sit
@@ -970,14 +970,14 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
 
     const prompt = buildSystemPromptSync(rt, {
-      backend: 'cli-local',
+      backend: 'cf',
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+        { name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active' },
       ],
     });
 
-    expect(prompt).toContain('`laptop.*`');
+    expect(prompt).toContain('`device.*`');
     expect(prompt).not.toContain('`sandbox.*`');
     expect(prompt).not.toContain('`nimbus.*`');
   });
@@ -1043,7 +1043,7 @@ describe('buildSystemPromptSync', () => {
     expect(noExec).not.toContain('Run the real check');
 
     const withRun = buildSystemPromptSync(rt, {
-      availableTools: ['memory', 'run'],
+      availableTools: ['memory', 'shell'],
       registeredExecutors: [],
     });
 
@@ -1068,7 +1068,7 @@ describe('buildSystemPromptSync', () => {
 
     expect(prompt).toContain('**memory**');
     expect(prompt).toContain('**web**');
-    expect(prompt).not.toContain('**execute_tools**');
+    expect(prompt).not.toContain('**eval**');
     expect(prompt).not.toContain('agent.schedule');
     // No delegation tool wired → no ladder at all.
     expect(prompt).not.toContain('## Delegation');
@@ -1106,11 +1106,11 @@ describe('buildSystemPromptSync', () => {
     const surface = compilePromptSurface({
       executors: [
         { name: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        { name: 'laptop', available: false, configured: true, active: false, status: 'disconnected' },
+        { name: 'device', available: false, configured: true, active: false, status: 'disconnected' },
       ],
     });
 
-    expect(surface.executors.map((exec) => exec.name)).toEqual(['laptop', 'workspace']);
+    expect(surface.executors.map((exec) => exec.name)).toEqual(['device', 'workspace']);
     expect(surface.selectableExecutors.map((exec) => exec.name)).toEqual(['workspace']);
   });
 
@@ -1118,7 +1118,7 @@ describe('buildSystemPromptSync', () => {
     expect(modelSupportsTools({ id: 'o4-mini' })).toBe(false);
     expect(modelSupportsTools({ id: '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b' })).toBe(false);
     expect(modelSupportsTools({ id: '@cf/moonshotai/kimi-k2.6' })).toBe(true);
-    expect(() => assertToolsSupportedByModel({ id: 'o4-mini' }, ['run']))
+    expect(() => assertToolsSupportedByModel({ id: 'o4-mini' }, ['shell']))
       .toThrow(/does not support tool calling/);
   });
 
@@ -1403,7 +1403,7 @@ describe('buildSystemPromptSync', () => {
       //   only place BUILTIN_TOOL_SPECS.example reaches a model, and which is
       //   the split OpenAI's GPT-4.1 guide prescribes: examples in the prompt,
       //   contract in the description field.
-      // 2026-09-03: RAISED 1020 → 1100, measured 1048: the execute_tools
+      // 2026-09-03: RAISED 1020 → 1100, measured 1048: the eval
       //   example became a three-line Node-style program (`require('fs/promises')`
       //   + readdir), which is the shape the hosted sandbox now runs.
       'Tools available this turn': 1100,
@@ -1428,11 +1428,11 @@ describe('buildSystemPromptSync', () => {
       //       therefore loses no surface (manyRuntimes implied it: with 2+
       //       executors at most one is `workspace`), so a lone sandbox now reads
       //       doctrine it used to miss. 3051 → 2928.
-      //     +73 (device identity) the laptop rows now name the machine the user
+      //     +73 (device identity) the device rows now name the machine the user
       //       named it and say whether this workspace already holds its access
       //       grant. 2928 → 3001.
       // 2026-09-03: RAISED 3050 → 3200 for the fleet, measured 3159.
-      //   +158 NET. The laptop line stopped naming ONE machine and one grant
+      //   +158 NET. The device line stopped naming ONE machine and one grant
       //     (−73: both left for the dynamic-context roster, where every machine
       //     renders by name each step — with two connected, the prefix's one
       //     name was whichever the hub happened to pick) and now states the
@@ -1453,14 +1453,22 @@ describe('buildSystemPromptSync', () => {
       // 2026-09-15: +152, exact measured 3412. One sentence under `hasSandbox`
       //   stating the container's mount equivalence — the container's whole
       //   filesystem sits at `/sandbox` while its commands run in `/workspace`
-      //   — so `/sandbox/workspace/x` is the file a `run` on `sandbox` calls
+      //   — so `/sandbox/workspace/x` is the file a `shell` on `sandbox` calls
       //   `x`. The mount paragraph it lives beside is `hasDevices`-gated, and
       //   a device-less workspace (every eval workspace) never saw it: the
       //   public-failure-recovery model wrote to `/sandbox/` (container `/`)
       //   and its `cd /` test run backgrounded on the 30s window.
-      'Execution environments': 3412,
+      // 2026-09-15, same day, rename raise → 3414, exact measured. The
+      //   `run`→`shell` rename made this section two chars longer in
+      //   aggregate; no text changed but the name, so the ceiling tracks
+      //   the rename, not a new sentence.
+      // 2026-09-16 → 3555, exact measured: one new sentence, the reference
+      //   grammar (docs/CODEMODE-SURFACE.md, "References in content") —
+      //   paths in commands, `root://path` in anything a person reads —
+      //   beside the mount sentence rewritten to `/pc/<name>` the same day.
+      'Execution environments': 3555,
       'Persistence': 700,
-      // 2026-08: −1 line. `execute_tools runs JavaScript against the active
+      // 2026-08: −1 line. `eval runs JavaScript against the active
       // executor/codemode namespaces` was the tool's own summary, restated.
       // 2026-08-12: +4 chars. Defect-B fix: the agent.jobResult bullet used to
       // read as a generic "read status and results" call; it now says a
@@ -1470,7 +1478,7 @@ describe('buildSystemPromptSync', () => {
       // 2026-08-25: LOWERED 1610 → 830, measured 801 (−425 on this surface,
       //   −777 with rlm.query present). The six `agent.*` API bullets were a
       //   hand-maintained second copy of the `agent.*` codemode type block,
-      //   which ships to the model inside the execute_tools description — and
+      //   which ships to the model inside the eval description — and
       //   the weaker copy: the proposeScaffold bullet omitted the required
       //   `async function* run(rt, task)` export, the host-bridge restriction
       //   and the rationale floor that the declaration states. One pointer at
@@ -1559,7 +1567,7 @@ describe('buildSystemPromptSync', () => {
 
     const options = {
       backend: 'cf',
-      registeredExecutors: ['workspace', 'nimbus', 'sandbox', 'laptop'],
+      registeredExecutors: ['workspace', 'nimbus', 'sandbox', 'device'],
       currentDate: '2026-06-11',
       model: { id: 'anthropic/claude-sonnet-4.5' },
     } satisfies SystemPromptOptions;

@@ -11,7 +11,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** Console output while `run` executes, in call order. */
+/** Console output while `shell` executes, in call order. */
 function captureConsole(run: () => void): string[] {
   const lines: string[] = [];
   const original = console.log;
@@ -71,7 +71,7 @@ describe('printToolResult', () => {
 
 
 describe('createTurnStatus', () => {
-  /** Terminal writes while `run` executes, in call order. */
+  /** Terminal writes while `shell` executes, in call order. */
   function captureWrites(run: () => void): string[] {
     const writes: string[] = [];
     const original = process.stdout.write;

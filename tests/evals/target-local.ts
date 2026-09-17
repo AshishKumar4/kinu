@@ -19,9 +19,9 @@
  *     episode: degraded gave no `craft_cycle` row and `craft_reuse` eligible 0;
  *     opened gave `crafted:["doubleIt"]`, `reused:["doubleIt"]`, eligible 1.
  *     Three flash runs blamed that zero on the corpus.
- *   `hostRoot: null`       — the default `laptop` provider is rooted at
- *     `process.cwd()`, and an episode reaches every registered provider through
- *     `execute_tools`. A live run left `scratch-add/{add.js,add.test.js}` in a
+ *   no `cwd`               — a bound directory makes the workspace shell the
+ *     developer's own, and an episode reaches every registered provider
+ *     through `eval`. A live run left `scratch-add/{add.js,add.test.js}` in a
  *     worktree root and `report.txt` in the repo root.
  *   `installPreTurnProfile` — `setProfileResolver` has exactly ONE caller in the
  *     product, `LocalAgentSession`'s constructor (`local-session.ts:625`), so a
@@ -134,7 +134,7 @@ export async function provisionLocalTarget(opts: LocalTargetOptions): Promise<Lo
 
   await createWorkspace(db, { name: opts.workspace, purpose: opts.purpose, llm: opts.llm });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: opts.llm, hostRoot: null });
+  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: opts.llm });
 
   requireExecutorSurface(opts.workspace, rt);
   requireSandboxedExecutors(opts.workspace, rt);

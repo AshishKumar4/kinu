@@ -10,7 +10,7 @@ The other three timescales are conversational. The next user message grades a tu
 
 A headless actor runs the step clock and nothing above it. `runHeadInference` (`packages/core/src/heads/head-inference.ts`) records none of its turns into the window, and the CLI declares every hosted child `noAutoEvolve` (`packages/cli-backend/src/agent-host/host.ts`). A hired agent learns at the step clock on both backends. Only the workspace agent that owns the conversation reviews turns, closes windows, and evolves its scaffold.
 
-The step clock fires on every settled `execute_tools` call, read off the tool-result hook. The hook carries the call's own args, so the code graded is the code that ran. Creation is credited only to a call that itself invoked `workspace.createTool`. Invocation means call sites in the submitted code: `tools.<name>(`, the one namespace a crafted tool answers in. Strings and comments are blanked first, so a tool body passed to `createTool` is not read as a call.
+The step clock fires on every settled `eval` call, read off the tool-result hook. The hook carries the call's own args, so the code graded is the code that ran. Creation is credited only to a call that itself invoked `workspace.createTool`. Invocation means call sites in the submitted code: `tools.<name>(`, the one namespace a crafted tool answers in. Strings and comments are blanked first, so a tool body passed to `createTool` is not read as a call.
 
 The fitness signal is execution, observed at the host. A crafted tool that raised is stamped with its own name leaving the sandbox, so the failure lands on the artifact whether or not the model caught it. A call that broke on its own account blames nobody. A completed call credits only tools that already existed when it started. A tool cannot certify itself on the call that created it. A call moved to the background is not a result and credits nothing.
 
@@ -164,7 +164,7 @@ The check runs at five call sites over four declared surfaces (`SURFACE_CRITERIA
 | `craft_tool` | `workspace.createTool`, `core/src/execution/inline.ts:337` | the four safety-machinery criteria |
 | `import` | Experience-library import, `core/src/experience/imports.ts:160` | all five |
 
-`craft_tool` is the one documented exception. It skips `network-egress` because the codemode Worker exposes raw network globals, so the same `fetch(...)` ran freely in an ephemeral `execute_tools` call one line earlier, and vetoing only the persisted form buys no containment. What persistence changes is blast radius over time, so criteria 2 through 5 are enforced there in full.
+`craft_tool` is the one documented exception. It skips `network-egress` because the codemode Worker exposes raw network globals, so the same `fetch(...)` ran freely in an ephemeral `eval` call one line earlier, and vetoing only the persisted form buys no containment. What persistence changes is blast radius over time, so criteria 2 through 5 are enforced there in full.
 
 ### Shadow evaluation
 
@@ -335,7 +335,7 @@ The proposal schema is `strictObject` at every level. An unknown field refuses t
 graph LR
     A[Tool call pattern<br/>in conversation] -->|"extractPattern()"| B[LLM generalizes<br/>to reusable function]
     B -->|"upsertCraftedTool()"| C[crafted_tools table<br/>+ FTS5 index]
-    C -->|"filterByEffectiveScore()"| D[Injected into the<br/>execute_tools sandbox]
+    C -->|"filterByEffectiveScore()"| D[Injected into the<br/>eval sandbox]
     D -->|"Model calls tool"| E[Execute via<br/>the runtime executor]
     E -->|"Score updated"| F[EMA scoring<br/>craft_scores table]
     F -->|"periodicCraftConsolidation()"| G{effectiveScore<br/>above threshold?}

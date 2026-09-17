@@ -7,13 +7,13 @@
 
 ## One workspace, optional environments
 
-Kinu has one workspace file plane. Nimbus holds it as a library over the owning Durable Object's own `ctx.storage.sql` on Cloudflare, and over the local workspace on the CLI. The `file` tool, default `run`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
+Kinu has one workspace file plane. Nimbus holds it as a library over the owning Durable Object's own `ctx.storage.sql` on Cloudflare, and over the local workspace on the CLI. The `file` tool, default `shell`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
 
 | Namespace | Registered by | Filesystem relationship |
 |---|---|---|
 | `workspace` | both backends. Cloudflare registers `createNimbusWorkspaceExecutor`; the CLI registers `createInlineExecutor` | the canonical workspace |
 | `sandbox` | Cloudflare only. `createSandboxExecutor` is registered once with a live handle and twice as a not-configured stub | a separate Linux container |
-| `laptop` | Cloudflare over the device tunnel (`createDeviceTunnelExecutor`); the CLI over its own host process (`createLocalLaptopExecutor`) | a separate user machine |
+| `device` | Cloudflare over the device tunnel (`createDeviceTunnelExecutor`); the CLI registers none — the machine is the workspace there | a separate user machine |
 | `parent` | CLI head runtimes only (`createParentExecutor`) | another workspace authority |
 
 Every registration lives in backend `runtime.ts`. `ExecutorKind` has five
@@ -30,7 +30,7 @@ call it. The Environment surface labels this `Parent workspace`
 (`core/src/read-models/executors.ts`).
 
 The mount table (`core/src/vfs/mounts.ts`) exposes the user's live device at
-`/pc` and a bound container at `/sandbox`. Mount paths route to the target
+`/pc/<name>` and a bound container at `/sandbox`. Mount paths route to the target
 `files` VFS with the prefix stripped, preserving its consent and path
 boundaries. An absent environment is explicit (`ENXIO`, `/pc`, `no device
 connected`), never an empty directory. There is no copy, sync, failover, or
@@ -38,15 +38,16 @@ second Cloudflare `nimbus.*` provider. Name a runtime for commands; cross a
 mount for files.
 
 The user's account is a fleet: several machines can be linked and several live
-at once. One live machine keeps `/pc` as its own root, byte for byte. Two or
-more mount each machine under `/pc/<name>`. The segment is the machine's
+at once. The mount is always `/pc/<name>`: every machine — one or many — is
+addressed by its segment, so a path stays valid when a second machine joins.
+The segment is the machine's
 user-chosen name, or its id when the name is shared or is not a usable path
 segment (`deviceMountSegment`, `core/src/execution/device-tunnel-executor.ts`).
-`/pc` itself then lists the machines. A path under no live machine is
+`/pc` itself lists the machines. A path under no live machine is
 `ENXIO` naming the fleet. Commands name their machine the same way: every
-`laptop` tool and `run { runtime: "laptop" }` take `device: "<name>"`. With one
-machine live it may be omitted. With several, a call that names none is refused
-with the classified ask (`deviceFleetAsk`, `core/src/execution/device-status.ts`).
+`device` tool takes `device: "<name>"` and `shell { runtime: "<name>" }` names
+the machine by the nickname the live prompt lists. With several, a call that
+names none is refused with the classified ask (`deviceFleetAsk`, `core/src/execution/device-status.ts`).
 The hub routes on the device id, which rides every frame it sends. It never
 picks a machine for an unnamed call (`DeviceSocketHub.connectedDeviceId`,
 `core/src/execution/device-hub.ts`). Grants stay per (workspace, device).
@@ -67,7 +68,7 @@ must be cheap. Neither provisions anything.
 `ExecutionRouter` (`core/src/execution/router.ts`) registers providers, reports
 status, and gives codemode only available providers. Explicit `runtime` plus
 namespace is the routing decision. `register()` applies `gateProviderExec`
-(`core/src/execution/approval.ts`), so `run` and `<name>.exec()` share approval.
+(`core/src/execution/approval.ts`), so `shell` and `<name>.exec()` share approval.
 `workspace.exec` is exempt. `withApprovalGatedShell` already gates it.
 `startProcess` is gated here.
 
@@ -81,7 +82,7 @@ A gate denial preserves `denied`; a queued request preserves `unavailable`.
 Neither dispatches a command. Only producer-classified no-execution
 outcomes qualify for a grant refund.
 
-Native invocations use the SDK error channel. For example, native `run`
+Native invocations use the SDK error channel. For example, native `shell`
 returns successful text but raises a classified `KinuError` for an operation
 failure, retaining observed exit metadata. The explicit namespace adapters
 return typed operation refusals as values so authored code can branch on them.
@@ -125,10 +126,10 @@ Status separates `configured` (binding exists), `available` (callable now),
 failure). Prompt, tools, and discovery derive from that state, never a stale
 backend label.
 
-## Workspace, container, laptop, parent
+## Workspace, container, device, parent
 
 `createNimbusWorkspaceExecutor()` gives Cloudflare one Nimbus session for
-files, POSIX shell, code/runtime execution, processes, and ports. `run`,
+files, POSIX shell, code/runtime execution, processes, and ports. `shell`,
 `file`, and codemode share a read-before-write ledger and approval policy.
 Actors share files and processes but retain a `shellId` across reconstruction.
 The key is `agent:<name>` for the main actor (`cf-backend/src/actor-agent.ts:700`)
@@ -202,7 +203,7 @@ deduplicates delivery (`cf-backend/src/sandbox-lifecycle.ts`). Deletion opens
 load-bearing: after object storage disappears, no one can name its R2 objects.
 A later same-name workspace inherits no container state.
 
-The laptop crosses device consent. `UserDO` scopes each action to the
+The device crosses device consent. `UserDO` scopes each action to the
 consented root unless full-filesystem access is granted; disconnected or
 unapproved devices never fall back to availability. `shell`, `native_binary`,
 `fs_owned`, `net_outbound`, `process_spawn` are structural. The hub probes
@@ -229,7 +230,7 @@ Hosted Node programs cannot: `workspaceNodeCommand` in
 `core/src/vfs/workspace-runtimes.ts` probes the shim at the first invocation,
 where workerd forbids its string compiler. Version and help commands do not
 compile a program. A runtime catalog entry is not proof that this host can run it.
-The CLI has no container: work needing a real machine goes to consented `laptop`.
+The CLI has no container: work needing a real machine goes to consented `device`.
 
 The inventories were probed. `scripts/nimbus-runtime-probe.ts` covers the
 workspace. `executeInExecutor` found `git` 2.34.1, `npm` 10.9.8, `node`
@@ -266,7 +267,7 @@ Escalate only for structural needs:
 
 An inbound port or a long-lived process alone does not select a container.
 The server runtime does. Hosted git already uses isomorphic-git. Local git
-work belongs on `laptop`. Docker and Python are absent from the probed
+work belongs on `device`. Docker and Python are absent from the probed
 container image; selecting that image does not install them. The container
 git path needs the outbound
 interception path (`cf-backend/src/egress/configure.ts`, `egress/outbound.ts`),

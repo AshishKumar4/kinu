@@ -54,7 +54,7 @@ function approvalsDb() {
  *  box and no longer the owner's decision. */
 const GATED = 'git push --force origin main';
 
-type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
+type ShellTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 
 function setup(opts: {
   mode?: 'strict' | 'allow_all' | 'deny_all';
@@ -113,12 +113,12 @@ function setup(opts: {
   const runtime: AgentRuntime = { ...rt, shell };
   const tools = buildBuiltinTools({ rt: runtime });
 
-  const run: RunTool = {
-    execute: toolExecute<{ command: string; runtime?: string }, string>(tools.run),
+  const shellTool: ShellTool = {
+    execute: toolExecute<{ command: string; runtime?: string }, string>(tools.shell),
   };
 
   return {
-    queue, store, shell, executed, delivered, granted, audited, run,
+    queue, store, shell, executed, delivered, granted, audited, shellTool,
     advance: (ms: number) => { elapsed += ms; },
   };
 }
@@ -152,9 +152,9 @@ describe('a gated action nobody is there to approve', () => {
   });
 
   test('is parked, and the model is told it did NOT run — in one line', async () => {
-    const { run, executed, queue } = setup();
+    const { shellTool, executed, queue } = setup();
 
-    const out = run.execute({ command: GATED });
+    const out = shellTool.execute({ command: GATED });
     // What only this call site knows: nothing ran, which rule, which machine,
     // the id, and that a decision is coming. The doctrine around it — carry on
     // or stop, re-issuing returns the same answer — is true of every parked
@@ -188,25 +188,25 @@ describe('a gated action nobody is there to approve', () => {
   test('re-issuing the same command returns the SAME parked row, not a second one', async () => {
     // One decision, one row. An identical answer is also what lets the turn's
     // own repeat detector see the loop instead of the queue filling up.
-    const { run, queue } = setup();
+    const { shellTool, queue } = setup();
 
-    const first = run.execute({ command: GATED });
+    const first = shellTool.execute({ command: GATED });
     await expect(first).rejects.toMatchObject({ code: 'unavailable', message: expect.stringContaining('defer-1') });
-    const second = run.execute({ command: GATED });
+    const second = shellTool.execute({ command: GATED });
     await expect(second).rejects.toMatchObject({ code: 'unavailable', message: expect.stringContaining('defer-1') });
     expect(queue.list()).toHaveLength(1);
   });
 
   test('a different gated command is its own row', async () => {
-    const { run, queue } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
-    await expect(run.execute({ command: 'npm publish' })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    await expect(shellTool.execute({ command: 'npm publish' })).rejects.toBeInstanceOf(KinuError);
     expect(queue.list().map((a) => a.id)).toEqual(['defer-1', 'defer-2']);
   });
 
   test('an ungated command is untouched by any of this', async () => {
-    const { run, executed, queue } = setup();
-    expect(await run.execute({ command: 'ls -la' })).toBe('ran');
+    const { shellTool, executed, queue } = setup();
+    expect(await shellTool.execute({ command: 'ls -la' })).toBe('ran');
     expect(executed).toEqual(['ls -la']);
     expect(queue.list()).toEqual([]);
   });
@@ -214,8 +214,8 @@ describe('a gated action nobody is there to approve', () => {
 
 describe('the standing modes still decide first', () => {
   test('allow_all runs a gated command and parks nothing', async () => {
-    const { run, executed, queue } = setup({ mode: 'allow_all' });
-    expect(await run.execute({ command: GATED })).toBe('ran');
+    const { shellTool, executed, queue } = setup({ mode: 'allow_all' });
+    expect(await shellTool.execute({ command: GATED })).toBe('ran');
     expect(executed).toEqual([GATED]);
     expect(queue.list()).toEqual([]);
   });
@@ -223,23 +223,23 @@ describe('the standing modes still decide first', () => {
   test('deny_all refuses without parking — the owner already answered', async () => {
     // Parking here would put a question to the owner they have standing
     // instructions about.
-    const { run, executed, queue } = setup({ mode: 'deny_all' });
-    const out = run.execute({ command: GATED })
+    const { shellTool, executed, queue } = setup({ mode: 'deny_all' });
+    const out = shellTool.execute({ command: GATED })
     await expect(out).rejects.toMatchObject({ message: expect.stringContaining('refused by standing policy (deny_all)') });
     expect(executed).toEqual([]);
     expect(queue.list()).toEqual([]);
   });
 
   test('a live channel that answers is never overridden by the queue', async () => {
-    const { run, executed, queue } = setup({ approve: async () => 'allow' });
-    expect(await run.execute({ command: GATED })).toBe('ran');
+    const { shellTool, executed, queue } = setup({ approve: async () => 'allow' });
+    expect(await shellTool.execute({ command: GATED })).toBe('ran');
     expect(executed).toEqual([GATED]);
     expect(queue.list()).toEqual([]);
   });
 
   test('a channel that says deny is a decision, not an absence', async () => {
-    const { run, queue } = setup({ approve: async () => 'deny' });
-    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('Denied by the owner') });
+    const { shellTool, queue } = setup({ approve: async () => 'deny' });
+    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('Denied by the owner') });
     expect(queue.list()).toEqual([]);
   });
 
@@ -247,22 +247,22 @@ describe('the standing modes still decide first', () => {
     // The unattended case as an ACP surface produces it: attached, but nobody
     // answering. `null` has always meant "nobody is listening"; it now parks
     // instead of manufacturing a refusal.
-    const { run, queue } = setup({ approve: async () => null });
-    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
+    const { shellTool, queue } = setup({ approve: async () => null });
+    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
     expect(queue.list()).toHaveLength(1);
   });
 
   test('with no queue wired at all, strict keeps its old explanatory refusal', async () => {
-    const { run, executed } = setup({ noQueue: true });
-    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('needs owner approval, nobody to ask') });
+    const { shellTool, executed } = setup({ noQueue: true });
+    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('needs owner approval, nobody to ask') });
     expect(executed).toEqual([]);
   });
 });
 
 describe('the owner decides, in bulk, and the agent is woken', () => {
   test('approval wakes the agent through the one signal seam — and says nothing has run', async () => {
-    const { run, queue, delivered, executed } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, delivered, executed } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
 
     const decided = await queue.decide(['defer-1'], 'approved');
 
@@ -278,8 +278,8 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
   });
 
   test('denial wakes the agent too, and says so in the owner\'s terms', async () => {
-    const { run, queue, delivered } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, delivered } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
 
     await queue.decide(['defer-1'], 'denied');
 
@@ -290,10 +290,10 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
   test('a night of parked actions is ONE decision and ONE wake', async () => {
     // The point of bulk: five queued commands decided in one sitting must not
     // cost the agent five separate turns of being told about them.
-    const { run, queue, delivered } = setup();
+    const { shellTool, queue, delivered } = setup();
 
     for (const command of ['npm publish a', 'npm publish b', 'npm publish c', 'npm publish d', 'npm publish e']) {
-      await expect(run.execute({ command })).rejects.toBeInstanceOf(KinuError);
+      await expect(shellTool.execute({ command })).rejects.toBeInstanceOf(KinuError);
     }
 
     expect(queue.list()).toHaveLength(5);
@@ -309,9 +309,9 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
   });
 
   test('a mixed batch names which are which', async () => {
-    const { run, queue, delivered } = setup();
-    await expect(run.execute({ command: 'npm publish a' })).rejects.toBeInstanceOf(KinuError);
-    await expect(run.execute({ command: 'npm publish b' })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, delivered } = setup();
+    await expect(shellTool.execute({ command: 'npm publish a' })).rejects.toBeInstanceOf(KinuError);
+    await expect(shellTool.execute({ command: 'npm publish b' })).rejects.toBeInstanceOf(KinuError);
 
     await queue.decide(['defer-1'], 'approved');
     await queue.decide(['defer-2'], 'denied');
@@ -323,8 +323,8 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
   });
 
   test('deciding an already-decided action changes nothing and wakes nobody', async () => {
-    const { run, queue, delivered } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, delivered } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-1'], 'approved');
 
     expect(await queue.decide(['defer-1'], 'denied')).toEqual([]);
@@ -335,8 +335,8 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
   test('one id sent twice is one decision, not two', async () => {
     // A double-click, or a bulk selection overlapping a single row: the wake
     // must not name one command as two decisions.
-    const { run, queue, delivered } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, delivered } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
 
     const decided = await queue.decide(['defer-1', 'defer-1'], 'approved');
 
@@ -347,24 +347,24 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
 
 describe('what an approval actually buys', () => {
   test('the approved command runs when the AGENT re-issues it — and only then', async () => {
-    const { run, queue, executed } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, executed } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-1'], 'approved');
     expect(executed).toEqual([]);
 
-    expect(await run.execute({ command: GATED })).toBe('ran');
+    expect(await shellTool.execute({ command: GATED })).toBe('ran');
     expect(executed).toEqual([GATED]);
   });
 
   test('one approval authorises exactly one run', async () => {
     // A grant that could be replayed would let a single click authorise an
     // unbounded number of executions of a command the gate stopped.
-    const { run, queue, executed } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, executed } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-1'], 'approved');
 
-    expect(await run.execute({ command: GATED })).toBe('ran');
-    const second = run.execute({ command: GATED })
+    expect(await shellTool.execute({ command: GATED })).toBe('ran');
+    const second = shellTool.execute({ command: GATED })
 
     await expect(second).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
     expect(executed).toEqual([GATED]);
@@ -372,22 +372,22 @@ describe('what an approval actually buys', () => {
   });
 
   test('an approval never travels to a different command', async () => {
-    const { run, queue, executed } = setup();
-    await expect(run.execute({ command: 'npm publish a' })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, executed } = setup();
+    await expect(shellTool.execute({ command: 'npm publish a' })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-1'], 'approved');
 
-    await expect(run.execute({ command: 'npm publish b' })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
+    await expect(shellTool.execute({ command: 'npm publish b' })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
     expect(executed).toEqual([]);
   });
 
   test('a refused command reports the refusal on re-issue instead of re-asking', async () => {
     // Device consent's doctrine: the owner said no, and asking again
     // immediately is noise. The escape is named in the message, not hidden.
-    const { run, queue, executed } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, executed } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-1'], 'denied');
 
-    const out = run.execute({ command: GATED })
+    const out = shellTool.execute({ command: GATED })
 
     await expect(out).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN — the owner refused this (defer-1). Not a timeout; find another way.') });
     expect(executed).toEqual([]);
@@ -400,13 +400,13 @@ describe('what an approval actually buys', () => {
     // standing policy: `deny_all` and the rule grants are. So the row expires
     // rather than answering for the life of the workspace, and rather than
     // accumulating one denied row per refused command forever.
-    const { run, queue, store, executed, advance } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, store, executed, advance } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-1'], 'denied');
-    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('the owner refused this (defer-1)') });
+    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('the owner refused this (defer-1)') });
 
     advance(DENIAL_STANDING_MS + 1);
-    const out = run.execute({ command: GATED })
+    const out = shellTool.execute({ command: GATED })
 
     await expect(out).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN — queued for owner approval (defer-2)') });
     expect(executed).toEqual([]);
@@ -416,13 +416,13 @@ describe('what an approval actually buys', () => {
   });
 
   test('an expired refusal is swept even when nothing re-issues its command', async () => {
-    const { run, queue, store, advance } = setup();
-    await expect(run.execute({ command: 'npm publish a' })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, store, advance } = setup();
+    await expect(shellTool.execute({ command: 'npm publish a' })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-1'], 'denied');
     advance(DENIAL_STANDING_MS + 1);
 
     // Any write to the queue is a sweep: here, the owner deciding something else.
-    await expect(run.execute({ command: 'npm publish b' })).rejects.toBeInstanceOf(KinuError);
+    await expect(shellTool.execute({ command: 'npm publish b' })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-2'], 'approved');
 
     expect(store.get('defer-1')).toBeNull();
@@ -433,18 +433,18 @@ describe('what an approval actually buys', () => {
     // The owner's ask: mark auto-approval for similar commands, not this exact
     // string. A second, DIFFERENT command of the same kind never reaches the
     // queue — which is the whole difference between a grant and an approval.
-    const { run, queue, executed, granted, delivered } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, executed, granted, delivered } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
 
     await queue.decide(['defer-1'], 'always');
 
     expect(granted).toEqual(['git-force-push@workspace']);
     // Still permission, not an effect: the agent re-issues, and it runs.
     expect(executed).toEqual([]);
-    expect(await run.execute({ command: GATED })).toBe('ran');
+    expect(await shellTool.execute({ command: GATED })).toBe('ran');
 
     const different = 'git push --force origin release';
-    expect(await run.execute({ command: different })).toBe('ran');
+    expect(await shellTool.execute({ command: different })).toBe('ran');
     expect(executed).toEqual([GATED, different]);
     expect(queue.list()).toEqual([]);
     // One decision, one wake — the grant did not manufacture a second.
@@ -452,23 +452,23 @@ describe('what an approval actually buys', () => {
   });
 
   test('an "always" grant does not travel to another rule', async () => {
-    const { run, queue, executed, granted } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, executed, granted } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-1'], 'always');
 
     expect(granted).toEqual(['git-force-push@workspace']);
-    await expect(run.execute({ command: 'npm publish' })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
+    await expect(shellTool.execute({ command: 'npm publish' })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
     expect(executed).toEqual([]);
   });
 });
 
 describe('the spent grant leaves an audit, and no row the gate did not close', () => {
   test('consuming a grant records the approval once and deletes its row', async () => {
-    const { run, queue, store, audited } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, store, audited } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-1'], 'approved');
 
-    expect(await run.execute({ command: GATED })).toBe('ran');
+    expect(await shellTool.execute({ command: GATED })).toBe('ran');
     expect(audited).toEqual([
       { approvalId: 'defer-1', command: GATED, executor: 'workspace' },
     ]);
@@ -478,12 +478,12 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
   });
 
   test('one grant is one audit and one run — a re-issue parks, never replays', async () => {
-    const { run, queue, executed, audited } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue, executed, audited } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-1'], 'approved');
 
-    await expect(run.execute({ command: GATED })).resolves.toBe('ran');
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);   // no grant left: parks defer-2
+    await expect(shellTool.execute({ command: GATED })).resolves.toBe('ran');
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);   // no grant left: parks defer-2
 
     expect(executed).toEqual([GATED]);
     expect(audited).toHaveLength(1);
@@ -543,8 +543,8 @@ describe('the parked action stays visible until it is decided', () => {
   });
 
   test('and stops the moment it is decided', async () => {
-    const { run, queue } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
     expect(queue.approvals()).toHaveLength(1);
 
     await queue.decide(['defer-1'], 'approved');
@@ -553,8 +553,8 @@ describe('the parked action stays visible until it is decided', () => {
   });
 
   test('it is a needs-you row the owner can act on', async () => {
-    const { run, queue } = setup();
-    await expect(run.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    const { shellTool, queue } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
 
     const rows = buildPendingActions({
       approvals: [], changes: [], scaffoldVersions: [], curriculum: [],
@@ -617,7 +617,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
  * command never reached its machine, the same grant becomes spendable again.
  */
 describe('an approval outlives an attempt that never reached the machine', () => {
-  /** The laptop seam as a router wires it: an ExecutorProvider whose `exec`
+  /** The device seam as a router wires it: an ExecutorProvider whose `exec`
    *  answers whatever this run of the test needs, gated by `gateProviderExec`
    *  with the real deferral queue behind it. */
   function deviceSetup() {
@@ -641,8 +641,8 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     let answer: () => CommandResult = () => 'ran';
 
     const provider: ExecutorProvider = {
-      name: 'laptop',
-      kind: 'laptop',
+      name: 'device',
+      kind: 'device',
       capabilities: new Set(['shell']),
       homeDir: async () => '/home/owner',
       isAvailable: () => true,
@@ -674,7 +674,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
   }
 
   /** The device transport's own refusal, classified: `unavailable` is the code
-   *  the laptop path already produces when no machine is attached
+   *  the device path already produces when no machine is attached
    *  (execution/device-tunnel-executor.ts NOT_CONNECTED_REFUSAL). The test
    *  reads the CODE, never the prose. */
   const notConnected = () => refusalOf(new KinuError('unavailable', 'No device connected.'));
@@ -693,8 +693,8 @@ describe('an approval outlives an attempt that never reached the machine', () =>
 
     // The owner approved a RUN, and no run happened: the grant they gave is
     // still theirs to spend, and they are not asked a second time.
-    expect(store.standing(GATED, 'laptop', 1_010)?.status).toBe('approved');
-    expect(store.standing(GATED, 'laptop', 1_010)?.id).toBe('defer-1');
+    expect(store.standing(GATED, 'device', 1_010)?.status).toBe('approved');
+    expect(store.standing(GATED, 'device', 1_010)?.id).toBe('defer-1');
     expect(queue.list()).toEqual([]);
   });
 
@@ -709,10 +709,10 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     expect(await exec(GATED)).toBe('ran');
 
     expect(executed).toEqual([GATED, GATED]);
-    expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
+    expect(store.standing(GATED, 'device', 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
     // One approval, one execution — and one audit for the spend that stuck.
-    expect(audited).toEqual([{ approvalId: 'defer-1', command: GATED, executor: 'laptop' }]);
+    expect(audited).toEqual([{ approvalId: 'defer-1', command: GATED, executor: 'device' }]);
     // A fourth attempt has no grant left and parks a fresh row.
     expect(await exec(GATED)).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('defer-2') });
   });
@@ -725,7 +725,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     await queue.decide(['defer-1'], 'approved');
     expect(await exec(GATED)).toBe(stdout);
     expect(executed).toEqual([GATED]);
-    expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
+    expect(store.standing(GATED, 'device', 1_010)).toBeNull();
   });
 
   test('a command that reached the machine and FAILED there does not refund', async () => {
@@ -739,7 +739,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     answerWith(() => commandResult({ stdout: '', stderr: 'rejected', exitCode: 1 }));
     expect(await exec(GATED)).toMatchObject({ reason: 'io' });
 
-    expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
+    expect(store.standing(GATED, 'device', 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
   });
 
@@ -755,7 +755,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     answerWith(() => refusalOf(new KinuError('io', 'the tunnel closed mid-call')));
     expect(await exec(GATED)).toMatchObject({ reason: 'io' });
 
-    expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
+    expect(store.standing(GATED, 'device', 1_010)).toBeNull();
   });
 
   test('a throw out of the executor does not refund', async () => {
@@ -768,7 +768,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     answerWith(() => { throw new Error('socket died'); });
     await expect(exec(GATED)).rejects.toThrow('socket died');
 
-    expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
+    expect(store.standing(GATED, 'device', 1_010)).toBeNull();
   });
 
   test('two refunds of one spend change nothing', async () => {
@@ -785,10 +785,10 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     if (!spend) throw new Error('the approved grant must be spendable');
 
     queue.channel.settle(spend.spend, 'did-not-run');
-    expect(store.standing(GATED, 'laptop', 1_010)?.id).toBe('defer-1');
+    expect(store.standing(GATED, 'device', 1_010)?.id).toBe('defer-1');
 
     queue.channel.settle(spend.spend, 'did-not-run');
-    expect(store.standing(GATED, 'laptop', 1_010)?.id).toBe('defer-1');
+    expect(store.standing(GATED, 'device', 1_010)?.id).toBe('defer-1');
 
     // …and a replay that arrives after a LATER spend cannot undo it.
     const second = store.spend('defer-1');
@@ -797,7 +797,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     if (!second) throw new Error('the refunded grant must be spendable again');
     queue.channel.settle(second.spend, 'spent');
     queue.channel.settle(spend.spend, 'did-not-run');
-    expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
+    expect(store.standing(GATED, 'device', 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
   });
 
@@ -832,7 +832,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
 
 test('no-execution refusals retain their class before native run and executor text formatting', async () => {
   const denied = setup({ mode: 'deny_all' });
-  await expect(denied.run.execute({ command: GATED })).rejects.toMatchObject({ code: 'denied' });
+  await expect(denied.shellTool.execute({ command: GATED })).rejects.toMatchObject({ code: 'denied' });
   expect(denied.executed).toEqual([]);
   const parked = setup();
   const result = await parked.shell.exec(GATED);
@@ -840,7 +840,7 @@ test('no-execution refusals retain their class before native run and executor te
   expect(parked.executed).toEqual([]);
   expect(parked.queue.list()).toMatchObject([{ status: 'queued', command: GATED }]);
   await parked.queue.decide(['defer-1'], 'denied');
-  await expect(parked.run.execute({ command: GATED })).rejects.toMatchObject({ code: 'denied' });
+  await expect(parked.shellTool.execute({ command: GATED })).rejects.toMatchObject({ code: 'denied' });
   expect(parked.executed).toEqual([]);
 });
 

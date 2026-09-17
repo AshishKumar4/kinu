@@ -77,7 +77,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import * as v from 'valibot';
 
 import { assertMeasured, finding, type Finding } from './gate-ratchet';
-import { readTests } from './sources';
+import { isTestScaffold, readMatching, readTests } from './sources';
 import {
   identifierCalleeName, identifierText, literalText, parse, walk, type SyntaxNode,
 } from './syntax';
@@ -515,13 +515,43 @@ export function writeShrinkingLock(next: ClockLock, path = LOCK): void {
       throw new Error(`test-clocks --lock: refusing to raise the lock from ${String(previous.total)} to `
         + `${String(next.total)} site(s); the lock only shrinks. Redesign the new wait instead.`);
     }
+
+    // Per file and kind, the same rule: an equal total that moved a site
+    // from one file to another, or a new file that arrived as another was
+    // paid down, is a new site the gate would refuse — so the lock refuses
+    // to launder it, and names it the way the gate would.
+    const verdict = reconcileLock(next, previous);
+    const arrived = [...verdict.unlocked, ...verdict.raised];
+
+    if (arrived.length > 0) {
+      throw new Error(`test-clocks --lock: refusing a lock that adds a site: ${arrived.join(', ')}; `
+        + 'the lock only shrinks, per file and kind. Redesign the new wait instead.');
+    }
   }
 
   writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
 }
 
-async function main(): Promise<number> {
+/** Test helpers that live outside a `tests/` directory and carry no test
+ *  suffix, but are read where they are written the way a `tests/helpers/`
+ *  file is: the browser harness the ux suites drive Chrome through. */
+const HELPERS_OUTSIDE_TESTS: readonly string[] = ['scripts/gallery-harness.ts'];
+
+/** The corpus: every test file, plus the helpers the tests wait through —
+ *  `packages/test-utils` and the browser harness — so a wait moved out of a
+ *  suite into a helper is still read, not hidden behind the helper's name. */
+export function readClockCorpus(): Map<string, string> {
   const tests = readTests();
+
+  for (const [file, text] of readMatching((file) => isTestScaffold(file) || HELPERS_OUTSIDE_TESTS.includes(file))) {
+    if (file.endsWith('.ts') || file.endsWith('.tsx')) tests.set(file, text);
+  }
+
+  return tests;
+}
+
+async function main(): Promise<number> {
+  const tests = readClockCorpus();
   const sites = auditCorpus(tests);
 
   const measured = assertMeasured('test-clocks', [
@@ -545,7 +575,7 @@ async function main(): Promise<number> {
   if (verdict.unlocked.length === 0 && verdict.raised.length === 0 && verdict.stale.length === 0) {
     console.log(`test-clocks: ok — ${summary}`);
     console.log('  blind to: a clock value reaching a comparison through a parameter or a return value; '
-      + 'a timer wrapped outside the corpus and called by the wrapper\'s name; a duration handed as a '
+      + 'a timer wrapped outside the corpus (test-utils and the browser harness are inside it) and called by the wrapper\'s name; a duration handed as a '
       + 'bare positional number to an unknown helper; setImmediate and queueMicrotask; a clock read '
       + 'used as a value and never compared.');
 

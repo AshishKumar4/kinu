@@ -154,8 +154,8 @@ describe('E2E Full Lifecycle', () => {
     // Provisioned through the seam: birth, the whole schema, open, the
     // executor-surface and sandbox guards and the pre-turn profile — the same
     // sequence every live suite drives, once. The birth runtime carries no
-    // `preBuilt` deps, so `execute_tools` answered every call with
-    // "execute_tools is not configured on this runtime" — measured live, while
+    // `preBuilt` deps, so `eval` answered every call with
+    // "eval is not configured on this runtime" — measured live, while
     // step 4 ("code execution") still passed, because it asserts only that the
     // reply is non-empty. `openWorkspaceCLI` builds `createCLIRuntime`, the
     // same spine `kinu exec` runs, so the tool the prompt names exists.
@@ -232,15 +232,15 @@ describe('E2E Full Lifecycle', () => {
 
     for (const name of names) expect(canonical).toContain(name);
 
-    for (const core of ['execute_tools', 'run', 'file', 'memory', 'agents']) {
+    for (const core of ['eval', 'shell', 'file', 'memory', 'agents']) {
       expect(names).toContain(core);
     }
 
     for (const ungated of ['skills', 'release']) expect(names).not.toContain(ungated);
     console.log(`  Tools: ${names.join(', ')}`);
-    const execute = tools.execute_tools;
+    const execute = tools.eval;
 
-    if (!execute) throw new Error('execute_tools is absent');
+    if (!execute) throw new Error('eval is absent');
 
     const result = await toolExecute<{ code: string }, unknown>(execute)({
       code: 'return 6 * 7;',
@@ -263,20 +263,20 @@ describe('E2E Full Lifecycle', () => {
     expect(finalIntegerAnswer(turn.assistantResponse)).toBe(4);
   }, 120_000);
 
-  // ── Step 4: Chat turn 2 — should use execute_tools ──────────
+  // ── Step 4: Chat turn 2 — should use eval ──────────
 
   liveTest('4. chat turn 2: code execution', async () => {
     const turn = await chatTurn(
       model, rt, tools,
-      'Use execute_tools to write and run a JS prime checker for 7, 10, and 13. '
+      'Use eval to write and run a JS prime checker for 7, 10, and 13. '
         + 'Print exactly JSON.stringify({7:true,10:false,13:true}), then summarize.',
     );
 
     console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
     console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
 
-    const execution = turn.toolCalls.find((call) => call.name === 'execute_tools');
-    expect(execution, 'the model did not use execute_tools').toBeDefined();
+    const execution = turn.toolCalls.find((call) => call.name === 'eval');
+    expect(execution, 'the model did not use eval').toBeDefined();
     const output = v.parse(v.object({ logs: v.array(v.string()) }), execution?.result);
     expect(output.logs).toContain('{"7":true,"10":false,"13":true}');
     expect(turn.assistantResponse.length).toBeGreaterThan(0);
@@ -313,7 +313,7 @@ describe('E2E Full Lifecycle', () => {
     db.close();
 
     const db2 = new Database(DB_PATH);
-    const { rt: rt2, info } = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG, hostRoot: null });
+    const { rt: rt2, info } = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG });
     // Hand over the reopened database and runtime before any assertion can
     // throw. Otherwise, an assertion failure leaves later steps holding the
     // closed database: step 7 reports unrelated `bun:sqlite` prepare errors,

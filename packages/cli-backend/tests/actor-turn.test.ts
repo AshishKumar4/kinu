@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { REAL_CLOCK } from '@kinu.run/core';
 import { createHash } from 'node:crypto';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import {
@@ -134,7 +135,7 @@ test('the real head caller executes its selected program and retains its produce
     budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: 'synthesize',
     loop: defaultLoopOrigin('head'),
   }, {
-    ...headLoopSeams(rt), model: chat.model, tools: {}, capture: new HeadCapture(),
+    ...headLoopSeams(rt), clock: REAL_CLOCK, model: chat.model, tools: {}, capture: new HeadCapture(),
     workspaceLayout: 'private-scratch', isAborted: () => false,
     reportMessages: messages => { produced.push(...messages); },
   });
@@ -160,7 +161,7 @@ test('separate model calls inside a selected head program share its real mission
     budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: 'synthesize',
     loop: defaultLoopOrigin('head'),
   }, {
-    ...headLoopSeams(rt), model: chat.model, tools: {}, capture: new HeadCapture(), mission,
+    ...headLoopSeams(rt), clock: REAL_CLOCK, model: chat.model, tools: {}, capture: new HeadCapture(), mission,
     workspaceLayout: 'private-scratch', isAborted: () => false,
   });
 

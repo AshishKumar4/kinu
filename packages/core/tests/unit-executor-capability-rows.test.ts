@@ -102,7 +102,7 @@ function probedDevice(binaries: readonly string[], secondsAgo = 0): DeviceTransp
   return { status: () => status, refreshStatus: async () => status, rpc: async () => undefined };
 }
 
-describe('tunneled laptop capability row', () => {
+describe('tunneled device capability row', () => {
   test('an unprobed machine claims nothing, and denies nothing either', () => {
     const line = runsLine(createDeviceTunnelExecutor(connectedDevice));
 
@@ -118,7 +118,7 @@ describe('tunneled laptop capability row', () => {
     // And none may be reported ABSENT either. The row that replaced this one
     // simply omitted them, which reads to the model exactly like a denial: it
     // would never try python on a machine that may well have python.
-    expect(runs).toBe('- laptop: connected, files at /pc, runs: native_binary, shell, fs_owned, net_outbound, process_spawn');
+    expect(runs).toBe('- device: connected, files at /pc, runs: native_binary, shell, fs_owned, net_outbound, process_spawn');
     expect(notMeasured).toBe('javascript, typescript, python, npm, git, docker, gpu');
   });
 
@@ -130,13 +130,13 @@ describe('tunneled laptop capability row', () => {
     const line = runsLine(createDeviceTunnelExecutor(probedDevice(['node', 'python3'])));
 
     expect(line).toBe(
-      '- laptop: connected, files at /pc, runs: javascript, python, native_binary, shell, fs_owned, net_outbound, process_spawn'
+      '- device: connected, files at /pc, runs: javascript, python, native_binary, shell, fs_owned, net_outbound, process_spawn'
       + ', not measured here: docker, gpu',
     );
   });
 
   test('a stale answer cannot masquerade as a fresh one', () => {
-    // The agent can install a toolchain onto that machine through `laptop.exec`,
+    // The agent can install a toolchain onto that machine through `device.exec`,
     // so an answer is evidence for a bounded time. Past it the row goes back to
     // knowing nothing — it does not keep claiming, and it does not start denying.
     const stale = runsLine(createDeviceTunnelExecutor(
@@ -159,7 +159,7 @@ describe('tunneled laptop capability row', () => {
     const provider = createDeviceTunnelExecutor(connectedDevice);
     const line = runsLine(provider);
 
-    // Nothing in the `laptop` namespace can keep a process alive between turns
+    // Nothing in the `device` namespace can keep a process alive between turns
     // or signal one, so neither may be declared.
     expect(Object.keys(provider.tools).sort())
       .toEqual(['exec', 'exists', 'readFile', 'readdir', 'writeFile']);
@@ -179,7 +179,7 @@ describe('tunneled laptop capability row', () => {
   test('is left out of the preview instructions it can never honour', () => {
     // net_inbound is not prompt decoration: prompt.ts builds the "Showing a
     // running app" recipe from exactly the executors that declare it, naming
-    // `<name>.exposePort(port)`. While laptop declared it, the model was told
+    // `<name>.exposePort(port)`. While device declared it, the model was told
     // to call a method that answers `supported: false`.
     const { rt } = createTestRuntime();
 
@@ -188,7 +188,7 @@ describe('tunneled laptop capability row', () => {
       executors: [
         { name: 'workspace', kind: 'workspace', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active' },
         {
-          name: 'laptop', kind: 'laptop',
+          name: 'device', kind: 'device',
           capabilities: [...createDeviceTunnelExecutor(connectedDevice).capabilities],
           available: true, configured: true, active: true, status: 'active',
         },
@@ -196,6 +196,6 @@ describe('tunneled laptop capability row', () => {
     });
 
     expect(prompt).toContain('workspace.exposePort(port)');
-    expect(prompt).not.toContain('laptop.exposePort(port)');
+    expect(prompt).not.toContain('device.exposePort(port)');
   });
 });

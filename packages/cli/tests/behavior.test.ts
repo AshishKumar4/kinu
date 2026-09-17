@@ -503,7 +503,7 @@ describe("kinu run — a tool refusal is rendered for the person, not the model"
 
     // An unregistered runtime fails deterministically without touching a shell.
     const server = startToolLoopMockLlm(
-      { name: "run", arguments: JSON.stringify({ command: "true", runtime: "nonexistent" }) },
+      { name: "shell", arguments: JSON.stringify({ command: "true", runtime: "nonexistent" }) },
       1,
       "done",
     );
@@ -529,7 +529,7 @@ describe("kinu run — a tool refusal is rendered for the person, not the model"
       const stderr = toText(proc.stderr);
       expect(stderr).not.toContain('"event"');
       expect(stderr).not.toContain("AI SDK Warning");
-      expect(readFileSync(join(home, "cli.log"), "utf-8")).toContain("run.escalation_refused");
+      expect(readFileSync(join(home, "cli.log"), "utf-8")).toContain("shell.escalation_refused");
     } finally {
       stopLocalDaemon(home);
       await server.stop();
@@ -549,7 +549,7 @@ describe("kinu exec --json — a mechanical steer is observable from outside", (
     // Three failures from the same tool is the `repeated_failure` trigger; an
     // unregistered runtime fails deterministically without touching a shell.
     const server = startToolLoopMockLlm(
-      { name: "run", arguments: JSON.stringify({ command: "true", runtime: "nonexistent" }) },
+      { name: "shell", arguments: JSON.stringify({ command: "true", runtime: "nonexistent" }) },
       3,
       "gave up",
     );
@@ -579,7 +579,7 @@ describe("kinu exec --json — a mechanical steer is observable from outside", (
         // with the same args and the same output, and the repeat detector
         // outranks the failure counter because it can name the exact call.
         trigger: "repeated_call",
-        tool: "run",
+        tool: "shell",
         // The model was told and pushed on alone — the conversion denominator.
         converted: false,
       });

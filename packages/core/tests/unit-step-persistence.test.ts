@@ -42,12 +42,12 @@ function sse(events: string[]): string {
   return events.map((e) => `data: ${e}\n\n`).join('');
 }
 
-/** One `run` call, finishing on tool_calls — a step that continues the turn. */
+/** One `shell` call, finishing on tool_calls — a step that continues the turn. */
 function toolStep(id: string, command: string): Response {
   return new Response(sse([
     JSON.stringify({ choices: [{ delta: { content: `about to ${command}` } }] }),
     JSON.stringify({ choices: [{ delta: { tool_calls: [
-      { index: 0, id, type: 'function', function: { name: 'run', arguments: JSON.stringify({ command }) } },
+      { index: 0, id, type: 'function', function: { name: 'shell', arguments: JSON.stringify({ command }) } },
     ] } }] }),
     JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }),
     '[DONE]',
@@ -63,7 +63,7 @@ function textStep(text: string): Response {
 }
 
 const tools: ToolSet = {
-  run: tool({
+  shell: tool({
     description: 'shell',
     inputSchema: z.object({ command: z.string() }),
     execute: async ({ command }: { command: string }) => `ran: ${command}`,

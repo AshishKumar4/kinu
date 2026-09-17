@@ -189,7 +189,7 @@ function routeAiCall(binding: Extract<SlateBinding, { kind: 'ai' }>, request: Sl
   const { member, args } = request;
   const payload = args[0];
 
-  if (member !== 'run') throw new KinuError('denied', `${name} offers run({ prompt, system?, tier? }) for one model call`);
+  if (member !== 'shell') throw new KinuError('denied', `${name} offers run({ prompt, system?, tier? }) for one model call`);
 
   if (args.length !== 1 || !isJsonObject(payload)) throw new KinuError('bad_input', `${name}.run takes one { prompt, system?, tier? } object`);
 
@@ -361,7 +361,7 @@ export function routeViewerBindingCall(input: {
     }
 
     case 'agent': return { ...admitted('send', 'mutate'), route: { ...route, viewer: input.viewer.subject } };
-    case 'ai': return admitted('run', 'mutate');
+    case 'ai': return admitted('shell', 'mutate');
     case 'app': {
       if (!grant.slates.includes(route.id)) {
         throw new KinuError('denied', `Slate ${id} does not grant ${name}.${route.method} to viewers`);

@@ -753,7 +753,7 @@ function listListeningPorts() {
 // toolchain table (packages/core/src/execution/toolchain.ts) and the hub sends
 // them with the question, so this daemon holds no capability policy of its own —
 // there is no second answer to "which binaries prove python" here to drift from
-// the one the CLI host uses. The hub turns the names back into the `laptop`
+// the one the CLI host uses. The hub turns the names back into the `device`
 // capability row, which is where the model decides to send work.
 //
 // Bare names only, and a bounded number of them. A name carrying a path

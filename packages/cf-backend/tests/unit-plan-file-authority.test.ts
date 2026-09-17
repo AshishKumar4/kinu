@@ -61,8 +61,8 @@ test('Plan blocks slate source restoration and authored calls without converting
   expect(await workspace.tools.slate.execute({ op: 'restore', id: 'app', version: version.id })).toMatchObject({ reason: 'denied' });
   const planCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' } satisfies typeof ROOT_SLATE_CALLER;
   expect(await agent.slateAs(planCaller, { op: 'restore', id: 'app', version: version.id })).toMatchObject({ ok: false, reason: 'denied' });
-  expect(await agent.slateAs(planCaller, { op: 'call', id: 'app', method: 'run' })).toMatchObject({ ok: false, reason: 'denied' });
-  expect(await agent.slateBindingCallAs(planCaller, 'app', 'PEER', { member: 'run', args: [], invocation: null })).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await agent.slateAs(planCaller, { op: 'call', id: 'app', method: 'shell' })).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await agent.slateBindingCallAs(planCaller, 'app', 'PEER', { member: 'shell', args: [], invocation: null })).toMatchObject({ ok: false, reason: 'denied' });
   expect(await files.readFile(path, { encoding: 'utf8' })).toBe('second');
   // The retained Build app has separate invocation authority from this Plan turn.
   expect(await agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'app', 'FILES', { member: 'readFile', args: [path], invocation: null })).toEqual({ ok: true, value: 'second' });

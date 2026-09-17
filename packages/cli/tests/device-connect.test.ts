@@ -215,7 +215,7 @@ async function scriptFailure(home: string, script: string, environment: Record<s
 function connectedDevice(connected: boolean, overrides: Partial<CloudDevice> = {}): CloudDevice {
   return {
     id: 'dev_1',
-    label: 'laptop',
+    label: 'device',
     os: 'linux',
     hostname: 'box',
     connected,
@@ -590,7 +590,7 @@ describe('the sandbox state the machine reported', () => {
   test('a device row from a hub too old to report the switch still lists', async () => {
     const stub = startStubCloud({
       devices: () => [{
-        id: 'dev_1', label: 'laptop', os: 'linux', hostname: 'box',
+        id: 'dev_1', label: 'device', os: 'linux', hostname: 'box',
         connected: true, createdAt: 0, lastSeenAt: null,
       }],
     });

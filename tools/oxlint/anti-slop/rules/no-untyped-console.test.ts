@@ -38,7 +38,7 @@ tester.run("anti-slop/no-untyped-console", noUntypedConsoleRule, {
       filename: core,
     },
     { code: "diagnostics.event('sandbox.executor_registered', { transport: 'websocket' });", filename: cf },
-    { code: "logger.failure('run.escalation_denied', refusal, { runtime });", filename: core },
+    { code: "logger.failure('shell.escalation_denied', refusal, { runtime });", filename: core },
     // A `console` that is not the receiver at all.
     { code: "reporters.console.write('x');", filename: core },
     { code: "obj.console.log('x');", filename: core },

@@ -428,7 +428,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       // probed. Both spellings bound it — `resolve` normalizes `..` and never
       // follows a symlink, so the real path is compared too. Unbounded, one
       // stray `pyproject.toml` there claimed every host write beneath it:
-      // 24,483 ms for one `laptop.writeFile`, measured 2026-09-02
+      // 24,483 ms for one `device.writeFile`, measured 2026-09-02
       // (scripts/preflight.ts refuses it).
       const temp = resolve(tmpdir());
       const realTemp = tolerate(() => realpathSync(temp), 'enoent') ?? temp;

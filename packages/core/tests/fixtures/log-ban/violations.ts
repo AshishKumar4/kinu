@@ -66,4 +66,4 @@ log.event('booted', { runtime: 'workspace' });
 
 // [9] A failure log with no classification. `failure` requires the error, so the
 //     string-return defect cannot come back one layer up.
-log.failure('run.escalation_failed', { runtime: 'sandbox' });
+log.failure('shell.escalation_failed', { runtime: 'sandbox' });

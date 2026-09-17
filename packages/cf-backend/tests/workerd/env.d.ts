@@ -172,7 +172,7 @@ declare global {
   // two halves of `RestoreReadiness` plus the normalization control —
   // deliberately NOT a sandbox stub, so it says nothing about containers.
   DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
-      /** The dynamic-Worker loader the execute_tools sandbox runs in. */
+      /** The dynamic-Worker loader the eval sandbox runs in. */
       LOADER: WorkerLoader;
     }
 

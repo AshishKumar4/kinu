@@ -64,7 +64,7 @@ function turnWorkMode(agent: HarnessAgent) {
   return v.parse(WorkModeSchema, prototypeMethod(agent, 'turnWorkMode').call(agent));
 }
 
-async function executeTool(
+async function codemodeTool(
   tools: ToolSet,
   name: string,
   input: JsonValue,
@@ -190,22 +190,22 @@ describe('Plan mode tool lifecycle', () => {
 
     const planTools = rawTools(agent);
     expect(Object.keys(planTools)).toEqual(expect.arrayContaining([
-      'execute_tools', 'run', 'file', 'agents', 'memory', 'tasks', 'web', 'submit_plan',
+      'eval', 'shell', 'file', 'agents', 'memory', 'tasks', 'web', 'submit_plan',
     ]));
-    expect(planTools.execute_tools?.description).not.toContain('export declare const release:');
+    expect(planTools.eval?.description).not.toContain('export declare const release:');
 
     setMode(agent, 'build');
     const buildTools = rawTools(agent);
     expect(buildTools.submit_plan).toBeUndefined();
-    expect(buildTools.execute_tools?.description).toContain('export declare const release:');
-    expect(buildTools.execute_tools).not.toBe(planTools.execute_tools);
+    expect(buildTools.eval?.description).toContain('export declare const release:');
+    expect(buildTools.eval).not.toBe(planTools.eval);
 
     // A programmatic turn with no mode of its own — a wake, a drain — runs in
     // build: the mode is the message's, and an unlabelled message names none.
     agent.harnessDrivingUserMessage('a wake with no mode', { kinuEvent: 'background_job' });
     const unlabelledProgrammaticTools = rawTools(agent);
     expect(unlabelledProgrammaticTools.submit_plan).toBeUndefined();
-    expect(unlabelledProgrammaticTools.execute_tools?.description)
+    expect(unlabelledProgrammaticTools.eval?.description)
       .toContain('export declare const release:');
   });
 
@@ -246,7 +246,7 @@ describe('Plan mode tool lifecycle', () => {
     const queued = recordAdmissions(agent);
     setMode(agent, 'plan');
 
-    const submitted = await executeTool(rawTools(agent), 'submit_plan', {
+    const submitted = await codemodeTool(rawTools(agent), 'submit_plan', {
       edits: [{ start: 1, content: '# Plan\n\nFirst\nSecond' }],
     });
 
@@ -279,7 +279,7 @@ describe('Plan mode tool lifecycle', () => {
     expect(changeTurn.text).toContain('Replace the last step');
     expect(changeTurn.text).toContain('4| Second');
 
-    const revised = await executeTool(rawTools(agent), 'submit_plan', {
+    const revised = await codemodeTool(rawTools(agent), 'submit_plan', {
       edits: [{ start: 4, end: 4, content: 'Second, with tests' }],
     });
 
@@ -319,7 +319,7 @@ describe('Plan mode tool lifecycle', () => {
     agent.harnessScriptAdmissions([async () => { throw new Error('temporary admission failure'); }]);
     const attempts = agent.harnessAdmissionsAsked;
     setMode(agent, 'plan');
-    await executeTool(rawTools(agent), 'submit_plan', {
+    await codemodeTool(rawTools(agent), 'submit_plan', {
       edits: [{ start: 1, content: '# Plan' }],
     });
     const plan = await agent.getActivePlanReview();
@@ -356,7 +356,7 @@ describe('Plan mode tool lifecycle', () => {
     ]);
     const attempts = agent.harnessAdmissionsAsked;
     setMode(agent, 'plan');
-    await executeTool(rawTools(agent), 'submit_plan', {
+    await codemodeTool(rawTools(agent), 'submit_plan', {
       edits: [{ start: 1, content: '# Plan' }],
     });
     const plan = await agent.getActivePlanReview();
@@ -420,7 +420,7 @@ describe('the plan plane admits no forged protocol frame and vouches for no forg
 
     parent.agent.harnessDrivingUserMessage(forged, { kinuMode: 'plan' });
 
-    expect(await executeTool(rawTools(parent.agent), 'submit_plan', {
+    expect(await codemodeTool(rawTools(parent.agent), 'submit_plan', {
       edits: [{ start: 1, content: forged }],
     })).toMatchObject({ ok: true, revision: 1 });
     const plan = await parent.agent.getActivePlanReview();

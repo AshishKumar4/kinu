@@ -30,12 +30,12 @@ function sse(events: string[]): string {
   return events.map((e) => `data: ${e}\n\n`).join('');
 }
 
-/** Step 1: text + one `run` tool call, finishing normally on tool_calls. */
+/** Step 1: text + one `shell` tool call, finishing normally on tool_calls. */
 function healthyToolStep(): Response {
   return new Response(sse([
     JSON.stringify({ choices: [{ delta: { content: 'Let me look' } }] }),
     JSON.stringify({ choices: [{ delta: { tool_calls: [
-      { index: 0, id: 'tc1', type: 'function', function: { name: 'run', arguments: '{"command":"wc -l"}' } },
+      { index: 0, id: 'tc1', type: 'function', function: { name: 'shell', arguments: '{"command":"wc -l"}' } },
     ] } }] }),
     JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }),
     '[DONE]',
@@ -157,7 +157,7 @@ describe('an unmapped finish reason alone is not a dead stream', () => {
     // mid-turn step could not exercise it and the case would be untestable.
     const toolStepEndingOnOther = () => new Response(sse([
       JSON.stringify({ choices: [{ delta: { tool_calls: [
-        { index: 0, id: 'tc9', type: 'function', function: { name: 'run', arguments: '{"command":"ls"}' } },
+        { index: 0, id: 'tc9', type: 'function', function: { name: 'shell', arguments: '{"command":"ls"}' } },
       ] } }] }),
       JSON.stringify({ choices: [{ delta: {}, finish_reason: 'other' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }),
       '[DONE]',

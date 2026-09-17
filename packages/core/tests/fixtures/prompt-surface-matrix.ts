@@ -11,7 +11,7 @@
  *
  * This list covers each conditional at least once in each direction: the two
  * plan-submission spellings, both model-family overlays, each built-in role,
- * an offline laptop, a preview-capable executor, the empty tool surface, the
+ * an offline device, a preview-capable executor, the empty tool surface, the
  * delegation rungs one at a time, and a workspace carrying instruction files
  * in both trust tiers. No resume case: provenance is turn-local and renders
  * no system section at all (prompting/volatile-context.ts).
@@ -39,16 +39,16 @@ const SANDBOX: PromptExecutorInfo = {
   name: 'sandbox', kind: 'sandbox', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active',
 };
 
-const LAPTOP: PromptExecutorInfo = {
-  name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active',
+const DEVICE: PromptExecutorInfo = {
+  name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active',
 };
 
-const LAPTOP_OFFLINE: PromptExecutorInfo = {
-  name: 'laptop', kind: 'laptop', available: false, configured: true, active: false, status: 'disconnected',
+const DEVICE_OFFLINE: PromptExecutorInfo = {
+  name: 'device', kind: 'device', available: false, configured: true, active: false, status: 'disconnected',
 };
 
 const CUSTOM: PromptExecutorInfo = {
-  name: 'gpu', kind: 'laptop', available: true, configured: true, active: true, status: 'active',
+  name: 'gpu', kind: 'device', available: true, configured: true, active: true, status: 'active',
 };
 
 const SKILL_HEADER: SkillHeader = {
@@ -110,7 +110,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: {
       soulOverride: 'You are Kinu.',
       availableTools: ALL_TOOLS,
-      executors: [WORKSPACE, SANDBOX, LAPTOP],
+      executors: [WORKSPACE, SANDBOX, DEVICE],
       backend: 'cf',
       temporaryAsk: true,
       model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
@@ -136,7 +136,9 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: {
       soulOverride: 'You are Kinu.',
       availableTools: ALL_TOOLS,
-      executors: [WORKSPACE, SANDBOX, LAPTOP],
+      // The CLI registers one executor: the machine is the workspace, and
+      // there is no device runtime and no container there.
+      executors: [WORKSPACE],
       backend: 'cli-local',
       temporaryAsk: true,
       model: { id: 'gpt-5-codex', provider: 'openai' },
@@ -146,7 +148,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   {
     name: 'family-kimi',
     opts: {
-      availableTools: ['run', 'memory'],
+      availableTools: ['shell', 'memory'],
       backend: 'cf',
       model: { id: 'kimi-k3-instruct', provider: 'moonshot' },
       currentDate: '2026-01-01',
@@ -155,7 +157,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   {
     name: 'family-gpt',
     opts: {
-      availableTools: ['run', 'memory'],
+      availableTools: ['shell', 'memory'],
       backend: 'cf',
       model: { id: 'gpt-5-codex', provider: 'openai' },
       currentDate: '2026-01-01',
@@ -164,7 +166,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   {
     name: 'family-gemini',
     opts: {
-      availableTools: ['run', 'memory'],
+      availableTools: ['shell', 'memory'],
       backend: 'cf',
       model: { id: 'gemini-3-pro', provider: 'google' },
       currentDate: '2026-01-01',
@@ -196,30 +198,26 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   {
     name: 'external-tools',
     opts: {
-      availableTools: ['run'],
+      availableTools: ['shell'],
       externalTools: [{ name: 'jira', source: 'mcp', description: 'Issue tracker.' }, 'linear'],
       backend: 'cf',
     },
   },
   {
     name: 'executors-workspace-only',
-    opts: { availableTools: ['run'], executors: [WORKSPACE], backend: 'cf' },
+    opts: { availableTools: ['shell'], executors: [WORKSPACE], backend: 'cf' },
   },
   {
-    name: 'executors-offline-laptop',
-    opts: { availableTools: ['run'], executors: [WORKSPACE, LAPTOP_OFFLINE], backend: 'cf' },
+    name: 'executors-offline-device',
+    opts: { availableTools: ['shell'], executors: [WORKSPACE, DEVICE_OFFLINE], backend: 'cf' },
   },
   {
     name: 'executors-preview-capable',
-    opts: { availableTools: ['run'], executors: [WORKSPACE, SANDBOX], backend: 'cf' },
+    opts: { availableTools: ['shell'], executors: [WORKSPACE, SANDBOX], backend: 'cf' },
   },
   {
     name: 'executors-unnamed-namespace',
-    opts: { availableTools: ['run'], executors: [WORKSPACE, CUSTOM], backend: 'cf' },
-  },
-  {
-    name: 'executors-cli-local-laptop',
-    opts: { availableTools: ['run'], executors: [WORKSPACE, LAPTOP], backend: 'cli-local' },
+    opts: { availableTools: ['shell'], executors: [WORKSPACE, CUSTOM], backend: 'cf' },
   },
   {
     name: 'delegation-swarm-only',
@@ -232,7 +230,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   {
     name: 'delegation-swarm-with-codemode',
     opts: {
-      availableTools: ['agents', 'execute_tools'],
+      availableTools: ['agents', 'eval'],
       agentsActions: ['swarm'],
       temporaryAsk: true,
       registeredExecutors: [],
@@ -246,13 +244,13 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     // ONE case, not the `code-execution-with/without-temporary-ask` pair this
     // replaces. `temporaryAsk` reaches the prompt only through the Delegation
     // section's `hasTemporaryAsk`, which is `surface.temporaryAsk && has('hire')`
-    // (prompt.ts) — so on a surface carrying `execute_tools` and no `agents`
+    // (prompt.ts) — so on a surface carrying `eval` and no `agents`
     // tool the flag renders nothing in either position, and the two cases were
     // one request under two names. The Code-execution section had its own
     // temporary-delegation bullet until the 2026-09-03 delegation-nudge
     // cutover; the pair outlived it.
     name: 'code-execution',
-    opts: { availableTools: ['execute_tools'], registeredExecutors: [] },
+    opts: { availableTools: ['eval'], registeredExecutors: [] },
   },
   {
     // The task lifetime's TRUE direction, and the only case that renders it.

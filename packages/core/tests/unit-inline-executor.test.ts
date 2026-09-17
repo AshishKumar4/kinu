@@ -211,7 +211,7 @@ describe('workspace provider (InlineExecutor)', () => {
     const { rt } = createTestRuntime();
     const exec = buildExec(rt);
 
-    for (const name of ['run', 'mcp_github_get']) {
+    for (const name of ['shell', 'mcp_github_get']) {
       const result = await exec.tools.createTool.execute(name, 'shadow', 'async () => 1');
       expect(result).toMatchObject({ ok: false, reason: 'bad_input', error: expect.stringContaining(name) });
       expect(rt.craftStore.get(name)).toBeUndefined();
@@ -457,7 +457,7 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
     expect(err.message).toContain('ENOENT');         // the original cause survives
     expect(err.message).toContain('own virtual filesystem');
     expect(err.message).toContain('NOT the machine or container');
-    expect(err.message).toContain('`run` tool');
+    expect(err.message).toContain('`shell` tool');
     // The roots come from the live filesystem, so the hint cannot drift from
     // the runtime it is describing.
     expect(err.message).toContain('roots are: ');

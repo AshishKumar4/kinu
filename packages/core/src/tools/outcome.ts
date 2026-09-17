@@ -55,9 +55,9 @@ const program = new AsyncLocalStorage<ProgramInvocation>();
 
 const ProgramFailuresSchema = v.object({ failures: v.array(BindingFailureSchema) });
 
-/** Only execute_tools produces this outer envelope; authored return data is nested under result. */
+/** Only eval produces this outer envelope; authored return data is nested under result. */
 export function successfulToolOutcome<Output>(name: string, output: Output): Extract<ToolOutcome, { success: true }> {
-  const parsed = name === 'execute_tools' ? v.safeParse(ProgramFailuresSchema, output) : null;
+  const parsed = name === 'eval' ? v.safeParse(ProgramFailuresSchema, output) : null;
 
   return parsed?.success ? { success: true, failures: parsed.output.failures } : { success: true };
 }
@@ -90,7 +90,7 @@ export function bindProgramCall<Args extends unknown[]>(
 
       if (failure === null) return value;
       const input = v.safeParse(v.object({ action: v.string() }), args[0]);
-      const action = binding.action ?? (binding.tool !== 'run' && input.success ? input.output.action : null);
+      const action = binding.action ?? (binding.tool !== 'shell' && input.success ? input.output.action : null);
       active?.failures.push({ ...failure, tool: binding.tool, action });
 
       return failure;

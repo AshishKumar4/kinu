@@ -230,7 +230,7 @@ export async function grantDeviceConsent(
   account: DeviceAccount, deviceId: string, agentName: string, deviceName?: string,
 ): Promise<void> {
   // This helper is now the FIRST-CALL route a case can use to reach a machine it
-  // owns: make one `laptop` call with a harmless `true`, let the deployment raise
+  // owns: make one `device` call with a harmless `true`, let the deployment raise
   // the real consent card for that workspace, and answer it `always` through the
   // RPC the card's own button calls. See `grantDeviceAccess` for the work.
   await grantDeviceAccess(account, deviceId, agentName, deviceName);
@@ -257,7 +257,7 @@ export async function grantDeviceAccess(
   //
   // The workspace's device transport serves a TTL-cached snapshot and its
   // authoritative refresh runs at TURN start (actor-agent.ts) — so a freshly
-  // created workspace answers the very first `executeInExecutor('laptop', …)`
+  // created workspace answers the very first `executeInExecutor('device', …)`
   // with "not available" while the kick its own status() read started is still
   // in flight. A person sees this once and their next click works; this harness
   // waits it out rather than concluding the machine is unreachable.
@@ -278,7 +278,7 @@ export async function grantDeviceAccess(
           'content-type': 'application/json',
         },
         body: JSON.stringify({ method: 'executeInExecutor',
-          args: deviceName === undefined ? ['laptop', 'true'] : ['laptop', 'true', deviceName] }),
+          args: deviceName === undefined ? ['device', 'true'] : ['device', 'true', deviceName] }),
       });
 
       const text = await response.text();
@@ -331,7 +331,7 @@ export async function grantDeviceAccess(
 
       if (warmup.test(raised.detail)
         || (!raised.ok && !/queued|approval|denied/i.test(raised.detail))) {
-        return new Error(`the laptop executor never became reachable for ${agentName}: `
+        return new Error(`the device executor never became reachable for ${agentName}: `
           + `${raised.detail}`);
       }
 

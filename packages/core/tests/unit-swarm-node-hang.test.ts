@@ -14,7 +14,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { handClock, scriptedTurnModel, type HandClock } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -213,19 +213,29 @@ function oneAnsweringProvider(): MockLanguageModelV3 {
   });
 }
 
+/** What each provider step costs on the swarm's clock: the slow work the
+ *  ledger has to carry as elapsed time, without a real pause. */
+const STEP_MS = 125;
+
+/** The provider's steps per node: read, report, close. */
+const STEPS_PER_NODE = 3;
+
 /**
  * A multi-step, active provider. It reads the reference, reports, then
  * closes: three answers, each a turn of work the node has to wait for. The
  * point is that no default elapsed envelope cuts work which continues to make
  * progress — a property `no-elapsed-work-deadline` holds on the source, and
  * this run holds on the ledger: every node completes, with no error, however
- * many steps that took. A real pause here would only race a real clock.
+ * many steps that took, and its wall clock carries the time those steps cost.
+ * Each step advances the swarm's clock (D19): the same figure a real pause
+ * would put on the row, without a real pause racing a real clock.
  */
-function steppingProvider(): MockLanguageModelV3 {
+function steppingProvider(clock: HandClock): MockLanguageModelV3 {
   return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-stepping',
     doGenerate: ({ prompt }) => {
+      clock.advance(STEP_MS);
       const read = prompt.some((message) => message.role === 'tool');
       const reported = prompt.filter((message) => message.role === 'tool').length > 1;
 
@@ -380,6 +390,7 @@ interface SwarmRunResult {
 async function runWith(
   model: MockLanguageModelV3,
   call: ResolvedSwarm = resolved(),
+  clock: HandClock = handClock(),
 ): Promise<SwarmRunResult> {
   const { rt, db } = createTestRuntime();
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
@@ -387,7 +398,7 @@ async function runWith(
   const logger = createRecordingLogger();
 
   const result = await runSwarm(
-    { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, mode: 'build', logger },
+    { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, mode: 'build', logger, clock },
     call,
   );
 
@@ -409,15 +420,19 @@ async function runWith(
 }
 
 describe('a slow level has no default envelope', () => {
-  test('nodes complete after as much active work as they need', async () => {
-    const { result, rows } = await runWith(steppingProvider(), resolved());
+  test('nodes complete after as much active work as they need, and the ledger carries that time', async () => {
+    const clock = handClock();
+    const { result, rows } = await runWith(steppingProvider(clock), resolved(), clock);
 
     expect('reason' in result).toBe(false);
     expect(rows).toHaveLength(BRANCHES);
 
     for (const row of rows) {
       expect(row.status).toBe('completed');
-      expect(row.wall_clock_ms).toBeGreaterThanOrEqual(0);
+      // Every step of this node's own work is on its row: at least its three
+      // steps' worth, so a node that a default envelope had cut short, or a
+      // ledger that recorded a zero, is red here.
+      expect(row.wall_clock_ms).toBeGreaterThanOrEqual(STEPS_PER_NODE * STEP_MS);
       expect(row.error_message).toBeNull();
     }
   });

@@ -1,7 +1,7 @@
 /**
  * `agent.*` — the agent's self-direction codemode namespace.
  *
- * Lets the LLM steer ITSELF from inside execute_tools: propose + accept its own
+ * Lets the LLM steer ITSELF from inside eval: propose + accept its own
  * Voyager-style curriculum, and schedule future autonomous turns (delivered by
  * the event→turn reactor). Registered exactly like every other codemode provider — zero new
  * top-level builtins, so it respects the 6-tool surface.

@@ -27,8 +27,8 @@ const conversations = [
     'Hire one subordinate named tea-reader to read delegate-note.txt and report its exact contents. Send it a message asking it to keep its answer to one sentence. Collect its answer and tell me what it said.',
   ] },
   { id: 'craft', turns: [
-    'Use execute_tools and workspace.createTool to save a crafted tool named cache_echo that takes a text argument and returns that same text. Read the available declaration and use its actual signature. Do not invoke the saved tool yet. Reply SAVED after saving it.',
-    'Use your saved cache_echo crafted tool through execute_tools with the text CACHE_ECHO_OK. Reply with the returned text.',
+    'Use eval and workspace.createTool to save a crafted tool named cache_echo that takes a text argument and returns that same text. Read the available declaration and use its actual signature. Do not invoke the saved tool yet. Reply SAVED after saving it.',
+    'Use your saved cache_echo crafted tool through eval with the text CACHE_ECHO_OK. Reply with the returned text.',
   ] },
 ];
 

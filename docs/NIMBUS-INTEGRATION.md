@@ -35,7 +35,7 @@ mount cannot unbind an outbound handler the host installed
 (`KinuSandbox.outboundHandlers`, `cf-backend/src/kinu-sandbox.ts`). The codemode
 patch adds the `./normalize` subpath export and the `dist/normalize.js` behind
 it, which `cli-backend/src/executor.ts` and
-`cli-backend/src/execute-tools-factory.ts` import as `normalizeCode`.
+`cli-backend/src/codemode-tool-factory.ts` import as `normalizeCode`.
 `bun run gate:patch-parity`
 (`scripts/patch-parity.ts`) reads `patchedDependencies` out of the root
 `package.json`, so it governs those six. Its header still narrates the `@nimbus-sh/core` patch incident,
@@ -84,7 +84,7 @@ reaches it, but the workspace executor declares neither `python` nor
 `native_binary` on this backend (`runtimeCatalog: false`, `runtime.ts`). The
 local CLI keeps them. It supplies `localFacetHost()`, which a Worker cannot.
 
-`Storage.vfs`, the native `file` tool, `run` with `runtime: "workspace"`, and
+`Storage.vfs`, the native `file` tool, `shell` with `runtime: "workspace"`, and
 the `workspace.*` codemode namespace all address that same session. A write
 through any one of them is immediately visible through the others.
 
@@ -96,7 +96,7 @@ Core interfaces:
 | Kinu surface | Nimbus authority |
 |---|---|
 | `Storage.vfs` | `box.files` through `nimbusSessionFiles()` |
-| `Shell` and `run` | `box.exec()` through `nimbusSessionShell()` |
+| `Shell` and `shell` | `box.exec()` through `nimbusSessionShell()` |
 | `workspace.*` | `createNimbusWorkspaceExecutor()` |
 | background processes | `box.startProcess()` and `box.processes` |
 | live previews | `box.ports`, wrapped by the Kinu capability host |
@@ -104,7 +104,7 @@ Core interfaces:
 
 The Cloudflare backend registers the provider only as `workspace`, through
 `createNimbusWorkspaceExecutor`. There is no product `nimbus` row and no `nimbus.*`
-namespace. The optional `sandbox` and `laptop` providers stay different machines
+namespace. The optional `sandbox` and `device` providers stay different machines
 with their own filesystems.
 
 The hosted composition (`cf-backend/src/workspace-host.ts`) belongs to the

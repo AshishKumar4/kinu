@@ -141,7 +141,7 @@ test('the graph renders every binding with members, effects and risk text', () =
   expect(graph.bindings[7]).toEqual({
     slate: 'issues', name: 'BRAIN', kind: 'ai', capability: { kind: 'model', tier: 'fast' },
     members: [{
-      member: 'run', effect: 'mutate',
+      member: 'shell', effect: 'mutate',
       risk: {
         public: 'Runs a model call on your fast tier. Every call spends your inference. Anyone who opens this share can trigger it.',
         users: 'Runs a model call on your fast tier. Every call spends your inference. Anyone you named on this share can trigger it.',
@@ -206,10 +206,10 @@ test('bindings the workspace cannot honour carry their problem on the row', () =
       bindings: {
         FILES: { kind: 'namespace', namespace: 'nonexistent' },
         GH: { kind: 'mcp', server: 'gitlab' },
-        TOOL: { kind: 'tool', name: 'run' },
+        TOOL: { kind: 'tool', name: 'shell' },
         MISSING_TOOL: { kind: 'tool', name: 'not_a_tool' },
         DELEGATE: { kind: 'tool', name: 'agents' },
-        EXEC: { kind: 'tool', name: 'execute_tools' },
+        EXEC: { kind: 'tool', name: 'eval' },
         SELF: { kind: 'namespace', namespace: 'agents' },
         MODEL: { kind: 'ai', tier: 'quantum' },
         GONE: { kind: 'app', id: 'missing' },
@@ -226,7 +226,7 @@ test('bindings the workspace cannot honour carry their problem on the row', () =
   expect(problem('GH')).toBe('MCP server gitlab is not connected');
   expect(problem('MISSING_TOOL')).toBe('no tool named not_a_tool is available');
   expect(problem('DELEGATE')).toBe('a slate cannot delegate or control its calling agent');
-  expect(problem('EXEC')).toBe('a slate cannot run execute_tools');
+  expect(problem('EXEC')).toBe('a slate cannot run eval');
   expect(problem('SELF')).toBe('a slate cannot delegate or control its calling agent');
   expect(problem('MODEL')).toBe('you have no quantum tier');
   expect(problem('GONE')).toBe('no slate named missing');
@@ -236,7 +236,7 @@ test('bindings the workspace cannot honour carry their problem on the row', () =
     catalog: { ...catalog, slates: { broken }, tools: ['crafted_one'] },
   }).bindings.find((binding) => binding.name === 'TOOL');
 
-  expect(tool).toMatchObject({ capability: { kind: 'tool', name: 'run' }, members: [{ member: 'call', effect: 'mutate' }] });
+  expect(tool).toMatchObject({ capability: { kind: 'tool', name: 'shell' }, members: [{ member: 'call', effect: 'mutate' }] });
 
   expect(() => slateCapabilityGraph({ slate: 'gone', workspace: 'ws', catalog }))
     .toThrow('No slate named gone');

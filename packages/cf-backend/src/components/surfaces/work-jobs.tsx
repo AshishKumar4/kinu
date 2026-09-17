@@ -1,5 +1,5 @@
 /**
- * Background jobs — auto-detached >30s tool calls (forks, long execute_tools /
+ * Background jobs — auto-detached >30s tool calls (forks, long eval /
  * run) — as cards in the Work surface, with the operator controls: hard-cancel
  * a running job, retry / dismiss a settled one.
  *

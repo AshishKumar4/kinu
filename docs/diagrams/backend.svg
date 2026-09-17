@@ -108,7 +108,7 @@
   <text class="xs" x="50" y="360" text-anchor="start">/home/user, plus one home per agent</text>
   <rect x="316" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="328" y="345" text-anchor="start">ExecutionRouter</text>
-  <text class="xs" x="328" y="360" text-anchor="start">workspace · sandbox · laptop · parent</text>
+  <text class="xs" x="328" y="360" text-anchor="start">workspace · sandbox · device · parent</text>
   <rect x="594" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="606" y="345" text-anchor="start">EventLog + Inbox</text>
   <text class="xs" x="606" y="360" text-anchor="start">the reactor, and what wakes a turn</text>
