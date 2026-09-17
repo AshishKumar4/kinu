@@ -191,8 +191,12 @@ describe(SUITE, () => {
         const firstDismiss = dismisses.at(0);
         const shown = durableName !== null && listRows.some((call) => textOf(call.result).includes(durableName));
 
+        // `eventIndex` counts within ONE run, so "after the dismiss" is only a
+        // question inside the dismiss's own run: an earlier turn's roster read
+        // can carry a larger index and would otherwise read as the later one.
         const retired = durableName !== null && firstDismiss !== undefined
-          && laterRosters.some((call) => call.eventIndex > firstDismiss.eventIndex
+          && laterRosters.some((call) => call.runId === firstDismiss.runId
+            && call.eventIndex > firstDismiss.eventIndex
             && !textOf(call.result).includes(durableName));
 
         subgoals.push({
