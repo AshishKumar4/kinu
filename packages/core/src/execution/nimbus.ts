@@ -45,7 +45,7 @@ const NIMBUS_RANGE_READER = `const fs=require('node:fs');const r=JSON.parse(proc
  * of the RPC).
  */
 async function readNimbusOriginRange(
-  box: NimbusSandboxHandle, files: NimbusSandboxFiles, path: string, offset: number, length: number,
+  box: NimbusSandboxHandle, files: NimbusSandboxFiles, path: string, offset: number, length: number, cred?: VfsCred,
 ): Promise<Uint8Array> {
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
     throw makeVfsError('EIO', 'range offset and length must be positive safe integers', path);
@@ -66,6 +66,7 @@ async function readNimbusOriginRange(
   // shell text, for the handles that need the session's own Node.
   const result = await box.exec(`node -e ${shellQuote(NIMBUS_RANGE_READER)}`, {
     env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path: absolute, offset, length }) },
+    ...asCred(cred),
   });
 
   if (!result.success || result.exitCode !== 0) {
@@ -1092,14 +1093,21 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Sh
  * mkdir/delete, with `write` taking Uint8Array natively, so binary round-trips
  * exactly.
  *
- * `cred` names WHO the operations act as, and it changes the transport because
- * the substrate leaves no choice: `box.files.*` is pid-less, and the worker
- * resolves a pid-less caller to the session user, so a credential cannot ride
- * that surface at all. Supplied, every operation goes through the one surface
- * that does accept a credential — see {@link agentSessionFiles}, which reaches
- * the SAME session and the same bytes as this. Absent is the ORIGIN, which is
- * every caller that is not one agent acting for itself.
+ * `cred` names WHO the operations act as. Supplied, the plane is the handle's
+ * credential-bound view (`files.as(cred)`, sdk 0.6), the same session and the
+ * same bytes under the node's own uid/gid; a handle without that view is
+ * refused as `unsupported` rather than served as the session user. Absent is
+ * the ORIGIN, which is every caller that is not one agent acting for itself.
+ * The three shell fallbacks below (`readRange`, `stat`, `mkdir`) exist for a
+ * view that lacks the method and run as the same credential.
  */
+/** The exec option that binds a shell fallback to the plane's own credential.
+ *  An absent credential is an ABSENT KEY: the substrate reads `'cred' in
+ *  options` to decide whether to inherit the session user. */
+function asCred(cred: VfsCred | undefined): { cred: VfsCred } | Record<string, never> {
+  return cred === undefined ? {} : { cred };
+}
+
 export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VFS & {
   removeRecursive(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
@@ -1135,7 +1143,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
     /** The origin session's fixed Node reader reads exactly this prefix — the
      *  SDK file methods cannot express a range and would materialize the file. */
     async readRange(path, offset, length) {
-      return readNimbusOriginRange(box, files, path, offset, length);
+      return readNimbusOriginRange(box, files, path, offset, length, cred);
     },
     async writeFile(path, data) { await files.write(workspacePath(path), data); },
     // NO `writeFileIfRevision`. The SDK's `files.write` takes no precondition
@@ -1158,7 +1166,10 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
         };
       }
 
-      const r = await box.exec(`stat -c '%s %Y %F' ${shellQuote(workspacePath(path))}`);
+      // The shell fallbacks run AS THE PLANE'S CREDENTIAL when one is bound:
+      // the boundary is uid/gid on real inodes, and a fallback that ran as
+      // the session user changed identity silently.
+      const r = await box.exec(`stat -c '%s %Y %F' ${shellQuote(workspacePath(path))}`, asCred(cred));
 
       if (!r.success || r.exitCode !== 0) return null;
       const [size, seconds, ...kind] = r.stdout.trim().split(/\s+/);
@@ -1178,7 +1189,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
         return;
       }
 
-      const r = await box.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(workspacePath(path))}`);
+      const r = await box.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(workspacePath(path))}`, asCred(cred));
 
       if (!r.success || r.exitCode !== 0) {
         throw makeVfsError('EIO', `${r.stderr.trim() || 'operation failed'}, mkdir '${path}'`, path);

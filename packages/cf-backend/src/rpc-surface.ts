@@ -501,6 +501,9 @@ const ORCHESTRATOR_METHODS = [
   'supervisorOp',
   // A client asks the workspace what it is called.
   'workspaceTitle',
+  // EVAL-ONLY: ends the activation. Never `@callable`; the worker route that
+  // calls it admits the eval-service identity and nobody else.
+  'evalAbortActivation',
 ] as const satisfies readonly (keyof OrchestratorAgent)[];
 
 export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [

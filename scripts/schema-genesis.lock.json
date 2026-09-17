@@ -1216,6 +1216,10 @@
     "created_at",
     "updated_at"
   ],
+  "user_mcp_server_presets@packages/core/src/state/user-schema.ts": [
+    "server_id",
+    "preset_id"
+  ],
   "user_mcp_servers@packages/core/src/state/user-schema.ts": [
     "id",
     "name",
@@ -1223,7 +1227,6 @@
     "transport",
     "headers",
     "allowed_tools",
-    "preset_id",
     "created_at",
     "updated_at"
   ],

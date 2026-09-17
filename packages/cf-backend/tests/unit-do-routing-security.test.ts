@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
+  hostedActorRoute,
+  hostedActorSocketPath,
   isForeignAgentNamespacePath,
 } from '@kinu.run/core';
 import { deriveUserId } from '../src/auth/store';
@@ -87,6 +89,27 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
    * endpoint set is enumerated, and the negative half below is the thing that
    * stops either direction regressing.
    */
+  test('every client builds a hosted actor\'s address through the one helper the edge admits', () => {
+    // The defect the owner met on build cba44dcb9: the browser built its
+    // socket path from the Agents SDK's `sub` option, which renders
+    // `/sub/<class>/<name>` — a facet hop this transport refuses, so the
+    // socket 404'd and every RPC on it timed out at 30 s ("Disconnected ·
+    // Untitled agent" over a skeleton). One helper now answers the address,
+    // and it is the admitted one.
+    const path = `/agents/orchestrator-agent/my-workspace/${hostedActorSocketPath('researcher')}`;
+    expect(path).toBe('/agents/orchestrator-agent/my-workspace/actor/researcher');
+    expect(isForeignAgentNamespacePath(path)).toBe(false);
+    expect(hostedActorRoute(path)).toEqual({ name: 'researcher', suffix: '' });
+    // A name with a slash or a space cannot escape its own segment.
+    const odd = `/agents/orchestrator-agent/my-workspace/${hostedActorSocketPath('a/b c')}`;
+    expect(isForeignAgentNamespacePath(odd)).toBe(false);
+    expect(hostedActorRoute(odd)).toEqual({ name: 'a/b c', suffix: '' });
+
+    // No client builds the address by hand: with SUBORDINATE_AGENT_SLUG gone
+    // from core, reintroducing the facet hop needs a new constant, which the
+    // compiler and gate:wired surface. The helper is the one definition.
+  });
+
   test("the transport's own chat-history endpoint is admitted at the workspace root", () => {
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/get-messages')).toBe(false);
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/get-messages')).toBe('my-workspace');

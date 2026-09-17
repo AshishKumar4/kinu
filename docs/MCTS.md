@@ -1,46 +1,46 @@
 # MCTS exploration
 
-MCTS explores solution approaches. Cloud branches run as logical actors on the workspace's one SQLite; local branches run as isolated processes bound to the same workspace database file.
+MCTS explores solution approaches. Cloud branches run as logical actors on the workspace's one SQLite. Local branches run as isolated processes bound to the same workspace database file.
 
 ## No tool reaches this engine
 
 Read before wiring. `swarm | hire | ask | send | reply | list | dismiss`
-never dispatches here; model-facing calls refuse or reach another engine (`packages/core/src/delegation/agents-tool.ts`).
+never dispatches here. Model-facing calls refuse or reach another engine (`packages/core/src/delegation/agents-tool.ts`).
 
-Models use `action:'swarm'`, `depth`, the verifier registry and
+Models use `action:'swarm'`, `depth`, the verifier registry, and
 `strategy/swarm-run.ts`. It shares `uct.ts`, `backpropagation.ts`,
-`record-node.ts` and `pruning.ts`, but no dispatch. Read
+`record-node.ts`, and `pruning.ts`, but no dispatch. Read
 [EXPLORATION.md](./EXPLORATION.md) for that surface.
 
-Every caller calls `runMCTS` directly: lifetime evolution
+Every caller calls `runMCTS` directly. Lifetime evolution
 (`evolution/engine.ts`, `lifetimeMCTSBudget`) is the only one in product code,
 and the rest are suites, among them `tests/evals/exploration.eval.test.ts` and
 `packages/core/tests/integration-mcts.test.ts`. The `createMCTSStrategy` adapter and the
 `StrategyRegistry` it was registered in are gone. No production path ever built
 that registry, so the adapter only added a shape in front of the engine. `mcts_search_runs`
-(`mcts/search-store.ts`) retains config, iteration and budget under a lease
+(`mcts/search-store.ts`) retains config, iteration, and budget under a lease
 epoch for resume. Swarm shares it (`engine: 'swarm'`; `findRunningSwarms` in
-`strategy/swarm-resume.ts`); scoped queries keep trees apart. Swarm uses an
-objective; MCTS branches are judged.
+`strategy/swarm-resume.ts`). Scoped queries keep trees apart. Swarm uses an
+objective. MCTS branches are judged.
 
 ## Which paper this is
 
 LATS ([arXiv:2310.04406](https://arxiv.org/abs/2310.04406)), §5.2's
 programming instantiation, not the ReAct one. HotPotQA and WebShop use
 ReAct. Kinu's `explore()` is one `generateText`, no `ToolSet`. Section 5.2
-uses complete-solution actions, test-suite/compiler observations, skipped
-simulation and percentage-passed reward.
+uses complete-solution actions, test-suite and compiler observations, skipped
+simulation, and percentage-passed reward.
 
-Here, `rt.executor` plus `generateAssertionSuite` is the environment; one
-action is one candidate; execution selects the reward band. Selection through
+Here, `rt.executor` plus `generateAssertionSuite` is the environment. One
+action is one candidate. Execution selects the reward band. Selection through
 reflection are §4.2 operations.
 
-- `plan` mode has no environment. `executionPolicy: 'judge-only'` runs
+- `plan` mode holds no environment. `executionPolicy: 'judge-only'` runs
   nothing. It is Tree of Thoughts ([arXiv:2305.10601](https://arxiv.org/abs/2305.10601)),
   UCT and backpropagation, LATS's weaker §5.4 CoT variant. Its score is an
   opinion.
 - Reward is banded around the pass fraction. LATS backpropagates
-  `passed_test_count / len(tests)`; here it positions the fail band. A pass is
+  `passed_test_count / len(tests)`. Here it positions the fail band. A pass is
   strictly higher, so clean code cannot lose to failing code.
 
 ## Search flow
@@ -81,8 +81,8 @@ flowchart TD
 UCT(node) = value + W × √(ln(parent_visits) / node_visits)
 ```
 
-`value` is the 0-1 reward mean; `W` is
-`DEFAULT_CONFIG.mcts.explorationWeight` = `Math.SQRT2` ≈ 1.414; visit terms
+`value` is the 0-1 reward mean. `W` is
+`DEFAULT_CONFIG.mcts.explorationWeight`, `Math.SQRT2`, about 1.414. Visit terms
 are counts.
 
 `mcts/uct.ts` selects the argmax over this tree's open nodes:
@@ -102,28 +102,28 @@ ORDER BY (
 LIMIT 1
 ```
 
-`log()` is log₁₀, hence `log(x) / log(exp(1.0))`. Root visits are the
+`log()` is log10, hence `log(x) / log(exp(1.0))`. Root visits are the
 synthetic parent count, floored at 2: `ln(1)` erases exploration and freezes
 breadth at `branches`. `s.depth < :maxDepth` skips capped nodes rather than
 aborting on a deep argmax. `root_id` prevents an interrupted tree's open node
 from taking the next task's budget.
 
-Defaults (`core/src/config.ts`): `budget: 5`, `branches: 3`, `maxDepth: 5`,
+Defaults (`packages/core/src/config.ts`): `budget: 5`, `branches: 3`, `maxDepth: 5`,
 `explorationWeight: Math.SQRT2`, `pruneThreshold: 0.25`,
 `minAcceptableScore: 0.3`, `minVisitsForPrune: 2`, `reflectionThreshold: 0.35`,
 `judgeSamples: 3`, `maxEvalLLMCalls: 4`, `maxCostUSD: 10`. Lifetime evolution
 runs smaller (budget 2, branches 2).
 
-`MctsOverrides` (`core/src/config/store.ts`) keeps exploration weight,
-iteration budget, depth cap, branch count, judge ensemble size and eval-call
-ceiling in `agent_config`; evolution reads five (`evolution/engine.ts`).
-`getMctsConfig` / `setMctsConfig` (`read-models/config-plane.ts`) expose
-exploration constant, iteration budget and branch count. Depth cap beside
+`MctsOverrides` (`packages/core/src/config/store.ts`) keeps exploration weight,
+iteration budget, depth cap, branch count, judge ensemble size, and eval-call
+ceiling in `agent_config`. Evolution reads five (`evolution/engine.ts`).
+`getMctsConfig` and `setMctsConfig` (`read-models/config-plane.ts`) expose
+exploration constant, iteration budget, and branch count. Depth cap beside
 iteration budget duplicates one limit. Swarm depth comes from its preset.
 
 ## Scoring: execution picks the band, and inside the fail band it positions too
 
-`mcts/evaluation.ts` is the sole scorer. Execution selects the band; the judge
+`mcts/evaluation.ts` is the sole scorer. Execution selects the band. The judge
 positions within it. They never average.
 
 | Branch produced | Score | Range |
@@ -135,13 +135,13 @@ positions within it. They never average.
 | Prose only, a sibling **did** write code | `0.30 · j` | 0.00 – 0.30 |
 
 `f` is `passedChecks / totalChecks`, LATS's measured reward. `j` is the
-`judgeSamples` median. Unparseable samples drop; all-fail reaches the band
-floor; empty trajectories score hard 0 without a judge call.
+`judgeSamples` median. Unparseable samples drop. All-fail reaches the band
+floor. Empty trajectories score hard 0 without a judge call.
 
 ### `judgeSamples` is a request, and `maxEvalLLMCalls` is its ceiling
 
 `maxEvalLLMCalls` is the evaluation pool. Code spends one call on its check
-suite; the ensemble gets the rest. `judgeCallBudget`
+suite. The ensemble gets the rest. `judgeCallBudget`
 (`mcts/evaluation.ts`) holds the arithmetic:
 
 | Branch | Realised ensemble | On shipped defaults (3, 4) |
@@ -153,34 +153,34 @@ suite; the ensemble gets the rest. `judgeCallBudget`
 `judgeSamples: 20` becomes three code-branch samples on shipped defaults.
 Each evaluation returns `BranchEvaluation.judgeSamplesAttempted`. Per realised
 size per search, MCTS logs `mcts.judge_ensemble_clamped`
-(`judgeSamplesRequested` / `judgeSamplesRealised` / `maxEvalLLMCalls`); heads
-logs `head.judge_ensemble_clamped`. `mcts_search_runs.config_json` stores
-resolved knobs; `mcts_search_runs.judge_samples_realised` stores the smallest
+(`judgeSamplesRequested` / `judgeSamplesRealised` / `maxEvalLLMCalls`). Heads
+log `head.judge_ensemble_clamped`. `mcts_search_runs.config_json` stores
+resolved knobs. `mcts_search_runs.judge_samples_realised` stores the smallest
 sampled ensemble, folded in SQL. `read-models/fork-params.ts` reports requested
-versus realised, never a prediction. Short-circuits can realise less than the
-table ceiling. Raising the request alone buys nothing; raise
+versus realised, never a prediction. Short-circuits realise less than the
+table ceiling. Raising the request alone buys nothing. Raise
 `maxEvalLLMCalls` too.
 
-Used 0 and attempted 3 means an ensemble answered nothing usable; attempted 0
+Used 0 and attempted 3 means an ensemble answered nothing usable. Attempted 0
 means it was never asked.
 
-The fail band uses `f`: appended suites stop at the first throw, making
+The fail band uses `f`. Appended suites stop at the first throw, making
 "three of four aspects correct" and "nothing works" the same observation
 apart from judge noise. That binary reward degenerates search toward best-of-n
-(`test-utils/src/eval-outcome.ts`); FunSearch requires "a 'rich' scoring
-feedback … as opposed to a binary signal". The judge stays in the pass band,
+(`test-utils/src/eval-outcome.ts`). FunSearch requires "a 'rich' scoring
+feedback ... as opposed to a binary signal". The judge stays in the pass band,
 where `f` is 1.
 
-One LLM call generates up to `MAX_GENERATED_CHECKS` = 4 independent checks,
+One LLM call generates up to `MAX_GENERATED_CHECKS`, 4 independent checks,
 matching LATS's four generated tests, only when two or more eval calls remain.
-Each executes separately. Executor calls cost no tokens, so `f` costs sandbox
+Each runs separately. Executor calls cost no tokens, so `f` costs sandbox
 round-trips, not spend. Without a suite, `f` and
-`passedChecks`/`totalChecks` are absent, not zero; the judge positions instead.
+`passedChecks`/`totalChecks` are absent, not zero. The judge positions instead.
 
 Prose caps at 0.30 when a sibling produced running code, below
-`minAcceptableScore`. `craftExtractionThreshold` 0.80 is the pass midpoint;
-`minAcceptableScore` 0.30 the fail ceiling; `reflectionThreshold` 0.35 sits
-above it; `pruneThreshold` 0.25 sits inside it.
+`minAcceptableScore`. `craftExtractionThreshold` 0.80 is the pass midpoint.
+`minAcceptableScore` 0.30 is the fail ceiling. `reflectionThreshold` 0.35 sits
+above it. `pruneThreshold` 0.25 sits inside it.
 
 ## Backpropagation
 
@@ -202,7 +202,7 @@ SET
 WHERE id IN (SELECT id FROM ancestors)
 ```
 
-Rewards clamp to `[0, 1]`. `new_value = (old_value × visits + reward) / (visits + 1)`.
+Rewards clamp to `[0, 1]`. `new_value` is `(old_value times visits plus reward) / (visits + 1)`.
 
 ## Branch isolation
 
@@ -210,11 +210,11 @@ Each MCTS branch runs isolated:
 
 | Platform | Mechanism | Isolation |
 |----------|-----------|-----------|
-| CF Workers | Hosted logical actors of kind `branch`, acquired per rollout from the workspace's one `ActorHost` (`exploration-hosting.ts`) | One workspace SQLite, actor-led keys. (`MCTS/StorageIsolation.lean` still models the old separate-store topology: its invariant is distinct branch storage ids, so it does not prove this row.) |
+| CF Workers | Hosted logical actors of kind `branch`, acquired per rollout from the workspace's one `ActorHost` (`packages/cf-backend/src/exploration-hosting.ts`) | One workspace SQLite, actor-led keys. (`MCTS/StorageIsolation.lean` still models the old separate-store topology: its invariant is distinct branch storage ids, so it does not prove this row.) |
 | CF Workers (fallback) | Inline LLM calls | No storage access at all. Captures only LLM config, never agent reference. |
 | CLI | `child_process.fork('branch-worker.ts')` over the workspace database file (`createBranchSpawner`) | Separate OS process, same database. A branch binds its own actor row and writes its rollout traces there. |
 
-Both backends score through `evaluation.ts`. A branch handle offers `explore` and `generateReflection(task, outcome?)`; `mcts/diversity.ts` gives each index a framing angle.
+Both backends score through `evaluation.ts`. A branch handle offers `explore` and `generateReflection(task, outcome?)`. `mcts/diversity.ts` gives each index a framing angle.
 
 ### The observation loop
 
@@ -224,35 +224,33 @@ generated assertions and FAILED: <error>`. Without it, deepening re-reads the
 proposal and misses the runtime error. `generateReflection` gets the same
 verdict, so `MEMORY.md` records how the attempt ended.
 `search_nodes.observation` remains the proposal text compared by
-`mcts/takes.ts`. Prose, plan-mode and unrunnable branches get no invented
+`mcts/takes.ts`. Prose, plan-mode, and unrunnable branches get no invented
 observation line.
 
-### Why branches are toolless, and where the tool-using ones live
-
 MCTS branches are one model call, no `ToolSet`, no runtime. Paired `heads`
-(`core/src/heads/controller.ts`) run full loops through `runHeadInference`,
-spawned per child by `HeadController.spawnHead` and scored through
+(`packages/core/src/heads/controller.ts`) run full loops through `runHeadInference`.
+They spawn per child by `HeadController.spawnHead` and score through
 `HeadController.scoreHeads` and `evaluation.ts`.
 
 | | `mcts` | `heads` |
 |---|---|---|
 | Branch | one `generateText`, no tools | multi-step loop, `eval`/`shell`/`file`/`web` |
 | Isolation | actor boundary: logical actors on one SQLite (CF) or one process per branch on the same database file (CLI) | prompt-level: heads share the canonical workspace and are *asked* to make their own git worktree |
-| Branches per run | tens (budget × branches, re-expanded by UCT) | a handful, spawned once |
+| Branches per run | tens (budget times branches, re-expanded by UCT) | a handful, spawned once |
 | Relationship | rivals; most are pruned | collaborators; all are merged |
 
-Spawning tens of concurrent heads in one shared workspace would leave branch changes ungradeable. A swarm node is a full agent instead, graded on its reported candidate, never a tree diff. See "A node is an agent" in [EXPLORATION.md](./EXPLORATION.md). Heads spawn through `HeadController.spawnHead` into hosted logical actors; [ARCHITECTURE.md](./ARCHITECTURE.md) describes the one actor hierarchy they join.
+Spawning tens of concurrent heads in one shared workspace leaves branch changes ungradeable. A swarm node is a full agent instead, graded on its reported candidate, never a tree diff. See "A node is an agent" in [EXPLORATION.md](./EXPLORATION.md). Heads spawn through `HeadController.spawnHead` into hosted logical actors. [ARCHITECTURE.md](./ARCHITECTURE.md) describes the one actor hierarchy they join.
 
 ## Pruning and convergence
 
 Pruning requires `value < pruneThreshold` (0.25) and
-`visits >= minVisitsForPrune` (2): mark `status = 'pruned'`, clear
-`branch_agent_key`, abort, then first write reflection at
+`visits >= minVisitsForPrune` (2). It marks `status = 'pruned'`, clears
+`branch_agent_key`, aborts, then first writes reflection at
 `reflectionThreshold` (0.35).
 
 `mcts/convergence.ts` takes the argmax over `terminal` and `open` values.
 Rivals within `takesEpsilon` (0.1) run one shared suite and compare satisfied
-shares — the measured share, not the pass bit, so two of four separates from
+shares. The measured share decides, not the pass bit, so two of four separates from
 none of four. Value order stands when no candidate carries runnable code,
 when nothing measured beats the argmax winner's own share, and always in Plan
 mode, which retains value order without running that suite.
@@ -260,7 +258,7 @@ mode, which retains value order without running that suite.
 It refuses a winner below `minAcceptableScore` (0.3), or Undifferentiated
 textually distinct approaches with exactly equal values. Then `ORDER BY value
 DESC` is row order while the shared value clears the bar. Equality is exact,
-not epsilon: a near-tie belongs in alternate takes; byte-identical scores
+not epsilon. A near-tie belongs in alternate takes. Byte-identical scores
 mean the scorer is not a function of the proposal. Either refusal sets
 `converged: false`, records its reason, and marks open nodes failed rather
 than shipping an unearned answer.

@@ -31,6 +31,12 @@ export interface DeviceUpdateFrame {
   version: string;
   urls: { tarball: string; checksum: string };
   sha256: string;
+  /** Every artifact's checksum the build signed, and the signature over them
+   *  (`http/release-signing.ts`): what the daemon verifies against its pinned
+   *  key before it downloads anything. The hub relays these from the served
+   *  build's manifest; it cannot mint them. */
+  checksums: Record<string, string>;
+  signature: string;
 }
 
 /** The published CLI artifact for a machine, by the words its daemon's HELLO

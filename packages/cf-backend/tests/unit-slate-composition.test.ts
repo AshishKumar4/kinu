@@ -9,7 +9,7 @@ import {
 import { sqlOver } from '@kinu.run/test-utils';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { MockLanguageModelV3 } from 'ai/test';
-import { hostedSubordinateHarness, thinkTurns, orchestratorHarness } from './helpers/actor-harness';
+import { hostedSubordinateHarness, chatSessionTurns, orchestratorHarness } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
@@ -73,7 +73,7 @@ test('native MCP protocol failures reject while namespace responses retain their
     seedMcpTools('connection-id', [{ name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }]);
     actor.agent.harnessDrivingUserMessage('Read the issue.', { kinuMode: 'build' });
 
-    const turn = await thinkTurns(actor.agent).prepare({ messages: [{ role: 'user', content: 'Read the issue.' }], tools: actor.agent.observeRawTools() });
+    const turn = await chatSessionTurns(actor.agent).prepare({ messages: [{ role: 'user', content: 'Read the issue.' }], tools: actor.agent.observeRawTools() });
 
     const native = turn.tools.mcp_github_read_issue;
 

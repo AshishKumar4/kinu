@@ -212,7 +212,13 @@ describe('two actors, one database: background_jobs', () => {
     expect(b.listRunning().total).toBe(1);
     expect(a.countRunningInWorkspace()).toBe(3);
     expect(b.countRunningInWorkspace()).toBe(3);
-    expect(a.hasLiveJobsInWorkspace()).toBe(true);
+    expect(a.hasUntimedLiveJobsInWorkspace()).toBe(true);
+    // A job waiting on an instant is the TIMED half of the same question.
+    a.deferResume('a1', 5);
+    expect(a.hasUntimedLiveJobsInWorkspace()).toBe(true);
+    a.deferResume('a2', 5);
+    b.deferResume('b1', 5);
+    expect(a.hasUntimedLiveJobsInWorkspace()).toBe(false);
 
     // The sweep is the actor's, because everything it can act through is.
     expect(a.runningIds()).toEqual(['a1', 'a2']);

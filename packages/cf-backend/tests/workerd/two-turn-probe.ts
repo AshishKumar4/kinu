@@ -67,6 +67,7 @@ import * as v from 'valibot';
 import {
   SleepTimeUpdateSchema,
   parseWorkspaceTitle,
+  hostedActorSocketPath, JsonValueSchema,
 } from '@kinu.run/core';
 import {
   createCompositeLogger,
@@ -486,7 +487,8 @@ export class FakeAI extends WorkerEntrypoint {
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp'>
+  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
+  | 'createSubordinateAgent'>
   & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'>;
 
 /** How long the wake proof's command sleeps: past the interactive detach
@@ -717,7 +719,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
   /** Real socket intake and Think queue; only the remote model response is
    * held. Peer ingress queues a durable event-drain submission while both
    * socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt'>): Promise<HttpCall[]> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'twin'>): Promise<HttpCall[]> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1495,6 +1497,144 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     }
   }
 
+
+  /**
+   * TWO CLIENTS, ONE MESSAGE, AT ONCE: two sockets on one conversation each
+   * put the same chat frame — the same client message id — on the wire with
+   * no await between them. The property is the object's, not the browser's:
+   * a message admitted once is one turn, one provider request and one row,
+   * however many sockets delivered it. `send-admission.test.ts` proved this
+   * on the retired submission surface; the loop's admission (`admitted` on
+   * the wire, the pending-send ledger) owns it now.
+   */
+  async twinSends(): Promise<{ http: HttpCall[]; transcript: SocketHistory; steers: PendingSteer[]; runEnds: Array<{ runId: string; reason: string }> }> {
+    const { target, workspace } = await this.claimQueueWorkspace('twin');
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+    const sockets: WebSocket[] = [];
+
+    try {
+      for (const tab of ['a', 'b']) {
+        const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}`, {
+          headers: { Upgrade: 'websocket' },
+        }));
+
+        if (response.status !== 101 || response.webSocket === null) throw new Error(`twin probe tab ${tab} did not receive a real WebSocket`);
+        response.webSocket.accept();
+        sockets.push(response.webSocket);
+      }
+
+      const wire = JSON.stringify({
+        type: 'cf_agent_use_chat_request', id: 'TWIN',
+        init: { method: 'POST', body: JSON.stringify({
+          messages: [{ id: 'input-TWIN', role: 'user', parts: [{ type: 'text', text: 'TWIN' }] }],
+          trigger: 'submit-message',
+        }) },
+      });
+
+      for (const socket of sockets) socket.send(wire);
+
+      // The turn's own settle is the end condition; a second admitted turn
+      // would compress its facts too, so the count below is the count that
+      // discriminates.
+      await awaitFactsCompressed(recording, 1);
+      await awaitQuiet(recording);
+
+      return {
+        http: await this.httpCalls(),
+        transcript: await this.socketHistory(target, workspace),
+        steers: await target.pendingSteers(),
+        runEnds: await target.runEnds(),
+      };
+    } finally {
+      for (const socket of sockets) socket.close(1000, 'twin probe complete');
+      restore();
+    }
+  }
+
+  /**
+   * THE EVAL-ONLY ABORT ends an activation the way the platform does: the
+   * stub call that asked rejects (that rejection is the receipt), and the
+   * next request over a fresh stub finds the object alive again over the same
+   * storage. Measured here because the first-run `background-wake` row rests
+   * on it and the deployed build cannot be driven by `abortAllDurableObjects`.
+   */
+  async evalAbort(): Promise<{ receipt: string | null; alive: boolean }> {
+    const { target, workspace } = await this.claimQueueWorkspace('twin');
+    let receipt: string | null = null;
+
+    try {
+      await target.evalAbortActivation();
+    } catch (cause) {
+      receipt = cause instanceof Error ? cause.message : String(cause);
+    }
+
+    const fresh: QueueTarget = await this.queueTarget(workspace);
+    await fresh.workspaceTitle();
+
+    return { receipt, alive: true };
+  }
+
+  /**
+   * THE AGENT TAB, as the browser opens one: the workspace mints a hired
+   * actor the way the tab strip's "+" does (`createSubordinateAgent`), then a
+   * socket is opened on that actor's OWN chat path and the two reads the tab
+   * makes on mount are asked over it — `getActorSnapshot` and
+   * `listAgentTasks`.
+   *
+   * The path is the point. On build cba44dcb9 the client built
+   * a facet hop instead (the Agents SDK's `sub` option), which this transport
+   * refuses, so the socket never opened and both reads timed out at the SDK's
+   * 30 s backstop. Here the request goes to the object exactly as the edge
+   * hands it over, and the answers are the proof.
+   */
+  async hostedActorTab(): Promise<{ name: string; snapshot: string; tasks: string; frames: number }> {
+    const { target, workspace } = await this.claimQueueWorkspace('twin');
+    const created = v.parse(v.object({ name: v.string() }), await target.createSubordinateAgent());
+    const path = `https://probe/agents/orchestrator-agent/${workspace}/${hostedActorSocketPath(created.name)}`;
+    const response = await target.fetch(new Request(path, { headers: { Upgrade: 'websocket' } }));
+    const socket = response.webSocket;
+
+    if (response.status !== 101 || socket === null) throw new Error(`the hosted actor path answered ${String(response.status)}, not a socket`);
+    socket.accept();
+    // The answers are carried back as their JSON text: a stub return of the
+    // recursive JsonValue type is a type the compiler cannot instantiate
+    // through the RPC boundary, and the reads under test are what the frames
+    // say, which the text holds exactly.
+    const answers = new Map<string, string>();
+    const arrived = Promise.withResolvers<void>();
+    let frames = 0;
+
+    socket.addEventListener('message', (event) => {
+      frames += 1;
+      const raw = v.is(v.string(), event.data) ? event.data : '';
+
+      const frame = v.safeParse(v.looseObject({ type: v.string(), id: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.string()) }),
+        raw.startsWith('{') ? JSON.parse(raw) : {});
+
+      if (!frame.success || frame.output.type !== 'rpc') return;
+      answers.set(frame.output.id, frame.output.error === undefined
+        ? JSON.stringify(frame.output.result ?? null)
+        : `ERROR ${frame.output.error}`);
+
+      if (answers.size === 2) arrived.resolve();
+    });
+
+    try {
+      socket.send(JSON.stringify({ type: 'rpc', id: 'tab-snapshot', method: 'getActorSnapshot', args: [created.name] }));
+      socket.send(JSON.stringify({ type: 'rpc', id: 'tab-tasks', method: 'listAgentTasks', args: [] }));
+      await arrived.promise;
+
+      return {
+        name: created.name,
+        snapshot: answers.get('tab-snapshot') ?? '',
+        tasks: answers.get('tab-tasks') ?? '',
+        frames,
+      };
+    } finally {
+      socket.close(1000, 'agent tab probe complete');
+    }
+  }
 
   /** The first-run regression: a workspace born with a mission (genesis turn
    *  running) receives its owner's first chat — which lands as a mid-turn

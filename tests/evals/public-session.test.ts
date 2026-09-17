@@ -534,6 +534,44 @@ describe('route-shaped run events score through the production instruments', () 
     }
   });
 
+  test('a spent episode budget tells the operation, retains the evidence as found, and fails on the budget', async () => {
+    resetLiveModelSpend();
+    const root = scratchDir('budget-evidence');
+
+    const spend: WorkspaceSpend = {
+      total: { calls: 3, callsWithoutUsage: 0, unpricedCalls: 3, floorPricedCalls: 0, usage: { input: 10, output: 5 } },
+      producers: [], missions: [], offTurnShare: null,
+      coverage: { calls: 3, measured: 3, reported: 1, silent: [], partial: [] },
+    };
+
+    const reader = {
+      async runEvents() { return LEDGER_EVENTS; },
+      async history() { return [{ role: 'assistant', text: 'still waiting' }]; },
+      async spend() { return spend; },
+    };
+
+    try {
+      // The operation is a wait the product never ends; the budget is the
+      // subject's own configuration, and the operation stops on its signal.
+      let told = false;
+
+      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'budget', modelCalls: 'expected', budgetMs: 20 },
+        async (_reader, _collect, budget) => {
+          await new Promise<void>((resolve) => { budget.addEventListener('abort', () => resolve(), { once: true }); });
+          told = true;
+
+          return 'never';
+        })).rejects.toThrow('the episode budget of 20 ms was spent');
+      expect(told).toBe(true);
+      expect(JSON.parse(readFileSync(join(root, 'budget/failure.json'), 'utf8'))).toMatchObject({ phase: 'budget' });
+      expect(readFileSync(join(root, 'budget/history.json'), 'utf8')).toContain('still waiting');
+      expect(readFileSync(join(root, 'budget/events.jsonl'), 'utf8').split('\n')).toHaveLength(LEDGER_EVENTS.length);
+      expect(JSON.parse(readFileSync(join(root, 'budget/spend.json'), 'utf8'))).toEqual(spend);
+    } finally {
+      resetLiveModelSpend();
+    }
+  });
+
   test('an opening failure retains the cause and unavailable channels without inventing measurements', async () => {
     resetLiveModelSpend();
     const root = scratchDir('opening-evidence');

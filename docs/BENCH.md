@@ -2,13 +2,13 @@
 
 Kinu carries a large self-evolution machine. Its gain is not measured yet.
 Measured 2026-08-24: 17,081 lines of non-test TypeScript across
-`core/src/evolution`, `core/src/mcts`, `core/src/scaffold` and `core/src/craft`.
-Live runs have caught the switch acting. No admissible paired comparison has put
+`packages/core/src/evolution`, `packages/core/src/mcts`, `packages/core/src/scaffold`, and `packages/core/src/craft`.
+Live runs caught the switch acting. No admissible paired comparison put
 a number on what it is worth.
 
-This harness is the instrument for producing that number. It has one
+This test runner is the instrument for producing that number. It holds one
 machine-checked metric, rejection by default, a held-out split, and no model
-anywhere in the scoring path. A gain of zero is a result, and the harness reports
+anywhere in the scoring path. A gain of zero is a result, and the runner reports
 it as one.
 
 ```
@@ -27,7 +27,7 @@ the public tree. That file is machine-local.
 ## Two families, one harness
 
 `--family` selects the corpus. Both families share the sandbox isolation, the
-seal, the pairing, the statistics, the report and the acceptance rule. They
+seal, the pairing, the statistics, the report, and the acceptance rule. They
 differ in three things: what the corpus is, how a sandbox is seeded, and what
 the controls do.
 
@@ -36,9 +36,9 @@ the controls do.
 | `defect` (default) | a seeded defect in this repo | this repo's own checks |
 | `longhorizon` | a generated corpus and three questions about it | exact answers, no model |
 
-They are never mixed. One pass rate over both would be a number about nothing.
+They are never mixed. One pass rate over both is a number about nothing.
 `--family` reaches `configHash` through the
-corpus path (`benchConfigHash` in `core/src/bench/report.ts`), so two runs on
+corpus path (`benchConfigHash` in `packages/core/src/bench/report.ts`), so two runs on
 different families are not comparable.
 
 ## The defect family
@@ -48,7 +48,7 @@ A task is a seeded defect, scored by this repo's own checks.
 `tests/bench/patches/` holds the matching 157 patch files. Each patch is the
 diff that breaks the code.
 
-The harness scores an attempt by running two checks in the sandbox:
+The test runner scores an attempt by running two checks in the sandbox:
 
 | check | command |
 |---|---|
@@ -59,8 +59,8 @@ The task passes when both exit 0. The two checks decide alone, with no partial
 credit. Running the full suite rather than only the target test scores collateral
 damage for free. A solver that breaks something else does not pass.
 
-We chose every task by evidence. We applied each candidate mutation, ran the
-suite, and kept only the mutations that broke a check.
+Every task was chosen by evidence. Each candidate mutation was applied, the suite ran,
+and only the mutations that broke a check stayed.
 `scripts/bench-corpus-gate.ts` re-proves the precondition for all 157 tasks.
 The defect fails and the oracle passes.
 
@@ -83,7 +83,7 @@ bun scripts/bench.ts validate --run-root /tmp/b --id <task-id>   # one task, no 
 The third step is the one that matters. A patch that applies again is not
 yet a patch that still breaks the checks. An id naming no task refuses.
 
-If the code a defect was data about is genuinely gone, retire the task instead.
+When the code a defect describes is genuinely gone, retire the task instead.
 Retire only after establishing that no live code still holds the property.
 Use this order, because each step keeps the next one distinguishable from a mistake:
 
@@ -97,15 +97,15 @@ Use this order, because each step keeps the next one distinguishable from a mist
 
 Steps 2 and 3 are both required. A patch file left
 behind is the orphan described above. `gate:bench-corpus` reports it
-as a half-finished retirement; `scripts/bench.test.ts` asserts the inverse for
-every ledger line. A retired id must be absent from the corpus and leave no
+as a half-finished retirement. `scripts/bench.test.ts` asserts the inverse for
+every ledger line. A retired id is absent from the corpus and leaves no
 patch file. Retirement is a last resort. A defect class that still exists in
 relocated or renamed code is re-authored against it. The ledger line goes back
 when that happens.
 
 ### Validation noise and `--validate-retries n`
 
-A single scored attempt can record a false fail. The harness re-checks a
+A single scored attempt records a false fail. The test runner re-checks a
 task that fails well-formedness, up to `--validate-retries` more times. The
 default is 2, so 3 attempts, bounded, stopping at the first success.
 
@@ -122,15 +122,12 @@ well-formedness belongs to the task, so neither leaks performance signal.
 `BENCH_SUITES` in `scripts/bench-corpus.ts` also defines a `lean` suite over
 `scripts/verify-lean.sh`. No Lean tasks ship yet.
 
-## The long-horizon family
-
 The defect corpus scores a repo fix. It is blind to everything context-shaped.
-It cannot tell whether a turn drowned in tool bulk, whether a fact survived
+It never tells whether a turn drowned in tool bulk, whether a fact survived
 compaction, or where peak prompt tokens went. `tests/bench/longhorizon.jsonl`
 holds 24 tasks, measured 2026-08-19, over four length buckets crossed with the
 planted-fact count, in two modes. Corpus sizes, generated from the committed
 parameters: 35,502 / 137,361 / 548,801 / 1,097,628 characters.
-
 The corpus file holds generator parameters only.
 `packages/core/src/bench/longhorizon.ts` derives everything from them. The
 answer key exists only as a pure function of a seed.

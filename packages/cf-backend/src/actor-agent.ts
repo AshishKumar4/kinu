@@ -87,7 +87,7 @@ import {
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
   DynamicContextLedger, turnLocalContextMessage, unverifiedInstructionsMessage,
-  observeSystemPromptHash, subordinateTurnContext, inheritedAsModelMessage,
+  observeSystemPromptHash, steerSkillsBlock,
   type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
@@ -1915,18 +1915,27 @@ export abstract class ActorAgent extends Think<Env> {
     // had already decided it had nothing to recover.
     await this.jobRunner.recoverDueResumes();
 
-    if (sweepsUnfinished || recoveryUnfinished) {
+    // What the registry holds after this tick is decided by the ledgers, not
+    // by the laps. UNTIMED owed work — a turn the run ledger holds open, a
+    // job running with no resume instant, an open drain lease — names no
+    // instant, so the pessimistic row is KEPT at the lap pace: the isolate may
+    // die at any point of that work, and a registry with no row would sleep
+    // until an external event (which is exactly what the turn-open arm exists
+    // to prevent, and a finished pass that released the row undid it one tick
+    // later). The pace climbs like an unfinished pass, so a long turn costs a
+    // wake at the ceiling and never a two-second loop. A TIMED obligation
+    // waits for its own instant, folded in soonest-wins; with only timed work
+    // left the pessimistic row is released for that instant, so a lone
+    // deferred job costs ONE wake at its instant, not a chain that arrives
+    // early and does nothing. Nothing owed at all sleeps empty.
+    const nextOwed = this.nextOwedAt();
+
+    if (sweepsUnfinished || recoveryUnfinished || this.owedUntimedWork()) {
       this.#maintenanceLaps = this.#maintenanceLaps + 1;
+
+      if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
     } else {
       this.#maintenanceLaps = 0;
-
-      // The pass is finished, so the pessimistic row's insurance has paid
-      // out. What it owes next is decided by the ledgers, not by the laps:
-      // a timed obligation waits for its own instant (a lone deferred job
-      // costs ONE wake at the instant, not a chain that arrives early and
-      // does nothing), and nothing owed at all sleeps empty — either way
-      // the row this tick wrote is released, never kept on suspicion.
-      const nextOwed = this.nextOwedAt();
       await this.cancelSchedule(armedRowId);
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
@@ -1968,11 +1977,20 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
 
-  /** Whether anything anywhere still owes this actor a wake. The base owns
-   *  none of the rosters the predicate reads, so it answers false; the
-   *  subclass that knows its owed surfaces overrides and the tick asks this,
-   *  never a flattened copy of the roster, for its end-of-tick cancel. */
+  /** Whether anything anywhere still owes this actor a wake: untimed work,
+   *  or a timed obligation with an instant. The activation asks this to arm
+   *  at all; the tick asks the two halves separately, because they decide
+   *  different things about the row it armed. */
   protected owedWorkExists(): boolean {
+    return this.owedUntimedWork() || this.nextOwedAt() !== null;
+  }
+
+  /** Whether work that names NO instant still owes this actor a wake — an
+   *  open turn, a running job with no resume instant, an open drain lease.
+   *  The tick keeps its lap-paced row while this answers true. The base owns
+   *  none of the rosters the predicate reads, so it answers false; the
+   *  subclass that knows its owed surfaces overrides. */
+  protected owedUntimedWork(): boolean {
     return false;
   }
 
@@ -2546,11 +2564,20 @@ export abstract class ActorAgent extends Think<Env> {
           // The workspace UI IS the review surface: a plan turn is admitted.
           planTurnRefusal: () => null,
           // The turn's own wake at its open: a kill mid-turn leaves the run
-          // row AND the wake that re-drives what it owed, at the lap-0 delay.
-          armTurnWake: async () => { await this.scheduleTerminalRetry(Date.now() + recoveryBackoffMs(0)); },
+          // row AND the wake that re-drives what it owed. The loop names the
+          // instant; the tick keeps a row while the turn is open.
+          armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
           modelWindow: () => ({
             contextWindow: this.sessionContextWindow(),
             modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+          }),
+          steerSkills: (text) => steerSkillsBlock({
+            vfs: this.getSkillsVfs(),
+            config: this.config,
+            userText: text,
+            trust: this.instructionTrust(),
+            limits: { contextWindow: this.sessionContextWindow(), modelOutputLimit: this.modelCatalog.modelOutputLimit() },
+            alreadyActive: new Set(this._turnActiveSkills?.active.map((skill) => skill.name) ?? []),
           }),
         },
       });
@@ -5913,25 +5940,9 @@ export abstract class ActorAgent extends Think<Env> {
     // Each run opens a new analytics write window.
     openAnalyticsWindow(this.env);
 
-    // Attachments ride as ModelMessage file parts, the shape ai's
-    // convertToModelMessages emits for FileUIParts, so multimodal models
-    // receive them natively.
-    const fileParts = (item.files ?? []).map((f) => ({
-      type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
-    }));
-
-    // The one rule for where the turn's conversation comes from, shared with
-    // the local backend: a delivery's reply turn opens on the settled working
-    // revision (born from the delivery's conversation when this actor has
-    // none), every other turn appends, and prior output follows either.
-    this.actorSession.openTurnInput(lease, {
-      item,
-      message: fileParts.length > 0
-        ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
-        : { role: 'user', content: item.text },
-      birthContext: (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
-    });
-
+    // The turn's input is already on the working history: the loop placed it
+    // there (core's one rule for where a turn's conversation comes from)
+    // before handing the turn here.
     const history = this.actorSession.history;
     // The conversation this turn was opened over, its own message included —
     // what a hire with context:'inherit' is born from, frozen here so a
@@ -6422,6 +6433,13 @@ export abstract class ActorAgent extends Think<Env> {
     // reads. Continuity alone would miss the whole autonomous population,
     // which is the population the one-shot policy was measured on.
     const programmatic = this.turnUserMessageEvent() !== null;
+
+    // A human typed into this turn while it ran: from that step on someone
+    // IS watching the stream, whatever drove the turn. The first-run
+    // background-settle row on build cba44dcb9 landed its ask as a steer
+    // inside the genesis turn, and the run tool kept the one-shot window, so
+    // a 45 s sleep ran inline and no wake ever engaged.
+    if (this.actorSession.landedSteers.length > 0) return 'interactive';
 
     return programmatic || this._turnContinuity === 'independent_task' ? 'one-shot' : 'interactive';
   }

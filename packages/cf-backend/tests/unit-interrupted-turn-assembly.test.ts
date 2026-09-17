@@ -14,7 +14,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { INTERRUPTED_TOOL_RESULT } from '@kinu.run/core';
-import { orchestratorHarness, thinkTurns } from './helpers/actor-harness';
+import { orchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
 
 const ORPHAN_ID = 'call_ed15d29f352a4735e6b01b5';
 
@@ -32,7 +32,7 @@ describe('the cf turn over an interrupted history', () => {
   test('hands the model a terminal result for the orphaned call', async () => {
     const { agent } = orchestratorHarness();
 
-    const config = await thinkTurns(agent).prepare({ messages: interruptedHistory });
+    const config = await chatSessionTurns(agent).prepare({ messages: interruptedHistory });
     // What the model was actually called with at its first step.
     const assembled = config.prompt;
     expect(assembled.length).toBeGreaterThan(0);

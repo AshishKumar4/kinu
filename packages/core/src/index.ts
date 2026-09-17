@@ -1539,7 +1539,6 @@ export {
   DEVICE_CONNECT_PATH,
   DEVICE_TERMINAL_PATH,
   ORCHESTRATOR_AGENT_SLUG,
-  SUBORDINATE_AGENT_SLUG,
 } from './cloud-wire';
 
 // The one record of what the Cloudflare platform does, and how we know. Every
@@ -1885,7 +1884,7 @@ export {
 export { createDurableMctsSession } from './orchestrator/mcts-session';
 
 export {
-  skillsVfsOver, resolveTurnSkills, filterToolNamesBySkills, filterToolSetBySkills,
+  skillsVfsOver, resolveTurnSkills, steerSkillsBlock, filterToolNamesBySkills, filterToolSetBySkills,
   renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface';
 
@@ -2360,6 +2359,11 @@ export {
 } from './http/deployed-assets';
 
 export {
+  RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, SignedReleaseSchema,
+  signRelease, verifyRelease, generateReleaseSigningKey, type ReleaseChecksums, type SignedRelease,
+} from './http/release-signing';
+
+export {
   DEVICE_UPDATE, DEVICE_UPDATE_STATES, cliArtifactPath, deviceUpdateState, isSameBuild,
   type DeviceUpdateFrame, type DeviceUpdateState,
 } from './http/device-update';
@@ -2574,6 +2578,7 @@ export {
   extractTicketOrchestratorAgentName,
   isForeignAgentNamespacePath,
   hostedActorRoute,
+  hostedActorSocketPath,
 } from './http/agent-routing';
 
 export {

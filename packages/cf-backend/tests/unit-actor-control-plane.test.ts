@@ -17,7 +17,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
-import { hostedSubordinateHarness, orchestratorHarness, thinkTurns } from './helpers/actor-harness';
+import { hostedSubordinateHarness, orchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
 import type { Database } from 'bun:sqlite';
 
 /** Activity rows for one actor. Scoped by handle: an unscoped read would let a
@@ -63,7 +63,7 @@ describe('the workspace root answers the actor control plane', () => {
    */
   test('steering with no turn running queues the text as the next ordinary turn', async () => {
     const { agent } = orchestratorHarness();
-    const turns = thinkTurns(agent);
+    const turns = chatSessionTurns(agent);
     const next = turns.park();
 
     // The send is the turn: the loop admits it as the operator's own next

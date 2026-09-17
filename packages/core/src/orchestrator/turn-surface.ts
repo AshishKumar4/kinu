@@ -11,7 +11,7 @@ import {
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
 } from '../skills/loader';
 import { discoverSkills, BUILTIN_SKILL_HEADERS, type SkillsVfs } from '../skills/discover';
-import { unionAllowedTools, toolAllowedBySkills, trustedActiveSkills } from '../skills/render';
+import { unionAllowedTools, toolAllowedBySkills, trustedActiveSkills, renderActiveSkillsSection } from '../skills/render';
 import type { ActiveSkillSet, SkillsIndex } from '../skills/types';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
 import { stepContextLimit, type ModelWindow } from '../prompting/step-prune';
@@ -91,6 +91,43 @@ export async function resolveTurnSkills(opts: {
     };
   }
 }
+
+/**
+ * What a send spliced MID-TURN activates that the running turn does not
+ * already carry, rendered as that step's reference; null when nothing new.
+ *
+ * Skills are resolved once, at the turn's open, from the message that opened
+ * it. A steer typed while the turn runs — "build me a slate" during the
+ * genesis turn — carried its words and nothing else to the next step, so a
+ * skill the words named by keyword never reached the model: measured on the
+ * first-run `slate` row, build cba44dcb9, where the ask landed at step 1 of
+ * the genesis turn, the prompt held the skills INDEX and no body, the model
+ * hunted `skills/slates.md` at five paths, and wrote a server class with no
+ * `fetch`. The system prompt is the turn's; what a step can add is a
+ * message, so the bodies ride the step beside the steer, non-durable, under
+ * the same rendering the system section uses.
+ */
+export async function steerSkillsBlock(opts: Parameters<typeof resolveTurnSkills>[0] & {
+  /** The names the turn already carries; their bodies are in the prompt. */
+  readonly alreadyActive: ReadonlySet<string>;
+}): Promise<string | null> {
+  const { activeSkills } = await resolveTurnSkills(opts);
+
+  if (activeSkills === undefined) return null;
+  const fresh = activeSkills.active.filter((skill) => !opts.alreadyActive.has(skill.name) && skill.body !== null);
+
+  if (fresh.length === 0) return null;
+
+  const rendered = renderActiveSkillsSection({
+    active: fresh,
+    reasons: activeSkills.reasons.filter((reason) => fresh.some((skill) => skill.name === reason.name)),
+  }, 'system');
+
+  return rendered === '' ? null : `${STEER_SKILLS_HEADING}\n${rendered}`;
+}
+
+/** The line in front of the bodies a mid-turn message activated. */
+const STEER_SKILLS_HEADING = 'The message above activates these skills; they apply for the rest of this turn.';
 
 async function admitTurnSkills(
   opts: {
