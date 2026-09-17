@@ -27,6 +27,7 @@
     "./slate-actor-probe.ts",
     "./slate-share-probe.ts",
     "./two-turn-probe.ts",
-    "./user-socket-probe.ts"
+    "./user-socket-probe.ts",
+    "./public-surface-probe.ts"
   ]
 }
