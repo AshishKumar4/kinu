@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import type { Server, ServerWebSocket } from 'bun';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
-  JsonArraySchema, JsonObjectSchema, parseJsonObject,
+  JsonArraySchema, JsonObjectSchema, parseJsonObject, hostedActorSocketPath,
   ChatHistoryEntrySchema, restoredRows,
   type JsonObject, type JsonValue,
 } from '@kinu.run/core';
@@ -310,7 +310,7 @@ describe('CloudAgentClient protocol', () => {
     );
 
     expect(mock.connectUrls.at(-1)?.pathname).toBe(
-      '/agents/orchestrator-agent/helios/sub/subordinate-agent/researcher-a1b2c3',
+      `/agents/orchestrator-agent/helios/${hostedActorSocketPath('researcher-a1b2c3')}`,
     );
     expect(mock.ticketRequests.at(-1)).toEqual({ name: 'helios', auth: 'Bearer ptc_token' });
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'Reviewed' }, true));
