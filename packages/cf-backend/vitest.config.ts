@@ -412,6 +412,10 @@ export default defineConfig({
   ],
   test: {
     include: ['tests/workerd/**/*.test.ts'],
+    // Asserts the pool actually started, rather than trusting a green run to
+    // mean workerd. Adopted from the owner's cloudflare-os
+    // (`test-setup/assert-workerd.ts`); the file states what it measured.
+    setupFiles: ['./tests/workerd/assert-workerd.ts'],
     // These tests measure gates and cancellation windows in wall time. Vitest's
     // default per-file parallelism would have two of them contend for the same
     // runtime and turn a latency assertion into a flake.
