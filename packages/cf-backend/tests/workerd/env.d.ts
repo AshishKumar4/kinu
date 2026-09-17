@@ -10,6 +10,7 @@ import type {
   AlarmDO, GatedDO, NeighbourDO, RetentionDO, SocketDO, SteerProbeDO, StreamLifecycleDO, TransactionDO,
 } from './worker';
 import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
+import type { HireObservation } from './hire-shapes';
 import type { CappedTurnProbeDO, UnboundedTurnProbeDO } from './step-cap-probe';
 import type { SpendProbeDO } from './spend-probe';
 import type { TerminalEffectProbeDO } from './terminal-effect-probe';
@@ -87,6 +88,17 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   parityPrepare(): Promise<ParityPrepared>;
   parityComplete(prepared: ParityPrepared): Promise<ParityCompleted>;
   backgroundWakeConversation(where: WakeHoldPlacement): Promise<WakeDriveResult>;
+}
+
+interface HireProbeRpc extends Rpc.DurableObjectBranded {
+  setup(workspace: string, model: string, script: 'answer' | 'throw' | 'park'): Promise<void>;
+  releaseChild(): Promise<void>;
+  childSpoke(): Promise<void>;
+  callerObserved(): Promise<void>;
+  openHire(workspace: string, prompt: string): Promise<void>;
+  msgSent(): Promise<void>;
+  reenter(workspace: string): Promise<void>;
+  observe(workspace: string): Promise<HireObservation>;
 }
 
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
@@ -171,6 +183,7 @@ declare global {
       SLATE_ACTOR_ROOT: DurableObjectNamespace<SlateActorRootRpc>;
       PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
       TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;
+      HIRE_PROBE: DurableObjectNamespace<HireProbeRpc>;
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
