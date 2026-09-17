@@ -92,6 +92,14 @@ export interface ActorExecutionInput {
 
 export interface ActorExecutionResult {
   readonly text: string;
+  /** The turn's answer as the runner selected it (the final step's text),
+   *  or null when the steps carried none and `text` is what streamed or a
+   *  synthesis of the tool results. */
+  readonly answer: string | null;
+  /** How many steps the turn finished in this process. A continuation reads
+   *  it to tell whether the answer is the cut step it resumed (one step) or a
+   *  later step whose narration the cut text belongs to. */
+  readonly steps: number;
   readonly failure: Error | null;
   readonly interrupted: boolean;
   /** Null when preparation failed before any program was selected. */
@@ -160,6 +168,7 @@ export class ActorSession {
     readonly onAccept?: (steer: AcceptedSteer) => void;
     readonly onDrain?: (rows: readonly LandedSteerRow[], atStep: number) => void | Promise<void>;
     readonly turnId?: () => string | null;
+    readonly skills?: (text: string) => Promise<string | null>;
   }): void {
     this.orchestrator.inbox.bindSteerDeps({
       onAccept: deps.onAccept,
@@ -169,6 +178,7 @@ export class ActorSession {
         this.landed.push(...rows);
       },
       turnId: () => deps.turnId?.() ?? this.active?.lease.turnId ?? null,
+      skills: deps.skills,
     });
   }
 
@@ -483,6 +493,8 @@ export class ActorSession {
     extensions.register(this.orchestrator.turnExtension);
     const pending: Array<Extract<ChatEvent, { type: 'tool-call' }>> = [];
     let text = '';
+    let answer: string | null = null;
+    let steps = 0;
     let completed = false;
     let program: ActorTurnProgram | null = null;
     let failure: Error | null = null;
@@ -542,6 +554,7 @@ export class ActorSession {
           case 'tool-result': this.recordToolResult(pending, event); break;
 
           case 'step-finish':
+            steps += 1;
             this.orchestrator.acc.recordStep({
               text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
               response: { messages: event.responseMessages }, usage: event.usage,
@@ -576,7 +589,21 @@ export class ActorSession {
           case 'done':
             this.messages.push(...this.orchestrator.inbox.replayInto(event.responseMessages));
 
-            if (!text.trim() && event.text.trim()) text = event.text;
+            // THE TURN'S ANSWER, over what it streamed. `text` above is every
+            // delta this session saw — one step's narration after another on a
+            // multi-step turn — while the runner's `done` carries the answer
+            // the turn stopped on and already falls back to the steps and to a
+            // tool synthesis when the model ended without prose. Preferring
+            // the deltas made the durable reply the narration and the answer
+            // concatenated: measured 2026-09-16 on build cba44dcb9, the
+            // `public-failure-recovery` episode's answers to "reply with only
+            // PASS or FAIL" were stored as three narration lines with FAIL run
+            // onto the end of the last. The deltas stay the fallback for a
+            // turn that produced no `done` at all — an interrupt throws past
+            // this arm, and the cut text is what the operator saw.
+            if (event.text.trim()) text = event.text;
+
+            if (event.answer !== undefined && event.answer.trim()) answer = event.answer;
             completed = true;
             break;
         }
@@ -605,7 +632,7 @@ export class ActorSession {
     }
 
     return {
-      text, failure, program, claim: active.claim,
+      text, answer, steps, failure, program, claim: active.claim,
       admittedMessages: active.claim === null ? [] : this.options.claims.admittedFor(active.claim).messages,
       interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
     };
@@ -626,10 +653,11 @@ export class ActorSession {
     // The VALUE the tool returned is what the ledger records; the rendered
     // text is for readers that render. A tool that returned nothing records
     // the text it rendered to, which is what such a tool's row has always read.
+    const timed = event.durationMs === undefined ? {} : { durationMs: event.durationMs };
     this.orchestrator.acc.recordToolCall(event.success
-      ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, failures: event.failures, output: event.output ?? event.result }
+      ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, failures: event.failures, output: event.output ?? event.result, ...timed }
       : { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: false, reason: event.reason, failures: event.failures,
-          execution: event.execution, error: event.error ?? event.result });
+          execution: event.execution, error: event.error ?? event.result, ...timed });
   }
 
   private requireTurn(lease: ActorTurnLease): ActiveTurn {

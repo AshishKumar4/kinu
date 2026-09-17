@@ -13,21 +13,20 @@ package manifests and `bun.lock` on 2026-09-14:
 
 | Package | Version | Declared in |
 |---|---|---|
-| `@nimbus-sh/core` | 0.8.0 | `packages/core`, `packages/cf-backend`, `packages/cli-backend` |
-| `@nimbus-sh/sdk` | 0.5.0 | `packages/cf-backend` |
-| `@nimbus-sh/worker` | 0.6.0 | `packages/cf-backend` |
+| `@nimbus-sh/core` | 0.9.0 | `packages/core`, `packages/cf-backend`, `packages/cli-backend` |
+| `@nimbus-sh/sdk` | 0.6.0 | `packages/cf-backend` |
+| `@nimbus-sh/worker` | 0.7.0 | `packages/cf-backend` |
 | `@nimbus-sh/runtime-bash` | 5.2.37 | `packages/cli-backend` |
 | `@nimbus-sh/runtime-cpython` | 3.13.14 | `packages/cli-backend` |
-
 `packages/core` and `packages/cf-backend` are the two workspace packages that declare
-`@nimbus-sh/fabric`, at 0.4.0 (`packages/core/package.json:28`), and core imports
-it directly: `core/src/events/outbox.ts:30` builds its outbox on
+`@nimbus-sh/fabric`, at 0.5.0 (`packages/core/package.json:31`). Core imports
+it directly: `packages/core/src/events/outbox.ts` builds its outbox on
 `@nimbus-sh/fabric/outbox.js`. `@nimbus-sh/worker` also depends on fabric, so
 the resolved tree holds it either way.
 
-No Nimbus package is patched: `@nimbus-sh/core` 0.8.0, `fabric` 0.4.0,
-`worker` 0.6.0, `sdk` 0.5.0 and `platform` 0.3.0 (published 2026-09-14) carry
-everything the four earlier patches did. The `patchedDependencies` entries
+No Nimbus package is patched: `@nimbus-sh/core` 0.9.0, `fabric` 0.5.0,
+`worker` 0.7.0 and `sdk` 0.6.0 (checked 2026-09-14) carry
+everything the four earlier patches did. The six `patchedDependencies` entries
 that remain are `@plannotator%2Fui@0.30.0.patch`,
 `@cloudflare%2Fsandbox@0.12.8.patch`, `@cloudflare%2Fcontainers@0.3.7.patch`,
 `agents@0.22.0.patch`, `@cloudflare%2Fcodemode@0.5.1.patch` and
@@ -39,10 +38,10 @@ it, which `cli-backend/src/executor.ts` and
 `cli-backend/src/codemode-tool-factory.ts` import as `normalizeCode`.
 `bun run gate:patch-parity`
 (`scripts/patch-parity.ts`) reads `patchedDependencies` out of the root
-`package.json`, so it governs those eight. Its header still narrates the `@nimbus-sh/core` patch incident,
+`package.json`, so it governs those six. Its header still narrates the `@nimbus-sh/core` patch incident,
 because that incident is why the gate exists.
 
-The ninth file, `upstream-codemode-normalize.patch`, is not a
+The seventh file, `upstream-codemode-normalize.patch`, is not a
 `patchedDependencies` entry, so bun never applies it and `gate:patch-parity`
 does not govern it. It patches the codemode repository's own
 `packages/codemode/` sources, which is the upstream proposal behind the export
@@ -53,9 +52,9 @@ the supplied credentialed view and never acquires kernel authority itself.
 Published core/worker runtime callers select kernel authority explicitly.
 Kinu's resident slate compiler instead uses `CRED_SESSION_USER` for both server
 and browser imports, matching the authoring agent's filesystem view. Its
-separate service object shares the existing module-cached esbuild-wasm namespace;
-it does not allocate a second wasm heap. Compile diagnostics become `bad_input`
-with their cause retained; compiler initialization errors remain runtime failures.
+separate service object shares the existing module-cached esbuild-wasm namespace.
+It does not allocate a second wasm heap. Compile diagnostics become `bad_input`
+with their cause retained. Compiler initialization errors remain runtime failures.
 The workerd slate-process suite checks both the private-file refusal and a working
 authored TypeScript resident process.
 
@@ -70,7 +69,7 @@ that possible: it owns no transport, no session and no Durable Object of its own
 
 `createHostedWorkspace()` is the only constructor, and the object's own name is
 the workspace's, so execution, export, forking, preview routing and destruction
-all address one place. A subordinate, head, node or branch actor is a logical entry in that same `ctx.storage.sql`, acquired from the workspace's one `ActorHost`; it never composes a filesystem, which would be a second, empty workspace.
+all address one place. A subordinate, head, node or branch actor is a logical entry in that same `ctx.storage.sql`, acquired from the workspace's one `ActorHost`. It never composes a filesystem, which would be a second, empty workspace.
 
 Destruction is one object's teardown: `this.destroy()` drops the filesystem with
 the conversation, so a same-name recreate cannot find half a workspace. Every
@@ -120,7 +119,7 @@ exported environment state. `ActorRuntimeIdentity.shellId`
 (`cf-backend/src/runtime.ts`) supplies a stable actor-specific key on every exec,
 process, and run-code call. The key reads `agent:<name>` for the main actor
 (`cf-backend/src/actor-agent.ts:700`) and `<kind>:<storage-key>` for every
-hosted logical actor — subordinate, head, node and branch alike — from
+hosted logical actor (subordinate, head, node and branch alike) from
 `hostedActorShellId` in `cf-backend/src/actor-hosting.ts`, keyed on the
 immutable storage key rather than the registered name. The published
 SDK accepts that key on every exec option (`NimbusExecOptions.shellId`) and
@@ -128,7 +127,7 @@ keeps each keyed shell's state separately. The filesystem and the process
 registry stay shared.
 
 Each actor's automatic scaffold lifecycle targets a distinct path. The default
-agent uses `scaffold/agent.js`; any other actor uses its own actor-keyed path under `.kinu/`.
+agent uses `scaffold/agent.js`. Any other actor uses its own actor-keyed path under `.kinu/`.
 Routine bootstrap and evolution writes therefore stay separate. Actors deliberately
 share an unrestricted workspace VFS. Treat that separation as a convention.
 It is not an ACL.

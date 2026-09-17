@@ -13,12 +13,11 @@
  *                loop persists and settles it exactly as production would; the
  *                ledgers a suite reads afterwards are the loop's own writes.
  *
- * Two drivers implement it. `thinkTurns` (in actor-harness, beside the
- * bridges it composes) drives the SDK's hooks the way Think calls them today;
- * `chatSessionTurns` will drive core's ChatSession once the root runs on it. A
- * suite moved onto this seam keeps its assertions and changes only how the
- * turn is started — which is the whole point: the switch commit swaps the
- * driver under every suite at once and none of them notices.
+ * One driver implements it: `chatSessionTurns` (in actor-harness, beside the
+ * bridges it composes) drives core's ChatSession, the loop the root runs on.
+ * A suite on this seam keeps its assertions and names nothing about how the
+ * turn is driven — which is what let the Think switch swap the driver under
+ * every suite at once with none of them noticing.
  */
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
 import type { SessionMessage } from 'agents/experimental/memory/session';

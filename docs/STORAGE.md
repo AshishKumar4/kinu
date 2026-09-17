@@ -7,32 +7,30 @@ SQLite owns relational actor state. Each subsystem owns its tables and creates
 them idempotently. No shadow VFS or sync path runs between the two.
 
 Two other Durable Object classes hold isolated databases of their own.
-`SubordinateAgent` gets the full workspace schema plus the one-row seeds its
-modes read: `subordinate_identity` for a hire, `facet_identity` (owner,
-capability token, parent workspace) and `facet_activation` (the head or node
-work spec) for an exploration worker. `SubordinateAgent.onStart` creates
-`traces` and `facet_model_operation_outbox` on every activation. Every mode's
-rows live in that facet's own database, which is what isolates one MCTS branch
-or head from its siblings. `UserDO` holds the per-user `user_*` and
+Only `OrchestratorAgent` bears actors: every subordinate, head, swarm node, and
+MCTS branch is a logical actor row inside the workspace's own SQLite
+(`packages/cf-backend/src/subordinate-hosting.ts`,
+`packages/cf-backend/src/exploration-hosting.ts`), never a second object and
+never a second database. `UserDO` holds the per-user `user_*` and
 `device_*` tables and the owner `experience_library`. Those tables belong to the
 user, not to any workspace.
 
 Four things live outside actor SQLite entirely. Browser auth lives in the `AUTH_KV`
 KV namespace. Sandbox `/workspace` backups live in the `BACKUP_BUCKET` R2 bucket.
 The authoritative Nimbus workspace lives in DO storage. Optional embedding recall
-lives in the `MEMORY_VECTORS` Vectorize index. Vectorize extends FTS5. It never
-serves as the source of truth.
+lives in the `MEMORY_VECTORS` Vectorize index. Vectorize extends FTS5. It is never
+the source of truth.
 
 `AUTH_KV` holds only expiring records: browser sessions, one-time OAuth
 handoff state, CLI browser-approval state, each carrying its own TTL. None of
-it serves as a source of truth. A user identity lives in their `UserDO`, keyed on a
+it is a source of truth. A user identity lives in their `UserDO`, keyed on a
 userId derived from the verified email. An emptied namespace costs everyone
 a fresh sign-in and nothing more. The handoff record keeps the hash of a
 binding cookie the initiating browser holds. A callback URL is worth nothing
 away from the browser that started that sign-in.
 
 A session cookie KV record is a projection. What the cookie stands for and
-whether it is still live are both one row in the signing-in user own
+whether it is still live are both one row in the signing-in user's own
 `UserDO`. That row is written once at sign-in and read on every cookie check. KV needs up
 to a minute to reach every colo in either direction, so it can answer neither
 question. A copied cookie replayed at a lagging colo would outlive logout by
@@ -47,7 +45,7 @@ It never sends the 401 that would tell a signed-in user to sign in again. A sign
 that cannot reach the store keeps the cookie and offers a retry. The cookie is
 the only handle that can still revoke that session. Clearing it would leave
 the session live with nothing able to reach it. A session whose row is gone or
-lapsed is simply not signed in. A record KV does not hold is not a sign-out
+lapsed is not signed in. A record KV does not hold is not a sign-out
 on its own. The row still says what the cookie stands for. Every path that
 ends a session deletes that row first. An absent record can never revive a
 revoked one. A record that no longer decodes is both a fault and a dead
@@ -238,11 +236,11 @@ Both backends run the Nimbus workspace filesystem over their own SQLite. The
 class is `SqliteVFS`, from `@nimbus-sh/core`. Nothing in this repository
 implements a filesystem.
 
-On hosted, the workspace lives in the actor OWN Durable Object storage. It is reached
+On hosted, the workspace lives in the actor's own Durable Object storage. It is reached
 through the remote session adapter in `core/src/execution/nimbus.ts`. The
 orchestrator DO creates none of the filesystem tables. On local, `createWorkspace`
 (`core/src/vfs/nimbus-workspace.ts`, imported as `createWorkspaceFilesystem`)
-builds the same component over `bun:sqlite` in the session own database
+builds the same component over `bun:sqlite` in the session's own database
 (`cli-backend/src/runtime.ts:493`).
 
 Nimbus owns those bytes and their tables.
@@ -273,8 +271,8 @@ Three properties follow:
 `packages/agent-utils` supplies the `VFS` interface both planes satisfy
 (`agent-utils/src/vfs/types.ts`) and nothing else on this axis: no filesystem
 implementation, no shell emulator. The shell is the Nimbus `runtime-bash`.
-Memory indexing reads through the active VFS on either backend. Relational
-`memory_chunks` never becomes a second file authority because indexing reads through the active VFS.
+Memory indexing reads through the active VFS on either backend, so relational
+`memory_chunks` never becomes a second file authority.
 
 One table named `vfs_files` still appears in the tree, in
 `packages/cli/tests/export-import.test.ts`. The test creates it there as a blob
@@ -293,12 +291,9 @@ is FTS5 MATCH with BM25 ranking. `sanitizeFtsQuery` removes operators and stop
 words. It falls back to OR-joined tokens when the AND query returns nothing.
 
 ## Think message persistence
-
-Chat history belongs to the SDK. `Think` extends the agents SDK `Agent` and
-holds a `Session` from `agents/experimental/memory/session`, whose
 `AgentSessionProvider.ensureTable` (`agents/dist/experimental/memory/session/index.js:747-790`,
-agents 0.20.1) creates, on the first session read — which is Think's own boot
-(`@cloudflare/think/dist/think.js:1003-1028`, 0.15.1), before the actor's
+agents 0.22.0) creates on the first session read, which is Think's own boot
+(`@cloudflare/think/dist/think.js:1012-1073`, 0.17.0), before the actor's
 `onStart`:
 
 - `assistant_messages`: the durable message tree (`id`, `session_id`,
@@ -307,36 +302,27 @@ agents 0.20.1) creates, on the first session read — which is Think's own boot
 - `assistant_config`: session-scoped settings
 - `assistant_fts`: the provider's FTS5 index over message content
 
-Kinu does not write these through the SDK, and on a hosted workspace
-`assistant_messages` is the pane store — the ONE authority for the default
-chat — and every conversational reader answers from it in raw SQL when it
-exists and from plain `actor_messages` when it does not
+Kinu does not write these through the SDK. On a hosted workspace
+`assistant_messages` is the pane store, the ONE authority for the default
+chat. Every conversational reader answers from it in raw SQL when it
+exists, and from plain `actor_messages` when it does not
 (`packages/core/src/identity/conversation-store.ts` `hasPaneStore`). The pane
-is the vendor's shape with no owner column: it is the ROOT actor's transcript
-by construction, since Think's session belongs to the workspace object and no
-child actor runs Think — `usesPaneStore` is the one place that says whose it
-is, and a child's default chat is the plain store. Plain `actor_messages` is the
+is the vendor's shape with no owner column. It is the ROOT actor's transcript
+by construction: Think's session belongs to the workspace object and no
+child actor runs Think. `usesPaneStore` is the one place that says whose it
+is. A child's default chat is the plain store. Plain `actor_messages` is the
 local backend's only store, never a projection of the pane (the header of
 that module records why the projection was retired). The
 census in `packages/core/src/conformance/manifest.ts` declares the four
-tables on both cf roots, and `ActorAgent.assertSessionStore`
+tables on both cf roots. `ActorAgent.assertSessionStore`
 (`packages/cf-backend/src/actor-agent.ts`) refuses an activation whose Think
 booted without leaving `assistant_messages` behind.
 
 ### Session replatform migration plan (2026-09-10)
 
-`@cloudflare/think`'s unreleased changeset `brisk-chats-branch`
-(`.changeset/brisk-chats-branch.md` on `cloudflare/agents` `main`) replatforms
-Think onto `agents/sessions`: on first wake each Durable Object lifts its
-`assistant_messages`, `assistant_compactions` and `assistant_config` rows into
-`cf_agents_session_*` tables, verifies every row landed, and DROPS the
 originals; the migration cannot be rolled back. Installed today:
-`@cloudflare/think` 0.15.1, `agents` 0.20.1 (`packages/cf-backend/package.json`).
-Neither is bumped by this plan; the bump is a separate, coordinated change and
-it must not ship before the readers below have moved, because the wake guard
-will refuse every hosted activation the moment they have not.
-
-Nothing below is convertible to the 0.15.1 `Session` read model with identical
+`@cloudflare/think` 0.17.0, `agents` 0.22.0 (`packages/cf-backend/package.json`).
+Nothing below converts to the 0.17.0 `Session` read model with identical
 results, which is why every reader is still raw SQL. That read model
 (`agents/dist/experimental/memory/session/index.d.ts:197-225`) is
 `Promise`-returning where every Kinu reader is synchronous over a
@@ -389,7 +375,7 @@ against a shape declared private.
 
 **B. `AgentRuntime` gains a session read port.** One interface in
 `packages/core/src/types/agent-runtime.ts` that answers what the readers
-actually ask — the ancestry of a leaf as ids, a message by id, the count, a
+actually ask: the ancestry of a leaf as ids, a message by id, the count, a
 newest-first page with a cursor, the user→assistant pairs, a full dump in
 insertion order — and one write, `append(message, parentId)`, for the fork.
 The cf backend implements it over Think (`getHistory(leafId)`, `getMessage`,
@@ -468,7 +454,7 @@ Five more groups are created outside that pass, by the root that owns each:
 | Subordinates | `workspace_subordinates` (every actor that can hire), `subordinate_identity` (child DO) | `core/src/subordinates/support.ts` |
 | Workspace-diff baseline | `vfs_baseline` | `core/src/read-models/workspace-diff.ts`, called by each root's schema pass |
 | Orchestrator-local | `turn_feedback`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
-| Email + webhooks | no boot DDL; the outbound mail rows are the shared outbox's `outbox_email` | `cf-backend/src/email/outbox.ts` |
+| Email + webhooks | no boot DDL; the outbound mail rows are the shared outbox's `outbox_email` | `packages/cf-backend/src/email/outbound.ts` |
 | Ingress gates | `webhook_rate_windows`, `webhook_secrets` (both backends) | `core/src/events/ingress/rate-limit.ts`, `secrets.ts` |
 
 Three tables are created lazily: `session_window` and `turn_review_queue` by

@@ -112,7 +112,7 @@ export const HttpCallSchema = v.object({
 
 export type HttpCall = v.InferOutput<typeof HttpCallSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'twin';
 
 /** A durable `pending_steers` row — the reservation a mid-turn send writes:
  *  the client's own message id bound to the turn it will land in. */

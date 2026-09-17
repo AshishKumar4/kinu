@@ -123,8 +123,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  at its first model call, `false` settles the parked one. What every
    *  reader of "is a turn running" then sees is the loop's answer. */
   async declareTurnInFlight(inFlight: boolean): Promise<void> {
-    if (inFlight) await thinkTurns(this).prepare({ messages: [{ role: 'user', content: 'a live turn' }] });
-    else await thinkTurns(this).settle({ messageId: 'a live turn', text: 'done' });
+    if (inFlight) await chatSessionTurns(this).prepare({ messages: [{ role: 'user', content: 'a live turn' }] });
+    else await chatSessionTurns(this).settle({ messageId: 'a live turn', text: 'done' });
   }
   /** The loop and the transcript, for the turn seam's driver. */
   get harnessChatLoop(): ChatSession { return this.chatLoop; }
@@ -1325,24 +1325,6 @@ function promptToModelMessages(prompt: ScriptedTurnOptions['prompt']): ModelMess
   });
 }
 
-/**
- * The turn seam over the root's real loop — core's ChatSession.
- *
- * `prepare` admits the input as a user send and PARKS the turn at its first
- * model call, answering with the request the loop assembled; `settle` scripts
- * what that parked call answers and lets the loop commit it. Between the two
- * the turn is in flight exactly as production's is, so a send routes into it
- * and every row a suite reads after `settle` is the loop's own write. `run`
- * is a send to completion on the harness's model; `enqueue` admits a
- * programmatic turn and `drainEnqueued` lets the pump run it.
- *
- * A suite moved onto this driver sees only what production leaves — the rows,
- * the events, the request the model was handed — and fabricates no state.
- */
-export function thinkTurns(agent: HarnessOrchestratorAgent): TurnHarness {
-  return chatSessionTurns(agent);
-}
-
 /** One parked turn: the request its model call was given, and the gate the
  *  scripted answer opens. */
 interface ParkedTurn {
@@ -1363,6 +1345,20 @@ const openedTurns = new WeakMap<HarnessOrchestratorAgent, string>();
  *  suite's model rather than one the seam scripts. */
 const seamFactories = new WeakSet<() => LanguageModel>();
 
+/**
+ * The turn seam over the root's real loop — core's ChatSession.
+ *
+ * `prepare` admits the input as a user send and PARKS the turn at its first
+ * model call, answering with the request the loop assembled; `settle` scripts
+ * what that parked call answers and lets the loop commit it. Between the two
+ * the turn is in flight exactly as production's is, so a send routes into it
+ * and every row a suite reads after `settle` is the loop's own write. `run`
+ * is a send to completion on the harness's model; `enqueue` admits a
+ * programmatic turn and `drainEnqueued` lets the pump run it.
+ *
+ * A suite moved onto this driver sees only what production leaves — the rows,
+ * the events, the request the model was handed — and fabricates no state.
+ */
 export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
   /** A model that parks on its first call until the answer is scripted, then
    *  answers every later call at once with the same text. */

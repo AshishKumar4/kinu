@@ -80,7 +80,7 @@ import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
-import type { ActorSession, ActorTurnLease, ActorExecutionInput } from './actor-session';
+import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
 import type { LandedSteerRow, PendingSendRow, PendingSendStore, UserSteer } from './inbox';
 import type { OwedEffect } from './terminal-effects';
@@ -91,6 +91,9 @@ import {
   type CompactionTriggerState, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
 import { olderHistoryNotice, type TranscriptStore } from './transcript-store';
+import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
+import { subordinateTurnContext } from '../subordinates/support';
+import { inheritedAsModelMessage } from '../heads/head-inference';
 
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
 
@@ -269,6 +272,41 @@ interface TurnContinuation {
  *  call never ran to completion and can decide to make it again. */
 const INTERRUPTED_TOOL_OUTPUT = 'This tool call was interrupted before it produced a result; the process running it stopped. Make the call again if its result is still needed.';
 
+/** A turn's input as the model message the working history carries: the
+ *  attachments as file parts — the shape ai's convertToModelMessages emits
+ *  for FileUIParts, so multimodal models receive them natively — then the
+ *  text. */
+function turnInputMessage(item: Pick<ChatTurnInput, 'text' | 'files'>): ModelMessage {
+  const fileParts = (item.files ?? []).map((f) => ({
+    type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
+  }));
+
+  return fileParts.length > 0
+    ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
+    : { role: 'user', content: item.text };
+}
+
+/**
+ * A continuation's answer row. The cut step's text the last process left is
+ * the answer's own head only when the step this process resumed IS the answer:
+ * the cut step issued no tool call and this process finished it in one step
+ * (or was cut again, and the streamed text stands). A cut inside a NARRATION
+ * step — one that went on to call tools before the turn answered — leaves text
+ * that belongs to that step, already in the client's rendering of it, and not
+ * in front of the answer. The finished steps' text is never joined: it is in
+ * the ledger as those steps' own messages.
+ */
+function continuedAnswer(
+  continuation: TurnContinuation | undefined,
+  execution: Pick<ActorExecutionResult, 'text' | 'steps' | 'interrupted'>,
+): string {
+  const partial = continuation?.partial;
+
+  if (partial === undefined || partial === null || partial.toolCalls.length > 0) return execution.text;
+
+  return execution.interrupted || execution.steps <= 1 ? partial.text + execution.text : execution.text;
+}
+
 /**
  * The assistant's prior output for a re-opened turn, as model messages: every
  * finished step's messages as recorded, then the cut step — its text and the
@@ -397,12 +435,20 @@ export interface ChatSessionPorts {
    *  to its producer rather than running it. Null when nothing coordinates. */
   driverGate(): Refusal | null;
   /** Arm the durable wake that re-drives owed work when the isolate dies
-   *  inside this turn. Called at the turn's synchronous open — an isolate
-   *  killed mid-turn with nothing else owed would otherwise sleep until an
-   *  external event. Soonest-wins: free when a wake already rides. */
-  armTurnWake(): Promise<void>;
+   *  inside this turn, at the instant the loop names. Called at the turn's
+   *  synchronous open — an isolate killed mid-turn with nothing else owed
+   *  would otherwise sleep until an external event. Soonest-wins: free when
+   *  a wake already rides. A backend whose process IS the wake (the local
+   *  session) arms nothing here: a crashed turn there re-arms from the ledger
+   *  on the next start, and a timer inside the process it would have to
+   *  outlive is not a wake. */
+  armTurnWake(atMs: number): Promise<void>;
   /** The model window the transcript restore is budgeted against. */
   modelWindow(): ModelWindow;
+  /** The skill bodies a mid-turn send activates that the running turn does
+   *  not already carry, rendered for the next step, or null
+   *  (`steerSkillsBlock`). */
+  steerSkills(text: string): Promise<string | null>;
   /** Why a programmatic PLAN turn cannot be admitted here, or null when it
    *  can: a plan turn ends in a review the operator decides on, and a backend
    *  with no review surface refuses the turn at admission rather than run a
@@ -501,6 +547,7 @@ export class ChatSession {
       onAccept: (steer) => { this.pendingSends.reserve({ ...steer, turnId: this.steerTurnId() }); },
       onDrain: (rows) => { this.commitLandedSteers(rows); },
       turnId: () => this.steerTurnId(),
+      skills: (text) => this.ports.steerSkills(text),
     });
     this.restoreOpenTurn();
     this.restorePendingSends();
@@ -1131,8 +1178,11 @@ export class ChatSession {
     // The turn's own wake, armed at its synchronous open: a kill inside the
     // turn leaves the run row and the wake that re-drives it, rather than the
     // row alone with nothing scheduled to notice it. Soonest-wins, so this is
-    // free when another wake already rides.
-    await this.ports.armTurnWake();
+    // free when another wake already rides. At the recovery CEILING, not the
+    // first lap: this row seeds the chain for a kill, and the tick it delivers
+    // keeps a row while the turn is still open — it is not a maintenance pass
+    // inside every turn longer than a second.
+    await this.ports.armTurnWake(Date.now() + RECOVERY_BACKOFF_CEILING_MS);
 
     try {
       await runOperationProfile(null, () => runWorkModeInvocation(mode, () => this.runTurn(item, event, startedAt, lease)));
@@ -1265,12 +1315,26 @@ export class ChatSession {
   }
 
   private async runTurn(item: QueueItem, event: string | undefined, startedAt: number, lease: ActorTurnLease): Promise<void> {
-    const prepared = await this.ports.prepareTurn(
-      item.continuation === undefined ? item : { ...item, priorOutput: priorOutputOf(item.continuation) },
-      lease,
-    );
+    const input: ChatTurnInput = item.continuation === undefined ? item : { ...item, priorOutput: priorOutputOf(item.continuation) };
+
+    // The one rule for where the turn's conversation comes from, on both
+    // backends: a delivery's reply turn opens on the settled working revision
+    // (born from the delivery's conversation when this actor has none), every
+    // other turn appends, and prior output follows either. The message shape
+    // is a function of the input alone, so it is built here and not in each
+    // backend's prepareTurn.
+    this.actorSession.openTurnInput(lease, {
+      item: input,
+      message: turnInputMessage(input),
+      birthContext: (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
+    });
+
+    const prepared = await this.ports.prepareTurn(input, lease);
 
     const partial = this.partialLedger(item.continuation);
+    /** Whether this process streamed anything of the answer at all — a token
+     *  or a call. A Stop before that leaves the operator's row alone. */
+    let streamed = item.continuation?.partial !== null && item.continuation?.partial !== undefined;
 
     const execution = await this.actorSession.execute(lease, {
       task: item.text,
@@ -1278,15 +1342,12 @@ export class ChatSession {
     }, (event) => {
       partial.observe(event);
 
+      if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;
+
       if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') this.emit(event);
     });
 
-    // A continuation's answer is what the client streamed as ONE message: the
-    // cut step's text the last process left, then what this one produced. The
-    // finished steps' text is already in the ledger as those steps' own
-    // messages and in the client's rendering of them; it is not part of the
-    // answer row twice.
-    const fullText = (item.continuation?.partial?.text ?? '') + execution.text;
+    const fullText = continuedAnswer(item.continuation, execution);
     const interrupted = execution.interrupted;
     let runError: string | null = null;
     let overflowRetry = false;
@@ -1310,6 +1371,10 @@ export class ChatSession {
       event,
       startedAt,
       assistantText: fullText,
+      // A turn cut before its first token has no answer row: the operator's
+      // row stands alone, on both backends, as it did before the switch — an
+      // empty assistant row was an empty bubble on every reload.
+      assistantRow: streamed || !interrupted,
       runError,
       interrupted,
       trialContext: execution.admittedMessages,
@@ -1429,6 +1494,9 @@ export class ChatSession {
     readonly event: string | undefined;
     readonly startedAt: number;
     readonly assistantText: string;
+    /** Whether an assistant row is written at all. False only for a turn
+     *  interrupted before it streamed anything. */
+    readonly assistantRow: boolean;
     readonly runError: string | null;
     readonly interrupted: boolean;
     /** The turn's inference history, for the shadow trial's recorded replay. */
@@ -1525,7 +1593,7 @@ export class ChatSession {
           // what the durable row's parent chain is ordered by. The rows
           // themselves were written by their own drains, at the step boundary.
           this.actorSession.landedSteers,
-          input.assistantText,
+          input.assistantRow ? input.assistantText : null,
           // The opening row already carries the operator's message's facts;
           // a programmatic turn's row is written here, with the producer's
           // stamp and event.
@@ -1585,7 +1653,7 @@ export class ChatSession {
     assistantId: string,
     userText: string,
     steers: ReadonlyArray<{ id: string; text: string; atStep: number }>,
-    assistantText: string,
+    assistantText: string | null,
     metadata?: JsonObject,
   ): void {
     this.transcript.appendUser({
@@ -1597,7 +1665,7 @@ export class ChatSession {
     // turn's opening row.
     const parentId = steers.length > 0 ? steers[steers.length - 1]!.id : turnId;
 
-    this.transcript.appendAssistant({ id: assistantId, parentId, text: assistantText });
+    if (assistantText !== null) this.transcript.appendAssistant({ id: assistantId, parentId, text: assistantText });
   }
 
   // ─── The pending-send ledger ─────────────────────────────────────────────
@@ -1724,8 +1792,10 @@ export class ChatSession {
     // that owned that turn died before its settle, and this one re-opened a
     // different turn or none. Swept per dead turn into ONE user-origin rerun,
     // the words in the order they were accepted, under the narrower mode any
-    // of them was typed in: merging never widens what a message was typed
-    // under. Their reservations are spent by that rerun's own row.
+    // of them was typed in — plan, which admits reads and a review but no
+    // effect, so a message typed for review is never run for effect because
+    // it was merged with one that was: merging never widens what a message
+    // was typed under. Their reservations are spent by that rerun's own row.
     const dead = new Map<string, PendingSendRow[]>();
     let queued = 0;
 

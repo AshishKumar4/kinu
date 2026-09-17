@@ -97,8 +97,10 @@ export const REFINEMENT_EDIT_KINDS = [
 export type RefinementEditKind = (typeof REFINEMENT_EDIT_KINDS)[number];
 
 /** Same bar as a scaffold or section proposal: the operator reads one
- *  changelog, so every edit states why it exists at that length. */
-const MIN_EDIT_RATIONALE = 40;
+ *  changelog, so every edit states why it exists at that length. Exported
+ *  because the refiner's brief has to STATE the floor it is held to, and a
+ *  number retyped into a prompt is a number that drifts from the parse. */
+export const MIN_EDIT_RATIONALE = 40;
 
 const RationaleSchema = v.pipe(v.string(), v.minLength(MIN_EDIT_RATIONALE));
 
@@ -194,6 +196,63 @@ export const RefinementProposalSchema: v.GenericSchema<unknown, RefinementPropos
     }),
   ])),
 });
+
+/** Every rationale slot in the example, so the floor the parse enforces is
+ *  printed from the constant that enforces it. Long enough to clear its own
+ *  minimum: a slot a refiner could leave in place and still be refused would
+ *  teach the wrong shape. */
+const RATIONALE_SLOT = '<why this is the smallest edit that would have prevented the failure, in at '
+  + `least ${String(MIN_EDIT_RATIONALE)} characters>`;
+
+/**
+ * The answer shape as a VALUE this schema accepts.
+ *
+ * The refiner's brief PRINTS this object, so what the refiner is asked for and
+ * what the parse allows are one artifact rather than two descriptions that
+ * drift. The compiler holds it to {@link RefinementProposal};
+ * `unit-continual-refinement` parses the bytes the brief printed back through
+ * {@link RefinementProposalSchema}, which is what holds the runtime rules —
+ * the picklists and the rationale floor — to the same page.
+ *
+ * PRODUCTION, 2026-09-16: a refiner answered `{"see_rpi":"…"}` and the parse
+ * reported all three required keys missing. The brief had described the shape
+ * in a template that was not one: `"value":<json>` is not JSON, and three of
+ * the four edits carried `"rationale":"..."` against a forty-character floor.
+ * There was nothing in it a refiner could copy and be accepted for, so every
+ * placeholder here is a legal value of its own field — the slots say what to
+ * write, and the object parses with them left in.
+ */
+export const REFINEMENT_PROPOSAL_EXAMPLE: RefinementProposal = {
+  scope: 'workspace',
+  summary: '<one sentence: the pattern in the turns above that these edits fix>',
+  edits: [
+    {
+      kind: 'fact',
+      key: '<dotted.key>',
+      value: '<any JSON value>',
+      quote: '<the user\'s own words, copied verbatim from a turn above>',
+      rationale: RATIONALE_SLOT,
+    },
+    {
+      kind: 'prompt_section',
+      sectionId: '<one registered section id from the inventory above>',
+      source: '<the whole replacement section, same template slots>',
+      rationale: RATIONALE_SLOT,
+    },
+    {
+      kind: 'skill',
+      path: '/workspace/skills/<name>.md',
+      source: '<the whole file>',
+      rationale: RATIONALE_SLOT,
+    },
+    {
+      kind: 'subagent_spec',
+      role: '<role id>',
+      spec: '<the change to that role\'s spec>',
+      rationale: RATIONALE_SLOT,
+    },
+  ],
+};
 
 /**
  * What became of one typed edit.

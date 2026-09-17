@@ -111,6 +111,121 @@ describe('AssistantMessagesTranscript', () => {
     });
     expect(uiMessageText(rows()[1]!.content)).toBe('pong\n\nhttps://preview.invalid/');
   });
+  test('a narration-then-call turn keeps the answer where its narration streamed', () => {
+    const { store, rows } = transcript();
+    store.appendUser({ id: 'u1', text: 'check the build' });
+
+    // The owner watched this shape live: a sentence, then a tool call, and no
+    // final text after it. The turn stopped on the calls, so the streamed
+    // sentence is the answer — and it stays where it streamed, in front.
+    const streamed = {
+      id: 'a1', role: 'assistant',
+      parts: [
+        { type: 'text', text: 'Checking now.', state: 'done' },
+        { type: 'step-start' },
+        { type: 'tool-file', toolCallId: 'c1', state: 'output-available', input: {}, output: 'x' },
+      ],
+    };
+
+    store.answersFrom({ answer: (id) => id === 'a1' ? streamed : null, streamed: (id) => id === 'a1' ? streamed : null });
+    store.appendAssistant({ id: 'a1', parentId: 'u1', text: 'Checking now.' });
+
+    expect(JSON.parse(rows()[1]!.content)).toEqual({
+      id: 'a1', role: 'assistant',
+      parts: [
+        { type: 'text', text: 'Checking now.', state: 'done' },
+        { type: 'step-start' },
+        { type: 'tool-file', toolCallId: 'c1', state: 'output-available', input: {}, output: 'x' },
+      ],
+    });
+    expect(uiMessageText(rows()[1]!.content)).toBe('Checking now.');
+  });
+
+  test('a call-then-answer turn keeps the answer after the call', () => {
+    const { store, rows } = transcript();
+    store.appendUser({ id: 'u1', text: 'check the build' });
+
+    const streamed = {
+      id: 'a1', role: 'assistant',
+      parts: [
+        { type: 'step-start' },
+        { type: 'tool-file', toolCallId: 'c1', state: 'output-available', input: {}, output: 'x' },
+        { type: 'step-start' },
+        { type: 'text', text: 'All green.', state: 'done' },
+      ],
+    };
+
+    store.answersFrom({ answer: (id) => id === 'a1' ? streamed : null, streamed: (id) => id === 'a1' ? streamed : null });
+    store.appendAssistant({ id: 'a1', parentId: 'u1', text: 'All green.' });
+
+    expect(JSON.parse(rows()[1]!.content)).toEqual({
+      id: 'a1', role: 'assistant',
+      parts: [
+        { type: 'step-start' },
+        { type: 'tool-file', toolCallId: 'c1', state: 'output-available', input: {}, output: 'x' },
+        { type: 'step-start' },
+        { type: 'text', text: 'All green.', state: 'done' },
+      ],
+    });
+    expect(uiMessageText(rows()[1]!.content)).toBe('All green.');
+  });
+
+  test('several narrations plus a final answer store one text part, last', () => {
+    const { store, rows } = transcript();
+    store.appendUser({ id: 'u1', text: 'build the slate' });
+
+    const streamed = {
+      id: 'a1', role: 'assistant',
+      parts: [
+        { type: 'text', text: 'First look.' },
+        { type: 'step-start' },
+        { type: 'tool-file', toolCallId: 'c1', state: 'output-available', input: {}, output: 'x' },
+        { type: 'text', text: 'Still going.' },
+        { type: 'step-start' },
+        { type: 'text', text: 'Shipped.', state: 'done' },
+      ],
+    };
+
+    store.answersFrom({ answer: (id) => id === 'a1' ? streamed : null, streamed: (id) => id === 'a1' ? streamed : null });
+    store.appendAssistant({ id: 'a1', parentId: 'u1', text: 'Shipped.' });
+
+    expect(JSON.parse(rows()[1]!.content)).toEqual({
+      id: 'a1', role: 'assistant',
+      parts: [
+        { type: 'step-start' },
+        { type: 'tool-file', toolCallId: 'c1', state: 'output-available', input: {}, output: 'x' },
+        { type: 'step-start' },
+        { type: 'text', text: 'Shipped.', state: 'done' },
+      ],
+    });
+    expect(uiMessageText(rows()[1]!.content)).toBe('Shipped.');
+  });
+
+  test('a turn with no streamed text stores the answer after its calls', () => {
+    const { store, rows } = transcript();
+    store.appendUser({ id: 'u1', text: 'check the build' });
+
+    const streamed = {
+      id: 'a1', role: 'assistant',
+      parts: [
+        { type: 'step-start' },
+        { type: 'tool-file', toolCallId: 'c1', state: 'output-available', input: {}, output: 'x' },
+      ],
+    };
+
+    store.answersFrom({ answer: (id) => id === 'a1' ? streamed : null, streamed: (id) => id === 'a1' ? streamed : null });
+    store.appendAssistant({ id: 'a1', parentId: 'u1', text: 'Ran the checks.' });
+
+    expect(JSON.parse(rows()[1]!.content)).toEqual({
+      id: 'a1', role: 'assistant',
+      parts: [
+        { type: 'step-start' },
+        { type: 'tool-file', toolCallId: 'c1', state: 'output-available', input: {}, output: 'x' },
+        { type: 'text', text: 'Ran the checks.' },
+      ],
+    });
+    expect(uiMessageText(rows()[1]!.content)).toBe('Ran the checks.');
+  });
 
   test('the restore reads user and assistant text newest first, and the operator check reads authorship', () => {
     const { store } = transcript();

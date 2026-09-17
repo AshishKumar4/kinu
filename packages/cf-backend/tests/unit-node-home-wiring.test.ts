@@ -35,7 +35,7 @@ import {
   type NodeWorkspaceProvisioner,
 } from '@kinu.run/core';
 import type { NimbusSandboxHandle } from '@kinu.run/core';
-import { nimbusSessionFiles } from '@kinu.run/core';
+import { nimbusSessionFiles, readExecutorFile, writeExecutorFileOp, type ExecutorFileLookup, type VFS } from '@kinu.run/core';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import {
   ensureProgrammaticReady,
@@ -496,6 +496,32 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     expect(nimbus.calls).toEqual([]);
   });
 
+  test('a credentialed plane whose view lacks stat, mkdir or readRange still acts as the node', async () => {
+    // The SDK view carries all three today; the type does not promise them,
+    // and a fallback that ran the shell as the SESSION USER changed identity
+    // silently — the boundary is uid/gid on real inodes, so a mkdir as the
+    // origin is a home the node then cannot write.
+    const nimbus = new RootExecNimbus();
+    const box = nimbusBox(nimbus);
+    const cred: VfsCred = { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 };
+    box.files.as = () => ({ read: async () => null, write: async () => undefined, list: async () => [], exists: async () => false, delete: async () => undefined });
+
+    const plane = nimbusSessionFiles(box, cred);
+    await plane.mkdir('/home/node-A/dir', { recursive: true });
+    await plane.stat('/home/node-A/dir');
+    await plane.readRange('/home/node-A/file', 0, 4);
+
+    expect(nimbus.calls).toHaveLength(3);
+    expect(nimbus.calls.map((call) => call.options.cred)).toEqual([cred, cred, cred]);
+  });
+
+  test('a handle with no credential-bound plane refuses to act as a node, by name', () => {
+    const box = nimbusBox(new RootExecNimbus());
+    const cred: VfsCred = { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 };
+
+    expect(() => nimbusSessionFiles(box, cred)).toThrow(expect.objectContaining({ code: 'unsupported' }));
+  });
+
   test('against the real substrate: the node writes its own home, a sibling is refused', async () => {
     const f = await openFixture();
     const a = credOf(await f.provision(node('aX9')));
@@ -694,5 +720,58 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     // One plane per uid: a shell holds cwd, so a second call must not hand the
     // node a fresh one that forgot its own `cd`.
     expect(await workspace.asAgent(a)).toBe(asA);
+  });
+});
+
+/**
+ * The plane has no compare-and-write, and says so once, in one voice. The
+ * SDK's `files.write` takes no precondition and `stat` reports no revision, so
+ * neither the origin's plane nor the node's declares `writeFileIfRevision`;
+ * the product refuses an in-place save as `unsupported`, an unconditional
+ * save still lands, and the viewer is handed the same reason. Held on the
+ * real substrate through `files.as` — the property the retired runner's
+ * suite pinned and this one keeps.
+ */
+describe('a plane with no compare-and-write says so, once, in one voice', () => {
+  const lookupFor = (files: VFS): ExecutorFileLookup => ({ getProvider: () => ({ files, homeDir: async () => '/home/user' }) });
+
+  test('neither session plane declares a conditional write', async () => {
+    const f = await openFixture();
+    const a = credOf(await f.provision(node('cw1')));
+    expect(nimbusSessionFiles(sessionBox(f, a), a).writeFileIfRevision).toBeUndefined();
+    expect(nimbusSessionFiles(sessionBox(f, ORIGIN)).writeFileIfRevision).toBeUndefined();
+  });
+
+  test('an in-place save is refused as unsupported and writes nothing; an unconditional save lands', async () => {
+    const f = await openFixture();
+    const a = credOf(await f.provision(node('cw2')));
+    const plane = nimbusSessionFiles(sessionBox(f, a), a);
+    const target = '/home/head-cw2/report.md';
+    await plane.writeFile(target, 'the previous file');
+
+    const refused = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, new TextEncoder().encode('the replacement'), 3);
+
+    if (!('unsupported' in refused)) throw new Error('expected the unsupported refusal');
+    expect(await plane.readFile(target, { encoding: 'utf8' })).toBe('the previous file');
+
+    expect(await writeExecutorFileOp(lookupFor(plane), 'workspace', target, new TextEncoder().encode('the replacement'))).toEqual({ ok: true });
+    expect(await plane.readFile(target, { encoding: 'utf8' })).toBe('the replacement');
+  });
+
+  test('the viewer is handed the reason rather than an edit token', async () => {
+    const f = await openFixture();
+    const a = credOf(await f.provision(node('cw3')));
+    const plane = nimbusSessionFiles(sessionBox(f, a), a);
+    const target = '/home/head-cw3/notes.md';
+    await plane.writeFile(target, 'editable text');
+
+    const refused = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, new TextEncoder().encode('an edit'), 7);
+
+    if (!('unsupported' in refused)) throw new Error('expected the unsupported refusal');
+    const viewed = await readExecutorFile(lookupFor(plane), 'workspace', target);
+
+    expect(viewed.content).toBe('editable text');
+    expect(viewed.revision).toBeUndefined();
+    expect(viewed.readOnlyReason).toBe(refused.error);
   });
 });

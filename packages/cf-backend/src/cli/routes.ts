@@ -1,4 +1,7 @@
-import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, USER_AI_PROXY_PATH, timingSafeEqual, type JsonValue } from '@kinu.run/core';
+import {
+  JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, USER_AI_PROXY_PATH, timingSafeEqual,
+  type JsonValue,
+} from '@kinu.run/core';
 import type { AuthIdentity } from '../auth/session';
 import {
   AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, isFreshAuthTime, readCookie,
@@ -908,16 +911,76 @@ die() {
   exit 1
 }
 
-# Each download is verified against the checksum published beside it. An
+# The one lock every writer of the CLI tree takes — this launcher, 'kinu
+# update' and its detached child — as a directory: mkdir creates it atomically
+# or refuses. The holder's pid is inside, so a lock a dead process left is
+# taken over rather than waited on. Released on every exit, die included.
+CLI_LOCK="$CLI_ROOT/.lock"
+take_cli_lock() {
+  mkdir -p "$CLI_ROOT"
+  attempt=0
+  while [ "$attempt" -lt 2 ]; do
+    if mkdir "$CLI_LOCK" 2>/dev/null; then
+      echo "$$" > "$CLI_LOCK/pid"
+      trap 'rm -rf "$CLI_LOCK"' EXIT
+      return 0
+    fi
+    holder="$(cat "$CLI_LOCK/pid" 2>/dev/null || true)"
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then return 1; fi
+    rm -rf "$CLI_LOCK"
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+# The release manifest is SIGNED at build with a key this deployment never
+# holds, and the public half is pinned into this launcher: a download is
+# verified against the checksum the signature covers, never against a
+# checksum the origin chooses for itself (a hostile or compromised deploy
+# could otherwise hand every machine bytes to run — SECURITY-devices C1).
+# The manifest is fetched and verified ONCE, before any artifact, and the
+# signed checksums are read from it per artifact. The verification runs on
+# the Bun this launcher already resolved: Ed25519 over WebCrypto.
+RELEASE_SIGNING_PUBLIC_KEY="\${KINU_RELEASE_SIGNING_PUBLIC_KEY:-${RELEASE_SIGNING_PUBLIC_KEY}}"
+MANIFEST_URL="\${KINU_ORIGIN}${CLI_VERSION_PATH}"
+verify_release() {
+  manifest="$1"
+  curl -fsSL "$MANIFEST_URL" -o "$manifest" || die "Could not download the release manifest from $MANIFEST_URL."
+  "$KINU_BUN" -e '
+    const [file, publicKeyHex] = process.argv.slice(1);
+    const manifest = JSON.parse(require("fs").readFileSync(file, "utf8"));
+    const checksums = manifest.checksums, signature = manifest.signature, version = manifest.version;
+    const fail = (why) => { console.error(why); process.exit(1); };
+    if (typeof version !== "string" || typeof signature !== "string" || Object(checksums) !== checksums) fail("the release manifest carries no signature; nothing is downloaded");
+    const lines = Object.entries(checksums).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([p, d]) => p + " " + String(d).toLowerCase());
+    const message = new TextEncoder().encode(["kinu-release-v1", version, ...lines, ""].join("\\n"));
+    const key = Uint8Array.from(publicKeyHex.match(/../g), (pair) => parseInt(pair, 16));
+    const sig = Uint8Array.from(Buffer.from(signature, "base64"));
+    crypto.subtle.importKey("raw", key, { name: "Ed25519" }, false, ["verify"])
+      .then((k) => crypto.subtle.verify("Ed25519", k, sig, message))
+      .then((ok) => { if (!ok) fail("the release signature does not verify against the pinned key; nothing is downloaded"); });
+  ' "$manifest" "$RELEASE_SIGNING_PUBLIC_KEY" || die "The release is not one this launcher trusts."
+}
+signed_checksum() {
+  "$KINU_BUN" -e '
+    const [file, artifact] = process.argv.slice(1);
+    const manifest = JSON.parse(require("fs").readFileSync(file, "utf8"));
+    const digest = manifest.checksums && manifest.checksums[artifact];
+    if (typeof digest !== "string" || !/^[0-9a-f]{64}$/i.test(digest)) { console.error("the signed release names no " + artifact); process.exit(1); }
+    console.log(digest.toLowerCase());
+  ' "$1" "$2"
+}
+# Each download is verified against the SIGNED checksum for its path. An
 # incomplete deploy answers a download path with the SPA shell, and unpacking
 # an HTML page as a tarball is how an install fails without saying why.
 fetch_verified() {
   url="$1"
   into="$2"
+  manifest="$3"
+  artifact="/downloads/\${url##*/downloads/}"
+  expected="$(signed_checksum "$manifest" "$artifact")" || die "The signed release names no $artifact."
+  [ -n "$expected" ] || die "The signed checksum for $url is empty."
   curl -fsSL "$url" -o "$into" || die "Could not download $url."
-  expected="$(curl -fsSL "$url.sha256" | awk '{print $1}')" \
-    || die "Could not download the checksum from $url.sha256."
-  [ -n "$expected" ] || die "The checksum published for $url is empty."
   if command -v sha256sum >/dev/null 2>&1; then
     actual="$(sha256sum "$into" | awk '{print $1}')"
   elif command -v shasum >/dev/null 2>&1; then
@@ -933,16 +996,19 @@ fetch_verified() {
 # package manager, no registry and no postinstall script runs here.
 #
 # Both unpack over one staging tree beside the installed one, that tree answers
-# --version before anything moves, and then two renames swap it in: an
-# interrupted download or a build that cannot launch leaves the installed CLI
-# as it was. The tree it replaced stays as prev for one launch (see below).
+# --version before anything moves, and then the swap (adopt_tree) puts it in
+# place: an interrupted download or a build that cannot launch leaves the
+# installed CLI as it was. The tree it replaced stays as prev for one launch
+# (see below). The staging directories are removed on every exit, die
+# included — a RETURN trap never fired on one.
 refresh_cli() {
   mkdir -p "$CLI_ROOT"
   tmp="$(mktemp -d)"
   next="$CLI_ROOT/next-$$"
-  trap 'rm -rf "$tmp" "$next"' RETURN
-  fetch_verified "$TARBALL_URL" "$tmp/cli.tar.gz"
-  fetch_verified "$RUNTIME_URL" "$tmp/runtime.tar.gz"
+  trap 'rm -rf "$tmp" "$next" "$CLI_LOCK"' EXIT
+  verify_release "$tmp/kinu-version.json"
+  fetch_verified "$TARBALL_URL" "$tmp/cli.tar.gz" "$tmp/kinu-version.json"
+  fetch_verified "$RUNTIME_URL" "$tmp/runtime.tar.gz" "$tmp/kinu-version.json"
   mkdir -p "$tmp/extract"
   tar -xzf "$tmp/cli.tar.gz" -C "$tmp/extract"
   tar -xzf "$tmp/runtime.tar.gz" -C "$tmp/extract"
@@ -950,9 +1016,48 @@ refresh_cli() {
   rm -rf "$next"
   mv "$tmp/extract/kinu" "$next"
   "$KINU_BUN" run "$next/cli.js" --version >/dev/null 2>&1 || die "The downloaded Kinu build does not launch."
-  rm -rf "$CLI_ROOT/prev"
-  [ -d "$CLI_DIR" ] && mv "$CLI_DIR" "$CLI_ROOT/prev"
-  mv "$next" "$CLI_DIR"
+  adopt_tree "$next"
+  rm -rf "$tmp"
+}
+
+# The swap, written so a kill at any line leaves a runnable tree. The
+# last-known-good prev is kept until the new current is in place: prev goes to
+# prev.old, current to prev, the proven tree to current, and only then does
+# prev.old go. Between the second and third lines there is no current — and
+# recover_current below finds the proven next-* on the next launch, or prev.
+adopt_tree() {
+  proven="$1"
+  rm -rf "$CLI_ROOT/prev.old"
+  if [ -d "$CLI_DIR" ]; then
+    [ -d "$CLI_ROOT/prev" ] && mv "$CLI_ROOT/prev" "$CLI_ROOT/prev.old"
+    mv "$CLI_DIR" "$CLI_ROOT/prev"
+  fi
+  mv "$proven" "$CLI_DIR"
+  rm -rf "$CLI_ROOT/prev.old"
+}
+
+# A launch that finds no current recovers one before it downloads anything: a
+# staged next-* that answers --version is the build a killed swap had already
+# proven, and prev is the build that last ran. Answers 1 only when neither is
+# there, which is what makes the download the last resort.
+recover_current() {
+  [ -f "$CLI_DIR/cli.js" ] && return 0
+  for candidate in "$CLI_ROOT"/next-*; do
+    [ -f "$candidate/cli.js" ] || continue
+    if "$KINU_BUN" run "$candidate/cli.js" --version >/dev/null 2>&1; then
+      rm -rf "$CLI_DIR"
+      adopt_tree "$candidate"
+      return 0
+    fi
+    rm -rf "$candidate"
+  done
+  if [ -d "$CLI_ROOT/prev.old" ] && [ ! -d "$CLI_ROOT/prev" ]; then mv "$CLI_ROOT/prev.old" "$CLI_ROOT/prev"; fi
+  if [ -f "$CLI_ROOT/prev/cli.js" ]; then
+    rm -rf "$CLI_DIR"
+    mv "$CLI_ROOT/prev" "$CLI_DIR"
+    return 0
+  fi
+  return 1
 }
 
 # The launch check. A prev tree means the last launch, or a background refresh
@@ -983,10 +1088,18 @@ export PATH
 # 'kinu update' is the CLI's own command: it stages, verifies and swaps its
 # tree the same way, then rewrites this script. The launcher downloads only
 # when asked (the installer) or when there is nothing to run.
-if [ "\${KINU_REFRESH_CLI:-0}" = "1" ] || [ ! -f "$CLI_DIR/cli.js" ]; then
-  refresh_cli
-else
-  check_launch
+# Under the tree's lock: a background refresh in flight lands the same build,
+# so a launcher that cannot take the lock runs what is installed and does no
+# download of its own (a missing current with the lock held is that refresh's
+# own window; it is retried on the next launch).
+if take_cli_lock; then
+  if [ "\${KINU_REFRESH_CLI:-0}" = "1" ] || ! recover_current; then
+    refresh_cli
+  else
+    check_launch
+  fi
+  rm -rf "$CLI_LOCK"
+  trap - EXIT
 fi
 
 cd "$CLI_DIR"

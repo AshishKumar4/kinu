@@ -251,8 +251,17 @@ export interface EpisodeEvidence {
  * unavailable channels, never fabricated empty ledgers or zero spend. */
 export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, T>(
   open: () => Promise<Reader>,
-  options: { readonly transcripts: string; readonly taskId: string; readonly modelCalls: 'expected' | 'none' },
-  operation: (reader: Reader, collect: () => Promise<EpisodeEvidence>) => Promise<T>,
+  options: {
+    readonly transcripts: string; readonly taskId: string; readonly modelCalls: 'expected' | 'none';
+    /** The most wall time the operation may take once the session is open.
+     *  When it is spent the operation is told (its `budget` signal aborts),
+     *  the episode is recorded as spent under `failure.json` with
+     *  `phase: 'budget'`, the evidence is COLLECTED as it stands, and the
+     *  spend is thrown — so a product that never settles leaves a ledger to
+     *  read, not an empty directory a runner's own timeout left behind. */
+    readonly budgetMs?: number;
+  },
+  operation: (reader: Reader, collect: () => Promise<EpisodeEvidence>, budget: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const dir = join(options.transcripts, options.taskId);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -339,13 +348,33 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
   };
 
   let result: { ok: true; value: T } | { ok: false; error: Error };
+  const budget = new AbortController();
+  /** Settles with the spend when the budget runs out — a value, so the race
+   *  below has no losing rejection to leave unread. */
+  const spent = Promise.withResolvers<{ readonly spent: Error }>();
+
+  const timer = options.budgetMs === undefined ? null : setTimeout(() => {
+    const reason = new Error(`${options.taskId}: the episode budget of ${String(options.budgetMs)} ms was spent before the operation ended`);
+    budget.abort(reason);
+    spent.resolve({ spent: reason });
+  }, options.budgetMs);
 
   try {
-    result = { ok: true, value: await operation(reader, collect) };
+    const raced = await Promise.race([
+      operation(reader, collect, budget.signal).then((value) => ({ value })),
+      spent.promise,
+    ]);
+
+    if ('spent' in raced) throw raced.spent;
+    result = { ok: true, value: raced.value };
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
     result = { ok: false, error: failure };
-    writeFileSync(join(dir, 'failure.json'), JSON.stringify({ name: failure.name, message: failure.message }), { mode: 0o600 });
+    writeFileSync(join(dir, 'failure.json'), JSON.stringify({
+      name: failure.name, message: failure.message, ...(budget.signal.aborted && { phase: 'budget' }),
+    }), { mode: 0o600 });
+  } finally {
+    if (timer !== null) clearTimeout(timer);
   }
 
   try {

@@ -18,8 +18,12 @@ describe('a served port from the hosted workspace', () => {
   it('a user-invoked program runs past the old 30 s wall-clock lifetime and reports its own exit', async () => {
     const subject = open('outlast');
 
-    // worker 0.7 dropped the 30 s cap on a user-invoked program (a Ctrl-C
-    // now reports 130); a program that runs 33 s must end on its own terms.
+    // PLATFORM PIN — measured 2026-09-15 under workerd on @nimbus-sh/worker
+    // 0.7.0 / core 0.9.0 (commit 0bed921f7): `sleep 33 && echo outlasted`
+    // exits 0 with its output where worker 0.6 killed it at the 30 s
+    // wall-clock lifetime. Worker 0.7 dropped that cap on a user-invoked
+    // program (a Ctrl-C now reports 130); a program that runs 33 s must end
+    // on its own terms.
     const ran = await subject.outlast(33);
     expect(ran.exitCode).toBe(0);
     expect(ran.stdout).toContain('outlasted');

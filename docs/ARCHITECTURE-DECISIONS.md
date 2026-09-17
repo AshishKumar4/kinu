@@ -164,7 +164,66 @@ floor zero. Measured 2026-09-15 by `unit-nimbus-workspace-executor`'s "each
 open of the same database adopts the next generation": two opens over one
 `bun:sqlite` file hand out pids a million apart and leave the row at 2; the
 revocation invariant is pinned by workerd `slate-durability` and the
-workspace-reset case of `unit-node-home-wiring`.
+workspace-reset case of `unit-node-home-wiring`. Amended 2026-09-16: the
+guard read `generation === 0`, which refused only a first boot whose put
+failed — a later boot whose put failed ran on the previous incarnation's
+floor, fabric having kept `prev`. The guard is now the counter read before
+the adopt against the value after it (`before + 1`, which fabric takes only
+once its put resolved); measured by "a bump that did not persist refuses the
+open, on a boot that is not the first" in the same suite.
+
+## Chat loop
+
+C1. The stored assistant row holds the turn's ANSWER, selected once by the
+runner (`chat.ts` `answerFromSteps`: the final step's text, joined back over
+output-limit cuts; null for an interrupted turn, whose streamed text stands),
+and every consumer reads the `done` it is handed. Narration — the text a step
+emits before its tool calls — is on that step's own `step_finish` row and on
+whoever watched live; it is not in the row. So the live view and the reloaded
+view differ by design: live shows narration then answer, reload shows the
+answer. On cf the row keeps the streamed message's non-text parts in order
+and carries the answer as its one text part, placed last; a turn that ended
+on tool calls with no final text stores the streamed narration as that part.
+Decided 2026-09-16, commit 21dd9f226. Measured on build cba44dcb9: the
+`public-failure-recovery` episode's "reply with only PASS or FAIL" row held
+three narration lines with FAIL run onto the end. A continuation joins the
+cut step's text to the answer only when the resumed step IS the answer (no
+tool call issued, finished in one step); a cut inside a narration step
+leaves that text on the step, not in front of the answer. Amended 2026-09-16:
+the owner's live turn wrote a sentence then made a tool call, and the reload
+rendered the tool card first with the sentence after it — the answer had been
+moved last regardless of where it streamed. The one text part now stays where
+the last streamed text part stood: a turn answered after its calls keeps it
+last, one that ended on its calls keeps its narration first; pinned by
+`unit-chat-transcript`.
+
+C2. A Stop is the operator's act, not a failure of the turn. The transport
+sends the model stream's `abort` chunk and closes the request; it sends no
+`error: true` frame for `INTERRUPTED_TURN` (the SDK's client surfaces that
+frame as the stream's error and the hook painted an error card on every
+Stop). A turn cut before it streamed anything — no token, no call — writes
+no assistant row; the operator's row stands alone, as it did before the
+Think switch, on both backends. Decided 2026-09-16, pinned by
+`unit-chat-transport` and `turn-answer-row`. Both changes were hidden by the
+parity re-record at a49c1edfa.
+
+C3. The deployed product carries one eval-only surface that ends a workspace
+object's activation: `POST /api/workspaces/<name>/eval/abort`, answered only
+for the eval-service identity (`DEV_USER_EMAIL` + `DEV_IDENTITY_SECRET`,
+`provider: 'dev'` after `authenticateRequest`) and 404 for every other
+caller; it calls `OrchestratorAgent.evalAbortActivation`, which is
+`ctx.abort` and nothing else, sealed in `rpc-surface.ts` as stub-reachable
+from the Worker and never `@callable`. It exists because the continuation of
+a multi-step turn across activations is a property of the deployed build
+that nothing else can force: every callable, the control plane and the CLI
+gate cancel a turn or delete a workspace, `abortAllDurableObjects` is the
+test runtime's, and the platform's idle eviction is neither forcible nor
+repeatable. The first-run `background-wake` row is its one caller. Measured
+2026-09-16 under workerd (`two-turn` "the eval-only abort ends the
+activation"): the stub call rejects with the abort reason and a fresh stub
+finds the object alive over the same storage. Decided 2026-09-16; the owner
+may veto it, in which case the row is retired with it and the property is
+held by the workerd wake case alone.
 
 ## Delegation
 

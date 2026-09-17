@@ -48,6 +48,7 @@ import {
 import { firstResponse, handlePcRequest } from "@kinu.run/core";
 import { servePreviewRequest } from "./preview-proxy";
 import { handleRunEventsRequest, handleWorkspaceOverviewRequest } from "./run-events-routes";
+import { handleEvalAbortRequest } from "./eval/abort-route";
 import { handleMcpRequest } from "./mcp-server";
 import { handleHealthRequest } from "@kinu.run/core";
 import { handleClientErrorRequest } from "./client-error/route";
@@ -730,6 +731,8 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     const eventsResp = await firstResponse(reqWithId, [
       (req) => handleWorkspaceOverviewRequest(req, () => agent.getWorkspaceOverview()),
       (req) => handleRunEventsRequest(req, env, REAL_CLOCK),
+      // Eval-only: ends the activation; every other identity is answered 404.
+      (req) => handleEvalAbortRequest(req, identity, () => agent.evalAbortActivation()),
     ]);
 
     if (eventsResp) return eventsResp;

@@ -25,6 +25,12 @@ const DAEMON_SIBLINGS = ['sandbox.js', 'pty.js', 'update.js'];
 
 const DEVICE_HOME = path.resolve(process.env.KINU_HOME?.trim() || path.join(os.homedir(), '.kinu'));
 
+/** The build this process IS: the stamp beside the daemon when it started,
+ *  read once. The file may change under a running daemon (an update lands
+ *  it before the successor connects); what this process reports is what it
+ *  loaded. */
+const RUNNING_VERSION = update.readVersionStamp(DEVICE_HOME);
+
 const CONFIG_PATH = path.join(DEVICE_HOME, 'device.json');
 
 /** The directory this daemon owns for agent homes. The HUB computes the home
@@ -2510,6 +2516,10 @@ function main() {
     },
     origin: HTTP_ORIGIN,
     log,
+    // A successor that died before connecting left the pidfile naming it;
+    // this daemon takes the machine back, which claimMachine grants because
+    // the holder it finds is dead.
+    reclaim: () => { claimMachine(); },
   });
 
   // The daemon's one WebSocket: the runtime's global. Kinu launches this
@@ -2597,11 +2607,14 @@ function main() {
           type: 'HELLO', user: USER, os: os.platform(), arch: os.arch(), hostname: os.hostname(), pid: process.pid,
           root: cfg.root,
           home: os.homedir(),
-          // The build this daemon is, from the stamp the CLI wrote beside it
-          // at connect (or the last update wrote), and whether the owner
-          // wants it left alone. Absent when no stamp exists: the hub then
-          // pushes nothing, as it does for every daemon before this field.
-          version: update.readVersionStamp(DEVICE_HOME) ?? undefined,
+          // The build this daemon IS: the stamp beside it when this process
+          // started, read once — the daemon is the build it loaded, not the
+          // file beside it now (an update that landed and whose successor
+          // died would otherwise report the new stamp from old code, and the
+          // hub would never push that version again). Absent when no stamp
+          // existed at start: the hub then pushes nothing, as it does for
+          // every daemon before this field.
+          version: RUNNING_VERSION ?? undefined,
           updateCheck: !update.updateOptedOut(DEVICE_HOME),
           // What this machine PROVED at startup, in the hub's words: the hub
           // decides the tier and needs one term for what the machine can
@@ -2676,7 +2689,7 @@ if (require.main === module) {
     // file is what its HELLO would report. No pidfile is claimed and nothing
     // connects.
     if (process.argv.includes('--selftest')) {
-      const stamp = update.readVersionStamp(DEVICE_HOME);
+      const stamp = RUNNING_VERSION;
 
       if (stamp === null) throw new Error(`no version stamp beside ${__filename}`);
       console.log(stamp);

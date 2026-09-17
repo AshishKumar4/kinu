@@ -13,7 +13,7 @@ Kinu has one workspace file plane. Nimbus holds it as a library over the owning 
 |---|---|---|
 | `workspace` | both backends. Cloudflare registers `createNimbusWorkspaceExecutor`; the CLI registers `createInlineExecutor` | the canonical workspace |
 | `sandbox` | Cloudflare only. `createSandboxExecutor` is registered once with a live handle and twice as a not-configured stub | a separate Linux container |
-| `device` | Cloudflare over the device tunnel (`createDeviceTunnelExecutor`); the CLI over its own host process (`createLocalDeviceExecutor`) | a separate user machine |
+| `device` | Cloudflare over the device tunnel (`createDeviceTunnelExecutor`); the CLI registers none — the machine is the workspace there | a separate user machine |
 | `parent` | CLI head runtimes only (`createParentExecutor`) | another workspace authority |
 
 Every registration lives in backend `runtime.ts`. `ExecutorKind` has five
@@ -27,9 +27,9 @@ interface. The hosted file half uses Durable Object RPC through
 `listWorkspaceFiles`, `deleteWorkspaceFile`. `execWorkspaceCommand` appears
 on no surface list, so `sealRpcSurface` shadows it and a stub-holder cannot
 call it. The Environment surface labels this `Parent workspace`
-(`cf-backend/src/lib/executors.ts:38`).
+(`core/src/read-models/executors.ts`).
 
-The mount table (`core/src/vfs/mounts.ts`) exposes each live device at
+The mount table (`core/src/vfs/mounts.ts`) exposes the user's live device at
 `/pc/<name>` and a bound container at `/sandbox`. Mount paths route to the target
 `files` VFS with the prefix stripped, preserving its consent and path
 boundaries. An absent environment is explicit (`ENXIO`, `/pc`, `no device
@@ -40,17 +40,17 @@ mount for files.
 The user's account is a fleet: several machines can be linked and several live
 at once. The mount is always `/pc/<name>`: every machine — one or many — is
 addressed by its segment, so a path stays valid when a second machine joins.
-The segment is the machine's user-chosen name, or its id when the name is
-shared or is not a usable path segment (`deviceMountSegment`,
-`core/src/execution/device-tunnel-executor.ts`). `/pc` itself lists the
-machines. A path under no live machine is `ENXIO` naming the fleet. Commands
-name their machine the same way: `shell { runtime: "<nickname>" }` names the
-machine by the nickname the live prompt lists. With one machine live the
-class name still reaches it; with several, a call that names none is refused
-with the classified ask (`deviceFleetAsk`, `core/src/execution/device-status.ts`).
+The segment is the machine's
+user-chosen name, or its id when the name is shared or is not a usable path
+segment (`deviceMountSegment`, `core/src/execution/device-tunnel-executor.ts`).
+`/pc` itself lists the machines. A path under no live machine is
+`ENXIO` naming the fleet. Commands name their machine the same way: every
+`device` tool takes `device: "<name>"` and `shell { runtime: "<name>" }` names
+the machine by the nickname the live prompt lists. With several, a call that
+names none is refused with the classified ask (`deviceFleetAsk`, `core/src/execution/device-status.ts`).
 The hub routes on the device id, which rides every frame it sends. It never
 picks a machine for an unnamed call (`DeviceSocketHub.connectedDeviceId`,
-`cf-backend/src/user/device-hub.ts`). Grants stay per (workspace, device).
+`core/src/execution/device-hub.ts`). Grants stay per (workspace, device).
 
 I omit line numbers for `packages/devbox/**`, `core/src/execution/**`, and
 `cf-backend/src/{runtime,kinu-sandbox,sandbox-lifecycle}.ts`: those files
@@ -69,30 +69,30 @@ must be cheap. Neither provisions anything.
 status, and gives codemode only available providers. Explicit `runtime` plus
 namespace is the routing decision. `register()` applies `gateProviderExec`
 (`core/src/execution/approval.ts`), so `shell` and `<name>.exec()` share approval.
-`workspace.exec` is exempt. `withApprovalGatedShell` already gates it;
+`workspace.exec` is exempt. `withApprovalGatedShell` already gates it.
 `startProcess` is gated here.
 
 Namespace command tools (`exec`, `startProcess`, and Nimbus `runCode`)
 return a successful string or a branchable refusal object
 `{ reason, error, execution?: { exitCode } }`. The execution field is present
 only when the producer observed the process exit. An actual nonzero exit has
-class `io` and retains both diagnostic streams; an unknown transport outcome
+class `io` and retains both diagnostic streams. An unknown transport outcome
 does not acquire an invented exit code. An executed failure spends its grant.
-A gate denial preserves `denied`; a queued request preserves `unavailable`,
-and neither dispatches a command. Only producer-classified no-execution
+A gate denial preserves `denied`; a queued request preserves `unavailable`.
+Neither dispatches a command. Only producer-classified no-execution
 outcomes qualify for a grant refund.
 
 Native invocations use the SDK error channel. For example, native `shell`
 returns successful text but raises a classified `KinuError` for an operation
 failure, retaining observed exit metadata. The explicit namespace adapters
 return typed operation refusals as values so authored code can branch on them.
-A codemode program that handles such a value and returns normally succeeds;
-an unhandled program exception fails. Neither arbitrary returned JSON nor
+A codemode program that handles such a value and returns normally succeeds.
+An unhandled program exception fails. Neither arbitrary returned JSON nor
 stdout can determine invocation status.
 
 Native MCP invocations use the MCP envelope's declared `isError` flag. A true
-flag raises `McpToolError` with the original protocol response retained;
-transport exceptions also reject. No error class or process exit is inferred
+flag raises `McpToolError` with the original protocol response retained.
+Transport exceptions also reject. No error class or process exit is inferred
 from remote content. Namespace adapters return the original MCP error envelope
 as a branchable value, and slate MCP bindings keep their protocol unchanged.
 A successful response containing `reason`, `error`, or nested `isError`
@@ -108,11 +108,12 @@ failed command-tool result, omitted on success. Its exit code is the display
 status (zero or one), not a reconstruction of the remote process's numeric
 exit code. Callers needing the class read `refusal`, never parse the display.
 
-`AgentRuntime.executor` is Core's baseline execution primitive;
+`AgentRuntime.executor` is Core's baseline execution primitive.
 `AgentRuntime.executionRouter` serves tools and UI. `storage.vfs` is the
 canonical VFS plus mounts. Memory indexing, fork snapshots and identity
 provisioning use the base tree only. Services that touch workspace bytes must
-never cross into a device or container. Agent-facing `file`, `workspace.*`,
+never cross into a device or container. Agent-facing `file` and `workspace.*`
+follow the same rule.
 
 `EXECUTOR_CAPABILITIES` (`core/src/execution/types.ts`) is ordered by runnable
 code, tooling, filesystem/network reach, then process rights. The order is
@@ -130,9 +131,9 @@ backend label.
 `createNimbusWorkspaceExecutor()` gives Cloudflare one Nimbus session for
 files, POSIX shell, code/runtime execution, processes, and ports. `shell`,
 `file`, and codemode share a read-before-write ledger and approval policy.
-Actors share files and processes but retain a `shellId` across reconstruction:
-`agent:<name>` for the main actor (`cf-backend/src/actor-agent.ts:700`) and
-`<kind>:<storage-key>` for every hosted logical actor —
+Actors share files and processes but retain a `shellId` across reconstruction.
+The key is `agent:<name>` for the main actor (`cf-backend/src/actor-agent.ts:700`)
+and `<kind>:<storage-key>` for every hosted logical actor,
 `hostedActorShellId(record)` in `cf-backend/src/actor-hosting.ts`, one function
 for all four kinds. It is keyed on the IMMUTABLE storage key rather than the
 registered name, because a rename must not move an actor's cwd and exported
@@ -167,21 +168,18 @@ and permanent configuration refuse at once. One budget
 (`attachBudgetMs`) covers every restoration phase, and each listener proof takes
 the smaller of its own cap and a share of what is left, so silent ports cannot
 add a window each.
-
-`DevboxStorage` (`devbox/src/storage.ts`) has five `DevboxStrategyName`
-strategies, and `Devbox.#buildStorage` dispatches all five exhaustively.
-An unrecognised name refuses to build the box rather than falling through to the
-chain wearing another strategy's name. Every one of them needs an R2 store
+`DevboxStorage` (`devbox/src/storage.ts`) ships one strategy, `snapshot-chain`.
+`Devbox.#buildStorage` returns it directly. It needs an R2 store
 binding. Without one the box builds a stub whose checkpoints skip and nothing is
 durable.
 `snapshotChainStorage` mounts immutable squashfs plus cumulative
 R2 delta as lazy FUSE layers. `r2fsStorage` mounts R2 through s3fs and has no
 archive or restore. `overlayCasStorage` replays only post-cursor journal
 entries over a read-only `tree/`, staging blobs before one journal object per
-64 entries. A red-first test pins that batch, and it additionally needs its
+64 entries. A red-first test pins that batch, and it needs its
 bundled runner at `CAS_RUNNER_PATH` in the image. `bounded-layers` and
 `merkle-pack` are the two `DURABLE_ROOT_FORMATS` candidates and share one
-container path (`candidateContainerStorage`). Each additionally needs a bundled
+container path (`candidateContainerStorage`). Each needs a bundled
 candidate runner. Absent, the box refuses by name. The journal daemon lives at
 `CANDIDATE_JOURNAL_BINARY`. No deployed run has compared
 these strategies across Worker, Durable Object, Container, or R2. Treat cost

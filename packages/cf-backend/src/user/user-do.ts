@@ -142,7 +142,7 @@ import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
-  DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, fetchDeployedAsset, readBuildStamp,
+  DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, type BuildStamp,
   type DeviceUpdateFrame, type DeviceUpdateState,
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId,
   DEVICE_TIERS, SANDBOX_UNAVAILABLE,
@@ -2594,11 +2594,15 @@ export class UserDO extends Agent<Env> {
    *  assets under. Read per HELLO: the stamp changes with every deploy, and a
    *  HELLO is exactly a moment nothing else is asking. */
   private async servedBuild(): Promise<string | null> {
+    return (await this.servedStamp())?.version ?? null;
+  }
+
+  private async servedStamp(): Promise<BuildStamp | null> {
     const origin = this.env.CLI_PUBLIC_ORIGIN;
 
     if (!origin) return null;
 
-    return (await readBuildStamp(this.env, origin))?.version ?? null;
+    return readBuildStamp(this.env, origin);
   }
 
   /**
@@ -2610,20 +2614,25 @@ export class UserDO extends Agent<Env> {
    * opted-out owner, or a deploy with no checksum to name.
    */
   private async deviceUpdateFrame(hello: v.InferOutput<typeof DeviceHelloSchema>): Promise<DeviceUpdateFrame | null> {
-    const served = await this.servedBuild();
+    const stamp = await this.servedStamp();
+    const served = stamp?.version ?? null;
     const state = deviceUpdateState({ version: hello.version ?? null, updateCheck: hello.updateCheck !== false }, served);
 
-    if (state !== 'behind' || served === null) return null;
+    if (state !== 'behind' || served === null || stamp === null) return null;
     const tarball = cliArtifactPath(hello.os, hello.arch);
 
     if (tarball === null) return null;
-    const origin = this.env.CLI_PUBLIC_ORIGIN ?? '';
-    const checksum = await fetchDeployedAsset(this.env, origin, `${tarball}.sha256`);
-    const sha256 = checksum === null ? '' : ((await checksum.text()).trim().split(/\s+/)[0] ?? '');
+    // The signed manifest is the whole authority: a build that shipped no
+    // signature, or none over this artifact, pushes nothing — the daemon
+    // would refuse it, and a push it refuses is one HELLO's worth of noise.
+    const sha256 = stamp.checksums?.[tarball];
 
-    if (!/^[0-9a-f]{64}$/i.test(sha256)) return null;
+    if (stamp.signature === undefined || stamp.checksums === undefined || sha256 === undefined || !/^[0-9a-f]{64}$/i.test(sha256)) return null;
 
-    return { type: DEVICE_UPDATE, version: served, urls: { tarball, checksum: `${tarball}.sha256` }, sha256: sha256.toLowerCase() };
+    return {
+      type: DEVICE_UPDATE, version: served, urls: { tarball, checksum: `${tarball}.sha256` }, sha256: sha256.toLowerCase(),
+      checksums: stamp.checksums, signature: stamp.signature,
+    };
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
@@ -5169,7 +5178,9 @@ export class UserDO extends Agent<Env> {
     const mgr = this.userMcp();
 
     const rows = this.sqlx<McpHydrationRow>(
-      `SELECT id, name, server_url, transport, headers, preset_id FROM user_mcp_servers`,
+      `SELECT s.id, s.name, s.server_url, s.transport, s.headers, p.preset_id
+         FROM user_mcp_servers s
+         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id`,
     );
 
     const configured = new Set(rows.map((row) => row.id));
@@ -5350,8 +5361,11 @@ export class UserDO extends Agent<Env> {
       allowed_tools: string | null; preset_id: McpPresetId | null;
       created_at: number; updated_at: number;
     }>(
-      `SELECT id, name, server_url, transport, allowed_tools, preset_id, created_at, updated_at
-       FROM user_mcp_servers ORDER BY name`,
+      `SELECT s.id, s.name, s.server_url, s.transport, s.allowed_tools,
+              p.preset_id, s.created_at, s.updated_at
+         FROM user_mcp_servers s
+         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
+        ORDER BY s.name`,
     );
 
     // Hydrate so the live view of connection state is real, and unconditionally
@@ -5455,11 +5469,21 @@ export class UserDO extends Agent<Env> {
     this.claimMcpServerName(cfg.name, id, () => {
       this.ctx.storage.sql.exec(
         `INSERT INTO user_mcp_servers
-           (id, name, server_url, transport, headers, allowed_tools, preset_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
-        sealedHeaders, allowedJson, cfg.presetId ?? null, now, now,
+        sealedHeaders, allowedJson, now, now,
       );
+
+      // A preset add tags the server one table over — `user_mcp_servers` is
+      // the shipped shape this storage already holds, so the tag has to live
+      // where a row of its own can reach it.
+      if (cfg.presetId !== undefined) {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO user_mcp_server_presets (server_id, preset_id) VALUES (?, ?)`,
+          id, cfg.presetId,
+        );
+      }
     });
 
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;

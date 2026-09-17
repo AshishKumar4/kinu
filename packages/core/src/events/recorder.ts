@@ -776,12 +776,19 @@ export class RunEventRecorder {
     const row = rows[0];
 
     if (row === undefined) return null;
-    // A start row this ledger cannot read names no turn to re-open: an open
-    // run without a turn identity is a run some other writer opened, and the
-    // read here is what decides whether a process continues something.
-    const start = v.safeParse(RunEventSchema, JSON.parse(row.payload));
+    // A start row this ledger cannot read is a fault, and it propagates: this
+    // read decides whether a process continues something, and a row that
+    // cannot be parsed is exactly what a reader must hear about. A readable
+    // start row without a turn identity is a run some other writer opened —
+    // a side lane, passed over and named, since nothing will re-open it and
+    // the wake reconcile seals it as interrupted.
+    const start = parseStoredRunEvent(row.payload);
 
-    if (!start.success || start.output.type !== 'run_start' || start.output.turn === undefined) return null;
+    if (start.type !== 'run_start' || start.turn === undefined) {
+      diagnostics.event('run.open_without_turn', { run: row.run_id });
+
+      return null;
+    }
 
     const steps = this.transcript(row.run_id);
 
@@ -798,7 +805,7 @@ export class RunEventRecorder {
     // A partial of a step that later finished is superseded by that step's row.
     const partial = newest !== null && newest.type === 'step_partial' && newest.stepIndex > finishedSteps ? newest : null;
 
-    return { runId: row.run_id, turn: start.output.turn, steps, partial };
+    return { runId: row.run_id, turn: start.turn, steps, partial };
   }
 
   /**

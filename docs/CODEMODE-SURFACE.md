@@ -1,22 +1,22 @@
 # The model-facing tool surface
 
-What the model can call, by what name, from where. Decided 2026-09-15 with the owner; this page is the spec the implementation batch executes and the record of why. Where a figure is unmeasured it says so.
+What the model can call, by what name, from where. The owner and I decided this on 2026-09-15. This page is the spec the implementation batch executes, and the record of why. Where a figure is unmeasured it says so.
 
 ## Names
 
 | Today | After | Why |
 |---|---|---|
-| `eval` | `eval` | The name every coding agent the models learned from uses for this tool. Identifiers follow as `codemode` (`executeCodemodeCalls` becomes `executeCodemodeCalls`); `eval` itself is reserved as a binding name in strict mode. |
-| `shell` | `shell` | One shell command in one runtime. `bash` was considered: the sandbox and a device run `bash -c`, the hosted workspace runs Nimbus's own shell, so `shell` is the name that is true on all three. |
+| `execute_tools` | `eval` | The name every coding agent the models learned from uses for this tool. Identifiers follow as `codemode` (`executeToolsCalls` becomes `executeCodemodeCalls`). `eval` itself is reserved as a binding name in strict mode. |
+| `run` | `shell` | One shell command in one runtime. I considered `bash`. The sandbox and a device run `bash -c`. The hosted workspace runs Nimbus's own shell. So `shell` is the name that holds true on all three. |
 | `run.runtime` + `run.device` | `shell.runtime` | One field. Its values are the names the live prompt lists: `workspace`, `sandbox`, and each device by its nickname. The `device` field goes. |
 | executor kind `laptop` | `device` | Four names for one thing today (`laptop`, `device`, "Your PC", `/pc`). The registry and the consent tables already say device. |
-| mount `/pc` (one device) or `/pc/<name>` | `/pc/<name>` always | A path stays valid when a second machine joins, so a saved tool or a slate that names it never breaks. `mounts.ts` and `volatile-context.ts` are the two sites. |
+| mount `/pc` (one device) or `/pc/<name>` | `/pc/<name>` always | A path stays valid when a second machine joins. A saved tool or a slate that names it never breaks. `packages/core/src/vfs/mounts.ts` and `packages/core/src/prompting/volatile-context.ts` are the two sites. |
 
 The `//` first-line intent comment convention stays; there is no separate intent field.
 
 ## The program
 
-Both backends run the program through `normalizeCode` from `@cloudflare/codemode/normalize`, which parses with acorn and wraps a bare body in an async function. Top-level statements, `await`, and `return` or a trailing expression all work today. The only text that said "async arrow function" was the package's `code` field label; core now owns that string (`fix/codemode-code-field`).
+Both backends run the program through `normalizeCode` from `@cloudflare/codemode/normalize`. It parses with acorn and wraps a bare body in an async function. Top-level statements, `await`, and `return` or a trailing expression all work today. The only text that said "async arrow function" was the package's `code` field label. Core now owns that string (`fix/codemode-code-field`).
 
 ## Namespaces inside `eval`
 
@@ -27,11 +27,11 @@ One vocabulary, one shape. A slate binding kind is the codemode namespace name.
 | `workspace` | `exec`, `readFile`, `writeFile`, `editFile`, `readdir`, `exists`, `remove` | `workspace` (with `members`, `paths`) |
 | `sandbox` | the same members plus `startProcess`, `stopProcess`, `listProcesses`, `exposePort`, `unexposePort`, `listPorts` | `sandbox` |
 | `<device name>` | the same members as `sandbox` | `<device name>` |
-| `tools` | every native tool as `tools.<name>(input)` with the native input object; crafted tools; `create`, `list` | `tools` (with `name`) |
+| `tools` | every native tool as `tools.<name>(input)` with the native input object, plus crafted tools, `create`, and `list` | `tools` (with `name`) |
 | `memory` | `save`, `search`, `conversations`, `remember`, `recall`, `forget` | `memory` |
 | `tasks` | as today | `tasks` |
 | `web` | `search`, `fetch` | `web` |
-| `db` | as today (`tools/db-codemode.ts`) | `db` |
+| `db` | as today (`packages/core/src/tools/db-codemode.ts`) | `db` |
 | `agents` | as today | refused to slates, as today |
 | `agent` | as today | refused to slates, as today |
 | `release` | as today | none |
@@ -39,42 +39,25 @@ One vocabulary, one shape. A slate binding kind is the codemode namespace name.
 | `plugins` | `list`, `search`, `describe`, and `plugins.<plugin>.<tool>(args)` | `plugins` (with `server`, `tools`) |
 | `state` | `get`, `set` | none |
 
-What moves: `workspace` loses `searchMemory`, `saveNote`, `listTools`, `createTool`, `slate`; `sandbox` loses `listFiles`. Every runtime namespace returns the same result and refusal shapes. The Node `fs`, `fs/promises`, and `child_process` shims stay as aliases over the `workspace` binding. `tools.<name>` stays for builtins so a mistaken call still lands. The generic `namespace` slate binding kind goes away; `rpc`, `mcp` (renamed `plugins`), `agent`, and `ai` stay slate-only. Slate persistence is unchanged: `this.sql` is the slate process's own SQLite and `this.storage` its key-value store; the `db` namespace is bindable for the shared store.
+What moves: `workspace` loses `searchMemory`, `saveNote`, `listTools`, `createTool`, and `slate`. `sandbox` loses `listFiles`. Every runtime namespace returns the same result and refusal shapes. The Node `fs`, `fs/promises`, and `child_process` shims stay as aliases over the `workspace` binding. `tools.<name>` stays for builtins so a mistaken call still lands. The generic `namespace` slate binding kind goes away. `rpc`, `mcp` (renamed `plugins`), `agent`, and `ai` stay slate-only. Slate persistence is unchanged: `this.sql` is the slate process's own SQLite and `this.storage` its key-value store. The `db` namespace is bindable for the shared store.
 
-Unmeasured: whether a slate's `this.sql` survives eviction the way its files and port do. A test proves it before anything relies on it.
+Unmeasured: whether a slate's `this.sql` survives eviction the way its files and port do. Prove it with a test before anything relies on it.
 
 ## Plugins
 
-MCP servers leave the native tool set. The eight standing tools (`unit-tools.test.ts` pins the count against `BUILTIN_TOOLS`) are the whole top level again, and `admitMcpDescriptors` with its per-turn budget is deleted with them. Inside `eval`:
+MCP servers leave the native tool set. The eight standing tools (`unit-tools.test.ts` pins the count against `BUILTIN_TOOLS`) are the whole top level again. `admitMcpDescriptors` with its per-turn budget goes with them. Inside `eval`:
 
-- `plugins.list()` returns `Array<{ plugin, tools: Array<{ name, summary }>, more }>`: every connected plugin, one line per tool (first sentence, at most 100 characters), at most 40 tools per plugin and the count beyond. Dynamic context carries one line per plugin.
-- `plugins.search(query, { limit?, plugin? })` returns `{ results: Array<{ path, summary, input, requiresApproval }>, searched, weak }`. `summary` is the first sentence at most 120 characters; `input` is the input type rendered by `jsonSchemaToTs`, present on the first eight results so a hit is callable without a second call; `searched` is the number of tools considered; `weak` is true when no strong match exists, in which case the best-ranked hits are still returned. Search never returns empty while a plugin is connected.
-- `plugins.describe(path)` returns the full description and the input and output types for one plugin or one method.
-- `plugins.<plugin>.<tool>(args)` is callable whether or not the model searched. No plugin method is ever in the schema, and nothing is added to the schema after a search: the result lives in the transcript, so the cache prefix holds.
+- `plugins.list()` returns `Array<{ plugin, tools: Array<{ name, summary }>, more }>`: every connected plugin, one line per tool (first sentence, at most 100 characters), at most 40 tools per plugin, and the count beyond. Dynamic context carries one line per plugin.
+- `plugins.search(query, { limit?, plugin? })` returns `{ results: Array<{ path, summary, input, requiresApproval }>, searched, weak }`. `summary` is the first sentence, at most 120 characters. `input` is the input type rendered by `jsonSchemaToTs`, present on the first eight results so a hit is callable without a second call. `searched` is the number of tools considered. `weak` is true when no strong match exists. The best-ranked hits still come back in that case. Search never returns empty while a plugin is connected.
+- `plugins.describe(path)` returns the full description plus the input and output types for one plugin or one method.
+- `plugins.<plugin>.<tool>(args)` is callable whether or not the model searched. No plugin method ever enters the schema, and nothing is added to the schema after a search: the result lives in the transcript, so the cache prefix holds.
 
-Ranking reuses the memory retrieval path: FTS5 BM25 for the lexical side, the vector store's `Embedder` for the semantic side, `hybridSearch` for reciprocal rank fusion. Each tool is one document: plugin name, tool name split on case and underscores, title, first sentence, and parameter names. Compared on 2026-09-15: OpenSeal (`packages/agent-utils/src/tools/search.ts`) ranks with MiniSearch BM25 plus fuzzy and prefix and then activates discovered tools into the schema, which edits the prompt mid-conversation; `@cloudflare/codemode` 0.5.1 ranks lexically with a coverage gate that returns nothing when a two-word query has one unmatched word, and returns no signature. Kinu takes the hybrid ranking, the never-empty rule, and the transcript-only delivery.
+Ranking comes from the memory retrieval path: FTS5 BM25 for the lexical side, the vector store's `Embedder` for the semantic side, and `hybridSearch` for reciprocal rank fusion. Each tool is one document: plugin name, tool name split on case and underscores, title, first sentence, and parameter names. Compared on 2026-09-15: OpenSeal ranks with MiniSearch BM25 plus fuzzy and prefix, then activates discovered tools into the schema. That edits the prompt mid-conversation. `@cloudflare/codemode` 0.5.1 ranks lexically with a coverage gate that returns nothing when a two-word query has one unmatched word, and returns no signature. Kinu takes the hybrid ranking, the never-empty rule, and the transcript-only delivery.
 
-Plugins bind through Kinu's own `McpToolSurfaceCache` descriptors and `codemodeFunction`, not the package's `McpConnector` or its durable runtime: claims, admission, and approvals already exist here, and the package's snippets duplicate crafted tools. MCP stays the protocol's name in settings; the agent never sees it.
+Plugins bind through Kinu's own `McpToolSurfaceCache` descriptors and `codemodeFunction`, not the package's `McpConnector` or its durable runtime. Claims, admission, and approvals already exist here, and the package's snippets duplicate crafted tools. MCP stays the protocol's name in settings. The agent never sees it.
 
 ## What the lane proves
 
-- `bun run check`, the tool and codemode suites, the slate binding suites, `gate:agents-fields`, the prompt budget gate, and the layer gate re-locked with the reason.
+- `bun run check`, the tool and codemode suites, the slate binding suites, `gate:agents-fields`, the prompt budget gate, and the layer gate, re-locked with the reason.
 - A rendered `eval` description measured in bytes on the harness actor, before and after, recorded here.
 - The trajectory tier green on the deployed build with the new names.
-
-## References in content
-
-A path is what a command takes; a reference is what a person reads. One grammar, `root://path`, over the mount table in core (`vfs/references.ts`): the root names a plane and the path is that plane's own absolute path.
-
-| Root | Plane | Mount table |
-|---|---|---|
-| `vfs` | the agent's workspace filesystem | `/` |
-| `sandbox` | the bound container | `/sandbox` |
-| `<device segment>` | one machine, by the segment it is mounted under | `/pc/<segment>` |
-| `local` | the machine the CLI runs on, as the CLI's alias of its own workspace | `/` in the CLI only |
-
-`vfs://home/user/report.txt` is `/home/user/report.txt` in the workspace; `studio://home/dev/a.txt` is `/pc/studio/home/dev/a.txt` in the mounted plane and `/home/dev/a.txt` on the machine. The parse/format pair is total over the live mount table: a reference whose root names no live plane parses to nothing, and a mounted path always formats to the reference of the plane that serves it. `local` is reserved: a machine named `local` (or `vfs`, or `sandbox`) is mounted under its id, never its name, so the alias never shadows a device.
-
-Where a reference is read: the web UI and the TUI recognise a reference whose root is in the live mount table and open the Files surface there; a reference to a device that is registered but offline opens as offline, with the machine's last-seen time, never as an empty directory. Tool results that name files render them as references. The prompt says it in one sentence: paths in commands, references in anything a person reads.
-
-Unmeasured: how often a model writes a reference where a path was wanted. The trajectory tier on the deployed build reads it before anything relies on it.

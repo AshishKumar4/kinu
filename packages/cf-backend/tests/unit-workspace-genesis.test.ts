@@ -15,7 +15,7 @@ import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { SIGNAL_ID_METADATA_KEY, WORKSPACE_CREATED_EVENT, renderSoulMarkdown, summarizeSoul } from '@kinu.run/core';
 import type { ModelMessage } from 'ai';
-import { orchestratorHarness, thinkTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 const MISSION = 'Audit the OAuth callback flow and report what an attacker could reach.';
 
@@ -69,7 +69,7 @@ describe('the workspace takes its own first turn', () => {
   test('a mission becomes a queued agent turn with no user input', async () => {
     const harness = orchestratorHarness();
     seedMission(harness.db, MISSION);
-    const turns = thinkTurns(harness.agent);
+    const turns = chatSessionTurns(harness.agent);
     const next = turns.park();
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
@@ -89,7 +89,7 @@ describe('the workspace takes its own first turn', () => {
   test('the mission is not quoted into the turn — it is already the system prompt', async () => {
     const harness = orchestratorHarness();
     seedMission(harness.db, MISSION);
-    const turns = thinkTurns(harness.agent);
+    const turns = chatSessionTurns(harness.agent);
     const next = turns.park();
 
     await harness.agent.beginGenesisTurn();
@@ -114,7 +114,7 @@ describe('the workspace takes its own first turn', () => {
   test('creation does not wait for the turn it started', async () => {
     const harness = orchestratorHarness();
     seedMission(harness.db, MISSION);
-    const turns = thinkTurns(harness.agent);
+    const turns = chatSessionTurns(harness.agent);
     const next = turns.park();
 
     // Answered while the turn it started is still parked at its model call.
@@ -142,7 +142,7 @@ describe('the workspace takes its own first turn', () => {
     // The operator's message reaches the loop before the offer does, as a
     // send the transport hands the idle loop: it IS the first turn, opened
     // and parked at its model call, its row durable before the offer arrives.
-    const turns = thinkTurns(harness.agent);
+    const turns = chatSessionTurns(harness.agent);
     const request = await turns.prepare({ messages: [{ role: 'user', content: 'Summarize the incident timeline first.' }] });
     expect(requestText(request.prompt)).toContain('Summarize the incident timeline first.');
     expect(requestText(request.prompt)).not.toContain('first turn');
@@ -163,7 +163,7 @@ describe('the workspace takes its own first turn', () => {
   test('a workspace with nobody speaking runs the offer as its first turn', async () => {
     const harness = orchestratorHarness();
     seedMission(harness.db, MISSION);
-    const turns = thinkTurns(harness.agent);
+    const turns = chatSessionTurns(harness.agent);
     const next = turns.park();
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
@@ -181,7 +181,7 @@ describe('the workspace takes its own first turn', () => {
   test('a message admitted after the genesis slot opened is the next turn', async () => {
     const harness = orchestratorHarness();
     seedMission(harness.db, MISSION);
-    const turns = thinkTurns(harness.agent);
+    const turns = chatSessionTurns(harness.agent);
     const genesis = turns.park();
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });

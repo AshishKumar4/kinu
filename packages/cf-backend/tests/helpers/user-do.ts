@@ -183,7 +183,7 @@ export interface TestUserDOOptions {
    *  the CLI artifacts' checksums, served through the `ASSETS` binding the
    *  hub reads for a device's UPDATE decision. Absent means a deployment
    *  that published no stamp — the hub then pushes nothing. */
-  servedBuild?: { version: string; checksums?: Record<string, string> };
+  servedBuild?: { version: string; checksums?: Record<string, string>; signature?: string };
   /** Answer device RPC frames the way the daemon does, so a call that PASSES
    *  consent completes instead of hanging on a socket nobody listens to. The
    *  difference between "the grant let it through" and "the grant did nothing"
@@ -274,7 +274,13 @@ export interface DevicePush extends v.InferOutput<typeof DevicePushSchema> {
  */
 function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']): Response {
   if (build && pathname === '/downloads/kinu-version.json') {
-    return Response.json({ version: build.version, sha: 'sha', builtAt: '2026-09-15T00:00:00Z' });
+    // The manifest as the build lane writes it: the stamp, every artifact's
+    // checksum, and — on a signed build — the signature over them.
+    return Response.json({
+      version: build.version, sha: 'sha', builtAt: '2026-09-15T00:00:00Z',
+      ...(build.checksums !== undefined && { checksums: build.checksums }),
+      ...(build.signature !== undefined && { signature: build.signature }),
+    });
   }
 
   const checksum = build?.checksums?.[pathname.replace(/\.sha256$/, '')];

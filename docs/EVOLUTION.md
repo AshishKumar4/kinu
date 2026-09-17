@@ -1,27 +1,27 @@
 # Evolution system
 
-Kinu evolves on four timescales. Each runs independently, and shorter ones feed data to longer ones. The engine is `core/src/evolution/engine.ts`. The shortest timescale is the only clock that ticks inside a single long autonomous turn. It has two channels: crafted-tool fitness (`core/src/orchestrator/craft-cycle.ts` over `core/src/craft/in-episode.ts`) and execution-recovery findings (`core/src/evolution/recovery.ts`, detected by the failure ledger in `core/src/orchestrator/turn-steering.ts`).
+Kinu evolves on four timescales. Each runs on its own, and shorter ones feed data to longer ones. The engine is `packages/core/src/evolution/engine.ts`. The shortest timescale is the only clock that ticks inside a single long autonomous turn. It holds two channels: crafted-tool fitness (`packages/core/src/orchestrator/craft-cycle.ts` over `packages/core/src/craft/in-episode.ts`) and execution-recovery findings (`packages/core/src/evolution/recovery.ts`, detected by the failure ledger in `packages/core/src/orchestrator/turn-steering.ts`).
 
-Two files this page names live in the workspace filesystem, not in this repository. Do not grep the tree for them. The curated memory note is `MemoryStore.curatedFile` (`agent-utils/src/memory/store.ts:93`), which resolves to memory/MEMORY.md inside a workspace. The live scaffold is each actor's `scaffoldPath()` (`cf-backend/src/actor-agent.ts:495`), which resolves to scaffold/agent.js there and is seeded by `createWorkspace` (`core/src/identity/create.ts:115`).
+Two files this page names live in the workspace filesystem, not in this repository. Do not grep the tree for them. The curated memory note is `MemoryStore.curatedFile` (`packages/agent-utils/src/memory/store.ts:93`), which resolves to memory/MEMORY.md inside a workspace. The live scaffold is each actor's `scaffoldPath()` (`packages/cf-backend/src/actor-agent.ts:495`), which resolves to scaffold/agent.js there and is seeded by `createWorkspace` (`packages/core/src/identity/create.ts:115`).
 
 ## In-episode evolution (the step clock)
 
-The other three timescales are conversational: the next user message grades a turn, five turns close a window, five windows close a lifetime.
+The other three timescales are conversational. The next user message grades a turn, five turns close a window, and five windows close a lifetime.
 
-A headless actor runs the step clock and nothing above it. `runHeadInference` (`core/src/heads/head-inference.ts`) records none of its turns into the window, and the CLI declares every hosted child `noAutoEvolve` (`cli-backend/src/agent-host/host.ts`). A hired agent learns at the step clock on both backends; only the workspace agent that owns the conversation reviews turns, closes windows and evolves its scaffold.
+A headless actor runs the step clock and nothing above it. `runHeadInference` (`packages/core/src/heads/head-inference.ts`) records none of its turns into the window, and the CLI declares every hosted child `noAutoEvolve` (`packages/cli-backend/src/agent-host/host.ts`). A hired agent learns at the step clock on both backends. Only the workspace agent that owns the conversation reviews turns, closes windows, and evolves its scaffold.
 
-The step clock fires on every settled `eval` call, read off the tool-result hook. The hook carries the call's own args, so the code graded is the code that ran. Creation is credited only to a call that itself invoked `workspace.createTool`. Invocation means call sites in the submitted code: `tools.<name>(`, the one namespace a crafted tool is callable in. Strings and comments are blanked first, so a tool body passed to `createTool` is not read as a call.
+The step clock fires on every settled `eval` call, read off the tool-result hook. The hook carries the call's own args, so the code graded is the code that ran. Creation is credited only to a call that itself invoked `workspace.createTool`. Invocation means call sites in the submitted code: `tools.<name>(`, the one namespace a crafted tool answers in. Strings and comments are blanked first, so a tool body passed to `createTool` is not read as a call.
 
 The fitness signal is execution, observed at the host. A crafted tool that raised is stamped with its own name leaving the sandbox, so the failure lands on the artifact whether or not the model caught it. A call that broke on its own account blames nobody. A completed call credits only tools that already existed when it started. A tool cannot certify itself on the call that created it. A call moved to the background is not a result and credits nothing.
 
 Two gates stand between observation and effect. The misevolution veto runs before
 each crafted-tool write. The injection floor is reachable because
 `workspace.createTool` calls `craftStore.create`
-(`core/src/execution/inline.ts`). The `crafted_tools` quality columns
+(`packages/core/src/execution/inline.ts`). The `crafted_tools` quality columns
 default to `0.5`, the `CRAFT_NEUTRAL_PRIOR` value
-(`agent-utils/src/stores/craft.ts`; `core/src/craft/in-episode.ts`), so an unscored
+(`packages/agent-utils/src/stores/craft.ts`; `packages/core/src/craft/in-episode.ts`), so an unscored
 tool cannot bypass the filter. Extracted candidates use the same store
-(`core/src/craft/conflict.ts:119`). Each settled block updates that row in one
+(`packages/core/src/craft/conflict.ts:119`). Each settled block updates that row in one
 synchronous SQL statement.
 
 `CRAFT_INVOCATION_QUALITY` maps a returned call to `0.7` and a raised call to
@@ -32,21 +32,15 @@ later return raises that score to `0.347`. These values come from
 policy arithmetic, not a measured success rate.
 
 A tool that keeps raising drops out of the callable set for the rest of the
-episode because both backends re-read the store per execute.
+episode because both backends re-read the store per run.
 
-Each turn writes at most one `craft_cycle` run event carrying `crafted`, `invoked`, `reused`, `returned`, `raised` and `dropped`, with `turn_end` as the denominator. `reused` is the numerator that matters: a tool crafted this turn and called by a later block is the loop actually closing.
+Each turn writes at most one `craft_cycle` run event carrying `crafted`, `invoked`, `reused`, `returned`, `raised`, and `dropped`, with `turn_end` as the denominator. `reused` is the numerator that matters. A tool crafted this turn and called by a later block is the loop closing.
 
-**The ceiling.** Execution-grounded fitness measures "it ran and did not raise". It cannot measure "it did the right thing". That needs a verifier the agent did not choose: the sealed bench has one, and production does not. So this channel feeds tool injection and nothing with a wider blast radius. No scaffold, prompt or gate is ever promoted on it. A `--no-auto-evolve` run observes nothing, so a benchmark's arms still mean what they say.
+**The ceiling.** Execution-grounded fitness measures "it ran and did not raise". It never measures "it did the right thing". That needs a verifier the agent did not choose. The sealed bench holds one, and production does not. So this channel feeds tool injection and nothing with a wider blast radius. No scaffold, prompt, or gate is ever promoted on it. A `--no-auto-evolve` run observes nothing, so a benchmark's arms still mean what they say.
 
 ### The knowledge channel (execution recoveries)
 
-The step clock's second observation sits beside the artifact channel, in `core/src/evolution/recovery.ts`, detected by the failure ledger in `core/src/orchestrator/turn-steering.ts`. When a tool's failure streak reaches the steer threshold and a changed call of the same tool then runs clean, the runtime records the pairing as a durable lesson. It stores `source = 'execution_recovery'` with both arg echoes verbatim. It injects the newest `MAX_RECOVERY_FINDINGS` findings (5, at `core/src/evolution/recovery.ts:83`) into every subsequent step's dynamic-context block.
-
-That makes it the one knowledge plane that moves during a long turn. Facts and the MEMORY.md tail freeze at turn assembly; a finding recorded at step 40 rides step 41. It survives compaction, continuation turns and instance death, where in-context learning does not.
-
-The discipline matches the artifact channel. The runtime records on both halves, on the same failing-result predicate the steer trusts, with no model asked. A streak broken by the same call finally working records nothing. A lucky retry is not a changed approach, and durable "keep grinding" advice is the exact misevolution the steer exists to prevent. The pairing is temporal rather than causal, so a finding gates nothing. It is a bounded hint plane, provisional forever, bound to no turn. Lesson corroboration can never admit it to MEMORY.md, and the experience library can never export it.
-
-Each turn with a broken streak writes one `execution_recovery` run event carrying `tool`, `failures` and `failedSignature`. The falsifier is a query: the same `failedSignature` failing again in a later turn is a finding that did not take.
+The step clock's second observation sits beside the artifact channel, in `packages/core/src/evolution/recovery.ts`, detected by the failure ledger in `packages/core/src/orchestrator/turn-steering.ts`. When a tool's failure streak reaches the steer threshold and a changed call of the same tool then runs clean, the runtime records the pairing as a durable lesson. It stores `source = 'execution_recovery'` with both arg echoes verbatim. It injects the newest `MAX_RECOVERY_FINDINGS` findings (5, at `packages/core/src/evolution/recovery.ts:83`) into every later step's dynamic-context block.
 
 ## Three conversational timescales
 
@@ -90,9 +84,9 @@ sequenceDiagram
 
 ## Turn-level evolution
 
-`reviewTurn()` (`core/src/evolution/engine.ts:469`) fires after every chat response, via `onChatResponse()`. It runs fire-and-forget, so it never blocks the Think TurnQueue.
+`reviewTurn()` (`packages/core/src/evolution/engine.ts:469`) fires after every chat response, through `onChatResponse()`. It runs fire-and-forget, so it never blocks the Think TurnQueue.
 
-There is no length or duration quality heuristic. Quality comes from a real turn outcome, one of `accepted`, `corrected`, `frustrated` or `abandoned`, recorded in the `turn_outcomes` table. Outcomes arrive from five sources, in canonical order in `TURN_OUTCOME_SOURCES` (`core/src/evolution/outcomes.ts:80`):
+There is no length or duration quality heuristic. Quality comes from a real turn outcome, one of `accepted`, `corrected`, `frustrated`, or `abandoned`, recorded in the `turn_outcomes` table. Outcomes arrive from five sources, in canonical order in `TURN_OUTCOME_SOURCES` (`packages/core/src/evolution/outcomes.ts:80`):
 
 | Source | What produced it |
 |---|---|
@@ -102,17 +96,11 @@ There is no length or duration quality heuristic. Quality comes from a real turn
 | `take_pick` | Which alternate take the user picked, through `applyTakePick` |
 | `execution` | The environment's verdict on a turn no user will grade, through `executionVerdict` |
 
-`execution` is machine evidence rather than a person's judgement, so `isUserVerdictSource()` excludes it. Every reader that speaks about user opinion must say so; `core/src/evolution/alignment.ts` does.
-
-The quality constants live in `outcomeQuality()` (`core/src/evolution/outcomes.ts:122`). A thumbs verdict is 0.9 or 0.2. `frustrated` is 0.1 and `abandoned` a neutral 0.5. An execution-sourced row prices on its own narrower band, 0.7 or 0.3, because it is a proxy. `reviewTurn` adds one case of its own: an abandoned or ungraded turn that errored scores 0.1. A turn with no outcome and no error produces no quality at all. The review returns early rather than inventing one. Such a turn still records, as a `turn_complete` event with `graded: false`.
-
-**Reflection** fires on any negative outcome, and on an abandoned or ungraded turn that also errored. An LLM call generates a lesson, always recorded in `lessons`. It reaches the curated memory note only when corroborated, and corroboration requires a negative verdict from a user source. An `execution` verdict deliberately does not corroborate. "The turn hit an error" is not a reader confirming the lesson drawn from it. An uncorroborated lesson stays `provisional` until a later user outcome corroborates it.
-
-**Pattern extraction** fires when the outcome is `accepted` and the turn made tool calls. `extractPattern()` (`core/src/evolution/engine.ts:1174`) asks the LLM to generalize the tool-call pattern into a reusable async arrow function with JSON Schema parameters. `upsertCraftedTool` stores it in `crafted_tools` after compiling it and running the misevolution veto. Conflict detection is a name match, or an FTS5 top-5 search whose Jaccard word overlap exceeds `conflictSimilarityThreshold` (0.85). An existing tool is overwritten only when the candidate scores more than 0.1 above it (`core/src/craft/conflict.ts:102`).
+**Reflection** fires on any negative outcome, and on an abandoned or ungraded turn that also errored. An LLM call generates a lesson and always records it in `lessons`. It reaches the curated memory note only when corroborated, and corroboration requires a negative verdict from a user source. An `execution` verdict deliberately does not corroborate. "The turn hit an error" is not a reader confirming the lesson drawn from it. An uncorroborated lesson stays `provisional` until a later user outcome corroborates it.
 
 ## Judge calibration
 
-Every outcome the follow-up classifier records is a judgement, and every rate downstream counts those judgements rather than what actually happened. That covers K_align, the per-scaffold outcome rates, the GEPA train/val split, and craft retirement. If the classifier misses a third of the corrections, all of those numbers are wrong by an unknown amount in an unknown direction. More turns only tighten the interval around the wrong answer. `core/src/evolution/calibration.ts` and `core/src/evolution/ppi.ts` close that with a few hand labels:
+Every outcome the follow-up classifier records is a judgement, and every rate downstream counts those judgements rather than what happened. That covers K_align, the per-scaffold outcome rates, the GEPA train/val split, and craft retirement. If the classifier misses a third of the corrections, all of those numbers are wrong by an unknown amount in an unknown direction. More turns only tighten the interval around the wrong answer. `packages/core/src/evolution/calibration.ts` and `packages/core/src/evolution/ppi.ts` close that with a few hand labels:
 
 ```
 kinu label export <agent>            # draws ~100 turns into a file
@@ -121,29 +109,23 @@ kinu label ingest <agent> <file>     # validates, then stores
 kinu label report <agent>            # what the labels established
 ```
 
-`DEFAULT_LABEL_BUDGET` is 100 (`core/src/evolution/calibration.ts:120`). The file is sized so ~100 turns is a 30 to 45 minute read (`core/src/evolution/calibration.ts:257`). The draw stratifies on the classifier's verdict. A uniform sample of a ledger that is ~85% `accepted` would measure nothing about the rare verdicts; within each stratum it is systematic in time. The file is blind: the request, the answer, the user's follow-up, never the classifier's verdict. Pre-filling the guess anchors the labeler on the number under test. Labels land append-only in `outcome_labels`; a re-label is a new row and the newest wins.
-
-The estimator is prediction-powered inference (Angelopoulos et al. 2023) with a prediction-stratified rectifier, factored so it transports across slices. Sensitivity and specificity are estimated once, with the population re-weighting the design requires. Each slice's observed rate is corrected by Rogan–Gladen, `θ̂ = (p̂ + q̂₀ − 1)/(q̂₁ + q̂₀ − 1)`, the delta method propagating all three uncertainties. Over the population the labels came from, that is algebraically the same estimate as the stratified PPI form.
+`DEFAULT_LABEL_BUDGET` is 100 (`packages/core/src/evolution/calibration.ts:120`). The file is sized so about 100 turns is a 30 to 45 minute read (`packages/core/src/evolution/calibration.ts:257`). The draw stratifies on the classifier's verdict. A uniform sample of a ledger that is about 85% `accepted` would measure nothing about the rare verdicts. Within each stratum it is systematic in time. The file is blind: the request, the answer, the user's follow-up, never the classifier's verdict. Pre-filling the guess anchors the labeler on the number under test. Labels land append-only in `outcome_labels`. A re-label is a new row, and the newest wins.
 
 `kinu alignment <agent>` prints the corrected block beneath K_align when text output is selected. With no labels it reads `uncalibrated`. That stops the reader assuming classifier and truth agree.
 
 ### Can two models do the labeling next time?
 
-A profile measured against last quarter's classifier says nothing about this quarter's, so calibration has to be redone. Thirty minutes a time quietly stops being paid. `core/src/evolution/ensemble.ts` measures whether the job can be handed over:
+A profile measured against last quarter's classifier says nothing about this quarter's, so calibration is redone. Thirty minutes a time quietly stops being paid. `packages/core/src/evolution/ensemble.ts` measures whether the job passes over:
 
 ```
 kinu label ensemble <agent>          # two cross-family judges, same turns
 ```
 
-Both judges see exactly what the human file showed, through the same `renderLabelingEvidence` call. Neither sees the classifier's verdict, the human's, or the other judge's; they answer independently. Agreement is the panel's verdict and a split is `unclear`. There is no third judge on purpose. A majority vote would turn those admissions of ignorance back into confident answers, and the admissions are what a two-model panel is for. Verdicts land append-only in `outcome_ensemble_labels`, one row per model per turn.
+The report gives Cohen's kappa for all three rater pairs (you to panel, you to classifier, panel to classifier) over the same turns, the panel's verdict against yours cell by cell, and the panel's sensitivity and specificity on the negative class, through the same `classifierAccuracy` estimator the classifier's own profile comes from.
 
-The report gives Cohen's κ for all three rater pairs (you↔panel, you↔classifier, panel↔classifier) over the same turns, the panel's verdict against yours cell by cell, and the panel's sensitivity and specificity on the negative class, through the same `classifierAccuracy` estimator the classifier's own profile comes from.
+One measurement needed care. The panel's verdict varies inside the stratum the sample drew on, so `classifierAccuracy`'s closed-form interval treats two halves of one sample as independent and comes back far too narrow. `packages/core/src/evolution/ppi.ts:317-325` records it. Over 250 simulated calibration sets per regime at the about 100-label budget, on a 3,000-row ledger with 15% negatives, the stratified bootstrap `resampledAccuracy` covers at 85 to 98% against a nominal 95%. The closed form on the same split covers at 44 to 75%. The source records no date for that run, and `packages/core/tests/unit-ensemble.test.ts` pins the ordering rather than the decimals.
 
-One measurement needed care. The panel's verdict varies inside the stratum the sample drew on, so `classifierAccuracy`'s closed-form interval treats two halves of one sample as independent and comes back far too narrow. `core/src/evolution/ppi.ts:317-325` records it. Over 250 simulated calibration sets per regime at the ~100-label budget, on a 3,000-row ledger with 15% negatives, the stratified bootstrap `resampledAccuracy` covers at 85–98% against a nominal 95%. The closed form on the same split covers at 44–75%. The source records no date for that run, and `packages/core/tests/unit-ensemble.test.ts` pins the ordering rather than the decimals.
-
-Whether the panel may stand in was decided by three conditions written into `core/src/evolution/ensemble.ts` before any of these numbers existed. First, κ(you↔panel) needs a lower bound at or above 0.60. Second, it must be at least κ(you↔classifier) on the same turns. Third, negative-class recall needs a lower bound at or above 0.70 with specificity at or above 0.90, keeping the Rogan–Gladen denominator at or above 0.60. The second condition is the one that matters: a panel no closer to you than the classifier already is would be measuring one flawed rater with another. Below the bar the report says the panel cannot stand in. Above it nothing switches either. What it buys is grounds to draw the next set with the panel and hand-audit a slice.
-
-## Session-level evolution
+Whether the panel stands in was decided by three conditions written into `packages/core/src/evolution/ensemble.ts` before any of these numbers existed. First, kappa (you to panel) needs a lower bound at or above 0.60. Second, it is at least kappa (you to classifier) on the same turns. Third, negative-class recall needs a lower bound at or above 0.70 with specificity at or above 0.90, keeping the Rogan-Gladen denominator at or above 0.60. The second condition is the one that matters. A panel no closer to you than the classifier already is measures one flawed rater with another. Below the bar the report says the panel cannot stand in. Above it nothing switches either. What it buys is grounds to draw the next set with the panel and hand-audit a slice.
 
 The cadence lives in `AgentOrchestrator`, not the engine. Every five turns it calls `engine.onSessionComplete()` with the accumulated turns. Five is not a per-backend option. Nothing a host can read chooses it, so both backends take one constant, `DEFAULT_SESSION_REFLECTION_INTERVAL` (`core/src/orchestrator/agent-orchestrator.ts:105`).
 

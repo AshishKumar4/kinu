@@ -5,14 +5,14 @@ complete requested contract and the current source/evidence boundaries.
 
 ## 1. What Kinu is
 
-Kinu is an agent platform with durable adaptation mechanisms. It:
+Kinu is an agent platform with durable adaptation. It:
 
 - runs measured tree searches, judged searches, and unranked ideation swarms;
 - builds reusable tools and updates their fitness from execution and later outcomes;
-- evaluates reversible changes to its scaffold;
+- judges reversible changes to its scaffold;
 - keeps persistent notes and searchable conversation text.
 
-These four are independent: none feeds the next, and a workspace can use any
+These four stand alone: none feeds the next, and a workspace uses any
 one of them without the others.
 
 Adaptation runs at four timescales:
@@ -48,10 +48,10 @@ Work, Files, Releases, Exploration, Agent, and Environment.
 ### Personal assistant with durable memory
 
 Each workspace is a Durable Object with its own SQLite database and default
-agent. Conversations persist across sessions. The agent can write long-term
-memory (`MEMORY.md`), extract crafted tools from problem-solving, and propose
-changes to its scaffold. These are stored capabilities; this document does not
-claim a benchmark result for them.
+agent. Conversations persist across sessions. The agent writes long-term
+memory (`MEMORY.md`), extracts crafted tools from problem-solving, and proposes
+changes to its scaffold. These are stored capabilities. This document states
+no benchmark result for them.
 
 ### Multi-model comparison
 
@@ -64,15 +64,14 @@ provider. On Workers AI the usual spread is:
 | Kimi K2.6 | Reasoning + tools + vision, 262k context | Long-context and vision-heavy work |
 | Nemotron 3 Super 120B / GPT OSS 120B | Reasoning models, 256k / 128k context | Alternate reasoning trajectories |
 | Llama 4 Scout | General-purpose instruction model | Quick tasks, simple questions, iteration |
-
 `kinu` keeps evolution state per workspace. Compare models in separate
-workspaces, then compare their records. Reasoning effort is a separate dial:
+workspaces, then compare their records. Reasoning effort is a separate dial.
 `/effort low|medium|high` maps onto each provider family's native knob.
 
 ### Hosted development environment
 
 Hosted workspaces use one authoritative Nimbus session for shared files and shell
-state. Available runtimes are stated by the actual host: catalogue/version output
+state. The actual host states available runtimes: catalogue and version output
 does not prove arbitrary Node programs run in workerd. Containers and connected
 devices remain separate, explicit environments. There is no second Nimbus file copy.
 
@@ -90,10 +89,10 @@ kinu chat dev-helper
 # Evolution happens locally; crafted tools persist in ~/.kinu/dev-helper/agent.db
 ```
 
-The local code-mode factory evaluates normalized programs in process with its
+The local code-mode factory judges normalized programs in process with its
 registered bindings and local require path. This is not the hosted dynamic
-Worker isolation boundary. File access, execution authority and unsupported
-operations must be stated for the actual selected environment.
+Worker isolation boundary. State the file access, execution authority, and unsupported
+operations for the actual selected environment.
 
 ### CI/CD integration
 
@@ -109,7 +108,7 @@ kinu import dev-helper-v2.kinu.jsonl --name dev-helper
 ```
 
 Local agent state uses SQLite. Cloud and local exports use a common archive
-format; that does not prove identical coverage of actor histories or native
+format. That does not prove identical coverage of actor histories or native
 project files. Check the declared scope before using an archive as a backup.
 
 ### Research experimentation
@@ -139,9 +138,9 @@ next turn without a restart. It also survives a restart.
    orchestration, storage contracts, tools, delegation, and adaptation policy.
 2. Scaffold changes are versioned. A candidate agent-loop change passes the
    configured checks and retains a rollback version.
-3. Crafted tools have a lifecycle: exponential moving score, relevance decay,
+3. Crafted tools hold a lifecycle: exponential moving score, relevance decay,
    retirement rules.
-4. Hosted nodes run as logical actors of the workspace object. Each has a
+4. Hosted swarm nodes run as logical actors of the workspace object. Each holds a
    private shell and scaffold state over the workspace's canonical files.
 
 ## 5. Current limitations
@@ -157,15 +156,15 @@ coordination cost?
 
 ### Evolution is slow in practice
 
-- Turn-level pattern extraction fires reliably after an accepted turn that used tools
-- Session-level needs 5 turns *and* a turn that errored or drew negative feedback; scaffold mutation additionally needs 3+ conversations
-- Lifetime fires every 5 closed session windows (`lifetimeEvolutionInterval: 5`, `core/src/evolution/types.ts:147`). That is 25 turns. `kinu evolve` runs a search on demand
-- Generalizing tool patterns into reusable code is inconsistent
+- Turn-level pattern extraction fires reliably after an accepted turn that used tools.
+- Session-level needs 5 turns plus a turn that errored or drew negative feedback. Scaffold mutation additionally needs 3 or more conversations.
+- Lifetime fires every 5 closed session windows (`lifetimeEvolutionInterval: 5`, `packages/core/src/evolution/types.ts:147`). That is 25 turns. `kinu evolve` runs a search on demand.
+- Generalizing tool patterns into reusable code is inconsistent.
 
 ### Evaluation exists; coverage is thin
 
-`scripts/eval.ts` runs one A/B over `core/src/eval/`. Each case gets one `generateText` call
-per model. The corpus holds cases a model with no tools can answer. A third model judges.
+`scripts/eval.ts` runs one A/B over `packages/core/src/eval/`. Each case gets one `generateText` call
+per model. The corpus holds cases a model with no tools answers. A third model judges.
 The run exits non-zero below a committed floor. That is the whole
 claim it makes. It uses no tools, no system prompt, and no loop. It does not
 measure the agent. It runs only on request. `docs/BENCH.md` runs real
@@ -173,21 +172,21 @@ agent solvers against this repository's own checks.
 
 A replay eval (`runReplayEval`) re-runs labelled past turns through the live
 scaffold for a loss curve, on demand only. I removed it from the lifetime
-cadence because it re-executed the same graded turns GEPA's seed scoring
-already re-executes, for a curve no decision reads. Shadow-veto promotion runs
+cadence because it re-ran the same graded turns GEPA's seed scoring
+already re-runs, for a curve no decision reads. Shadow-veto promotion runs
 its own shadow trials instead.
 
-Still unmeasured: task completion before vs after evolution, tool reuse
+Still unmeasured: task completion before and after evolution, tool reuse
 frequency, and how much stored memory a turn reads. The seed corpus is small.
 
 ### Scaffold mutation rarely triggers
 
-Scaffold mutation is fully implemented and rarely fires. It has four-gate validation,
+Scaffold mutation is fully implemented and rarely fires. It holds four-gate validation,
 version history, and rollback:
 
-- Needs 3 or more session reflections to trigger
-- The LLM often writes scaffolds that fail structural validation, usually on a forbidden pattern such as `import`
-- Most conversations do not produce enough data for a scaffold change worth keeping
+- Needs 3 or more session reflections to trigger.
+- The LLM often writes scaffolds that fail structural validation, usually on a forbidden pattern such as `import`.
+- Most conversations do not produce enough data for a scaffold change worth keeping.
 
 ### The search explorer
 
@@ -202,7 +201,7 @@ id, not only through the recent-run window.
 
 Capability hosts already isolate preview origins and strip Kinu credentials.
 Sibling-preview cookie isolation additionally needs a preview suffix on a
-Public Suffix List boundary. That is a DNS/domain deployment prerequisite, not an
+Public Suffix List boundary. That is a DNS and domain deployment prerequisite, not an
 application fallback.
 
 ### Multi-agent coordination
@@ -210,23 +209,23 @@ application fallback.
 Delegation shipped through one `agents` surface: in-workspace subordinates and
 cross-workspace handoff. Three pieces of the original idea remain:
 
-- Share crafted tools through a global CraftStore (R2 for cross-DO storage)
-- Coordinate search across agents, so one archive covers what several explored
-- Measure whether hiring actually beats working linearly
+- Share crafted tools through a global CraftStore (R2 for cross-DO storage).
+- Coordinate search across agents, so one archive covers what several explored.
+- Measure whether hiring beats working linearly.
 
 ### Evaluation benchmarks
 
-Broaden the harness beyond its seed corpus:
+Broaden the test runner beyond its seed corpus:
 
-- CryptoHack (308 crypto challenges) gives CTF-style verification with known flags
-- SWE-bench gives software engineering tasks with automated verification
-- Custom evolution benchmarks measure tool extraction rate, scaffold improvement, and memory reads
+- CryptoHack (308 crypto challenges) gives CTF-style verification with known flags.
+- SWE-bench gives software engineering tasks with automated verification.
+- Custom evolution benchmarks measure tool extraction rate, scaffold improvement, and memory reads.
 
 ### Lean-to-TypeScript evidence
 
 Extend the Lean pipeline:
 
-- Shared differential fixtures executing Lean models and TypeScript on the same inputs
-- Proved properties mirrored as property-based tests over production functions and SQL paths
-- Every theorem, trusted assumption, source reference, and missing-evidence item kept enrolled in the CI traceability gate
-- Missing FTS5 index-to-search and multi-chunk VFS integration coverage
+- Shared differential fixtures running Lean models and TypeScript on the same inputs.
+- Proved properties mirrored as property-based tests over production functions and SQL paths.
+- Every theorem, trusted assumption, source reference, and missing-evidence item kept enrolled in the CI traceability gate.
+- Missing FTS5 index-to-search and multi-chunk VFS integration coverage.

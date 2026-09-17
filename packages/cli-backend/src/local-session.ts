@@ -70,9 +70,8 @@ import { TierIdSchema,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
-  skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
+  skillsVfsOver, resolveTurnSkills, steerSkillsBlock, filterToolSetBySkills, renderFactsForTurn,
   inheritedContextFromHistory,
-  subordinateTurnContext, inheritedAsModelMessage,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   // The terminal transition — core owns the vocabulary, the roster, the state
@@ -175,7 +174,7 @@ import { TierIdSchema,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
   // The ONE turn loop, and the transcript store the local backend keeps it over.
   ChatSession, ActorMessagesTranscript,
-  type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent, recoveryBackoffMs,
+  type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
@@ -916,12 +915,21 @@ export class LocalAgentSession implements BackendHost {
         terminal: () => this.terminal,
         holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
         driverGate: () => this.driverGate?.() ?? null,
-        // The turn's own wake at its open, the in-process half: a crashed turn
-        // re-arms from the ledger on the next start either way.
-        armTurnWake: () => this.scheduleTerminalRetry(Date.now() + recoveryBackoffMs(0)),
+        // No durable wake to arm: this process IS the wake, and a crashed turn
+        // re-arms from the ledger on the next start. A timer here would have
+        // to outlive the process it runs in, which is not a wake.
+        armTurnWake: async () => {},
         modelWindow: () => ({
           contextWindow: this.sessionContextWindow(),
           modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+        }),
+        steerSkills: (text) => steerSkillsBlock({
+          vfs: this.getSkillsVfs(),
+          config: this.config,
+          userText: text,
+          trust: this.instructionTrust,
+          limits: { contextWindow: this.sessionContextWindow(), modelOutputLimit: this.modelCatalog.modelOutputLimit() },
+          alreadyActive: new Set(this.turnActiveSkillNames),
         }),
       },
     });
@@ -2229,6 +2237,8 @@ export class LocalAgentSession implements BackendHost {
       roleSkills,
     );
 
+    this.turnActiveSkillNames = activeSkills?.active.map((skill) => skill.name) ?? [];
+
     const candidateBuiltins = this.filterToolsBySkills(activeSkills);
 
     const candidateBuiltinNames = Object.keys(candidateBuiltins).filter(
@@ -2348,20 +2358,8 @@ export class LocalAgentSession implements BackendHost {
     const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
     this.recordSystemPromptHash(systemPrompt);
 
-    // Attachments ride as ModelMessage file parts (the same shape ai's
-    // convertToModelMessages emits for FileUIParts on the cloud path), so
-    // multimodal models receive them natively from streamText.
-    const fileParts = (item.files ?? []).map((f) => ({
-      type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
-    }));
-
-    this.actorSession.openTurnInput(lease, {
-      item,
-      message: fileParts.length > 0
-        ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
-        : { role: 'user', content: item.text },
-      birthContext: (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
-    });
+    // The turn's input is already on the working history: the loop placed it
+    // there before handing the turn here.
 
     // Live state (facts, memory tail, executor status, running background work,
     // the open fork roster) rides the dynamic-context ledger — the shared step
@@ -3288,6 +3286,10 @@ export class LocalAgentSession implements BackendHost {
     return this._webSearchProvider;
   }
 
+  /** The names the running turn's prompt already carries bodies for, so a
+   *  mid-turn steer adds only what is new. */
+  private turnActiveSkillNames: readonly string[] = [];
+
   private resolveTurnSkills(
     userText: string,
     roleSkills: readonly string[] = [],
@@ -3516,7 +3518,7 @@ export class LocalAgentSession implements BackendHost {
       stopWhen: stepCountIs(1),
     })) {
       if (ev.type === 'text-delta') text += ev.delta;
-      else if (ev.type === 'done' && !text.trim()) text = ev.text;
+      else if (ev.type === 'done' && ev.text.trim()) text = ev.text;
     }
 
     return text;

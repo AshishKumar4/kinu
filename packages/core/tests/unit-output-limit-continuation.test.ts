@@ -166,6 +166,26 @@ describe('output-limit continuation', () => {
     ]);
   });
 
+  test('a narration step cut at the limit with a completed call is not joined into the answer', async () => {
+    const tools: ToolSet = {
+      look: tool({ description: 'look', inputSchema: z.object({}), execute: async () => 'looked' }),
+    };
+
+    // The cut step issued a call and the SDK continued it on that call's
+    // result: the step is narration the result followed, and the answer is
+    // the step the turn stopped on alone.
+    const { model } = scriptedModel([
+      [...text('n1', 'Looking first, and the narration ran long'),
+        { type: 'tool-call', toolCallId: 'tc1', toolName: 'look', input: '{}' }, finish('length')],
+      [...text('a1', 'the answer'), finish('stop')],
+    ]);
+
+    const events = await drain(model, tools);
+    const done = events.find((e) => e.type === 'done');
+
+    expect(done?.type === 'done' && done.text).toBe('the answer');
+  });
+
   test('an output limit after a completed tool continues without replaying the call', async () => {
     let executions = 0;
 

@@ -18,7 +18,7 @@ import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { openWorkspaceMainActor } from '@kinu.run/core';
 import { makeSql } from '../../core/tests/helpers';
-import { hostedSubordinateHarness, orchestratorHarness, thinkTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 /**
  * The actor these rows belong to.
@@ -260,7 +260,7 @@ describe('the workspace keeps exactly one wake row', () => {
 
     if (!wake) throw new Error('the activation armed no wake for the child\'s owed job');
     // IMMEDIATE, and named as not-the-instant. "A wake exists" was already true
-    // before the chain was fixed — `hasLiveJobsInWorkspace` said so — so a case
+    // before the chain was fixed — `hasUntimedLiveJobsInWorkspace` said so — so a case
     // that only counted rows could not tell an armed workspace from a stranded
     // one. WHEN it fires is the whole difference.
     expect(wake.time).not.toBe(owedAt);
@@ -409,11 +409,14 @@ describe('the workspace keeps exactly one wake row', () => {
     // and read under the id the agent's own recorder uses.
     const actorId = harnessActorId(db);
 
+    // A start row as the recorder writes one: the ledger reads its open
+    // runs through the event schema, and a row it cannot read is a fault.
     const start = (run: string, ts: number): void => {
+      const stamped = new Date(ts).toISOString();
       db.prepare(
         `INSERT INTO run_events (actor_id, run_id, event_index, type, ts, payload)
-         VALUES (?, ?, 1, 'run_start', ?, '{}')`,
-      ).run(actorId, run, new Date(ts).toISOString());
+         VALUES (?, ?, 1, 'run_start', ?, ?)`,
+      ).run(actorId, run, stamped, JSON.stringify({ type: 'run_start', agentId: 'a', eventIndex: 1, runId: run, timestamp: stamped }));
     };
 
     // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
@@ -513,20 +516,6 @@ describe('the workspace keeps exactly one wake row', () => {
       .filter((row) => row.callback === '_kinuTerminalRetryTick' && row.time > Math.floor(Date.now() / 1000));
 
     expect(armed).toHaveLength(1);
-  });
-
-  test('a tick with nothing owed releases the row it armed', async () => {
-    // The other half of arm-first: the pessimistic row was insurance, not work
-    // anybody is waiting on, so a pass that ends with nothing unfinished and
-    // nothing owed deletes exactly the row it wrote — the registry sleeps
-    // empty rather than holding a wake that fires to find nothing.
-    const { agent } = orchestratorHarness();
-    await agent.activateActor();
-    expect(await agent.listSchedules()).toEqual([]);
-
-    await agent._kinuTerminalRetryTick();
-
-    expect(await agent.listSchedules()).toEqual([]);
   });
 
   test('a tick with nothing owed releases the row it armed', async () => {
@@ -666,7 +655,7 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     expect(await agent.listSchedules()).toEqual([]);
 
-    const turns = thinkTurns(agent);
+    const turns = chatSessionTurns(agent);
     const request = await turns.prepare({ messages: [{ role: 'user', content: 'a turn that opens' }] });
 
     const armed = (await agent.listSchedules())
@@ -676,6 +665,64 @@ describe('the workspace keeps exactly one wake row', () => {
 
     // The turn is only parked, not owed by the suite: settle it so the pump
     // finishes cleanly inside this test rather than leaking a pending call.
+    await turns.settle({ messageId: request.identity.messageId, text: 'done' });
+  });
+
+  test('a tick that fires inside a parked turn keeps a wake row', async () => {
+    // The turn's open run row is untimed owed work: nothing in the ledgers
+    // names an instant, and the process may die at any point of the turn.
+    // A finished pass used to release the row it armed on "nothing timed
+    // owed", which left an open turn with no wake from the first mid-turn
+    // tick to the end of the turn — exactly the state the turn-open arm
+    // exists to remove.
+    const { agent } = orchestratorHarness();
+    await agent.activateActor();
+    expect(await agent.listSchedules()).toEqual([]);
+
+    const turns = chatSessionTurns(agent);
+    const request = await turns.prepare({ messages: [{ role: 'user', content: 'a turn the tick fires inside' }] });
+
+    const wakes = async (): Promise<number[]> => (await agent.listSchedules())
+      .filter((row) => row.callback === '_kinuTerminalRetryTick')
+      .map((row) => row.time);
+
+    expect(await wakes()).toHaveLength(1);
+
+    // The alarm the platform delivers: the SDK consumes the one-shot row
+    // when it fires, then the callback runs.
+    for (const row of await agent.listSchedules()) await agent.cancelSchedule(row.id);
+    const firedAtSec = Math.floor(Date.now() / 1000);
+    await agent._kinuTerminalRetryTick();
+
+    // A row remains, in the future, while the turn is still owed.
+    const kept = await wakes();
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toBeGreaterThan(firedAtSec);
+
+    // The release half — a tick with nothing owed drops the row — is the
+    // case above; a settled turn in this harness still owes its terminal
+    // sequence's retry, which is timed work of its own.
+    await turns.settle({ messageId: request.identity.messageId, text: 'done' });
+  });
+
+  test('a turn-open wake does not fire inside an ordinary turn', async () => {
+    // The turn-open arm seeds the chain for a kill; it is not a mid-turn
+    // maintenance pass. Armed at the recovery ceiling, it lands after any
+    // ordinary turn and the tick it delivers finds the turn settled.
+    const { agent } = orchestratorHarness();
+    await agent.activateActor();
+
+    const turns = chatSessionTurns(agent);
+    const armedAtSec = Math.floor(Date.now() / 1000);
+    const request = await turns.prepare({ messages: [{ role: 'user', content: 'a turn that opens' }] });
+
+    const armed = (await agent.listSchedules())
+      .filter((row) => row.callback === '_kinuTerminalRetryTick')
+      .map((row) => row.time);
+
+    expect(armed).toHaveLength(1);
+    expect((armed[0] ?? 0) - armedAtSec).toBeGreaterThanOrEqual(60);
+
     await turns.settle({ messageId: request.identity.messageId, text: 'done' });
   });
 

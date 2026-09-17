@@ -11,8 +11,22 @@ import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { workspaceDisplayTitle } from '@kinu.run/core';
 import { WorkspaceBar, type Altitude, type WorkspaceBarProps } from '../src/components/WorkspaceBar';
 import type { ConnectionStatus } from '../src/hooks/use-kinu';
+
+/** The bar at one title moment: the caller resolves through the read model,
+ *  the bar renders what it is handed, so both moments pin rendered output. */
+function markupForTitle(title: string): string {
+  return renderToStaticMarkup(createElement(WorkspaceBar, {
+    title,
+    onRename: async (name: string) => name,
+    connectionStatus: 'connected',
+    working: false,
+    altitude: 'run',
+    onAltitude: () => {},
+  }));
+}
 
 function markupFor(options: {
   connectionStatus?: ConnectionStatus;
@@ -63,5 +77,30 @@ describe('the altitude tabs', () => {
     expect(html).toContain('>Supervise<');
     expect(html).toContain('title="Work: the current task and its record"');
     expect(html).toContain('title="Supervise: what the agent learned and what needs you"');
+  });
+});
+
+describe('the workspace title at both moments', () => {
+  test('a stored title renders from the first paint, never the slug', () => {
+    const html = markupForTitle(workspaceDisplayTitle({ name: 'ashen-kiln-386c2ec1', displayName: 'Fix the kiln' }));
+
+    expect(html).toContain('Fix the kiln');
+    expect(html).not.toContain('ashen-kiln-386c2ec1');
+  });
+
+  test('an unknown title renders the placeholder state, never the slug or id', () => {
+    for (const stored of [undefined, null, '   ', 'ashen-kiln-386c2ec1']) {
+      const shown = workspaceDisplayTitle({ name: 'ashen-kiln-386c2ec1', displayName: stored });
+      const html = markupForTitle(shown);
+
+      expect(shown.length).toBeGreaterThan(0);
+      expect(html).toContain(shown);
+      expect(html).not.toContain('ashen-kiln-386c2ec1');
+    }
+
+    const states = [undefined, null, '   ', 'ashen-kiln-386c2ec1'].map((stored) =>
+      markupForTitle(workspaceDisplayTitle({ name: 'ashen-kiln-386c2ec1', displayName: stored })));
+
+    expect(new Set(states).size).toBe(1);
   });
 });

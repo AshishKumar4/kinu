@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { providersInWorkMode, type JsonValue } from '@kinu.run/core';
-import { orchestratorHarness, thinkTurns } from './helpers/actor-harness';
+import { orchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
 import * as v from 'valibot';
 import { ROOT_SLATE_CALLER } from '../src/slates/bindings';
 
@@ -12,7 +12,7 @@ test('a real Plan turn reads files but cannot edit them, even after a Build turn
   await files.writeFile(path, 'original');
   agent.harnessDrivingUserMessage('Inspect only.', { kinuMode: 'plan' });
   const planTools = agent.observeRawTools();
-  await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'Inspect only.' }], tools: planTools });
+  await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'Inspect only.' }], tools: planTools });
   const planFile = planTools.file;
 
   if (planFile === undefined) throw new Error('Plan has no file inspection tool');
@@ -21,7 +21,7 @@ test('a real Plan turn reads files but cannot edit them, even after a Build turn
   await expect(plan({ action: 'edit', path, edits: [{ old_text: 'original', new_text: 'modified' }] }))
     .rejects.toMatchObject({ code: 'denied' });
   expect(await files.readFile(path, { encoding: 'utf8' })).toBe('original');
-  await thinkTurns(agent).settle({ messageId: 'plan-answer', text: 'Inspection done.', requestId: 'plan-answer' });
+  await chatSessionTurns(agent).settle({ messageId: 'plan-answer', text: 'Inspection done.', requestId: 'plan-answer' });
   agent.harnessDrivingUserMessage('Now implement.', { kinuMode: 'build' });
   const buildTools = agent.observeRawTools();
   const buildFile = buildTools.file;
@@ -49,7 +49,7 @@ test('Plan blocks slate source restoration and authored calls without converting
   await files.writeFile(path, 'second');
   agent.harnessDrivingUserMessage('Plan only.', { kinuMode: 'plan' });
   const native = agent.observeRawTools();
-  await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'Plan only.' }], tools: native });
+  await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'Plan only.' }], tools: native });
   const providers = providersInWorkMode('plan', agent.observeRuntime().executionRouter?.getProviders() ?? []);
   const workspace = providers.find((provider) => provider.name === 'workspace');
 
@@ -68,7 +68,7 @@ test('Plan blocks slate source restoration and authored calls without converting
   expect(await agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'app', 'FILES', { member: 'readFile', args: [path], invocation: null })).toEqual({ ok: true, value: 'second' });
   expect(await agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'app', 'FILES', { member: 'writeFile', args: [path, 'build app wrote'], invocation: null })).toMatchObject({ ok: true });
   expect(await files.readFile(path, { encoding: 'utf8' })).toBe('build app wrote');
-  await thinkTurns(agent).settle({ messageId: 'done', text: 'Plan ready.', requestId: 'done' });
+  await chatSessionTurns(agent).settle({ messageId: 'done', text: 'Plan ready.', requestId: 'done' });
   expect(await agent.slateAs(planCaller, { op: 'restore', id: 'app', version: version.id })).toMatchObject({ ok: false, reason: 'denied' });
   expect(await agent.slate({ op: 'restore', id: 'app', version: version.id })).toMatchObject({ ok: true });
   expect(await files.readFile(path, { encoding: 'utf8' })).toBe('first');
@@ -79,13 +79,13 @@ test('a planner role records Plan authority for deferred work even when the mess
   await agent.setRole('planner');
   agent.harnessDrivingUserMessage('Inspect the project.', { kinuMode: 'build' });
   const requested = agent.observeRawTools();
-  const configured = await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'Inspect the project.' }], tools: requested });
+  const configured = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'Inspect the project.' }], tools: requested });
   const submitted = configured.tools.submit_plan;
 
   if (submitted === undefined) throw new Error('Role-imposed Plan has no plan submission operation');
   expect(await toolExecute(submitted)({ edits: [{ start: 1, content: '# Plan\nInspect the source before implementation.' }] })).toMatchObject({ ok: true, status: 'pending' });
   expect(await agent.getActivePlanReview()).toMatchObject({ status: 'pending' });
-  await thinkTurns(agent).settle({ messageId: 'role-plan-answer', text: 'Plan ready.', requestId: 'role-plan-answer' });
+  await chatSessionTurns(agent).settle({ messageId: 'role-plan-answer', text: 'Plan ready.', requestId: 'role-plan-answer' });
   const runs = await agent.listRuns();
   const run = runs.items[0];
 

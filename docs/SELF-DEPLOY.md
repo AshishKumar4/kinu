@@ -1,6 +1,9 @@
 # Self-deploy: kinu.run/deploy, `kinu deploy cloudflare`, `kinu deploy local`
 
-Design, decided with the owner on 2026-09-15. Plan only; nothing here is built.
+Design, decided with the owner on 2026-09-15 and 2026-09-16: the deployment
+owns its own key (Option A below), the local account model, no monitor
+locally; the owner creates the OAuth client. Step 1 of the order of work is
+in progress.
 Research and measurements: `~/kinu-logs/self-deploy/RESEARCH.md` and
 `oauth-scopes.json` (the 387-scope catalog, read 2026-09-15 with a wrangler
 session).
@@ -117,10 +120,13 @@ self-update work already covers the devices.
 the same release artifact, a pinned workerd binary, a generated workerd
 configuration rendered from `release.json` (Durable Object storage and KV and
 R2 on local disk, assets from the artifact, the runtime cache seed unpacked),
-and a supervisor in the shape of the existing daemon command. No container,
-no cron; the monitor cadence runs from the supervisor. Sign-in is a first-run
-local credential the installer mints and prints. Devices connect through the
-same approval flow as kinu.run. Updates are the CLI's update channel with a
+and a supervisor in the shape of the existing daemon command. No container
+and no monitor: the cron-driven monitor is kinu.run's own uptime probe and has
+no job on a local instance. Sign-in is a local account the installer creates
+as the default owner, username `local-<short suffix>`, printed once;
+onboarding asks for the name as it does today and offers a password, and a
+user who skips it keeps the default account bound to that machine. Devices
+connect through the same approval flow as kinu.run. Updates are the CLI's update channel with a
 different artifact name. The local instance serves `http://` on a port the
 installer prints; TLS is the host's concern.
 

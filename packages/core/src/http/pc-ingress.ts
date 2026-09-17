@@ -11,8 +11,15 @@
  * the WebSocket with the ticket so long-lived secrets do not appear in URLs.
  *
  * This Worker serves the daemon to nobody. The daemon travels inside the CLI
- * release and `kinu connect` writes it from there, so no code path here hands
- * a machine bytes to execute, and a compromised deploy cannot reach one.
+ * release and `kinu connect` writes it from there. Two paths DO hand a
+ * machine bytes to run — the launcher's refresh and the daemon's UPDATE
+ * frame, both of which download a published release — and what keeps a
+ * compromised deploy from reaching one is not this module: every release is
+ * signed at build with a key the deployment never holds, and the launcher,
+ * the CLI and the daemon verify that signature against the public key
+ * pinned in their bundles before a byte reaches a live path
+ * (`http/release-signing.ts`, SECURITY-devices C1). A deploy can serve any
+ * bytes it likes; it cannot sign them.
  *
  * The two authenticated rails (`/pc/connect-ticket`, `/pc/connect`) are the
  * only unauthenticated paths here that choose a Durable Object by name, so

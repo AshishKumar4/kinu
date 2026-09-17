@@ -32,7 +32,7 @@ import { describe, expect, test, vi } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { BRANCH_RATIONALE } from '@kinu.run/core';
 import {
-  orchestratorHarness, reactivateOrchestratorHarness, thinkTurns,
+  orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns,
   type ActorHarness, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 
@@ -89,7 +89,7 @@ async function workspaceWithQueuedWork(
   // Production opens a turn through beforeTurn; driving the same entry point
   // gives beforeStep the prepared snapshot it refuses without, and writes the
   // durable turn identity the steer row binds to.
-  await thinkTurns(seeded.agent).prepare({
+  await chatSessionTurns(seeded.agent).prepare({
     messages: [{ role: 'user', content: 'deploy the api' }, { role: 'assistant', content: 'starting' }],
   });
 
@@ -120,8 +120,8 @@ async function landQueuedSteers(agent: HarnessOrchestratorAgent): Promise<void> 
   Reflect.set(agent, 'addMessages', async () => { await Promise.resolve(); });
   // A step refuses an unprepared turn: open it the way production does, so the
   // drain reads a real snapshot.
-  await thinkTurns(agent).prepare({ messages });
-  await thinkTurns(agent).step(1, messages);
+  await chatSessionTurns(agent).prepare({ messages });
+  await chatSessionTurns(agent).step(1, messages);
 }
 
 describe('the reconnect snapshot answers from durable rows, not from RAM', () => {

@@ -16,17 +16,17 @@ Where this document and the code disagree, the code runs. Report the difference.
 
 A swarm is a tree search whose nodes are agents. I call one such node a **swarm node**.
 
-`preset` and `task` are a complete call. A `verify` preset without an
+`preset` plus `task` is a complete call. A `verify` preset without an
 `objective` runs the judged sweep in *Presets*, not its measured shape. An
 `objective` buys that shape.
 
 A verifier is code that reports a raw number in its own unit. That number chooses
-the winner. `score:'judge'` uses an ensemble median, which ranks candidates but
-measures nothing, so judged runs write no record.
+the winner. `score:'judge'` uses an ensemble median. The median ranks candidates.
+It measures nothing, so judged runs write no record.
 
 Six axes (`unit`, `context`, `expand`, `score`, `advance`, `carry`) describe the
-search. A preset is one point in them. `advance` selects down the tree;
-`expand:'aggregate'` makes a DAG; `advance:'archive'` keeps cells. Measured
+search. A preset is one point in them. `advance` selects down the tree.
+`expand:'aggregate'` makes a DAG. `advance:'archive'` keeps cells. Measured
 results persist in `exploration_records` for later runs of the same objective.
 
 ## The six axes
@@ -43,28 +43,28 @@ the enumeration.
 | `advance` | where the next unit of budget goes | `uct`, `best-first`, `pareto`, `archive`, `none` |
 | `carry` | what survives across iterations | `none`, `reflections`, `elites`, `artifacts` |
 
-`answer` is the agent node: turns, tools, and a transcript. `thought` is one
+`answer` is the agent node. It runs turns, tools, and a transcript. `thought` is one
 model call with no tools or observed environment. The engine reads this axis in
-exactly one place, to decide whether a node is an agent at all.
+exactly one place. It decides whether a swarm node is an agent at all.
 
 `generator` was a third value here and is gone. Nothing branched on it. A caller
 who writes it is refused by name and pointed at `answer`. The `prove` preset
 names `answer`.
 
-`inherit` gives a child its parent's conversation verbatim, preserving one cacheable
+`inherit` gives a child its parent's conversation verbatim. That preserves one cacheable
 prefix for siblings. `fresh` gives only the task block and parent report. `inherit`
-was `fork` until the removed `agents` action made that spelling ambiguous; stored
+was `fork` until the removed `agents` action made that spelling ambiguous. Stored
 rows carrying the old value are translated on resume. One spelling governs caller-to-root and
-branch edges; a resolved `fresh` search refuses an `inherit` child.
+branch edges. A resolved `fresh` search refuses an `inherit` child.
 
 `sample` starts from the workspace as found. `aggregate` consumes k parents into
-one child; see *Fan-in*. `verify` runs the registered instrument; `judge` takes
-an ensemble median; `none` composes only with `advance:'none'`, because a
+one child (see *Fan-in*). `verify` runs the registered instrument. `judge` takes
+an ensemble median. `none` composes only with `advance:'none'`. A
 selector without a signal makes row order win.
 
 `uct` re-widens against an exploration term. `best-first` takes the best
 unexpanded node. `archive` keeps cells. `none` expands once. `pareto` orders
-its frontier by the axes of an `instanced` or `vector` objective and settles
+its frontier by the axes of an `instanced` or `vector` objective. It settles
 to a nondominated front rather than one winner.
 
 `elites` and `artifacts` persist. `reflections` and `none` do not. `settle` is
@@ -173,10 +173,10 @@ An objective declares `minimise` or `maximise`, a metric, a unit, and a verifier
 **Wire form.** It is snake_case. Stable stringification fixes key order, not
 spelling, so a digest uses one named form.
 
-**Measured baseline.** Measure it live on the workspace as found; callers never
+**Measured baseline.** Measure it live on the workspace as found. Callers never
 supply it.
 
-**Raw units.** The instrument reports its own raw unit. The harness normalises
+**Raw units.** The instrument reports its own raw unit. The search normalises
 once.
 
 **Measurement context.** It has exactly two members. It sees no model, network,
@@ -230,14 +230,14 @@ Implemented by `Floor`, `floorMargin`, and `FloorBreach`.
 
 ## The publication seal
 
-A write publishes when another run can use an artifact or sealed-objective value.
+A write publishes when another run uses an artifact or sealed-objective value.
 Both matter because later runs reuse the artifact and quote the value.
 
 The seal is reachability over an enumerated set, not one table. Writes need the
 open state. A single-table seal let a breached run publish through a
 cross-workspace library called "separate and unchanged".
 
-`PUBLICATION_SURFACES` is the governed set and `admitsPublication` is total over
+`PUBLICATION_SURFACES` is the governed set, and `admitsPublication` is total over
 it. Callers name a surface, so a writer chooses an enumerated member. A missing
 publication surface is a specification violation.
 
@@ -246,15 +246,15 @@ evidence about the breached guarantee. Suppression is disclosed over
 `PUBLISHING_CARRIES`, since other carries write nothing later runs read.
 
 Implemented by `PublicationState`, `PUBLICATION_SURFACES`, `admitsPublication`,
-and `carrySuppression`; `tests/contract-publication-seal.test.ts` holds writer
+and `carrySuppression`; `packages/core/tests/contract-publication-seal.test.ts` holds writer
 census and set equality in both directions.
 
 ## The records store
 
-`exploration_records` is the leaderboard. Publishing carries read its prior best
+`exploration_records` is the leaderboard. Publishing carries read their prior best
 for the same objective and floor before expansion, then write their result.
 `none` and `reflections` do neither. A row keys on objective identity and floor
-digest; an objective-only key would collapse a corrected floor with a wrong one.
+digest. An objective-only key would collapse a corrected floor with a wrong one.
 
 A re-record keeps the better measurement. Lowering one refuses with
 `cause: 'not-better'` and preserves the stored value. The writer checks the
@@ -301,13 +301,13 @@ Implemented by `strategy/archive.ts`.
 
 ## A node is an agent
 
-A node has a tool loop and stop condition, tool surface, no delegation authority,
-model, transcript, and workspace. It uses `runChat` through `runHeadInference`,
-the one path that requests a model, dispatches tools, prunes context, and repairs
+A swarm node holds a tool loop and stop condition, a tool surface, no delegation authority,
+a model, a transcript, and a workspace. It uses `runChat` through `runHeadInference`.
+That is the one path that requests a model, dispatches tools, prunes context, and repairs
 an unpaired tool call.
 
-Work crossing 30 s detaches where a wake can arrive. A node takes the next turn
-when it settles, with the wake last. Reporting ends a node. Otherwise it finishes
+Work crossing 30 s detaches where a wake arrives. A swarm node takes the next turn
+when it settles, with the wake last. Reporting ends a swarm node. Otherwise it finishes
 only with no running job and no queued wake.
 
 Its tools are a head's builtins plus report. It proposes more actors only through
@@ -318,18 +318,18 @@ Implemented by `strategy/node-agent.ts`, `heads/head-inference.ts`, `chat.ts`,
 
 ## What bounds a node
 
-A node has no step cap or default wall clock (owner ruling, 2026-08-21).
-`runChat` has no cap. `UNBOUNDED_STEPS` in `chat.ts` never fires; a caller's condition can
-only add a stop reason. The arbiter owns node depth. A head with no split depth
-left still finishes its own work; its tool surface excludes further splitting.
+A swarm node holds no step cap or default wall clock (owner ruling, 2026-08-21).
+`runChat` holds no cap. `UNBOUNDED_STEPS` in `chat.ts` never fires. A caller's condition
+only adds a stop reason. The arbiter owns swarm node depth. A head with no split depth
+left still finishes its own work. Its tool surface excludes further splitting.
 
-A node ends when the model stops calling tools and it holds nothing, the search
+A swarm node ends when the model stops calling tools and it holds nothing, the search
 aborts it, its mission governor declines the next request, or an opt-in
 `maxWallClockMs` deadline passes. Shipped dispatch declares none. The last three
-are read between steps, so none interrupts one: a node runs in the isolate that
+are read between steps, so none interrupts one. A swarm node runs in the isolate that
 ran the search, as its own logical actor of the one workspace, and the search
-records the cut on the node's own report under the cancel reason. There is no
-node isolate and no node-loop host — the loop runs in one place, so the cut is
+records the cut on the swarm node's own report under the cancel reason. There is no
+swarm node isolate and no swarm node-loop host. The loop runs in one place, so the cut is
 observed in one place.
 
 Three tool-using nodes still ran at 1,216,358 / 1,310,061 / 1,336,833 ms across
@@ -339,7 +339,7 @@ Measured 2026-08-19 at `8afd45e8d`, on one credentialed depth-2 width-3
 `tests/evals/swarm.eval.ts` run against the shipped default model.
 
 A deadline cannot pre-empt a step. One measured step held 91% CPU for 26 minutes.
-I kept no date for that run, so quote it as an anecdote, not a result. Neither
+I kept no date for that run, so I quote it as an anecdote, not a result. Neither
 deadline nor `AbortSignal` reached it. This is a stated limit, not a solved
 problem. Nothing measured fixes a bound on one step's request.
 
@@ -347,12 +347,10 @@ Implemented by `runNodeAgent`, `runNodeLoop`, `budgetExhausted`, and
 `UNBOUNDED_STEPS`. `packages/core/tests/unit-swarm-node-envelope.test.ts` holds
 the contract and figures in both directions.
 
-## A node that did not finish is not a node that measured badly
-
-Aborted, exhausted, or errored nodes return an unscored status, step count, and
+Aborted, exhausted, or errored swarm nodes return an unscored status, step count, and
 clock. The engine skips instrument and ensemble. This differs from *unmeasurable*,
-where an instrument declines a real answer. Collapsing them can score a status
-line or code fence and rank elapsed work over answer quality.
+where an instrument declines a real answer. Collapsing them scores a status
+line or code fence and ranks elapsed work over answer quality.
 
 Implemented by `SwarmCandidate.incomplete` and `strategy/swarm-run.ts`.
 
@@ -376,8 +374,8 @@ Retry bounds, terminals, and verifier immutability are not settled here.
 ## Arbitration
 
 A proposal enters selection and never bypasses it. The engine checks a depth cap
-and hidden shared budget. Its return value is the verdict; refusal text is the
-node's next instruction. Without a proposal tool, it is a typed diagnostic event.
+and hidden shared budget. Its return value is the verdict. Refusal text is the
+swarm node's next instruction. Without a proposal tool, it is a typed diagnostic event.
 
 **Build-time exclusion.** A tool that could only ever refuse MUST NOT be offered.
 
@@ -386,15 +384,15 @@ Implemented by `arbitrateBranch`, `strategy/node-agent.ts`, and
 
 ## Budget conservation
 
-Allocations granted to a node's children MUST sum to no more than the parent's
-remaining budget. Depth and width bound shape; conservation bounds spend.
+Allocations granted to a swarm node's children MUST sum to no more than the parent's
+remaining budget. Depth and width bound shape. Conservation bounds spend.
 
 Implemented by `strategy/swarm-budget.ts` and `strategy/swarm-run.ts`.
 
 ## Per-node assignments
 
 A caller states the first level in one of two ways. `nodes: [{ prompt, task }]`
-names each node. `branches: N` states a count and lets the engine vary the angle.
+names each swarm node. `branches: N` states a count and lets the engine vary the angle.
 Stating both is refused, because `nodes.length` IS the width. Every assigned
 `task` MUST be distinct.
 
@@ -402,23 +400,23 @@ Each entry becomes one branch of a `BranchGrant`. `task` is the branch task and
 `prompt` is the branch rationale. `context` stays run-level, because it is what
 makes siblings comparable.
 
-**Per-node model routing.** `models: [spec, …]` assigns one model spec per
+**Per-node model routing.** `models: [spec, ...]` assigns one model spec per
 expansion child, round-robin by slot: the child at index `i` of its wave runs
 `models[i % models.length]`. The rule is deterministic. A re-drive routes the
 same slots the same way because the slot is durable. The list needs no relation
-to the width: a list of one names every node, and a list longer than the wave is
+to the width. A list of one names every swarm node, and a list longer than the wave is
 truncated by the modulo rather than refused. A fan-in's vertex is one child of
 one, so it runs the first spec. Each spec resolves through the one resolver a
-delegation's tier already uses (`AgentsSwarmDeps.resolveModel`), an unresolvable
-spec is refused as `bad_input` naming it before any node runs, and the list is
-mutually exclusive with `tier` (run-level routing). Omitted, every node runs the
+delegation's tier already uses (`AgentsSwarmDeps.resolveModel`). An unresolvable
+spec is refused as `bad_input` naming it before any swarm node runs, and the list is
+mutually exclusive with `tier` (run-level routing). Omitted, every swarm node runs the
 one model the call resolved to. That is the unchanged default. The spec list is
 digested into the record's `configDigest`, so two runs differing only in
-routing never collide in the store. A node runs the resolved model directly; the
+routing never collide in the store. A swarm node runs the resolved model directly. The
 slot's own spec travels beside it on `HeadInput.model`, which is the field a
 head resolved out of process is bound from.
 
-A node receives exactly one brief. When a caller or a parent `propose_branch`
+A swarm node receives exactly one brief. When a caller or a parent `propose_branch`
 wrote it, that brief occupies the angle slot and the engine sends no angle of its
 own beside it. The journal keeps the assigned task and the chosen brief. A re-entry
 reads both from that row at every depth. It reads sibling briefs from the journal,
@@ -429,13 +427,13 @@ Implemented by `tools/swarm-input.ts`, `strategy/swarm.ts` and
 
 ## One node, one row, across every re-entry
 
-A node becomes durable when its spawn is journalled, before its model runs. Its
+A swarm node becomes durable when its spawn is journalled, before its model runs. Its
 answer becomes durable after its whole level is scored. An activation that dies
-between the two leaves a node the store remembers and an answer nothing holds.
+between the two leaves a swarm node the store remembers and an answer nothing holds.
 
-A node in that state is unfinished work. A re-entry re-runs it under its own id,
-in the words its row recorded, at the slot it held. It is not retired and it is
-not replaced by a fresh sibling. The number of logical nodes a search holds is
+A swarm node in that state is unfinished work. A re-entry re-runs it under its own id,
+in the words its row recorded, at the slot it held. It is not retired, and it is
+not replaced by a fresh sibling. The number of logical swarm nodes a search holds is
 therefore decided by its caps alone, across any number of re-drives.
 
 Expansion accounting reads both durable records: tree rows, plus journalled
@@ -482,31 +480,31 @@ the hosted backend runs it on the object that owns the workspace, in the same
 isolate every hosted actor runs in.
 
 Both backends report `private-home`. Both credential both planes, and both are
-required. A node reaches the tree with commands and with file tools. A file plane
-pinned to the session user refuses a node's writes inside its own home. I measured
-`EACCES` on `/home/node-aX9`. It cannot refuse a sibling's, because every
-pid-less filesystem call is the same identity. So the local backend gives a node
+required. A swarm node reaches the tree with commands and with file tools. A file plane
+pinned to the session user refuses a swarm node's writes inside its own home. I measured
+`EACCES` on `/home/node-aX9`. It refuses nothing to a sibling, because every
+pid-less filesystem call is the same identity. So the local backend gives a swarm node
 `SqliteVFS.as(cred)` and a second `Shell` over the SAME filesystem
 (`WorkspaceBundle.asAgent`), and the hosted backend binds the session's own file plane to the
-node (`nimbusSessionFiles(box, cred)` → `box.files.as(cred)`, `execution/nimbus.ts`),
+swarm node (`nimbusSessionFiles(box, cred)` to `box.files.as(cred)`, `execution/nimbus.ts`),
 with `withHostedNodeExecution` for its
 commands. `NodeAgentDeps.runtimeForWorkspace` is where a backend hands that
-runtime back; `runNodeAgent` uses it for a loop that runs in this isolate, and a
+runtime back. `runNodeAgent` uses it for a loop that runs in this isolate, and a
 hosted actor rebuilds the same thing from `HostedNodeHome`.
 
-The hosted program is the session's own `node`, and the protocol is strict JSON:
-the request travels in one environment variable, the answer comes back on stdout
+The hosted program is the session's own `node`, and the protocol is strict JSON.
+The request travels in one environment variable, and the answer comes back on stdout
 carrying the substrate's own errno. Three consequences, each measured. No path or
-payload is ever shell text, so a filename holding a newline, a quote or a leading
-dash lists, reads, renames and deletes exactly. `ls` cannot express that. No
+payload is ever shell text, so a filename holding a newline, a quote, or a leading
+dash lists, reads, renames, and deletes exactly. `ls` cannot express that. No
 error is matched as prose: `EACCES` arrives as `EACCES`. And `stat` answers
 `null` for `ENOENT` only, so a refusal never reads as an empty space.
 
-Bytes are chunked, and the chunk is a WIRE bound rather than a file-size limit: a
-read loops until a zero-length read, a write stages into a temp beside the target
+Bytes are chunked, and the chunk is a WIRE bound rather than a file-size limit. A
+read loops until a zero-length read, and a write stages into a temp beside the target
 and renames onto it, so a failure mid-write leaves the old target byte-exact and
 removes the temp. Cost, measured: a small file is one call to read and two to
-write; a file one chunk over the bound is three each.
+write. A file one chunk over the bound is three each.
 
 Measured 2026-09-06, `packages/cf-backend/tests/unit-node-home-wiring.test.ts`
 passes 26 tests with 0 failures. It covers home ownership, sibling write
@@ -522,28 +520,28 @@ backends. Hosted actors ask the workspace owner to register their mappings.
 Boot restores these mappings after a reset.
 
 Measured 2026-09-10, `bun scripts/workspace-planes-probe.ts` reads four
-distinct temporary-file values from main, swarm-node, head, and subordinate
-planes — the node's home is `head-<its own key>`, one head namespace for both
+distinct temporary-file values from main, swarm node, head, and subordinate
+planes. The swarm node's home is `head-<its own key>`, one head namespace for both
 modes. All four read the same shared workspace file. The second runtime
 generation returns the same values without copying files.
 
 `shared-origin-plane` remains the honest state of a runtime with no provisioner:
-a harness runtime, or a plane bound to a physical directory, which has no
+a test runtime, or a plane bound to a physical directory, which has no
 principal registry. A directory-bound actor still runs its commands with `HOME`
 and `TMPDIR` in its own scratch under the workspace state, and the tree stays
 shared. Grader and merge-back need the home, hence `0o755` and not `0o700`. One
-view preserves the user's repository. Exactly two isolation states exist;
-"partially isolated" cannot guide behaviour. Shared-plane runs grade reported
+view preserves the user's repository. Exactly two isolation states exist.
+"Partially isolated" guides no behaviour. Shared-plane runs grade reported
 candidates, never diffs with no concurrent-writer owner.
 
 Malformed credentials fall through to the session user, so the boundary returns
-the substrate credential type, and `NodeWorkspace` is a union: a provisioned node
-has a home, a scratch and a credential, and an unprovisioned one has none of the
+the substrate credential type, and `NodeWorkspace` is a union. A provisioned swarm node
+holds a home, a scratch, and a credential, and an unprovisioned one holds none of the
 three.
 
-The storage-isolation proof covers toolless branches. A tooled node breaks its
+The storage-isolation proof covers toolless branches. A tooled swarm node breaks its
 storage-acquisition hypothesis. `lean/Kinu/Exploration/Isolation.lean` proves
-that distinction; nodes need their own action, postcondition, and preservation
+that distinction. Swarm nodes need their own action, postcondition, and preservation
 proof.
 
 Implemented by `strategy/node-workspace.ts` and `vfs/agent-home.ts`; modelled
@@ -553,7 +551,7 @@ negatively by `lean/Kinu/Exploration/Isolation.lean`.
 
 `settle` is a total function of exactly (score, advance), compiler-checked in
 TypeScript and Lean. A new value cannot fall through. The returned shape
-follows the resolved settle: `best` carries the one aggregate answer, and
+follows the resolved settle. `best` carries the one aggregate answer, and
 `frontier` carries the nondominated candidates. `frontier` is null on every
 run that did not use `advance:'pareto'`.
 
@@ -564,8 +562,8 @@ Implemented by `settleOf` and `lean/Kinu/Exploration/Settle.lean`.
 `expand:'aggregate'` fans a level in. Its claim is an ORDER.
 
 At each measured barrier, parents enter merge-back in topological dependency
-order. Agreeing members accumulate; the first conflict spawns the graded merge
-node. Changed bases are re-verified and checked per transaction bound.
+order. Agreeing members accumulate. The first conflict spawns the graded merge
+swarm node. Changed bases are re-verified and checked per transaction bound.
 `search_nodes.parent_id` remains the selection edge, so a measurement cannot
 count for two ancestors.
 
@@ -573,7 +571,7 @@ count for two ancestors.
 unusable members, and parents retired from selection. Fewer than two consumable
 parents is `sample`, not fan-in.
 
-`depth:1` has only the root. An `advance` without selection stops after that
+`depth:1` holds only the root. An `advance` without selection stops after that
 wave. `score:'judge'` and `score:'none'` provide neither artifact diff nor
 measured verdict. Each is refused for that reason.
 
@@ -582,8 +580,8 @@ Implemented by `fanInAtLevel`, `SwarmFanInReport`, and
 
 ## Merge-back
 
-Four named policies take settled work to the origin. Each derives from `settle`;
-callers cannot choose one. The mapping is total. `best` applies its winner.
+Four named policies take settled work to the origin. Each derives from `settle`.
+Callers choose none. The mapping is total. `best` applies its winner.
 `archive` and `front` rebase in dependency order. `merge` synthesises reports.
 Conflict merge-node spawning is outside it because conflict is discovered while
 applying diffs.
@@ -591,12 +589,12 @@ applying diffs.
 **Dependency order.** Multi-member settles use dependency order, never tree
 order. A dropped edge refuses rather than degrading.
 
-Diff provenance, not node identity, decides mergeability. Reported answers and
+Diff provenance, not swarm node identity, decides mergeability. Reported answers and
 private-home diffs merge. Shared-plane diffs refuse because concurrent siblings
-share one tree and no captured write has stable ownership.
+share one tree and no captured write holds stable ownership.
 
 A diff is self-contained net content, not a line diff or released-home reference.
-A verdict binds member and base digests; the member alone cannot detect a moved
+A verdict binds member and base digests. The member alone cannot detect a moved
 base. Conflict models produce and grade candidates, never in-place edits.
 Transactions are atomic per member, with no cross-member rollback.
 
@@ -624,7 +622,7 @@ Counted 2026-08-19 as `theorem` declarations per module.
 `lean/traceability.yaml` is canonical.
 
 The descriptor property depends on an unspecified descriptor producer. Isolation
-proves a negative. `ArchiveAdmission.lean` is a finding, not a guarantee:
+proves a negative. `ArchiveAdmission.lean` is a finding, not a guarantee.
 `separated_cells_are_unboundedly_large` refutes a population bound from admission,
 so missing eviction remains unjustified. `scripts/lean-citations.ts` keeps these
 citations resolving.

@@ -166,6 +166,25 @@ describe('schema-drift genesis lock', () => {
       .toEqual(USER_DEVICES_GENESIS);
   });
 
+  test('RED: a widened table is refused even through the namesake-filtering genesis --lock actually calls', () => {
+    // The deployed call shape is `lockUpdate(tables, lock, (t) =>
+    // genesisForNewTable(t, lock))`, and `genesisForNewTable` answers the
+    // intersection of the locked namesakes — for a table that HAS an entry,
+    // that intersection is the entry's own list. A widen under it must still
+    // be refused against `table.columns`, or `--lock` launders a shipped-table
+    // change into silence.
+    const update = lockUpdate(
+      [DRIFTED_DEVICES], DEVICES_LOCK,
+      (table) => genesisForNewTable(table, DEVICES_LOCK),
+    );
+
+    expect(update.added).toEqual([]);
+    expect(update.refused).toHaveLength(1);
+    expect(update.refused[0]).toContain('unstopped_at');
+    expect(update.next['user_devices@packages/cf-backend/src/user/schema.ts'])
+      .toEqual(USER_DEVICES_GENESIS);
+  });
+
   test('RED: a DDL moved to another file inherits the narrowest locked genesis', () => {
     // Relocate the statement and the new key would lock at TODAY's shape,
     // excusing the six columns the move carried with it.

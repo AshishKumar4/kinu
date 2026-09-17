@@ -14,7 +14,7 @@
 import { BACKGROUND_POLICY, invocationBackgroundPolicy } from '@kinu.run/core';
 import { describe, test, expect } from 'bun:test';
 
-import { orchestratorHarness } from './helpers/actor-harness';
+import { chatSessionTurns, orchestratorHarness } from './helpers/actor-harness';
 import * as v from 'valibot';
 
 type RunnerView = {
@@ -56,6 +56,26 @@ describe('cf background policy follows the turn surface', () => {
     const agent = orchestratorHarness().agent;
     setTurnContinuity(agent, 'conversation');
     expect(runnerPolicy(agent)).toEqual(BACKGROUND_POLICY.interactive);
+  });
+
+  test('a one-shot turn a human steered mid-turn is interactive from that step on', async () => {
+    // The first-run background-settle row on build cba44dcb9: the ask landed
+    // as a steer inside the genesis turn, a turn nobody was watching, so the
+    // run tool kept the one-shot detach window (300 s) and a 45 s sleep ran
+    // inline — the wake half never engaged. Someone typed the steer, so
+    // someone is watching the stream from that step on.
+    const { agent } = orchestratorHarness();
+    await agent.activateActor();
+    const turns = chatSessionTurns(agent);
+    const request = await turns.prepare({ messages: [{ role: 'user', content: 'an unwatched turn' }] });
+    setTurnContinuity(agent, 'independent_task');
+    expect(runnerPolicy(agent)).toEqual(invocationBackgroundPolicy('one-shot', true));
+
+    expect(await agent.send('a human typed this while it ran')).toEqual({ landed: 'mid-turn' });
+    await turns.step(0, [{ role: 'user', content: 'an unwatched turn' }]);
+    expect(runnerPolicy(agent)).toEqual(BACKGROUND_POLICY.interactive);
+
+    await turns.settle({ messageId: request.identity.messageId, text: 'done' });
   });
 
   test('a one-shot turn takes the one-shot thresholds with wakes enabled — same runner, per turn', () => {
