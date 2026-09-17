@@ -424,7 +424,41 @@ export default defineConfig({
     // the runtime's own terminal signal, and a hang is killed by the deploy
     // ladder at the gate's deadline, which names the gate. `0` is Vitest's
     // documented disabled-timeout value; `gate:test-clocks` pins it.
+    //
+    // THE COLD START `0` IS CHOSEN AGAINST, measured on this tree 2026-09-16
+    // (vitest 4.1.11, single-file runs, warm module cache, this box): the FIRST
+    // test in a file pays the pool boot and the bundle's instantiation inside
+    // its own body — 12,603 ms in `do-alarm.test.ts`, 7,408 ms in
+    // `do-transaction.test.ts` — while a steady-state test in the same file
+    // costs 3 ms, and a trivial file still spends ~13 s in vitest's `import`
+    // phase plus ~4.5 s transforming and ~3.7 s building the probe bundles this
+    // config compiles. Vitest's default 5,000 ms would fail the first test of
+    // both files here, so any finite clock is a bet on the runner's load.
     testTimeout: 0,
     hookTimeout: 0,
+    // The rejections this layer's probes raise ON PURPOSE, each with its reason,
+    // and nothing else: an unhandled error no line here names stays fatal.
+    //
+    // WHICH CHANNEL CARRIES THEM, measured 2026-09-16 on this tree: a rejection
+    // nobody awaits in the TEST isolate reaches this hook and fails the run even
+    // when every test passed (scratch-proved), while a rejection raised inside a
+    // Durable Object — both entries below — is printed by workerd as
+    // `uncaught exception; source = Uncaught (in promise)` and does not reach
+    // this hook yet. The entries are written against the message anyway, because
+    // the POOL decides which channel carries a DO-side rejection: the owner's
+    // cloudflare-os pool routes them here, and one pool upgrade would otherwise
+    // turn two deliberate probe arms into a red layer.
+    onUnhandledError(error) {
+      // `AlarmDO.alarm` rethrows so the RUNTIME owns redelivery, which is the
+      // subject `do-alarm.test.ts` asserts; nothing awaits that delivery
+      // (worker.ts:503-506).
+      if (error.message.includes('alarm-body-failed')) return false;
+
+      // `TransactionDO` fails the roster write after the event row landed —
+      // the rollback `do-transaction.test.ts` asserts — and its async-body arm
+      // throws after `transactionSync` already committed, so that promise has
+      // no owner left (worker.ts:258, :289).
+      if (error.message.includes('unknown subordinate "relay"')) return false;
+    },
   },
 });
