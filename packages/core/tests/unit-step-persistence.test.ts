@@ -63,7 +63,7 @@ function textStep(text: string): Response {
 }
 
 const tools: ToolSet = {
-  run: tool({
+  shell: tool({
     description: 'shell',
     inputSchema: z.object({ command: z.string() }),
     execute: async ({ command }: { command: string }) => `ran: ${command}`,
