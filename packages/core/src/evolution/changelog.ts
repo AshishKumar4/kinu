@@ -82,6 +82,17 @@ export interface ChangelogEntry {
    * digest that call printed.
    */
   decision?: { requestId: string; routeIndex: number };
+  /**
+   * Present only on a run that moved nothing — today, a refinement refused.
+   *
+   * The digest holds runs as well as changes, and this one is neither a change
+   * nor a measurement: it is the honest record that a review happened and
+   * proposed nothing. Set at the source so no surface has to read it out of the
+   * prose, and read by the two feeds that answer "what changed" — the
+   * journal's All chip and the changes-only page — while the Self-changes chip
+   * keeps it, because that is where the question it answers is asked.
+   */
+  noChange?: boolean;
   /** Aggregate cards reuse the same entry model for expandable child rows. */
   items?: ChangelogEntry[];
 }
@@ -93,8 +104,9 @@ export interface BuildChangelogOptions {
   limit?: number;
   /** When true, the digest keeps only entries that ARE a self-change: the
    *  'outcomes' and 'replay' rows are measurements a closed window leaves
-   *  behind. The exclusion runs BEFORE the limit is taken, so a page of fresh
-   *  bookkeeping cannot push an older real change off the end. */
+   *  behind, and a {@link ChangelogEntry.noChange} run moved nothing. The
+   *  exclusion runs BEFORE the limit is taken, so a page of fresh bookkeeping
+   *  cannot push an older real change off the end. */
   changesOnly?: boolean;
   now?: number;
 }
@@ -445,7 +457,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
       return item;
     });
 
-    return {
+    const entry: ChangelogEntry = {
       id: `refinement:${request.id}:${request.stage}`,
       kind: 'refinement' as const,
       at: request.updatedAt,
@@ -454,6 +466,13 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
         + (request.detail === '' ? '' : ` — ${request.detail}`),
       items,
     };
+
+    // `refused` is the one stage that ends with the workspace as it started:
+    // the routes, if any, were all declined. Every other stage either changed
+    // something or is still on its way to doing so.
+    if (request.stage === 'refused') entry.noChange = true;
+
+    return entry;
   });
 }
 
@@ -593,7 +612,7 @@ export function buildChangelog(
   entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
 
   const kept = opts.changesOnly === true
-    ? entries.filter((e) => e.kind !== 'outcomes' && e.kind !== 'replay')
+    ? entries.filter((e) => e.kind !== 'outcomes' && e.kind !== 'replay' && e.noChange !== true)
     : entries;
 
   return kept.slice(0, limit);
