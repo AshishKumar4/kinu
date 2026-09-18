@@ -26,15 +26,12 @@ import { getProfile } from "@/lib/user-api";
 import { useMediaQuery } from "./use-media-query";
 
 import {
-  INSPECTOR_DEFAULT_PX, INSPECTOR_MIN_PX, INSPECTOR_WIDE_QUERY,
+  INSPECTOR_DEFAULT_PX, INSPECTOR_MIN_PX, INSPECTOR_WIDE_QUERY, UNKEYED_INSPECTOR_LAYOUT,
   applyInspectorDecision, claimInspectorTarget, commitInspectorLayout, initialInspectorState,
   decideInspector, isInspectorInputKey, newInspectorGroup, readStoredInspector,
-  type InspectorEffects, type InspectorState, type InspectorTarget, type StoredInspectorLayout,
+  type InspectorAccount, type InspectorEffects, type InspectorState, type InspectorTarget,
+  type StoredInspectorLayout,
 } from "@kinu.run/core/web/inspector-layout";
-
-/** What a layout nobody owns reads as: no remembered width, no choice — so
- *  the first-visit policy answers for it, every mount. */
-const UNKEYED_LAYOUT: StoredInspectorLayout = { width: null, choice: null };
 
 /** The panel element ids, which the library writes onto the DOM: one document
  *  may hold more than one workbench (the landing page mounts three sample
@@ -43,20 +40,17 @@ const panelId = (panel: "chat" | "inspector", scope: string | undefined): string
   scope === undefined ? panel : `${panel}-${scope}`
 );
 
-/** The account that keys a persisted layout, or why there is none: a signed-in
- *  profile with no email keys nothing, and a profile that could not be read is
- *  a session-only layout — the failure is classified, not swallowed. */
-type AccountKey =
-  | { kind: "known"; email: string }
-  | { kind: "none" }
-  | { kind: "unreadable" };
+/** The account that keys a persisted layout, resolved once per page: a
+ *  signed-in profile with an email keys one, a profile with no email keys
+ *  nothing, and a profile that could not be read is a session-only layout.
+ *  Each of the three is an ANSWER — the absence of one is the pending promise,
+ *  never a resolved value. */
+let readAccountKeyCache: Promise<InspectorAccount> | null = null;
 
-let readAccountKeyCache: Promise<AccountKey> | null = null;
-
-function readAccountKey(): Promise<AccountKey> {
+function readAccountKey(): Promise<InspectorAccount> {
   return (readAccountKeyCache ??= getProfile().then(
-    (profile): AccountKey => (profile?.email ? { kind: "known", email: profile.email } : { kind: "none" }),
-    (): AccountKey => ({ kind: "unreadable" }),
+    (profile): InspectorAccount => (profile?.email ? { kind: "known", email: profile.email } : { kind: "none" }),
+    (): InspectorAccount => ({ kind: "unreadable" }),
   ));
 }
 
@@ -147,27 +141,34 @@ export function useInspectorLayout(input: {
   // key the reader's own app layout to whatever it displays.
   const keyed = workspace !== undefined;
 
-  const [account, setAccount] = useState<string | null>(
-    () => keyed ? localStorage.getItem("kinu.inspector.account") : null,
-  );
+  // `null` is "the account has not resolved yet", and nothing else: a session
+  // resolved to NO account is a layout the policy decides and nothing
+  // persists. Read as one value, an anonymous session was never decided at
+  // all and its column stayed behind the expand handle for the page's life.
+  // The cached email is the last visit's answer, so the first paint can use
+  // this person's width before the profile read returns.
+  const [account, setAccount] = useState<InspectorAccount | null>(() => {
+    const cached = keyed ? localStorage.getItem("kinu.inspector.account") : null;
+
+    return cached === null ? null : { kind: "known", email: cached };
+  });
 
   useEffect(() => {
     if (!keyed) return;
     let live = true;
 
     startTransition(async () => {
-      const key = await readAccountKey();
-      const email = key.kind === "known" ? key.email : null;
+      const resolved = await readAccountKey();
 
-      if (!live || email === null) return;
+      if (!live) return;
 
-      setAccount((prev) => {
-        if (prev === email) return prev;
+      if (resolved.kind === "known") localStorage.setItem("kinu.inspector.account", resolved.email);
 
-        localStorage.setItem("kinu.inspector.account", email);
-
-        return email;
-      });
+      // The cached account confirmed keeps its own object, so a resolve that
+      // changed nothing does not re-run the decision effect.
+      setAccount((prev) => (
+        prev?.kind === "known" && resolved.kind === "known" && prev.email === resolved.email ? prev : resolved
+      ));
     });
 
     return () => { live = false; };
@@ -178,7 +179,7 @@ export function useInspectorLayout(input: {
   // the rest of the page's life.
   const readLayout = useCallback(
     (): StoredInspectorLayout | null => (
-      workspace === undefined ? UNKEYED_LAYOUT : readStoredInspector(account, workspace)
+      workspace === undefined ? UNKEYED_INSPECTOR_LAYOUT : readStoredInspector(account, workspace)
     ),
     [account, workspace],
   );
@@ -219,10 +220,10 @@ export function useInspectorLayout(input: {
   const commitsRef = useRef(0);
 
   const persist = useCallback((target: InspectorTarget) => {
-    if (account === null || !widePanels) return;
-    localStorage.setItem(`kinu.inspector.${account}`, String(target.widthPx));
+    if (account?.kind !== "known" || !widePanels) return;
+    localStorage.setItem(`kinu.inspector.${account.email}`, String(target.widthPx));
 
-    if (workspace !== undefined) localStorage.setItem(`kinu.inspector.open.${account}.${workspace}`, target.collapsed ? "0" : "1");
+    if (workspace !== undefined) localStorage.setItem(`kinu.inspector.open.${account.email}.${workspace}`, target.collapsed ? "0" : "1");
   }, [account, workspace, widePanels]);
 
   // One step of the machine, applied: the state mirrored, the effects done.

@@ -7,13 +7,14 @@
 import { describe, expect, test } from 'bun:test';
 import {
   INSPECTOR_DEFAULT_PX, INSPECTOR_MIN_PX, applyInspectorDecision, claimInspectorTarget, commitInspectorLayout,
-  decideInspector, initialInspectorState, newInspectorGroup, type InspectorState,
+  decideInspector, initialInspectorState, newInspectorGroup, readStoredInspector,
+  type InspectorState, type StoredInspectorLayout,
 } from '../src/web/inspector-layout';
 
 const WS = 'ws-1';
 
 /** A measured group whose first commit already landed at the stored layout. */
-function measured(stored: { width: number; choice: boolean }): InspectorState {
+function measured(stored: StoredInspectorLayout): InspectorState {
   const decision = decideInspector(stored, false);
 
   const first = commitInspectorLayout(initialInspectorState(decision), {
@@ -212,5 +213,47 @@ describe('the first-visit policy', () => {
     const fresh = newInspectorGroup(parked);
 
     expect(fresh).toMatchObject({ measured: false, pending: null });
+  });
+});
+
+describe('the account that keys the layout', () => {
+  // The distinction the hook lost: "no account yet" and "no account" are not
+  // one value. A session that will never have one must still be DECIDED —
+  // it reads nothing and writes nothing, and the policy answers for it. Read
+  // as "nothing keys this layout, so nothing is decided", an anonymous
+  // session's column sat behind its expand handle for the page's life however
+  // much the workspace had to show.
+  test('a resolved session with no account is decided by the policy, and reads nothing', () => {
+    // There is no `localStorage` in this environment at all, so a read
+    // against one throws here: a layout coming back is proof nothing read.
+    for (const account of [{ kind: 'none' }, { kind: 'unreadable' }] as const) {
+      expect(readStoredInspector(account, WS)).toEqual({ width: null, choice: null });
+
+      const step = applyInspectorDecision(measured({ width: null, choice: null }), {
+        workspace: WS, stored: readStoredInspector(account, WS), worthShowing: true, panelPresent: true,
+      });
+
+      expect(step.effects).toEqual({ write: { collapsed: false, widthPx: INSPECTOR_DEFAULT_PX } });
+      expect(step.state.ready).toBe(true);
+    }
+  });
+
+  test('an account not yet resolved decides nothing, and the decision still lands when it arrives', () => {
+    const state = measured({ width: null, choice: null });
+
+    expect(readStoredInspector(null, WS)).toBeNull();
+
+    const parked = applyInspectorDecision(state, {
+      workspace: WS, stored: readStoredInspector(null, WS), worthShowing: true, panelPresent: true,
+    });
+
+    expect(parked.effects).toEqual({});
+    expect(parked.state).toEqual(state);
+
+    const landed = applyInspectorDecision(parked.state, {
+      workspace: WS, stored: readStoredInspector({ kind: 'none' }, WS), worthShowing: true, panelPresent: true,
+    });
+
+    expect(landed.effects).toEqual({ write: { collapsed: false, widthPx: INSPECTOR_DEFAULT_PX } });
   });
 });
