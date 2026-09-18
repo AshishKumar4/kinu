@@ -320,7 +320,7 @@ describe('account panels', () => {
           }
 
           for (const view of ['list', 'tiled'] as const) {
-            const page = await freshPage(gallery, view === 'tiled' ? 'workspaces&view=tiled' : 'workspaces', theme, viewport);
+            const page = await freshPage(gallery, view === 'list' ? 'workspaces&view=list' : 'workspaces', theme, viewport);
 
             try {
               await page.waitForSelector('[aria-label="Search workspaces"]');

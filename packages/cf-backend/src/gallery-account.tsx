@@ -8,7 +8,7 @@
  *     → the home page's Setup card opening an account panel in place, with
  *       the shipped chrome (sidebar + HomePage) behind the modal.
  *
- *   /gallery.html?frame=workspaces[&view=tiled] and ?frame=plugins
+ *   /gallery.html?frame=workspaces[&view=list] and ?frame=plugins
  *     → the two primary-nav pages behind the shipped chrome (sidebar + page).
  *
  *   /gallery.html?frame=welcome&step=0..2
@@ -47,8 +47,9 @@ function Chrome({ children }: { children: ReactNode }) {
 }
 
 export function WorkspacesFrame() {
-  // The page reads its stored view once at mount, so the seed lands first.
-  if (new URLSearchParams(location.search).get("view") === "tiled") localStorage.setItem("kinu:workspaces-view", "tiled");
+  // The page reads its stored view once at mount, so the seed lands first;
+  // tiles are the default, so the list is the choice that has to be stored.
+  if (new URLSearchParams(location.search).get("view") === "list") localStorage.setItem("kinu:workspaces-view", "list");
   else localStorage.removeItem("kinu:workspaces-view");
 
   return <Chrome><WorkspacesPage /></Chrome>;

@@ -19,15 +19,26 @@ const DOT_BY_TONE = {
   danger: 'bg-[var(--c-danger)]',
 } satisfies Record<PluginTone, string>;
 
-export function PluginCard({ icon: Icon, name, line, status }: {
+/** The icon well's colour, by the kind of thing the card is. */
+export type PluginKind = 'server' | 'tool' | 'skill' | 'device';
+
+const WELL_BY_KIND = {
+  server: 'bg-[#3b82f6]/15 text-[#60a5fa]',
+  tool: 'p-accent-subtle p-accent',
+  skill: 'bg-[#22c55e]/15 text-[#4ade80]',
+  device: 'bg-[#a855f7]/15 text-[#c084fc]',
+} satisfies Record<PluginKind, string>;
+
+export function PluginCard({ icon: Icon, kind, name, line, status }: {
   icon: ComponentType<{ size?: number; className?: string }>;
+  kind: PluginKind;
   name: string;
   line: string;
   status: PluginStatus;
 }) {
   return (
     <div className="p-card flex items-start gap-3 p-4" data-plugin={name}>
-      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg p-fill p-text-3">
+      <div className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${WELL_BY_KIND[kind]}`}>
         <Icon size={18} />
       </div>
       <div className="min-w-0 flex-1">

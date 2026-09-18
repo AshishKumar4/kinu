@@ -111,7 +111,7 @@ export default function PluginsPage() {
               availability={lastValue(presets.resource) ?? undefined}
               onChanged={servers.reload} />,
             ...rows.map((server) => (
-              <PluginCard key={server.id} icon={PlugsConnectedIcon} name={server.name} line={server.serverUrl}
+              <PluginCard key={server.id} icon={PlugsConnectedIcon} kind="server" name={server.name} line={server.serverUrl}
                 status={serverStatus(server.status)} />
             )),
           ])}
@@ -120,7 +120,7 @@ export default function PluginsPage() {
         <PluginSection title="Crafted tools" onRetry={crafts.reload} what="your crafted tools"
           empty="No workspace has published a tool to your library yet."
           cards={mapResource(crafts.resource, (rows) => rows.map((entry) => (
-            <PluginCard key={entry.id} icon={WrenchIcon} name={entry.title}
+            <PluginCard key={entry.id} icon={WrenchIcon} kind="tool" name={entry.title}
               line={entry.payload.description ?? entry.evidence}
               status={{ label: `from ${entry.sourceWorkspace}`, tone: 'neutral' }} />
           )))}
@@ -132,7 +132,7 @@ export default function PluginsPage() {
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {BUILTIN_SKILL_HEADERS.map((skill) => (
-              <PluginCard key={skill.name} icon={BookOpenIcon} name={skill.name} line={skill.description}
+              <PluginCard key={skill.name} icon={BookOpenIcon} kind="skill" name={skill.name} line={skill.description}
                 status={{ label: 'built in', tone: 'neutral' }} />
             ))}
           </div>
@@ -146,7 +146,7 @@ export default function PluginsPage() {
               : undefined;
 
             return (
-              <PluginCard key={`${grant.deviceId}:${grant.agentName}`} icon={DesktopTowerIcon}
+              <PluginCard key={`${grant.deviceId}:${grant.agentName}`} icon={DesktopTowerIcon} kind="device"
                 name={device?.label ?? grant.deviceId} line={`workspace ${grant.agentName}`}
                 status={grant.policy === 'allow'
                   ? { label: 'allowed', tone: 'success' }

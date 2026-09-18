@@ -31,7 +31,7 @@ type View = v.InferOutput<typeof ViewSchema>;
 function storedView(): View {
   const parsed = v.safeParse(ViewSchema, localStorage.getItem(VIEW_KEY));
 
-  return parsed.success ? parsed.output : "list";
+  return parsed.success ? parsed.output : "tiled";
 }
 
 /** The filter's buckets, cut from the same priorities the chip states: what
