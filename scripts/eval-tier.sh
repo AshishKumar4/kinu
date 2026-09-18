@@ -277,14 +277,28 @@ TRAJECTORY_EVAL=tests/evals/trajectory.eval.ts
 # device cannot report green.
 DEVICE_EVAL=tests/evals/device.eval.ts
 
+# The third CLOUD-ONLY arm: the Kinu TASK family — four multi-turn episodes over
+# the product's own machinery (a slate with a JSON contract, hires running
+# beside a plan, workspace-versus-sandbox routing, memory and tasks across an
+# eviction), every turn verified through the artifact's own surface against
+# references the verifier owns.
+#
+# Cloud only, and an arm of its own, for the two reasons the trajectory arm is:
+# its subject is the DEPLOYED public API, and its silent zero must be its own
+# failure rather than one hidden inside the behaviour arm's spend. Its
+# credential-free red probes — a correct fixture and one mutation per subgoal —
+# run at every tier, including this arm on `--backend local`, which is why the
+# behaviour arm excludes the path there too.
+KINU_TASKS_EVAL=tests/evals/kinu-tasks.eval.ts
+
 # The BEHAVIOUR arm's identity. It is the only arm that SELECTS BY EXCLUSION —
 # the config's `include` minus the three files above — so it passes no path to
 # vitest and this string is never argv. It is here because the skip ratchet
 # proves one target per arm non-empty, and an arm with no name cannot be proven:
 # before the arms carried their targets, this file's path lived only inside
 # `SKIP_RATCHET_VITEST_TARGETS` and the two could disagree about which arm
-# existed. `scripts/ladder.test.ts` holds the six names here equal to the
-# `*.eval.ts` files on disk, so a seventh cannot join the behaviour arm silently.
+# existed. `scripts/ladder.test.ts` holds the seven names here equal to the
+# `*.eval.ts` files on disk, so an eighth cannot join the behaviour arm silently.
 BEHAVIOUR_EVAL=tests/evals/behaviour.eval.ts
 
 # ── WHICH ARMS THIS BACKEND CAN MEASURE ───────────────────────────────────────
@@ -327,6 +341,9 @@ if [[ "$BACKEND" == cloud ]]; then
   # The device arm, same rule: it links THIS machine to the deployment, and a
   # local runtime has no device plane to link it to.
   RUN_DEVICE_ARM=1
+  # The Kinu task family, same rule as the trajectory arm: four episodes over
+  # the deployed public API.
+  RUN_KINU_TASKS_ARM=1
   SKIPPED_ARMS="behaviour evals, research, optimization (not on the target seam yet); \
 e2e-lifecycle and the swarm suite's in-process arms (they drive a CLIRuntime, which no \
 deployed workspace hands out)"
@@ -337,10 +354,11 @@ else
   RUN_OPTIMIZATION_ARM=1
   RUN_TRAJECTORY_ARM=0
   RUN_DEVICE_ARM=0
-  SKIPPED_ARMS="trajectory (its subject is the DEPLOYED public API — REST, the web client's \
-chat frames, the run-event and file routes — and no such surface stands in front of an \
-in-process runtime); device (it links this machine to a DEPLOYMENT over the device tunnel, \
-and an in-process runtime is not one); run \`bun run evals:cloud\` for both"
+  RUN_KINU_TASKS_ARM=0
+  SKIPPED_ARMS="trajectory and kinu-tasks (their subject is the DEPLOYED public API — REST, \
+the web client's chat frames, the run-event and file routes — and no such surface stands in \
+front of an in-process runtime); device (it links this machine to a DEPLOYMENT over the device \
+tunnel, and an in-process runtime is not one); run \`bun run evals:cloud\` for all three"
 fi
 
 # Per ARM, because "what did the tier cost" is not one number and reporting it as
@@ -360,6 +378,7 @@ JUNIT_RESEARCH="$REPORT_DIR/junit-research-$BACKEND.xml"
 JUNIT_OPTIMIZATION="$REPORT_DIR/junit-optimization-$BACKEND.xml"
 JUNIT_TRAJECTORY="$REPORT_DIR/junit-trajectory-$BACKEND.xml"
 JUNIT_DEVICE="$REPORT_DIR/junit-device-$BACKEND.xml"
+JUNIT_KINU_TASKS="$REPORT_DIR/junit-kinu-tasks-$BACKEND.xml"
 SPEND_BUN="$REPORT_DIR/spend-bun-$BACKEND.jsonl"
 SPEND_EVALS="$REPORT_DIR/spend-vitest-$BACKEND.jsonl"
 SPEND_SWARM="$REPORT_DIR/spend-swarm-$BACKEND.jsonl"
@@ -367,6 +386,7 @@ SPEND_RESEARCH="$REPORT_DIR/spend-research-$BACKEND.jsonl"
 SPEND_OPTIMIZATION="$REPORT_DIR/spend-optimization-$BACKEND.jsonl"
 SPEND_TRAJECTORY="$REPORT_DIR/spend-trajectory-$BACKEND.jsonl"
 SPEND_DEVICE="$REPORT_DIR/spend-device-$BACKEND.jsonl"
+SPEND_KINU_TASKS="$REPORT_DIR/spend-kinu-tasks-$BACKEND.jsonl"
 SPEND="$REPORT_DIR/spend-$BACKEND.jsonl"
 : > "$SPEND_BUN"
 : > "$SPEND_EVALS"
@@ -375,6 +395,7 @@ SPEND="$REPORT_DIR/spend-$BACKEND.jsonl"
 : > "$SPEND_OPTIMIZATION"
 : > "$SPEND_TRAJECTORY"
 : > "$SPEND_DEVICE"
+: > "$SPEND_KINU_TASKS"
 
 # The ONE place this is set. `liveModelTarget` refuses to spend without it, so a
 # credential exported in a developer's shell cannot make the commit hook
@@ -517,7 +538,7 @@ if [[ $RUN_EVALS_ARM -eq 1 ]]; then
   # behaviour arm's report — a suite billed to an arm that cannot run it.
   bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts \
     --exclude "$SWARM_EVAL" --exclude "$RESEARCH_EVAL" --exclude "$OPTIMIZATION_EVAL" \
-    --exclude "$TRAJECTORY_EVAL" --exclude "$DEVICE_EVAL" \
+    --exclude "$TRAJECTORY_EVAL" --exclude "$DEVICE_EVAL" --exclude "$KINU_TASKS_EVAL" \
     --reporter=default --reporter=junit --outputFile="$JUNIT_EVALS"
   EVAL_STATUS=$?
   EVALS_SECONDS=$((SECONDS - ARM_STARTED))
@@ -612,9 +633,25 @@ if [[ $RUN_DEVICE_ARM -eq 1 ]]; then
   if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$DEVICE_STATUS; fi
 fi
 
+# The Kinu task arm: four multi-turn episodes over the product's own machinery,
+# each turn verified through the artifact's own surface. Cloud only and its own
+# invocation, for the reasons the trajectory arm is; its credential-free red
+# probes run in every tier that collects this file.
+ARM_STARTED=$SECONDS
+KINU_TASKS_STATUS=0
+KINU_TASKS_SECONDS=0
+export KINU_EVAL_SPEND_FILE="$SPEND_KINU_TASKS"
+if [[ $RUN_KINU_TASKS_ARM -eq 1 ]]; then
+  bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts "$KINU_TASKS_EVAL" \
+    --reporter=default --reporter=junit --outputFile="$JUNIT_KINU_TASKS"
+  KINU_TASKS_STATUS=$?
+  KINU_TASKS_SECONDS=$((SECONDS - ARM_STARTED))
+  if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$KINU_TASKS_STATUS; fi
+fi
+
 # THE ACTIVE ARMS, as one indexed list.
 #
-# Spelling six arms once per block below — a report check, a timing line and a
+# Spelling seven arms once per block below — a report check, a timing line and a
 # liveness assertion — makes adding an arm four edits, and forgetting one leaves
 # an arm nobody measured. That is the shape of the hole this tier was built to
 # close, one level up: the set the assertions govern and the set the run
@@ -679,6 +716,7 @@ if [[ $RUN_RESEARCH_ARM -eq 1 ]]; then arm 'research' "$JUNIT_RESEARCH" "$SPEND_
 if [[ $RUN_OPTIMIZATION_ARM -eq 1 ]]; then arm 'optimization' "$JUNIT_OPTIMIZATION" "$SPEND_OPTIMIZATION" "$OPTIMIZATION_SECONDS" "./$OPTIMIZATION_EVAL" model; fi
 if [[ $RUN_TRAJECTORY_ARM -eq 1 ]]; then arm 'trajectory' "$JUNIT_TRAJECTORY" "$SPEND_TRAJECTORY" "$TRAJECTORY_SECONDS" "./$TRAJECTORY_EVAL" model; fi
 if [[ $RUN_DEVICE_ARM -eq 1 ]]; then arm 'device' "$JUNIT_DEVICE" "$SPEND_DEVICE" "$DEVICE_SECONDS" "./$DEVICE_EVAL" self; fi
+if [[ $RUN_KINU_TASKS_ARM -eq 1 ]]; then arm 'kinu tasks' "$JUNIT_KINU_TASKS" "$SPEND_KINU_TASKS" "$KINU_TASKS_SECONDS" "./$KINU_TASKS_EVAL" model; fi
 
 for index in "${!ARM_NAMES[@]}"; do
   if [[ ! -f "${ARM_JUNITS[$index]}" ]]; then
