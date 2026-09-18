@@ -12,7 +12,8 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, MINTED_SECRETS,
+  ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY,
+  MINTED_SECRETS,
   REFRESH_TOKEN_KEY, deployDoor, deployPlan, factsFrom, runDeployPlan,
 } from '../src/deploy/index';
 import type {
@@ -103,6 +104,8 @@ class FakeCloudflare implements CloudflareTransport {
 
   readonly apps: string[] = [];
 
+  readonly objects: string[] = [];
+
   readonly secrets = new Map<string, string>();
 
   scriptExists = false;
@@ -125,6 +128,17 @@ class FakeCloudflare implements CloudflareTransport {
       };
     }
 
+    // An R2 object nobody has put yet. The seed step looks before it uploads,
+    // so a second run over a seeded bucket must find its own keys there.
+    if (call.method === 'HEAD') {
+      if (this.objects.includes(call.path)) return { status: 200, body: null };
+
+      return {
+        status: 404,
+        body: { success: false, errors: [{ code: 10007, message: 'The specified key does not exist.' }], result: null },
+      };
+    }
+
     return { status: 200, body: { success: true, errors: [], result: this.answer(call) } };
   }
 
@@ -144,6 +158,12 @@ class FakeCloudflare implements CloudflareTransport {
 
     if (upload.path.includes('/workers/assets/upload')) {
       return { status: 201, body: { success: true, errors: [], result: { jwt: 'completion-token' } } };
+    }
+
+    if (upload.path.includes('/r2/buckets/')) {
+      this.objects.push(upload.path);
+
+      return { status: 200, body: { success: true, errors: [], result: null } };
     }
 
     this.scriptExists = true;
@@ -395,6 +415,7 @@ beforeEach(async () => {
   health = 200;
   await vault.write(ACCESS_TOKEN_KEY, 'access-token-value');
   await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
+  await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
 });
 
 describe('a guided run', () => {
@@ -408,10 +429,10 @@ describe('a guided run', () => {
     expect(cloudflare.apps).toEqual(['kinu.acme.workers.dev']);
     expect(cloudflare.secrets.get(DEPLOYMENT_REFRESH_SECRET)).toBe('refresh-token-value');
     expect(JSON.parse(cloudflare.secrets.get(DEPLOYMENT_RECORD_SECRET) ?? '{}')).toMatchObject({
-      accountId: INPUTS.accountId,
-      scriptName: 'kinu',
+      inputs: { accountId: INPUTS.accountId, instanceName: 'kinu', ownerEmail: INPUTS.ownerEmail },
       address: 'kinu.acme.workers.dev',
       channelOrigin: 'https://kinu.run',
+      clientId: 'deploy-client-id',
     });
     expect(progress.at(-1)).toEqual({ kind: 'run-done', address: 'kinu.acme.workers.dev' });
   });
@@ -488,6 +509,7 @@ describe('a second sitting on the same account', () => {
     cloudflare.calls.length = 0;
     ledger = new ArrayLedger();
     await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
+    await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
 
     const rows = await run();
 
@@ -496,6 +518,10 @@ describe('a second sitting on the same account', () => {
     expect(cloudflare.buckets).toEqual(['kinu-backups']);
     expect(cloudflare.indexes).toEqual(['kinu-memory']);
     expect(cloudflare.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/storage/kv/namespaces')))
+      .toEqual([]);
+    // What makes a second run an update: the largest thing the flow moves is
+    // already in the bucket, so it is looked at and not sent again.
+    expect(cloudflare.calls.filter((call) => call.method === 'PUT' && call.path.includes('/r2/buckets/')))
       .toEqual([]);
   });
 });

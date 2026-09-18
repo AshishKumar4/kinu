@@ -138,16 +138,40 @@ export async function exchangeDeployCode(
   exchange: TokenExchange,
   fetchImpl: typeof fetch = fetch,
 ): Promise<DeployToken> {
+  return tokenGrant(new URLSearchParams({
+    grant_type: 'authorization_code',
+    client_id: exchange.clientId,
+    redirect_uri: exchange.redirectUri,
+    code: exchange.code,
+    code_verifier: exchange.verifier,
+  }), fetchImpl);
+}
+
+/**
+ * The deployment renewing its own access token.
+ *
+ * This is the whole reason the client is public: a deployment holds a refresh
+ * token and no secret, and it spends that token on itself when its Updates
+ * page runs a plan. The answer's refresh token is what the deployment keeps
+ * from then on — Cloudflare may rotate it, and a deployment that kept the old
+ * one would update once and never again.
+ */
+export function refreshDeployToken(
+  refresh: { readonly clientId: string; readonly refreshToken: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<DeployToken> {
+  return tokenGrant(new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: refresh.clientId,
+    refresh_token: refresh.refreshToken,
+  }), fetchImpl);
+}
+
+async function tokenGrant(body: URLSearchParams, fetchImpl: typeof fetch): Promise<DeployToken> {
   const response = await fetchImpl(CLOUDFLARE_TOKEN_URL, {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      client_id: exchange.clientId,
-      redirect_uri: exchange.redirectUri,
-      code: exchange.code,
-      code_verifier: exchange.verifier,
-    }),
+    body,
   });
 
   const answer = v.parse(TokenAnswerSchema, v.parse(JsonObjectSchema, await response.json()));
