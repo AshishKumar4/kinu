@@ -6,10 +6,12 @@
  * closed before exit.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import puppeteer, { type Browser, type Page } from 'puppeteer';
+import { tolerate } from '@kinu.run/core/obs';
 
 const OUT = '/tmp/review-LandingV3';
 
@@ -276,6 +278,21 @@ async function waitArtifactSettled(page: Page): Promise<void> {
 const chromePath = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']
   .find((p) => existsSync(p));
 
+/** Tear down a dev server's whole process GROUP. `bunx` parents the real vite
+ *  process, which parents workerd, so signalling the lone parent orphans both
+ *  to init — where they keep the port and the memory this script's next pass
+ *  needs. SIGTERM first so the Cloudflare plugin's own shutdown runs, SIGKILL
+ *  as the backstop, and a group that is already gone raises ESRCH. */
+async function reapGroup(child: ChildProcess): Promise<void> {
+  const { pid } = child;
+
+  if (pid === undefined) return;
+  tolerate(() => process.kill(-pid, 'SIGTERM'), 'esrch');
+
+  if (child.exitCode === null && child.signalCode === null) await once(child, 'exit');
+  tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
+}
+
 let browser: Browser | null = null;
 
 const design = await serveDesign();
@@ -283,7 +300,8 @@ const design = await serveDesign();
 const vitePort = await freePort(5199);
 
 const vite = spawn('bunx', ['vite', 'dev', '--config', 'gallery.vite.config.ts', '--port', String(vitePort)],
-  { cwd: CF, stdio: 'ignore' });
+  // setsid: vite leads its own group, so `reapGroup` reaches the workerd child.
+  { cwd: CF, stdio: 'ignore', detached: true });
 
 try {
   const origin = `http://127.0.0.1:${vitePort}`;
@@ -382,7 +400,7 @@ try {
 } finally {
   await browser?.close();
   design.kill();
-  vite.kill();
+  await reapGroup(vite);
 }
 
 /** Section heights on both sides, keyed by starting marker. */
@@ -407,7 +425,10 @@ function secsTable(a: SectionYs, p: SectionYs): DriftReport['sectionHeights'] {
   //-lived one was dying between passes and taking the light set with it.
   await browser?.close();
   browser = await puppeteer.launch({ headless: true, executablePath: chromePath ?? undefined, args: ['--no-sandbox'] });
-  const viteL = spawn('bunx', ['vite', 'dev', '--config', 'gallery.vite.config.ts', '--port', String(vitePort + 1)], { cwd: CF, stdio: 'ignore' });
+
+  const viteL = spawn('bunx', ['vite', 'dev', '--config', 'gallery.vite.config.ts', '--port', String(vitePort + 1)],
+    { cwd: CF, stdio: 'ignore', detached: true });
+
   const originL = `http://127.0.0.1:${vitePort + 1}`;
 
   try {
@@ -435,6 +456,6 @@ function secsTable(a: SectionYs, p: SectionYs): DriftReport['sectionHeights'] {
       console.log(`shot light ${label}`);
     }
   } finally {
-    viteL.kill();
+    await reapGroup(viteL);
   }
 }
