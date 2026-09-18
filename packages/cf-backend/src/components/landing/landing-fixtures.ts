@@ -98,17 +98,21 @@ export const CHECKOUT_MESSAGES: UIMessage[] = [
 ];
 
 const CHECKOUT_TASKS = [
-  { id: 't1', parentId: null, title: 'Reproduce the SAVE20 coupon 500', status: 'done', createdAt: NOW - 52e5, updatedAt: NOW - 44e5, subtasks: [] },
+  { id: 't1', parentId: null, title: 'Reproduce the SAVE20 coupon 500', status: 'done', createdAt: NOW - 52e5, updatedAt: NOW - 44e5, note: null, subtasks: [] },
   {
-    id: 't2', parentId: null, title: 'Patch the coupon kind backfill', status: 'active', createdAt: NOW - 52e5, updatedAt: NOW - 8e5,
+    id: 't2', parentId: null, title: 'Patch the coupon kind backfill', status: 'active', createdAt: NOW - 52e5, updatedAt: NOW - 8e5, note: null,
     subtasks: [
-      { id: 't5', parentId: 't2', title: 'Backfill kind for percentage coupons', status: 'done', createdAt: NOW - 30e5, updatedAt: NOW - 21e5 },
-      { id: 't6', parentId: 't2', title: 'Re-run the migration on a copy', status: 'active', createdAt: NOW - 30e5, updatedAt: NOW - 6e5 },
+      { id: 't5', parentId: 't2', title: 'Backfill kind for percentage coupons', status: 'done', createdAt: NOW - 30e5, updatedAt: NOW - 21e5, note: null },
+      { id: 't6', parentId: 't2', title: 'Re-run the migration on a copy', status: 'active', createdAt: NOW - 30e5, updatedAt: NOW - 6e5, note: null },
     ],
   },
-  { id: 't3', parentId: null, title: 'Deploy to staging when the suite is green', status: 'open', createdAt: NOW - 52e5, updatedAt: NOW - 52e5, subtasks: [] },
-  { id: 't4', parentId: null, title: 'Add a regression test for the percentage case', status: 'done', createdAt: NOW - 52e5, updatedAt: NOW - 4e5, subtasks: [] },
+  { id: 't3', parentId: null, title: 'Deploy to staging when the suite is green', status: 'open', createdAt: NOW - 52e5, updatedAt: NOW - 52e5, note: null, subtasks: [] },
+  { id: 't4', parentId: null, title: 'Add a regression test for the percentage case', status: 'done', createdAt: NOW - 52e5, updatedAt: NOW - 4e5, note: null, subtasks: [] },
 ];
+
+/** The actor every fixture row belongs to: the landing sample is one
+ *  workspace's root, so `listWorkspaceWork` reports one owner. */
+const LANDING_OWNER = { actorId: 'actor-main', name: 'main', retired: false };
 
 const CHECKOUT_CHANGELOG = {
   seenAt: NOW - 30e5,
@@ -155,7 +159,9 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
       return answer({ view: request.view, path: request.path, page: { status: 'end', items: [] } });
     }
 
-    if (method === 'listAgentTasks') return answer(CHECKOUT_TASKS);
+    // The Work tab's one read: this sample has no plan under review, so every
+    // task is the root's unlinked work.
+    if (method === 'listWorkspaceWork') return answer({ plans: [], tasks: [{ owner: LANDING_OWNER, plan: null, tasks: CHECKOUT_TASKS }] });
 
     if (method === 'getEvolutionChangelog') return answer(CHECKOUT_CHANGELOG);
 
@@ -317,6 +323,16 @@ export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview |
       if (request.view === 'planTasks') return answer({ view: 'planTasks', path: request.path, tasks: [] });
 
       return answer({ view: request.view, path: request.path, page: { status: 'end', items: request.view === 'plans' && base !== null ? [base] : [] } });
+    }
+
+    // The Work tab's one read, over the SAME plan: the story's current one, so
+    // the pane and the read cannot disagree about whether a plan exists. A
+    // workspace that has not submitted one answers no plans at all.
+    if (method === 'listWorkspaceWork') {
+      return answer({
+        plans: base === null ? [] : [{ owner: LANDING_OWNER, plan: base, tasks: [] }],
+        tasks: [],
+      });
     }
 
     if (method === 'getEvolutionChangelog') return answer({ seenAt: NOW, unseenCount: 0, entries: [] });

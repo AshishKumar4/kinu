@@ -393,6 +393,27 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
       return promise;
     };
 
+    /** An element the PRODUCT decides to render, awaited on its own arrival
+     *  rather than on a count of frames: the mutation that inserts it is the
+     *  end condition. Resolves at once when it is already there. */
+    const mounted = (selector: string): Promise<void> => {
+      const stage = stageRef.current;
+
+      if (stage === null || stage.querySelector(selector) !== null) return Promise.resolve();
+      const { promise, resolve } = Promise.withResolvers<void>();
+
+      const observer = new MutationObserver(() => {
+        if (stage.querySelector(selector) === null) return;
+
+        observer.disconnect();
+        resolve();
+      });
+
+      observer.observe(stage, { childList: true, subtree: true });
+
+      return promise;
+    };
+
     const handle: LandingMovieHandle = {
       duration: MOVIE_END,
       cues: MOVIE_CUES,
@@ -415,16 +436,22 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
         syncFrame();
         // Settle async fallout: the plan view is a lazy chunk behind
         // Suspense, and the approve click decides through the product's rpc.
-        // Neither re-runs this component's effects, so poll frames until the
-        // beat's expectations hold, then re-anchor the cursor.
+        // Neither re-runs this component's effects.
         const settled = discreteAt(tRef.current);
 
         if (settled.plan !== null) {
-          for (let tick = 0; tick < 90; tick += 1) {
-            if (stageRef.current?.querySelector('[data-kinu-plan-review]') !== null) break;
-            await nextFrame();
-            syncFrame();
-          }
+          // The review cannot be on screen before its renderer has landed, and
+          // no number of frames is the right number to wait for a chunk: a
+          // count parked the story at this beat whenever the chunk took
+          // longer, and every later beat then measured a movie that had
+          // stopped. Dynamic because it IS the wait: this specifier names the
+          // same module `WorkTab`'s `lazy()` holds, so the promise resolves
+          // exactly when React can render it — a static import would pull the
+          // plan renderer into the landing page's first paint, which is what
+          // the lazy boundary exists to prevent.
+          await import('@/components/surfaces/PlanReviewView');
+          await mounted('[data-kinu-plan-review]');
+          syncFrame();
         }
 
         if (tRef.current >= MOVIE_CUES.approve) {
@@ -440,12 +467,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
           }
         }
 
-        if (settled.slates.length > 0) {
-          for (let tick = 0; tick < 90; tick += 1) {
-            if (stageRef.current?.querySelector('[data-slate-dashboard]') !== null) break;
-            await nextFrame();
-          }
-        }
+        if (settled.slates.length > 0) await mounted('[data-slate-dashboard]');
 
         syncFrame();
       },

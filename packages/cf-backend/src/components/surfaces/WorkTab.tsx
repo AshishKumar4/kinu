@@ -22,7 +22,7 @@
  * be acted on later, not a second narration. And the run's meters stay on the
  * gauge beside the strip, which was already the right home for them.
  */
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Badge, Button, Loader } from "@cloudflare/kumo";
 import {
   ClockIcon, PulseIcon, WarningCircleIcon, GitBranchIcon,
@@ -199,6 +199,40 @@ export function WorkTab({
   useEffect(() => {
     if (review !== null && work !== null && reviewed === undefined) setReview(null);
   }, [review, reviewed, work]);
+
+  /** The revision the connection reports as this pane's own active review —
+   *  `plan_updated` and the workspace snapshot's `activePlan` carry it, and
+   *  the inspector column opens ON it. */
+  const activeKey = plan === null ? null : `${plan.id}:${plan.revision}`;
+
+  /** The active revision whose review this tab has already opened. It lives
+   *  HERE rather than in the list: the list unmounts while a review is open,
+   *  so a latch held there would die on Back and reopen the review the reader
+   *  just left. */
+  const openedActive = useRef<string | null>(null);
+
+  // The plan the connection reports is the thing being decided, so its review
+  // is what the tab shows rather than a card that hides it behind one more
+  // click — once per revision, and only once the shared read confirms the row
+  // exists. It takes no surface: the plan was already there when the reader
+  // arrived, so it must not pull them off the tab they are on, which is what
+  // `onNewPlan` is for on a genuine arrival.
+  useEffect(() => {
+    if (plan === null || activeKey === null) {
+      openedActive.current = null;
+
+      return;
+    }
+
+    if (openedActive.current === activeKey || work === null) return;
+
+    const own = work.plans.find((owned) => owned.owner.name === (planOwner ?? "main")
+      && owned.plan.id === plan.id && owned.plan.revision === plan.revision);
+
+    if (own === undefined) return;
+    openedActive.current = activeKey;
+    setReview({ owner: own.owner.name, id: own.plan.id, revision: own.plan.revision });
+  }, [activeKey, plan, planOwner, work]);
 
   // A review takes the whole tab — the plan is the thing being decided, and
   // the rest of the column is everything else. Checked BEFORE the empty tab:

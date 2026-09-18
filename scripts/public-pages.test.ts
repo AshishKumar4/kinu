@@ -68,6 +68,87 @@ interface WidthIntegrity {
   readonly cutWorst: readonly string[];
 }
 
+/**
+ * The measurement itself, run IN the page — passed to `page.evaluate`, so it
+ * closes over nothing and every name in it is a browser global.
+ *
+ * Two axes. `clipped`: a box that leaves the viewport with no ancestor that
+ * legitimately contains it. `cut`: a box whose OWN content is wider than
+ * itself, where the overflow crosses a clipping ancestor's edge — that content
+ * is gone with no ellipsis to say so and nothing to scroll. An overhang that
+ * lands inside every clipping ancestor is in full view and is not a defect:
+ * the sidebar rail's collapse handle sits in the gutter beside its box by
+ * design, and a rule that counted the overhang alone called that a cut.
+ */
+function widthIntegrity(): WidthIntegrity {
+  const viewport = document.documentElement.clientWidth;
+
+  const contained = (start: Element): boolean => {
+    for (let node = start.parentElement; node !== null && node !== document.body; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      const scrollable = style.overflowX === 'auto' || style.overflowX === 'scroll';
+
+      const truncation = (style.overflowX === 'hidden' || style.overflowX === 'clip')
+        && style.textOverflow === 'ellipsis';
+
+      if (!scrollable && !truncation) continue;
+      const box = node.getBoundingClientRect();
+
+      if (box.left >= -1 && box.right <= viewport + 1) return true;
+    }
+
+    return false;
+  };
+
+  /** Where this element's overflow is actually lost: the nearest ancestor
+   *  that clips it, or null when the overflow stays in view — nothing clips,
+   *  or a scrollable ancestor reaches it. */
+  const clipEdge = (start: Element): number | null => {
+    for (let node = start.parentElement; node !== null && node !== document.body; node = node.parentElement) {
+      const overflow = getComputedStyle(node).overflowX;
+
+      if (overflow === 'hidden' || overflow === 'clip') return node.getBoundingClientRect().right;
+
+      if (overflow === 'auto' || overflow === 'scroll') return null;
+    }
+
+    return null;
+  };
+
+  const worst: string[] = [];
+  const cutWorst: string[] = [];
+
+  for (const element of document.querySelectorAll('main *, header *, footer *')) {
+    const box = element.getBoundingClientRect();
+
+    if (box.width === 0 || box.height === 0) continue;
+
+    if ((box.right > viewport + 1 || box.left < -1) && !contained(element)) {
+      worst.push(`${element.tagName.toLowerCase()}.${element.className.toString().slice(0, 60)} [${String(Math.round(box.left))},${String(Math.round(box.right))}]`);
+    }
+
+    const style = getComputedStyle(element);
+
+    if (style.overflowX !== 'visible' || element.scrollWidth <= element.clientWidth + 2) continue;
+
+    if (contained(element)) continue;
+    const edge = clipEdge(element);
+
+    // The ink's right edge: `scrollWidth` is measured from the padding box,
+    // so this is where the widest content actually ends on the page.
+    if (edge === null || box.left + element.scrollWidth <= edge + 1) continue;
+    cutWorst.push(`${element.tagName.toLowerCase()}.${element.className.toString().slice(0, 60)} [${String(element.clientWidth)}<${String(element.scrollWidth)}]`);
+  }
+
+  return {
+    scroll: document.documentElement.scrollWidth - viewport,
+    clipped: worst.length,
+    worst: worst.slice(0, 6),
+    cut: cutWorst.length,
+    cutWorst: cutWorst.slice(0, 6),
+  };
+}
+
 interface RailFact {
   readonly frames: number;
   /** Each frame's rail lane, in px: the app's open lane is `w-60`. */
@@ -155,6 +236,13 @@ interface Facts {
   providers?: string[];
   loginLayout?: { dialog: boolean; cardOffset: number; barOffset: number; footer: boolean };
   landingOverflow: Record<string, WidthIntegrity>;
+  /** The `cut` rule measured in both directions on one page: the landing's
+   *  own count, that count with a clipped row injected, and with an overhang
+   *  that nothing clips. */
+  integrityRule?: { base: number; clipped: number; overhang: number };
+  /** The plan beat with its renderer held back on the wire: whether the beat
+   *  held when the seek resolved. */
+  lateChunk?: { decisionsOnReturn: boolean };
   publicOverflow: Record<string, number>;
   landingTargets?: number[];
   publicTargets?: number[];
@@ -208,6 +296,9 @@ function parseRgb(value: string): [number, number, number] {
 async function openLanding(
   size: { width: number; height: number },
   reducedMotion = false,
+  /** Installed on the page BEFORE it loads — a row that has to shape the
+   *  network (a chunk held back) cannot do it after the first request. */
+  prepare?: (page: Page) => Promise<void>,
 ): Promise<Page> {
   const page = await newPage();
   await page.setViewport(size);
@@ -215,6 +306,7 @@ async function openLanding(
     { name: 'prefers-color-scheme', value: 'dark' },
     { name: 'prefers-reduced-motion', value: reducedMotion ? 'reduce' : 'no-preference' },
   ]);
+  await prepare?.(page);
   await page.bringToFront();
   await page.goto(`${origin}/landing.html`, { waitUntil: 'networkidle0' });
   // Mutation-observed, not raf-polled: the h1 mounts inside one React commit,
@@ -752,64 +844,9 @@ beforeAll(async () => {
       const page = await openLanding(size);
       // documentElement.scrollWidth CANNOT see this defect class: the landing
       // root is overflow-x-clip, so an oversized child creates no scrollable
-      // overflow and the browser just cuts it. Prove containment per element:
-      // a box may leave the viewport only under an ancestor that itself fits
-      // and either scrolls (overflow-x auto/scroll) or is a single-line
-      // ellipsis truncation. Everything else is silent clipping.
-      facts.landingOverflow[label] = await page.evaluate(() => {
-        const viewport = document.documentElement.clientWidth;
-
-        const contained = (start: Element): boolean => {
-          for (let node = start.parentElement; node !== null && node !== document.body; node = node.parentElement) {
-            const style = getComputedStyle(node);
-            const scrollable = style.overflowX === 'auto' || style.overflowX === 'scroll';
-
-            const truncation = (style.overflowX === 'hidden' || style.overflowX === 'clip')
-              && style.textOverflow === 'ellipsis';
-
-            if (!scrollable && !truncation) continue;
-            const box = node.getBoundingClientRect();
-
-            if (box.left >= -1 && box.right <= viewport + 1) return true;
-          }
-
-          return false;
-        };
-
-        const worst: string[] = [];
-        const cutWorst: string[] = [];
-
-        for (const element of document.querySelectorAll('main *, header *, footer *')) {
-          const box = element.getBoundingClientRect();
-
-          if (box.width === 0 || box.height === 0) continue;
-
-          if ((box.right > viewport + 1 || box.left < -1) && !contained(element)) {
-            worst.push(`${element.tagName.toLowerCase()}.${element.className.toString().slice(0, 60)} [${String(Math.round(box.left))},${String(Math.round(box.right))}]`);
-          }
-
-          // The second half of the same defect, which the viewport axis above
-          // cannot see: an element whose OWN content is wider than its box, with
-          // `overflow-x: visible`, is cut by whichever ancestor clips — no
-          // ellipsis to say so and nothing to scroll. Its box may sit entirely
-          // inside the viewport, so containment is not the question here.
-          const style = getComputedStyle(element);
-
-          if (style.overflowX !== 'visible' || element.scrollWidth <= element.clientWidth + 2) continue;
-
-          if (!contained(element)) {
-            cutWorst.push(`${element.tagName.toLowerCase()}.${element.className.toString().slice(0, 60)} [${String(element.clientWidth)}<${String(element.scrollWidth)}]`);
-          }
-        }
-
-        return {
-          scroll: document.documentElement.scrollWidth - viewport,
-          clipped: worst.length,
-          worst: worst.slice(0, 6),
-          cut: cutWorst.length,
-          cutWorst: cutWorst.slice(0, 6),
-        };
-      });
+      // overflow and the browser just cuts it. `widthIntegrity` proves
+      // containment per element instead, on both axes.
+      facts.landingOverflow[label] = await page.evaluate(widthIntegrity);
 
       const surfacesFit = await page.evaluate(() => {
         const viewport = document.documentElement.clientWidth;
@@ -882,6 +919,135 @@ beforeAll(async () => {
         );
       }
 
+      await page.close();
+    }
+
+    // The `cut` rule's own two directions, proved on a page rather than
+    // asserted about. A row whose content runs past a clipping ancestor's
+    // edge is cut; a decoration that overhangs into the space beside its box
+    // and stays inside every clipper is in full view. Both are measured
+    // against the same landing page the rows above count, so the reading is
+    // the delta this rule contributes and not a number about a blank page.
+    {
+      const page = await openLanding(DESKTOP);
+
+      const withProbe = async (markup: string): Promise<number> => {
+        await page.evaluate((inner: string) => {
+          document.querySelector('#integrity-probe')?.remove();
+          const host = document.createElement('div');
+          host.id = 'integrity-probe';
+          host.innerHTML = inner;
+          document.querySelector('main')?.append(host);
+        }, markup);
+
+        return (await page.evaluate(widthIntegrity)).cut;
+      };
+
+      const base = (await page.evaluate(widthIntegrity)).cut;
+
+      facts.integrityRule = {
+        base,
+        clipped: await withProbe(
+          '<div style="width:120px;overflow-x:hidden">'
+          + '<div style="width:80px"><span style="display:block;width:400px;height:12px"></span></div></div>',
+        ),
+        overhang: await withProbe(
+          '<div style="width:120px;overflow-x:hidden">'
+          + '<div style="position:relative;width:80px;height:20px">'
+          + '<span style="position:absolute;right:-10px;top:0;width:20px;height:12px"></span></div></div>',
+        ),
+      };
+      await page.close();
+    }
+
+    // The plan beat's renderer is a lazy chunk, held on the wire here until
+    // the drive has had more frames than any budget it could have carried.
+    // What the seek PROMISES is that the beat holds when it resolves — it
+    // awaits the chunk's own promise, so nothing downstream waits again. A
+    // 90-frame budget resolved first and parked the story at t=6400 with no
+    // plan on screen, and every later beat then measured a movie that had
+    // stopped. The hold is counted in FRAMES because the defect was written
+    // in frames: only a hold that outlasts a budget tells the two drives
+    // apart.
+    {
+      const requested = Promise.withResolvers<void>();
+
+      // Every held request, because the chunk has two importers: the drive's
+      // own `import()` and the lazy boundary that renders it. Rollup answers
+      // the second with a facade that re-exports the first, so both are the
+      // same module and both have to be let go.
+      const held: (() => Promise<void>)[] = [];
+
+      const page = await openLanding(DESKTOP, false, async (target) => {
+        await target.setRequestInterception(true);
+        target.on('request', async (request) => {
+          if (!/PlanReviewView-/u.test(request.url())) {
+            await request.continue();
+
+            return;
+          }
+
+          held.push(() => request.continue());
+          requested.resolve();
+        });
+      });
+
+      const cues = await page.evaluate(() => window.__kinuLandingMovie?.cues);
+
+      if (cues === undefined) throw new Error('the walkthrough publishes no cues');
+      // Driven, not awaited: the beat's own state at the moment the seek
+      // resolves is the reading, and it is taken in the page. A drive that
+      // rejects reads as a beat that did not hold, which is this row's red.
+      await page.evaluate((at: number) => {
+        // SAFETY: `__lateChunk` is this row's own field on its own page, set
+        // on the next line before anything reads it.
+        const w = window as Window & { __lateChunk?: { decisions: boolean | null } };
+        w.__lateChunk = { decisions: null };
+        window.__kinuLandingMovie?.seek(at).then(
+          () => {
+            w.__lateChunk = {
+              decisions: document.querySelector('[data-landing-frame="plan"] [data-plan-decisions]') !== null,
+            };
+          },
+          () => { w.__lateChunk = { decisions: false }; },
+        );
+      }, cues.planReady + 200);
+
+      await requested.promise;
+      await page.evaluate(() => {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        let frames = 0;
+
+        const tick = (): void => {
+          frames += 1;
+
+          if (frames >= 150) {
+            resolve();
+
+            return;
+          }
+
+          requestAnimationFrame(tick);
+        };
+
+        requestAnimationFrame(tick);
+
+        return promise;
+      });
+
+      for (const release of held) await release();
+
+      // SAFETY: the field is this row's own, written by the drive above.
+      await page.waitForFunction(
+        () => (window as Window & { __lateChunk?: { decisions: boolean | null } }).__lateChunk?.decisions !== null,
+      );
+
+      // SAFETY: the same field, now settled by the drive's own resolution.
+      facts.lateChunk = {
+        decisionsOnReturn: await page.evaluate(
+          () => (window as Window & { __lateChunk?: { decisions: boolean | null } }).__lateChunk?.decisions === true,
+        ),
+      };
       await page.close();
     }
 
@@ -1194,6 +1360,13 @@ describe('the plan frame walks through the session', () => {
     expect(reduced.decided).toBeTrue();
     expect(reduced.frozen).toBeTrue();
   });
+
+  test('a plan renderer that lands late still holds the beat the seek returns on', () => {
+    expect(
+      required(facts.lateChunk, 'the late plan chunk').decisionsOnReturn,
+      'the seek resolved on a plan beat with no decisions on screen',
+    ).toBeTrue();
+  });
 });
 
 describe('the hero heading names its rotation', () => {
@@ -1257,6 +1430,15 @@ describe('public pages are responsive', () => {
         `landing@${where} cuts its own content: ${integrity.cutWorst.join(' · ')}`,
       ).toBe(0);
     }
+  });
+
+  // The rule above is only worth its green if it still fails on the thing it
+  // names: a row cut by a clipping ancestor counts, and an overhang that
+  // stays inside every clipper does not.
+  test('the cut rule counts a clipped row and spares an overhang in view', () => {
+    const rule = required(facts.integrityRule, 'the cut rule in both directions');
+    expect(rule.clipped, 'a row running past a clipping ancestor was not counted').toBe(rule.base + 1);
+    expect(rule.overhang, 'an overhang nothing clips was counted as a cut').toBe(rule.base);
   });
 
   test('utility pages fit both colour modes', () => {

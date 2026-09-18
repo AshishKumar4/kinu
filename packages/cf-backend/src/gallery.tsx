@@ -1494,6 +1494,13 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   // threw on the dereference and emptied every frame that mounts it.
   if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
+  // And once more: `getToolDescriptions` is read as `result.builtIn.map(...)`
+  // by the live refresh every mounted PAGE runs, so the blanket `[]` threw on
+  // the dereference and the page put "Tools could not be refreshed. Cannot
+  // read properties of undefined (reading 'map')" up on every frame that
+  // mounts one. Three halves, the way the orchestrator answers it.
+  if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
+
   if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
 
   return rpcResult({}).json<T>();
@@ -1639,6 +1646,21 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   },
   listSlates: () => ({ slates: [], problems: [] }),
   getActivePlanReview: () => galleryAgentPlan,
+  // The Work tab's own read: the workspace's plans with their linked tasks,
+  // every actor. The page's plan lives here too — `getActivePlanReview` is
+  // what the connection reports, this read is what the tab draws, and a
+  // fixture that answered only the first showed a Work tab with no plan in it.
+  //
+  // The owner is the WORKSPACE's name because that is what the real read
+  // answers for a root actor: `createMain({ name: this.name })` registers the
+  // workspace's own name, never the word "main".
+  listWorkspaceWork: () => ({
+    plans: [{
+      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false },
+      plan: galleryAgentPlan, tasks: [],
+    }],
+    tasks: [],
+  }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
   listPendingConsents: () => [],
 }));
