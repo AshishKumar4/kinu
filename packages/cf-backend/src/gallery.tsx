@@ -1475,6 +1475,19 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   // live-preview chip in the chrome of a screenshot about search.
   if (method === "getExposedPorts") return rpcResult({ ports: [] }).json<T>();
 
+  // The same class, one card over: the change-set reader reads
+  // `result.files.length` for every executor option before it picks one, so
+  // `[]` threw inside the load and every Work column rendered "Could not load
+  // the change-set: Cannot read properties of undefined (reading length)"
+  // where a fresh workspace's empty change-set belongs. `ExecutorDiffResult`
+  // (core read-models/workspace-diff.ts) carries `files` on every path it can
+  // return, so an empty change-set is `files: []` and not no files at all.
+  //
+  // `vfs-baseline` is what the product answers a column whose `executors` prop
+  // is empty: with no workspace provider to hold a git tree, the read falls
+  // through to the VFS baseline.
+  if (method === "getExecutorDiff") return rpcResult({ files: [], mode: "vfs-baseline" }).json<T>();
+
   if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
 
   return rpcResult({}).json<T>();
