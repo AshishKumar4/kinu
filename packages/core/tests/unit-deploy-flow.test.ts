@@ -13,12 +13,13 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY,
-  LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS,
+  HeldBytes, LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS,
   REFRESH_TOKEN_KEY, deployDoor, deployPlan, factsFrom, localLayout, parseReleaseManifest, releaseDir,
   renderLocalConfig, renderWorkerdConfig, runDeployPlan, unhostedBindings, workerdDirectories,
 } from '../src/deploy/index';
 import type {
-  CloudflareCall, CloudflareHttpResponse, CloudflareTransport, DeployContext, DeployInputs,
+  ArtifactMember, CloudflareCall, CloudflareHttpResponse, CloudflareTransport, DeployContext,
+  DeployInputs,
   ArtifactSource, DeployLedger, DeployProgress, DeploySecretVault, DeployStepFailure, DeployStepRow,
   DeployStepSeed, HttpGet,
   MultipartUpload, ReleaseManifest, UpdateBuild,
@@ -337,14 +338,37 @@ class MemoryVault implements DeploySecretVault {
   }
 }
 
+/**
+ * The artifact as the reader hands it over: one walk, each member in the
+ * pieces the decompressor produced, assets before modules — the order
+ * `scripts/build-worker-release.ts` writes and the order that lets the upload
+ * step let go of the archive before it holds the module set.
+ */
 function artifactFor(manifest: ReleaseManifest): ArtifactSource {
-  const bytes = new TextEncoder();
+  const encoder = new TextEncoder();
+
+  const ordered = [...manifest.files].sort(
+    (left, right) => Number(left.path.startsWith('worker/')) - Number(right.path.startsWith('worker/')),
+  );
 
   return {
-    async read(path: string): Promise<Uint8Array<ArrayBuffer>> {
-      if (!manifest.files.some((file) => file.path === path)) throw new Error(`no ${path} in the artifact`);
+    held: new HeldBytes(),
+    async *members(): AsyncIterable<ArtifactMember> {
+      for (const file of ordered) {
+        const body = encoder.encode(`bytes of ${file.path}`);
 
-      return bytes.encode(`bytes of ${path}`);
+        yield {
+          path: file.path,
+          size: body.length,
+          // Two pieces on purpose: a member arrives in whatever pieces the
+          // decompressor made, and a reader that assumed one is wrong.
+          async *chunks(): AsyncIterable<Uint8Array> {
+            yield body.subarray(0, 3);
+            yield body.subarray(3);
+          },
+          bytes: () => Promise.resolve(body),
+        };
+      }
     },
   };
 }

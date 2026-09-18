@@ -27,7 +27,7 @@
  * proved by the child still living and by `/api/health` answering, not by the
  * socket accepting.
  */
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { connect } from 'node:net';
 import { get } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
@@ -139,11 +139,36 @@ async function install(opts: { origin?: string; port?: string }): Promise<void> 
     mkdirSync(join(layout.root, relative), { recursive: true });
   }
 
-  for (const file of manifest.files) {
-    const target = join(dir, file.path);
+  // One walk, a member at a time, through the same reader the Cloudflare door
+  // uses: that door installs from inside a Durable Object and cannot hold the
+  // unpacked archive (docs/SELF-DEPLOY.md § What the artifact weighs). Here it
+  // means a release lands on disk without ever being in memory whole.
+  const wanted = new Set(manifest.files.map((file) => file.path));
+  const laid = new Set<string>();
+
+  for await (const member of artifact.members()) {
+    if (!wanted.has(member.path)) continue;
+
+    const target = join(dir, member.path);
 
     mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, await artifact.read(file.path));
+
+    const handle = openSync(target, 'w');
+
+    try {
+      for await (const piece of member.chunks()) writeSync(handle, piece);
+    } finally {
+      closeSync(handle);
+    }
+
+    laid.add(member.path);
+  }
+
+  const absent = [...wanted].filter((path) => !laid.has(path));
+
+  if (absent.length > 0) {
+    throw new Error(`the release artifact carries no ${absent[0] ?? ''}`
+      + (absent.length > 1 ? ` (and ${String(absent.length - 1)} more the manifest names)` : ''));
   }
 
   // Replaced rather than updated in place: a symlink swap is the whole of an
