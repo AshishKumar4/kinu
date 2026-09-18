@@ -28,9 +28,30 @@ const REPO = join(import.meta.dir, '..');
 
 const CF = join(REPO, 'packages', 'cf-backend');
 
+/** The dev server's own output, by origin, for as long as `withLiveApp` holds
+ *  that server up. A 500 out of the Worker is printed by vite as `Internal
+ *  server error:` and its stack, on a stream this harness was reading only to
+ *  decide whether the boot failed — so a request that failed AFTER the boot
+ *  used to leave a bare status behind and the one account of why it failed in
+ *  a buffer nobody read. */
+const devServerOutput = new Map<string, readonly string[]>();
+
+/** What the dev server said about the last failure it served. The LAST block
+ *  is this request's: the harness runs one row at a time against its own
+ *  server. */
+function serverAccount(origin: string): string {
+  const log = devServerOutput.get(origin)?.join('') ?? '';
+  const at = log.lastIndexOf('Internal server error');
+
+  if (at < 0) return '';
+
+  return `\n--- vite dev said ---\n${log.slice(at).split('\n').slice(0, 20).join('\n')}`;
+}
+
 /** The route's JSON answer, parsed as a value rather than passed as unknown.
- *  A non-ok answer throws with its body: a live-app caller that gets HTML
- *  where it expected JSON has hit the app, not the API, and the text says so. */
+ *  A non-ok answer throws with its WHOLE body and the dev server's account of
+ *  it: a live-app caller that gets HTML where it expected JSON has hit the
+ *  app, not the API, and a 500 carries the worker's own error. */
 export async function apiJson(origin: string, path: string, init?: RequestInit): Promise<JsonValue> {
   const response = await fetch(`${origin}${path}`, {
     ...init,
@@ -39,7 +60,11 @@ export async function apiJson(origin: string, path: string, init?: RequestInit):
 
   const text = await response.text();
 
-  if (!response.ok) throw new Error(`${init?.method ?? 'GET'} ${path} -> ${String(response.status)}: ${text.slice(0, 200)}`);
+  if (!response.ok) {
+    throw new Error(
+      `${init?.method ?? 'GET'} ${path} -> ${String(response.status)}: ${text}${serverAccount(origin)}`,
+    );
+  }
 
   return text ? parseJsonValue(text) : null;
 }
@@ -286,6 +311,8 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
 
   try {
     const origin = await waitForDevServer(child, port, output);
+    // From here, a failing request can quote the server that failed it.
+    devServerOutput.set(origin, output);
     const executablePath = chromePath();
 
     const launchOptions: LaunchOptions = {
@@ -314,6 +341,7 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
     try {
       return await body({ browser, newPage, origin });
     } finally {
+      devServerOutput.delete(origin);
       signalGroup(browserGroup, 'SIGTERM');
       await browser.close();
       signalGroup(browserGroup, 'SIGKILL');
