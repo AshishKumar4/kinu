@@ -308,7 +308,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
         return content === undefined
           ? refusalOf(new KinuError('bad_input', 'workspace.saveNote: content must be a string'))
-          : appendMemoryNote(memory, content);
+          : appendMemoryNote(memory, content, { by: actor?.name });
       },
     },
 

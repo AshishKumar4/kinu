@@ -67,7 +67,6 @@ export interface WorkSurfaceProps {
   planFocus?: string | null;
   planOwner?: string;
   workspacePlanArrival?: WorkspacePlanArrival | null;
-  activePlanActors?: readonly string[];
   onReviewActor?: (name: string) => void | Promise<void>;
   onSurface: (s: SurfaceKind) => void;
   /** Hide the inspector column. Present only where the column can collapse. */
@@ -288,15 +287,15 @@ export function WorkSurface(props: WorkSurfaceProps) {
               plan={props.plan}
               planOwner={props.planOwner}
               workspacePlanArrival={props.workspacePlanArrival}
-              activePlanActors={props.activePlanActors}
-              onReviewActor={props.onReviewActor}
               planRpc={props.planRpc ?? props.rpc}
+              onReviewActor={props.onReviewActor}
               pendingActions={props.pendingActions}
               onRefreshQueue={props.onRefreshQueue}
               backgroundJobs={props.backgroundJobs}
               onRefreshJobs={props.onRefreshJobs}
               onOpenSurface={focus.navigate}
               onChangelogSeen={props.onChangelogSeen}
+              memory={props.memory}
               isStreaming={props.isStreaming}
               rpc={props.rpc}
             />

@@ -41,6 +41,10 @@ export interface TasksToolInput {
   titles?: string[];
   id?: string;
   status?: TaskStatus;
+  /** For action=update: the operator's one-line annotation beside the item —
+   *  set, replaced, or cleared with null. Either `status` or `note` must be
+   *  present or the call changes nothing. */
+  note?: string | null;
   parent?: string | null;
   /** For action=mode: the role id to switch to. Omit to read the current one. */
   role?: string;
@@ -68,6 +72,8 @@ interface ListedTask {
   id: string;
   title: string;
   status: TaskStatus;
+  /** The operator's annotation, when the item has one. */
+  note?: string;
   subtasks?: ListedTask[];
 }
 
@@ -134,18 +140,29 @@ export function createTasksDispatcher(
 
       case 'update': {
         if (!args.id) throw new KinuError('bad_input', 'tasks.update requires `id`');
-        const status = v.safeParse(TaskStatusSchema, args.status);
+        const status = args.status === undefined ? undefined : v.safeParse(TaskStatusSchema, args.status);
 
-        if (!status.success) {
+        if (status !== undefined && !status.success) {
           throw new KinuError('bad_input', 'tasks.update requires `status` — one of ' + TASK_STATUSES.join(', '));
         }
 
-        const task = taskList.setStatus(args.id, status.output, now);
+        if (status === undefined && args.note === undefined) {
+          throw new KinuError('bad_input', 'tasks.update requires `status` or `note`');
+        }
+
+        const noteParsed = args.note === undefined ? undefined : (args.note === null ? null : v.safeParse(v.string(), args.note));
+
+        if (noteParsed !== undefined && noteParsed !== null && !noteParsed.success) {
+          throw new KinuError('bad_input', 'tasks.update requires `note` — a string, or null to clear');
+        }
+
+        const note = noteParsed === undefined || noteParsed === null ? noteParsed : noteParsed.output;
+        const task = taskList.update(args.id, { status: status?.output, note }, now);
 
         if (!task) throw new KinuError('missing', 'no task ' + args.id);
         // The one thing closing a parent hides: work filed under it that is
         // still open. Said at the moment the model would otherwise move on.
-        const openSubtasks = status.output === 'done' ? taskList.countOpenSubtasks(task.id) : 0;
+        const openSubtasks = status?.output === 'done' ? taskList.countOpenSubtasks(task.id) : 0;
         const result: TaskUpdated = { id: task.id, title: task.title, status: task.status };
 
         if (openSubtasks > 0) result.open_subtasks = openSubtasks;
@@ -161,12 +178,16 @@ export function createTasksDispatcher(
         const listed = tasks.map((task): ListedTask => {
           const item: ListedTask = { id: task.id, title: task.title, status: task.status };
 
+          if (task.note !== null) item.note = task.note;
+
           if (task.subtasks.length > 0) {
-            item.subtasks = task.subtasks.map((sub) => ({
-              id: sub.id,
-              title: sub.title,
-              status: sub.status,
-            }));
+            item.subtasks = task.subtasks.map((sub): ListedTask => {
+              const s: ListedTask = { id: sub.id, title: sub.title, status: sub.status };
+
+              if (sub.note !== null) s.note = sub.note;
+
+              return s;
+            });
           }
 
           return item;

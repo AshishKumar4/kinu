@@ -22,7 +22,7 @@ export {
 
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
-  outputLimitContinuationTerminalEffect,
+  outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
   takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect,
   terminalEffectKey, terminalEffectBackoffMs, keyedScope, TerminalEffectInterrupt,
@@ -1517,7 +1517,9 @@ export {
   applyPlanEdits,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
+  listPendingPlanReviews,
   planReviewAwaitingDecision,
+  planTitle,
   validatePlanEdits,
   type PlanEdit,
   type PlanAnnotationMathTarget,
@@ -1792,11 +1794,23 @@ export {
 
 export { withTaskPlan, bindTaskPlan, type TaskPlan, type TaskPlanContext } from './tasks/plan-scope';
 
+// The stop-time reminder a turn owes when it settles with open tasks.
+export {
+  TaskReminders, TASK_REMINDER_EVENT,
+  taskReminderIdempotencyKey,
+} from './tasks/reminder';
+
 // Backend-agnostic orchestration — per-turn accounting shared by both backends.
 export {
   TurnAccumulator,
   type StepLike, type ToolResultLike, type TurnSinks,
 } from './orchestrator/turn-accumulator';
+
+// The workspace's work across every actor — the read model behind
+// `listWorkspaceWork` on both backends.
+export { readWorkspaceWork } from './read-models/workspace-work';
+
+export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
 
 export {
   AgentOrchestrator, type AgentOrchestratorDeps,

@@ -192,7 +192,7 @@ describe('collectDynamicContext', () => {
   test('the tasks plane reads the task list, open items only', () => {
     const o = setup();
     o.stores.taskList.add(['Reproduce the 502', 'Patch the timeout'], null, 1);
-    o.stores.taskList.setStatus('t1', 'done', 2);
+    o.stores.taskList.update('t1', { status: 'done' }, 2);
     expect(collect(o).tasks?.items.map((t) => t.title)).toEqual(['Patch the timeout']);
   });
 

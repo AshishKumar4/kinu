@@ -156,6 +156,7 @@ import {
   type ReleaseStatus, type ReleaseToolDeps,
   // Release execution engine — the driver beneath the governance ledger
   ReleaseEngine, createSandboxReleaseExec,
+  readWorkspaceWork, type WorkspaceWork,
   // Peer-agent teams (the agents tool's team deps contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
@@ -201,7 +202,7 @@ import {
   type RecordObjectiveSummary, type RecordCellSummary,
   type RecordObjectiveHandle, type RecordCellHandle, type ExplorationRecord,
   type HeadStep,
-  buildPendingActions, type PendingAction,
+  buildPendingActions, listPendingPlanReviews, type PendingAction,
   type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
@@ -2691,6 +2692,7 @@ export class OrchestratorAgent extends ActorAgent {
       branches: this._pendingBranches.map((branch) => ({ id: branch.id, task: branch.task })),
       overflowRetry: input.overflowRetry,
       outputContinuation: input.outputContinuation,
+      taskReminder: input.taskReminder ?? undefined,
       advisor: projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn), input.reachableTools) }),
       sleepTime: { toolCalls: projectJsonValue({ value: this.acc.toolCalls }) },
       autoTitle: isPlaceholderMission(mission) || mission === null
@@ -3149,6 +3151,19 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async listAgentTasks(): Promise<AgentTaskTree[]> {
     return this.taskList.list();
+  }
+
+  /** The workspace's work across every actor — each actor's plan reviews with
+   *  the tasks linked to that revision, and each actor's unlinked tasks. The
+   *  roster is the retired-inclusive list: a dismissed subordinate's rows are
+   *  still in the database and the board that shows workspace work shows them. */
+  @callable()
+  async listWorkspaceWork(): Promise<WorkspaceWork> {
+    return readWorkspaceWork(
+      this.boundSql,
+      this.actorHandle(),
+      this.workspaceActors().list({ retired: true }),
+    );
   }
 
   /** The orchestrator's half of the shared Stop: settle the turn that was
@@ -4129,6 +4144,7 @@ export class OrchestratorAgent extends ActorAgent {
         latestAt: unseen[0]?.at ?? Date.now(),
       },
       curriculum: listProposedTasks(this.rt, 'pending'),
+      pendingPlans: listPendingPlanReviews(this.boundSql, this.rt.actor.workspaceId),
     });
   }
 

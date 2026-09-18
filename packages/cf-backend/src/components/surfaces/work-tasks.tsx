@@ -34,7 +34,7 @@ export function isClosedTree(task: AgentTaskTree): boolean {
   return isSettled(task.status) && task.subtasks.every((sub) => isSettled(sub.status));
 }
 
-function TaskRow({ task, depth }: { task: AgentTask; depth: number }) {
+function TaskRow({ task, depth, owner }: { task: AgentTask; depth: number; owner?: string }) {
   const meta = STATUS_META[task.status];
   const Icon = meta.icon;
 
@@ -55,16 +55,18 @@ function TaskRow({ task, depth }: { task: AgentTask; depth: number }) {
         }`}
       >
         {task.title}
+        {owner && <span className="p-meta p-text-3"> · {owner}</span>}
+        {task.note && <span className="block p-meta p-text-3 mt-0.5">{task.note}</span>}
       </span>
     </div>
   );
 }
 
-export function TaskTree({ task, grouped = false }: { task: AgentTaskTree; grouped?: boolean }) {
+export function TaskTree({ task, grouped = false, owner }: { task: AgentTaskTree; grouped?: boolean; owner?: string }) {
   return (
     <div className={grouped ? "px-3 py-2" : "p-group px-3 py-2"}>
-      <TaskRow task={task} depth={0} />
-      {task.subtasks.map((sub) => <TaskRow key={sub.id} task={sub} depth={1} />)}
+      <TaskRow task={task} depth={0} owner={owner} />
+      {task.subtasks.map((sub) => <TaskRow key={sub.id} task={sub} depth={1} owner={owner} />)}
     </div>
   );
 }

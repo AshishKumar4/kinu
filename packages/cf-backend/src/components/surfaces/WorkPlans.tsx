@@ -1,256 +1,126 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { Loader } from '@cloudflare/kumo';
-import * as v from 'valibot';
-import { SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type PlanReview, type AgentTaskTree, type SeekCursor } from '@kinu.run/core';
+import { useEffect, useRef } from 'react';
+import { Badge } from '@cloudflare/kumo';
+import { NotePencilIcon } from '@phosphor-icons/react';
+import type { OwnedPlan, WorkspaceWork } from '@kinu.run/core';
+import { planTitle } from '@kinu.run/core';
 import type { WorkspacePlanArrival } from '@/hooks/use-kinu';
-import type { Rpc } from '@kinu.run/core';
-import { lastValue, useAsyncResource } from '@/hooks/use-async-resource';
-import { LoadFailure } from '@/components/ui/LoadFailure';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { Section } from './shared';
 import { PlanProgress, TaskTree } from './work-tasks';
 
-const PlanReviewView = lazy(() => import('./PlanReviewView'));
+const keyOf = ({ owner, plan }: OwnedPlan) => `${owner.name}:${plan.id}:${plan.revision}`;
 
-interface OwnedPlan { plan: PlanReview; path: string[]; active: boolean }
-
-interface ReadPage { path: string[]; active: boolean; view: 'plans' | 'children'; cursor?: SeekCursor }
-
-const keyOf = ({ plan, path }: OwnedPlan) => JSON.stringify([path, plan.id, plan.revision]);
-
-const ownerOf = (path: readonly string[]) => path.length ? path.join(' / ') : 'Main';
+/** The actor name a `workspacePlanArrival` path resolves to: the path's last
+ *  hop is the actor's own name, and the empty path is the root's. */
+const arrivalOwner = (path: readonly string[]) => path.at(-1) ?? 'main';
 
 /**
- * ONE presentation policy, derived once for every row, because the dropdown
- * label, the read-only banner and the review affordance all answer the same
- * question. Answering it three times makes them disagree: a priority record
- * arrives with no scanned status, so a label read off the record says
- * "retained" about an actor the selection has already decided is live. A
- * direct actor is live exactly when the root's roster still lists it; deeper
- * history keeps what the traversal observed; the root itself always is.
+ * The workspace's plans as one list, newest first — the workspace-wide work
+ * read, so a subordinate's plan and its tasks render beside the root's with
+ * the actor that owns them named on both. A row opens the review over the
+ * whole tab; the open state lives in WorkTab because the queue's
+ * `plan_review` rows open the same view.
  *
- * The selection rides with the rows for the same reason: which row is picked,
- * and whether it belongs to THIS pane, are read off the merged list and cannot
- * be asked before it exists.
+ * "This pane's own plan" is the one auto-open rule: the review belongs to
+ * whoever's conversation this is, so a foreign actor's new pending plan shows
+ * in the list (and in the needs-you queue) without hijacking the tab.
+ *
+ * The list draws nothing until the read has answered once: the plans read and
+ * the Now tasks read are the same `listWorkspaceWork`, so its spinner and its
+ * retry already have a home there — a second one here would photograph the
+ * same failure twice.
  */
-function planSelection(
-  held: { readonly plans: readonly OwnedPlan[] } | null,
-  current: OwnedPlan | null,
-  activeActors: readonly string[],
-  selected: string | null,
-  owner: string,
-) {
-  const merged = held?.plans.slice() ?? [];
-
-  if (current) {
-    const index = merged.findIndex(item => keyOf(item) === keyOf(current));
-
-    if (index < 0) merged.unshift(current); else merged[index] = current;
-  }
-
-  const plans = merged.map(item => ({
-    ...item,
-    active: item.path.length === 0
-      || (item.path.length === 1 ? activeActors.includes(item.path[0] ?? '') : item.active),
-  }));
-
-  const picked = plans.find(candidate => keyOf(candidate) === selected) ?? plans[0] ?? null;
-
-  return {
-    plans,
-    picked,
-    inline: picked !== null
-      && (picked.path.length === 0 || (picked.path.length === 1 && picked.path[0] === owner)),
-  };
-}
-
-/** Read existing actors, including retained descendants. Each user page permits
- * four sequential inspection reads; the remaining frontier is explicit. */
-export function WorkPlans({ active, rpc, rootRpc, owner = 'main', arrival, activeActors = [], onPresence, onNewPlan, onReviewActor }: {
-  active: PlanReview | null; rpc: Rpc; rootRpc: Rpc; owner?: string;
-  arrival?: WorkspacePlanArrival | null; activeActors?: readonly string[];
+export function WorkPlans({ work, owner = 'main', arrival, onPresence, onNewPlan, onOpenReview }: {
+  /** The workspace-wide read's plans — shared with the tab's task list, so
+   *  one `listWorkspaceWork` feeds both. Null while it is still out. */
+  work: WorkspaceWork | null;
+  /** The conversation's own actor name — 'main' at the root pane. */
+  owner?: string;
+  arrival?: WorkspacePlanArrival | null;
+  /** Whether the list holds anything — the empty tab's "Nothing yet" reads it. */
   onPresence: (present: boolean) => void;
+  /** A fresh pending plan of this pane's own actor just auto-opened. */
   onNewPlan: () => void;
-  onReviewActor?: (name: string) => void | Promise<void>;
+  onOpenReview: (item: OwnedPlan) => void;
 }) {
-  const [selected, setSelected] = useState<string | null>(null);
-  const [navigationError, setNavigationError] = useState<string | null>(null);
-  const [pages, setPages] = useState(1);
-  const known = useRef<Map<string, Set<string>>>(new Map());
-  const seenPageCount = useRef(pages);
+  const plans = work?.plans ?? [];
+  const known = useRef<Set<string> | null>(null);
   const focus = arrival?.reference ?? null;
-  const focusKey = focus ? JSON.stringify([focus.path, focus.id, focus.revision]) : null;
 
-  const load = useCallback(async () => {
-    const plans: OwnedPlan[] = [];
-    const warnings: string[] = [];
-    const scannedActors = new Set<string>();
-    const queue: ReadPage[] = [{ path: [], active: true, view: 'plans' }, { path: [], active: true, view: 'children' }];
-    const queuedActors = new Set(['[]']);
-
-    if (focus) {
-      const result = v.parse(SubordinateInspectionResultSchema, await rootRpc('inspectSubordinate', [{ ...focus, view: 'plan' }]));
-
-      if (result.view === 'plan') plans.push({ plan: result.plan, path: result.path, active: false });
-      // A notification is only a hint, and this read is the authority that
-      // decides. A reference it cannot resolve is reported where every other
-      // unreadable actor is and focuses nothing; throwing would let one stale
-      // hint take the whole retained history down on every poll, for as long as
-      // the reference is held.
-      else if (result.view === 'missing') warnings.push(`${ownerOf(focus.path)}: ${result.error}`);
-      else throw new Error('Plan inspection returned a different view.');
-    }
-
-    if (owner !== 'main') {
-      queue.unshift({ path: [owner], active: true, view: 'plans' }, { path: [owner], active: true, view: 'children' });
-      queuedActors.add(JSON.stringify([owner]));
-    }
-
-    for (let index = 0; index < pages * 4 && queue.length; index++) {
-      const next = queue.shift();
-
-      if (!next) break;
-      const request: SubordinateInspectionRequest = { path: next.path, view: next.view, page: { limit: 20, cursor: next.cursor } };
-      const result = v.parse(SubordinateInspectionResultSchema, await rootRpc('inspectSubordinate', [request]));
-
-      if (result.view === 'missing') { warnings.push(`${ownerOf(next.path)}: ${result.error}`); continue; }
-
-      if (result.view !== next.view) throw new Error('Plan inspection returned a different view.');
-
-      if (result.view === 'plans') {
-        scannedActors.add(JSON.stringify(next.path));
-        plans.push(...result.page.items.map(plan => ({ plan, path: next.path, active: next.active })));
-      }
-
-      if (result.view === 'children') for (const child of result.page.items) {
-        const path = [...next.path, child.name];
-        const actorKey = JSON.stringify(path);
-
-        if (queuedActors.has(actorKey)) continue;
-        queuedActors.add(actorKey);
-        const childActive = next.active && child.status !== 'dismissed';
-        queue.push({ path, active: childActive, view: 'plans' }, { path, active: childActive, view: 'children' });
-      }
-
-      if ((result.view === 'plans' || result.view === 'children') && result.page.status === 'more') queue.push({ ...next, cursor: result.page.next });
-    }
-
-    const unique = [...new Map(plans.map(item => [keyOf(item), item])).values()];
-    unique.sort((a, b) => b.plan.createdAt - a.plan.createdAt || b.plan.revision - a.plan.revision);
-
-    return { plans: unique, more: queue.length > 0, warnings, scannedActors, pageCount: pages, focusKey };
-  }, [rootRpc, pages, owner, focusKey, active?.id, active?.revision, active?.updatedAt]);
-
-  const { resource, reload } = useAsyncResource(load, useCallback(() => 4000, []));
-  const held = lastValue(resource);
-  const current: OwnedPlan | null = active ? { plan: active, path: owner === 'main' ? [] : [owner], active: true } : null;
-  const { plans, picked, inline } = planSelection(held, current, activeActors, selected, owner);
-  const reviewRpc = picked?.path.length === 0 ? rootRpc : rpc;
-
-  const openReview = async () => {
-    const name = picked?.path[0];
-
-    if (!name || !onReviewActor) return;
-    setNavigationError(null);
-
-    try { await onReviewActor(name); }
-    catch (cause) { setNavigationError(renderThrownChain({ cause })); }
-  };
-
+  // First read seeds what was already there; after it, a PENDING plan owned by
+  // this pane's actor that the read had never seen is fresh and takes the tab.
   useEffect(() => {
-    if (!held) return;
-    const expanding = seenPageCount.current !== held.pageCount;
+    if (work === null) return;
 
-    const fresh = expanding ? undefined : held.plans.find(item => {
-      const previous = known.current.get(JSON.stringify(item.path));
+    const seen = known.current ?? new Set<string>();
 
-      return item.plan.status === 'pending' && previous !== undefined && !previous.has(keyOf(item));
-    });
+    const fresh = known.current !== null
+      ? plans.find((item) => item.plan.status === 'pending'
+          && item.owner.name === owner && !seen.has(keyOf(item)))
+      : undefined;
 
-    for (const actor of held.scannedActors) if (!known.current.has(actor)) known.current.set(actor, new Set());
+    for (const item of plans) seen.add(keyOf(item));
+    known.current = seen;
 
-    for (const item of held.plans) known.current.get(JSON.stringify(item.path))?.add(keyOf(item));
-    seenPageCount.current = held.pageCount;
+    if (fresh) { onOpenReview(fresh); onNewPlan(); }
+  }, [work, plans, owner, onNewPlan, onOpenReview]);
 
-    if (fresh) { setSelected(keyOf(fresh)); onNewPlan(); }
-  }, [held, onNewPlan]);
+  // An arrival names the plan it points at — by id and revision, both unique
+  // inside an actor's stream — and the read is the authority that it exists.
+  // The claim is the connection's, not this pane's: a pane remounts on every
+  // conversation switch, and a claim held here would replay the honoured hint
+  // on the fresh mount.
+  // A hint that lands while a review is open never claims: this list is
+  // unmounted then, by design — an arrival does not open a review over the
+  // reader's head. It claims on the next mount (Back), which is what this
+  // effect already does for a fresh reference.
   useEffect(() => {
-    if (!current) return;
+    if (!arrival || !focus || work === null) return;
 
-    // A conversation's pane opens on ITS actor's plan, decided or not: the row
-    // this pane answers for is the reason the reader is here. The root pane
-    // keeps the pending-only rule, so its "newest plan anywhere" default — and
-    // any older revision the reader picked through it — still stands once its
-    // own plan is decided. Both matter now that an arrival from an unscanned
-    // actor can be the newest plan in the workspace.
-    if (owner === 'main' && current.plan.status !== 'pending') return;
-    setSelected(keyOf(current));
-  }, [active?.id, active?.revision, owner]);
-  useEffect(() => {
-    if (!arrival || focusKey === null || held?.focusKey !== focusKey) return;
+    const item = plans.find((candidate) =>
+      candidate.plan.id === focus.id && candidate.plan.revision === focus.revision
+        && candidate.owner.name === arrivalOwner(focus.path));
 
-    // Only an AUTHORIZED reference reaches here: the exact read has answered
-    // and its plan is in the merged history. A hint the workspace cannot
-    // resolve never moves the user off whatever they were looking at.
-    if (!held.plans.some(item => keyOf(item) === focusKey)) return;
-
-    // Claimed LAST, and by the connection rather than by this pane. Last,
-    // because a reference the read has not authorized yet must stay claimable.
-    // By the connection, because this pane is remounted on every conversation
-    // switch: a claim that lived here would make an honoured hint arrive all
-    // over again on the fresh mount.
-    if (!arrival.claim(arrival.reference)) return;
-    setSelected(focusKey);
+    if (!item || !arrival.claim(focus)) return;
+    onOpenReview(item);
     onNewPlan();
-  }, [arrival, focusKey, held, onNewPlan]);
+  }, [arrival, focus, work, plans, onNewPlan, onOpenReview]);
+
   useEffect(() => { onPresence(plans.length > 0); }, [plans.length, onPresence]);
 
-  if (plans.length === 0 && resource.status !== 'error' && !held?.more && !held?.warnings.length) return null;
+  if (work === null || plans.length === 0) return null;
 
-  return <section data-work-plans className="space-y-3">
-    {navigationError && <LoadFailure what="actor review" message={navigationError} onRetry={openReview} />}
-    {resource.status === 'error' && <LoadFailure what="workspace plan history" message={resource.message} onRetry={reload} />}
-    <div className="flex items-center gap-3 flex-wrap">
-      <h2 className="p-text text-sm font-semibold">Plans</h2>
-      {plans.length > 0 && <select aria-label="Plan history" className="min-w-0 flex-1 p-bg p-text text-xs border p-border rounded px-2 py-1.5"
-        value={picked ? keyOf(picked) : ''} onChange={event => setSelected(event.target.value)}>
-        {plans.map(item => <option key={keyOf(item)} value={keyOf(item)}>
-          {ownerOf(item.path)} · {item.plan.content.split('\n').find(line => line.trim())?.replace(/^#+\s*/, '') || 'Plan'} · r{item.plan.revision} · {item.plan.status}{item.active ? '' : ' · retained'}
-        </option>)}
-      </select>}
-      {held?.more && <button type="button" className="text-xs p-accent" onClick={() => setPages(count => count + 1)}>Older plans / more actors</button>}
-      {resource.status === 'loading' && <Loader size="sm" />}
+  return (
+    <div data-work-plans>
+      <Section id="work-plans" title="Plans"
+        icon={<NotePencilIcon size={14} className="p-text-2" />}
+        badge={<Badge variant="secondary">{plans.length}</Badge>}>
+        <div className="space-y-2">
+          {plans.map((item) => <PlanCard key={keyOf(item)} item={item} onOpen={() => onOpenReview(item)} />)}
+        </div>
+      </Section>
     </div>
-    {held?.warnings.map(message => <p key={message} className="p-meta p-text-3">{message}</p>)}
-    {picked && <>
-      {!inline && <p className="p-meta p-text-3">{picked.active ? 'Read-only workspace overview.' : 'Retained actor history — read-only.'}
-        {picked.active && picked.path.length === 1 && onReviewActor && <button type="button" className="ml-2 p-accent" onClick={openReview}>Review in {ownerOf(picked.path)} conversation</button>}
-      </p>}
-      <PlanTasks key={keyOf(picked)} item={picked} rpc={rootRpc} />
-      <Suspense fallback={<Loader size="sm" />}><PlanReviewView key={keyOf(picked)} plan={picked.plan} rpc={reviewRpc} readOnly={!inline || !picked.active} /></Suspense>
-    </>}
-  </section>;
+  );
 }
 
-function PlanTasks({ item, rpc }: { item: OwnedPlan; rpc: Rpc }) {
-  const { plan, path } = item;
-  const actorKey = JSON.stringify(path);
+function PlanCard({ item, onOpen }: { item: OwnedPlan; onOpen: () => void }) {
+  const { owner, plan, tasks } = item;
 
-  const load = useCallback(async (): Promise<AgentTaskTree[]> => {
-    const request: SubordinateInspectionRequest = { path, view: 'planTasks', id: plan.id, revision: plan.revision };
-    const result = v.parse(SubordinateInspectionResultSchema, await rpc('inspectSubordinate', [request]));
-
-    if (result.view === 'missing') throw new Error(result.error);
-
-    if (result.view !== 'planTasks') throw new Error('Plan inspection returned a different view.');
-
-    return result.tasks;
-  }, [rpc, actorKey, plan.id, plan.revision]);
-
-  const { resource, reload } = useAsyncResource(load, useCallback(() => 4000, []));
-  const tasks = lastValue(resource) ?? [];
-
-  return <div className="space-y-2">
-    {resource.status === 'error' && <LoadFailure what="plan tasks" message={resource.message} onRetry={reload} />}
-    {tasks.length > 0 && <><PlanProgress tasks={tasks} />{tasks.map(task => <TaskTree key={task.id} task={task} />)}</>}
-  </div>;
+  return (
+    <div className="p-group">
+      <button type="button" onClick={onOpen}
+        className="w-full rounded-t-md px-3 pt-2.5 pb-2 text-left transition-colors hover:p-elevated">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className="p-row-text p-text min-w-0 truncate">{planTitle(plan.content)}</span>
+          <span className="p-meta p-text-3 shrink-0">r{plan.revision} · {plan.status}</span>
+        </div>
+        <div className="p-meta p-text-3 mt-0.5">{owner.name}{owner.retired ? " · retained" : ""}</div>
+      </button>
+      {tasks.length > 0 && (
+        <div className="space-y-2 px-3 pb-2.5">
+          <PlanProgress tasks={tasks} />
+          {tasks.map((task) => <TaskTree key={task.id} task={task} grouped owner={owner.name} />)}
+        </div>
+      )}
+    </div>
+  );
 }

@@ -22,7 +22,7 @@ import './helpers/ui-module-globals';
 import { describe, test, expect } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { AgentTaskTree, ChangelogEntry, PendingAction, Rpc } from '@kinu.run/core';
+import type { AgentTaskTree, ChangelogEntry, MemoryEntry, PendingAction, Rpc } from '@kinu.run/core';
 import type { BackgroundJob } from '@kinu.run/core/protocol';
 import { buildJournal, WorkTab } from '../src/components/surfaces/WorkTab';
 import { CHANGELOG_REVALIDATE_MS } from '../src/components/surfaces/changelog-entries';
@@ -36,7 +36,7 @@ function job(over: Partial<BackgroundJob> & { id: string }): BackgroundJob {
 }
 
 function task(id: string, updatedAt: number): AgentTaskTree {
-  return { id, parentId: null, title: id, status: 'done', createdAt: 0, updatedAt, subtasks: [] };
+  return { id, parentId: null, title: id, status: 'done', createdAt: 0, updatedAt, note: null, subtasks: [] };
 }
 
 function entry(id: string, at: number): ChangelogEntry {
@@ -125,10 +125,10 @@ const UNREAD: Rpc = () => Promise.withResolvers<never>().promise;
  *  effect, which `renderToStaticMarkup` discards, so both ledger reads are
  *  still out — the state the tab opens in. The queue and the jobs are props and
  *  wait for no read at all. */
-function workTabMarkup(jobs: BackgroundJob[], queue: PendingAction[] = []): string {
+function workTabMarkup(jobs: BackgroundJob[], queue: PendingAction[] = [], memory: MemoryEntry[] = []): string {
   return renderToStaticMarkup(createElement(WorkTab, {
     plan: null, planRpc: UNREAD, rpc: UNREAD, pendingActions: queue, backgroundJobs: jobs,
-    onRefreshJobs: () => {}, onOpenSurface: () => {}, isStreaming: false,
+    onRefreshJobs: () => {}, onOpenSurface: () => {}, isStreaming: false, memory,
   }));
 }
 
@@ -160,5 +160,32 @@ describe('Now owes the work in hand whatever the plan read is doing', () => {
     };
 
     expect(sectionTitles(workTabMarkup([], [decision]))).toEqual(['Needs you', 'Now']);
+  });
+});
+
+/**
+ * Learnings is the workspace's own memory — the same `getMemoryContent` read
+ * the Agent surface renders whole — so it draws only once a note exists, and
+ * newest first, the order a reader returns to them in.
+ */
+describe('Learnings lists what the workspace remembered', () => {
+  const note = (content: string, when = '2026-09-18', by: string | null = 'main'): MemoryEntry => ({
+    path: 'memory/MEMORY.md', content, matchScore: 1, updatedAt: when, savedBy: by,
+  });
+
+  test('no saved notes, no Learnings frame', () => {
+    expect(sectionTitles(workTabMarkup([]))).not.toContain('Learnings');
+  });
+
+  test('rows list newest first, each with its stamp and who saved it', () => {
+    const markup = workTabMarkup([], [], [
+      note('Gateway timeout repair\nretry the upstream fetch', '2026-09-15', 'main'),
+      note('Prompt assembles lanes', '2026-09-17', 'worker'),
+    ]);
+
+    expect(sectionTitles(markup)).toContain('Learnings');
+    expect(markup.indexOf('Prompt assembles lanes')).toBeLessThan(markup.indexOf('Gateway timeout repair'));
+    expect(markup).toContain('2026-09-17 · worker');
+    expect(markup).toContain('2026-09-15 · main');
   });
 });

@@ -94,6 +94,7 @@ import { TierIdSchema,
   runChat, type CountableRequest,
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
+  TASK_REMINDER_EVENT, taskReminderIdempotencyKey,
   normalizeUsage,
   measureCompactionTrigger,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
@@ -912,6 +913,10 @@ export class LocalAgentSession implements BackendHost {
         // No review surface here: a plan is reviewed in the hosted workspace UI.
         planTurnRefusal: () => 'Plan review is available in the hosted workspace UI; this local session has no review surface.',
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
+        taskList: () => this.taskList,
+        // A running job's own settle wakes the session: a reminder fired
+        // behind it would race that wake.
+        hasPendingAsyncWake: () => this.jobs.listRunning(1).total > 0,
         terminal: () => this.terminal,
         holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
         driverGate: () => this.driverGate?.() ?? null,
@@ -2575,6 +2580,8 @@ export class LocalAgentSession implements BackendHost {
     };
     parts.branches = this.pendingBranches.map(({ id, task }) => ({ id, task }));
 
+    if (input.taskReminder !== null) parts.taskReminder = { text: input.taskReminder.text };
+
     if (input.overflowRetry) parts.overflowRetry = true;
 
     if (gated) parts.completionGate = { text: this.chat.completionGate.task };
@@ -2753,6 +2760,7 @@ export class LocalAgentSession implements BackendHost {
           }
 
           if (!this.chat.announcementInFlight(identity)) {
+
             this.chat.appendOwedTurn({ text: OVERFLOW_RETRY_TEXT, idempotencyKey: identity, event: OVERFLOW_RETRY_EVENT });
           }
 
@@ -2760,6 +2768,30 @@ export class LocalAgentSession implements BackendHost {
         },
       }),
 
+      // The third signal a settled turn can owe: it ended while its task list
+      // still held open items. Same contract as the retry beside it — owed
+      // until the turn's durable row exists, keyed on this response's scope so
+      // a replay announces once.
+      task_reminder: terminalEffect({
+        input: v.object({ text: v.string() }),
+        run: ({ text }, scope) => {
+          const effectScope = keyedScope(scope);
+
+          const identity = effectScope === undefined
+            ? `task-reminder:${crypto.randomUUID()}`
+            : taskReminderIdempotencyKey(effectScope);
+
+          if (this.chat.announcementOnDisk(identity)) {
+            return { status: 'completed', detail: 'the reminder turn is on disk' };
+          }
+
+          if (!this.chat.announcementInFlight(identity)) {
+            this.chat.appendOwedTurn({ text, idempotencyKey: identity, event: TASK_REMINDER_EVENT });
+          }
+
+          return { status: 'owed', detail: 'the reminder turn is queued and not yet on disk' };
+        },
+      }),
 
       turn_record: turnRecordTerminalEffect(this.actorSession.orchestrator),
       event_drain: eventDrainTerminalEffect(this.actorSession.orchestrator),
@@ -2783,6 +2815,7 @@ export class LocalAgentSession implements BackendHost {
         // still runs off the queue.
         run: async ({ status, workMode, advisor }) => {
           if (!this.actorSession.orchestrator.improvementLanesOpen(status, workMode)) {
+
             return { status: 'completed', detail: 'improvement lanes closed for this turn' };
           }
 

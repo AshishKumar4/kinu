@@ -95,6 +95,8 @@ import {
 import { olderHistoryNotice, type TranscriptStore } from './transcript-store';
 import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 import { subordinateTurnContext } from '../subordinates/support';
+import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
+import type { TaskListStore } from '../tasks/store';
 import { inheritedAsModelMessage } from '../heads/head-inference';
 
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
@@ -413,6 +415,9 @@ export interface OwedTerminalEffectsInput {
   /** The turn's last model step ended at the output limit, and the turn was
    *  not itself a continuation — ONE continuation is owed. */
   readonly outputContinuation: boolean;
+  /** The reminder this turn owes because it settled with open tasks: the
+   *  already-rendered signal text, or null when the decision said none. */
+  readonly taskReminder: { readonly text: string } | null;
 }
 
 /**
@@ -445,6 +450,13 @@ export interface ChatSessionPorts {
    *  on the next start, and a timer inside the process it would have to
    *  outlive is not a wake. */
   armTurnWake(atMs: number): Promise<void>;
+  /** This actor's task list — the reminder decision reads it at commit, never
+   *  captured earlier: a replayed roster already froze its answer, and a live
+   *  one owes the list as it stands when the turn settles. */
+  taskList(): TaskListStore;
+  /** Whether this actor has background work in flight whose own settle wakes
+   *  the session — a reminder fired behind it would race the wake. */
+  hasPendingAsyncWake(): boolean;
   /** The model window the transcript restore is budgeted against. */
   modelWindow(): ModelWindow;
   /** The skill bodies a mid-turn send activates that the running turn does
@@ -524,6 +536,9 @@ export class ChatSession {
    *  one-shot task turn: on the interactive surface the human reading the
    *  answer is the check, so it never arms and costs nothing. */
   readonly completionGate = new CompletionGate();
+  /** The stop-time task reminder's memory for this conversation — attempts
+   *  and the unanswered-reminder latch (core tasks/reminder.ts). */
+  private readonly taskReminders = new TaskReminders();
   /** FIFO of turns to run — user inputs + programmatic injects (reactor / job
    *  wake), drained by a single serialized pump so turns never interleave. */
   private readonly queue: QueueItem[] = [];
@@ -666,6 +681,16 @@ export class ChatSession {
       if (refusal !== null) return Promise.reject(new Error(refusal));
     }
 
+    // A reminder signal is admitted only while the ledger still says its row is
+    // owed. `hasAnnounced` dedupes a re-delivery of a turn that already ran; a
+    // signal whose row closed some other way — the turn's commit rolled back,
+    // or a replay that lands after the sequence settled — is answered 'queued'
+    // so the producer's row completes, but no turn starts for it.
+    if (input.metadata?.kinuEvent === TASK_REMINDER_EVENT
+      && !this.ports.terminal().ledger.hasOwed('task_reminder')) {
+      return Promise.resolve({ status: 'queued' });
+    }
+
     // A job settling during shutdown must not start a turn the ending session
     // will never drain: 'skipped' sends the caller down its durable-breadcrumb
     // path instead, and the next run drains it from the event log.
@@ -781,6 +806,10 @@ export class ChatSession {
     } = {},
   ): Promise<SendLanding> {
     const { text, files } = normalizePromptInput(input);
+
+    // The operator spoke: the reminder count starts over, whether these words
+    // splice into the live turn or open one of their own.
+    this.taskReminders.noteUserPrompt();
 
     // Nothing to say and nothing attached is not a message: refused at the
     // door, never a blank turn or a blank steer the model is asked to read.
@@ -1308,6 +1337,9 @@ export class ChatSession {
               ? { ...call, ...(event.success ? { result: event.result } : { error: event.error ?? event.result }) }
               : call);
             flush('settled');
+            // Any tool result is progress on the last reminder — the model
+            // answered it with work, so the next settle is judged fresh.
+            this.taskReminders.noteToolResult();
 
             return;
           case 'step-finish':
@@ -1598,6 +1630,26 @@ export class ChatSession {
       const status = classifyRunEnd(facts).reason;
       const turn = this.snapshotTurn(item, input.assistantText, messageId);
 
+      // The stop-time reminder, decided where the list, the answer and the
+      // outcome are all readable together. The decision mutates the tracker —
+      // it IS the firing — so it runs exactly where the roster is frozen.
+      // The tracker is RAM anyway: a process cut loses the count wholesale,
+      // and the ledger row is what makes the delivery once-only.
+      //
+      // A turn that IS the reminder never owes another: its settle would read
+      // the same open list, and any tool call it made clears the progress
+      // latch — answering a reminder with a reminder is the loop, cut at the
+      // source rather than bounded by the cap.
+      const taskReminder = input.event === TASK_REMINDER_EVENT
+        ? null
+        : this.taskReminders.decide({
+          open: this.ports.taskList().listOpen(),
+          assistantText: input.assistantText,
+          workMode: this.actorSession.workMode,
+          completed: runError === null,
+          asyncWakePending: this.ports.hasPendingAsyncWake(),
+        });
+
       const owed = this.ports.owedTerminalEffects({
         turn,
         status,
@@ -1613,6 +1665,7 @@ export class ChatSession {
         assistantText: input.assistantText,
         completed: runError === null,
         interrupted: facts.interrupted,
+        taskReminder,
         startedAt: input.startedAt,
         trialContext: input.trialContext,
         answeredDeliveries: this.answeredDeliveries(item),

@@ -226,7 +226,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
       case 'save':
         if (!args.content) throw new KinuError('bad_input', 'memory.save requires `content`.');
 
-        return appendMemoryNote(memory, args.content);
+        return appendMemoryNote(memory, args.content, { by: deps.actor.name });
       case 'search':
         if (!args.query) throw new KinuError('bad_input', 'memory.search requires `query`.');
 
