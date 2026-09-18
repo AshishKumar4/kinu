@@ -308,11 +308,14 @@ async function countRpc(page: Page): Promise<RpcCounter> {
   };
 }
 
-/** Workspace-scoped reads the right panel owns; Agent and Activity are per agent. */
+/** Workspace-scoped reads the right panel owns; Agent and Activity are per
+ *  agent. `getEvolutionChangelog` belongs here by ownership even though
+ *  `rpc-gate` classifies it `interactive` rather than `workspace.read` — that
+ *  axis is authorization, and the Journal it feeds is the workspace's. */
 const WORKSPACE_READS = [
   'getWorkspaceSnapshot', 'getExposedPorts', 'listPendingActions', 'getMemoryContent',
   'getToolDescriptions', 'getExecutors', 'listBackgroundJobs', 'listSlates',
-  'listPendingConsents', 'getActivePlanReview',
+  'listPendingConsents', 'getActivePlanReview', 'getEvolutionChangelog',
 ] as const;
 
 /** One of the reads above, as a type: the delta table below is keyed by the
