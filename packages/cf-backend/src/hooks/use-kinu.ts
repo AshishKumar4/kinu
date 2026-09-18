@@ -30,7 +30,7 @@ import { applySignalCard, parseSignalCardEvent, type SignalCard } from "@kinu.ru
 import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
-import { looksLikeSecretField, type InlineSteer } from "@kinu.run/core";
+import { looksLikeSecretField, parseMemoryNotes, type InlineSteer } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
@@ -1921,7 +1921,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (isSourceCurrent("memoryContent")) {
       setMemoryContent(snap.memoryContent);
 
-      if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
+      if (snap.memoryContent) setMemory(memoryRows(snap.memoryContent));
     }
 
     if (isSourceCurrent("executors")) {
@@ -2211,7 +2211,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       // Empty search — re-parse full content
       setSourceError("memory", null);
 
-      if (memoryContent) setMemory(parseMemoryContent(memoryContent));
+      if (memoryContent) setMemory(memoryRows(memoryContent));
 
       return;
     }
@@ -2579,31 +2579,9 @@ function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
   ];
 }
 
-/** Parse MEMORY.md sections into MemoryEntry[] for the UI */
-function parseMemoryContent(content: string): MemoryEntry[] {
-  const entries: MemoryEntry[] = [];
-  const sections = content.split(/\n(?=###|##)/);
-
-  for (const section of sections) {
-    const lines = section.trim().split("\n");
-    const header = lines[0] ?? "";
-    const body = lines.slice(1).join("\n").trim();
-
-    if (!body || !header) continue;
-    // The heading is `### Note (<date>[ · <actor>])`: the date is the row's
-    // "when" and the stamp's second half is who saved it, which notes written
-    // before the stamp carried one simply lack.
-    const stamp = /\((?<stamp>[^()]*)\)\s*$/.exec(header.replace(/^#+\s*/, ""))?.groups?.stamp;
-    const [when, savedBy] = stamp?.split("·").map((part) => part.trim()) ?? [];
-
-    entries.push({
-      path: "memory/MEMORY.md",
-      content: body,
-      matchScore: 1,
-      updatedAt: when ?? header.replace(/^#+\s*/, ""),
-      savedBy: savedBy ?? null,
-    });
-  }
-
-  return entries;
+/** MEMORY.md as pane rows. The heading the notes are read out of belongs to
+ *  `memory/note.ts`, which writes it; all this adds is the score, and a note is
+ *  not a search hit, so every note scores 1. */
+function memoryRows(content: string): MemoryEntry[] {
+  return parseMemoryNotes(content).map((note) => ({ ...note, matchScore: 1 }));
 }

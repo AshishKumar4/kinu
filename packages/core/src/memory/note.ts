@@ -74,6 +74,65 @@ export async function appendMemoryNote(
   return 'Note saved to memory.';
 }
 
+/** A note starts at a Markdown heading of level 2 or 3, which is what
+ *  {@link appendMemoryNote} writes and what a reflection or lesson appended by
+ *  hand uses. Lookahead, so the heading stays with the body it introduces. */
+const NOTE_BOUNDARY = /\n(?=###|##)/;
+
+const HEADING_HASHES = /^#+\s*/;
+
+/** The stamp is the LAST parenthesised span of the heading, so a title that
+ *  itself contains parentheses does not shift what is read as the date. */
+const HEADING_STAMP = /\(([^()]*)\)\s*$/;
+
+/**
+ * One note as MEMORY.md records it — what the file says, with no view fields.
+ *
+ * The wire shape the UI's memory pane reads ({@link MemoryEntry}) is this plus
+ * a match score, which is a search concept and not something a note carries.
+ */
+export interface MemoryNote {
+  /** The memory file the note was read out of, VFS-relative. */
+  path: string;
+  /** The note's body, heading excluded. */
+  content: string;
+  /** The heading's date, or the whole heading text when the heading carried no
+   *  stamp at all — a note is still a note. */
+  updatedAt: string;
+  /** The actor whose turn saved the note, read out of the stamp's second half —
+   *  null on a note written before the stamp carried one. */
+  savedBy: string | null;
+}
+
+/**
+ * The notes in an append-only MEMORY.md, oldest first — the inverse of
+ * {@link appendMemoryNote} and the only reader of the heading it writes.
+ *
+ * The `### Note (<date>[ · <actor>])` heading has one owner, and this is the
+ * file that owns it: a second hand-written reader drifts the moment the stamp
+ * gains a field.
+ *
+ * A heading with no body is dropped: `appendMemoryNote` always writes content
+ * under its heading, so an empty section is the file's leading blank or a
+ * document title, not a note.
+ */
+export function parseMemoryNotes(content: string): MemoryNote[] {
+  const notes: MemoryNote[] = [];
+
+  for (const section of content.split(NOTE_BOUNDARY)) {
+    const lines = section.trim().split('\n');
+    const heading = (lines[0] ?? '').replace(HEADING_HASHES, '');
+    const body = lines.slice(1).join('\n').trim();
+
+    if (heading === '' || body === '') continue;
+    const [when, savedBy] = HEADING_STAMP.exec(heading)?.[1].split('·').map((part) => part.trim()) ?? [];
+
+    notes.push({ path: MEMORY_PATH, content: body, updatedAt: when ?? heading, savedBy: savedBy ?? null });
+  }
+
+  return notes;
+}
+
 /**
  * Bytes the agent's memory occupies, walked through the workspace filesystem.
  *

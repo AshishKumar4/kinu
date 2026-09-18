@@ -1358,7 +1358,7 @@ export {
 // readMemoryTail is the shared bounded-tail read both backends weave per turn.
 export { memoryBytes } from './memory/note';
 
-export { appendMemoryNote, readMemoryTail, MEMORY_TAIL_MAX_CHARS } from './memory/note';
+export { appendMemoryNote, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';
 
 // Zero-LLM transcript search over the actor's conversation authority.
 // Backs the `memory` tool's `conversations` action on both backends.
