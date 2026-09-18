@@ -77,27 +77,24 @@ beforeEach(async () => {
   await env.DEPLOY_RUN_PROBE.get(env.DEPLOY_RUN_PROBE.idFromName(SELF_UPDATE_RUN_ID)).forget();
 });
 
-const DEADLINE_MS = 20_000;
-
-const POLL_MS = 25;
-
-/** The update, read back the way the page reads it, until it settles. */
+/**
+ * The update, awaited on the object that runs it and then read back the way the
+ * page reads it.
+ *
+ * `apply` answers before the first step: the plan runs on the object's alarm.
+ * The object parks this call on the end of that delivery and answers with the
+ * state it left (`settledAfter`), so the read through `/api/updates/run` is the
+ * page's own path taken ONCE, over a ledger that has stopped moving — not a
+ * poll racing whatever else the machine is running.
+ */
 async function settled(): Promise<DeploySnapshot> {
-  const deadline = Date.now() + DEADLINE_MS;
+  await env.DEPLOY_RUN_PROBE.get(env.DEPLOY_RUN_PROBE.idFromName(SELF_UPDATE_RUN_ID))
+    .settledAfter(['done', 'failed']);
 
-  const read = async (): Promise<DeploySnapshot> => v.parse(
+  return v.parse(
     DeploySnapshotSchema,
     JSON.parse((await env.UPDATES_PROBE.hit('GET', '/api/updates/run', OWNER)).body),
   );
-
-  let held = await read();
-
-  while (held.state !== 'done' && held.state !== 'failed' && Date.now() < deadline) {
-    await scheduler.wait(POLL_MS);
-    held = await read();
-  }
-
-  return held;
 }
 
 describe('a deployment updating itself', () => {

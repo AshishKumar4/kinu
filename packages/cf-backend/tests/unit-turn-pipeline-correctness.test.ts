@@ -6,7 +6,7 @@ import {
   MERGE_POLICY_BINDING, memberBody, mergePolicyProfile, scriptedTurnModel, toolExecute,
 } from '@kinu.run/test-utils';
 import {
-  MergeOutputSchema, WORKSPACE_RUN_ID, actorReferenceOf, listQueuedShadowTrials,
+  MergeOutputSchema, WORKSPACE_RUN_ID, listQueuedShadowTrials,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   type CompletedTurn, type ReasoningEffort, type ResolvedTurnProfile,
 } from '@kinu.run/core';
@@ -385,31 +385,31 @@ describe('turn-pipeline correctness wiring', () => {
     // pane drew an empty model while its pick wrote the workspace's. The
     // snapshot now carries the same resolution the turn makes, with the
     // source the pick would name.
+    //
+    // The child is added the way the tab strip's "+" adds one
+    // (`createSubordinateAgent`), so the roster row the snapshot resolves
+    // through is the row a real add writes — the read under test is then the
+    // whole path a pane takes, not a seeded row beside it.
     const workspace = orchestratorHarness();
     workspace.agent.harnessInstallCatalog({
       tiers: { default: { model: 'workers-ai/account-default' } },
       availableModels: ['workers-ai/account-default', 'workers-ai/pinned-model'],
     });
     await workspace.agent.setModel('workers-ai/pinned-model');
+    // An added agent inherits the workspace's purpose, so the workspace has to
+    // have one — the same order the owner does it in.
+    await workspace.agent.setSoul('# Purpose\n\nShip the deploy gates.');
 
-    const hire = await hostedSubordinateHarness(workspace, {
-      name: 'task-pinned-snapshot', displayName: '', nameOrigin: 'auto', mission: 'work the brief',
-    });
+    const added = await workspace.agent.createSubordinateAgent();
 
-    workspace.agent.harnessRoster().create({
-      name: 'task-pinned-snapshot', actorReference: actorReferenceOf(hire.actor.handle), birth: null,
-      deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null,
-      createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-    });
-
-    const pinned = await workspace.agent.getActorSnapshot('task-pinned-snapshot');
+    const pinned = await workspace.agent.getActorSnapshot(added.name);
     expect(pinned.model).toEqual({ model: 'workers-ai/pinned-model', source: 'workspace' });
 
     // Unpin the workspace: the same read resolves the role's tier, and says
     // the role chose it — the only other answer a picker can show.
     workspace.db.prepare("DELETE FROM actor_config WHERE key = 'model'").run();
 
-    const unpinned = await workspace.agent.getActorSnapshot('task-pinned-snapshot');
+    const unpinned = await workspace.agent.getActorSnapshot(added.name);
     expect(unpinned.model).toEqual({ model: 'workers-ai/account-default', source: 'role' });
   });
 
