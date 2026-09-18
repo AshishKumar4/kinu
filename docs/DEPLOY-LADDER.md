@@ -9,8 +9,9 @@ through.
 `scripts/ladder.ts` is the one source of truth. `scripts/deploy.sh` consumes
 `bun scripts/ladder.ts --plan` and names no gate itself. `scripts/deploy.test.ts`
 drives the real script over that plan and asserts it holds no gate command.
-Every fact the runner needs lives on the row: phase, label, weight, deadline,
-command. Tier membership and the set of required gates do not change here.
+Every fact the runner needs lives on the row or in the measured cost table:
+phase, label, threads, resident MiB, deadline, command. Tier membership and
+the set of required gates do not change here.
 What changes is which gates re-run, in what order, how wide, and when
 the run stops.
 
