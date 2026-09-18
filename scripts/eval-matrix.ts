@@ -36,25 +36,57 @@
  * that silently rewrote the account's provider credential would change what
  * every other arm measures.
  *
- * MEASURED IDS, 2026-09-18, from each provider's own listing (both answered a
- * keyless `GET /models`, so the ids below are confirmed rather than inferred):
+ * DOORS ARE TRIED IN THE OWNER'S ORDER: opencode ZEN first, then GO. A row
+ * carries a LIST of doors, each with its own base URL and its own candidate
+ * ids, and the first door whose listing answers one of its candidates wins.
+ * Ordering them here rather than picking one is what the Muse row needed: the
+ * contributor-FREE tier exists on zen and not on go.
  *
- *   muse-spark-1.3-contributor → `muse-spark-1.3-contributor`
- *     `https://opencode.ai/zen/go/v1` · 38 models listed. There is NO
- *     contributor-free variant: the listing holds `muse-spark-1.3-contributor`
- *     and `muse-spark-1.2-contributor` and nothing else matching Muse Spark,
- *     and the only free row is `union-alpha` ("Union Alpha Free"), a different
- *     model. So the spec's "contributor-free first; if refused, the contributor
- *     tier" resolves to the contributor tier, and {@link MATRIX} says so.
- *     CAVEAT, from opencode's own endpoint table: Muse Spark is served on
- *     `/v1/responses` with `@ai-sdk/openai`, NOT on `/v1/chat/completions` —
- *     so an `openai-compat` credential may be refused on that path. The row
- *     runs and the refusal is reported; it is a provider fact, not a harness
- *     one.
+ * MEASURED IDS, 2026-09-18, from each provider's own listing (all three
+ * answered a keyless `GET /models`, so the ids below are confirmed rather than
+ * inferred):
+ *
+ *   muse-spark-1.3-contributor
+ *     zen (`https://opencode.ai/zen/v1`, 71 ids) HOLDS the free tier:
+ *     `muse-spark-1.3-contributor-free` and `muse-spark-1.2-contributor-free`,
+ *     plus the plain `muse-spark-1.3` / `muse-spark-1.2`. It does NOT list a
+ *     bare `muse-spark-1.3-contributor`.
+ *     go (`https://opencode.ai/zen/go/v1`, 38 ids) holds the CONTRIBUTOR tier:
+ *     `muse-spark-1.3-contributor` and `muse-spark-1.2-contributor`, and no
+ *     free Muse at all (its only free row is `union-alpha`).
+ *     So the spec's "contributor-free first; if refused, the contributor tier"
+ *     is the door order itself: zen's `-contributor-free`, then go's
+ *     `-contributor`.
  *   mercury-2.5     → `inception/mercury-2.5` ("Inception: Mercury 2.5")
  *   ling-3.0-flash-vl → `inclusionai/ling-3.0-flash-vl`
  *     ("inclusionAI: Ling 3.0 Flash VL"; a `:free` variant also exists and is
  *     the second candidate)
+ *
+ * THE RESPONSES API, AND WHY THE MUSE ROW STILL GOES THROUGH
+ * `/chat/completions`. opencode's own endpoint table serves Muse Spark on
+ * `/v1/responses` with `@ai-sdk/openai`, not on `/v1/chat/completions`. The
+ * product DOES hold a responses-capable provider —
+ * `packages/core/src/providers/openai.ts:70-96`, whose `createModel` returns
+ * `provider.responses(modelId)` at :95 — but it cannot be pointed at a
+ * third-party base URL: line 93 builds `createOpenAI({ apiKey: 'placeholder',
+ * fetch })` with NO `baseURL`, so it resolves the SDK default
+ * `https://api.openai.com/v1`, and its credential is pinned to
+ * `OPENAI_CRED_KEY = 'openai.bearer'` (:15). The credential path that DOES
+ * carry a base URL is `openai-compat`
+ * (`packages/core/src/providers/openai-compat.ts:74-76`), and it builds
+ * `createOpenAICompatible`, which speaks `/chat/completions` only — the same
+ * surface `packages/core/src/llm.ts:355,370` builds for a workspace turn.
+ * `packages/core/src/providers/codex.ts:235` does call `provider.responses`,
+ * but that provider is the ChatGPT SUBSCRIPTION backend
+ * (`chatgpt.com/backend-api/codex/responses`, its file header line 2), not a
+ * base-URL-configurable door.
+ *
+ * So there is NO responses path in the product a third-party base URL can be
+ * routed through, and registering one would be a product change this lane does
+ * not own. The Muse row therefore runs over `openai-compat`
+ * `/chat/completions`, and {@link probeChatCompletions} records the EXACT HTTP
+ * status and body when that surface refuses — which is the finding, not a
+ * fallback this script invents.
  *
  *   bun scripts/eval-matrix.ts [--trials N] [--row <label>] [--resolve-only]
  */
@@ -92,63 +124,90 @@ const FAMILY = 'tests/evals/kinu-tasks.eval.ts';
 /** N trials per model, the family's own declared figure. */
 const DEFAULT_TRIALS = 3;
 
-interface MatrixRow {
-  /** The owner's word for this model. */
-  readonly label: string;
-  /** Which provider door it goes through. */
+/** One provider endpoint and the ids this row would accept from it. */
+interface MatrixDoor {
+  /** The door's own name, as the owner says it. */
   readonly door: string;
   /** The openai-compatible base URL the account's credential must point at. */
   readonly baseURL: string;
+  /** Ids to look for in this door's listing, in preference order. */
+  readonly candidates: readonly string[];
+}
+
+interface MatrixRow {
+  /** The owner's word for this model. */
+  readonly label: string;
+  /** Every door, IN THE OWNER'S ORDER. The first one whose listing answers a
+   *  candidate is the one the row runs through. */
+  readonly doors: readonly MatrixDoor[];
   /** Env names that may carry this provider's key, in preference order. The
-   *  first two are the tier's own generic provider-auth pair, so a row with no
+   *  last two are the tier's own generic provider-auth pair, so a row with no
    *  dedicated name still has one door rather than a new one. */
   readonly keyEnv: readonly string[];
-  /** Ids to look for in the listing, in preference order. */
-  readonly candidates: readonly string[];
   readonly note: string;
 }
 
 const MATRIX: readonly MatrixRow[] = [
   {
     label: 'muse-spark-1.3-contributor',
-    door: 'opencode-go',
-    baseURL: 'https://opencode.ai/zen/go/v1',
+    doors: [
+      {
+        door: 'opencode-zen',
+        baseURL: 'https://opencode.ai/zen/v1',
+        candidates: ['muse-spark-1.3-contributor-free', 'muse-spark-1.2-contributor-free', 'muse-spark-1.3'],
+      },
+      {
+        door: 'opencode-go',
+        baseURL: 'https://opencode.ai/zen/go/v1',
+        candidates: ['muse-spark-1.3-contributor', 'muse-spark-1.2-contributor'],
+      },
+    ],
     keyEnv: [...LIVE_MODEL_ENV.gatewayAuth],
-    candidates: ['muse-spark-1.3-contributor', 'muse-spark-1.2-contributor'],
-    note: 'no contributor-free variant exists in the listing; this IS the contributor tier. '
-      + 'Served on /v1/responses per opencode\'s endpoint table, so an openai-compat '
-      + 'credential may be refused on /v1/chat/completions.',
+    note: 'zen first per the owner\'s order, and zen is where the contributor-FREE tier lives; '
+      + 'go carries the paid contributor tier and no free Muse. Served on /v1/responses per '
+      + 'opencode\'s endpoint table, and the product has no responses path a third-party base '
+      + 'URL can use (see the header), so this row runs over /chat/completions and the refusal '
+      + 'is recorded verbatim.',
   },
   {
     label: 'mercury-2.5',
-    door: 'OpenRouter',
-    baseURL: 'https://openrouter.ai/api/v1',
+    doors: [{
+      door: 'OpenRouter',
+      baseURL: 'https://openrouter.ai/api/v1',
+      candidates: ['inception/mercury-2.5'],
+    }],
     keyEnv: ['OPENROUTER_API_KEY', ...LIVE_MODEL_ENV.gatewayAuth],
-    candidates: ['inception/mercury-2.5'],
     note: 'Inception Labs Mercury 2.5.',
   },
   {
     label: 'ling-3.0-flash-vl',
-    door: 'OpenRouter',
-    baseURL: 'https://openrouter.ai/api/v1',
+    doors: [{
+      door: 'OpenRouter',
+      baseURL: 'https://openrouter.ai/api/v1',
+      candidates: ['inclusionai/ling-3.0-flash-vl', 'inclusionai/ling-3.0-flash-vl:free'],
+    }],
     keyEnv: ['OPENROUTER_API_KEY', ...LIVE_MODEL_ENV.gatewayAuth],
-    candidates: ['inclusionai/ling-3.0-flash-vl', 'inclusionai/ling-3.0-flash-vl:free'],
     note: 'inclusionAI Ling 3.0 Flash VL.',
   },
 ];
 
 type RowResolution =
-  | { readonly kind: 'resolved'; readonly row: MatrixRow; readonly modelId: string; readonly listed: number }
+  | {
+    readonly kind: 'resolved'; readonly row: MatrixRow; readonly door: MatrixDoor;
+    readonly modelId: string; readonly listed: number;
+    /** What `POST <baseURL>/chat/completions` answered, verbatim. */
+    readonly chatSurface: string;
+  }
   | { readonly kind: 'unresolved'; readonly row: MatrixRow; readonly reason: string };
 
-/** One provider's model ids. Both doors answer the OpenAI listing shape. */
-async function listModels(row: MatrixRow, key: string | undefined): Promise<string[]> {
-  const response = await fetch(`${row.baseURL}/models`, {
+/** One door's model ids. Every door answers the OpenAI listing shape. */
+async function listModels(door: MatrixDoor, key: string | undefined): Promise<string[]> {
+  const response = await fetch(`${door.baseURL}/models`, {
     headers: key === undefined ? {} : { authorization: `Bearer ${key}` },
   });
 
   if (!response.ok) {
-    throw new Error(`GET ${row.baseURL}/models answered HTTP ${String(response.status)} `
+    throw new Error(`GET ${door.baseURL}/models answered HTTP ${String(response.status)} `
       + `${response.statusText}`);
   }
 
@@ -158,40 +217,82 @@ async function listModels(row: MatrixRow, key: string | undefined): Promise<stri
   const listing = v.safeParse(ModelListingSchema, await response.json());
 
   if (!listing.success) {
-    throw new Error(`GET ${row.baseURL}/models did not answer an OpenAI listing: `
+    throw new Error(`GET ${door.baseURL}/models did not answer an OpenAI listing: `
       + listing.issues.map((issue) => issue.message).join('; '));
   }
 
   return listing.output.data.map((entry) => entry.id);
 }
 
-/** Resolve one row against its provider's listing. The key is read but never
+/**
+ * Does `POST <baseURL>/chat/completions` serve this model at all?
+ *
+ * Asked because opencode serves Muse Spark on `/v1/responses`, and the product
+ * has no responses path a third-party base URL can use (see the header). The
+ * answer is recorded VERBATIM — status line plus the first of the body — so a
+ * refusal is a provider fact somebody can act on rather than a silent red on
+ * every episode of that row. One token, no streaming; the key never appears in
+ * the returned string.
+ */
+async function probeChatCompletions(
+  door: MatrixDoor, modelId: string, key: string | undefined,
+): Promise<string> {
+  if (key === undefined) return 'not probed: no key for this door';
+
+  const response = await fetch(`${door.baseURL}/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: modelId, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }],
+    }),
+  });
+
+  const body = (await response.text()).slice(0, 400);
+
+  return response.ok
+    ? `POST /chat/completions → HTTP ${String(response.status)} (serves this model)`
+    : `POST /chat/completions REFUSED → HTTP ${String(response.status)} ${response.statusText} — ${body}`;
+}
+
+/** Resolve one row against its doors, IN ORDER. The key is read but never
  *  echoed: only WHICH variable supplied it is reported. */
 async function resolveRow(row: MatrixRow): Promise<RowResolution> {
   const named = row.keyEnv.find((name) => (process.env[name] ?? '').trim() !== '');
   const key = named === undefined ? undefined : process.env[named]?.trim();
+  const refused: string[] = [];
 
-  try {
-    const listed = await listModels(row, key);
-    const modelId = row.candidates.find((candidate) => listed.includes(candidate));
+  for (const door of row.doors) {
+    // A door that cannot be listed is not fatal to the row: the next door in
+    // the owner's order is still a door, and the reasons accumulate so an
+    // unresolved row names every one of them.
+    let listed: string[];
 
-    if (modelId === undefined) {
-      return {
-        kind: 'unresolved', row,
-        reason: `none of ${row.candidates.join(', ')} is in the ${String(listed.length)} ids `
-          + `${row.baseURL}/models listed`
-          + `${named === undefined ? ' (no key: set one of ' + row.keyEnv.join(' / ') + ')' : ` (key from ${named})`}`,
-      };
+    try {
+      listed = await listModels(door, key);
+    } catch (cause) {
+      refused.push(`${door.door}: ${cause instanceof Error ? cause.message : String(cause)}`);
+      continue;
     }
 
-    return { kind: 'resolved', row, modelId, listed: listed.length };
-  } catch (cause) {
+    const modelId = door.candidates.find((candidate) => listed.includes(candidate));
+
+    if (modelId === undefined) {
+      refused.push(`${door.door}: none of ${door.candidates.join(', ')} in the `
+        + `${String(listed.length)} ids ${door.baseURL}/models listed`);
+      continue;
+    }
+
     return {
-      kind: 'unresolved', row,
-      reason: `${cause instanceof Error ? cause.message : String(cause)}`
-        + `${named === undefined ? `; no key — set one of ${row.keyEnv.join(' / ')}` : `; key from ${named}`}`,
+      kind: 'resolved', row, door, modelId, listed: listed.length,
+      chatSurface: await probeChatCompletions(door, modelId, key),
     };
   }
+
+  return {
+    kind: 'unresolved', row,
+    reason: `${refused.join('; ')}`
+      + `${named === undefined ? `; no key — set one of ${row.keyEnv.join(' / ')}` : `; key from ${named}`}`,
+  };
 }
 
 interface TrialResult {
@@ -387,9 +488,12 @@ function printTable(cells: readonly Cell[], resolutions: readonly RowResolution[
 
   for (const resolution of resolutions) {
     console.log(resolution.kind === 'resolved'
-      ? `resolved  ${resolution.row.label} → ${resolution.modelId} (${resolution.row.door}, `
-        + `${String(resolution.listed)} ids listed) — ${resolution.row.note}`
-      : `UNRESOLVED ${resolution.row.label} (${resolution.row.door}) — ${resolution.reason}`);
+      ? `resolved  ${resolution.row.label} → ${resolution.modelId} (${resolution.door.door}, `
+        + `${String(resolution.listed)} ids listed) — ${resolution.chatSurface} — `
+        + resolution.row.note
+      : `UNRESOLVED ${resolution.row.label} `
+        + `(doors: ${resolution.row.doors.map((door) => door.door).join(' → ')}) — `
+        + resolution.reason);
   }
 }
 
@@ -418,7 +522,8 @@ const resolutions = await Promise.all(rows.map(resolveRow));
 
 for (const resolution of resolutions) {
   console.log(resolution.kind === 'resolved'
-    ? `resolved  ${resolution.row.label} → ${resolution.modelId} (${String(resolution.listed)} ids at ${resolution.row.baseURL})`
+    ? `resolved  ${resolution.row.label} → ${resolution.modelId} via ${resolution.door.door} `
+      + `(${String(resolution.listed)} ids at ${resolution.door.baseURL}); ${resolution.chatSurface}`
     : `UNRESOLVED ${resolution.row.label} — ${resolution.reason}`);
 }
 
@@ -475,9 +580,11 @@ writeFileSync(artifact, `${JSON.stringify({
   createdAt: new Date().toISOString(),
   trials,
   resolutions: resolutions.map((resolution) => resolution.kind === 'resolved'
-    ? { label: resolution.row.label, door: resolution.row.door, baseURL: resolution.row.baseURL,
-      modelId: resolution.modelId, listed: resolution.listed, note: resolution.row.note }
-    : { label: resolution.row.label, door: resolution.row.door, baseURL: resolution.row.baseURL,
+    ? { label: resolution.row.label, door: resolution.door.door, baseURL: resolution.door.baseURL,
+      modelId: resolution.modelId, listed: resolution.listed,
+      chatSurface: resolution.chatSurface, note: resolution.row.note }
+    : { label: resolution.row.label,
+      doors: resolution.row.doors.map((door) => `${door.door} ${door.baseURL}`),
       unresolved: resolution.reason, note: resolution.row.note }),
   trialRecords: results.map((result) => ({
     label: result.label, modelId: result.modelId, trial: result.trial,
