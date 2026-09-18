@@ -192,8 +192,11 @@ export function SubordinateTabs({
             </FilledButton>
           </>}
         >
+          {/* What this button does, and what it does NOT do. The copy names no
+              second action: an agent's own helper has no delete here, and
+              "deleting would…" described a control the reader cannot reach. */}
           <p className="text-xs leading-relaxed p-text-2">
-            Dismissing removes the tab and keeps the conversation and private state. Deleting would remove them.
+            Dismissing closes the tab and stops this agent being given work. Its conversation is kept, not deleted.
           </p>
           {dismissError && <div role="alert" className="rounded-md px-2.5 py-2 text-xs p-notice-danger">{dismissError}</div>}
         </Modal>
