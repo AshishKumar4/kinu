@@ -17,9 +17,22 @@
  * 32 hex characters), and the KV, R2, Vectorize, AI Gateway, Access, DNS and
  * Workers domains resources.
  *
- * WHAT IS STILL UNMEASURED, and must be, against a live account before the
- * update path is trusted (AGENTS.md: a claim about platform behaviour cites a
- * dated measurement):
+ * WHAT ONE REAL RUN MEASURED, 2026-09-18, account f44999d1, instance
+ * `kinu-probe-202609181030`, release 0.4.0+probe-d5d744899 driven through this
+ * plan with an account API token as the bearer:
+ *   - `account` read the account and settled
+ *     `kinu-probe-202609181030.ashishkmr472.workers.dev`.
+ *   - `kv` created `kinu-probe-202609181030-auth-kv`
+ *     (5a149b52d800447f9722ffc2c9d10472).
+ *   - `r2` created all four buckets, prefixed by the instance name.
+ *   - `vectorize` STOPPED THE RUN: `code 10000 status 403 Authentication
+ *     error`, and the same refusal on a bare `GET /vectorize/v2/indexes`, so
+ *     the token carries no Vectorize permission at all. Everything created was
+ *     deleted and confirmed absent by listing.
+ *
+ * WHAT IS THEREFORE STILL UNMEASURED, because the run never reached the
+ * upload (AGENTS.md: a claim about platform behaviour cites a dated
+ * measurement):
  *   - `migrations` is sent only on the first upload (`PUT .../scripts/<name>`)
  *     and never on `POST .../versions`. The premise is that re-declaring
  *     `new_sqlite_classes` under a tag the script already applied is refused
@@ -29,8 +42,9 @@
  *     this flow — into the new version. The premise is that a version upload
  *     replaces the whole binding list unless told otherwise. UNMEASURED; the
  *     `deploymentSecrets` read-through it replaced was the compensation for it.
- * Everything else here is proved against the fake transport in the suite, and
- * the first real run is the measurement.
+ * Both need one credential that can reach Vectorize; nothing else was
+ * missing. Everything else here is proved against the fake transport in the
+ * suite.
  */
 import * as v from 'valibot';
 import { cloudflareResult, readEnvelope, type CloudflareTransport, type UploadPart } from './cloudflare';

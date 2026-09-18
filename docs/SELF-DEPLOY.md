@@ -66,6 +66,27 @@ publishes under `/downloads/`:
 
 The flow never reads the repository. It reads `release.json`.
 
+### What the artifact weighs, and what that costs the run
+
+Measured 2026-09-18 at `d5d744899` with `scripts/build-worker-release.ts`: the
+artifact is 27.35 MiB compressed and 107.99 MiB unpacked, 118 modules and 427
+assets, biggest single member 21.5 MiB
+(`client/_assets/opencode/1.16.2/chunks.json`).
+
+It does not fit in the Durable Object that installs it. The flow buffers the
+compressed bytes to check the published digest, then holds the unpacked
+archive for the length of the plan — 135.34 MiB together, before one asset is
+base64'd for the upload. `do.isolate.transient_alloc_reset` in
+`packages/core/src/platform-catalog.ts` measured a Durable Object reset about
+1.7 s after a transient allocate-and-free of 128 MiB, with the request already
+answered 200. So the Cloudflare door cannot install this release from inside
+`DeployRunDO` today. The footprint's shape is measured in
+`packages/cf-backend/tests/workerd/deploy-ledger.test.ts`: an 8 MiB release
+peaks at 2.87x its unpacked size. Which way out we take is undecided — a
+smaller artifact, member-at-a-time streaming out of R2, or the upload run
+somewhere with more memory. `kinu deploy local` is unaffected: it unpacks to
+disk.
+
 ## The Cloudflare door
 
 1. **Sign in with Cloudflare.** A self-managed OAuth client owned by Kinu,
@@ -207,3 +228,23 @@ Cloudflare door. No user repository and no Workers Builds.
    bash`) that puts a pinned workerd in `~/.kinu/local/bin/` — until then a
    local instance uses the `workerd` on PATH — the runtime cache seed, and the
    local owner account the installer creates.
+
+6. **Not done: the Cloudflare door has never deployed anything.** One real run
+   was driven through the plan on 2026-09-18 with an account API token as the
+   bearer (instance `kinu-probe-202609181030`, release
+   `0.4.0+probe-d5d744899`). It read the account, settled
+   `kinu-probe-202609181030.ashishkmr472.workers.dev`, created the KV namespace
+   and all four R2 buckets, and stopped at the Vectorize step: `code 10000
+   status 403 Authentication error`, the same refusal on a plain
+   `GET /vectorize/v2/indexes`, so that token carries no Vectorize permission
+   in either direction. Every resource it made was deleted and confirmed gone
+   by listing (`kinu-logs/wave4-0917/selfdeploy/measure-*.log`).
+
+   So nothing downstream of Vectorize has been measured: no upload, no
+   deployment pointer, no `/api/health` answer from a deployment this flow
+   made, and neither of the two version-upload premises in
+   `packages/core/src/deploy/steps.ts` (`migrations` only on the first upload,
+   `keep_bindings` carrying the live secrets). The next run needs one
+   credential that can reach Vectorize; nothing else was missing. The memory
+   finding above is the other thing standing between this door and a real
+   deployment.
