@@ -2,8 +2,8 @@
 
 Design, decided with the owner on 2026-09-15 and 2026-09-16: the deployment
 owns its own key, the local account model, no monitor locally; the owner
-creates the OAuth client. Steps 1 to 4 of the order of work are built
-(2026-09-18).
+creates the OAuth client. All five steps of the order of work are built
+(2026-09-18); what the local door still owes is named at step 5.
 Research and measurements: `~/kinu-logs/self-deploy/RESEARCH.md` and
 `oauth-scopes.json` (the 387-scope catalog, read 2026-09-15 with a wrangler
 session). The research file's "Option A" is a different thing — Workers Builds
@@ -118,19 +118,20 @@ self-update work already covers the devices.
 
 ## The local door
 
-`curl kinu.run/install-local.sh | bash` lays down, under `~/.kinu/local/`,
-the same release artifact, a pinned workerd binary, a generated workerd
-configuration rendered from `release.json` (Durable Object storage and KV and
-R2 on local disk, assets from the artifact, the runtime cache seed unpacked),
-and a supervisor in the shape of the existing daemon command. No container
+`kinu deploy local` (and, later, `curl kinu.run/install-local.sh | bash`) lays
+down, under `~/.kinu/local/`, the same release artifact, a pinned workerd
+binary, a generated workerd configuration rendered from `release.json`
+(Durable Object storage and KV and R2 on local disk, assets from the artifact,
+the runtime cache seed unpacked), and a supervisor in the shape of the
+existing daemon command. No container
 and no monitor: the cron-driven monitor is kinu.run's own uptime probe and has
 no job on a local instance. Sign-in is a local account the installer creates
 as the default owner, username `local-<short suffix>`, printed once;
 onboarding asks for the name as it does today and offers a password, and a
 user who skips it keeps the default account bound to that machine. Devices
 connect through the same approval flow as kinu.run. Updates are the CLI's update channel with a
-different artifact name. The local instance serves `http://` on a port the
-installer prints; TLS is the host's concern.
+different artifact name. The local instance serves `http://` on the port the
+command prints, 8787 by default; TLS is the host's concern.
 
 ## Not in this design
 
@@ -174,5 +175,20 @@ Cloudflare door. No user repository and no Workers Builds.
    deployment's own record, and the Updates page that polls the run. Proved in
    workerd against the same fake plane:
    `packages/cf-backend/tests/workerd/deploy-updates.test.ts` (4 rows).
-5. The local door: installer, workerd config renderer, supervisor. **Not
-   built.**
+5. **Built 2026-09-18.** The local door: `kinu deploy local` reads the
+   channel, lays the release down under `~/.kinu/local/releases/<version>/`
+   with a `current` symlink, renders `workerd.capnp` and `config.json` from
+   `release.json` (`packages/core/src/deploy/local.ts`), and starts workerd on
+   8787 through a pidfile supervisor — `kinu deploy local [start|stop|status]`.
+   Durable Object storage and every KV and R2 binding are directories under
+   `state/`; Vectorize, AI, the Worker loader, Analytics Engine and the
+   container are not hosted by workerd and are printed by name as what a local
+   instance is without. Proved end to end against the real workerd binary in
+   `packages/cli/tests/deploy-local.test.ts` (the instance answers on its own
+   port), the rendering in
+   `packages/core/tests/unit-deploy-flow.test.ts`.
+
+   Still to come: the one-line installer (`curl kinu.run/install-local.sh |
+   bash`) that puts a pinned workerd in `~/.kinu/local/bin/` — until then a
+   local instance uses the `workerd` on PATH — the runtime cache seed, and the
+   local owner account the installer creates.

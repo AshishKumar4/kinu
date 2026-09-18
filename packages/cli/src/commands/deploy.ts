@@ -1,5 +1,6 @@
 /**
- * `kinu deploy cloudflare` — the same door as the page, from a terminal.
+ * `kinu deploy` — the two doors a terminal has: `cloudflare` (the same run as
+ * the page) and `local` (this machine, `./deploy-local.ts`).
  *
  * ONE FLOW, ONE LEDGER. Nothing here re-implements a step. The command mints a
  * run on kinu.run, authorizes on a loopback redirect the way wrangler does,
@@ -24,10 +25,21 @@ import { defaultOrigin } from '../cloud-api';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { ask, askSecret, requireInteractiveTerminal } from '../prompt';
 import { openBrowser } from './auth';
+import { localDoor } from './deploy-local';
 
-export async function deployCommand(door: string | undefined, opts: { origin?: string } = {}): Promise<void> {
+export async function deployCommand(
+  door: string | undefined,
+  action: string | undefined,
+  opts: { origin?: string; port?: string } = {},
+): Promise<void> {
+  if (door === 'local') {
+    await localDoor(action, opts);
+
+    return;
+  }
+
   if (door !== 'cloudflare') {
-    console.log(`${WARN('!')} Name a door: ${ACCENT('kinu deploy cloudflare')}`);
+    console.log(`${WARN('!')} Name a door: ${ACCENT('kinu deploy cloudflare')} or ${ACCENT('kinu deploy local')}`);
 
     return;
   }

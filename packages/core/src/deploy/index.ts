@@ -13,6 +13,14 @@ export {
 
 export { TarArtifact, sha256Hex } from './artifact';
 
+export { fetchReleaseArtifact, fetchReleaseManifest } from './channel';
+
+export {
+  LOCAL_PORT, LocalConfigSchema, localLayout, releaseDir, renderLocalConfig,
+  renderWorkerdConfig, unhostedBindings, workerdDirectories,
+  type LocalConfig, type LocalLayout,
+} from './local';
+
 export {
   CLI_DEPLOY_REDIRECT_PORT, CLI_DEPLOY_REDIRECT_URI, CLOUDFLARE_DEPLOY_SCOPES,
   authorizeUrl, createPkcePair, exchangeDeployCode, refreshDeployToken,

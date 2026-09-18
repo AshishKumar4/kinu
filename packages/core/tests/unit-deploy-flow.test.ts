@@ -13,8 +13,9 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY,
-  MINTED_SECRETS,
-  REFRESH_TOKEN_KEY, deployDoor, deployPlan, factsFrom, runDeployPlan,
+  LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS,
+  REFRESH_TOKEN_KEY, deployDoor, deployPlan, factsFrom, localLayout, releaseDir, renderLocalConfig,
+  renderWorkerdConfig, runDeployPlan, unhostedBindings, workerdDirectories,
 } from '../src/deploy/index';
 import type {
   CloudflareCall, CloudflareHttpResponse, CloudflareTransport, DeployContext, DeployInputs,
@@ -660,5 +661,85 @@ describe('the door client', () => {
     ) satisfies typeof fetch);
 
     await expect(misrouted.snapshot()).rejects.toThrow('/api/deploy/runs/run-1?key=k did not answer JSON');
+  });
+});
+
+/**
+ * The local door's rendered configuration. What a reader of the capnp must be
+ * able to trust: every module is embedded from the release that `current`
+ * names, the stores workerd has no implementation of are directories under
+ * `state/`, the Durable Object classes are SQL-backed with a key that does not
+ * move between renders, and a binding workerd cannot host is named rather than
+ * rendered as something else.
+ */
+describe('the workerd configuration for a local instance', () => {
+  test('renders the release, its stores and its objects, and names what a local instance loses', () => {
+    const config = renderWorkerdConfig({ manifest: MANIFEST, version: MANIFEST.version, port: 8787 });
+
+    expect(config).toContain('(name = "http", address = "127.0.0.1:8787", http = (), service = "main"),');
+    expect(config).toContain('(name = "index.js", esModule = embed "releases/0.4.0+abc1234/worker/index.js"),');
+    expect(config).toContain('(name = "chunk.js", esModule = embed "releases/0.4.0+abc1234/worker/chunk.js"),');
+    expect(config).toContain('compatibilityDate = "2025-12-01",');
+    expect(config).toContain('compatibilityFlags = ["nodejs_compat"],');
+
+    // KV and R2 are directories: workerd has neither, and the doc's "KV and R2
+    // on local disk" is this.
+    expect(config).toContain('(name = "kv-AUTH_KV", disk = (path = "state/kv/kinu-auth-kv", writable = true)),');
+    expect(config).toContain('(name = "r2-BACKUP_BUCKET", disk = (path = "state/r2/kinu-backups", writable = true)),');
+    expect(config).toContain('(name = "AUTH_KV", service = "kv-AUTH_KV"),');
+    expect(config).toContain('(name = "BACKUP_BUCKET", service = "r2-BACKUP_BUCKET"),');
+
+    // The assets directory is the release's own and is never written to.
+    expect(config).toContain('(name = "assets", disk = (path = "releases/0.4.0+abc1234/client", writable = false)),');
+    expect(config).toContain('(name = "ASSETS", service = "assets"),');
+
+    // Both classes the migrations declare, SQL-backed, under one storage
+    // directory; the key is derived from the class name, because workerd keys a
+    // class's on-disk database by it.
+    expect(config).toContain('(className = "OrchestratorAgent", uniqueKey = "kinu-local-OrchestratorAgent", enableSql = true),');
+    expect(config).toContain('(className = "KinuSandbox", uniqueKey = "kinu-local-KinuSandbox", enableSql = true),');
+    expect(config).toContain('durableObjectStorage = (localDisk = "do-state"),');
+    expect(config).toContain('(name = "OrchestratorAgent", durableObjectNamespace = "OrchestratorAgent"),');
+    expect(config).toContain('(name = "Sandbox", durableObjectNamespace = "KinuSandbox"),');
+
+    // A carried var travels; a derived or `ours` var never reaches a local
+    // instance's config.
+    expect(config).toContain('(name = "SANDBOX_TRANSPORT", text = "rpc"),');
+    expect(config).not.toContain('CLI_PUBLIC_ORIGIN');
+    expect(config).not.toContain('DEV_USER_EMAIL');
+
+    // Nothing workerd cannot host is rendered as a binding, and all of it is
+    // reported by name.
+    expect(config).not.toContain('MEMORY_VECTORS');
+    expect(config).not.toContain('LOADER');
+    expect(unhostedBindings(MANIFEST)).toEqual(['MEMORY_VECTORS', 'AGENT_METRICS', 'AI', 'LOADER']);
+
+    // Every writable directory the config names, because workerd refuses to
+    // start on a disk service whose directory is absent: it answered
+    // `Directory named "do-state" not found: state/do` (workerd 2026-09-03,
+    // measured 2026-09-18) until the installer created them.
+    expect(workerdDirectories(MANIFEST)).toEqual(['state/do', 'state/kv/kinu-auth-kv', 'state/r2/kinu-backups']);
+  });
+
+  test('the layout is one tree, and the config records the address it settled on', () => {
+    const layout = localLayout('/home/somebody/.kinu');
+
+    expect(layout.root).toBe('/home/somebody/.kinu/local');
+    expect(layout.current).toBe('/home/somebody/.kinu/local/current');
+    expect(layout.capnp).toBe('/home/somebody/.kinu/local/workerd.capnp');
+    expect(releaseDir(layout, MANIFEST.version)).toBe('/home/somebody/.kinu/local/releases/0.4.0+abc1234');
+
+    const config = v.parse(LocalConfigSchema, JSON.parse(renderLocalConfig({
+      version: MANIFEST.version,
+      port: LOCAL_PORT,
+      at: new Date('2026-09-18T00:00:00.000Z'),
+    })));
+
+    expect(config).toEqual({
+      version: '0.4.0+abc1234',
+      port: 8787,
+      address: 'http://127.0.0.1:8787',
+      renderedAt: '2026-09-18T00:00:00.000Z',
+    });
   });
 });
