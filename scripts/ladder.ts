@@ -1927,22 +1927,20 @@ export const LADDER: readonly Gate[] = [
     run: 'bun test --timeout=0 scripts/live-app-tier.test.ts',
     label: 'Live app in a browser',
     tier: 'deploy',
-    // Measured 2026-09-17 alone on the 24-thread workstation, three runs:
-    // 53.0s wall at load 1.4, 54.7s at load 2.15, 53.0s at load 1.9 — 75.4s
-    // cpu, 2 threads, 12 rows driven end to end (two of them red on the pane
-    // transcript leak they exist to measure, which costs the wall nothing).
-    // No deadline of its own: 53s is an eighth of the shared 480s wall.
+    // Measured 2026-09-17 alone on the 24-thread workstation. Its solo wall is
+    // 53.0s (twice, at load 1.4 and 1.9; 54.7s at load 2.15) for 12 rows driven
+    // end to end — two of them red on the pane transcript leak they exist to
+    // measure, which costs the wall nothing. No deadline of its own: 53s is an
+    // eighth of the shared 480s wall.
     //
-    // ITS MEASURED MEMORY IS A FLOOR, NOT ITS FOOTPRINT. gate-cost.json reads
-    // 203 MiB, which is the `bun test` process alone: the sampler sums the
-    // row's own SESSION, and both of this row's heavy children leave it —
-    // live-app-harness spawns `vite dev` with `detached` (setsid, so the
-    // teardown can signal workerd with the group) and puppeteer spawns Chrome
-    // detached by default. Sampled by pid tree over the same two runs instead:
-    // 5013 and 5115 MiB peak (vite 2.6 GiB, workerd 1.1 GiB, Chrome 1.0 GiB,
-    // the row 0.2 GiB). The wave therefore admits this row against a figure
-    // 24x under its real hold; the instrument's basis is one change for every
-    // row it has measured, so it is reported rather than edited here.
+    // The figures in gate-cost.json are the pid-tree ones: 5112 MiB and 114.8
+    // CPU seconds over a 59.1s wall, three threads. The session-basis sampler
+    // read 203 MiB and 75.4s for the same row, because both of this row's heavy
+    // children leave its session — live-app-harness spawns `vite dev` detached
+    // (setsid, so the teardown signals workerd through the group) and puppeteer
+    // spawns Chrome detached by default. The 6s of extra wall is the sampler's
+    // own cost: it now walks Chrome's ~110 processes for their runnable tasks.
+    // The tree basis is L7 in docs/ARCHITECTURE-DECISIONS.md.
     seconds: 53,
     catches: 'a defect in the SHIPPED workspace surfaces that every source-reading gate and '
       + 'every gallery gate here is structurally unable to see. The gallery serves a FROZEN '

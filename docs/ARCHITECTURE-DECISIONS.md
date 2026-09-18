@@ -383,7 +383,7 @@ workerd rows declared one thread each; `gate:dead-code` declared one and holds
 
 The figures (`scripts/gate-cost.json`, written by
 `bun scripts/gate-cost-measure.ts`; each row alone under the wave's own
-`timeout` wrapper, its whole session sampled — summed `rss` for memory, tasks
+`timeout` wrapper, its whole process tree sampled (L7) — summed `rss` for memory, tasks
 in state R for parallel demand, getrusage for CPU seconds). Heaviest first,
 24-thread workstation, 2026-09-17:
 
@@ -443,6 +443,50 @@ shape on a second row. Raising either deadline is refused here. Rows whose
 figures come from a run that exited non-zero (the gate self-tests row among
 them, red on main through `test-clocks`) are floors, not costs, and the table
 records each exit status so a reader can see which.
+
+L7. A row's cost is sampled over its PROCESS TREE — the row's session plus
+every descendant by ppid — not over its session alone. Decided 2026-09-17.
+This reverses the sampling half of L6, which held the sampler and deploy.sh's
+kill to one blind spot on purpose; killability and cost are different
+questions, and memory a detached child holds is memory the box does not have.
+
+What L6 missed. A child that calls `setsid` leaves the row's session, and the
+two heaviest children a browser row has both do it: `live-app-harness.ts`
+spawns `vite dev` detached so the teardown can signal workerd through the
+group (d6b075bd8), and puppeteer spawns Chrome detached by default. Measured
+under both shapes on the 24-thread workstation, 2026-09-17, the live-app row:
+203 MiB and 75.4 CPU seconds by session, 5,112 MiB and 114.8 CPU seconds by
+tree, against an independent pid-tree sampler that read 5,013 and 5,115 MiB
+over two runs (vite 2.6 GiB, workerd 1.1 GiB, Chrome 1.0 GiB, the row itself
+0.2 GiB). Every browser row carried the Chrome half of it.
+
+Re-measured with the fixed instrument, before → after:
+
+| row | peak RSS | cpu s | thr |
+| --- | --- | --- | --- |
+| UI gate self-tests | 2150 → 4124 MiB | 142.0 → 89.5 | 1 → 1 |
+| React runtime identity | 3042 → 3537 MiB | 26.3 → 22.9 | 2 → 2 |
+| Swarm-tree geometry | 2153 → 3293 MiB | 14.8 → 30.9 | 1 → 2 |
+| Public pages render | 2077 → 3328 MiB | 17.6 → 37.1 | 1 → 1 |
+| Chat infinite scroll | 2108 → 3152 MiB | 9.6 → 12.6 | 1 → 1 |
+| Live app in a browser | 202 → 5112 MiB | 75.4 → 114.8 | 2 → 3 |
+| Gate self-tests: secrets, corpus, preflight | 486 → 609 MiB | 37.2 → 30.4 | 2 → 2 |
+
+Rows that spawn no detached child were left alone, and the control says their
+figures stand on either basis: re-measured twice under the new sampler,
+`gate:do-init` read 592 → 572 MiB and `gate:platform` 86.2 → 85.6 MiB, both
+inside sampling jitter, and those two runs were reverted.
+
+The sampler now costs more on a browser row: it walks Chrome's ~110
+processes for their runnable tasks, and the live-app row's wall moved 53.0 s
+to 59.1 s across the change. The row declares the 53.0 s solo wall, which is
+the smaller divisor and charges the row more threads, not fewer.
+
+Reported, not fixed. Summed over the 72 source rows, the wave's peak resident
+set is now 157.3 GiB against a cap of 30.7 GiB — 75% of the 41.0 GiB
+MemAvailable read on this box, 2026-09-17 — where the same sum read 129 GiB
+while every browser row was 2 GiB short. The wave already serialises on that
+cap and now serialises on the true figures. The cap is untouched.
 
 
 ## Open
