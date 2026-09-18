@@ -51,6 +51,20 @@ export interface ScriptedRequest {
 
 export type ScriptedModel = (request: ScriptedRequest) => ScriptedAnswer;
 
+/** Wrap a script so the run's FIRST request gets `first` — the caller knows
+ *  by construction which turn opens the run (a fresh workspace's create
+ *  queues its genesis turn before anything else can speak), while matching
+ *  on the request's text would guess. */
+export function countingScript(script: ScriptedModel, first: ScriptedAnswer): ScriptedModel {
+  let seen = 0;
+
+  return (request) => {
+    seen += 1;
+
+    return seen === 1 ? first : script(request);
+  };
+}
+
 const TextPartSchema = v.object({ type: v.optional(v.string()), text: v.optional(v.string()) });
 
 /** A message's text, whatever shape the provider serialized it in: a plain
@@ -155,7 +169,7 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
         const answer = script(asked);
         // Every request's surface, on the run's own log: a script that answered
         // prose where a tool call was meant is read here first.
-        process.stderr.write(`scripted-model: tools=${asked.available.join(',')} called=${asked.called.join(',')}\n`);
+        process.stderr.write(`scripted-model: tools=${asked.available.join(',')} called=${asked.called.join(',')} users=${JSON.stringify(asked.userTexts)}\n`);
         answers.push(answer);
         response.setHeader('content-type', 'text/event-stream');
         response.end(streamOf(answer));

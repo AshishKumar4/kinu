@@ -157,3 +157,4 @@ CC-CORPUS-*.md
 # checkout. It is EMPTY residue, never output anybody wants, and without this
 # line a `git add -A` in an affected tree commits it.
 /:memory:/
+kinu-logs/
