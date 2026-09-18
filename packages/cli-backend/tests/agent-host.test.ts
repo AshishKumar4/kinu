@@ -625,13 +625,21 @@ describe('LocalAgentHost', () => {
         if (!first) throw new Error('The hired child never reached its model.');
         const conversation = hireConversation(first);
 
+        // THE BRIEF IS THE TURN. The child's driving message is the mission
+        // verbatim, never the reactor's `task: …` drain line: an assignment is
+        // the whole input of the turn it buys, and the delegation runner admits
+        // it as one. A child reading `1 event arrived … task: <mission>` is
+        // working from a paraphrase of its own instructions.
         if (context === 'inherit') {
           expect(conversation.slice(0, 3)).toEqual(HIRE_FORK_PREFIX);
-          expect(conversation.findIndex((message) => message.content.includes(`task: ${HIRE_FORK_MISSION}`))).toBeGreaterThan(2);
+          expect(conversation.findIndex((message) => message.content === HIRE_FORK_MISSION)).toBeGreaterThan(2);
         } else {
-          expect(conversation[0]?.content).toContain(`task: ${HIRE_FORK_MISSION}`);
+          expect(conversation[0]?.content).toBe(HIRE_FORK_MISSION);
           expect(conversation).not.toContainEqual(HIRE_FORK_PREFIX[1]);
         }
+
+        expect(conversation.map((message) => message.content).join('\n'))
+          .not.toContain('event arrived while you were');
       } finally {
         await host.close();
       }
@@ -678,7 +686,7 @@ describe('LocalAgentHost', () => {
       if (!followup) throw new Error('The second assignment never reached the child provider.');
       const conversation = hireConversation(followup);
       expect(conversation.slice(0, 3)).toEqual(HIRE_FORK_PREFIX);
-      expect(conversation.filter((message) => message.content.includes(`task: ${HIRE_FORK_MISSION}`))).toHaveLength(1);
+      expect(conversation.filter((message) => message.content === HIRE_FORK_MISSION)).toHaveLength(1);
       expect(conversation).toContainEqual({ role: 'assistant', content: HIRE_CHILD_CONTEXT });
       expect(followup.prompt).toContainEqual(tool);
       const next = conversation.findIndex((message) => message.content.includes(HIRE_FORK_FOLLOWUP));
@@ -770,11 +778,11 @@ describe('LocalAgentHost', () => {
     // directory row records the release, and the actor's own rows — the
     // transcript itself — stay.
     expect(actorLifecycle(dbPath, reference.actorId)).toBe('retained');
-    // The task it was assigned, as its own turn read it — the drain wraps the
-    // ingress line around it, so the assignment is a substring of the
-    // transcript rather than a message of its own.
-    expect(userMessages(dbPath, reference.actorId).join('\n'))
-      .toContain('task: Find the root cause and report it.');
+    // The task it was assigned, as its own turn read it: a message of its own,
+    // carrying the brief and nothing else. The reactor used to wrap an ingress
+    // line around it, which left the child working from a summary.
+    expect(userMessages(dbPath, reference.actorId))
+      .toContain('Find the root cause and report it.');
     await expect(team.assign({ name: 'researcher', task: 'again', mode: 'build' }))
       .rejects.toThrow('subordinate "researcher" is dismissed');
 
@@ -800,6 +808,127 @@ describe('LocalAgentHost', () => {
     // And the retained one was untouched by its sibling's destroy.
     expect(actorRowCount(dbPath, reference.actorId)).toBeGreaterThan(0);
     await host.close();
+  });
+
+  /**
+   * B10, on the local host: ONE assignment row, ONE runner, ONE turn.
+   *
+   * The defect was two runners over one row kind. The reactor admitted a
+   * `subordinate_task` like any external event, digested it into "1 event
+   * arrived while you were idle … [subordinate_task] from workspace …", and
+   * handed that to the child's turn admission; on the cloud backend that
+   * admission re-published the digest as a NEW assignment, so the two runners
+   * fed each other — 242 rows from one hire, bodies nesting 253 → 850
+   * characters, measured 2026-09-17 in the workerd pool. The local host had one
+   * runner and therefore no loop, but the same wrong input: its child worked
+   * from the wrapper rather than from the brief.
+   *
+   * Everything asserted here is read through the public host surface — the
+   * `team` port, the subscription, the model the child actually called, and the
+   * rows on disk. Nothing stubs the runner or reads source text.
+   */
+  test('a hired child runs its brief once, as its own instruction, under the row\'s mode', async () => {
+    const brief = 'Reconcile the ledger and report the variance.';
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const childPrompts: LanguageModelV2CallOptions[] = [];
+    let calls = 0;
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async (options) => {
+        calls += 1;
+
+        // The child speaks first: its assignment is what starts this scene, and
+        // the parent's own turn only runs once the report reaches it.
+        if (calls === 1) childPrompts.push(options);
+
+        const answer = calls === 1 ? 'variance reconciled' : 'noted';
+        const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'text-start', id: '0' });
+              controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    });
+
+    const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const childTurns: Array<{ kind: string; workMode: string; text: string }> = [];
+    const reported = Promise.withResolvers<void>();
+
+    host.subscribe((agent, event) => {
+      if (agent === 'root/auditor' && event.type === 'turn-start') {
+        childTurns.push({ kind: event.kind, workMode: event.workMode, text: event.text });
+      }
+
+      if (
+        event.type === 'broadcast' && event.event.type === 'subordinate_event'
+        && event.event.status === 'progress'
+      ) reported.resolve();
+    });
+
+    try {
+      const team = await host.team('root');
+      const created = await team.create({ name: 'auditor', role: 'researcher', mission: 'Watch the ledger.' });
+      const reference = created.subordinate.actorReference;
+
+      if (!reference) throw new Error('The created subordinate has no actor reference.');
+      const answered = awaitTurns(host, 'root/auditor', 1);
+      await team.assign({ name: 'auditor', task: brief, mode: 'build' });
+      await answered;
+      await reported.promise;
+
+      // ONE turn, driven by the brief itself and under the mode the row was
+      // admitted with. `programmatic` is the fact that opens the child's
+      // `report` surface and the fact the relay policy reads, so the shape the
+      // reactor used to produce is preserved in everything except the text.
+      expect(childTurns).toEqual([{ kind: 'programmatic', workMode: 'build', text: brief }]);
+
+      // What the child's model was actually handed. Exactly ONE user text
+      // mentions the brief and that text IS the brief: a wrapper would still
+      // contain it, so the equality is what separates the instruction from a
+      // summary of it. The turn-local `dynamic_context` block rides beside it as
+      // harness state and is not conversation.
+
+      const prompt = childPrompts[0]?.prompt ?? [];
+
+      const heard = prompt.flatMap((message) => message.role === 'user'
+        ? message.content.flatMap((part) => part.type === 'text' ? [part.text] : [])
+        : []);
+
+      expect(heard.filter((text) => text.includes(brief))).toEqual([brief]);
+      expect(JSON.stringify(prompt)).not.toContain('event arrived while you were');
+
+      // One row for one brief, and its body IS the brief — a re-admission loop
+      // shows up here as a second row whose body quotes the first.
+      const view = new Database(dbPath, { readonly: true });
+
+      const assignments = view.query<{ body: string }, [string]>(
+        `SELECT json_extract(payload, '$.body') AS body FROM agent_log
+         WHERE kind = 'event' AND variant = 'subordinate_task' AND actor_id = ?`,
+      ).all(reference.actorId);
+
+      const reports = view.query<{ n: number }, []>(
+        "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+      ).get()?.n ?? 0;
+
+      view.close();
+      expect(assignments.map((row) => row.body)).toEqual([brief]);
+      expect(reports).toBe(1);
+    } finally {
+      await host.close();
+    }
   });
 
   /**

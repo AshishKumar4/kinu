@@ -240,6 +240,24 @@ research to a researcher task hire, general work to a task hire; coupled,
 dependent or single-context work stays with the root. Subordinates keep their
 role prompts. Decided 2026-09-13; lands with `feat/delegation-prompts`.
 
+D3. An assignment is not an external event, so no reactor drains one. A
+`subordinate_task` row is the whole turn input of the subordinate it names, and
+one runner owns it: core `drainAssignments`
+(`core/src/subordinates/assignments.ts`), driven by the cloud sweep
+(`drainAdmittedDelegations`) and by the local host's pass
+(`drainAssignedWork`). `wakesADrain` states the exclusion once, for the batch,
+the wake fold and the runner. Decided 2026-09-17, commit 53c341be7. Measured
+the same day in the workerd pool (`tests/workerd/hire.test.ts`, "one brief
+produces exactly one child turn"): before, one hire brief produced 242
+`subordinate_task` rows with bodies nesting 253 -> 850 characters, because the
+reactor digested the row into "1 event arrived while you were idle …" and the
+hosted turn admission re-published that digest as a new assignment while the
+durable sweep ran the raw brief beside it; after, 1 row whose body is the
+brief. The cloud wake still arms for a pending assignment through
+`hasAdmittedDelegations`, which is workspace-wide SQL and never read
+`wakesADrain`; the local host arms nothing and re-drives on every pass and on
+open.
+
 ## Deploy ladder
 
 L1. The deploy wave is scheduled by a thread budget, not a gate count. Each
