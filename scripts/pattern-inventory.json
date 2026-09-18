@@ -78,13 +78,6 @@
       "decision": "html"
     },
     {
-      "file": "packages/cf-backend/src/hooks/use-kinu.ts",
-      "kind": "hand-parser",
-      "owner": "parseMemoryContent",
-      "sourceSha256": "e98aaef960d0f2cd869c7abeb4b4816e74944bea11b46f9a9134a19459de9258",
-      "decision": "framing"
-    },
-    {
       "file": "packages/cf-backend/src/slates/resident.ts",
       "kind": "regexp-constructor",
       "owner": "STATIC_SPECIFIER",
@@ -419,6 +412,13 @@
       "owner": "extractFinalText",
       "sourceSha256": "867fc41685eabf335ae6136eef9a6c0ae0d7dee7cb362a1410e5e585224fd388",
       "decision": "traversal"
+    },
+    {
+      "file": "packages/core/src/memory/note.ts",
+      "kind": "hand-parser",
+      "owner": "parseMemoryNotes",
+      "sourceSha256": "8f9ae1868789939eec133cef2c41d4ae14b5057f3c0cc4f83d7ce535bc33fe2a",
+      "decision": "framing"
     },
     {
       "file": "packages/core/src/prompting/attachment-sanitizer.ts",
@@ -1119,6 +1119,13 @@
       "owner": "reaches",
       "sourceSha256": "9fc4569ca194c73301508b8cb2869622ed2fc1d203b140267844601d40df1bcc",
       "decision": "sourceGate"
+    },
+    {
+      "file": "scripts/plan-demo-film.test.ts",
+      "kind": "regex-literal",
+      "owner": "tag",
+      "sourceSha256": "02b50202baeb02cf6091c74dccc9e047ef372e1a9374f7b3301cffaf4612d3e1",
+      "decision": "lexical"
     },
     {
       "file": "scripts/preflight.test.ts",
