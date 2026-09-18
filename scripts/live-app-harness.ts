@@ -18,6 +18,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Subprocess } from 'bun';
 import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppeteer';
+import { tolerate } from '@kinu.run/core/obs';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -131,6 +132,10 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
       cwd: CF,
       stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
       env: { ...process.env, ...options.env },
+      // setsid, so vite leads its own process group: teardown can signal the
+      // workerd children with it rather than orphaning them to systemd
+      // (deploy.sh:357-362 — this accumulation OOM-killed the box once).
+      detached: true,
     },
   );
 
@@ -166,7 +171,12 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
       await browser.close();
     }
   } finally {
-    child.kill(9);
+    // The group, not just vite: workerd outlives a lone-parent kill. SIGTERM
+    // first so the Cloudflare plugin's own shutdown runs; SIGKILL is the
+    // backstop for a group that never took it. An already-exited group raises
+    // ESRCH, an expected absence here.
+    tolerate(() => process.kill(-child.pid, 'SIGTERM'), 'esrch');
     await child.exited;
+    tolerate(() => process.kill(-child.pid, 'SIGKILL'), 'esrch');
   }
 }

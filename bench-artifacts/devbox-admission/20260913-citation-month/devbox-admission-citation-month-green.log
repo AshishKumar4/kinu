@@ -1,9 +1,0 @@
-bun test v1.4.0 (34cbb9a40)
-
-scripts/literature-citations.test.ts:
-[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
-
- 59 pass
- 0 fail
- 115 expect() calls
-Ran 59 tests across 1 file. [48.00ms]
