@@ -22,7 +22,6 @@
  */
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
-import type { CacheWarmReport } from './worker';
 
 /** Five minutes minus the fifteen-second lead, plus a second, expressed as an
  *  age: a request sent this long ago is one whose refresh is due now. */
@@ -32,26 +31,8 @@ const DUE_AGE_MS = 5 * 60_000 - 15_000 + 1_000;
  *  due. */
 const FRESH_AGE_MS = 30_000;
 
-const DEADLINE_MS = 10_000;
-
-const POLL_MS = 25;
-
 describe('the prompt-cache warm on the wake chain', () => {
   const open = (name: string) => env.CACHE_WARM_PROBE.get(env.CACHE_WARM_PROBE.idFromName(name));
-
-  /** Wait for the CONDITION, never for a fixed sleep: a timeout falls through
-   *  and lets the assertion report the state actually reached. */
-  const settle = async (name: string, done: (report: CacheWarmReport) => boolean): Promise<CacheWarmReport> => {
-    const deadline = Date.now() + DEADLINE_MS;
-    let report = await open(name).report();
-
-    while (!done(report) && Date.now() < deadline) {
-      await scheduler.wait(POLL_MS);
-      report = await open(name).report();
-    }
-
-    return report;
-  };
 
   it('fires past the TTL-minus-lead point with no real request in between, as a zero-output replay', async () => {
     const probe = open('fires');
@@ -61,7 +42,9 @@ describe('the prompt-cache warm on the wake chain', () => {
     });
 
     expect(at).not.toBeNull();
-    const report = await settle('fires', (r) => r.sentMaxTokens.length > 0);
+    // The wait is the DELIVERY itself: `reportAfterWake` resolves at the end of
+    // the alarm frame, so this report is the state that frame left.
+    const report = await probe.reportAfterWake();
 
     expect(report.fires).toBeGreaterThan(0);
     // The replay the provider was handed: the previous request's body with no
@@ -83,7 +66,7 @@ describe('the prompt-cache warm on the wake chain', () => {
     // itself: the counter moves, and the warm behind it is void.
     await probe.noteRealRequest();
 
-    const report = await settle('rearmed', (r) => r.fires > 0);
+    const report = await probe.reportAfterWake();
 
     expect(report.fires).toBeGreaterThan(0);
     expect(report.sentMaxTokens).toEqual([]);
@@ -121,7 +104,7 @@ describe('the prompt-cache warm on the wake chain', () => {
     });
     await probe.refuseNextSend();
 
-    const report = await settle('refused', (r) => r.refused !== null);
+    const report = await probe.reportAfterWake();
 
     // The failure is diagnosed exactly once …
     expect(report.refused).toContain('401');

@@ -272,10 +272,12 @@ export interface KinuTaskIo {
    *  an approval that queues an implementation turn, an eviction, a
    *  reconnect. */
   refresh(): Promise<{ readonly events: readonly RunEvent[]; readonly history: readonly PublicMessage[] }>;
-  /** Wait for the next run the PRODUCT opened by itself to close — the
-   *  implementation turn an approved plan queues. A no-op where no such turn
-   *  can exist (the fixtures). */
-  settleProgrammaticTurn(): Promise<void>;
+  /** Start watching for the next turn the PRODUCT opens by itself — the
+   *  implementation turn an approved plan queues — and resolve when it closes.
+   *  CALLED BEFORE the act that queues it, so the watch cannot miss a turn
+   *  that closes while the approval is still being answered. A fixture has no
+   *  such turn and answers at once. */
+  watchProgrammaticTurn(): Promise<void>;
 }
 
 /** One episode's verifier: it owns the references it computes, which is what
@@ -897,6 +899,26 @@ function hiredName(call: ToolCallEnd): string | null {
   return parsed.output.name ?? parsed.output.agent ?? null;
 }
 
+/**
+ * The wall window a set of runs occupied, read off the LEDGER's own timestamps
+ * — the deployment's clock, which is the one every `createdAt` this file
+ * compares against is stamped in. This process's clock is another machine's,
+ * and a second of skew silently empties a window check.
+ *
+ * Null when the ledger holds no event of the set: the caller says what an
+ * absent run means, because an open window and an empty one are opposite
+ * readings of "nothing ran".
+ */
+function runWindow(
+  events: readonly RunEvent[], holds: (event: RunEvent) => boolean,
+): { readonly from: number; readonly to: number } | null {
+  const stamps = events.filter(holds).map((event) => Date.parse(event.timestamp));
+
+  if (stamps.length === 0) return null;
+
+  return { from: Math.min(...stamps), to: Math.max(...stamps) };
+}
+
 const DELEGATE_AND_BUILD: KinuTaskCase = {
   id: 'delegate-and-build',
   purpose: 'A lead who delegates in parallel, plans while others work, and reports exactly what they answered.',
@@ -939,14 +961,12 @@ const DELEGATE_AND_BUILD: KinuTaskCase = {
           const ownRuns = new Set(promptToolCalls(io.events, turns[0], io.absorbedBy)
             .map((call) => call.runId));
 
-          const stamps = io.events
-            .filter((event) => ownRuns.has(event.runId)
-              || (event.type === 'run_start' && event.userMessage === turns[0]))
-            .map((event) => Date.parse(event.timestamp));
-
-          const window = stamps.length === 0
-            ? { from: 0, to: Number.MAX_SAFE_INTEGER }
-            : { from: Math.min(...stamps), to: Math.max(...stamps) };
+          // A ledger holding none of turn 1's own rows leaves the window OPEN:
+          // there is nothing to place the plan against, and refusing every plan
+          // for that would grade the read rather than the agent.
+          const window = runWindow(io.events, (event) => ownRuns.has(event.runId)
+            || (event.type === 'run_start' && event.userMessage === turns[0]))
+            ?? { from: 0, to: Number.MAX_SAFE_INTEGER };
 
           // APPROVED WHATEVER WAS SUBMITTED. The harness plays the reviewer, and
           // a reviewer approves the plan in front of them — grading the step
@@ -1007,12 +1027,17 @@ const DELEGATE_AND_BUILD: KinuTaskCase = {
           // THE INTERLUDE: approve the plan the way the review pane does, then
           // wait for the implementation turn the approval QUEUES — it is a
           // programmatic turn with no prompt of its own, so the window it ran
-          // in is what turn 2's task subgoals are read against.
+          // in is what turn 2's task subgoals are read against. The watch is
+          // registered BEFORE the approval, and the window is the queued run's
+          // own rows: no run of its own means no window, so a task that was
+          // already there cannot read as one this turn created.
           if (approved !== null) {
-            const from = Date.now();
+            const settled = io.watchProgrammaticTurn();
+            const before = new Set(io.events.map((event) => event.runId));
             await io.session.decidePlan(approved.id, approved.revision, 'approve');
-            await io.settleProgrammaticTurn();
-            implementWindow = { from, to: Date.now() };
+            await settled;
+            implementWindow = runWindow(await io.session.runEvents(),
+              (event) => !before.has(event.runId)) ?? { from: 0, to: 0 };
           }
 
           return subgoals;
@@ -1665,23 +1690,10 @@ describe('Kinu task evals — measured', () => {
 
               return { events: next, history: rows };
             },
-            async settleProgrammaticTurn() {
-              // The approval queued a turn with no prompt of its own. Its
-              // close is the bound, never a clock: count the closed runs now
-              // and wait until one more has closed.
-              const closed = (rows: readonly RunEvent[]): number =>
-                rows.filter((event) => event.type === 'run_end').length;
-
-              const before = closed(await session.runEvents());
-
-              for (;;) {
-                const now = closed(await session.runEvents());
-
-                if (now > before) return;
-
-                await new Promise<void>((resolve) => setTimeout(resolve, 500));
-              }
-            },
+            // The turn an approval queues has no prompt of this session's own,
+            // and the socket it streams to is this one: its done frame is the
+            // bound, never a poll on a clock.
+            watchProgrammaticTurn: () => session.watchProgrammaticTurn(),
           });
 
           for (const [index, turn] of turns.entries()) {
@@ -1806,7 +1818,7 @@ async function driveEpisode(
       history: world.history(turn),
       absorbedBy: new Map(),
       refresh: async () => ({ events: world.events(turn), history: world.history(turn) }),
-      settleProgrammaticTurn: async () => undefined,
+      watchProgrammaticTurn: async () => undefined,
     }));
   }
 
@@ -1844,6 +1856,9 @@ interface FixtureState {
   subordinates: PublicSubordinate[];
   plans: PlanReview[];
   preview(url: string, path: string, body?: { method: string; json?: unknown }): { status: number; text: string };
+  /** The ledger the session's OWN read answers, for a verifier that re-reads
+   *  it after acting — the run an approval queues appears here. */
+  runs?: readonly RunEvent[];
   onDecide?(): void;
 }
 
@@ -1870,7 +1885,7 @@ function fixtureSession(state: FixtureState): KinuTaskSession {
     },
     connect: async () => undefined,
     disconnect: () => undefined,
-    runEvents: async () => [],
+    runEvents: async () => [...(state.runs ?? [])],
     history: async () => [],
     abortActivation: async () => undefined,
   };
@@ -2271,6 +2286,16 @@ function delegateWorld(options: DelegateFixtureOptions): FixtureWorld {
     createdAt: base + 5_000, updatedAt: base + 5_000, decidedAt: null,
   };
 
+  /** The turn the APPROVAL QUEUES, as the ledger records it: a run with no
+   *  prompt of its own, at a fixed instant. The verifier reads the implement
+   *  window off these two rows, so the tasks the turn cut are stamped between
+   *  them rather than at whatever this process's clock says. */
+  const implementRun: readonly RunEvent[] = [
+    runStart('d-implement', '', base + 20_000), runEnd('d-implement', base + 30_000),
+  ];
+
+  const implementedAt = base + 25_000;
+
   const state: FixtureState = {
     slates: [],
     ports: { workspace: [] },
@@ -2285,10 +2310,12 @@ function delegateWorld(options: DelegateFixtureOptions): FixtureWorld {
       ? { status: 502, text: 'no server is listening on that port' }
       : { status: 200, text: '<!doctype html><title>Queue dashboard</title>' },
     // The implementation turn the approval queues is what cuts the tasks and
-    // builds the slates, so the fixture does both AT DECISION TIME — which is
-    // what puts their `createdAt` inside the window the verifier opened.
+    // builds the slates, so the fixture does both AT DECISION TIME, and adds
+    // the run itself to the ledger the verifier re-reads — which is what puts
+    // their `createdAt` inside the window it reads off that run.
     onDecide() {
-      const at = Date.now();
+      const at = implementedAt;
+      state.runs = [...(ledgers[0] ?? []), ...implementRun];
 
       state.tasks = [
         { id: 't1', title: 'Read the queue contract', status: 'done', createdAt: at, updatedAt: at, subtasks: [] },
@@ -2332,7 +2359,9 @@ function delegateWorld(options: DelegateFixtureOptions): FixtureWorld {
       stepRow('d0', 6, base + 5_200, options.sequentialHires === true ? 3 : 2),
       runEnd('d0', base + 6_000),
     ],
-    [runStart('d1', turns[1] ?? '', base + 60_000), runEnd('d1', base + 61_000)],
+    // The queued implementation turn sits in the ledger from turn 2 on, ahead
+    // of that turn's own run: it ran between the approval and the next prompt.
+    [...implementRun, runStart('d1', turns[1] ?? '', base + 60_000), runEnd('d1', base + 61_000)],
     [runStart('d2', turns[2] ?? '', base + 70_000), runEnd('d2', base + 71_000)],
   ];
 
