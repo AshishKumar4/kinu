@@ -47,6 +47,21 @@ let childSpoke = Promise.withResolvers<void>();
  *  still owed. */
 let durableMsgSent = Promise.withResolvers<void>();
 
+/** Resolved when the CHILD's model has been asked for BOTH of the durable
+ *  lane's turns — the birth brief and the message.
+ *
+ *  The durable lane waits for this before it answers, and the wait is what
+ *  makes the case reading it deterministic rather than a race. A delegated turn
+ *  is on the child's run ledger from its `run_start`, which `runHostedTask`
+ *  writes BEFORE it calls the model, so a second request arriving on this wire
+ *  IS both of the child's runs being open. Without it the caller's own answer
+ *  races the delegation sweep in the alarm frame and a count of the child's
+ *  turns reads whatever had landed by then. */
+let childAskedTwice = Promise.withResolvers<void>();
+
+/** Requests the child's model has taken, for the gate above. */
+let childCalls = 0;
+
 /** What the child's model does on its turn, armed over the control host. */
 let childScript: 'answer' | 'throw' | 'park' = 'answer';
 
@@ -250,10 +265,11 @@ function rootLane(body: OutboundBody, results: readonly string[]): Response {
 
 /**
  * The durable lane for the `msg` case: hire a durable child, then send it one
- * message, then stop. Three requests, each keyed on what the history already
- * carries — never on a counter, for the reason `rootLane` states.
+ * message, wait for the child to be working on both, then stop. Each request is
+ * keyed on what the history already carries — never on a counter, for the
+ * reason `rootLane` states.
  */
-function durableLane(body: OutboundBody, results: readonly string[]): Response {
+async function durableLane(body: OutboundBody, results: readonly string[]): Promise<Response> {
   const model = body.model ?? HIRE_DURABLE_MODEL;
   const name = mintedName(results);
 
@@ -266,7 +282,14 @@ function durableLane(body: OutboundBody, results: readonly string[]): Response {
     });
   }
 
-  const sent = results.some((result) => result.includes('HIRE-MSG-BODY'));
+  // THE DELIVERY RECEIPT, which is what a `msg` call actually returns:
+  // `{"status":"delivered","agent":…,"event_id":…,"delivery":…}`. Keyed on the
+  // message BODY until 2026-09-17, which no result on this wire has ever
+  // carried — so the guard could not become true and this lane authored the
+  // same `msg` on every step for as long as the turn lasted: 329 steps in the
+  // 30 s the probe sampled, the caller's turn never ending and the case that
+  // waits on it hanging with the loop, not the product, as its cause.
+  const sent = results.some((result) => result.includes('"status":"delivered"'));
 
   if (!sent) {
     // Resolve BEFORE the call is authored: the suite reads the child's log
@@ -281,6 +304,10 @@ function durableLane(body: OutboundBody, results: readonly string[]): Response {
     });
   }
 
+  // Both admissions are the child's work now; this caller has asked for
+  // everything it was going to ask for and waits for its colleague to be on
+  // both before it closes the turn.
+  await childAskedTwice.promise;
   rootSaw.resolve();
 
   return textBody(model, `ROOT-SAW-DURABLE ${name}`);
@@ -292,7 +319,10 @@ function durableLane(body: OutboundBody, results: readonly string[]): Response {
  * so the caller's resolved value is built from these words.
  */
 async function childLane(body: OutboundBody): Promise<Response> {
+  childCalls += 1;
   childSpoke.resolve();
+
+  if (childCalls >= 2) childAskedTwice.resolve();
 
   // 'park' is consumed by the call that parks: an interruption is staged as
   // one model request that never answers, and the turn a recovery re-runs
@@ -358,6 +388,8 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
     childSpoke = Promise.withResolvers<void>();
     childPark = Promise.withResolvers<void>();
     durableMsgSent = Promise.withResolvers<void>();
+    childAskedTwice = Promise.withResolvers<void>();
+    childCalls = 0;
     childScript = spec.script ?? 'answer';
 
     return Response.json({ ok: true });
@@ -440,7 +472,7 @@ export async function hireOutbound(request: Request): Promise<Response> {
 
   if (body.model === HIRE_CHILD_MODEL) return await childLane(body);
 
-  if (body.model === HIRE_DURABLE_MODEL) return durableLane(body, results);
+  if (body.model === HIRE_DURABLE_MODEL) return await durableLane(body, results);
 
   return rootLane(body, results);
 }
