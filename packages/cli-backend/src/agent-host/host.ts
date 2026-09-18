@@ -88,6 +88,7 @@ import {
   type WorkMode,
   type WorkspaceActor,
   type WorkspaceActorDirectory,
+  readWorkspaceWork, type WorkspaceWork,
 } from '@kinu.run/core';
 import { KinuError, diagnostics, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import {
@@ -472,6 +473,18 @@ export class LocalAgentHost {
 
     return entry.tree.host.list().map((reference) => entry.tree.host.describe(reference.actorId))
       .filter((record): record is WorkspaceActor => record !== null);
+  }
+
+  /** The same workspace-wide work read `listWorkspaceWork` exposes over RPC —
+   *  plans with their linked tasks plus each actor's unlinked list, over the
+   *  retired-inclusive roster this host's directory already hands out. */
+  async workspaceWork(address: string): Promise<WorkspaceWork> {
+    const entry = await this.resolveEntry(address);
+
+    const actors = entry.tree.host.list().map((reference) => entry.tree.host.describe(reference.actorId))
+      .filter((record): record is WorkspaceActor => record !== null);
+
+    return readWorkspaceWork(entry.ws.rt.storage.sql, entry.ws.rt.actor, actors);
   }
 
   /** End every session, then release every database handle. */

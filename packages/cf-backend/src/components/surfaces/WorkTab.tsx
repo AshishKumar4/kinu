@@ -28,7 +28,7 @@ import {
   ClockIcon, PulseIcon, WarningCircleIcon, GitBranchIcon,
   RocketLaunchIcon, PackageIcon, SparkleIcon, CaretRightIcon, ShieldWarningIcon,
 } from "@phosphor-icons/react";
-import type { AgentTaskTree, ChangelogEntry, PendingAction, PendingActionKind, PlanReview } from "@kinu.run/core";
+import type { AgentTaskTree, ChangelogEntry, PendingAction, PendingActionKind, PlanReview, WorkspaceWork } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -121,7 +121,13 @@ export function WorkTab({
   const [hasPlans, setHasPlans] = useState(plan !== null);
   const onNewPlan = useCallback(() => onOpenSurface("Work"), [onOpenSurface]);
 
-  const loadTasks = useCallback(() => planRpc<AgentTaskTree[]>("listAgentTasks", []), [planRpc]);
+  const loadTasks = useCallback(async () => {
+    const work = await planRpc<WorkspaceWork>("listWorkspaceWork", []);
+
+    // The tab's task list is every actor's, owners flattened — a subordinate's
+    // open item is the workspace's open item.
+    return [...work.tasks.flatMap((owned) => owned.tasks), ...work.plans.flatMap((owned) => owned.tasks)];
+  }, [planRpc]);
 
   // The agent writes its plan mid-turn and the server never pushes it, so the
   // tab revalidates while anything is still open and stands down once
