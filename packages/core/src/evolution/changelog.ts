@@ -88,9 +88,9 @@ export interface ChangelogEntry {
    * The digest holds runs as well as changes, and this one is neither a change
    * nor a measurement: it is the honest record that a review happened and
    * proposed nothing. Set at the source so no surface has to read it out of the
-   * prose, and read by the two feeds that answer "what changed" — the
-   * journal's All chip and the changes-only page — while the Self-changes chip
-   * keeps it, because that is where the question it answers is asked.
+   * prose, and read by the one feed named for changes — `changesOnly`. The
+   * journal renders the unfiltered digest, because the needs-you queue counts
+   * these entries as unseen off the same read and points at it.
    */
   noChange?: boolean;
   /** Aggregate cards reuse the same entry model for expandable child rows. */
