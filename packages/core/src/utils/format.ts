@@ -59,3 +59,23 @@ export function timeAgo(at: number): string {
 
 	return new Date(at).toLocaleDateString();
 }
+
+/** The compact age a narrow column carries — "4h", not "Active 4h ago" —
+ *  running on past the day into days, months and years, so a list never
+ *  switches to a calendar date mid-column. Null for a moment never recorded. */
+export function shortAge(at: number): string | null {
+	if (!at) return null;
+	const s = Math.max(0, Math.floor((Date.now() - at) / 1000));
+
+	if (s < 60) return "now";
+
+	if (s < 3600) return `${Math.floor(s / 60)}m`;
+
+	if (s < 86400) return `${Math.floor(s / 3600)}h`;
+
+	if (s < 2_592_000) return `${Math.floor(s / 86400)}d`;
+
+	if (s < 31_536_000) return `${Math.floor(s / 2_592_000)}mo`;
+
+	return `${Math.floor(s / 31_536_000)}y`;
+}

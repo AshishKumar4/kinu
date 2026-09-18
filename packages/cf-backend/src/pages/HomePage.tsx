@@ -96,7 +96,7 @@ export default function HomePage() {
             </div>
             <div className="overflow-hidden rounded-[14px] border p-border p-surface">
               {workspaces.slice(0, RECENT_WORKSPACES).map((agent, index) => (
-                <WorkspaceOverviewCard key={agent.name} workspace={agent} variant="row" first={index === 0} />
+                <WorkspaceOverviewCard key={agent.name} workspace={agent} variant="line" first={index === 0} />
               ))}
             </div>
           </section>
