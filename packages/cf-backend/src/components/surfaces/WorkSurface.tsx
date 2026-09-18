@@ -295,6 +295,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               onRefreshJobs={props.onRefreshJobs}
               onOpenSurface={focus.navigate}
               onChangelogSeen={props.onChangelogSeen}
+              memory={props.memory}
               isStreaming={props.isStreaming}
               rpc={props.rpc}
             />

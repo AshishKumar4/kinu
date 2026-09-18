@@ -3040,6 +3040,29 @@ describe('the Work tab reads the workspace, not the actor', () => {
       await page.close();
     });
   });
+  test('Learnings lists the workspace\'s saved memories, newest first', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 430, height: 1400 });
+      await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => [...document.querySelectorAll('section')]
+        .some((node) => node.querySelector('.p-label')?.textContent === 'Learnings'));
+
+      const learnings = (await workSections(page)).find((section) => section.title === 'Learnings');
+
+      if (learnings === undefined) throw new Error('the Learnings section is missing');
+      expect(learnings.badge).toBe('2');
+
+      const rows = await page.$$eval('[data-learning]', (nodes) => nodes.map((node) => node.textContent ?? ''));
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toContain('Prompt lanes assemble');
+      expect(rows[0]).toContain('2026-09-17 · courier');
+      expect(rows[1]).toContain('retry budget');
+      expect(rows[1]).toContain('2026-09-15 · main');
+      await page.close();
+    });
+  });
 });
 
 
