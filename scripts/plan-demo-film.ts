@@ -1,32 +1,35 @@
 #!/usr/bin/env bun
 /**
- * Cut the README's planning walkthrough GIF from the landing page's plan
- * movie.
+ * Cut the README's planning walkthrough GIF from the PRODUCT.
  *
- * One timeline exists (`landing-movie-timeline.ts`): the landing plays it, the
- * public-page tests seek it, and this script photographs it. Every frame here
- * is a Chrome screenshot of the real DOM at a timeline stamp, driven through
- * the same `window.__kinuLandingMovie` handle the tests use, so the shipped
- * animation cannot drift from what the landing shows. Regenerate it with:
+ * Every frame is a Chrome screenshot of the real client talking to the real
+ * Worker in workerd over real Durable Objects (`live-app-harness`), driven
+ * through the controls a person uses: the composer's Plan segment, the
+ * composer, Send, and the plan's own Approve control found by role and name.
+ * The only stand-in is the provider — a local scripted model
+ * (`scripted-model.ts`), because a local run has none. The README's caption can
+ * therefore say where the film comes from, and name the build it was cut from.
  *
- *   bun scripts/plan-demo-film.ts              # writes docs/assets/kinu-plan-demo.gif
- *   bun scripts/plan-demo-film.ts --out /tmp/demo.gif
+ *   bun scripts/plan-demo-film.ts                    # docs/assets/kinu-plan-demo.gif
+ *   bun scripts/plan-demo-film.ts --out /tmp/x.gif --evidence /tmp/stills
+ *
+ * The drive is shared with the live-app tier's own row over the same script
+ * (`drivePlanReview`): the row asserts the walkthrough, this program
+ * photographs it, and neither can drift from the other. A beat's pacing is the
+ * run's own — the hold a frame gets is the time the product spent on it,
+ * clamped — so the animation plays at the speed the product answered.
  *
  * Frames are captured as PNGs and muxed to GIF with the system ffmpeg's
- * palettegen/paletteuse two-pass (requires ffmpeg + ffprobe on PATH — a host
- * prerequisite, nothing this script installs) — GitHub's README renderer animates GIF
- * everywhere, and the palette pass keeps the dark theme's ink clean under
- * 256 colours. Frame durations ride in the concat manifest, so a held beat
- * costs one screenshot, not one per tick.
+ * palettegen/paletteuse two-pass (ffmpeg + ffprobe on PATH are host
+ * prerequisites, nothing this script installs): GitHub's README renderer
+ * animates GIF everywhere, and the palette pass keeps the dark theme's ink
+ * clean under 256 colours. Frame durations ride in the concat manifest, so a
+ * held beat costs one screenshot, not one per tick.
  *
- * The plan document is taller than the pane it opens in and its Approve
- * button sits under the fold; rather than a storyboard jump, the pane scrolls
- * with the DOM's own scrollIntoView on the decisions row as the cursor
- * travels to it — the same thing a reader's wheel would do.
- *
- * Tool duration chips read Date.now(); the page clock is virtualised to the
- * timeline stamp before each seek, so a chip says the beat's true duration
- * instead of how long two screenshots happened to take.
+ * Every shot settles the page's animations first — a one-shot animation is
+ * photographed finished, a looping one parked at its first frame — so two
+ * screenshots of the same state are the same bytes and fold into one held
+ * frame instead of flickering.
  */
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -34,265 +37,342 @@ import { execFileSync } from 'node:child_process';
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 
-import { withGallery } from './gallery-harness';
+import { withLiveApp, createWorkspace, type LiveApp } from './live-app-harness';
+import {
+  PLAN_MISSION, SCRIPTED_MODEL_SPEC, SLATE_TITLE,
+  planWalkthrough, registerScriptedModel, startScriptedModel,
+} from './scripted-model';
 import { scratchDir } from '../packages/test-utils/src/scratch';
-
-// The shared contract is dependency-free: this program reads the cue table
-// and handle shape straight from it without typechecking the timeline's
-// component-land imports, and the drive cannot drift from the product's own
-// declaration. Its `declare global` covers `window.__kinuLandingMovie` here.
-import type { LandingMovieHandle, MovieCue } from '@kinu.run/core';
-
-declare global {
-  interface Window {
-    /** Installed by this script's evaluateOnNewDocument virtual clock. */
-    __setDemoNow?: (value: number) => void;
-  }
-}
-
-/** What a seeker can ask the live movie for: the cue table and the duration.
- *  The handle's methods do not cross `page.evaluate` — Puppeteer returns a
- *  serialized copy, so reading the handle itself would type functions the
- *  copy does not carry. */
-const movieStats = (page: Page): Promise<Pick<LandingMovieHandle, 'cues' | 'duration'> | undefined> => (
-  page.evaluate((): Pick<LandingMovieHandle, 'cues' | 'duration'> | undefined => {
-    const movie = window.__kinuLandingMovie;
-
-    return movie === undefined ? undefined : { cues: movie.cues, duration: movie.duration };
-  })
-);
 
 const REPO = resolve(import.meta.dir, '..');
 
 /** Where the README reads the animation from. */
 export const DEFAULT_OUT = resolve(REPO, 'docs/assets/kinu-plan-demo.gif');
 
-/** Fixed page epoch so duration chips render identically on every run. */
-const VIRTUAL_EPOCH = 1_755_993_600_000;
-
-/** The stage the movie plays on, and the theme the README shows it in. */
-const STAGE_SELECTOR = '[data-landing-frame="plan"]';
-
+/** The theme the README shows the film in. */
 const THEME = 'dark';
 
-export interface CaptureFrame {
-  readonly at: number;
-  readonly holdMs: number;
+/** 16:10, the aspect the README's image tag reserves. */
+export const VIEWPORT = { width: 1440, height: 900 } as const;
+
+/** The published width; the height follows the viewport's aspect. */
+export const GIF_WIDTH = 1200;
+
+/** The workspace's standing brief — what the workspace IS, shown by the empty
+ *  conversation before the first turn. The mission is sent, not this. */
+const WORKSPACE_PURPOSE = 'Fix the checkout coupon 500 and report on the support queue';
+
+/** How many distinct frames the film may hold. A turn that takes longer than
+ *  expected must cost hold time, never an unbounded palette. */
+const FRAME_BUDGET = 170;
+
+/** A hold below this reads as a stutter, above it as a stall. */
+const MIN_HOLD_MS = 40;
+
+const MAX_HOLD_MS = 1_400;
+
+/** The settled state, held before the loop restarts. */
+const TAIL_HOLD_MS = 2_600;
+
+/** The cursor's travel to a control: dense enough to read as a movement. */
+const TRAVEL_STEPS = 6;
+
+/** How often a waiting beat photographs the product while it works. */
+const SAMPLE_MS = 180;
+
+/** A shut inspector column: the library leaves a 0px box. */
+const SHUT_PX = 1;
+
+/* ── The recorded cursor ──────────────────────────────────────────────────
+   Chrome never paints a pointer into a screenshot, so the film draws one:
+   an overlay moved to the same coordinates the real mouse is moved to, and
+   pressed when the real mouse presses. The arrow is the landing walkthrough's
+   own, so the two animations show one product. */
+
+const CURSOR_SCRIPT = `(() => {
+  const existing = document.getElementById('kinu-film-cursor');
+
+  if (existing !== null) return;
+  const host = document.createElement('div');
+  host.id = 'kinu-film-cursor';
+  host.setAttribute('aria-hidden', 'true');
+  host.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;opacity:0;'
+    + 'filter:drop-shadow(0 1px 2px rgba(0,0,0,.6));transition:none';
+  host.innerHTML = '<svg width="20" height="22" viewBox="0 0 20 22">'
+    + '<path d="M2 1 L2 17 L6.5 13.5 L9.5 20 L12.5 18.7 L9.6 12.4 L15.5 12 Z"'
+    + ' fill="var(--c-text)" stroke="var(--c-bg)" stroke-width="1.4" stroke-linejoin="round" /></svg>';
+  const ripple = document.createElement('div');
+  ripple.id = 'kinu-film-ripple';
+  ripple.setAttribute('aria-hidden', 'true');
+  ripple.style.cssText = 'position:fixed;left:0;top:0;width:40px;height:40px;border-radius:9999px;'
+    + 'border:2px solid var(--c-accent);z-index:2147483646;pointer-events:none;opacity:0';
+  document.body.append(host, ripple);
+})()`;
+
+/** Paint the overlay at a point. `press` draws the click's ring. */
+function cursorAt(x: number, y: number, press: boolean): string {
+  return `(() => {
+    const cursor = document.getElementById('kinu-film-cursor');
+    const ripple = document.getElementById('kinu-film-ripple');
+
+    if (cursor === null || ripple === null) return;
+    cursor.style.opacity = '1';
+    cursor.style.transform = 'translate(${String(Math.round(x))}px, ${String(Math.round(y))}px)';
+    ripple.style.opacity = ${press ? "'.55'" : "'0'"};
+    ripple.style.transform = 'translate(${String(Math.round(x) - 20)}px, ${String(Math.round(y) - 20)}px) scale(${press ? '1' : '.35'})';
+  })()`;
 }
 
-/** The recorder's own cadence — densify the window before each published cue
- *  so the frames bracket whatever the movie does there. It deliberately does
- *  NOT read the timeline's cursor timing: capture policy stays independent of
- *  private animation constants, and the cue table is the contract. */
-const APPROACH_WINDOW_MS = 800;
+/* ── Measurements the drive reports ──────────────────────────────────────── */
 
-const APPROACH_STEP_MS = 160;
+/** The inspector column's box, `-1` when the document holds no such panel. */
+const INSPECTOR_WIDTH = `(() => {
+  const column = document.getElementById('inspector');
 
-/** The cues whose approach is sampled densely: the click and the two beats
- *  the cursor travels to. */
-const CURSOR_ARRIVALS: readonly MovieCue[] = ['submitted', 'approve', 'finalText'];
+  return column === null ? -1 : Math.round(column.getBoundingClientRect().width);
+})()`;
 
-/** One evidence still: `at` an absolute stamp or `cue` a beat name resolved
- *  off the live movie's table, `offsetMs` shifting either (negative for the
- *  approach). */
-export type EvidenceStamp = { readonly name: string; readonly offsetMs?: number }
-  & ({ readonly at: number } | { readonly cue: MovieCue });
+/** The inspector strip's tab labels, in order. */
+const STRIP_LABELS = `[...document.querySelectorAll('#inspector .p-tabstrip button')]
+  .map((button) => (button.textContent ?? '').trim()).filter((label) => label.length > 0)`;
 
-/** The beats the recorder saves stills of next to the GIF, so a review can
- *  see what the animation actually says without decoding it. */
-export const EVIDENCE_STAMPS: readonly EvidenceStamp[] = [
-  { name: 'first', at: 0 },
-  { name: 'review', cue: 'planReady' },
-  // The cursor mid-approach with the approve row scrolled into view — proof
-  // the click lands on a control the reader can see.
-  { name: 'preapprove', cue: 'approve', offsetMs: -400 },
-  { name: 'approve', cue: 'approve' },
-];
+/** Tool cards standing in the transcript — what a turn that ran tools leaves. */
+const TOOL_CARDS = `document.querySelectorAll('#chat [data-tool-group]').length`;
+
+const PLAN_STATUS = `(document.querySelector('#inspector [data-plan-status]')?.textContent ?? '').trim()`;
+
+/** What the walkthrough did, as the product showed it. Every field is read off
+ *  the rendered document, never off the script that drove it. */
+export interface WalkthroughVerdict {
+  /** The column's width while the plan turn was still running. */
+  readonly inspectorBeforePlan: number;
+  /** The column's width once the plan arrived. */
+  readonly inspectorOnPlan: number;
+  /** The plan's own review surface stood in the column. */
+  readonly planReviewShown: boolean;
+  /** The accessible name of the control the approval went through. */
+  readonly approveControl: string;
+  /** `[data-plan-status]` after the decision. */
+  readonly planStatus: string;
+  readonly toolCardsBeforeApproval: number;
+  /** Tool cards after the approved turn ran — the enqueued handoff's work. */
+  readonly toolCardsAfterImplement: number;
+  /** The strip once the slate exists. */
+  readonly stripLabels: readonly string[];
+}
+
+/** Called after every shot-worthy moment; the recorder photographs, a test
+ *  that only wants the verdict passes a no-op. */
+export type OnFrame = (beat: string) => Promise<void>;
+
+const PointSchema = v.object({ x: v.number(), y: v.number() });
+
+const ControlSchema = v.object({ x: v.number(), y: v.number(), name: v.string() });
 
 /**
- * The capture plan. Dense while the cursor travels or a beat just landed,
- * sparse through holds, derived from the same cue table the live movie plays.
- * A GIF holds a frame for as long as its duration says, so the cadence is a
- * clarity budget, not a size one. The last frame holds the settled state
- * before the loop restarts.
+ * The first visible control whose accessible name matches, scoped to a
+ * container: its centre in viewport coordinates and the name that matched.
+  * Role and NAME only — the accessible name: `aria-label`, else the control's
+ * own text, else `title` — so a
+ * relabelled control still answers and a copied sentence never does.
  */
-export function capturePlan(cues: LandingMovieHandle['cues'], end: number): readonly CaptureFrame[] {
-  const stamps = new Set<number>();
+async function control(page: Page, input: { within: string; name: string }): Promise<v.InferOutput<typeof ControlSchema>> {
+  const found = await page.evaluate(`(() => {
+    const scope = document.querySelector(${JSON.stringify(input.within)});
 
-  for (let at = 0; at < end; at += 560) stamps.add(at);
+    if (scope === null) return { candidates: [] };
+    const pattern = new RegExp(${JSON.stringify(input.name)}, 'iu');
+    const candidates = [];
 
-  for (const at of Object.values(cues)) stamps.add(Math.min(at + 40, end));
+    for (const element of scope.querySelectorAll('button, [role="button"]')) {
+      const text = (element.textContent ?? '').trim();
+      const name = element.getAttribute('aria-label') ?? (text.length > 0 ? text : (element.getAttribute('title') ?? ''));
+      const shut = element.disabled === true;
+      const box = element.getBoundingClientRect();
+      candidates.push(name + (shut ? ' [disabled]' : '') + (element.getClientRects().length === 0 ? ' [hidden]' : ''));
 
-  for (const name of CURSOR_ARRIVALS) {
-    const arrival = cues[name];
+      if (shut || element.getClientRects().length === 0 || !pattern.test(name)) continue;
 
-    if (arrival === undefined) throw new Error(`the movie publishes no "${name}" cue`);
+      return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2), name };
+    }
 
-    for (let at = Math.max(0, arrival - APPROACH_WINDOW_MS); at <= arrival; at += APPROACH_STEP_MS) stamps.add(at);
+    return { candidates };
+  })()`);
+
+  const control = v.safeParse(ControlSchema, found);
+
+  if (!control.success) {
+    const seen = v.parse(v.object({ candidates: v.array(v.string()) }), found);
+
+    throw new Error(`no ${input.name} control inside ${input.within}; saw ${JSON.stringify(seen.candidates)}`);
   }
 
-  const approve = cues['approve'];
-
-  if (approve !== undefined) stamps.add(approve + 200);
-  const ordered = [...stamps].filter((at) => at <= end).sort((a, b) => a - b);
-
-  return ordered.map((at, index) => {
-    const next = ordered[index + 1];
-
-    return { at, holdMs: next === undefined ? 2_600 : Math.max(30, next - at) };
-  });
+  return control.output;
 }
 
-/** A rectangle in page coordinates, as a screenshot clip. */
-interface StageRegion { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
+/** Settle CSS animations so two shots of one state are the same bytes. */
+const SETTLE_SCRIPT = `(() => {
+  for (const animation of document.getAnimations()) {
+    if (animation.effect?.getTiming().iterations === Number.POSITIVE_INFINITY) {
+      animation.currentTime = 0;
+      animation.pause();
+    } else {
+      animation.finish();
+    }
+  }
+})()`;
 
-export interface FilmResult {
-  readonly out: string;
-  readonly width: number;
-  readonly height: number;
-  readonly bytes: number;
-  readonly frames: number;
-  readonly durationS: number;
+/** Move the real mouse to a point, the drawn cursor with it, photographing
+ *  the travel. The click is a real press at real coordinates: a control the
+ *  layout covers or shifts cannot be clicked by accident. */
+async function travelTo(page: Page, target: { x: number; y: number }, from: { x: number; y: number }, onFrame: OnFrame, beat: string): Promise<void> {
+  for (let step = 1; step <= TRAVEL_STEPS; step += 1) {
+    const progress = step / TRAVEL_STEPS;
+    const x = from.x + (target.x - from.x) * progress;
+    const y = from.y + (target.y - from.y) * progress;
+    await page.mouse.move(x, y);
+    await page.evaluate(cursorAt(x, y, false));
+    await onFrame(beat);
+  }
 }
 
-/** Load the landing in a fresh page, in the README's theme, with the movie
- *  paused at its start and its stage scrolled into view. */
-async function openMovie(page: Page, origin: string): Promise<StageRegion> {
-  await page.setViewport({ width: 1024, height: 1000 });
+async function pressAt(page: Page, point: { x: number; y: number }, onFrame: OnFrame, beat: string): Promise<void> {
+  await page.evaluate(cursorAt(point.x, point.y, true));
+  await onFrame(beat);
+  await page.mouse.click(point.x, point.y);
+  await page.evaluate(cursorAt(point.x, point.y, false));
+  await onFrame(beat);
+}
+
+/** How long the film waits for one beat of the product before it says what it
+ *  was waiting for. Not a deadline on the turn — the turn owns its own time —
+ *  but the recorder's patience: a beat that never lands must fail with the
+ *  page's state, not hang a browser forever. */
+const BEAT_PATIENCE_MS = 90_000;
+
+/** What the page can say about where the walkthrough got to. */
+const WHERE = `JSON.stringify({
+  mode: [...document.querySelectorAll('[aria-label="Turn mode"] button')].map((b) => b.textContent + '=' + String(b.getAttribute('aria-pressed'))),
+  planStatus: document.querySelector('#inspector [data-plan-status]')?.textContent ?? null,
+  toolCards: document.querySelectorAll('#chat [data-tool-group]').length,
+  strip: [...document.querySelectorAll('#inspector .p-tabstrip button')].map((b) => (b.textContent ?? '').trim()),
+  notices: [...document.querySelectorAll('[role="alert"], [role="status"]')].map((n) => (n.textContent ?? '').trim()).slice(0, 4),
+  chatTail: (document.querySelector('#chat')?.textContent ?? '').slice(-400),
+})`;
+
+/** Photograph the product while it works, until the condition holds. */
+async function until(page: Page, condition: string, onFrame: OnFrame, beat: string): Promise<void> {
+  process.stderr.write(`plan-demo-film: ${beat}\n`);
+  const deadline = Date.now() + BEAT_PATIENCE_MS;
+  const settled = page.waitForFunction(condition, { polling: 100, timeout: BEAT_PATIENCE_MS });
+  let done = false;
+  const stop = settled.then(() => { done = true; }, () => { done = true; });
+
+  while (!done) {
+    await onFrame(beat);
+    await Promise.race([stop, new Promise((wake) => setTimeout(wake, SAMPLE_MS))]);
+
+    if (!done && Date.now() > deadline) break;
+  }
+
+  if (!done || Date.now() > deadline) {
+    const where = String(await page.evaluate(WHERE));
+
+    throw new Error(`the ${beat} beat never landed: ${condition.replace(/\s+/gu, ' ')} — ${where}`);
+  }
+
+  await settled;
+  await onFrame(beat);
+}
+
+/**
+ * Drive the plan review end to end through the product's own controls, on the
+ * workspace the caller created: Plan mode, the mission, the plan that comes
+ * back, the approval, and the slate the approved turn writes.
+ */
+export async function drivePlanReview(
+  page: Page, origin: string, workspace: string, onFrame: OnFrame,
+): Promise<WalkthroughVerdict> {
+  await page.setViewport(VIEWPORT);
   await page.emulateMediaFeatures([
     { name: 'prefers-color-scheme', value: THEME },
     { name: 'prefers-reduced-motion', value: 'no-preference' },
   ]);
-  await page.evaluateOnNewDocument((theme: string, epoch: number) => {
-    // The landing reads its mode from localStorage before first paint, and
-    // the fixtures stamp themselves off Date.now() at module evaluation —
-    // so the virtual epoch starts NOW, not at the first seek: a fixture's
-    // createdAt and a seek's stamp must share one clock or an approved plan
-    // reads older than the pending one.
+  await page.evaluateOnNewDocument((theme: string) => {
     localStorage.setItem('theme', theme);
-    let virtual = epoch;
-    Object.defineProperty(window, '__setDemoNow', { value: (at: number) => { virtual = at; } });
-    Date.now = () => virtual;
-  }, THEME, VIRTUAL_EPOCH);
-  await page.goto(`${origin}/landing.html`, { waitUntil: 'networkidle0' });
-  await page.waitForFunction(
-    () => window.__kinuLandingMovie !== undefined && document.fonts.status === 'loaded',
-    { timeout: 20_000 },
-  );
-  const applied = await page.evaluate(() => document.documentElement.dataset.mode);
+  }, THEME);
+  await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
+  await page.waitForFunction(`[...document.querySelectorAll('#chat textarea')].some((area) => !area.disabled)`, { polling: 100 });
+  await page.waitForFunction(`document.fonts.status === 'loaded'`, { polling: 100 });
+  await page.evaluate(CURSOR_SCRIPT);
+  await onFrame('open');
+  await onFrame('open');
 
-  if (applied !== THEME) throw new Error(`asked for the ${THEME} theme, the landing rendered ${String(applied)}`);
+  const origin0 = { x: VIEWPORT.width - 80, y: VIEWPORT.height - 60 };
 
-  const stageBox = await page.evaluate((selector: string) => {
-    const stage = document.querySelector(selector);
-    stage?.scrollIntoView({ block: 'center' });
-    window.__kinuLandingMovie?.pause();
-    const rect = stage?.getBoundingClientRect();
+  const planMode = await control(page, { within: '[aria-label="Turn mode"]', name: '^Plan$' });
+  await travelTo(page, planMode, origin0, onFrame, 'plan-mode');
+  await pressAt(page, planMode, onFrame, 'plan-mode');
 
-    return rect === undefined ? null : {
-      x: Math.round(rect.x + window.scrollX),
-      y: Math.round(rect.y + window.scrollY),
-      width: Math.round(rect.width),
-      height: Math.round(rect.height),
-    };
-  }, STAGE_SELECTOR);
+  const composer = v.parse(v.nullable(PointSchema), await page.evaluate(`(() => {
+    const area = [...document.querySelectorAll('#chat textarea')].find((element) => !element.disabled);
 
-  if (stageBox === null) throw new Error('the plan movie stage is not on the landing');
+    if (area === undefined) return null;
+    const box = area.getBoundingClientRect();
 
-  return stageBox;
-}
+    return { x: Math.round(box.x + 40), y: Math.round(box.y + box.height / 2) };
+  })()`));
 
-/**
- * True while the cursor is travelling to the Approve button: the window in
- *  which the plan pane has to be scrolled so the click lands on something
- *  the reader can see.
- */
-function approachingApprove(at: number, cues: LandingMovieHandle['cues']): boolean {
-  const approve = cues['approve'];
+  if (composer === null) throw new Error('the workspace has no live composer');
+  await travelTo(page, composer, planMode, onFrame, 'mission');
+  await page.mouse.click(composer.x, composer.y);
 
-  return approve !== undefined && at >= approve - APPROACH_WINDOW_MS && at <= approve + APPROACH_WINDOW_MS;
-}
+  for (const [index, letter] of [...PLAN_MISSION].entries()) {
+    await page.keyboard.type(letter);
 
-/** Seek the live timeline, then — during the approve approach — scroll the
- *  plan pane with the DOM's own scrollIntoView when its decision row is
- *  offscreen, and re-seek so the cursor re-anchors on the moved target.
- *  Settles every running CSS animation so the shot is deterministic: a
- *  one-shot animation is photographed finished (a just-mounted message must
- *  never sit at opacity 0); a looping one is parked at its first frame. */
-async function seekTo(page: Page, at: number, revealApprove: boolean): Promise<void> {
-  await page.evaluate(async (now: number, target: number, reveal: boolean, selector: string) => {
-    window.__setDemoNow?.(now);
-    await window.__kinuLandingMovie?.seek(target);
-
-    if (reveal) {
-      const stage = document.querySelector(selector);
-      const decisions = stage?.querySelector('[data-plan-decisions]');
-      // The scrollable ancestor of the decisions row is the Work pane's own
-      // overflow container — found, not named, because the row is a sibling
-      // of the document scroller inside PlanReviewView, not its child.
-      let pane: HTMLElement | null = decisions instanceof HTMLElement ? decisions.parentElement : null;
-
-      while (pane !== null && !/auto|scroll/.test(getComputedStyle(pane).overflowY)) pane = pane.parentElement;
-
-      if (decisions instanceof HTMLElement && pane instanceof HTMLElement) {
-        const paneRect = pane.getBoundingClientRect();
-        const rowRect = decisions.getBoundingClientRect();
-        const offscreen = rowRect.bottom > paneRect.bottom || rowRect.top < paneRect.top;
-
-        if (offscreen) {
-          decisions.scrollIntoView({ block: 'nearest' });
-          // The target moved under the cursor; re-anchor it.
-          await window.__kinuLandingMovie?.seek(target);
-        }
-      }
-    }
-
-    for (const animation of document.getAnimations()) {
-      if (animation.effect?.getTiming().iterations === Number.POSITIVE_INFINITY) {
-        animation.currentTime = 0;
-        animation.pause();
-      } else {
-        animation.finish();
-      }
-    }
-  }, VIRTUAL_EPOCH + at, at, revealApprove, STAGE_SELECTOR);
-}
-
-/** A timeline stamp, absolute or the name of the cue to resolve off the live
- *  movie's published table — a name follows the timeline when beats move. */
-export type CueStamp = { readonly at: number } | { readonly cue: MovieCue };
-
-/** Photograph the whole stage once at the given stamp — one real frame of
- *  the real DOM, in the README's theme. The recorder saves the
- *  EVIDENCE_STAMPS shots next to the GIF so a review can see what the
- *  animation says without decoding it; the test drives the same path on a
- *  named cue. */
-export async function captureCueFrame(
-  page: Page,
-  origin: string,
-  stamp: CueStamp,
-): Promise<{ png: Uint8Array; phase: string; stage: StageRegion }> {
-  const stageBox = await openMovie(page, origin);
-  const movie = await movieStats(page);
-
-  if (movie === undefined) throw new Error('the landing movie handle went away after load');
-
-  const cues = movie.cues;
-  const at = 'at' in stamp ? stamp.at : cues[stamp.cue];
-
-  if (at === undefined) {
-    throw new Error(`the movie publishes no "${'cue' in stamp ? stamp.cue : String(stamp.at)}" stamp`);
+    if (index % 3 === 0) await onFrame('mission');
   }
 
-  await seekTo(page, at, approachingApprove(at, cues));
-  const png = await page.screenshot({ type: 'png', clip: stageBox });
+  await onFrame('mission');
 
-  const phase = await page.evaluate(
-    (selector: string) => document.querySelector(selector)?.getAttribute('data-movie-phase') ?? '',
-    STAGE_SELECTOR,
-  );
+  const send = await control(page, { within: '#chat', name: '^Send$' });
+  await travelTo(page, send, composer, onFrame, 'send');
+  const toolCardsBeforeApproval0 = Number(await page.evaluate(TOOL_CARDS));
+  await pressAt(page, send, onFrame, 'send');
 
-  return { png: new Uint8Array(png), phase, stage: stageBox };
+  const inspectorBeforePlan = Number(await page.evaluate(INSPECTOR_WIDTH));
+  await until(page, `document.querySelector('#chat [data-tool-group]') !== null
+    || document.querySelector('#inspector [data-plan-status]') !== null`, onFrame, 'turn');
+  await until(page, `document.querySelector('#inspector [data-plan-decisions] button:not([disabled])') !== null`, onFrame, 'turn');
+
+  const inspectorOnPlan = Number(await page.evaluate(INSPECTOR_WIDTH));
+  const planReviewShown = await page.evaluate(`document.querySelector('#inspector [data-plan-body]') !== null`) === true;
+  await onFrame('review');
+  await onFrame('review');
+
+  const approve = await control(page, { within: '#inspector [data-plan-decisions]', name: 'approve' });
+  await travelTo(page, approve, send, onFrame, 'approve');
+  const toolCardsBeforeApproval = Number(await page.evaluate(TOOL_CARDS));
+  await pressAt(page, approve, onFrame, 'approve');
+  await until(page, `${PLAN_STATUS} === 'Approved'`, onFrame, 'approved');
+  const planStatus = String(await page.evaluate(PLAN_STATUS));
+  await until(page, `${STRIP_LABELS}.includes(${JSON.stringify(SLATE_TITLE)})`, onFrame, 'implement');
+
+  const stripLabels = v.parse(v.array(v.string()), await page.evaluate(STRIP_LABELS));
+  const toolCardsAfterImplement = Number(await page.evaluate(TOOL_CARDS));
+  await page.evaluate(cursorAt(origin0.x, origin0.y, false));
+  await onFrame('slate');
+
+  return {
+    inspectorBeforePlan,
+    inspectorOnPlan,
+    planReviewShown,
+    approveControl: approve.name,
+    planStatus,
+    toolCardsBeforeApproval: Math.max(toolCardsBeforeApproval, toolCardsBeforeApproval0),
+    toolCardsAfterImplement,
+    stripLabels,
+  };
 }
 
 /** One distinct frame of the manifest — named by basename, since the
@@ -303,44 +383,45 @@ export interface ManifestEntry {
   holdMs: number;
 }
 
-/** Photograph the movie's frames into `framesDir` as PNGs. Held beats
- *  screenshot identically twice; a duplicate shot folds into the previous
- *  entry's hold instead of paying a second palette entry. */
-export async function captureFrames(
-  page: Page,
-  origin: string,
-  framesDir: string,
-): Promise<{ entries: readonly ManifestEntry[]; stage: StageRegion }> {
-  const stageBox = await openMovie(page, origin);
-
-  const handle = await movieStats(page);
-
-  if (handle === undefined) throw new Error('the landing movie handle went away after load');
-
-  const plan = capturePlan(handle.cues, handle.duration);
+/** The reel: every shot the drive asks for, deduplicated. A held beat
+ *  screenshots identically twice, and the second shot becomes hold time on the
+ *  first rather than a second palette entry. The hold a frame gets is the time
+ *  the product spent before the next shot, so the film plays at the pace the
+ *  run had. */
+function reel(page: Page, framesDir: string) {
   const entries: ManifestEntry[] = [];
+  const beats = new Map<string, string>();
   let previous: Uint8Array | null = null;
+  let shotAt = 0;
 
-  for (const step of plan) {
-    await seekTo(page, step.at, approachingApprove(step.at, handle.cues));
-    const shot = await page.screenshot({ type: 'png', clip: stageBox });
+  const shoot = async (beat: string): Promise<void> => {
+    if (entries.length >= FRAME_BUDGET) return;
+
+    await page.evaluate(SETTLE_SCRIPT);
+    const shot = await page.screenshot({ type: 'png' });
     const bytes = new Uint8Array(shot);
+    const now = Date.now();
     const last = entries[entries.length - 1];
-    const before: Uint8Array | null = previous;
 
-    if (before !== null && last !== undefined
-      && bytes.length === before.length && bytes.every((b, i) => b === before[i])) {
-      last.holdMs += step.holdMs;
-      continue;
+    if (last !== undefined) {
+      last.holdMs = Math.min(MAX_HOLD_MS, Math.max(MIN_HOLD_MS, now - shotAt));
+    }
+
+    shotAt = now;
+
+    if (previous !== null && last !== undefined
+      && bytes.length === previous.length && bytes.every((byte, index) => byte === previous?.[index])) {
+      return;
     }
 
     const file = `frame-${String(entries.length).padStart(3, '0')}.png`;
     writeFileSync(join(framesDir, file), shot);
-    entries.push({ file, holdMs: step.holdMs });
+    entries.push({ file, holdMs: TAIL_HOLD_MS });
+    beats.set(beat, file);
     previous = bytes;
-  }
+  };
 
-  return { entries, stage: stageBox };
+  return { shoot, entries, beats };
 }
 
 /** The concat manifest: every distinct frame with its hold, the final file
@@ -362,14 +443,17 @@ export function concatManifest(entries: readonly ManifestEntry[]): string {
 }
 
 /** ffmpeg two-pass: concat the held frames, build a palette from them, then
- *  encode the GIF through it. */
-export function muxGif(framesDir: string, manifestPath: string, out: string): void {
+ *  encode the GIF through it at the published width. The scale runs in BOTH
+ *  passes: a palette built from the full-size frames quantizes colours the
+ *  resampler never produces. */
+export function muxGif(framesDir: string, manifestPath: string, out: string, width = GIF_WIDTH): void {
   const palette = join(framesDir, 'palette.png');
+  const scale = `scale=${String(width)}:-1:flags=lanczos`;
 
   execFileSync('ffmpeg', [
     '-y', '-v', 'error',
     '-f', 'concat', '-safe', '0', '-i', manifestPath,
-    '-vf', 'palettegen=stats_mode=full',
+    '-vf', `${scale},palettegen=stats_mode=full`,
     palette,
   ]);
   execFileSync('ffmpeg', [
@@ -381,7 +465,7 @@ export function muxGif(framesDir: string, manifestPath: string, out: string): vo
     // unchanged pixels transparent, which is legal under disposal 0/1. The
     // film test's parser bounds what that means; frame 0's opacity is proven
     // by decoding it in plan-demo-film.test.ts.
-    '-lavfi', 'paletteuse=dither=bayer:bayer_scale=4',
+    '-lavfi', `[0:v]${scale}[s];[s][1:v]paletteuse=dither=bayer:bayer_scale=4`,
     out,
   ]);
 }
@@ -466,15 +550,36 @@ export function probeGif(out: string): GifFacts {
   };
 }
 
-/** Shoot the plan movie and mux it into the README's GIF. */
-export async function filmMovie(
-  page: Page,
-  origin: string,
-  out: string,
-  evidenceDir?: string,
+export interface FilmResult {
+  readonly out: string;
+  readonly width: number;
+  readonly height: number;
+  readonly bytes: number;
+  readonly frames: number;
+  readonly durationS: number;
+  readonly verdict: WalkthroughVerdict;
+}
+
+/** Record the walkthrough on a booted live app and mux the README's GIF. */
+export async function filmPlanReview(
+  app: LiveApp, out: string, evidenceDir?: string,
 ): Promise<FilmResult> {
   const framesDir = scratchDir(`plan-demo-${String(process.pid)}`);
-  const { entries } = await captureFrames(page, origin, framesDir);
+  const page = await app.newPage();
+  const film = reel(page, framesDir);
+
+  const workspace = await createWorkspace(
+    app.origin, `plan-demo-${crypto.randomUUID().slice(0, 8)}`, WORKSPACE_PURPOSE, SCRIPTED_MODEL_SPEC);
+
+  const verdict = await drivePlanReview(page, app.origin, workspace, film.shoot);
+  await page.close();
+
+  const entries = film.entries;
+  const last = entries[entries.length - 1];
+
+  if (last === undefined) throw new Error('the walkthrough produced no frames');
+  last.holdMs = TAIL_HOLD_MS;
+
   const manifestPath = join(framesDir, 'frames.txt');
   writeFileSync(manifestPath, concatManifest(entries));
   muxGif(framesDir, manifestPath, out);
@@ -490,28 +595,23 @@ export async function filmMovie(
     // GIF frame delays are centiseconds, so a hold lands within ~20ms of
     // plan; 30ms of slack keeps quantization from failing a true beat.
     if (Math.abs((facts.packetDurations[index] ?? 0) - entry.holdMs / 1000) > 0.03) {
-      throw new Error(`GIF packet ${String(index)} holds ${String(facts.packetDurations[index])}s, the timeline planned ${String(entry.holdMs / 1000)}s`);
+      throw new Error(`GIF packet ${String(index)} holds ${String(facts.packetDurations[index])}s, the film planned ${String(entry.holdMs / 1000)}s`);
     }
   }
 
   if (Math.abs(facts.durationS - planned) > 0.5) {
-    throw new Error(`GIF runs ${String(facts.durationS)}s, the timeline planned ${String(planned)}s`);
+    throw new Error(`GIF runs ${String(facts.durationS)}s, the film planned ${String(planned)}s`);
+  }
+
+  if (verdict.inspectorBeforePlan > SHUT_PX) {
+    throw new Error(`the inspector was ${String(verdict.inspectorBeforePlan)}px wide before the plan arrived`);
   }
 
   if (evidenceDir !== undefined) {
-    // The four moments a reviewer asks for: the opening state, the plan
-    // awaiting its decision, the cursor on approach, and the click itself.
-    const movie = await movieStats(page);
-
-    if (movie === undefined) throw new Error('the landing movie handle went away after load');
-
-    for (const stamp of EVIDENCE_STAMPS) {
-      const target = 'at' in stamp ? stamp.at : movie.cues[stamp.cue];
-
-      if (target === undefined) throw new Error(`the movie publishes no "${'cue' in stamp ? stamp.cue : String(stamp.at)}" cue`);
-
-      const { png } = await captureCueFrame(page, origin, { at: target + (stamp.offsetMs ?? 0) });
-      writeFileSync(join(evidenceDir, `kinu-plan-demo-${stamp.name}.png`), png);
+    // One still per beat the film tells, so a review can see what the
+    // animation says without decoding it.
+    for (const [beat, file] of film.beats) {
+      writeFileSync(join(evidenceDir, `kinu-plan-demo-${beat}.png`), await Bun.file(join(framesDir, file)).bytes());
     }
   }
 
@@ -522,6 +622,7 @@ export async function filmMovie(
     bytes: await Bun.file(out).size,
     frames: facts.frames,
     durationS: facts.durationS,
+    verdict,
   };
 }
 
@@ -531,12 +632,15 @@ if (import.meta.main) {
   const out = named === undefined ? DEFAULT_OUT : resolve(named);
   const evidenceFlag = process.argv.indexOf('--evidence');
   const evidenceDir = evidenceFlag >= 0 ? resolve(process.argv[evidenceFlag + 1] ?? '') : undefined;
+  const model = await startScriptedModel(planWalkthrough);
 
-  await withGallery(async ({ newPage, origin }) => {
-    const page = await newPage();
-    const result = await filmMovie(page, origin, out, evidenceDir);
-    console.log(JSON.stringify(result, null, 2));
-    await page.close();
+  const result = await withLiveApp(async (app) => {
+    await registerScriptedModel(app.origin, model.port);
+
+    return filmPlanReview(app, out, evidenceDir);
   });
+
+  await model.stop();
+  console.log(JSON.stringify(result, null, 2));
   process.exit(0);
 }
