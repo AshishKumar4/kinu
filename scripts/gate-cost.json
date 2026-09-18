@@ -794,6 +794,17 @@
       "samples": 1846,
       "loadAtStart": 31.76,
       "exit": 124
+    },
+    "bun test --timeout=0 scripts/live-app-tier.test.ts": {
+      "wallSeconds": 53.01,
+      "cpuSeconds": 75.43,
+      "peakRssMb": 202.38,
+      "peakRunnable": 4,
+      "peakCpuThreads": 33.7,
+      "meanThreads": 1.42,
+      "samples": 250,
+      "loadAtStart": 1.93,
+      "exit": 1
     }
   }
 }
