@@ -20,11 +20,6 @@
 </p>
 
 <p align="center">
-  <b>6</b> named searches &nbsp;·&nbsp; <b>8</b> built-in tools &nbsp;·&nbsp;
-  <b>2</b> backends, one core &nbsp;·&nbsp; <b>4</b> execution environments
-</p>
-
-<p align="center">
   <a href="QUICKSTART.md">Quick start</a> &nbsp;·&nbsp;
   <a href="docs/USER-GUIDE.md">User guide</a> &nbsp;·&nbsp;
   <a href="docs/EXPLORATION.md">Swarms</a> &nbsp;·&nbsp;
