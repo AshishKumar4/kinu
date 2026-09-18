@@ -5151,11 +5151,48 @@ export abstract class ActorAgent extends Think<Env> {
     }, request, authority);
   }
 
+  /**
+   * One page of ONE chat: the caller's own by default, or the chat of the
+   * hosted actor a pane names.
+   *
+   * A pane addresses its own actor by the id its snapshot already carries
+   * (`SubordinateSnapshot.actorId`); the root's pane names none and reads this
+   * actor's conversation. Before the parameter existed every caller was
+   * answered from `actorHandle()`, so an actor pane's scroll-up paged the
+   * WORKSPACE's rows into a helper's chat — the same leak the pane's live
+   * transcript had, one surface later.
+   */
   @callable()
-  async getChatHistoryPage(request?: PageRequest): Promise<Page<ChatHistoryEntry>> {
+  async getChatHistoryPage(request?: PageRequest & { actor?: string }): Promise<Page<ChatHistoryEntry>> {
     this.ensureSchema();
+    const { actor, ...page } = request ?? {};
 
-    return getChatHistoryPage(this.boundSql, this.actorHandle(), request ?? {});
+    return getChatHistoryPage(this.boundSql, actor === undefined ? this.actorHandle() : this.hostedChatActor(actor), page);
+  }
+
+  /**
+   * The actor behind a pane's id, refused when this workspace hosts no chat
+   * under it.
+   *
+   * The DIRECTORY answers, because the id it issued is what the pane holds: it
+   * refuses an actor this workspace never registered or has retired, and the
+   * two further checks are the ones `resolveHostedActorRoute` makes of the
+   * socket serving the same chat — a child of THIS actor, of the one kind
+   * whose pane has a conversation. The page itself then comes off the rows
+   * that actor's own chat wire serves (`actor_messages` under
+   * `CHAT_SESSION_ID`, through the canonical read model), not a reader of this
+   * RPC's own.
+   */
+  private hostedChatActor(actorId: string): ActorHandle {
+    const directory = this.actorDirectoryStore();
+    const handle = directory.open(actorId);
+    const record = directory.describe(handle);
+
+    if (record.parentActorId !== this.actorHandle().actorId || record.kind !== 'subordinate') {
+      throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
+    }
+
+    return handle;
   }
 
   /** The agent's stored model spec. The UI preselects a menu entry with it; the

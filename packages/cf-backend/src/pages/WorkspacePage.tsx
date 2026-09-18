@@ -401,10 +401,12 @@ function SubordinateChatColumn({
   const effectiveMode = planGate.mode;
 
   // The same older-history walk the workspace column runs, over this facet's
-  // own storage. A subordinate keeps its own conversation, and a helper that
-  // worked for an hour has more of one than the SDK's hydration window holds.
+  // own storage — named by this pane's actor, because the read serves whichever
+  // actor the request names and the workspace's own chat is the default. A
+  // subordinate keeps its own conversation, and a helper that worked for an
+  // hour has more of one than the SDK's hydration window holds.
   const { history, transcript, thread } = useChatThread(
-    state.rpc, state.messages, state.transcriptSeeded, state.steerRuns);
+    state.rpc, state.messages, state.transcriptSeeded, state.steerRuns, state.paneActorId);
 
   const messagesRef = useGrowingScroll<HTMLDivElement>({
     grows: "up",
