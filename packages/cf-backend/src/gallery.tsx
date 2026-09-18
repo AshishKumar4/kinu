@@ -26,7 +26,7 @@
  *                                  one column
  *   /gallery.html?frame=modal    → modal open
  *   /gallery.html?frame=home     → HomePage
- *   /gallery.html?frame=workspaces → the Workspaces page (`&view=tiled` for the grid)
+ *   /gallery.html?frame=workspaces → the Workspaces page (`&view=list` for the list)
  *   /gallery.html?frame=plugins  → the Plugins page
  *   /gallery.html?frame=setupmodal → HomePage with an account panel open in
  *                                  the modal the Setup card opens;
@@ -1157,7 +1157,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
       displayName: "Checkout coupon bug", purpose: "Find why the SAVE20 coupon 500s and fix it.",
       soul: "# Checkout coupon bug\n\nI own the checkout coupon path. I read the migration before I guess.\n",
       createdAt: NOW - 7 * 864e5, scaffoldVersion: 7, searchNodeCount: 106,
-      craftedToolCount: 2, messageCount: 48, model: "anthropic/claude-opus-4", forkLineage: null,
+      craftedToolCount: 2, messageCount: 48, model: "anthropic/claude-opus-4", forkLineage: null, reasoningEffort: "medium",
     },
     tools: { builtIn: [], crafted: [] },
     memoryContent: "",
@@ -1760,6 +1760,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
       role: "task",
       mission: "",
       model: { model: "anthropic/claude-opus-4", source: "workspace" },
+      reasoningEffort: "medium",
       activePlan: galleryAgentPlan,
       pendingSteers: [],
     } satisfies SubordinateSnapshot,
@@ -3095,7 +3096,7 @@ function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
   return (
     <SubordinateTabs
       workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
-      onCreate={async () => {}} creating={false} onDismiss={async () => {}}
+      onCreate={async () => {}} creating={false} onDismiss={async () => {}} onRename={async (_name, displayName) => displayName}
       trailing={clearable && <Button variant="ghost" {...SQUARE_BUTTON_PROPS} size="sm" icon={<TrashIcon size={12} />} aria-label="Clear history" />}
     />
   );
@@ -3908,7 +3909,7 @@ function TabsFrame() {
         <div key={w} className="flex flex-col border p-border overflow-hidden" style={{ width: w, height: 190 }}>
           <SubordinateTabs
             workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
-            onCreate={async () => {}} creating={false} onDismiss={async () => {}}
+            onCreate={async () => {}} creating={false} onDismiss={async () => {}} onRename={async (_name, displayName) => displayName}
           />
           <div className="flex-1 px-5 py-4 p-row-text p-text-3">Main chat body</div>
         </div>
@@ -3916,7 +3917,7 @@ function TabsFrame() {
       <div className="flex flex-col border p-border overflow-hidden" style={{ width: 520, height: 190 }}>
         <SubordinateTabs
           workspace="checkout-fixes" subordinates={SUBORDINATES} activeName="coupon-tester"
-          onCreate={async () => {}} creating={false} onDismiss={async () => {}}
+          onCreate={async () => {}} creating={false} onDismiss={async () => {}} onRename={async (_name, displayName) => displayName}
         />
         <div className="flex-1 px-5 py-4 p-row-text p-text-3">Subordinate chat body</div>
       </div>
@@ -4052,6 +4053,7 @@ function AgentChatsScene() {
           activeName={subName}
           onCreate={create}
           creating={false}
+          onRename={async (_name, displayName) => displayName}
           onDismiss={async (name, keepHistory) => {
             setRoster((current) => current.filter((entry) => entry.name !== name));
             // What the backend does with the THREAD, mirrored: `keepHistory`
@@ -4447,7 +4449,7 @@ const BRAIN_STATUS = {
   name: "checkout-coupon-bug-9935d3", displayName: "Checkout coupon bug",
   purpose: "Find why the SAVE20 coupon 500s and fix it.", model: "anthropic/claude-opus-4",
   scaffoldVersion: 7, searchNodeCount: 12, craftedToolCount: 2, messageCount: 48,
-  soul: "# Checkout coupon bug", forkLineage: null, createdAt: NOW - 7 * 864e5,
+  soul: "# Checkout coupon bug", forkLineage: null, createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
 } satisfies AgentStatus;
 
 /* ── Agent-authored Slate preview ────────────────────────────── */
@@ -6620,12 +6622,14 @@ const StaleChunkRoute = lazyRoute(async () => {
   return { default: () => <p data-lazy-loaded className="text-sm p-text-2">The split route rendered.</p> };
 });
 
-/** The sibling that never fails. Its attempt count is the assertion that a
- *  regenerated loader clears one route's memo and not the others'. */
+/** The sibling that never fails, loaded as the real code-split chunk it is
+ *  (`gallery-lazy-healthy.tsx` says why). Its attempt count is the assertion
+ *  that a regenerated loader clears one route's memo and not the others'. */
 const HealthyChunkRoute = lazyRoute(async () => {
   recordAttempt("healthy");
+  const { default: LazyHealthyRoute } = await import("./gallery-lazy-healthy");
 
-  return { default: () => <p data-lazy-healthy className="text-sm p-text-2">The other split route rendered.</p> };
+  return { default: LazyHealthyRoute };
 });
 
 function LazyRouteScene() {
@@ -6897,7 +6901,7 @@ async function mount() {
     ["setupmodal", { node: <SetupModalFrame />, entries: ["/"] }],
     // The onboarding wizard, stepped: `&step=0..3` picks which panel is open.
     ["welcome", { node: <WelcomeFrame />, entries: ["/welcome"] }],
-    // The two primary-nav pages behind the shipped chrome; `&view=tiled`
+    // The two primary-nav pages behind the shipped chrome; `&view=list`
     // seeds the workspaces page's stored choice.
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
     // Chat with ts/bash/json fences — the frame the highlighting test shoots.

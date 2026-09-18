@@ -30,7 +30,7 @@ import { SidebarRail } from '@/components/SidebarRail';
 import { SubordinateTabs } from '@/components/SubordinateTabs';
 import { WorkspaceBar, type Altitude } from '@/components/WorkspaceBar';
 import { WorkSurface, type SurfaceKind } from '@/components/surfaces/WorkSurface';
-import { WorkbenchPanels } from '@/components/WorkbenchPanels';
+import { InspectorToggle, WorkbenchPanels } from '@/components/WorkbenchPanels';
 import { SLATE_PREFIX } from '@/components/surfaces/presence';
 import { SupervisePage } from '@/pages/SupervisePage';
 import { AccountProvider } from '@/hooks/use-account';
@@ -550,7 +550,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
                 pinnedPorts: [],
                 activePlan: plan,
               }}
-              chat={<>
+              chat={(inspectorControl) => <>
                 <SubordinateTabs
                   workspace={LANDING_WORKSPACE}
                   subordinates={LANDING_SUBORDINATES}
@@ -558,6 +558,8 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
                   onCreate={async () => {}}
                   creating={false}
                   onDismiss={async () => {}}
+                  onRename={async (_name, displayName) => displayName}
+                  trailing={inspectorControl && <InspectorToggle control={inspectorControl} />}
                 />
                 <div className="@container flex min-h-0 flex-1 flex-col">
                   <div ref={transcript} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-7 lg:px-8 [&>*]:mx-auto [&>*]:max-w-[780px]">
@@ -579,9 +581,9 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
                   </div>
                 </div>
               </>}
-              inspector={(onCollapse) => (
+              inspector={(
                 <WorkSurface
-                  surface={surface} onSurface={onSurface} onCollapse={onCollapse}
+                  surface={surface} onSurface={onSurface}
                   pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}}
                   plan={plan} planRpc={rpc}
                   snapshot={{ status: 'loading' }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent="" onSearchMemory={() => {}}

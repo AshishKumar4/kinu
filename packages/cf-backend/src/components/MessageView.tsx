@@ -873,7 +873,7 @@ export const MessageView = memo(function MessageView({
   );
 
   return (
-    <div className="space-y-1 animate-fade-in">
+    <div className="group/msg space-y-1 animate-fade-in">
       {segments.map((segment, s) => (
         <Fragment key={s}>
           {segment.steer && <SteerBubble steer={segment.steer} onFork={onFork} />}
@@ -954,7 +954,8 @@ function MessageFeedback({
   }, [busy, current, messageId, onFeedback]);
 
   return (
-    <div className="flex items-center gap-1">
+    // Hidden until the pointer or focus is on the message; a recorded choice stays shown.
+    <div className={`flex items-center gap-1 transition-opacity ${current === null ? 'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100' : ''}`}>
       <button
         type="button"
         onClick={() => toggle('positive')}
