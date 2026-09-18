@@ -3,11 +3,10 @@
  *
  * The reactor's job is to wake the agent when external events arrive (webhooks,
  * timers, peer messages, …) and let it act on them in a normal Think turn. This
- * pure helper picks the externally-triggered pending events — EXCLUDING the
- * agent's own `self_emit` / `internal` events, which is the anti-self-wake-loop
- * mechanism — and renders them into a single user message. The orchestrator
- * binds the returned ids (markConsumed) before injecting the message, so a
- * concurrent drain can't double-process them.
+ * pure helper picks the externally-triggered pending events — {@link
+ * wakesADrain} states which those are — and renders them into a single user
+ * message. The orchestrator binds the returned ids (markConsumed) before
+ * injecting the message, so a concurrent drain can't double-process them.
  */
 import * as v from 'valibot';
 import type { KinuEvent } from './types';
@@ -33,11 +32,7 @@ export interface DrainBatch {
 }
 
 function delegatedEventMode(event: KinuEvent): WorkMode | null {
-  if (
-    event.variant !== 'peer_agent'
-    && event.variant !== 'subordinate_task'
-    && event.variant !== 'subordinate_report'
-  ) return null;
+  if (event.variant !== 'peer_agent' && event.variant !== 'subordinate_report') return null;
 
   if (event.payload_visibility === 'full' || event.payload_visibility === 'redact') {
     return event.payload.kinu_mode;
@@ -62,16 +57,34 @@ function oneLine(value: string): string {
 /**
  * Would this pending event wake a turn?
  *
- * The agent's own `self_emit` / `internal` rows never do — that is the
- * anti-self-wake-loop rule, and it is stated ONCE here because two readers now
- * need it: the batch below, and the wake fold that decides whether a workspace
- * still owes itself an alarm (`EventLog.nextPendingDrainAt`). Spelled twice,
- * they drift the moment a third ingress is added, and the failure is silent in
- * the direction that matters: a workspace that arms no wake for work it will
- * later agree to drain.
+ * TWO exclusions, and they are separate rules.
+ *
+ * The agent's own `self_emit` / `internal` rows never wake one: the
+ * anti-self-wake-loop rule.
+ *
+ * A `subordinate_task` row never wakes one either, because it is not an
+ * external event to react to. An assignment IS the subordinate's whole turn
+ * input, and it belongs to the delegation runner (`drainAssignments`), which
+ * runs the brief verbatim as that turn. The reactor DIGESTS: it renders its
+ * batch as "1 event arrived while you were idle … [subordinate_task] from
+ * workspace …" and hands that summary to the host's turn admission. Both
+ * halves are wrong for an assignment — the child reads a paraphrase of its
+ * brief instead of the brief, and on a backend whose hosted admission
+ * re-publishes a queued turn as a new assignment the two runners feed each
+ * other. Measured 2026-09-17 in the workerd pool: one hire brief produced 242
+ * `subordinate_task` rows, bodies nesting 253 → 850 characters.
+ *
+ * Stated ONCE here because three readers need it: the batch below, the wake
+ * fold that decides whether a workspace still owes itself an alarm
+ * (`EventLog.nextPendingDrainAt`), and the delegation runner, which owns
+ * exactly what this excludes. Spelled twice they drift the moment a fourth
+ * ingress is added, and the failure is silent in the direction that matters: a
+ * workspace that arms no wake for work it will later agree to drain.
  */
 export function wakesADrain(event: KinuEvent): boolean {
-  return event.ingress !== 'self_emit' && event.variant !== 'internal';
+  return event.ingress !== 'self_emit'
+    && event.variant !== 'internal'
+    && event.variant !== 'subordinate_task';
 }
 
 /** Externally-triggered pending events → one drain batch, or null if there are
