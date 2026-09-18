@@ -1,11 +1,11 @@
 /**
  * Two lanes, because a hire has two speakers. Both speak over HTTP: the
  * workspace model is pinned to `openai-compat/hire-root`, whose credential
- * baseURL is this fixture's host, and the CHILD's wire is the same lane —
- * the fixture writes the account profile catalog's default tier as
- * `openai-compat/hire-child` (`hire-probe.ts:setup`), because a hosted
- * actor's profile resolves its model from the catalog's TIER, not the
- * workspace pin. The AI service binding (`hire-probe.ts:HireAI`) answers
+ * baseURL is this fixture's host, and the CHILD speaks on that same pin — a
+ * hosted actor's turn resolves the workspace's pinned model like every other
+ * turn of the workspace (`hostedActorProfile`). So the lanes are keyed on WHO
+ * is speaking rather than on a model id: a delegated turn is the one carrying
+ * the `report` tool. The AI service binding (`hire-probe.ts:HireAI`) answers
  * only the auxiliary lanes a workspace always emits: title, sleep-time.
 
  * NO CLOCKS. Every wait in this fixture is a gate a request resolves, never a
@@ -470,7 +470,14 @@ export async function hireOutbound(request: Request): Promise<Response> {
   if (body.stream !== true) return auxLane(body);
 
 
-  if (body.model === HIRE_CHILD_MODEL) return await childLane(body);
+  // THE CHILD'S LANE, keyed on the `report` tool rather than on a model id.
+  // `report` is deps-gated (core's `DEPS_GATED_TOOLS`): only an actor that was
+  // hired has its deps wired, so the lane that carries it is a delegated turn
+  // and no root turn can be mistaken for one. The model id cannot key it —
+  // every turn of a pinned workspace, hosted included, runs on the workspace's
+  // pin (`hostedActorProfile`), so the child and its hirer name one spec on
+  // the wire.
+  if (toolNames(body).includes('report')) return await childLane(body);
 
   if (body.model === HIRE_DURABLE_MODEL) return await durableLane(body, results);
 

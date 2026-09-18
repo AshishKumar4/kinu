@@ -21,11 +21,11 @@ export const HIRE_ROOT_MODEL = 'hire-root';
 /** The root's model id for the durable hire + message lane. */
 export const HIRE_DURABLE_MODEL = 'hire-root-durable';
 
-/** The CHILD's model id. A hosted actor takes its model from the profile
- *  catalog's tier rather than the workspace pin, so the fixture authors an
- *  account catalog whose default tier is this spec — which puts the child on
- *  the same HTTP lane the two-turn tier already proves, instead of the direct
- *  Workers AI binding. */
+/** The spec the fixture writes as the account catalog's DEFAULT TIER. It is
+ *  not what the child's turn runs on — every turn of a pinned workspace, a
+ *  hosted actor's included, runs on the workspace pin — but every tier slot is
+ *  checked against the provider listing at the turn boundary, so the default
+ *  tier has to name a spec this fixture's `/v1/models` offers. */
 export const HIRE_CHILD_MODEL = 'hire-child';
 
 /** What the child's model does on its turn. */
