@@ -135,8 +135,37 @@ export interface ReleaseManifest {
 
 const Sha256Schema = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/u));
 
+/**
+ * A version as a release names it, and the one character class it may use.
+ *
+ * The same class `RELEASE_ARTIFACT_ROUTE` serves the artifact on, because the
+ * version is pasted into that path — and into `releases/<version>/` on the
+ * local door's disk, where a version carrying `/` or `..` would write outside
+ * the release it names.
+ */
+const RELEASE_VERSION = /^[A-Za-z0-9._+-]+$/u;
+
+/**
+ * A path inside a release, and what makes it inside.
+ *
+ * The local door writes these to disk (`join(releaseDir(version), path)`), so a
+ * path a channel chose is a host file write: an absolute path, a `..` segment
+ * or a Windows separator escapes the release directory. Refused here, at the
+ * one place a manifest becomes data, rather than at each writer.
+ */
+const ReleaseFilePathSchema = v.pipe(
+  v.string(),
+  v.minLength(1),
+  v.check(
+    (path: string) => !path.startsWith('/')
+      && !path.includes('\\')
+      && path.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..'),
+    'a release file path must stay inside its release',
+  ),
+);
+
 export const ReleaseManifestSchema: v.GenericSchema<ReleaseManifest> = v.object({
-  version: v.pipe(v.string(), v.trim(), v.minLength(1)),
+  version: v.pipe(v.string(), v.trim(), v.regex(RELEASE_VERSION)),
   sha: v.pipe(v.string(), v.trim(), v.minLength(1)),
   builtAt: v.pipe(v.string(), v.trim(), v.minLength(1)),
   channelOrigin: v.pipe(v.string(), v.url()),
@@ -145,9 +174,9 @@ export const ReleaseManifestSchema: v.GenericSchema<ReleaseManifest> = v.object(
     mainModule: v.pipe(v.string(), v.minLength(1)),
     compatibilityDate: v.pipe(v.string(), v.regex(/^\d{4}-\d{2}-\d{2}$/u)),
     compatibilityFlags: v.array(v.string()),
-    modules: v.pipe(v.array(v.string()), v.minLength(1)),
-    modulesPath: v.pipe(v.string(), v.minLength(1)),
-    assets: v.pipe(v.string(), v.minLength(1)),
+    modules: v.pipe(v.array(ReleaseFilePathSchema), v.minLength(1)),
+    modulesPath: ReleaseFilePathSchema,
+    assets: ReleaseFilePathSchema,
     assetsBinding: v.pipe(v.string(), v.minLength(1)),
     crons: v.array(v.string()),
   }),
@@ -178,7 +207,7 @@ export const ReleaseManifestSchema: v.GenericSchema<ReleaseManifest> = v.object(
     value: v.optional(v.string()),
   })),
   files: v.array(v.object({
-    path: v.pipe(v.string(), v.minLength(1)),
+    path: ReleaseFilePathSchema,
     sha256: Sha256Schema,
     size: v.pipe(v.number(), v.integer(), v.minValue(0)),
     assetHash: v.nullable(v.pipe(v.string(), v.regex(/^[0-9a-f]{32}$/u))),
@@ -200,3 +229,18 @@ export const ReleaseManifestSchema: v.GenericSchema<ReleaseManifest> = v.object(
  * until somebody's install.
  */
 export const RELEASE_ARTIFACT_ROUTE = /^\/downloads\/(kinu-worker-[A-Za-z0-9._+-]+\.tar\.gz)$/u;
+
+/** The published manifest, parsed. A manifest that does not parse is not a
+ *  release the flow may act on: every later step reads a field of it, and a
+ *  half-read manifest deploys a Worker with a binding missing. */
+export function parseReleaseManifest(text: string): ReleaseManifest {
+  return v.parse(ReleaseManifestSchema, JSON.parse(text));
+}
+
+/** Where the small publishable half of a release sits: the manifest is a static
+ *  asset, the artifact it names is an R2 object. */
+export const RELEASE_MANIFEST_PATH = '/downloads/release.json';
+
+export function workerArtifactPath(version: string): string {
+  return `/downloads/kinu-worker-${version}.tar.gz`;
+}

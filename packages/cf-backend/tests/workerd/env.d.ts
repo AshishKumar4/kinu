@@ -18,6 +18,10 @@ import type { DbCapabilityProbeDO } from './db-capability-probe';
 import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
+import type {
+  DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState,
+} from './deploy-fake';
+import type { DeployInputs, DeploySnapshot } from '@kinu.run/core/deploy';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
@@ -159,6 +163,71 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   stopped(): Promise<boolean>;
 }
 
+
+/** The deploy run, as the runner reaches it. Declared here rather than
+ *  imported from the probe, because the probe compiles under the PRODUCTION
+ *  project (it subclasses `DeployRunDO`, whose `Env` is production's) and this
+ *  project must not pull that closure in. */
+interface DeployRunProbeRpc extends Rpc.DurableObjectBranded {
+  open(runId: string, keyDigest: string): Promise<void>;
+  admits(runKey: string): Promise<boolean>;
+  holdAuthorization(verifier: string): Promise<string>;
+  landAuthorization(clientId: string, redirectUri: string, code: string, state: string): Promise<boolean>;
+  landToken(accessToken: string, refreshToken: string): Promise<void>;
+  authorized(): Promise<boolean>;
+  accounts(): Promise<readonly { id: string; name: string }[]>;
+  snapshot(): Promise<DeploySnapshot>;
+  start(inputs: DeployInputs): Promise<DeploySnapshot>;
+  retry(stepId: string): Promise<DeploySnapshot>;
+  heldSecretNames(): Promise<readonly string[]>;
+  forget(): Promise<void>;
+  alarmAt(): Promise<number>;
+  expireSoon(): Promise<boolean>;
+  rowText(): Promise<string>;
+  abort(reason: string): Promise<void>;
+}
+
+interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
+  reset(): Promise<void>;
+  state(): Promise<DeployFakeState>;
+  refuseOnce(refusal: DeployFakeRefusal): Promise<void>;
+  serve(build: DeployFakeServedBuild): Promise<void>;
+  publish(build: DeployFakeServedBuild): Promise<void>;
+  stallOnce(stall: DeployFakeStall): Promise<void>;
+  weigh(bytes: number): Promise<void>;
+  expireGrant(expiresIn: number): Promise<void>;
+}
+
+/** A session as the Updates gate reads one: an email, and the two fields that
+ *  make an identity synthesized or non-interactive. Spelled here rather than
+ *  imported for the same reason `SurfaceControlRpc` is — `AuthIdentity` is the
+ *  production project's type. */
+interface UpdatesSession {
+  userId: string;
+  email: string;
+  sub: string;
+  provider?: string;
+  cliScopes?: readonly string[];
+}
+
+interface UpdatesProbeRpc extends Rpc.WorkerEntrypointBranded {
+  hit(method: string, path: string, session: UpdatesSession): Promise<{ status: number; body: string }>;
+}
+
+/** One call to the door's public routes, as a browser makes it. `setCookie`
+ *  carries every `set-cookie` the answer wrote, because the binding under test
+ *  IS a cookie. */
+interface DoorProbeAnswer {
+  status: number;
+  body: string;
+  location: string;
+  setCookie: readonly string[];
+}
+
+interface DeployDoorProbeRpc extends Rpc.WorkerEntrypointBranded {
+  hit(method: string, path: string, headers?: Readonly<Record<string, string>>): Promise<DoorProbeAnswer>;
+}
+
 declare global {
   namespace Cloudflare {
     interface Env {
@@ -207,6 +276,19 @@ declare global {
       PUBLIC_SURFACE: Fetcher;
       /** That worker's one test-only entrypoint, for the shared model log. */
       SURFACE_CONTROL: Service<SurfaceControlRpc>;
+      /** The production deploy run, hosted by `deploy-probe` as the probe
+       *  subclass that adds two read-only windows onto its storage. */
+      DEPLOY_RUN_PROBE: DurableObjectNamespace<DeployRunProbeRpc>;
+      /** That worker's control entrypoint, for the deploy fake's state. */
+      DEPLOY_FAKE: Service<DeployFakeControlRpc>;
+      /** The production `/api/updates` handlers on that worker, which is bound
+       *  like a deployed Kinu: a record, a refresh token of its own, and an
+       *  asset bundle carrying its build stamp. */
+      UPDATES_PROBE: Service<UpdatesProbeRpc>;
+      /** The production deploy routes on that worker, called as a browser and
+       *  as the CLI call them: what a callback proves, and where the key is
+       *  allowed to be. */
+      DEPLOY_DOOR_PROBE: Service<DeployDoorProbeRpc>;
     }
 
     /** The test worker re-exports the production egress entrypoint, so

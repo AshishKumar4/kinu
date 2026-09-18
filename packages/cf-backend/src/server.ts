@@ -16,10 +16,13 @@
  *   3. /login, /auth/*, /logout, /api/auth/* — OAuth/OIDC app auth.
  *   4. / — public landing page when no Kinu session is present.
  *   5. /install, /install.sh, /downloads/kinu, /api/cli/* — CLI install/auth/API.
- *   6. /downloads/kinu-worker-<version>.tar.gz, /api/health,
- *      /api/shared/blueprint/<id> — public endpoints (no auth). The worker
- *      release artifact is streamed from R2 because it exceeds the 25 MiB
- *      static-asset limit; the blueprint id carries its own signature.
+ *   6. /downloads/kinu-worker-<version>.tar.gz, /deploy, /deploy/callback,
+ *      /api/deploy/*, /api/health, /api/shared/blueprint/<id> — public
+ *      endpoints (no auth). The worker release artifact is streamed from R2
+ *      because it exceeds the 25 MiB static-asset limit; the deploy door is
+ *      gated by the run key rather than a session, because a person deploying
+ *      their own Kinu has no account here yet (deploy/routes.ts); the
+ *      blueprint id carries its own signature.
  *   6b. /mcp/v1/* — MCP server; CLI-bearer-token or session auth + ownership
  *       enforced inside (external MCP clients can't do browser OAuth).
  *   7. AUTH GATE — every other request needs a Kinu session
@@ -32,8 +35,8 @@
  *   8b. /api/control/* — admin control plane; a verified Access identity that
  *       EQUALS an allowlisted session email, and a fresh sign-in for anything
  *       that mutates.
- *   9. /api/user/*, /api/shared/* — account-scoped (profile, agents,
- *      credentials, codex flow; shared library publish, list, fork).
+ *   9. /api/user/*, /api/shared/*, /api/updates/* — signed-in: account-
+ *      scoped APIs plus this deployment's own release channel and installs.
  *   10. /api/workspaces/<name>/* — owner check via UserDO.hasWorkspace.
  *   11. /agents/* — Think DOs (chat WebSocket).
  *   12. env.ASSETS fallback — SPA for everything else.
@@ -58,6 +61,8 @@ import { handleUserRequest } from "./user/routes";
 import { handleAccountRequest } from "./user/account-routes";
 import { handleCliRequest } from "./cli/routes";
 import { handleReleaseArtifactRequest } from "@kinu.run/core";
+import { handleDeployRequest } from "./deploy/routes";
+import { handleUpdatesRequest } from "./updates/routes";
 import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
 import { handleSharedPublicRequest, handleSharedRequest } from "./shared/routes";
@@ -125,6 +130,10 @@ export { MonitorDO } from "./monitor/monitor-do";
 
 // The admin control plane's index and audit log. One instance ("site").
 export { ControlPlaneDO } from "./control-plane/control-plane-do";
+
+// One guided self-deployment per run: its step ledger, and the Cloudflare
+// tokens it holds until the last step hands them to the new Worker.
+export { DeployRunDO } from "./deploy/deploy-do";
 
 // This module's exports are the names workerd hangs on `ctx.exports`
 // (`enable_ctx_exports`; compatibility date 2025-12-01 clears the >= 2025-11-17
@@ -573,14 +582,19 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   if (cliResp) return cliResp;
 
   // 6. Public, unauthenticated answers, in one band: the worker release
-  //    artifact, health's build stamp, and a blueprint's page data by link.
-  //    The artifact is served out of R2 rather than as an asset because it is
-  //    larger than Cloudflare's per-file asset limit, and it answers first so
-  //    it keeps its place beside the CLI's downloads above. The blueprint id
-  //    carries a signature checked inside its handler before any object is
-  //    touched, and the owner's object re-reads the share row on every call.
+  //    artifact, the deploy door, health's build stamp, and a blueprint's
+  //    page data by link. The artifact is served out of R2 rather than as an
+  //    asset because it is larger than Cloudflare's per-file asset limit, and
+  //    it answers first so it keeps its place beside the CLI's downloads
+  //    above. The deploy door stands in front of the auth gate because it
+  //    belongs to a person with no Kinu account: what authorizes every call
+  //    is the key the run was minted with, compared inside DeployRunDO
+  //    against a digest. The blueprint id carries a signature checked inside
+  //    its handler before any object is touched, and the owner's object
+  //    re-reads the share row on every call.
   const publicResp = await firstResponse(request, [
     (req) => handleReleaseArtifactRequest(req, env.RELEASES_BUCKET),
+    (req) => handleDeployRequest(req, env),
     (req) => handleHealthRequest(req, env),
     (req) => handleSharedPublicRequest(req, env),
   ]);
@@ -687,14 +701,19 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   }
 
   // 9. The signed-in account APIs — /api/user/* profile and roster, and
-  //    /api/shared/* publish, list, fork. Ownership of every workspace named
-  //    in a body is claimed inside. The account-authority endpoints answer
-  //    first: their writes land on owner_only UserDO methods, so they never
-  //    pass through the workspace-token surface behind them.
+  //    /api/shared/* publish, list, fork — plus /api/updates/*, this
+  //    deployment reading its own release channel and installing from it.
+  //    The updates owner check is the deployment's own record, inside that
+  //    module: everyone else is answered 404, including the fact that the
+  //    surface exists. Ownership of every workspace named in a body is
+  //    claimed inside. The account-authority endpoints answer first: their
+  //    writes land on owner_only UserDO methods, so they never pass through
+  //    the workspace-token surface behind them.
   const accountResp = await firstResponse(authenticatedRequest, [
     (req) => handleAccountRequest(req, env, identity),
     (req) => handleUserRequest(req, env, identity, ctx),
     (req) => handleSharedRequest(req, env, identity),
+    (req) => handleUpdatesRequest(req, env, identity),
   ]);
 
   if (accountResp) return accountResp;
