@@ -98,7 +98,9 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema, STEER_STEP_METADATA_KEY, initRunEventTables,
   parseJsonValue, renderSoulMarkdown, CommandResultSchema,
-  type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent, type WorkspaceSpend,
+  PlanReviewSchema, SubordinateInspectionResultSchema,
+  type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type PlanReview,
+  type PlanReviewDecision, type RunEvent, type SubordinateInspectionRequest, type WorkspaceSpend,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
@@ -774,6 +776,84 @@ const SlatePreviewSchema = v.variant('ok', [
 
 export type PublicSlatePreview = v.InferOutput<typeof SlatePreviewSchema>;
 
+/** The roster rows `listSubordinates` serves (orchestrator.ts:5536), narrowed
+ *  to the three facts a delegation case grades: WHO was hired, whether the row
+ *  is still active, and the `lifetime` that decided it — the one column no
+ *  later state recovers (core/src/subordinates/roster.ts:38-44), which is what
+ *  makes "a task hire retired itself" checkable at all.
+ *
+ *  The RPC the AGENT SURFACE reads: `AgentSurface.tsx:321`'s `loadRoster` and
+ *  the chat's own roster refresh (`hooks/use-kinu.ts:1990`) both call it. */
+const SubordinateRowSchema = v.object({
+  name: v.string(),
+  status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
+  lifetime: v.string(),
+});
+
+const SubordinateRosterSchema = v.array(SubordinateRowSchema);
+
+/** One row of the roster, as the Agents surface lists it. */
+export type PublicSubordinate = v.InferOutput<typeof SubordinateRowSchema>;
+
+/** The agent's own task list as `listAgentTasks` serves it (orchestrator.ts:3103)
+ *  — the read `WorkTab.tsx:124` is bound to. Narrowed to what a case grades and
+ *  mirroring `AgentTaskTree` (core/src/tasks/store.ts:44) rather than importing
+ *  it: the store module is another lane's, and every other read on this session
+ *  declares the shape it consumes. */
+const TaskRowSchema = v.object({
+  id: v.string(),
+  title: v.string(),
+  status: v.picklist(['open', 'active', 'done', 'dropped']),
+  createdAt: v.number(),
+  updatedAt: v.number(),
+});
+
+const TaskTreeSchema = v.object({ ...TaskRowSchema.entries, subtasks: v.array(TaskRowSchema) });
+
+const TaskListSchema = v.array(TaskTreeSchema);
+
+/** One task with its subtasks, as the Work tab draws it. */
+export type PublicTask = v.InferOutput<typeof TaskTreeSchema>;
+
+/** `decidePlanReview`'s answer (actor-agent.ts:961): the plan on a decision that
+ *  landed, or the error on one that did not. The accepted branch may also carry
+ *  `queued`, because an approval whose handoff was accepted starts the
+ *  implementation turn instead of broadcasting — which is the fact a case that
+ *  waits for that turn needs. */
+const PlanDecisionSchema = v.variant('ok', [
+  v.looseObject({ ok: v.literal(true), plan: PlanReviewSchema, queued: v.optional(v.boolean()) }),
+  v.looseObject({ ok: v.literal(false), error: v.string() }),
+]);
+
+/** What a decision on a plan answered. */
+export type PublicPlanDecision = v.InferOutput<typeof PlanDecisionSchema>;
+
+/** One preview host response: the status and the body, both kept. A preview
+ *  that answers 404 with HTML and one that answers 200 with the wrong title are
+ *  different findings, and reducing either to a boolean loses which. */
+export interface PublicPreviewResponse {
+  readonly status: number;
+  readonly text: string;
+}
+
+/**
+ * The absolute URL one preview request goes to: the exposure's own path prefix
+ * (a preview URL carries its capability there) followed by `path`.
+ *
+ * Resolved through the URL parser rather than by assigning `pathname`, because
+ * a request path legitimately carries a QUERY — `/tickets?status=claimed` is
+ * the contract a slate case exercises — and assigning it to `pathname`
+ * percent-encodes the `?`, so the query never reaches the app and the route
+ * answers 404. Exported so a fixture server resolves its requests exactly the
+ * way the live session resolves them.
+ */
+export function previewTarget(url: string, path: string): URL {
+  const base = new URL(url);
+  const suffix = path.startsWith('/') ? path : `/${path}`;
+
+  return new URL(base.pathname.replace(/\/$/u, '') + suffix, base);
+}
+
 /** What `readExecutorFile` answers, exactly as `ExecutorTextFile` declares it
  *  (core/src/read-models/files.ts): the preview's text, or the reason there is
  *  none. Both optional, because the read model answers one or the other. */
@@ -1294,6 +1374,145 @@ export class KinuPublicSession {
     );
 
     return v.parse(v.object({ ports: v.array(v.object({ port: v.number(), url: v.string() })) }), answer).ports;
+  }
+
+  /**
+   * The delegation roster — `listSubordinates`, the RPC the Agents surface's
+   * own card is bound to (`components/surfaces/AgentSurface.tsx:321`) and the
+   * one the chat refreshes on every reconnect (`hooks/use-kinu.ts:1990`).
+   *
+   * Read rather than derived from the hire results: a `lifetime:'task'` row
+   * retires itself when it answers, and "the row LEFT the roster" is a fact
+   * only the roster holds — a hire result says who was hired, never who is
+   * still employed.
+   */
+  async subordinates(): Promise<readonly PublicSubordinate[]> {
+    const rows = await infraBoundary(
+      `listSubordinates on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('listSubordinates', []),
+    );
+
+    return v.parse(SubordinateRosterSchema, rows);
+  }
+
+  /**
+   * The agent's own task list — `listAgentTasks`, the read the Work tab polls
+   * (`components/surfaces/WorkTab.tsx:124`'s `loadTasks`).
+   *
+   * READ-ONLY on purpose at the product end (orchestrator.ts:3098-3105): the
+   * agent maintains this list from its `tasks` tool, so this is the surface's
+   * view of what the agent decided, never a place a harness may write. That is
+   * exactly what makes it a verifier: a reply claiming a task is closed is
+   * checked against the list the product would draw.
+   */
+  async tasks(): Promise<readonly PublicTask[]> {
+    const rows = await infraBoundary(
+      `listAgentTasks on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('listAgentTasks', []),
+    );
+
+    return v.parse(TaskListSchema, rows);
+  }
+
+  /**
+   * This workspace's OWN plan reviews — `inspectSubordinate` with view `plans`
+   * at the root path, the first read `components/surfaces/WorkPlans.tsx:83-113`
+   * queues when the Work tab opens.
+   *
+   * The root path (`[]`) and nothing deeper: the Work tab walks children from
+   * there, and a case that graded a subordinate's plan as the root's would
+   * credit the wrong actor. A `missing` view is answered as an empty list —
+   * `plan_reviews` not existing is "no plan was ever submitted", which is the
+   * honest reading and the one a pre-plan subgoal needs.
+   */
+  async plans(): Promise<readonly PlanReview[]> {
+    // `satisfies` rather than an annotation: the literal keeps its own inferred
+    // type, which is what a `JsonValue` argument accepts, while the product's
+    // request type still rules on the shape at compile time.
+    const request = { path: [], view: 'plans', page: { limit: 50 } } satisfies SubordinateInspectionRequest;
+
+    const answer = await infraBoundary(
+      `inspectSubordinate(plans) on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('inspectSubordinate', [request]),
+    );
+
+    const result = v.parse(SubordinateInspectionResultSchema, answer);
+
+    if (result.view === 'missing') return [];
+
+    if (result.view !== 'plans') {
+      throw new Error(`inspectSubordinate(plans) answered the ${result.view} view instead`);
+    }
+
+    return result.page.items;
+  }
+
+  /**
+   * Decide one plan review — `decidePlanReview`, the RPC the review pane's own
+   * button calls with the same four arguments
+   * (`components/surfaces/PlanReviewView.tsx:315`).
+   *
+   * The product's own vocabulary, not a harness verb: an `approve` whose
+   * handoff is accepted QUEUES the implementation turn (actor-agent.ts:972-978)
+   * rather than broadcasting, which is why the answer is returned whole — a
+   * caller that must wait for that turn needs to know one was started.
+   */
+  async decidePlan(
+    id: string, revision: number, decision: PlanReviewDecision, feedback?: string,
+  ): Promise<PublicPlanDecision> {
+    const args: JsonValue[] = feedback === undefined
+      ? [id, revision, decision]
+      : [id, revision, decision, feedback];
+
+    const answer = await infraBoundary(
+      `decidePlanReview(${id}#${String(revision)}) on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('decidePlanReview', args),
+    );
+
+    return v.parse(PlanDecisionSchema, answer);
+  }
+
+  /**
+   * Fetch one path off a preview URL, as a person clicking the preview tab
+   * does.
+   *
+   * NOT an RPC: the URL comes from `getExposedPorts` (orchestrator.ts:6051, the
+   * read `hooks/use-kinu.ts:1759` binds the Env pane's preview tabs to) and the
+   * bytes come from the preview host itself (`server.ts:492`
+   * `routePreviewHost`), whose authority is the capability inside the URL. The
+   * web identity's header rides along anyway, for the one case where the
+   * exposure is served off the API origin rather than the preview host — a
+   * preview that 401s because the harness dropped a header it already holds is
+   * a finding about the harness.
+   *
+   * `status` and `text` are both returned: an exposure row is not evidence of a
+   * live server (docs/EXECUTION-LAYER-SPEC.md:329-332), so what the port
+   * ANSWERED is the whole subject.
+   *
+   * `body` makes it a WRITE too, because an app's own contract is checked
+   * through the app: a queue that only ever answered GETs was never told to
+   * store anything. One client for both directions rather than a second
+   * fetcher beside it — the URL, the headers and the refusal handling are the
+   * same on a POST as on a GET, and two of them would be two answers to what
+   * a preview request is.
+   */
+  fetchPreview(
+    url: string, path: string,
+    body?: { readonly method: string; readonly json?: JsonValue },
+  ): Promise<PublicPreviewResponse> {
+    const target = previewTarget(url, path);
+
+    return infraBoundary(`${body?.method ?? 'GET'} ${target.origin}${target.pathname}`, async () => {
+      const response = await fetch(target, {
+        method: body?.method ?? 'GET',
+        headers: body?.json === undefined
+          ? webHeaders(this.input.identity)
+          : { ...webHeaders(this.input.identity), 'content-type': 'application/json' },
+        body: body?.json === undefined ? undefined : JSON.stringify(body.json),
+      });
+
+      return { status: response.status, text: await response.text() };
+    });
   }
 
   /** Resolve when a response chunk of `requestId` satisfies `accept` — a

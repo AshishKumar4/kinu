@@ -78,7 +78,7 @@
  */
 import { tmpdir } from 'node:os';
 
-import { join, posix } from 'node:path';
+import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 import * as v from 'valibot';
 
@@ -108,6 +108,10 @@ import {
   type PublicSessionPlan,
 } from './public-session';
 import { tolerate } from '../../packages/core/src/obs/index';
+import {
+  awaitDetachedJobWakes, fileActionOn, isToolCallEnd, promptToolCalls,
+  requireMeasuredToolOutcomes, toolActionOn,
+} from './prompt-ledger';
 import { DEGENERATE_EVENTS, LEDGER_EVENTS } from './fixtures/public-session-frames';
 
 const SUITE = 'Trajectory Evals';
@@ -582,43 +586,6 @@ const CASES: readonly TrajectoryCase[] = [
 
 const DECLARED = CASES.map((entry) => entry.id);
 
-function isToolCallEnd(event: RunEvent): event is Extract<RunEvent, { type: 'tool_call_end' }> {
-  return event.type === 'tool_call_end';
-}
-
-/** Identify the requested prompt's run, not a later autonomous run or an
- * earlier run that happens to use the same tool. Missing identity earns no
- * credit. A prompt absorbed mid-turn opens no `run_start` of its own: its run
- * is the one it landed in, read off `absorbedBy` rather than the log.
- *
- * A detached tool call's recovery lands in neither of those: its run's calls
- * end at the background handle, and the job's settle wakes a NEW run whose
- * `run_start.userMessage` is the wake text — never the prompt. The wake run is
- * still the prompt's answer: its `run_start` names the detached job's id
- * verbatim, and the job id is in the handle the prompt's own run returned. So
- * a prompt owns its own runs plus the wake runs of the jobs those runs
- * detached — a recovery that settles past the detach is scorable instead of
- * invisible by construction. */
-function promptToolCalls(
-  events: readonly RunEvent[], prompt: string | undefined,
-  absorbedBy?: ReadonlyMap<string, string>,
-): Extract<RunEvent, { type: 'tool_call_end' }>[] {
-  if (prompt === undefined) return [];
-  const runs = new Set(events.filter((event) => event.type === 'run_start' && event.userMessage === prompt).map((event) => event.runId));
-  const absorbed = absorbedBy?.get(prompt);
-
-  if (absorbed !== undefined) runs.add(absorbed);
-
-  for (const jobId of detachedJobIds(events, runs)) {
-    for (const event of events) {
-      if (event.type === 'run_start' && event.userMessage?.includes(jobId) === true) runs.add(event.runId);
-    }
-  }
-
-  return events.filter(isToolCallEnd).filter((call) => runs.has(call.runId));
-}
-
-
 /** What a settled `shell` job's stored result carries when it carries an exit
  *  verdict at all: the serialized refusal shape a failed command's error was
  *  packed into — never the stdout string a zero exit resolves to. */
@@ -682,132 +649,8 @@ function runExitedZero(
   return true;
 }
 
-/** The background jobs a set of runs detached, read off the handles their tool
- *  calls returned. A handle is the only place the prompt's ledger and the job
- *  row meet: the call's `result` carries the `jobId`, and nothing else on
- *  either side does. */
-function detachedJobIds(
-  events: readonly RunEvent[], runs: ReadonlySet<string>,
-): string[] {
-  return [...new Set(events.filter(isToolCallEnd)
-    .filter((call) => runs.has(call.runId))
-    .map((call) => call.result)
-    .filter(isBackgroundHandle)
-    .map((handle) => handle.jobId))];
-}
-
-/** The poll cadence the public plane can absorb: the run-event route is paged
- *  REST, and each read is several round trips — anything tighter is load the
- *  episode creates, not evidence it waits for. */
-const WAKE_POLL_MS = 250;
-
-/**
- * Wait out the detached jobs a case's prompts minted, until their wake runs
- * close — the product's promise a detached call makes ("the settled result
- * will wake me") measured where it lands.
- *
- * THE BOUND IS THE RUN'S COMPLETION, never a clock (AGENTS.md: no elapsed
- * deadlines on turn work). For each job the prompt's calls detached, a wake
- * run's `run_start` carries the job id verbatim in its `userMessage` — the
- * synthesized "Background run job …" text — so the run to wait on is named
- * rather than guessed. The wait ends per job when every such run has closed;
- * a wake that never opened a run is declared over when the job is settled and
- * no run is still open — either its event was spliced into and consumed by an
- * open turn (which a closed log then rules out), or the delivery failed, in
- * which case the scoring reads the job row the runner wrote before waking.
- *
- * One quiet poll is not proof of quiet: the splice-to-queue hand-off inside
- * the workspace can land a wake's `run_start` a beat after the last `run_end`
- * was read. Two consecutive polls that agree nothing is owed end the wait;
- * the second read costs one page of runs and nothing else.
- */
-async function awaitDetachedJobWakes(
-  session: Pick<KinuPublicSession, 'runEvents' | 'backgroundJobs'>,
-  entry: TrajectoryCase,
-  absorbedBy: ReadonlyMap<string, string>,
-): Promise<void> {
-  let quiet = 0;
-
-  for (;;) {
-    const [jobs, events] = await Promise.all([session.backgroundJobs(), session.runEvents()]);
-
-    const promptRuns = new Set(
-      events.filter((event) => event.type === 'run_start' && event.userMessage !== undefined
-          && entry.turns.includes(event.userMessage)).map((event) => event.runId),
-    );
-
-    for (const runId of absorbedBy.values()) promptRuns.add(runId);
-
-    const detached = detachedJobIds(events, promptRuns);
-
-    if (detached.length === 0) return;
-
-    const openRuns = new Set(
-      events.filter((event) => event.type === 'run_start').map((event) => event.runId)
-        .filter((runId) => !events.some((event) => event.type === 'run_end' && event.runId === runId)),
-    );
-
-    const pending = detached.filter((jobId) => {
-      const wakeRuns = events.filter((event) =>
-        event.type === 'run_start' && event.userMessage?.includes(jobId) === true).map((event) => event.runId);
-
-      if (wakeRuns.length > 0) return wakeRuns.some((runId) => openRuns.has(runId));
-
-      const job = jobs.find((candidate) => candidate.id === jobId);
-
-      return openRuns.size > 0 || (job !== undefined && job.status === 'running');
-    });
-
-    if (pending.length === 0) {
-      quiet += 1;
-
-      if (quiet >= 2) return;
-    } else {
-      quiet = 0;
-    }
-
-    await new Promise<void>((resolve) => setTimeout(resolve, WAKE_POLL_MS));
-  }
-}
-
-const FileActionSchema = v.object({ action: v.string(), path: v.string() });
-
-function fileActionOn(
-  call: Extract<RunEvent, { type: 'tool_call_end' }>, action: 'read' | 'write' | 'edit', path: string,
-): boolean {
-  if (call.name !== 'file' || call.outcome?.success !== true) return false;
-  const args = v.safeParse(FileActionSchema, call.args);
-
-  if (!args.success || args.output.action !== action) return false;
-  const actual = posix.normalize(args.output.path);
-
-  return actual === path || actual === `/${path}`;
-}
-
-const ToolActionSchema = v.object({ action: v.string() });
-
-/** A successful call of a named ACTION on a native tool (`memory` save, `tasks`
- *  list): the file helper above plus the path it needs, for tools whose calls
- *  carry no path. Attribution required — an unmeasured row proves nothing. */
-function toolActionOn(
-  call: Extract<RunEvent, { type: 'tool_call_end' }>, tool: string, action: string,
-): boolean {
-  if (call.name !== tool || call.outcome?.success !== true) return false;
-  const args = v.safeParse(ToolActionSchema, call.args);
-
-  return args.success && args.output.action === action;
-}
-
 function isRecoveryTestRun(call: Extract<RunEvent, { type: 'tool_call_end' }>): boolean {
   return call.name === 'shell' && v.is(RecoveryTestRunSchema, call.args);
-}
-
-/** Missing attribution is a harness evidence gap, not an agent failure or
- * a success inferred from harmless-looking output. The attempt/raw ledger remains retained. */
-function requireMeasuredToolOutcomes(calls: readonly Extract<RunEvent, { type: 'tool_call_end' }>[]): void {
-  const missing = calls.filter((call) => call.outcome === undefined).length;
-
-  if (missing > 0) throw new Error(`producer tool outcomes unmeasured for ${String(missing)}/${String(calls.length)} observed calls`);
 }
 
 /**
@@ -1371,7 +1214,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         // recovery the product already produced is scored on a ledger that
         // ended one settle early. Bounded by the jobs' own lifecycle, never by
         // a clock: a still-running job is still owed its wake.
-        await awaitDetachedJobWakes(session, entry, absorbedBy);
+        await awaitDetachedJobWakes(session, entry.turns, absorbedBy);
 
         const { events, history } = await collect();
         observedModels.note(events);

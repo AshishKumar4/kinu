@@ -1363,6 +1363,44 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'spends live model turns as the eval identity; its evidence is behavioural and dated, never a function of the tree alone.' },
   },
   {
+    run: 'bun run gate:kinu-tasks',
+    label: 'Kinu task family × model matrix',
+    tier: 'evals',
+    // FIRST SIZING, NOT A MEASUREMENT. This family has never been run live:
+    // the figure is the trajectory tier's own measured 541s (2026-09-12, five
+    // two-turn episodes on one model, `gate:trajectory`) scaled to four
+    // three-and-four-turn episodes × three trials × three models — 541 × (4/5)
+    // × (3.25/2) × 9 ≈ 6,300s. It is a ceiling to re-size from the first run
+    // record, and it is labelled here because a declared cost that reads like
+    // a measurement is the defect `gate:trajectory`'s own comment records.
+    seconds: 6_300,
+    catches: 'an agent that cannot carry the PRODUCT\'S OWN MACHINERY across turns, graded on '
+      + 'four episodes whose every turn is verified through the artifact\'s own surface against '
+      + 'references the verifier owns: a slate with a JSON HTTP contract seeded in non-sorted '
+      + 'order and re-read after a reconnect; two hires settling while a plan is submitted, with '
+      + 'the reply held to the roster and the task list; workspace-versus-sandbox routing where '
+      + 'the agent must MEET the hosted node\'s codegen boundary rather than guess at it '
+      + '(measured 2026-09-18 on the deployment: `npm i` exits 0, `npx vite` exits 127); and '
+      + 'memory plus tasks across an `abortActivation()` eviction. Each case carries a '
+      + 'per-episode nonce, so a copied answer from an earlier run cannot pass. Its '
+      + 'credential-free half — a minimal correct fixture per case plus one mutation per subgoal, '
+      + 'each proved to flip exactly that subgoal — runs at every tier and costs nothing. Three '
+      + 'models, resolved against each provider\'s own `GET /models` BEFORE anything spends, so '
+      + 'a row cannot report a label whose model nobody confirmed.',
+    blind: 'everything four episodes do not reach, and the granularity its one ordering subgoal '
+      + 'has: `parallel-delegation` reads STEP BOUNDARIES — both `agents` hire rows between the '
+      + 'same pair of consecutive `step_finish` rows, the ledger\'s own record of one assistant '
+      + 'message issuing both (there is no `tool_call_start` row, core/src/events/types.ts:'
+      + '147-151) — so it catches a lead that closed a step between its hires and says nothing '
+      + 'about wall-clock overlap INSIDE one step. It is a capability grade on '
+      + 'ONE workspace per case, so nothing about a second account or a second user is measured. '
+      + 'Its task-closure subgoals read FINAL STATE only: the turn-end task reminder is not on '
+      + 'main, so a product that closed a task the user held back would be caught, but the '
+      + 'reminder\'s own at-most-once rule is not. And it is a live tier — a provider outage and '
+      + 'a behavioural regression produce the same red until the retained transcript is opened.',
+    inputs: { kind: 'live', why: 'drives the DEPLOYED public API on three provider models and spends live turns as the eval identity.' },
+  },
+  {
     run: 'bun test --timeout=0 scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts',
     label: 'Evaluation gate logic',
     tier: 'ci',
