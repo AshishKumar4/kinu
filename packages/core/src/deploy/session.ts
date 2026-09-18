@@ -3,12 +3,14 @@
  *
  * The door is public — a person deploying their own Kinu has no Kinu account
  * yet, so there is no session to gate on. What gates it is the key: 192 random
- * bits handed to the browser (or to the CLI) once, presented on every call and
- * on the socket upgrade, compared against a stored DIGEST rather than against
+ * bits handed to the browser (or to the CLI) once, presented in the
+ * `authorization` header of every call and as the socket upgrade's second
+ * subprotocol token, compared against a stored DIGEST rather than against
  * itself. A run's storage therefore never holds the key, and neither does a
- * log line, a ledger row or a diagnostics field — the run id is what identifies
- * a run in every one of those places.
+ * log line, a ledger row, a diagnostics field or a URL — the run id is what
+ * identifies a run in every one of those places.
  */
+import { sha256Hex } from '../safety/argument-digest';
 import { base64Url, timingSafeEqual } from '../utils/crypto';
 
 /** 192 bits. Above the 128-bit floor, and a multiple of three so the base64url
@@ -32,17 +34,26 @@ export function mintDeployRun(): DeployRunTicket {
   return { runId: base64Url(id), runKey: base64Url(key) };
 }
 
-/** What the run stores instead of the key. */
-export async function runKeyDigest(runKey: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(runKey));
-
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+/** What the run stores instead of the key. One digest spelling in this tree,
+ *  `safety/argument-digest.ts`; it reaches `node:crypto`, which is why it is
+ *  called on a backend and never in the page that holds the key. */
+export function runKeyDigest(runKey: string): string {
+  return sha256Hex(runKey);
 }
 
-export async function runKeyAdmits(presented: string, storedDigest: string): Promise<boolean> {
+export function runKeyAdmits(presented: string, storedDigest: string): boolean {
   if (presented === '' || storedDigest === '') return false;
 
-  return timingSafeEqual(await runKeyDigest(presented), storedDigest);
+  return timingSafeEqual(runKeyDigest(presented), storedDigest);
 }
+
+/**
+ * The subprotocol that names the run key on a socket upgrade.
+ *
+ * A browser cannot set a header on a WebSocket upgrade, and the key must not be
+ * in the URL, so the upgrade offers two tokens: this name, and the key. The
+ * route reads the second and answers with the first — the key is never echoed.
+ */
+export const DEPLOY_SOCKET_PROTOCOL = 'kinu.deploy.run-key';
 
 export const DEPLOY_RUN_ID = /^[A-Za-z0-9_-]{16}$/u;

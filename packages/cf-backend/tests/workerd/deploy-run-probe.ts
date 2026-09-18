@@ -26,6 +26,7 @@
  */
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { DeployRunDO } from '../../src/deploy/deploy-do';
+import { handleDeployRequest } from '../../src/deploy/routes';
 import { handleUpdatesRequest } from '../../src/updates/routes';
 import type { AuthIdentity } from '../../src/auth/session';
 import {
@@ -108,5 +109,46 @@ export class UpdatesProbe extends WorkerEntrypoint<Env> {
     if (response === null) throw new Error(`the updates routes do not answer ${method} ${path}`);
 
     return { status: response.status, body: await response.text() };
+  }
+}
+
+/** What one call to the door's routes answered. `setCookie` is every
+ *  `set-cookie` the answer wrote, because the binding under test IS a cookie. */
+export interface DoorProbeAnswer {
+  readonly status: number;
+  readonly body: string;
+  readonly location: string;
+  readonly setCookie: readonly string[];
+}
+
+/**
+ * The door's public routes, called the way a browser and the CLI call them.
+ *
+ * The third subject on this worker, and the one the ledger probe cannot reach:
+ * `handleDeployRequest` decides what a callback must prove before a stranger's
+ * Cloudflare tokens land in a run, and where the run key is allowed to travel.
+ * Headers in, headers out, no cookie jar — the test carries the cookie between
+ * two calls itself, which is exactly the thing a forwarded URL cannot do.
+ */
+export class DeployDoorProbe extends WorkerEntrypoint<Env> {
+  async hit(method: string, path: string, headers: Readonly<Record<string, string>> = {}): Promise<DoorProbeAnswer> {
+    const response = await handleDeployRequest(
+      new Request(`https://kinu.probe.workers.dev${path}`, { method, headers }),
+      this.env,
+    );
+
+    if (response === null) throw new Error(`the deploy routes do not answer ${method} ${path}`);
+
+    // An upgrade the row only inspects: the client end is accepted and closed
+    // so the runtime does not report a half of a pipe nobody took.
+    response.webSocket?.accept();
+    response.webSocket?.close();
+
+    return {
+      status: response.status,
+      body: response.webSocket === null ? await response.text() : '',
+      location: response.headers.get('location') ?? '',
+      setCookie: response.headers.getAll('set-cookie'),
+    };
   }
 }

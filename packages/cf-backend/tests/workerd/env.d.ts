@@ -170,7 +170,7 @@ interface DeployRunProbeRpc extends Rpc.DurableObjectBranded {
   open(runId: string, keyDigest: string): Promise<void>;
   admits(runKey: string): Promise<boolean>;
   holdAuthorization(verifier: string): Promise<string>;
-  landAuthorization(clientId: string, redirectUri: string, code: string, state: string): Promise<void>;
+  landAuthorization(clientId: string, redirectUri: string, code: string, state: string): Promise<boolean>;
   landToken(accessToken: string, refreshToken: string): Promise<void>;
   authorized(): Promise<boolean>;
   accounts(): Promise<readonly { id: string; name: string }[]>;
@@ -202,6 +202,20 @@ interface UpdatesSession {
 
 interface UpdatesProbeRpc extends Rpc.WorkerEntrypointBranded {
   hit(method: string, path: string, session: UpdatesSession): Promise<{ status: number; body: string }>;
+}
+
+/** One call to the door's public routes, as a browser makes it. `setCookie`
+ *  carries every `set-cookie` the answer wrote, because the binding under test
+ *  IS a cookie. */
+interface DoorProbeAnswer {
+  status: number;
+  body: string;
+  location: string;
+  setCookie: readonly string[];
+}
+
+interface DeployDoorProbeRpc extends Rpc.WorkerEntrypointBranded {
+  hit(method: string, path: string, headers?: Readonly<Record<string, string>>): Promise<DoorProbeAnswer>;
 }
 
 declare global {
@@ -261,6 +275,10 @@ declare global {
        *  like a deployed Kinu: a record, a refresh token of its own, and an
        *  asset bundle carrying its build stamp. */
       UPDATES_PROBE: Service<UpdatesProbeRpc>;
+      /** The production deploy routes on that worker, called as a browser and
+       *  as the CLI call them: what a callback proves, and where the key is
+       *  allowed to be. */
+      DEPLOY_DOOR_PROBE: Service<DeployDoorProbeRpc>;
     }
 
     /** The test worker re-exports the production egress entrypoint, so

@@ -2,14 +2,16 @@
  * The Cloudflare door, as a person with no Kinu account reaches it on the
  * deployed build: `/deploy` answers without a session, `/api/deploy/options`
  * parses as the door's own contract, and the authorize handoff carries the
- * PKCE parameters it must.
+ * PKCE parameters it must — with the key in a header and the leg bound to this
+ * caller by a cookie.
  *
- * NO SIGN-IN HAPPENS HERE. The row reads the 302 and stops; it never follows
- * it to Cloudflare, never exchanges a code and never spends a scope. What it
- * measures is the shape of the URL a person is sent to — the one part of the
- * flow that a deployment can get wrong silently, because an authorize URL with
- * an empty `client_id` or no `code_challenge_method` looks like a working
- * button and fails on Cloudflare's page.
+ * NO SIGN-IN HAPPENS HERE. The row reads the handoff and stops; it never opens
+ * the URL, never exchanges a code and never spends a scope. What it measures is
+ * the shape of the URL a person is sent to — the one part of the flow a
+ * deployment can get wrong silently, because an authorize URL with an empty
+ * `client_id` or no `code_challenge_method` looks like a working button and
+ * fails on Cloudflare's page — and the two things a deployment can get wrong
+ * dangerously: the run key in that URL, and no binding cookie on the answer.
  *
  * The unconfigured deployment is measured too, and is the expected state until
  * the owner registers the client: the door must say so and refuse the handoff
@@ -69,18 +71,22 @@ describe(SUITE, () => {
         const minted = await fetch(`${plan.origin}/api/deploy/runs`, { method: 'POST' });
         const ticket = v.parse(DeployTicketSchema, await minted.json());
 
-        const handoff = await fetch(
-          `${plan.origin}/deploy/authorize?run=${encodeURIComponent(ticket.runId)}`
-            + `&key=${encodeURIComponent(ticket.runKey)}`,
-          { redirect: 'manual' },
-        );
+        // The leg is a POST with the key in a header, and the answer is where
+        // the browser is sent — so the key is in no URL the product ever
+        // navigates to, and this row reads the URL it would have navigated to.
+        const handoff = await fetch(`${plan.origin}/api/deploy/runs/${ticket.runId}/authorize`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${ticket.runKey}` },
+        });
+
+        const said = await handoff.text();
 
         goals.push(options.cloudflare
-          ? authorizeHandoff(handoff, plan.origin, options.clientId)
+          ? authorizeHandoff(handoff, said, plan.origin, options.clientId)
           : {
             what: 'unconfigured-door-refuses-the-handoff',
-            reached: handoff.status === 503 && handoff.headers.get('location') === null,
-            detail: JSON.stringify({ status: handoff.status, location: handoff.headers.get('location') }),
+            reached: handoff.status === 503 && !said.includes('dash.cloudflare.com'),
+            detail: JSON.stringify({ status: handoff.status, said: said.slice(0, 200) }),
           });
 
         return goals;
@@ -92,13 +98,21 @@ describe(SUITE, () => {
   });
 });
 
-/** The 302's URL, parameter by parameter. Read, never followed. */
-function authorizeHandoff(handoff: Response, origin: string, clientId: string): EvalSubgoal {
-  const location = handoff.headers.get('location') ?? '';
-  const sent = v.safeParse(v.pipe(v.string(), v.url()), location);
-  const url = sent.success ? new URL(location) : null;
+/**
+ * The handoff the door answered, parameter by parameter, plus the binding it
+ * set on the browser. Read, never followed: nothing here consents to anything.
+ *
+ * The cookie is half of what this row measures. Without it a callback URL is
+ * bearer authority over whichever run its `state` names, so a deployment that
+ * answered a handoff and set no `__Host-kinu_deploy_state` is the B1 shape
+ * back, on the product, and this row is what says so.
+ */
+function authorizeHandoff(handoff: Response, body: string, origin: string, clientId: string): EvalSubgoal {
+  const said = v.safeParse(v.object({ location: v.pipe(v.string(), v.url()) }), JSON.parse(body));
+  const url = said.success ? new URL(said.output.location) : null;
   const query = url?.searchParams;
   const scopes = (query?.get('scope') ?? '').split(' ');
+  const binding = handoff.headers.get('set-cookie') ?? '';
 
   const carried = {
     status: handoff.status,
@@ -110,12 +124,17 @@ function authorizeHandoff(handoff: Response, origin: string, clientId: string): 
     challenge: query?.get('code_challenge') ?? '',
     state: query?.get('state') ?? '',
     scopes: scopes.length,
-    referrerPolicy: handoff.headers.get('referrer-policy') ?? '',
+    bound: binding.includes('__Host-kinu_deploy_state=')
+      && binding.includes('HttpOnly')
+      && binding.includes('Secure'),
+    // The key authorized the POST in a header; a deployment that put it back
+    // in the URL it hands the browser is the H1 shape back.
+    keyInHandoff: said.success && said.output.location.includes('key='),
   };
 
   return {
-    what: 'authorize-url-carries-the-pkce-handoff',
-    reached: handoff.status === 302
+    what: 'authorize-answer-carries-the-pkce-handoff-and-binds-the-browser',
+    reached: handoff.status === 200
       && carried.endpoint === 'https://dash.cloudflare.com/oauth2/auth'
       && carried.responseType === 'code'
       && carried.clientId === clientId
@@ -124,7 +143,8 @@ function authorizeHandoff(handoff: Response, origin: string, clientId: string): 
       && CHALLENGE.test(carried.challenge)
       && carried.state !== ''
       && CLOUDFLARE_DEPLOY_SCOPES.every((scope) => scopes.includes(scope))
-      && carried.referrerPolicy === 'no-referrer',
+      && carried.bound
+      && !carried.keyInHandoff,
     detail: JSON.stringify(carried),
   };
 }

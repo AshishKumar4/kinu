@@ -18,10 +18,9 @@
  *   5. /install, /install.sh, /downloads/kinu, /api/cli/* — CLI install/auth/API.
  *   5b. /downloads/kinu-worker-<version>.tar.gz — the worker release artifact,
  *       streamed from R2 because it exceeds the 25 MiB static-asset limit.
- *   5c. /deploy, /deploy/authorize, /deploy/callback, /api/deploy/* — the
- *       self-deploy door. Public, and gated by the run key rather than by a
- *       session: a person deploying their own Kinu has no account here yet
- *       (deploy/routes.ts).
+ *   5c. /deploy, /deploy/callback, /api/deploy/* — the self-deploy door.
+ *       Public, and gated by the run key rather than by a session: a person
+ *       deploying their own Kinu has no account here yet (deploy/routes.ts).
  *   6. /api/health, /api/shared/blueprint/<id> — public endpoints (no auth;
  *      the blueprint id carries its own signature).
  *   6b. /mcp/v1/* — MCP server; CLI-bearer-token or session auth + ownership

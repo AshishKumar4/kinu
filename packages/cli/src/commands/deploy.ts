@@ -193,7 +193,7 @@ async function follow(door: DeployDoor, origin: string, first: DeploySnapshot): 
     return;
   }
 
-  const socket = new WebSocket(door.socketUrl());
+  const socket = new WebSocket(door.socketUrl(), [...door.socketProtocols()]);
 
   await new Promise<void>((resolve) => {
     let last = first;

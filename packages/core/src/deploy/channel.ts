@@ -8,7 +8,8 @@
  * archive is opened, so an artifact that does not match is never unpacked,
  * never uploaded and never written to disk.
  */
-import { TarArtifact, sha256Hex } from './artifact';
+import { TarArtifact } from './artifact';
+import { sha256Hex } from '../safety/argument-digest';
 import { RELEASE_MANIFEST_PATH, parseReleaseManifest, workerArtifactPath, type ReleaseManifest } from './manifest';
 
 export async function fetchReleaseManifest(origin: string, fetchImpl: typeof fetch = fetch): Promise<ReleaseManifest> {
