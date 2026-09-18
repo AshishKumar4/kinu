@@ -17,10 +17,20 @@
  * over RPC. `heldSecretNames` lists the vault's keys and never its values;
  * `rowText` returns every SQL row as text, which is how the test asserts that
  * a digest, a token or a minted secret is not in one.
+ *
+ * `UpdatesProbe` is the second subject here: the production `/api/updates`
+ * handlers, called with a session this worker synthesizes. A session is all
+ * this probe fakes — the record, the channel, the refresh grant, the plan and
+ * the Durable Object are the real ones — because the gate's subject is the
+ * deployment's own record and not how a cookie was verified.
  */
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { DeployRunDO } from '../../src/deploy/deploy-do';
-import { DeployFakeStateSchema, type DeployFakeRefusal, type DeployFakeState } from './deploy-fake';
+import { handleUpdatesRequest } from '../../src/updates/routes';
+import type { AuthIdentity } from '../../src/auth/session';
+import {
+  DeployFakeStateSchema, type DeployFakeRefusal, type DeployFakeServedBuild, type DeployFakeState,
+} from './deploy-fake';
 import * as v from 'valibot';
 
 const SECRET_PREFIX = 'secret.';
@@ -56,7 +66,12 @@ export class DeployFakeControl extends WorkerEntrypoint {
     await this.hit('/refuse', refusal);
   }
 
-  private async hit(path: string, body?: DeployFakeRefusal): Promise<DeployFakeState> {
+  /** What this deployment serves as its own build stamp from here on. */
+  async serve(build: DeployFakeServedBuild): Promise<void> {
+    await this.hit('/serve', build);
+  }
+
+  private async hit(path: string, body?: DeployFakeRefusal | DeployFakeServedBuild): Promise<DeployFakeState> {
     const sent = body === undefined
       ? { method: 'POST' }
       : { method: 'POST', body: JSON.stringify(body) };
@@ -66,5 +81,32 @@ export class DeployFakeControl extends WorkerEntrypoint {
     if (!response.ok) throw new Error(`the deploy fake refused ${path}: ${String(response.status)}`);
 
     return v.parse(DeployFakeStateSchema, await response.json());
+  }
+}
+
+/** What one call to the Updates surface answered. */
+export interface UpdatesProbeAnswer {
+  readonly status: number;
+  readonly body: string;
+}
+
+/**
+ * The Updates surface, called as a signed-in session.
+ *
+ * The identity is synthesized with a provider name and no CLI scopes, which is
+ * what a browser session is here; `dev` and CLI-token identities are what the
+ * route refuses, and a row asking for either passes them through.
+ */
+export class UpdatesProbe extends WorkerEntrypoint<Env> {
+  async hit(method: string, path: string, session: AuthIdentity): Promise<UpdatesProbeAnswer> {
+    const response = await handleUpdatesRequest(
+      new Request(`https://kinu.probe.workers.dev${path}`, { method }),
+      this.env,
+      session,
+    );
+
+    if (response === null) throw new Error(`the updates routes do not answer ${method} ${path}`);
+
+    return { status: response.status, body: await response.text() };
   }
 }

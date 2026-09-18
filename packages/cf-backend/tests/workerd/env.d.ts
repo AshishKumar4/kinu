@@ -18,7 +18,7 @@ import type { DbCapabilityProbeDO } from './db-capability-probe';
 import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
-import type { DeployFakeRefusal, DeployFakeState } from './deploy-fake';
+import type { DeployFakeRefusal, DeployFakeServedBuild, DeployFakeState } from './deploy-fake';
 import type { DeployInputs, DeploySnapshot } from '@kinu.run/core/deploy';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
@@ -185,6 +185,23 @@ interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
   reset(): Promise<void>;
   state(): Promise<DeployFakeState>;
   refuseOnce(refusal: DeployFakeRefusal): Promise<void>;
+  serve(build: DeployFakeServedBuild): Promise<void>;
+}
+
+/** A session as the Updates gate reads one: an email, and the two fields that
+ *  make an identity synthesized or non-interactive. Spelled here rather than
+ *  imported for the same reason `SurfaceControlRpc` is — `AuthIdentity` is the
+ *  production project's type. */
+interface UpdatesSession {
+  userId: string;
+  email: string;
+  sub: string;
+  provider?: string;
+  cliScopes?: readonly string[];
+}
+
+interface UpdatesProbeRpc extends Rpc.WorkerEntrypointBranded {
+  hit(method: string, path: string, session: UpdatesSession): Promise<{ status: number; body: string }>;
 }
 
 declare global {
@@ -240,6 +257,10 @@ declare global {
       DEPLOY_RUN_PROBE: DurableObjectNamespace<DeployRunProbeRpc>;
       /** That worker's control entrypoint, for the deploy fake's state. */
       DEPLOY_FAKE: Service<DeployFakeControlRpc>;
+      /** The production `/api/updates` handlers on that worker, which is bound
+       *  like a deployed Kinu: a record, a refresh token of its own, and an
+       *  asset bundle carrying its build stamp. */
+      UPDATES_PROBE: Service<UpdatesProbeRpc>;
     }
 
     /** The test worker re-exports the production egress entrypoint, so

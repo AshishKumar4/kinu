@@ -50,7 +50,9 @@ import { buildSlateVendor, slateVendor } from './slate-vendor';
 import { defineConfig, type Plugin } from 'vitest/config';
 import { probeOutbound } from './tests/workerd/http-model-fake';
 import { hireOutbound } from './tests/workerd/hire-model-fake';
-import { DEPLOY_FAKE_CHANNEL, deployOutbound } from './tests/workerd/deploy-fake';
+import {
+  DEPLOY_FAKE_CHANNEL, DEPLOY_FAKE_RECORD, DEPLOY_FAKE_REFRESH_TOKEN, assetsOutbound, deployOutbound,
+} from './tests/workerd/deploy-fake';
 import { kCurrentWorker } from 'miniflare';
 import { builtinModules } from 'node:module';
 import { promptText } from './vite-prompt-text';
@@ -473,11 +475,29 @@ export default defineConfig({
             path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
           })),
           // The channel the run reads its release from, which is the one var
-          // `DeployRunDO` uses to find it.
-          bindings: { CLI_PUBLIC_ORIGIN: DEPLOY_FAKE_CHANNEL },
+          // `DeployRunDO` uses to find it, and the state a DEPLOYED Kinu holds
+          // about itself: the record its first run wrote and the refresh token
+          // it owns. The two minted root secrets are bound because a
+          // self-update's vault reads through to them — a version uploaded
+          // without them would bind a new encryption key over the credentials
+          // this deployment has already stored.
+          bindings: {
+            CLI_PUBLIC_ORIGIN: DEPLOY_FAKE_CHANNEL,
+            KINU_DEPLOYMENT_RECORD: DEPLOY_FAKE_RECORD,
+            KINU_SELF_DEPLOY_REFRESH_TOKEN: DEPLOY_FAKE_REFRESH_TOKEN,
+            CREDENTIAL_ENCRYPTION_KEY: 'ZGVwbG95LXByb2JlLWNyZWRlbnRpYWwta2V5LTMyYg==',
+            WEBHOOK_ROUTE_SECRET: 'ZGVwbG95LXByb2JlLXdlYmhvb2stcm91dGUtc2VjcmV0',
+          },
           outboundService: deployOutbound,
+          // The deployment's own asset bundle, which holds exactly the build
+          // stamp `/api/updates` reads to say what version it is running.
+          serviceBindings: { ASSETS: assetsOutbound },
           durableObjects: {
             DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', useSQLite: true },
+            // The same class under the name production reaches it by, because
+            // `/api/updates/apply` addresses the self-update run through
+            // `env.DeployRunDO`.
+            DeployRunDO: { className: 'DeployRunProbeDO', useSQLite: true },
           },
         }],
         // The runner's door to the production route table. A miniflare service
@@ -493,6 +513,10 @@ export default defineConfig({
           // The deploy fake's created-resource state is Node-side module state
           // too; this is how the test resets it and reads what a run made.
           DEPLOY_FAKE: { name: 'deploy-probe', entrypoint: 'DeployFakeControl' },
+          // The deployment's own Updates surface, called as a session: the
+          // production handlers over the production Durable Object, on the
+          // worker that is bound like a deployed Kinu.
+          UPDATES_PROBE: { name: 'deploy-probe', entrypoint: 'UpdatesProbe' },
         },
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
