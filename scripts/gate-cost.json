@@ -783,6 +783,17 @@
       "samples": 1077,
       "loadAtStart": 37.5,
       "exit": 0
+    },
+    "bun run test:workerd:cf": {
+      "wallSeconds": 480.15,
+      "cpuSeconds": 539.86,
+      "peakRssMb": 6290,
+      "peakRunnable": 26,
+      "peakCpuThreads": 7.63,
+      "meanThreads": 1.12,
+      "samples": 1846,
+      "loadAtStart": 31.76,
+      "exit": 124
     }
   }
 }
