@@ -40,9 +40,20 @@ const UiMessageSchema = v.object({
   parts: v.optional(v.array(v.object({
     type: v.string(),
     text: v.optional(v.string()),
+    toolName: v.optional(v.string()),
   }))),
   metadata: v.optional(JsonObjectSchema),
 });
+
+/** The tool a stored part records a call to, or null for a part that is not
+ *  one. The AI SDK's UI message names a static tool in the part's type
+ *  (`tool-<name>`) and a dynamic one in its `toolName` — the same two forms
+ *  `recordedAnswer` keeps from the streamed message. */
+function toolNameOf(part: { type: string; toolName?: string }): string | null {
+  if (part.type === 'dynamic-tool') return part.toolName ?? null;
+
+  return part.type.startsWith('tool-') ? part.type.slice('tool-'.length) : null;
+}
 
 /**
  * The id prefix a programmatic turn's durable message carries, and the whole
@@ -144,32 +155,66 @@ export function transcriptRole<Metadata>(
   return role === 'user' && turnAuthor({ id, metadata }) === 'harness' ? 'system' : role;
 }
 
-/** A stored conversation row projected for a transcript: its plain text, and
- *  the provenance metadata that decides who wrote it. */
+/** A stored conversation row projected for a transcript: its plain text, the
+ *  tools it recorded calls to, and the provenance metadata that decides who
+ *  wrote it. */
 export interface StoredRowProjection {
   text: string;
+  /** Names of the tools the row's parts record calls to, in call order — empty
+   *  for a user row and for an answer stored as plain text. */
+  toolCalls: string[];
   metadata?: JsonObject;
 }
 
-/** A stored row's plain text and the provenance metadata beside it, from ONE
- *  parse. `assistant_messages` rows hold the serialized UI message and
- *  `actor_messages` rows hold plain text; both reach this, so text that is not JSON
- *  is a value here and nothing else is. */
+/** A stored row's plain text, tool calls and the provenance metadata beside
+ *  them, from ONE parse. `assistant_messages` rows hold the serialized UI
+ *  message and `actor_messages` rows hold plain text; both reach this, so text
+ *  that is not JSON is a value here and nothing else is. */
 export function uiMessageRow(content: string): StoredRowProjection {
   const decoded = tolerate(() => parseJsonValue(content), 'malformed-input');
 
-  if (decoded === undefined) return { text: content };
+  if (decoded === undefined) return { text: content, toolCalls: [] };
   const parsed = v.safeParse(UiMessageSchema, decoded);
 
-  if (!parsed.success || !parsed.output.parts) return { text: content };
+  if (!parsed.success || !parsed.output.parts) return { text: content, toolCalls: [] };
 
   const text = parsed.output.parts
     .flatMap((part) => part.type === 'text' && part.text !== undefined ? [part.text] : [])
     .join('');
 
+  const toolCalls = parsed.output.parts.flatMap((part) => {
+    const name = toolNameOf(part);
+
+    return name === null ? [] : [name];
+  });
+
   const metadata = parsed.output.metadata;
 
-  return metadata === undefined ? { text } : { text, metadata };
+  return metadata === undefined ? { text, toolCalls } : { text, toolCalls, metadata };
+}
+
+/** A stored row as the restore and the between-turn readers see it: the row's
+ *  identity, its plain text and the tools its answer recorded calls to. */
+export interface TranscriptRow {
+  readonly id: string;
+  readonly role: string;
+  readonly content: string;
+  readonly toolCalls: readonly string[];
+}
+
+/** The columns a stored row is projected from, on either table. */
+export interface TranscriptSourceRow {
+  readonly id: string;
+  readonly role: string;
+  readonly content: string;
+}
+
+/** A stored row as a reader sees it — one projection for both tables, so the
+ *  text and the tools come out of one parse. */
+export function transcriptRow(row: TranscriptSourceRow): TranscriptRow {
+  const projected = uiMessageRow(row.content);
+
+  return { id: row.id, role: row.role, content: projected.text, toolCalls: projected.toolCalls };
 }
 
 /**

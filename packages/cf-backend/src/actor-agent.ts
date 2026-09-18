@@ -1544,6 +1544,7 @@ export abstract class ActorAgent extends Think<Env> {
 
     this.onConnect = async (connection, ctx) => {
       if (await this.refuseRevokedSocketAuthority(connection, '')) return;
+      this.connectionOpened();
 
       if (this._cf_requestTargetsSubAgent(ctx.request)) return await baseOnConnect?.call(this, connection, ctx);
 
@@ -1554,6 +1555,13 @@ export abstract class ActorAgent extends Think<Env> {
     this.onClose = async (connection, code, reason, wasClean) => {
       this.chatRoomFor(connection)?.onClose(connection);
       await baseOnClose?.call(this, connection, code, reason, wasClean);
+
+      // The closing socket is no longer open, so the manager's iterator does
+      // not yield it; its id is excluded anyway, because the answer must not
+      // depend on which state the platform left it in when this ran.
+      for (const other of this.getConnections()) if (other.id !== connection.id) return;
+
+      this.lastConnectionClosed();
     };
 
     // The transcript seed the hook fetches: Think's route serves its
@@ -2704,6 +2712,15 @@ export abstract class ActorAgent extends Think<Env> {
    *  connections — or null when this workspace hosts no such actor. Only the
    *  workspace root knows its directory, so the wire is built there. */
   protected abstract hostedChatWire(name: string): ChatWire | null;
+
+  /** A client connection opened on this object — any actor's. The base keeps
+   *  no between-turn lane that watches attendance; the root's sleep-time
+   *  closed-tab trigger overrides both hooks. */
+  protected connectionOpened(): void {}
+
+  /** The object's LAST client connection closed. Fires once per emptying, in
+   *  the close hook, after the room has been told. */
+  protected lastConnectionClosed(): void {}
 
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
 

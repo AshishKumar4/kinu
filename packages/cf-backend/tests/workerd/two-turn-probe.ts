@@ -43,7 +43,8 @@
  * (`holdTerminalClose`), so the turn-driving RPC returns before the terminal
  * effects land. The probe joins the product's own evidence instead of the
  * fiber: after each turn it polls the installed recording sink until that
- * turn's `memory.facts_compressed` event arrives — the sleep-time effect's
+ * turn's sleep-time settle event arrives (`memory.facts_deferred` or
+ * `memory.facts_compressed`) — the sleep-time effect's
  * completion record — then, after the second turn, waits for log quiescence
  * and asserts the captured log holds zero failures and zero
  * `turn.terminal_effects_owed` events. `end()` emits the owed event exactly
@@ -594,12 +595,19 @@ const RawChatFrameSchema = v.looseObject({
  *  which excludes this file for importing production `src` (see the
  *  `//exclude` note in this directory's tsconfig). */
 
-/** Join on the product's own completion evidence: one
- *  `memory.facts_compressed` per settled sleep-time effect, awaited on the
- *  recording sink's own delivery. A close that never finishes hangs here,
- *  ended and named by the row's deadline rather than by a clock beside it. */
-function awaitFactsCompressed(recording: RecordingLogger, count: number): Promise<void> {
-  return recording.until((emitted) => emitted.filter((e) => e.event === 'memory.facts_compressed').length >= count);
+/** The sleep-time effect's own completion record, one per settled turn: the
+ *  lane runs on a cadence, so a turn it declines says so on the log exactly
+ *  as one it compresses does. */
+function sleepTimeSettled(emitted: readonly { event: string }[]): number {
+  return emitted.filter((e) => e.event === 'memory.facts_deferred' || e.event === 'memory.facts_compressed').length;
+}
+
+/** Join on the product's own completion evidence: one sleep-time settle per
+ *  turn, awaited on the recording sink's own delivery. A close that never
+ *  finishes hangs here, ended and named by the row's deadline rather than by
+ *  a clock beside it. */
+function awaitSleepTimeSettled(recording: RecordingLogger, count: number): Promise<void> {
+  return recording.until((emitted) => sleepTimeSettled(emitted) >= count);
 }
 
 /** A bounded wait on one promise, naming what did not arrive. */
@@ -742,7 +750,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         throw new Error(`two-turn probe: turn A skipped at enqueue: ${JSON.stringify(turnA)}`);
       }
 
-      await awaitFactsCompressed(recording, 1);
+      await awaitSleepTimeSettled(recording, 1);
 
       restore = capture();
       const turnB = await target.runTaskFromMcp('B');
@@ -751,7 +759,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         throw new Error(`two-turn probe: turn B skipped at enqueue: ${JSON.stringify(turnB)}`);
       }
 
-      await awaitFactsCompressed(recording, 2);
+      await awaitSleepTimeSettled(recording, 2);
       await awaitQuiet(recording);
 
       const snapshot = await target.getWorkspaceSnapshot();
@@ -773,8 +781,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
 
             return v.is(v.string(), owed) ? owed.split(',').filter((k) => k.length > 0) : [];
           }),
-        factsCompressed: recording.emitted
-          .filter((e) => e.event === 'memory.facts_compressed').length,
+        sleepTimeSettled: sleepTimeSettled(recording.emitted),
         catalogFallbacks: recording.emitted.filter((e) => e.event === 'models_dev.catalog_fallback').length,
         catalogHits: (await this.probeLog()).catalogHits,
       });
@@ -931,7 +938,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       // sends it could not land. A peer event that arrived mid-genesis rides
       // that rerun's first step rather than queueing a turn behind it; a
       // signal's own programmatic turn is the third.
-      await awaitFactsCompressed(recording, { chat: 2, peer: 2, signal: 3, yield: 1, attach: 2 }[mode]);
+      await awaitSleepTimeSettled(recording, { chat: 2, peer: 2, signal: 3, yield: 1, attach: 2 }[mode]);
       await awaitQuiet(recording);
 
       return await this.httpCalls();
@@ -1233,7 +1240,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
       // ONE turn: the re-opened genesis turn, with B and C landed at its first
       // step — the step boundary both were waiting for when the reset came.
-      await awaitFactsCompressed(recording, 1);
+      await awaitSleepTimeSettled(recording, 1);
       await awaitQuiet(recording);
 
       return {
@@ -1377,7 +1384,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         // 1. An idle send runs as a turn of its own.
         socket.send(this.parityFrame('PARITY-ONE'));
         landings['PARITY-ONE'] = (await done('PARITY-ONE')).landed ?? null;
-        await awaitFactsCompressed(recording, 1);
+        await awaitSleepTimeSettled(recording, 1);
 
         // 2. A send mid-turn, carrying a file, while the turn's model call is
         //    parked. The echo lane has no second step, so the steer reruns as
@@ -1389,7 +1396,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         landings['PARITY-TWO-STEER'] = (await done('PARITY-TWO-STEER')).landed ?? null;
         await fetch('http://probe-control.invalid/parity/release', { method: 'POST' });
         landings['PARITY-TWO'] = (await done('PARITY-TWO')).landed ?? null;
-        await awaitFactsCompressed(recording, 3);
+        await awaitSleepTimeSettled(recording, 3);
         await awaitQuiet(recording);
         afterTwo = await target.parityRows();
 
@@ -1448,13 +1455,13 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         socket.send(JSON.stringify({ type: 'cf_agent_stream_resume_request' }));
         await fetch('http://probe-control.invalid/parity/release', { method: 'POST' });
         await awaitQuiet(recording);
-        await awaitFactsCompressed(recording, 1);
+        await awaitSleepTimeSettled(recording, 1);
         await awaitQuiet(recording);
 
         // 6. A fresh send on the restarted actor.
         socket.send(this.parityFrame('PARITY-FIVE'));
         landings['PARITY-FIVE'] = (await done('PARITY-FIVE')).landed ?? null;
-        await awaitFactsCompressed(recording, 2);
+        await awaitSleepTimeSettled(recording, 2);
         await awaitQuiet(recording);
       } finally {
         socket.close(1000, 'parity complete');
@@ -1601,7 +1608,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
   /** A fresh workspace's first chat: the claim, the socket's real
    *  first-run bench never saw. Returns the model-call count and the turn's
    *  terminal evidence so the test can say where the drive stopped. */
-  async firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: SocketHistory; factsCompressed: number }> {
+  async firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: SocketHistory; sleepTimeSettled: number }> {
     const workspace = 'first-chat-workspace';
     const owner = 'first-chat-owner';
     const target: QueueTarget = await this.queueTarget(workspace);
@@ -1647,7 +1654,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         http: await this.httpCalls(),
         steers: await target.pendingSteers(),
         transcript: await this.socketHistory(target, workspace),
-        factsCompressed: recording.emitted.filter((e) => e.event === 'memory.facts_compressed').length,
+        sleepTimeSettled: sleepTimeSettled(recording.emitted),
       };
     } finally {
       restore();
@@ -1694,7 +1701,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       // The turn's own settle is the end condition; a second admitted turn
       // would compress its facts too, so the count below is the count that
       // discriminates.
-      await awaitFactsCompressed(recording, 1);
+      await awaitSleepTimeSettled(recording, 1);
       await awaitQuiet(recording);
 
       return {
@@ -2036,7 +2043,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         throw new Error(`two-turn probe: turn skipped at enqueue: ${JSON.stringify({ turn, http, history, failures })}`);
       }
 
-      await awaitFactsCompressed(recording, 1);
+      await awaitSleepTimeSettled(recording, 1);
       await awaitQuiet(recording);
 
       const snapshot = await target.getWorkspaceSnapshot();
@@ -2056,8 +2063,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
 
             return v.is(v.string(), owed) ? owed.split(',').filter((k) => k.length > 0) : [];
           }),
-        factsCompressed: recording.emitted
-          .filter((e) => e.event === 'memory.facts_compressed').length,
+        sleepTimeSettled: sleepTimeSettled(recording.emitted),
         catalogFallbacks: recording.emitted.filter((e) => e.event === 'models_dev.catalog_fallback').length,
         catalogHits: (await this.probeLog()).catalogHits,
       });

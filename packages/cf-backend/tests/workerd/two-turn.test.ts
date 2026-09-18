@@ -24,7 +24,7 @@
  * the cutover. Nothing in production knows the probe exists.
  *
  * THE CLEAN-LOG ASSERTION. The probe joins each turn's terminal settle on the
- * product's own evidence (`memory.facts_compressed`) and returns the captured
+ * product's own evidence (`memory.facts_deferred` / `memory.facts_compressed`) and returns the captured
  * diagnostics: the test asserts zero failures and zero owed effects. A double
  * that fails the product code it serves is a defect, not a limitation — so a
  * failing lane would fail this test rather than pass behind an echo.
@@ -417,7 +417,7 @@ describe('two real turns over the HTTP model seam', () => {
     // the intake became a turn.
     expect(out.transcript.some((row) => row.role === 'user' && row.id === 'input-FIRST-CHAT')).toBe(true);
     expect(calls.length).toBe(1);
-    expect(out.factsCompressed).toBe(1);
+    expect(out.sleepTimeSettled).toBe(1);
   });
 
   it('the owner\'s first chat after genesis rides the genesis turn', async () => {
@@ -467,11 +467,12 @@ describe('two real turns over the HTTP model seam', () => {
     const http = v.parse(HttpSchema, out.http);
 
     // The cutover proof: no streamed turn reached the binding — the turns
-    // traveled HTTP — while the sleep-time judge still arrived there twice.
+    // traveled HTTP. The sleep-time judge is not counted here: it runs on a
+    // cadence a two-turn drive never reaches, and `calls` is the fake's
+    // worker-wide record, so its sleep rows belong to the three-turn drives.
     const calls = v.parse(v.array(CallRecordSchema), out.calls);
 
     expect(calls.filter((c) => c.stream)).toHaveLength(0);
-    expect(calls.filter((c) => c.lane === 'sleep').length).toBeGreaterThanOrEqual(2);
 
     // Zero unmocked egress at the HTTP seam: every captured request went to
     // the fake host, and the two turn posts carried the typed lines — (b)
@@ -510,13 +511,13 @@ describe('two real turns over the HTTP model seam', () => {
     // The settle verdict: both turns' terminal closes finished with nothing
     // owed and nothing failed. `failures` is every captured `diagnostics`
     // failure across the whole drive; `owedEffects` is every effect key a
-    // finished close left behind; `factsCompressed` counts the sleep-time
-    // completions, one per turn.
+    // finished close left behind; `sleepTimeSettled` counts the sleep-time
+    // settles, one per turn.
     const failures: DiagnosticFailure[] = v.parse(FailuresSchema, out.failures);
 
     expect(failures).toEqual([]);
     expect(out.owedEffects).toEqual([]);
-    expect(out.factsCompressed).toBe(2);
+    expect(out.sleepTimeSettled).toBe(2);
     // THE CATALOG WAS SERVED, NOT REFUSED. Every listing sweep asks models.dev
     // for the provider catalog; refused, each provider takes a slow fallback
     // path and the gate's wall goes from its declared seconds to minutes
@@ -567,7 +568,7 @@ describe('two real turns over the HTTP model seam', () => {
     expect(assistant.at(-1)?.endsWith('echo:tool-answered')).toBe(true);
     expect(v.parse(FailuresSchema, out.failures)).toEqual([]);
     expect(out.owedEffects).toEqual([]);
-    expect(out.factsCompressed).toBe(1);
+    expect(out.sleepTimeSettled).toBe(1);
   });
 
   // The tool-call-only first step, no narrated text delta — the shape real
@@ -608,7 +609,7 @@ describe('two real turns over the HTTP model seam', () => {
     expect(assistant.at(-1)?.endsWith('echo:tool-answered')).toBe(true);
     expect(v.parse(FailuresSchema, out.failures)).toEqual([]);
     expect(out.owedEffects).toEqual([]);
-    expect(out.factsCompressed).toBe(1);
+    expect(out.sleepTimeSettled).toBe(1);
   });
 
   it('settles the turn after a provider error', async () => {
@@ -642,7 +643,7 @@ describe('two real turns over the HTTP model seam', () => {
 
     expect(assistant.at(-1)).toBe('echo:E1');
     expect(out.owedEffects).toEqual([]);
-    expect(out.factsCompressed).toBe(1);
+    expect(out.sleepTimeSettled).toBe(1);
   });
 
   // The consumer's contract is to stop at [DONE]: the turn completes on the
@@ -668,7 +669,7 @@ describe('two real turns over the HTTP model seam', () => {
     expect(assistant.at(-1)).toBe('echo:early');
     expect(v.parse(FailuresSchema, out.failures)).toEqual([]);
     expect(out.owedEffects).toEqual([]);
-    expect(out.factsCompressed).toBe(1);
+    expect(out.sleepTimeSettled).toBe(1);
   });
 
 });
