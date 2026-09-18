@@ -53,12 +53,16 @@ export interface ModelPickerProps {
   label?: string;
   /** Allow clearing the selection back to '' (= inherit the default). */
   clearable?: boolean;
+  /** Read-only render: the trigger shows the value but opens no menu — an
+   *  agent pane's picker, where the model is the actor's resolved one and the
+   *  only write lives on the workspace's own tab. */
+  disabled?: boolean;
   className?: string;
 }
 
 export function ModelPicker({
   models, failures, value, onChange,
-  size = "base", placeholder = "Select a model…", label = "Model", clearable = false, className,
+  size = "base", placeholder = "Select a model…", label = "Model", clearable = false, className, disabled = false,
 }: ModelPickerProps) {
   const items = useMemo(
     () => groupModelMenu(models, value).map((g) => ({ value: g.provider, items: g.models })),
@@ -86,7 +90,7 @@ export function ModelPicker({
       }}
       size={size}
     >
-      <Combobox.TriggerInput
+      <Combobox.TriggerInput disabled={disabled}
         placeholder={placeholder}
         aria-label={label}
         // Kumo renders the clear button unconditionally and offers no prop to
@@ -125,7 +129,7 @@ export function ModelPicker({
  * sent connected users through a full OAuth prompt=login.
  */
 export function ConnectedModelPicker({
-  value, onChange, size, className, clearable, placeholder, renderEmpty,
+  value, onChange, size, className, clearable, placeholder, renderEmpty, disabled,
 }: Omit<ModelPickerProps, "models"> & {
   /** Rendered when no provider is connected. Defaults to the Workers AI
    *  reconnect CTA. */
@@ -210,6 +214,7 @@ export function ConnectedModelPicker({
       className={className}
       clearable={clearable}
       placeholder={placeholder}
+      disabled={disabled}
     />
   );
 }

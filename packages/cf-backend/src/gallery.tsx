@@ -1737,7 +1737,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
       displayName: latest?.displayName ?? "",
       role: "task",
       mission: "",
-      model: null,
+      model: { model: "anthropic/claude-opus-4", source: "workspace" },
       activePlan: galleryAgentPlan,
       pendingSteers: [],
     } satisfies SubordinateSnapshot,

@@ -7,7 +7,7 @@ import { useAgent } from "agents/react";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
   branchHeadId, ORCHESTRATOR_AGENT_SLUG, SLATES_CHANGED_EVENT, hostedActorSocketPath,
-  type PendingAction, type PlanReview, type RoleId, type SlateProblem, type SlateSummary,
+  type PendingAction, type PlanReview, type RoleId, type SlateProblem, type SlateSummary, type TierSource,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
@@ -128,6 +128,10 @@ export interface AgentStatus {
   craftedToolCount: number;
   messageCount: number;
   model: string;
+  /** Why `model` is what it is — the tier source the turn profile resolved:
+   *  the workspace pin, an explicit tier, the role's tier, or the default
+   *  alias. Set on agent panes, where the picker is read-only. */
+  modelSource?: TierSource;
   forkLineage: ForkLineage | null;
 }
 
@@ -152,7 +156,9 @@ export interface SubordinateSnapshot {
   displayName: string;
   role: RoleId;
   mission: string;
-  model: string | null;
+  /** The actor's effective model and the tier source that chose it — the same
+   *  resolution the turn makes, not the actor's own (unset) pin. */
+  model: { model: string; source: TierSource };
   activePlan: unknown;
   /** The facet's own acknowledged-and-not-landed steers, from its durable
    *  rows. Read here for the same reason the root reads them off its
@@ -1978,10 +1984,11 @@ export function useKinu(target?: string | KinuActorAddress) {
       soul: snapshot.mission,
       createdAt: 0,
       scaffoldVersion: 0,
+      model: snapshot.model.model,
+      modelSource: snapshot.model.source,
       searchNodeCount: 0,
       craftedToolCount: 0,
       messageCount: messages.length,
-      model: snapshot.model ?? "",
       forkLineage: null,
     });
     const loadedPlan = parseActivePlanReview(snapshot.activePlan);
