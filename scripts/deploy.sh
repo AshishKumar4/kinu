@@ -611,14 +611,33 @@ for platform in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
   KINU_CLI_ARTIFACTS+=("kinu-cli-$platform.tar.gz")
 done
 KINU_WORKER_ARTIFACT="kinu-worker-$KINU_RELEASE_VERSION.tar.gz"
-for file in kinu-version.json release.json "$KINU_WORKER_ARTIFACT" "$KINU_WORKER_ARTIFACT.sha256" \
+KINU_WORKER_ARTIFACT_PATH="$KINU_ROOT/packages/cf-backend/dist/worker-release/$KINU_WORKER_ARTIFACT"
+for file in kinu-version.json release.json "$KINU_WORKER_ARTIFACT.sha256" \
   "${KINU_CLI_ARTIFACTS[@]}" "${KINU_CLI_ARTIFACTS[@]/%/.sha256}"; do
   if [ ! -s "$KINU_ASSETS_DIR/downloads/$file" ]; then
     echo -e "${RED}❌ Missing build output: $KINU_ASSETS_DIR/downloads/$file${NC}"
     exit 1
   fi
 done
+if [ ! -s "$KINU_WORKER_ARTIFACT_PATH" ]; then
+  echo -e "${RED}❌ Missing build output: $KINU_WORKER_ARTIFACT_PATH${NC}"
+  exit 1
+fi
 echo -e "${GREEN}✅ CLI and worker release assets staged in $KINU_ASSETS_DIR/downloads${NC}"
+
+# The worker artifact is larger than Cloudflare's 25 MiB per-file asset limit,
+# so it is published into R2 and streamed by the Worker instead. BEFORE the
+# deploy, never after: the release.json this deploy publishes names this
+# artifact, and a manifest that names an object nobody uploaded yet sends every
+# self-deploy run at a 404.
+echo "Publishing $KINU_WORKER_ARTIFACT to r2://kinu-releases"
+npx wrangler r2 object put "kinu-releases/$KINU_WORKER_ARTIFACT" \
+  --file "$KINU_WORKER_ARTIFACT_PATH" --content-type application/gzip --remote \
+  || { echo -e "${RED}❌ uploading the worker release artifact failed${NC}"; exit 1; }
+npx wrangler r2 object put "kinu-releases/$KINU_WORKER_ARTIFACT.sha256" \
+  --file "$KINU_ASSETS_DIR/downloads/$KINU_WORKER_ARTIFACT.sha256" --content-type text/plain --remote \
+  || { echo -e "${RED}❌ uploading the worker release checksum failed${NC}"; exit 1; }
+echo -e "${GREEN}✅ Worker release artifact published to R2${NC}"
 
 # ── Step 3: Deploy Kinu ───────────────────────────────────────
 echo ""
@@ -743,10 +762,12 @@ done
 RELEASE_ARTIFACT_SHA="$(curl -fsSL --max-time 15 "${KINU_URL}downloads/$KINU_WORKER_ARTIFACT.sha256" 2>/dev/null | awk '{print $1}')"
 SIGNED_ARTIFACT_SHA="$(curl -fsSL --max-time 15 "${KINU_URL}downloads/kinu-version.json" 2>/dev/null \
   | bun -e 'const m=JSON.parse(await Bun.stdin.text()); process.stdout.write(m.checksums?.["/downloads/"+process.argv[1]] ?? "")' "$KINU_WORKER_ARTIFACT")"
-if [ "$RELEASE_SHA" = "$KINU_SHA" ] && [ -n "$RELEASE_ARTIFACT_SHA" ] && [ "$RELEASE_ARTIFACT_SHA" = "$SIGNED_ARTIFACT_SHA" ]; then
-  echo -e "${GREEN}✅ Published release.json names this build and the signed worker artifact${NC}"
+ARTIFACT_STATUS="$(curl -s -o /dev/null -w '%{http_code}' -I --max-time 30 "${KINU_URL}downloads/$KINU_WORKER_ARTIFACT" 2>/dev/null)"
+if [ "$RELEASE_SHA" = "$KINU_SHA" ] && [ -n "$RELEASE_ARTIFACT_SHA" ] \
+  && [ "$RELEASE_ARTIFACT_SHA" = "$SIGNED_ARTIFACT_SHA" ] && [ "$ARTIFACT_STATUS" = "200" ]; then
+  echo -e "${GREEN}✅ release.json names this build, the artifact route answers, and its checksum is the signed one${NC}"
 else
-  echo -e "${RED}❌ release.json sha is '${RELEASE_SHA:-<unparseable>}' (expected '$KINU_SHA'); worker artifact checksum '${RELEASE_ARTIFACT_SHA:-<none>}' vs signed '${SIGNED_ARTIFACT_SHA:-<none>}'${NC}"
+  echo -e "${RED}❌ release.json sha is '${RELEASE_SHA:-<unparseable>}' (expected '$KINU_SHA'); worker artifact checksum '${RELEASE_ARTIFACT_SHA:-<none>}' vs signed '${SIGNED_ARTIFACT_SHA:-<none>}'; artifact route answered ${ARTIFACT_STATUS:-<none>}${NC}"
   SMOKE_FAIL=1
 fi
 
