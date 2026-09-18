@@ -44,13 +44,16 @@ import type { SurfaceKind } from "./WorkSurface";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { WorkPlans } from "./WorkPlans";
 
-/** The chips over the journal. `All` is not the absence of a filter — it is
- *  every row that reports something happening, which is all of them bar a
- *  self-review that changed nothing; {@link buildJournal} decides that. Plan
- *  history is not a chip: `WorkPlans` above owns the plan read model
- *  (`inspectSubordinate` over `plan_reviews`), so a second Plan here would be
- *  the duplicate B12 removed — closed tasks are the settled tail, not the
- *  home. */
+/** The chips over the journal. `All` holds every row the feed has. The queue
+ *  above counts an unseen entry with the same unfiltered read this feed
+ *  renders (`listUnseenChangelog`), and its row says to read them "in the
+ *  journal below" — so a chip named for everything that dropped one of those
+ *  entries sent the owner to a feed without it. Curation belongs to the read
+ *  named for it (`buildChangelog`'s `changesOnly`), never to this chip: the
+ *  journal half of 28e8206eb is reversed here. Plan history is not a chip:
+ *  `WorkPlans` above owns the plan read model (`inspectSubordinate` over
+ *  `plan_reviews`), so a second Plan here would be the duplicate B12 removed —
+ *  closed tasks are the settled tail, not the home. */
 type JournalFilter = "all" | "jobs" | "self";
 
 const FILTERS: Array<{ id: JournalFilter; label: string }> = [
@@ -194,48 +197,58 @@ export function WorkTab({
 
       {!nowEmpty && (
       <Section id="work-now" title="Now" icon={<PulseIcon size={14} className="p-text-2" />}>
-        {taskResource.status === "error" && tasks === null ? (
-          <LoadFailure what="the plan" message={taskResource.message} onRetry={reloadTasks} />
-        ) : tasks === null ? (
-          <div className="flex justify-center py-4"><Loader size="sm" /></div>
-        ) : (
-          <div className="space-y-3">
-            {tasks.length > 0 && <PlanProgress tasks={tasks} />}
-            {openTasks.length > 0 && (
-              <div className="space-y-2">
-                {openTasks.map((task) => <TaskTree key={task.id} task={task} />)}
-              </div>
-            )}
-            {runningJobs.length > 0 && (
-              <div className="space-y-2">
-                {runningJobs.map((job) => (
-                  <JobCard key={job.id} job={job} onRefresh={onRefreshJobs} rpc={rpc} />
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+        <div className="space-y-3">
+          {/* The plan read's tri-state covers the PLAN half only. Gating the
+              whole section on it put a running job behind the plan's spinner,
+              and dropped it altogether when that read failed — two ledgers,
+              and this one is already in hand as a prop. */}
+          {taskResource.status === "error" && tasks === null ? (
+            <LoadFailure what="the plan" message={taskResource.message} onRetry={reloadTasks} />
+          ) : tasks === null ? (
+            <div className="flex justify-center py-4"><Loader size="sm" /></div>
+          ) : (
+            <>
+              {tasks.length > 0 && <PlanProgress tasks={tasks} />}
+              {openTasks.length > 0 && (
+                <div className="space-y-2">
+                  {openTasks.map((task) => <TaskTree key={task.id} task={task} />)}
+                </div>
+              )}
+            </>
+          )}
+          {runningJobs.length > 0 && (
+            <div className="space-y-2">
+              {runningJobs.map((job) => (
+                <JobCard key={job.id} job={job} onRefresh={onRefreshJobs} rpc={rpc} />
+              ))}
+            </div>
+          )}
+        </div>
       </Section>
       )}
 
-      {journal.length > 0 && (
+      {(journal.length > 0 || changelogResource.status === "error") && (
       <Section id="work-journal" title="Journal"
         icon={<ClockIcon size={14} className="p-text-2" />}
-        badge={<Badge variant="secondary">{journal.length}</Badge>}>
+        badge={journal.length > 0 ? <Badge variant="secondary">{journal.length}</Badge> : undefined}>
         <div className="space-y-3">
-          <div className="flex items-center gap-1 flex-wrap">
-            {FILTERS.map((chip) => (
-              <button key={chip.id} type="button" onClick={() => setFilter(chip.id)}
-                aria-pressed={filter === chip.id}
-                className={`px-2.5 py-0.5 p-t-control rounded-full transition-colors ${filter === chip.id ? "bg-[rgba(224,164,88,.1)] p-accent" : "p-text-3 hover:p-accent"}`}>
-                {chip.label}
-              </button>
-            ))}
-          </div>
+          {journal.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap">
+              {FILTERS.map((chip) => (
+                <button key={chip.id} type="button" onClick={() => setFilter(chip.id)}
+                  aria-pressed={filter === chip.id}
+                  className={`px-2.5 py-0.5 p-t-control rounded-full transition-colors ${filter === chip.id ? "bg-[rgba(224,164,88,.1)] p-accent" : "p-text-3 hover:p-accent"}`}>
+                  {chip.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Spinner until the digest has loaded once, and the failure on every
               read that breaks after — including a revalidation over a snapshot
-              still on screen, which would otherwise go stale in silence. */}
+              still on screen, which would otherwise go stale in silence. The
+              failure is also why this section renders over an empty feed: gated
+              on rows alone, a broken digest read left the whole tab blank. */}
           {(changelog === null || changelogResource.status === "error") && (
             <ChangelogFailure resource={changelogResource} reload={reloadChangelog} />
           )}
@@ -245,7 +258,7 @@ export function WorkTab({
             </div>
           )}
 
-          {visible.length > 0 && (
+          {journal.length > 0 && (visible.length > 0 ? (
             <div className="p-group">
               {visible.map((row) => (
                 <div key={row.key}>
@@ -258,7 +271,9 @@ export function WorkTab({
                 </div>
               ))}
             </div>
-          )}
+          ) : (
+            <p className="p-row-text p-text-3">Nothing under this chip</p>
+          ))}
         </div>
       </Section>
       )}
@@ -511,9 +526,8 @@ function PendingRow(
 /* ── the journal ───────────────────────────────────────────────── */
 
 /** A row and the chips it answers to. Membership is decided by the builder
- *  below, never by the renderer: `All` is the one chip whose list is not
- *  "every row of a kind", and a component that re-derived it would be a second
- *  place the rule lives. */
+ *  below, never by the renderer, so one place holds the rule and no chip can
+ *  drift from the feed it filters. */
 type JournalRow =
   | { key: string; at: number; chips: readonly JournalFilter[]; kind: "job"; job: BackgroundJob }
   | { key: string; at: number; chips: readonly JournalFilter[]; kind: "task"; task: AgentTaskTree }
@@ -528,12 +542,13 @@ type JournalRow =
  * tasks ride the `self` filter: they are settled history, and the live plan
  * already has its home in `WorkPlans` above.
  *
- * A SELF-REVIEW THAT CHANGED NOTHING IS NOT IN `All`. The journal reads as what
- * happened, and "I reviewed my own recent failures and changed nothing"
- * ({@link ChangelogEntry.noChange}) reports a run whose result is that nothing
- * happened — placed beside the rows that did move behaviour, it buries them.
- * Self-changes keeps it, because there the question being asked is what the
- * agent has done about itself, and the honest answer includes the no-ops.
+ * EVERY ROW ANSWERS TO `All`, a self-review that changed nothing
+ * ({@link ChangelogEntry.noChange}) included. The queue above counts that
+ * entry as unseen — `listUnseenChangelog` reads the digest with no
+ * `changesOnly` — and tells the owner to read it in the journal below, so a
+ * chip named for everything that dropped it pointed at a feed without it.
+ * That is the journal half of 28e8206eb reversed: the curation lives in the
+ * read named for it, and the row reads as a no-op from its own summary.
  */
 export function buildJournal(
   jobs: readonly BackgroundJob[],
@@ -548,9 +563,7 @@ export function buildJournal(
       key: `task:${task.id}`, at: task.updatedAt, chips: ["all", "self"], kind: "task", task,
     })),
     ...entries.map((entry): JournalRow => ({
-      key: `self:${entry.id}`, at: entry.at,
-      chips: entry.noChange === true ? ["self"] : ["all", "self"],
-      kind: "self", entry,
+      key: `self:${entry.id}`, at: entry.at, chips: ["all", "self"], kind: "self", entry,
     })),
   ];
 
