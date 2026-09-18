@@ -69,6 +69,10 @@ export function WorkPlans({ work, owner = 'main', arrival, onPresence, onNewPlan
   // The claim is the connection's, not this pane's: a pane remounts on every
   // conversation switch, and a claim held here would replay the honoured hint
   // on the fresh mount.
+  // A hint that lands while a review is open never claims: this list is
+  // unmounted then, by design — an arrival does not open a review over the
+  // reader's head. It claims on the next mount (Back), which is what this
+  // effect already does for a fresh reference.
   useEffect(() => {
     if (!arrival || !focus || work === null) return;
 

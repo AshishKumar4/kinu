@@ -27,9 +27,9 @@ import { Badge, Button, Loader } from "@cloudflare/kumo";
 import {
   ClockIcon, PulseIcon, WarningCircleIcon, GitBranchIcon,
   RocketLaunchIcon, PackageIcon, SparkleIcon, CaretRightIcon, ShieldWarningIcon,
-  NotePencilIcon, ArrowLeftIcon,
+  NotePencilIcon, ArrowLeftIcon, DatabaseIcon,
 } from "@phosphor-icons/react";
-import type { AgentTaskTree, ChangelogEntry, OwnedPlan, PendingAction, PendingActionKind, PlanReview, WorkspaceWork } from "@kinu.run/core";
+import type { AgentTaskTree, ChangelogEntry, MemoryEntry, OwnedPlan, PendingAction, PendingActionKind, PlanReview, WorkspaceWork } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -120,10 +120,13 @@ export interface WorkTabProps {
   /** A turn is in flight — the plan is rewritten while it is. */
   isStreaming: boolean;
   rpc: Rpc;
+  /** The workspace's saved memories — the same `getMemoryContent` read the
+   *  Agent surface's Memory view renders, already workspace-wide. */
+  memory?: MemoryEntry[];
 }
 
 export function WorkTab({
-  plan, planRpc, planOwner, workspacePlanArrival, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, isStreaming, rpc,
+  plan, planRpc, planOwner, workspacePlanArrival, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, isStreaming, rpc, memory = [],
 }: WorkTabProps) {
   const [filter, setFilter] = useState<JournalFilter>("all");
   const [hasPlans, setHasPlans] = useState(plan !== null);
@@ -360,6 +363,24 @@ export function WorkTab({
             </div>
           ) : (
             <p className="p-row-text p-text-3">Nothing under this chip</p>
+          ))}
+        </div>
+      </Section>
+      )}
+      {/* What the workspace remembered — the tail of the same MEMORY.md the
+          Agent surface's Memory view renders whole. A row opens that view;
+          the section itself draws only once there is a note to list. */}
+      {memory.length > 0 && (
+      <Section id="work-learnings" title="Learnings"
+        icon={<DatabaseIcon size={14} className="p-text-2" />}
+        badge={<Badge variant="secondary">{memory.length}</Badge>}>
+        <div data-learnings className="p-group">
+          {[...memory].reverse().map((entry, i) => (
+            <button key={i} type="button" data-learning onClick={() => onOpenSurface("Agent")}
+              className="w-full rounded-md px-3 py-2 text-left transition-colors hover:p-elevated">
+              <span className="p-row-text p-text line-clamp-1">{entry.content.split("\n")[0]}</span>
+              <span className="p-meta p-text-3 mt-0.5 block">{entry.updatedAt}{entry.savedBy ? ` · ${entry.savedBy}` : ""}</span>
+            </button>
           ))}
         </div>
       </Section>

@@ -186,7 +186,7 @@ import {
   type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
   type ProfileCatalogEnvelope,
 } from "@kinu.run/core";
-import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, Rpc, ToolInfo } from "@kinu.run/core";
+import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc, ToolInfo } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { buildTree, type MctsRow } from "@kinu.run/core";
 import { formatWorkspaceError, type AgentStatus, type ExecutorOutput, type WorkspaceErrors } from "@/hooks/use-kinu";
@@ -4858,15 +4858,22 @@ const NO_JOBS: BackgroundJob[] = [];
 /** Which Work lane `?frame=work&lane=…` selects. */
 function workLane(lane: string | null) {
   if (lane === "settled") {
-    return { jobs: NO_JOBS, queue: PENDING_ACTIONS, rpc: settledOnlyRpc };
+    return { jobs: NO_JOBS, queue: PENDING_ACTIONS, rpc: settledOnlyRpc, memory: [] };
   }
 
   if (lane === "failed") {
-    return { jobs: BACKGROUND_JOBS.filter((job) => job.status === "running"), queue: NO_QUEUE, rpc: failedReadsRpc };
+    return { jobs: BACKGROUND_JOBS.filter((job) => job.status === "running"), queue: NO_QUEUE, rpc: failedReadsRpc, memory: [] };
   }
 
-  return { jobs: BACKGROUND_JOBS, queue: PENDING_ACTIONS, rpc: workRpc };
+  return { jobs: BACKGROUND_JOBS, queue: PENDING_ACTIONS, rpc: workRpc, memory: WORK_MEMORIES };
 }
+
+/** The workspace's saved memories the `work` frame photographs — oldest first,
+ *  the order `getMemoryContent` parses them; Learnings renders the reverse. */
+const WORK_MEMORIES: MemoryEntry[] = [
+  { path: "memory/MEMORY.md", content: "The gateway's upstream needs a retry budget", matchScore: 1, updatedAt: "2026-09-15", savedBy: "main" },
+  { path: "memory/MEMORY.md", content: "Prompt lanes assemble in the order the fixture lists them", matchScore: 1, updatedAt: "2026-09-17", savedBy: "courier" },
+];
 
 function WorkFrame() {
   const lane = workLane(new URLSearchParams(location.search).get("lane"));
@@ -4876,7 +4883,7 @@ function WorkFrame() {
       <div className="w-[430px] min-h-screen border-x p-border">
         <WorkSurface
           surface="Work" onSurface={() => {}}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={lane.memory} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={lane.jobs} onRefreshJobs={() => {}} pendingActions={lane.queue}
