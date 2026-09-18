@@ -163,29 +163,29 @@ describe('AgentConfigStore — typed accessors', () => {
     const c = setup();
     expect(c.getShellApprovalGrants()).toEqual([]);
 
-    c.grantShellApproval([{ rule: 'rm-recursive', executor: 'laptop' }]);
+    c.grantShellApproval([{ rule: 'rm-recursive', executor: 'device' }]);
     // Granting the same thing twice is one grant, not two.
     c.grantShellApproval([
-      { rule: 'rm-recursive', executor: 'laptop' },
+      { rule: 'rm-recursive', executor: 'device' },
       { rule: 'sudo', executor: 'parent' },
     ]);
     expect(c.getShellApprovalGrants()).toEqual([
-      { rule: 'rm-recursive', executor: 'laptop' },
+      { rule: 'rm-recursive', executor: 'device' },
       { rule: 'sudo', executor: 'parent' },
     ]);
 
     // Revoking one leaves the other; revoking something never granted is fine.
     c.revokeShellApproval([
-      { rule: 'rm-recursive', executor: 'laptop' },
+      { rule: 'rm-recursive', executor: 'device' },
       { rule: 'nothing', executor: 'nowhere' },
     ]);
     expect(c.getShellApprovalGrants()).toEqual([{ rule: 'sudo', executor: 'parent' }]);
 
     // A value that cannot be parsed must never widen what runs.
-    c.set(AGENT_CONFIG_KEYS.shellApprovalGrants, 'bogus,@,rule@,,sudo@laptop');
-    expect(c.getShellApprovalGrants()).toEqual([{ rule: 'sudo', executor: 'laptop' }]);
+    c.set(AGENT_CONFIG_KEYS.shellApprovalGrants, 'bogus,@,rule@,,sudo@device');
+    expect(c.getShellApprovalGrants()).toEqual([{ rule: 'sudo', executor: 'device' }]);
 
-    c.revokeShellApproval([{ rule: 'sudo', executor: 'laptop' }]);
+    c.revokeShellApproval([{ rule: 'sudo', executor: 'device' }]);
     expect(c.getShellApprovalGrants()).toEqual([]);
     expect(c.get(AGENT_CONFIG_KEYS.shellApprovalGrants)).toBeNull();
   });
@@ -379,7 +379,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setRoleSelection('auditor'),
     (c) => c.setAssignedTier('deep'),
     (c) => c.setShellApprovalMode('allow_all'),
-    (c) => c.grantShellApproval([{ rule: 'rm-recursive', executor: 'laptop' }]),
+    (c) => c.grantShellApproval([{ rule: 'rm-recursive', executor: 'device' }]),
     (c) => c.setSleepTimeComputeEnabled(false),
     (c) => c.setAutoPromoteScaffold(false),
     (c) => c.setShadowSampleRate(0.5),

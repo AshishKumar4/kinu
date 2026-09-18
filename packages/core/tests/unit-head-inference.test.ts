@@ -2,6 +2,7 @@
 // real generateText loop with a fake v2 model so the status/summary/usage/steps
 // assembly is locked behind ONE test both backends rely on, rather than sitting
 // inside one backend's host where only that backend could prove it.
+import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import { createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions } from '@kinu.run/test-utils';
 import { createTestWorkspace } from './helpers';
@@ -76,7 +77,7 @@ const deps = async (
 
   return {
     actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
-    model, tools: {}, capture: new HeadCapture(), isAborted: () => false, ...over,
+    model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false, ...over,
     workspaceLayout: over?.workspaceLayout ?? 'shared-workspace',
   };
 };
@@ -129,7 +130,7 @@ describe('runHeadInference — report assembly', () => {
   test('aborted → status aborted + errorMessage from abortReason', async () => {
     const report = await runHeadInference(
       headInput(),
-      await deps(fakeHeadModel('text'), { isAborted: () => true, abortReason: () => 'operator cancelled' }),
+      await deps(fakeHeadModel('text'), { clock: REAL_CLOCK, isAborted: () => true, abortReason: () => 'operator cancelled' }),
     );
 
     expect(report.status).toBe('aborted');
@@ -215,7 +216,7 @@ describe('durable delegated turn opening', () => {
       restored.actor.session.restoreWorkingHistory(() => { throw new Error('A working revision must not consult the transcript.'); });
 
       const report = await runHeadInference(headInput(), {
-        ...restored, model: fakeHeadModel('Child answer.'), tools: {}, capture: new HeadCapture(), isAborted: () => false,
+        ...restored, model: fakeHeadModel('Child answer.'), tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
         workspaceLayout: 'shared-workspace',
         framing: { system: 'Read the ledger.', messages: [{ role: 'user', content: 'New assignment.' }] },
         delegation: { assignmentId: 'assignment-a', birthContext: [{ role: 'user', content: 'Do not resurrect this birth prefix.' }] },
@@ -262,7 +263,7 @@ describe('durable delegated turn opening', () => {
       let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'subordinate');
 
       const run = async (assignmentId: string) => runHeadInference(headInput(), {
-        ...seat, model, tools: {}, capture: new HeadCapture(), isAborted: () => false,
+        ...seat, model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
         workspaceLayout: 'shared-workspace',
         framing: { system: 'Read the ledger.', messages: [{ role: 'user', content: 'Check this ledger.' }] },
         delegation: { assignmentId, birthContext: [{ role: 'user', content: 'Frozen birth prefix.' }] },
@@ -294,7 +295,7 @@ describe('durable delegated turn opening', () => {
     const model = fakeHeadModel('Child answer.');
 
     const run = (assignmentId: string, edit: boolean) => runHeadInference(headInput(), {
-      ...seat, model, tools: {}, capture: new HeadCapture(), isAborted: () => false,
+      ...seat, model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
       workspaceLayout: 'shared-workspace',
       framing: { system: 'Read the ledger.', messages: [{ role: 'user', content: assignmentId }] },
       delegation: { assignmentId, birthContext: [{ role: 'user', content: 'Original birth prefix.' }] },
@@ -413,11 +414,11 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
     // same toolCallId; a SerializedMessage has no id to match, so emitting one
     // would make every head request malformed at the provider.
     const msgs = buildHeadMessages(headInput({
-      inheritedContext: [{ id: 't1', role: 'tool', content: 'exit status 0', createdAt: 1, toolName: 'run' }],
+      inheritedContext: [{ id: 't1', role: 'tool', content: 'exit status 0', createdAt: 1, toolName: 'shell' }],
     }));
 
     expect(msgs.map((m) => m.role)).toEqual(['user', 'user']);
-    expect(msgs[0]!.content).toBe('[inherited tool result from run]\nexit status 0');
+    expect(msgs[0]!.content).toBe('[inherited tool result from shell]\nexit status 0');
   });
 
   test("an inherited 'system' entry does not become a second system prompt", () => {

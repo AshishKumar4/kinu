@@ -103,12 +103,12 @@ export function getShellApprovalMode(config: AgentConfigStore) {
 }
 
 /**
- * How the `run` builtin handles 'gate' decisions from the approval-gate
+ * How the `shell` builtin handles 'gate' decisions from the approval-gate
  * review. Effective on the next turn, once `onChanged` has dropped the tool
  * surface the old mode built.
  *
  *   strict     — default; put gate decisions to the owner (sudo on their
- *                laptop, a force-push, a publish). Commands whose only harm
+ *                device, a force-push, a publish). Commands whose only harm
  *                is local to the agent's own workspace or sandbox are not
  *                gate decisions in the first place — see safety/approval-gate.ts.
  *   allow_all  — treat gate decisions as warn (logged + executed). Trusted
@@ -133,7 +133,7 @@ export function setShellApprovalMode(
  * The standing grants: every rule the owner has said "always" to, and where.
  *
  * This is the revoke surface. A grant is one line — `rm-recursive` on
- * `laptop` — so what it bought is legible without reading any code, and
+ * `device` — so what it bought is legible without reading any code, and
  * dropping the line is the whole of taking it back. Grants never widen what a
  * command can reach; they only stop the gate asking again.
  */

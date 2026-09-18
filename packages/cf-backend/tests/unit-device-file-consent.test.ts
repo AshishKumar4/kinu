@@ -15,7 +15,7 @@ import { orchestratorHarness } from './helpers/actor-harness';
 
 function deviceFiles() {
   const harness = orchestratorHarness();
-  const provider = harness.agent.observeRuntime().executionRouter?.getProvider('laptop');
+  const provider = harness.agent.observeRuntime().executionRouter?.getProvider('device');
 
   if (!provider?.files) throw new Error('the runtime registered no device file view');
 

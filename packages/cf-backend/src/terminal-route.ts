@@ -53,7 +53,7 @@ type SandboxPty = {
 };
 
 /** The executor name for the owner's own machine. */
-const DEVICE_EXECUTOR = "laptop";
+const DEVICE_EXECUTOR = "device";
 
 /** The window a pane gets when it names none. 80x24 is what a terminal has
  *  been since DEC sold one, and every program still assumes it. */

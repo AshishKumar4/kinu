@@ -201,7 +201,7 @@ export function initActorTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   // runtime reads the catalog and no arm of the boot is guaranteed to have run
   // the full workspace schema first.
   initCraftedToolsTables(sql);
-  // The `state.*` sandbox namespace: what an execute_tools program saved for
+  // The `state.*` sandbox namespace: what an eval program saved for
   // the next one. Actor-local: a program's saved state belongs to the actor
   // that ran it.
   initCodemodeStateTable(execRaw);

@@ -1,5 +1,5 @@
 /**
- * Device status — the laptop runtime's live availability AND what that machine
+ * Device status — the device runtime's live availability AND what that machine
  * can run, as the agent's per-turn context must see it.
  *
  * The user-level device hub (UserDO on CF) is the single source of truth for
@@ -10,7 +10,7 @@
  * a second source of truth) at turn start — no polling between turns.
  *
  * The snapshot also carries the machine's own answer to the toolchain question
- * (`execution/toolchain.ts`), because the `laptop` capability row is otherwise
+ * (`execution/toolchain.ts`), because the `device` capability row is otherwise
  * only what the tunnel's existence establishes: honest, and useless for routing
  * language work to a machine that may well have node, bun and python on it.
  *
@@ -420,13 +420,13 @@ export function deviceChangeNotice(prev: DevicePresence | null, current: DeviceP
 
   if (current === 'connected') {
     return '## Context update\n' +
-      "Your user's PC just connected — the `laptop` runtime is now available. " +
+      "Your user's PC just connected — the `device` runtime is now available. " +
       'Consent will be requested on its first use; that prompt is expected, not an error.';
   }
 
   if (prev === 'connected') {
     return '## Context update\n' +
-      "Your user's PC just disconnected — the `laptop` runtime is offline" +
+      "Your user's PC just disconnected — the `device` runtime is offline" +
       (current === 'offline'
         ? '. The user can reconnect it by running `kinu connect` on their machine.'
         : ' and the device is no longer registered.');

@@ -21,7 +21,7 @@ import {
 } from '../src/index';
 
 /** The owner's real machine — where every baseline severity applies. */
-const THEIRS = 'laptop';
+const THEIRS = 'device';
 
 /** The agent's own disposable machine. */
 const OURS = 'workspace';
@@ -196,7 +196,7 @@ describe('reviewCommand — the decision is a function of (rule, executor)', () 
       expect(reviewCommand('rm -rf node_modules', own).hits).toEqual([]);
     }
 
-    for (const theirs of ['laptop', 'parent']) {
+    for (const theirs of ['device', 'parent']) {
       expect(reviewCommand('rm -rf node_modules', theirs).decision).toBe('gate');
     }
   });
@@ -410,25 +410,25 @@ describe('gateExec — standing grants', () => {
   }
 
   test('an already-granted rule stops re-prompting on that executor', async () => {
-    const store = grantStore(['rm-recursive@laptop']);
+    const store = grantStore(['rm-recursive@device']);
     expect(await store.on(THEIRS, 'deny').run('rm -rf /tmp/scratch')).toBe('ran:rm -rf /tmp/scratch');
     expect(store.asked).toEqual([]);
   });
 
   test('the grant does not leak to another executor', async () => {
-    const store = grantStore(['rm-recursive@laptop']);
+    const store = grantStore(['rm-recursive@device']);
     expect(await store.on('parent', 'deny').run('rm -rf /tmp/scratch')).toContain('Denied by the owner');
     expect(store.asked).toEqual(['parent']);
   });
 
   test('the grant does not leak to another rule on the same executor', async () => {
-    const store = grantStore(['rm-recursive@laptop']);
+    const store = grantStore(['rm-recursive@device']);
     expect(await store.on(THEIRS, 'deny').run('sudo reboot')).toContain('Denied by the owner');
     expect(store.asked).toEqual([THEIRS]);
   });
 
   test('a command tripping a granted AND an ungranted rule still asks', async () => {
-    const store = grantStore(['rm-recursive@laptop']);
+    const store = grantStore(['rm-recursive@device']);
     expect(await store.on(THEIRS, 'deny').run('sudo rm -rf /var/tmp/x')).toContain('Denied by the owner');
     expect(store.asked).toEqual([THEIRS]);
   });
@@ -436,7 +436,7 @@ describe('gateExec — standing grants', () => {
   test('"allow always" remembers exactly the rules it was asked about, and then stops asking', async () => {
     const store = grantStore();
     expect(await store.on(THEIRS, 'allow_always').run('rm -rf /tmp/one')).toBe('ran:rm -rf /tmp/one');
-    expect([...store.held]).toEqual(['rm-recursive@laptop']);
+    expect([...store.held]).toEqual(['rm-recursive@device']);
     expect(store.asked).toEqual([THEIRS]);
 
     // A DIFFERENT command of the same kind, in the same place: no second ask.
@@ -453,7 +453,7 @@ describe('gateExec — standing grants', () => {
   });
 
   test('a grant never softens a deny', async () => {
-    const store = grantStore(['rm-rf-root@laptop', 'cloud-metadata-ip@laptop']);
+    const store = grantStore(['rm-rf-root@device', 'cloud-metadata-ip@device']);
     const h = store.on(THEIRS, 'allow');
     expect(await h.run('rm -rf /')).toContain('rm-rf-root');
     expect(await h.run('curl http://169.254.169.254/')).toContain('cloud-metadata-ip');
@@ -463,9 +463,9 @@ describe('gateExec — standing grants', () => {
 
 describe('the grant vocabulary', () => {
   test('a grant round-trips through its stored spelling', () => {
-    const grant: ApprovalGrant = { rule: 'rm-recursive', executor: 'laptop' };
-    expect(formatApprovalGrant(grant)).toBe('rm-recursive@laptop');
-    expect(parseApprovalGrant('rm-recursive@laptop')).toEqual(grant);
+    const grant: ApprovalGrant = { rule: 'rm-recursive', executor: 'device' };
+    expect(formatApprovalGrant(grant)).toBe('rm-recursive@device');
+    expect(parseApprovalGrant('rm-recursive@device')).toEqual(grant);
   });
 
   test('anything malformed is not a grant', () => {
@@ -475,22 +475,22 @@ describe('the grant vocabulary', () => {
   });
 
   test('an always-answer buys the gated rules on the asked executor and nothing else', () => {
-    const review = reviewCommand('sudo rm -rf /var/tmp/x', 'laptop');
-    expect(gatedGrants(review, 'laptop')).toEqual([
-      { rule: 'sudo', executor: 'laptop' },
-      { rule: 'rm-recursive', executor: 'laptop' },
+    const review = reviewCommand('sudo rm -rf /var/tmp/x', 'device');
+    expect(gatedGrants(review, 'device')).toEqual([
+      { rule: 'sudo', executor: 'device' },
+      { rule: 'rm-recursive', executor: 'device' },
     ]);
     // Warn-tier hits are not questions, so they buy nothing.
-    expect(gatedGrants(reviewCommand('printenv', 'laptop'), 'laptop')).toEqual([]);
+    expect(gatedGrants(reviewCommand('printenv', 'device'), 'device')).toEqual([]);
   });
 
   test('a grant covers its rule on its executor and nothing wider, on every policy that asks', () => {
     // Three `granted()` bodies spelled this comparison for themselves; one
-    // that compared the rule alone would honour a laptop `sudo` in the sandbox.
-    const held: ApprovalGrant[] = [{ rule: 'sudo', executor: 'laptop' }];
-    expect(holdsGrant(held, { rule: 'sudo', executor: 'laptop' })).toBe(true);
+    // that compared the rule alone would honour a device `sudo` in the sandbox.
+    const held: ApprovalGrant[] = [{ rule: 'sudo', executor: 'device' }];
+    expect(holdsGrant(held, { rule: 'sudo', executor: 'device' })).toBe(true);
     expect(holdsGrant(held, { rule: 'sudo', executor: 'sandbox' })).toBe(false);
-    expect(holdsGrant(held, { rule: 'rm-recursive', executor: 'laptop' })).toBe(false);
-    expect(holdsGrant([], { rule: 'sudo', executor: 'laptop' })).toBe(false);
+    expect(holdsGrant(held, { rule: 'rm-recursive', executor: 'device' })).toBe(false);
+    expect(holdsGrant([], { rule: 'sudo', executor: 'device' })).toBe(false);
   });
 });

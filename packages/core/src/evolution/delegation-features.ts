@@ -23,7 +23,7 @@ export interface DelegationFeatures extends ExecutionPathSignals {
   teamCalls: number;
   thinkCalls: number;
   peerCalls: number;
-  executeToolsCalls: number;
+  executeCodemodeCalls: number;
   wallClockMs: number;
 }
 
@@ -104,7 +104,7 @@ function blockEquals(prints: ReadonlyArray<string>, a: number, b: number, length
  * Path effects readable from a call's arguments. Files are touched three ways:
  * the `file` tool (the native file plane, whose path is a typed field read by
  * `fileToolPath` below), code-mode (`workspace.readFile` / `workspace.writeFile`,
- * the documented VFS surface) and `run` shell commands. The two text
+ * the documented VFS surface) and `shell` shell commands. The two text
  * vocabularies here cover the last two. Deliberately narrow: a missed effect
  * costs one missed signal, an invented one would poison the evidence line this
  * module feeds.
@@ -248,7 +248,7 @@ export function delegationFeatures(turn: TurnProcessRecord): DelegationFeatures 
     teamCalls: count((call) => hasKey(STAFFING_ACTIONS, agentsAction(call))),
     thinkCalls: count((call) => hasKey(EXPLORATION_ACTIONS, agentsAction(call))),
     peerCalls: count((call) => hasKey(MESSAGING_ACTIONS, agentsAction(call))),
-    executeToolsCalls: count((call) => call.name === 'execute_tools'),
+    executeCodemodeCalls: count((call) => call.name === 'eval'),
     wallClockMs: turn.durationMs,
     ...executionPathSignals(turn.toolCalls),
   };
@@ -270,7 +270,7 @@ export function renderDelegationFeatures(features: DelegationFeatures): string {
 
   return `Turn process: ${features.stepCount} sequential steps, ${features.teamCalls} hiring, ` +
     `${features.thinkCalls} exploration, ${features.peerCalls} messaging, ` +
-    `${features.executeToolsCalls} execute_tools, ${compactDuration(features.wallClockMs)} wall clock` +
+    `${features.executeCodemodeCalls} eval, ${compactDuration(features.wallClockMs)} wall clock` +
     (path.length > 0 ? `. Wasted motion: ${path.join(', ')} tool calls` : '');
 }
 

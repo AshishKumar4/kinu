@@ -2,7 +2,7 @@
  * `agents.*` — the delegation tool, projected into the codemode sandbox.
  *
  * This is the bridge that makes a WORKFLOW an ordinary crafted tool: LLM-authored
- * JS inside `execute_tools` already reaches `llm.*`, `workspace.*`, `web.*` and
+ * JS inside `eval` already reaches `llm.*`, `workspace.*`, `web.*` and
  * every crafted tool in `tools.*`, so once it can also delegate, a deterministic
  * script over nondeterministic agent calls is just code — savable via
  * `workspace.createTool`, callable as `tools.<name>()`, schedulable via
@@ -25,7 +25,7 @@
  * mid-script is not delegation either.
  *
  * One honest limitation, stated in the swarm docstring the model reads: a search
- * started in here rides the enclosing `execute_tools` call, and that job kind
+ * started in here rides the enclosing `eval` call, and that job kind
  * declines background resume (side effects can't be re-run). Quick orchestration
  * belongs in the sandbox; one long expensive search that must survive an
  * eviction belongs at the top-level tool, which resumes from its search
@@ -88,8 +88,8 @@ ${SWARM_PRESET_DOCTRINE.map((line) => `   *    ${line}`).join('\n')}
    *  It refuses rather than approximates: an illegal composition names the axis
    *  to change, and a shape no engine here runs faithfully says so instead of
    *  returning a number from a different mechanism.
-   *  NOT resumable from here: a search started inside execute_tools rides this
-   *  sandbox call, and execute_tools declines background resume because its
+   *  NOT resumable from here: a search started inside eval rides this
+   *  sandbox call, and eval declines background resume because its
    *  side effects cannot be safely re-run. Script quick fan-out here; call the
    *  top-level \`agents\` tool for one long search that must survive an
    *  eviction, which resumes from its search checkpoint. */`,
@@ -253,7 +253,7 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
   const initialDeps = deps();
   const actions = agentsActionsFor(initialDeps);
   // A provider belongs to one Plan/Build tool surface. Other dependencies may
-  // refresh between calls, but the trusted mode must not: execute_tools may
+  // refresh between calls, but the trusted mode must not: eval may
   // keep running after its originating turn has detached.
   const mode = initialDeps.mode;
   const tools: CodemodeProvider['tools'] = {};

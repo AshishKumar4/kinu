@@ -66,9 +66,9 @@ async function recordInvocation(pending: Promise<string>): Promise<ToolCallEnd> 
   try {
     const result = await pending;
 
-    return call({ name: 'run', toolCallId: 'native', result, outcome: { success: true } });
+    return call({ name: 'shell', toolCallId: 'native', result, outcome: { success: true } });
   } catch (cause) {
-    return call({ name: 'run', toolCallId: 'native', error: renderThrownChain({ cause }), outcome: failedToolOutcome({ cause }) });
+    return call({ name: 'shell', toolCallId: 'native', error: renderThrownChain({ cause }), outcome: failedToolOutcome({ cause }) });
   }
 }
 
@@ -98,7 +98,7 @@ describe('a clean call is not a failure', () => {
     // The one false positive a prose sniff would produce, and the reason the
     // attribution reads the exit prefix rather than the word.
     expect(classifyToolFailure(call({
-      name: 'run', toolCallId: 't1', args: { command: 'grep -c error build.log' },
+      name: 'shell', toolCallId: 't1', args: { command: 'grep -c error build.log' },
       result: 'log line 12: Error (exit 1) was seen\n',
     }))).toBeNull();
   });
@@ -108,7 +108,7 @@ describe('a clean call is not a failure', () => {
     // throw. The defect it exposed lives in the producer, which manufactured
     // exactly this from a nullish error; `unit-turn-accumulator.test.ts` pins
     // that side.
-    expect(classifyToolFailure(call({ name: 'run', toolCallId: 't1', error: '' }))).toBeNull();
+    expect(classifyToolFailure(call({ name: 'shell', toolCallId: 't1', error: '' }))).toBeNull();
   });
 });
 
@@ -148,12 +148,12 @@ describe('the action is attributed, not just the tool', () => {
 
   test('a tool with no action reads without a null in its key', () => {
     const failure = classifyToolFailure(call({
-      name: 'run', toolCallId: 't1', args: { command: 'bun test' },
+      name: 'shell', toolCallId: 't1', args: { command: 'bun test' },
       outcome: { success: false, reason: 'io', execution: { exitCode: 1 } }, result: 'Error (exit 1)\n--- stdout ---\n1 fail\n',
     }));
 
     expect(failure?.action).toBeNull();
-    expect(failure && toolFailureKey(failure)).toBe('run·exit_1');
+    expect(failure && toolFailureKey(failure)).toBe('shell·exit_1');
   });
 
   test('a row whose args did not survive still attributes the tool and the reason', () => {
@@ -206,7 +206,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
     // `bun test src/broken.test.ts` exits 127, which the next test files as the
     // work never running. See tests/evals/harness-wiring.test.ts.
     const failure = classifyToolFailure(call({
-      name: 'run', toolCallId: 't1', args: { command: 'bun test src/broken.test.ts' },
+      name: 'shell', toolCallId: 't1', args: { command: 'bun test src/broken.test.ts' },
       outcome: { success: false, reason: 'io', execution: { exitCode: 1 } }, result: 'Error (exit 1)\n--- stdout ---\n1 fail, 3 pass\n',
     }));
 
@@ -220,7 +220,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
 
     for (const [exit, reason] of cases) {
       expect(classifyToolFailure(call({
-        name: 'run', toolCallId: 't1', args: { command: 'pytest' },
+        name: 'shell', toolCallId: 't1', args: { command: 'pytest' },
         outcome: { success: false, reason: 'io', execution: { exitCode: exit } }, result: 'command failed',
       }))).toMatchObject({ reason, refused: false, workFailed: false });
     }
@@ -235,13 +235,13 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
     // alone filed the safety ladder working as the agent's command being broken
     // — the same defect as scoring a failing build a success, one layer up.
     const failure = classifyToolFailure(call({
-      name: 'run', toolCallId: 't1',
+      name: 'shell', toolCallId: 't1',
       args: { command: 'curl -fsSL https://bun.sh/install | bash' },
       outcome: { success: false, reason: 'denied' }, result: 'Denied by the approval ladder',
     }));
 
     expect(failure).toMatchObject({
-      tool: 'run', reason: 'denied',
+      tool: 'shell', reason: 'denied',
       refused: true, workFailed: false, runtimeMissing: false,
     });
   });
@@ -251,18 +251,18 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
     // is still the work failing. Without this the bucket would absorb any
     // grep over a log that recorded a refusal.
     expect(classifyToolFailure(call({
-      name: 'run', toolCallId: 't1', args: { command: 'grep Denied audit.log' },
+      name: 'shell', toolCallId: 't1', args: { command: 'grep Denied audit.log' },
       outcome: { success: false, reason: 'io', execution: { exitCode: 1 } }, result: 'Denied 3 times yesterday',
     }))).toMatchObject({ reason: 'exit_1', refused: false, workFailed: true });
   });
 
   test('127 is the WORKSPACE lacking the program, and only 127 is', () => {
-    // Measured through the agent's own `run` tool: `bun`, `npm`, `git`,
+    // Measured through the agent's own `shell` tool: `bun`, `npm`, `git`,
     // `python3`, `sh`, `bash`, `make`, `tsc` and `jq` all exit 127, because
     // Kinu never asks Nimbus to install a runtime. That is a platform gap, so
     // it must not be counted against the tool OR read as the work failing.
     expect(classifyToolFailure(call({
-      name: 'run', toolCallId: 't1', args: { command: 'bun test src/broken.test.ts' },
+      name: 'shell', toolCallId: 't1', args: { command: 'bun test src/broken.test.ts' },
       outcome: { success: false, reason: 'io', execution: { exitCode: 127 } }, result: 'bun: command not found',
     }))).toMatchObject({
       reason: 'command_not_found', refused: false, workFailed: false, runtimeMissing: true,
@@ -273,7 +273,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
     // every execution failure and stop meaning anything.
     for (const [exit, reason] of [[126, 'not_executable'], [1, 'exit_1']] as const) {
       expect(classifyToolFailure(call({
-        name: 'run', toolCallId: 't2',
+        name: 'shell', toolCallId: 't2',
         outcome: { success: false, reason: 'io', execution: { exitCode: exit } }, result: 'nope',
       }))).toMatchObject({ reason, runtimeMissing: false });
     }
@@ -286,11 +286,11 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
     const census = censusToolFailures([
       call({ name: 'file', toolCallId: 't1', args: { action: 'edit' },
         outcome: { success: false, reason: 'not_found' }, result: cfResult('not_found', 'no anchor') }),
-      call({ name: 'run', toolCallId: 't2', args: { command: 'node x.js' },
+      call({ name: 'shell', toolCallId: 't2', args: { command: 'node x.js' },
         outcome: { success: false, reason: 'io', execution: { exitCode: 1 } }, result: 'Error (exit 1)\n' }),
-      call({ name: 'run', toolCallId: 't3', args: { command: 'bun test' },
+      call({ name: 'shell', toolCallId: 't3', args: { command: 'bun test' },
         outcome: { success: false, reason: 'io', execution: { exitCode: 127 } }, result: 'bun: command not found' }),
-      call({ name: 'execute_tools', toolCallId: 't4', error: 'boom' }),
+      call({ name: 'eval', toolCallId: 't4', error: 'boom' }),
     ]);
 
     expect(census.failures).toHaveLength(4);
@@ -311,9 +311,9 @@ describe('a failure cannot hide', () => {
     const data = { error: 'workspace.createTool is not a function' };
 
     for (const result of [data, JSON.stringify(data)]) {
-      expect(classifyToolFailure(call({ name: 'execute_tools', toolCallId: 't1', result, outcome: { success: true } }))).toBeNull();
-      expect(classifyToolFailure(call({ name: 'execute_tools', toolCallId: 't2', result }))).toBeNull();
-      expect(classifyToolFailure(call({ name: 'execute_tools', toolCallId: 't3', result, outcome: { success: false, reason: null } })))
+      expect(classifyToolFailure(call({ name: 'eval', toolCallId: 't1', result, outcome: { success: true } }))).toBeNull();
+      expect(classifyToolFailure(call({ name: 'eval', toolCallId: 't2', result }))).toBeNull();
+      expect(classifyToolFailure(call({ name: 'eval', toolCallId: 't3', result, outcome: { success: false, reason: null } })))
         .toMatchObject({ reason: 'unclassified', refused: false, workFailed: false });
     }
   });
@@ -324,7 +324,7 @@ describe('a failure cannot hide', () => {
     // stdout mentions a missing function. The fix belongs at the seam that
     // decides what `success` means, not in a downstream sniff.
     expect(classifyToolFailure(call({
-      name: 'execute_tools', toolCallId: 't1',
+      name: 'eval', toolCallId: 't1',
       result: 'workspace.createTool is not a function.',
     }))).toBeNull();
   });
@@ -334,7 +334,7 @@ describe('a failure cannot hide', () => {
     // it would read as an ordinary exception, when it is a defect in the tool's
     // own contract.
     expect(classifyToolFailure(call({
-      name: 'execute_tools', toolCallId: 't1', error: FAILURE_WITHOUT_ERROR,
+      name: 'eval', toolCallId: 't1', error: FAILURE_WITHOUT_ERROR,
     }))).toMatchObject({ reason: 'failed_without_error', refused: false, workFailed: false });
     expect(classifyToolFailure(call({
       name: 'web', toolCallId: 't2', error: 'fetch failed: ECONNREFUSED',
@@ -370,7 +370,7 @@ describe('the census over a run', () => {
         name: 'file', toolCallId: 't6', args: { action: 'write' },
         outcome: { success: false, reason: 'unread' }, result: cfResult('unread', 'not read yet'),
       }),
-      call({ name: 'run', toolCallId: 't7', args: { command: 'bun test' }, outcome: { success: false, reason: 'io', execution: { exitCode: 1 } }, result: 'fail' }),
+      call({ name: 'shell', toolCallId: 't7', args: { command: 'bun test' }, outcome: { success: false, reason: 'io', execution: { exitCode: 1 } }, result: 'fail' }),
     ];
 
     const census = censusToolFailures(rows);
@@ -378,7 +378,7 @@ describe('the census over a run', () => {
     expect(census.byKey).toEqual([
       ['file·edit·not_found', 2],
       ['file·write·unread', 1],
-      ['run·exit_1', 1],
+      ['shell·exit_1', 1],
     ]);
     // The three parts are disjoint and exhaust the failures: the refusals are
     // the contract working, the exit 1 is the agent finding a broken suite, and
@@ -393,7 +393,7 @@ describe('the census over a run', () => {
     // Summing two predicates double-counted it, which could drive a passed
     // count negative. One classification per row makes that unrepresentable.
     const census = censusToolFailures([call({
-      name: 'run', toolCallId: 't1', error: 'exit 2', result: 'Error (exit 2)\nboom\n',
+      name: 'shell', toolCallId: 't1', error: 'exit 2', result: 'Error (exit 2)\nboom\n',
     })]);
 
     expect(census.failures).toHaveLength(1);
@@ -409,10 +409,10 @@ describe('the census over a run', () => {
   });
 });
 
-describe('the classification the `run` tool actually produced reaches the reader', () => {
+describe('the classification the `shell` tool actually produced reaches the reader', () => {
   /**
    * The vertical slice, end to end and with nothing hand-written in the middle:
-   * the real `run` tool computes the refusal, the real payload crosses the ledger
+   * the real `shell` tool computes the refusal, the real payload crosses the ledger
    * in BOTH backend shapes, and the real reader attributes it.
    *
    * Before the classification existed this row was `returned_error` with
@@ -427,7 +427,7 @@ describe('the classification the `run` tool actually produced reaches the reader
     const { rt } = createTestRuntime();
     const logger = createRecordingLogger();
     const tools = buildBuiltinTools({ rt, logger });
-    const run = { execute: toolExecute<{ command: string; runtime: string }, string>(tools.run) };
+    const run = { execute: toolExecute<{ command: string; runtime: string }, string>(tools.shell) };
 
     return { record: await recordInvocation(run.execute({ command: 'pytest -q', runtime })), logger };
   }
@@ -438,7 +438,7 @@ describe('the classification the `run` tool actually produced reaches the reader
     for (const result of [{ error: record.error ?? '' }, record.error]) {
       const failure = classifyToolFailure({ ...record, result: result ?? null });
       expect(failure).toMatchObject({
-        tool: 'run',
+        tool: 'shell',
         reason: 'unavailable',
         // Not the tool declining and not the work failing: the environment was
         // never there. Exactly where an exit 127 lands, for the same reason.
@@ -450,13 +450,13 @@ describe('the classification the `run` tool actually produced reaches the reader
   });
 
   test('the refusal is counted as a runtime gap, not as a broken tool', async () => {
-    const { record } = await refuseEscalation('laptop');
+    const { record } = await refuseEscalation('device');
     const census = censusToolFailures([record]);
     expect({
       refused: census.refused, workFailed: census.workFailed,
       runtimeMissing: census.runtimeMissing, broke: census.broke,
     }).toEqual({ refused: 0, workFailed: 0, runtimeMissing: 1, broke: 0 });
-    expect(census.byKey).toEqual([['run·unavailable', 1]]);
+    expect(census.byKey).toEqual([['shell·unavailable', 1]]);
   });
 
   test('the same decision is logged under a stable dotted event name', async () => {
@@ -464,7 +464,7 @@ describe('the classification the `run` tool actually produced reaches the reader
     // that said something the row did not would be a second source of truth.
     const { logger } = await refuseEscalation('sandbox');
     expect(logger.emitted).toEqual([{
-      event: 'run.escalation_refused',
+      event: 'shell.escalation_refused',
       code: 'unavailable',
       cause: 'runtime_not_provisioned',
       fields: { runtime: 'sandbox' },
@@ -477,12 +477,12 @@ describe('the classification the `run` tool actually produced reaches the reader
     const { rt } = createTestRuntime();
     const logger = createRecordingLogger();
     const tools = buildBuiltinTools({ rt: { ...rt, shell: undefined }, logger });
-    const run = { execute: toolExecute<{ command: string }, string>(tools.run) };
+    const run = { execute: toolExecute<{ command: string }, string>(tools.shell) };
     const record = await recordInvocation(run.execute({ command: 'pytest -q' }));
     expect(classifyToolFailure(record)).toMatchObject({
       reason: 'unsupported', refused: true, workFailed: false, runtimeMissing: false,
     });
-    expect(logger.emitted.map((line) => line.event)).toEqual(['run.shell_absent']);
+    expect(logger.emitted.map((line) => line.event)).toEqual(['shell.shell_absent']);
   });
 });
 
@@ -543,7 +543,7 @@ describe('every error class lands in exactly one part of the census', () => {
 
     for (const code of ERROR_CODES) {
       const census = censusToolFailures([call({
-        name: 'run', toolCallId: `t-${code}`, args: { command: 'pytest -q' },
+        name: 'shell', toolCallId: `t-${code}`, args: { command: 'pytest -q' },
         outcome: { success: false, reason: code }, result: refusalText(new KinuError(code, 'refused: ' + code)),
       })]);
 
@@ -557,7 +557,7 @@ describe('every error class lands in exactly one part of the census', () => {
 
   test('the parts still sum to the failures, over the whole vocabulary at once', () => {
     const census = censusToolFailures(ERROR_CODES.map((code) => call({
-      name: 'run', toolCallId: `t-${code}`, args: { command: 'pytest -q' },
+      name: 'shell', toolCallId: `t-${code}`, args: { command: 'pytest -q' },
       outcome: { success: false, reason: code }, result: refusalText(new KinuError(code, 'refused: ' + code)),
     })));
 
@@ -575,8 +575,8 @@ describe('every error class lands in exactly one part of the census', () => {
 /**
  * THE FIVE EXECUTOR TOOLS, on the payloads they really produce.
  *
- * Read through the real `run` tool wherever `run` can reach the executor, because
- * that is the seam that writes the durable row: `run` calls `provider.tools.exec`,
+ * Read through the real `shell` tool wherever `shell` can reach the executor, because
+ * that is the seam that writes the durable row: `shell` calls `provider.tools.exec`,
  * decides the escalation outcome from `isFailingResultText`, and hands the text on
  * as the tool result the ledger stores.
  *
@@ -592,7 +592,7 @@ describe('each executor tool files its own failure in the right part', () => {
     const router = new DefaultExecutionRouter();
     router.register(provider);
     const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router } });
-    const run = { execute: toolExecute<{ command: string; runtime: string }, string>(tools.run) };
+    const run = { execute: toolExecute<{ command: string; runtime: string }, string>(tools.shell) };
 
     return recordInvocation(run.execute({ command, runtime: provider.name }));
   }
@@ -606,7 +606,7 @@ describe('each executor tool files its own failure in the right part', () => {
     // (cf-backend/src/runtime.ts:509,512) — so this is the deployed shape, not a
     // hypothetical one.
     const census = censusOf(await escalate(createSandboxExecutor()));
-    expect(census.byKey).toEqual([['run·unavailable', 1]]);
+    expect(census.byKey).toEqual([['shell·unavailable', 1]]);
     expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
   });
 
@@ -623,7 +623,7 @@ describe('each executor tool files its own failure in the right part', () => {
         ...sandboxHandleLifecycle,
     })));
 
-    expect(census.byKey).toEqual([['run·unavailable', 1]]);
+    expect(census.byKey).toEqual([['shell·unavailable', 1]]);
     expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
   });
 
@@ -661,7 +661,7 @@ describe('each executor tool files its own failure in the right part', () => {
 
     const census = censusOf(await escalate(createSandboxExecutor(notReady())));
 
-    expect(census.byKey).toEqual([['run·unavailable', 1]]);
+    expect(census.byKey).toEqual([['shell·unavailable', 1]]);
     expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
   });
 
@@ -677,13 +677,13 @@ describe('each executor tool files its own failure in the right part', () => {
         ...sandboxHandleLifecycle,
     })));
 
-    expect(census.byKey).toEqual([['run·io', 1]]);
+    expect(census.byKey).toEqual([['shell·io', 1]]);
     expect(parts(census)).toEqual(onlyPart('broke'));
   });
 
   test('nimbus: an absent binding is a platform gap; a narrow handle is a refusal', async () => {
     const absent = censusOf(await escalate(createNimbusExecutor()));
-    expect(absent.byKey).toEqual([['run·unavailable', 1]]);
+    expect(absent.byKey).toEqual([['shell·unavailable', 1]]);
     expect(parts(absent)).toEqual(onlyPart('runtimeMissing'));
 
     // `unsupported` and therefore `refused`: this deployment's handle has no
@@ -699,10 +699,10 @@ describe('each executor tool files its own failure in the right part', () => {
 
     const refusal = await narrow.tools.runCode.execute('print(1)');
     expect(refusal).toMatchObject({ reason: 'unsupported' });
-    expect(censusOf(call({ name: 'execute_tools', toolCallId: 'handled', result: refusal, outcome: { success: true } })).failures).toEqual([]);
+    expect(censusOf(call({ name: 'eval', toolCallId: 'handled', result: refusal, outcome: { success: true } })).failures).toEqual([]);
   });
 
-  test('laptop: no device attached is a platform gap, not a successful call', async () => {
+  test('device: no device attached is a platform gap, not a successful call', async () => {
     const payload = await escalate(createDeviceTunnelExecutor({
       rpc: async () => { throw new Error('no device connected'); },
       status: () => ({ connected: false, registered: true, toolchain: null }),
@@ -713,7 +713,7 @@ describe('each executor tool files its own failure in the right part', () => {
     // counting nothing at all here.
     expect(payload.outcome).toMatchObject({ success: false, reason: 'unavailable' });
     const census = censusOf(payload);
-    expect(census.byKey).toEqual([['run·unavailable', 1]]);
+    expect(census.byKey).toEqual([['shell·unavailable', 1]]);
     expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
     // And the instruction the user needs survives inside the payload.
     expect(payload.error).toContain('kinu connect');
@@ -735,7 +735,7 @@ describe('each executor tool files its own failure in the right part', () => {
       },
     })));
 
-    expect(census.byKey).toEqual([['run·missing', 1]]);
+    expect(census.byKey).toEqual([['shell·missing', 1]]);
     expect(parts(census)).toEqual(onlyPart('broke'));
   });
 
@@ -766,9 +766,9 @@ describe('each executor tool files its own failure in the right part', () => {
   });
 
   test('workspace: the inline plane refuses with a class its own caller can read', async () => {
-    // `run` never reaches this tool — the workspace branch calls `rt.shell`
+    // `shell` never reaches this tool — the workspace branch calls `rt.shell`
     // directly — so what the classification buys here is the OTHER caller:
-    // LLM-generated code inside `execute_tools`, which can now branch on `reason`
+    // LLM-generated code inside `eval`, which can now branch on `reason`
     // instead of matching prose, and a block reader that can see a failure at all.
     const { rt } = createTestRuntime();
 
@@ -779,7 +779,7 @@ describe('each executor tool files its own failure in the right part', () => {
 
     const payload = await workspace.tools.exec.execute(42);
     expect(payload).toEqual({ reason: 'bad_input', error: 'workspace.exec: command must be a string' });
-    expect(censusOf(call({ name: 'execute_tools', toolCallId: 'handled', result: payload, outcome: { success: true } })).failures).toEqual([]);
+    expect(censusOf(call({ name: 'eval', toolCallId: 'handled', result: payload, outcome: { success: true } })).failures).toEqual([]);
   });
 
   test('workspace: the misevolution gate working is a refusal, not a defect', async () => {
@@ -800,7 +800,7 @@ describe('each executor tool files its own failure in the right part', () => {
     expect(vetoed).toMatchObject({ ok: false, reason: 'denied' });
 
     const census = censusToolFailures([call({
-      name: 'execute_tools', toolCallId: 'tc-1', args: { code: 'workspace.createTool(...)' },
+      name: 'eval', toolCallId: 'tc-1', args: { code: 'workspace.createTool(...)' },
       outcome: { success: true }, result: v.parse(JsonObjectSchema, vetoed),
     })]);
 

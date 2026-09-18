@@ -11,7 +11,7 @@
  *
  * Backend-neutral on purpose. The Durable Object and the CLI answer the same
  * question — "what did this response still owe when the process went away?" —
- * and one state machine over one table is what makes an interrupted laptop turn
+ * and one state machine over one table is what makes an interrupted device turn
  * and an evicted isolate the same problem with the same answer. Two
  * implementations of it drift: a claim-and-sweep on one side against a release
  * at persist time with no recovery at all on the other.
@@ -303,7 +303,7 @@ export class TerminalTransitions {
     try {
       run = await this.ledger.drive(this.sequenceId(transition));
     } catch (err) {
-      // RELEASED, then RE-ARMED. `run` can reject while arming the first wake:
+      // RELEASED, then RE-ARMED. `shell` can reject while arming the first wake:
       // a live process holding the sequence is one every later sweep skips, and
       // rows owed with no wake behind them are rows nothing comes back for.
       this.leave(transition);

@@ -37,7 +37,7 @@ import { createTestActors } from '@kinu.run/test-utils';
 
 function finding(overrides: Partial<RecoveryFinding> = {}): RecoveryFinding {
   return {
-    tool: 'run',
+    tool: 'shell',
     failures: 3,
     failedArgs: '{"command":"npm test"}',
     succeededArgs: '{"command":"bun test"}',
@@ -177,13 +177,13 @@ async function grindThenRecover(orch: AgentOrchestrator): Promise<void> {
 
   for (let attempt = 0; attempt < 3; attempt++) {
     await onToolResult({
-      toolName: 'run', args: { command: 'npm test', attempt }, result: 'Error (exit 1): npm not found',
+      toolName: 'shell', args: { command: 'npm test', attempt }, result: 'Error (exit 1): npm not found',
       success: false, reason: 'io', execution: { exitCode: 1 },
     });
   }
 
   await onToolResult({
-    toolName: 'run', args: { command: 'bun test' }, result: '12 tests passed', success: true,
+    toolName: 'shell', args: { command: 'bun test' }, result: '12 tests passed', success: true,
   });
 }
 
@@ -201,7 +201,7 @@ describe('the loop, through the production seams', () => {
     // Durable at the moment of observation — no turn boundary was crossed.
     const injectable = listRecoveryFindings(rt.storage.sql, rt.actor);
     expect(injectable).toHaveLength(1);
-    expect(injectable[0]).toContain('`run` failed 3x in a row');
+    expect(injectable[0]).toContain('`shell` failed 3x in a row');
     expect(injectable[0]).toContain('npm test');
     expect(injectable[0]).toContain('bun test');
 
@@ -228,8 +228,8 @@ describe('the loop, through the production seams', () => {
     // The turn's run record names the streak for the measurement query.
     const snapshot = orch.recoverySnapshot();
     expect(snapshot?.recoveries).toHaveLength(1);
-    expect(snapshot?.recoveries[0]).toMatchObject({ tool: 'run', failures: 3 });
-    expect(snapshot?.recoveries[0]?.failedSignature).toMatch(/^run/);
+    expect(snapshot?.recoveries[0]).toMatchObject({ tool: 'shell', failures: 3 });
+    expect(snapshot?.recoveries[0]?.failedSignature).toMatch(/^shell/);
   });
 
   test('a finding recorded between two steps reaches the NEXT step\'s request — the episode improves while running', async () => {
@@ -313,7 +313,7 @@ describe('the run event', () => {
 
     closeTurnRun(recorder, 'run-1', {
       turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed',
-      recoveries: { recoveries: [{ tool: 'run', failures: 3, failedSignature: 'run abc' }] },
+      recoveries: { recoveries: [{ tool: 'shell', failures: 3, failedSignature: 'run abc' }] },
     });
     closeTurnRun(recorder, 'run-2', {
       turnIndex: 1, usage: { input: 1, output: 1 }, reason: 'completed',
@@ -324,7 +324,7 @@ describe('the run event', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toEqual({
       runId: 'run-1',
-      input: { type: 'execution_recovery', recoveries: [{ tool: 'run', failures: 3, failedSignature: 'run abc' }] },
+      input: { type: 'execution_recovery', recoveries: [{ tool: 'shell', failures: 3, failedSignature: 'run abc' }] },
     });
   });
 });

@@ -1,6 +1,6 @@
 /**
  * `db` — the workspace's structured data capability, as a program reaches it
- * inside `execute_tools`.
+ * inside `eval`.
  *
  * WHAT THIS IS NOT: a SQL handle. No operation here accepts SQL text, and
  * nothing a program passes is ever concatenated into a statement. Every
@@ -1180,7 +1180,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
  * `CODE_EXECUTION_SECTION` records about `agent.*`: a section is unconditional
  * while a namespace is wired per root and per role, so prose in a section would
  * advertise `db.*` to an actor that does not have it. This block ships exactly
- * when the provider does, through the one `renderExecuteToolsDescription` both
+ * when the provider does, through the one `renderCodemodeDescription` both
  * backends compose.
  */
 const DB_TYPES = `type DbValue = null | boolean | number | string | DbValue[] | { [key: string]: DbValue };

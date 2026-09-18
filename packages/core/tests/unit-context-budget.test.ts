@@ -45,8 +45,8 @@ describe('TurnContextBudget', () => {
     const budget = new TurnContextBudget();
     expect(budget.active).toBe(false);
     budget.admit(120);
-    budget.recordSpill({ producer: 'run', omitted: 900, referenced: true });
-    budget.recordSpill({ producer: 'run', omitted: 100, referenced: false, tightened: true });
+    budget.recordSpill({ producer: 'shell', omitted: 900, referenced: true });
+    budget.recordSpill({ producer: 'shell', omitted: 100, referenced: false, tightened: true });
     budget.recordSpill({ producer: 'pasted_text', omitted: 50, referenced: true });
     budget.noteFollowUp();
 
@@ -54,7 +54,7 @@ describe('TurnContextBudget', () => {
     expect(budget.snapshot()).toEqual({
       admittedChars: 120,
       omittedChars: 1_050,
-      trips: { run: 2, pasted_text: 1 },
+      trips: { shell: 2, pasted_text: 1 },
       referenced: 2,
       tightened: 1,
       followUps: 1,

@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { REAL_CLOCK } from '@kinu.run/core';
 import { jsonSchema, tool } from 'ai';
 import type { ModelMessage } from 'ai';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
@@ -116,7 +117,7 @@ test('hosted polled cancellation refuses a promoted direct effect without a sign
   const model = unusedModel();
 
   const report = await runHeadInference(headInput(), {
-    ...headLoopSeams(rt), model, capture: new HeadCapture(), workspaceLayout: 'private-scratch',
+    ...headLoopSeams(rt), clock: REAL_CLOCK, model, capture: new HeadCapture(), workspaceLayout: 'private-scratch',
     isAborted: () => true, abortReason: () => 'already cancelled',
     tools: { mutate: tool({ inputSchema, execute: async () => ++effects }) },
   });
@@ -169,7 +170,7 @@ for (const program of programs) test(`${program.name} preserves reasoning and ac
   const deltas: Array<{ kind: string; text: string }> = [];
 
   const report = await runHeadInference(headInput(), {
-    ...headLoopSeams(rt), model, tools, capture, workspaceLayout: 'private-scratch', isAborted: () => false,
+    ...headLoopSeams(rt), clock: REAL_CLOCK, model, tools, capture, workspaceLayout: 'private-scratch', isAborted: () => false,
     reportMessages: produced => { messages.push(...produced); },
     reportDelta: (kind, text) => { deltas.push({ kind, text }); },
   });
@@ -247,7 +248,7 @@ test('a custom model call preserves completed tool messages when its next reques
   } });
 
   const running = runHeadInference(headInput(), {
-    ...headLoopSeams(rt), model, capture: new HeadCapture(), workspaceLayout: 'private-scratch',
+    ...headLoopSeams(rt), clock: REAL_CLOCK, model, capture: new HeadCapture(), workspaceLayout: 'private-scratch',
     signal: abort.signal, isAborted: () => abort.signal.aborted,
     tools: { probe: tool({ inputSchema, execute: async () => value }) },
     reportMessages: produced => { messages.push(...produced); },

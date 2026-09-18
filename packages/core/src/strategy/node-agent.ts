@@ -45,6 +45,7 @@
  * else does.
  */
 
+import { REAL_CLOCK, type Clock } from '../types/clock';
 import { jsonSchema, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { HEAD_BUILTIN_TOOLS } from '../heads/types';
 import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../heads/head-inference';
@@ -256,6 +257,8 @@ export interface NodeAgentDeps {
   journal: HeadJournal;
   logger: Logger;
   signal?: AbortSignal;
+  /** The clock a node's wall time is measured on; see HeadInferenceDeps.clock. */
+  clock?: Clock;
   reportModelCall?: ModelCallSink;
   publishHeadStream?: PublishHeadStream;
   mission?: MissionScope;
@@ -276,9 +279,9 @@ export interface NodeAgentDeps {
    * instead reports `shared-origin-plane`.
    */
   runtimeForWorkspace?: ((workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>) | null;
-  /** Backend-built `execute_tools`; absent on a runtime that wired none, and then
+  /** Backend-built `eval`; absent on a runtime that wired none, and then
    *  the tool is absent too rather than broken. */
-  executeTool?: unknown;
+  codemodeTool?: unknown;
   webSearch?: WebSearchProvider;
   /** The report contract's gate; see {@link NodeLoopDeps.gradeReport}. */
   gradeReport?: (candidate: string) => Promise<string | null>;
@@ -351,6 +354,7 @@ export interface NodeLoopDeps {
   model: LanguageModel;
   logger: Logger;
   signal?: AbortSignal;
+  clock: Clock;
   mission?: MissionScope;
   /** Where each finished step lands WHILE the node still runs. */
   reportStep?: (seq: number, step: HeadStep) => Promise<void> | void;
@@ -359,7 +363,7 @@ export interface NodeLoopDeps {
   reportDelta?: ReportHeadDelta;
   /** The search's arbiter, or null when no branch could be granted. */
   arbitrate: NodeArbiter | null;
-  executeTool?: unknown;
+  codemodeTool?: unknown;
   webSearch?: WebSearchProvider;
   /**
    * THE REPORT CONTRACT'S GATE: run the objective's instrument over what the node is
@@ -579,7 +583,7 @@ function buildNodeToolSet(input: {
     report,
     webSearch: deps.webSearch,
     admitted: NODE_BUILTIN_TOOLS,
-    executeTool: deps.executeTool,
+    codemodeTool: deps.codemodeTool,
     post: input.arbitrate ? buildProposeTool(input.arbitrate, scratch) : undefined,
     wrapFinished: (finished) => withHeadCaptureRecording(
       wrapToolsForBackground(finished, {
@@ -769,6 +773,7 @@ async function runNodeLoop(
     runId: deps.runId,
     profile: deps.profile,
     dynamic: deps.dynamic,
+    clock: deps.clock,
     model: deps.model,
     tools,
     // The layout the node is TOLD matches the boundary it actually got, and the
@@ -1034,6 +1039,9 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
     dynamic: seat.dynamic,
     model: deps.model,
     logger: deps.logger,
+    // Real time unless the run handed a clock (D19); the node's ledger row
+    // carries whichever it was measured on.
+    clock: deps.clock ?? REAL_CLOCK,
     arbitrate: input.arbitrate,
     reportStep: (seq, step) => { deps.journal.appendStep(input.nodeId, seq, step); },
   };
@@ -1051,7 +1059,7 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
 
   if (deps.mission !== undefined) loop.mission = deps.mission;
 
-  if (deps.executeTool !== undefined) loop.executeTool = deps.executeTool;
+  if (deps.codemodeTool !== undefined) loop.codemodeTool = deps.codemodeTool;
 
   if (deps.webSearch !== undefined) loop.webSearch = deps.webSearch;
 

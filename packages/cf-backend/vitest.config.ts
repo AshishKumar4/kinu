@@ -187,6 +187,15 @@ const slateDurabilityProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
+const publicSurfaceProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/public-surface-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/public-surface-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
 let forbiddenEgressHits = 0;
 
 export default defineConfig({
@@ -202,7 +211,7 @@ export default defineConfig({
         // registers these under; miniflare spells the same thing `useSQLite`.
         // Without it `ctx.storage.sql` throws and the init-gate read would
         // measure an error path instead of the gate.
-        // The dynamic-Worker loader `execute_tools` runs programs through
+        // The dynamic-Worker loader `eval` runs programs through
         // (`wrangler.jsonc` `worker_loaders`), so the sandbox test below runs
         // the real @cloudflare/codemode executor over the real module graph.
         workerLoaders: { LOADER: {} },
@@ -373,7 +382,52 @@ export default defineConfig({
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
+        }, {
+          // The production Worker entry, reached from the runner over the
+          // `PUBLIC_SURFACE` service binding below: `public-surface.test.ts`
+          // drives `route()` itself — the REST create, the chat socket, the
+          // transcript read — so the door the product is used through runs under
+          // workerd rather than only against a deployment.
+          //
+          // Same model seam as two-turn-probe, and the flag for the same reason:
+          // the direct Workers AI adapter hands `request.signal` to
+          // `binding.run`, which workerd marshals only under
+          // `enable_abortsignal_rpc`.
+          name: 'public-surface-probe',
+          compatibilityDate: workerCompatibility.compatibilityDate,
+          compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
+          workerLoaders: { LOADER: {} },
+          modules: publicSurfaceProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          // `DEV_USER_EMAIL` is what makes `env.AI` the development inference
+          // plane AND what the loopback identity is synthesized from; the
+          // encryption key is the owner capability `ownerCaller` derives.
+          bindings: { DEV_USER_EMAIL: 'probe@local', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'FakeAI' } },
+          // The turn's model plane, and the same handler the two-turn probe
+          // uses: compat requests fall back to the global fetch, which this
+          // worker's outboundService routes to the Node-side fake. Unmatched
+          // hosts throw there, so nothing in a public-surface turn reaches a
+          // network unnamed.
+          outboundService: probeOutbound,
+          durableObjects: {
+            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+            UserDO: { className: 'UserDO', useSQLite: true },
+          },
         }],
+        // The runner's door to the production route table. A miniflare service
+        // binding carries a WebSocket upgrade — measured 2026-09-16: 101 with a
+        // live `response.webSocket` and a round-trip frame — which is what lets
+        // the test speak the product's chat protocol in-pool rather than
+        // re-entering through a Durable Object stub.
+        serviceBindings: {
+          PUBLIC_SURFACE: { name: 'public-surface-probe' },
+          // The model fake's captured log is one Node-side module shared by
+          // every worker bound to it; this is how the test hands it back empty.
+          SURFACE_CONTROL: { name: 'public-surface-probe', entrypoint: 'SurfaceControl' },
+        },
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
           NEIGHBOUR: { className: 'NeighbourDO', useSQLite: true },
@@ -412,6 +466,10 @@ export default defineConfig({
   ],
   test: {
     include: ['tests/workerd/**/*.test.ts'],
+    // Asserts the pool actually started, rather than trusting a green run to
+    // mean workerd. Adopted from the owner's cloudflare-os
+    // (`test-setup/assert-workerd.ts`); the file states what it measured.
+    setupFiles: ['./tests/workerd/assert-workerd.ts'],
     // These tests measure gates and cancellation windows in wall time. Vitest's
     // default per-file parallelism would have two of them contend for the same
     // runtime and turn a latency assertion into a flake.
@@ -420,7 +478,41 @@ export default defineConfig({
     // the runtime's own terminal signal, and a hang is killed by the deploy
     // ladder at the gate's deadline, which names the gate. `0` is Vitest's
     // documented disabled-timeout value; `gate:test-clocks` pins it.
+    //
+    // THE COLD START `0` IS CHOSEN AGAINST, measured on this tree 2026-09-16
+    // (vitest 4.1.11, single-file runs, warm module cache, this box): the FIRST
+    // test in a file pays the pool boot and the bundle's instantiation inside
+    // its own body — 12,603 ms in `do-alarm.test.ts`, 7,408 ms in
+    // `do-transaction.test.ts` — while a steady-state test in the same file
+    // costs 3 ms, and a trivial file still spends ~13 s in vitest's `import`
+    // phase plus ~4.5 s transforming and ~3.7 s building the probe bundles this
+    // config compiles. Vitest's default 5,000 ms would fail the first test of
+    // both files here, so any finite clock is a bet on the runner's load.
     testTimeout: 0,
     hookTimeout: 0,
+    // The rejections this layer's probes raise ON PURPOSE, each with its reason,
+    // and nothing else: an unhandled error no line here names stays fatal.
+    //
+    // WHICH CHANNEL CARRIES THEM, measured 2026-09-16 on this tree: a rejection
+    // nobody awaits in the TEST isolate reaches this hook and fails the run even
+    // when every test passed (scratch-proved), while a rejection raised inside a
+    // Durable Object — both entries below — is printed by workerd as
+    // `uncaught exception; source = Uncaught (in promise)` and does not reach
+    // this hook yet. The entries are written against the message anyway, because
+    // the POOL decides which channel carries a DO-side rejection: the owner's
+    // cloudflare-os pool routes them here, and one pool upgrade would otherwise
+    // turn two deliberate probe arms into a red layer.
+    onUnhandledError(error) {
+      // `AlarmDO.alarm` rethrows so the RUNTIME owns redelivery, which is the
+      // subject `do-alarm.test.ts` asserts; nothing awaits that delivery
+      // (worker.ts:503-506).
+      if (error.message.includes('alarm-body-failed')) return false;
+
+      // `TransactionDO` fails the roster write after the event row landed —
+      // the rollback `do-transaction.test.ts` asserts — and its async-body arm
+      // throws after `transactionSync` already committed, so that promise has
+      // no owner left (worker.ts:258, :289).
+      if (error.message.includes('unknown subordinate "relay"')) return false;
+    },
   },
 });

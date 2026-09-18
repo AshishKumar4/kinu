@@ -1143,7 +1143,7 @@ export class KinuPublicSession {
    * rather than reduced to stdout: a refusal arrives as `{error}` or as a
    * classified payload on the stdout channel, and which one it is is the finding
    * a device case reads. `device` is the fleet member the call names — the
-   * same third argument the RPC carries for the laptop executor, left absent
+   * same third argument the RPC carries for the device executor, left absent
    * rather than defaulted so an unnamed call keeps its own answer.
    */
   async execute(executor: string, command: string, device?: string): Promise<PublicExecutorResult> {
@@ -1232,7 +1232,7 @@ export class KinuPublicSession {
    * The workspace's background jobs, as the Work tab's Supervise pane reads
    *   them — `listBackgroundJobs`, the `@callable` the pane's own rpc is bound
    *   to (pages/SupervisePage.tsx:240). This is how a harness asks what a
-   *   detached tool call became: `run`/`execute_tools` calls that outrun the
+   *   detached tool call became: `shell`/`eval` calls that outrun the
    *   foreground window answer a `{jobId}` handle and settle out of turn, so
    *   their result is reachable only through this row — never in the run
    *   events of the prompt that issued them.

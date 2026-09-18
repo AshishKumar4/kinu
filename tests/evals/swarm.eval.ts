@@ -481,7 +481,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     }
 
     // PROVISIONED THROUGH THE SEAM. Birth, `initWorkspaceSchema`, `openWorkspaceCLI`
-    // with `hostRoot: null`, the executor-surface and sandbox guards and
+    // with no directory bound, the executor-surface and sandbox guards and
     // `installPreTurnProfile` were all spelled out here, and identically in three
     // sibling suites — so a step learned in one place had to be remembered in four.
     // `provisionLocalTarget` is that sequence, once. Nothing about what this suite

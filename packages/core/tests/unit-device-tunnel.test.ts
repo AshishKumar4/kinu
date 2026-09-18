@@ -4,9 +4,10 @@ import * as v from 'valibot';
 import {
   DeviceTunnel, TUNNEL_DISCONNECTED, DEVICE_UNRESPONSIVE, DEVICE_DUPLICATE_REQUEST,
   DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
-  nextDeviceRequestId, type TunnelSocket, type TunnelTimers,
+  nextDeviceRequestId, type TunnelSocket,
 } from '../src/execution/device-tunnel';
 import { JsonValueSchema } from '../src/utils/json';
+import { handClock } from '@kinu.run/test-utils';
 
 const SentFrameSchema = v.object({
   id: v.string(),
@@ -16,45 +17,6 @@ const SentFrameSchema = v.object({
 });
 
 type SentFrame = v.InferOutput<typeof SentFrameSchema>;
-
-/** The tunnel's clock, advanced by hand (D19): every deadline and probe the
- *  tunnel arms fires when the test steps past it, so a test states which
- *  timer fires and never sleeps beside a real one. */
-function handTimers(): TunnelTimers & { advance(ms: number): void } {
-  interface Armed { readonly at: number; readonly every: number | null; readonly fire: () => void }
-
-  let now = 0;
-  const armed = new Set<Armed>();
-
-  const arm = (fire: () => void, ms: number, every: number | null): (() => void) => {
-    const entry: Armed = { at: now + ms, every, fire };
-    armed.add(entry);
-
-    return () => { armed.delete(entry); };
-  };
-
-  return {
-    after: (fire, ms) => arm(fire, ms, null),
-    every: (fire, ms) => arm(fire, ms, ms),
-    now: () => now,
-    advance: (ms) => {
-      const until = now + ms;
-
-      for (;;) {
-        const next = [...armed].filter((entry) => entry.at <= until).sort((a, b) => a.at - b.at)[0];
-
-        if (next === undefined) break;
-        now = next.at;
-        armed.delete(next);
-
-        if (next.every !== null) armed.add({ ...next, at: next.at + next.every });
-        next.fire();
-      }
-
-      now = until;
-    },
-  };
-}
 
 /** A fake socket that records sent frames and lets the test inject responses. */
 function fakeSocket(open = true) {
@@ -158,12 +120,12 @@ describe('DeviceTunnel', () => {
   });
 
   // Liveness and the work budget are separate deadlines, and these pin them
-  // apart. ONE 30s deadline on every call fails a laptop build or test suite as
+  // apart. ONE 30s deadline on every call fails a device build or test suite as
   // "device RPC timeout" — a message indistinguishable from a dead device.
   describe('work budget vs liveness', () => {
     test('a call with no deadline outlives the control timeout', async () => {
       const sock = fakeSocket();
-      const timers = handTimers();
+      const timers = handClock();
       const t = new DeviceTunnel(sock, 10, 1_000, timers);
       const p = t.rpc('exec', ['make -j8'], { timeoutMs: 0 });
       timers.advance(40);
@@ -194,7 +156,7 @@ describe('DeviceTunnel', () => {
 
     test('a device that keeps speaking keeps its open-ended call alive', async () => {
       const sock = fakeSocket();
-      const timers = handTimers();
+      const timers = handClock();
       const t = new DeviceTunnel(sock, 1_000, 15, timers);
       const p = t.rpc('exec', ['pytest -x'], { timeoutMs: 0 });
       let settled = false;
@@ -231,7 +193,7 @@ describe('DeviceTunnel', () => {
 
     test('the heartbeat stops once no open-ended call is left', async () => {
       const sock = fakeSocket();
-      const timers = handTimers();
+      const timers = handClock();
       const t = new DeviceTunnel(sock, 1_000, 10, timers);
       const p = t.rpc('exec', ['true'], { timeoutMs: 0 });
       t.handleMessage(JSON.stringify({ id: sock.sent[0].id, result: 'ok' }));

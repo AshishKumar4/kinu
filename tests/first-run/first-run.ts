@@ -255,7 +255,7 @@ export const FIRST_RUN_DEFECTS = {
       + 'text the turn was started with, so every check but `no-agents-call` missed. '
       + 'One check per tool, each off durable state: `sees-every-tool` reds when the '
       + 'prompt hides a root tool; `file-wrote` when `file` writes nothing or the wrong bytes; '
-      + '`run-ran` when `run` errors or drops stdout; `execute-tools-ran` when codemode cannot '
+      + '`shell-ran` when `shell` errors or drops stdout; `codemode-tool-ran` when codemode cannot '
       + 'return a string; `memory-saved-and-found` when a save or the search that should find it '
       + 'errors or comes back empty; `tasks-written` when `tasks` refuses an add; `web-fetched` '
       + 'when `web` cannot reach the health route; `every-tool-answered` names any call that '

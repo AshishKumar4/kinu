@@ -80,7 +80,7 @@ export const CHECKOUT_MESSAGES: UIMessage[] = [
     parts: [
       { type: 'text', text: 'Fixed the SAVE20 coupon 500 — migration 0042 patched, 14 tests green.' },
       { type: 'tool-run', toolCallId: 'landing-run', state: 'output-available', input: { runtime: 'sandbox', command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: 'HTTP 500' },
-      { type: 'tool-execute_tools', toolCallId: 'landing-query', state: 'output-available', input: { code: '// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons`;\nreturn rows;' }, output: '[{"code":"SAVE20","kind":null,"value":20}]' },
+      { type: 'tool-eval', toolCallId: 'landing-query', state: 'output-available', input: { code: '// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons`;\nreturn rows;' }, output: '[{"code":"SAVE20","kind":null,"value":20}]' },
       { type: 'tool-file', toolCallId: 'landing-read', state: 'output-available', input: { action: 'read', path: 'packages/checkout/migrations/0042_coupon_kind.sql' }, output: '…' },
       { type: 'tool-file', toolCallId: 'landing-edit', state: 'output-error', input: { action: 'edit', path: 'packages/checkout/migrations/0042_coupon_kind.sql', edits: [{}, {}] }, errorText: 'old_text not found or not unique' },
       { type: 'tool-file', toolCallId: 'landing-reread', state: 'output-available', input: { action: 'read', path: 'packages/checkout/migrations/0042_coupon_kind.sql' }, output: '…' },
@@ -115,8 +115,8 @@ const CHECKOUT_CHANGELOG = {
 };
 
 const CHECKOUT_JOBS: BackgroundJob[] = [
-  { id: 'bgjob-7c1e4a92', kind: 'execute_tools', label: 'bun test packages/checkout', workMode: 'build', status: 'running', result: null, error: null, createdAt: NOW - 9e5, settledAt: null },
-  { id: 'bgjob-9d3c6e11', kind: 'run', label: 'bun test packages/checkout --filter coupon', workMode: 'build', status: 'failed', result: null, error: 'exit 1: 2 failed — percentage coupons still read kind:null', createdAt: NOW - 61e5, settledAt: NOW - 58e5 },
+  { id: 'bgjob-7c1e4a92', kind: 'eval', label: 'bun test packages/checkout', workMode: 'build', status: 'running', result: null, error: null, createdAt: NOW - 9e5, settledAt: null },
+  { id: 'bgjob-9d3c6e11', kind: 'shell', label: 'bun test packages/checkout --filter coupon', workMode: 'build', status: 'failed', result: null, error: 'exit 1: 2 failed — percentage coupons still read kind:null', createdAt: NOW - 61e5, settledAt: NOW - 58e5 },
 ];
 
 // The queue holds what only the owner can decide: the mission said "deploy
@@ -165,7 +165,7 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
       jobs = method === 'retryBackgroundJob'
         ? [
           ...jobs.map((job) => (job.id === id ? { ...job, retriedBy: retryId } : job)),
-          { id: retryId, kind: 'run', label: 'wrangler deploy --env staging --dry-run', workMode: 'build', status: 'running', result: null, error: null, createdAt: Date.now(), settledAt: null },
+          { id: retryId, kind: 'shell', label: 'wrangler deploy --env staging --dry-run', workMode: 'build', status: 'running', result: null, error: null, createdAt: Date.now(), settledAt: null },
         ]
         : jobs.filter((job) => job.id !== id);
       pending = pending.filter((action) => action.id !== id);
@@ -371,7 +371,7 @@ export const SLATE_MESSAGES: UIMessage[] = [
       { type: 'tool-file', toolCallId: 'landing-slate-manifest', state: 'output-available', input: { action: 'write', path: '/home/user/slates/support-queue/package.json' }, output: 'ok' },
       { type: 'tool-file', toolCallId: 'landing-slate-server', state: 'output-available', input: { action: 'write', path: '/home/user/slates/support-queue/server.ts' }, output: 'ok' },
       { type: 'tool-file', toolCallId: 'landing-slate-client', state: 'output-available', input: { action: 'write', path: '/home/user/slates/support-queue/client.tsx' }, output: 'ok' },
-      { type: 'tool-execute_tools', toolCallId: 'landing-slate-preview', state: 'output-available', input: { code: "// Boot the preview and hand back its URL\nconst preview = await workspace.slate({ op: 'preview', id: 'support-queue' });\nreturn preview;" }, output: JSON.stringify({ ok: true, value: { url: SLATE_PREVIEW_URL, port: 8789 } }) },
+      { type: 'tool-eval', toolCallId: 'landing-slate-preview', state: 'output-available', input: { code: "// Boot the preview and hand back its URL\nconst preview = await workspace.slate({ op: 'preview', id: 'support-queue' });\nreturn preview;" }, output: JSON.stringify({ ok: true, value: { url: SLATE_PREVIEW_URL, port: 8789 } }) },
       { type: 'text', text: 'The dashboard is open in the Support queue tab. It reads issues through the ISSUES binding, which only reaches `list_issues` on your GitHub connection.' },
     ],
   },

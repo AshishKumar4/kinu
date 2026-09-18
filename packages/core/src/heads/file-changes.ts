@@ -17,7 +17,7 @@
  * What it therefore covers, and what it does not: every write and delete a head
  * makes through the workspace VFS — `workspace.writeFile` and the `file` tool.
  * It does NOT cover files changed by a shell command the head ran
- * (`workspace.exec 'sed -i …'`, `run laptop …`): that plane reports an exit code,
+ * (`workspace.exec 'sed -i …'`, `run device …`): that plane reports an exit code,
  * not a file list, and recovering one would mean diffing a directory siblings
  * are writing to at the same time — the smear this design exists to avoid. Those
  * changes are real, and they are left unattributed rather than attributed to a

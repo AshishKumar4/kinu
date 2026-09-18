@@ -85,7 +85,7 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
     const headless = (): CompletedTurn => makeTurn({
       hadError: true,
       turnId: 'msg-err',
-      toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: 'exit 1' }],
+      toolCalls: [{ name: 'shell', args: { command: 'bun test' }, result: 'exit 1' }],
     });
 
     const inline = workspace();

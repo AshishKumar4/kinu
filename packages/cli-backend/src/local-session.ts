@@ -100,7 +100,7 @@ import { TierIdSchema,
   AdvisorRecoverySnapshotSchema,
   ADVISOR_LANE_FIBER, advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn,
   advisorWorkspaceGuidance,
-  createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_WEB_SCHEDULE, type WebSearchProvider,
+  createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_CLOCK, type WebSearchProvider,
   createAgentsCodemodeProvider, createReleaseCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
@@ -183,7 +183,7 @@ import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRu
 import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, localActorMission } from './actor-identity';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
-import { createNodeExecuteToolFactory } from './execute-tools-factory';
+import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps, type HostedHeadSeat } from './head-runtime';
 import { detectOrphanedFibers, type OrphanedFiber } from '@kinu.run/core';
 import { connectMcpServers, type McpServerConfig } from './mcp';
@@ -1200,7 +1200,7 @@ export class LocalAgentSession implements BackendHost {
    *  one, 'strict' parks gate hits in the durable owner queue.
    *  Wired straight onto `rt.setShellApprovalChannel` — the SAME channel
    *  `rt.shell` and every `rt.executionRouter` provider consult, so an
-   *  approval answers `run` and every registered codemode executor's `exec()`
+   *  approval answers `shell` and every registered codemode executor's `exec()`
    *  call identically. Returns a disposer so
    *  a surface can detach on disconnect. */
   setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void {
@@ -1235,7 +1235,7 @@ export class LocalAgentSession implements BackendHost {
    * were asked about (safety/approval-gate.ts's ApprovalGrant), which is what
    * the button says it does. NEVER a whole-agent `allow_all`: one click on one
    * `sudo` prompt would then run every gated command everywhere, on the owner's
-   * laptop included, unasked for the rest of the session. Revocable from the
+   * device included, unasked for the rest of the session. Revocable from the
    * same config plane that reads it.
    */
   private wrapShellApprovalHandler(handler: ShellApprovalHandler): RequestShellApproval {
@@ -1484,7 +1484,7 @@ export class LocalAgentSession implements BackendHost {
     return { executor: this.rt.executor, explorer: this.rt.llm };
   }
 
-  /** The codemode namespaces a head's execute_tools gets beyond its runtime's
+  /** The codemode namespaces a head's eval gets beyond its runtime's
    *  own executors: `web.*`. Pointedly NOT `agents.*`/`agent.*` — a head forks
    *  its parent's resources, never its authority to delegate. */
   private headCodemodeExtras(): CodemodeProvider[] {
@@ -1882,7 +1882,7 @@ export class LocalAgentSession implements BackendHost {
    * so a backlog is not this session's first turn's latency.
    *
    * LAST, the terminal suffix a previous turn was interrupted inside. This is
-   * the whole of the CLI's terminal recovery — a laptop has no alarm, so the
+   * the whole of the CLI's terminal recovery — a device has no alarm, so the
    * next start IS the wake — and it runs last because replaying an owed suffix
    * can enqueue turns and drain events, and both read state the two sweeps
    * above have just corrected. It runs UNDER THE DRIVER LEASE, for the reason
@@ -2480,7 +2480,7 @@ export class LocalAgentSession implements BackendHost {
   // moment: the alternate-takes claim, the branch settlements, the completion
   // gate, the evolution recording, the reactor drain, the advisor lane, the
   // shadow trial and the auto title. Run as straight-line code with the turn
-  // claims released as soon as the transcript is on disk, a laptop killed
+  // claims released as soon as the transcript is on disk, a device killed
   // anywhere inside that sequence loses the whole suffix with nothing to say
   // what had already happened.
   //
@@ -2869,7 +2869,7 @@ export class LocalAgentSession implements BackendHost {
   /**
    * The wake for an owed effect: the next start, AND a timer inside this process.
    *
-   * The next start is the durable half, and it is the only half a laptop can
+   * The next start is the durable half, and it is the only half a device can
    * promise — `recoverTerminalTransitions()` sweeps every owed sequence before
    * this workspace takes new work, and the local scheduler daemon opens the
    * workspace unattended, so an idle machine converges.
@@ -3277,7 +3277,7 @@ export class LocalAgentSession implements BackendHost {
 
     const options: Parameters<typeof createDefaultWebSearchProvider>[0] = {
       fetch: globalThis.fetch,
-      schedule: REAL_WEB_SCHEDULE,
+      clock: REAL_CLOCK,
     };
 
     if (getAuth) options.getAuth = getAuth;
@@ -4031,7 +4031,7 @@ export class LocalAgentSession implements BackendHost {
       // `agents.*` — the delegation tool projected into the sandbox, over
       // the same deps the top-level tool holds. Locally that is fork only.
       createAgentsCodemodeProvider(() => this.agentsToolDeps(mode)),
-      // `state.*` — the provider the shared execute_tools description promises.
+      // `state.*` — the provider the shared eval description promises.
       // Absent, a CLI program calling `state.set` answered a bare ReferenceError;
       // the hosted backend already binds this same provider over the same SQL.
       createStateCodemodeProvider(this.rt.actor.programState),
@@ -4313,7 +4313,7 @@ export class LocalAgentSession implements BackendHost {
       escalations: this.actorSession.orchestrator.acc.escalations,
       craftedToolExecute: createNodeCraftedExecute(),
       vectorStore: null,
-      executeTools: (surface) => {
+      codemode: (surface) => {
         // Narrowed by the SAME set the native surface is narrowed by, so a role
         // cannot lose a tool natively and keep it through the sandbox — as a
         // `tools.<name>` binding or as a namespace. An unresolved profile
@@ -4326,7 +4326,7 @@ export class LocalAgentSession implements BackendHost {
           if (narrowing.allowsTool(name)) native[name] = entry;
         }
 
-        return createNodeExecuteToolFactory({
+        return createNodeCodemodeToolFactory({
           extraProviders: narrowing.narrowProviders(this.codemodeProviders(mode)),
         })({ ...surface, native });
       },

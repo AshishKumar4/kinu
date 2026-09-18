@@ -67,6 +67,7 @@ import * as v from 'valibot';
 import {
   SleepTimeUpdateSchema,
   parseWorkspaceTitle,
+  hostedActorSocketPath, JsonValueSchema,
 } from '@kinu.run/core';
 import {
   createCompositeLogger,
@@ -161,21 +162,21 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     });
   }
 
-  /** The `run` tool, for the wake proof: the command sleeps past the detach
+  /** The `shell` tool, for the wake proof: the command sleeps past the detach
    *  window and prints the marker — no container, the same wrap. Only the
    *  execute is the probe's; the schema, the wrap and the runner are the
    *  product's, which is what the detach and the settle are proven on. */
   protected override getRawToolsForWorkMode(mode: WorkMode, claimScope?: string): ToolSet {
     this.installSettleHold();
     const tools = super.getRawToolsForWorkMode(mode, claimScope);
-    const run = tools.run;
+    const shell = tools.shell;
 
-    if (run === undefined) return tools;
+    if (shell === undefined) return tools;
 
     return {
       ...tools,
-      run: {
-        ...run,
+      shell: {
+        ...shell,
         execute: async () => {
           await new Promise<void>((resolve) => setTimeout(resolve, WAKE_RUN_SLEEP_MS));
 
@@ -332,25 +333,14 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    *  re-pends the stale leases (the unbindStale half), then the reactor drains
    *  whatever is pending — the two halves the platform alarm runs in order.
    *  The drain's model call lands async after admission, so the wake joins on
-   *  the buffered event's marker reaching the wire log before returning. */
+   *  the buffered event's marker reaching the wire log before returning: the
+   *  fake parks `/log/until` until the call carrying the marker is recorded.
+   *  A wake that never re-delivers hangs here, ended and named by the row's
+   *  deadline. */
   async runEventWake(marker: string): Promise<void> {
     await this.owedDeliveryWork();
     await this.orch.drainPendingEvents({ rethrow: true });
-
-    const began = Date.now();
-
-    for (;;) {
-      // SAFETY: the `/log` handler returns `{ calls: [...log] }` — the same
-      // owner-guaranteed shape `httpCalls` parses against the shared schema.
-      const calls = v.parse(v.array(HttpCallSchema),
-        (await (await fetch('http://probe-control.invalid/log')).json() as { calls: unknown }).calls);
-
-      if (calls.some((call) => call.conversation.some((m) => m.content.includes(marker)))) return;
-
-      if (Date.now() - began > 20000) throw new Error(`the wake never re-delivered the buffered event ${marker}`);
-
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
-    }
+    await fetch(`http://probe-control.invalid/log/until?marker=${encodeURIComponent(marker)}`);
   }
 }
 
@@ -497,7 +487,8 @@ export class FakeAI extends WorkerEntrypoint {
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'>
+  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
+  | 'createSubordinateAgent'>
   & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'>;
 
 /** How long the wake proof's command sleeps: past the interactive detach
@@ -513,32 +504,12 @@ type SocketHistory = v.InferOutput<typeof SocketHistorySchema>;
  *  which excludes this file for importing production `src` (see the
  *  `//exclude` note in this directory's tsconfig). */
 
-/** Bounded join on the product's own completion evidence: one
- *  `memory.facts_compressed` per settled sleep-time effect. Throws naming the
- *  missing evidence rather than hanging the suite. */
-async function awaitFactsCompressed(
-  recording: RecordingLogger,
-  count: number,
-): Promise<void> {
-  const started = Date.now();
-
-  for (;;) {
-    const seen = recording.emitted.filter((e) => e.event === 'memory.facts_compressed').length;
-
-    if (seen >= count) return;
-
-    if (Date.now() - started > 20000) {
-      throw new Error(
-        `two-turn probe: ${String(count)} facts_compressed events never arrived `
-        + `(saw ${String(seen)}); the terminal close did not finish`,
-      );
-    }
-
-    const tick = Promise.withResolvers<void>();
-
-    setTimeout(tick.resolve, 50);
-    await tick.promise;
-  }
+/** Join on the product's own completion evidence: one
+ *  `memory.facts_compressed` per settled sleep-time effect, awaited on the
+ *  recording sink's own delivery. A close that never finishes hangs here,
+ *  ended and named by the row's deadline rather than by a clock beside it. */
+function awaitFactsCompressed(recording: RecordingLogger, count: number): Promise<void> {
+  return recording.until((emitted) => emitted.filter((e) => e.event === 'memory.facts_compressed').length >= count);
 }
 
 /** A bounded wait on one promise, naming what did not arrive. */
@@ -581,13 +552,13 @@ async function awaitQuiet(recording: RecordingLogger): Promise<void> {
 
 
 export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
-  /** Spike 1: does an AbortSignal cross the service binding into `run`?
+  /** Spike 1: does an AbortSignal cross the service binding into `shell`?
    *  Returns the kind FakeAI recorded, or the throw's message — the caller
    *  cannot distinguish "no signal" from a serialization failure otherwise. */
   async signalProbe(): Promise<{ signalKind: string } | { threw: string }> {
     try {
       // SAFETY: the vitest config declares `env.AI` as this worker's service
-      // binding to `FakeAI`, whose entrypoint contract provides `run` — the
+      // binding to `FakeAI`, whose entrypoint contract provides `shell` — the
       // member AIRunner names and the only member the adapter calls.
       const binding: AIRunner | undefined = this.env.AI as AIRunner | undefined;
       const controller = new AbortController();
@@ -966,7 +937,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       // closed with a reply.
       for (;;) {
         const rows = await target.wakeRows();
-        const woken = rows.runs.filter((run) => run.userMessage.includes('Background run job'));
+        const woken = rows.runs.filter((run) => run.userMessage.includes('Background shell job'));
 
         if (woken.length > 0 && woken.every((run) => run.reason !== null)) {
           const calls = await this.httpCalls();
@@ -1602,6 +1573,67 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     await fresh.workspaceTitle();
 
     return { receipt, alive: true };
+  }
+
+  /**
+   * THE AGENT TAB, as the browser opens one: the workspace mints a hired
+   * actor the way the tab strip's "+" does (`createSubordinateAgent`), then a
+   * socket is opened on that actor's OWN chat path and the two reads the tab
+   * makes on mount are asked over it — `getActorSnapshot` and
+   * `listAgentTasks`.
+   *
+   * The path is the point. On build cba44dcb9 the client built
+   * a facet hop instead (the Agents SDK's `sub` option), which this transport
+   * refuses, so the socket never opened and both reads timed out at the SDK's
+   * 30 s backstop. Here the request goes to the object exactly as the edge
+   * hands it over, and the answers are the proof.
+   */
+  async hostedActorTab(): Promise<{ name: string; snapshot: string; tasks: string; frames: number }> {
+    const { target, workspace } = await this.claimQueueWorkspace('twin');
+    const created = v.parse(v.object({ name: v.string() }), await target.createSubordinateAgent());
+    const path = `https://probe/agents/orchestrator-agent/${workspace}/${hostedActorSocketPath(created.name)}`;
+    const response = await target.fetch(new Request(path, { headers: { Upgrade: 'websocket' } }));
+    const socket = response.webSocket;
+
+    if (response.status !== 101 || socket === null) throw new Error(`the hosted actor path answered ${String(response.status)}, not a socket`);
+    socket.accept();
+    // The answers are carried back as their JSON text: a stub return of the
+    // recursive JsonValue type is a type the compiler cannot instantiate
+    // through the RPC boundary, and the reads under test are what the frames
+    // say, which the text holds exactly.
+    const answers = new Map<string, string>();
+    const arrived = Promise.withResolvers<void>();
+    let frames = 0;
+
+    socket.addEventListener('message', (event) => {
+      frames += 1;
+      const raw = v.is(v.string(), event.data) ? event.data : '';
+
+      const frame = v.safeParse(v.looseObject({ type: v.string(), id: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.string()) }),
+        raw.startsWith('{') ? JSON.parse(raw) : {});
+
+      if (!frame.success || frame.output.type !== 'rpc') return;
+      answers.set(frame.output.id, frame.output.error === undefined
+        ? JSON.stringify(frame.output.result ?? null)
+        : `ERROR ${frame.output.error}`);
+
+      if (answers.size === 2) arrived.resolve();
+    });
+
+    try {
+      socket.send(JSON.stringify({ type: 'rpc', id: 'tab-snapshot', method: 'getActorSnapshot', args: [created.name] }));
+      socket.send(JSON.stringify({ type: 'rpc', id: 'tab-tasks', method: 'listAgentTasks', args: [] }));
+      await arrived.promise;
+
+      return {
+        name: created.name,
+        snapshot: answers.get('tab-snapshot') ?? '',
+        tasks: answers.get('tab-tasks') ?? '',
+        frames,
+      };
+    } finally {
+      socket.close(1000, 'agent tab probe complete');
+    }
   }
 
   /** The first-run regression: a workspace born with a mission (genesis turn

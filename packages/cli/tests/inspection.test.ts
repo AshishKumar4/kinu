@@ -170,7 +170,10 @@ describe("CLI inspection commands", () => {
 
     const executors = runCli(home, ["executors", "localtest"]);
     expect(executors.exitCode).toBe(0);
-    expect(executors.stdout.toString()).toContain("laptop");
+    // The one executor: the machine is the workspace, and its row carries
+    // the toolchain probed on this machine.
+    expect(executors.stdout.toString()).not.toContain("device");
+    expect(executors.stdout.toString()).toContain("native_binary");
   });
 
   test("kinu model normalizes specs through the provider resolver", async () => {

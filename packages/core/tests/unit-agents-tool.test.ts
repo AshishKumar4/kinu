@@ -1185,7 +1185,7 @@ describe('agents tool — resuming a stored delegation row', () => {
     // re-driven must never detach into a job in the first place.
     expect(resumableAgentsInput('agents', { action: 'hire', role: 'r', mission: 'm' })).toBeNull();
     expect(resumableAgentsInput('agents', { action: 'ask', agent: 'a', message: 'm' })).toBeNull();
-    expect(resumableAgentsInput('run', { command: 'ls' })).toBeNull();
+    expect(resumableAgentsInput('shell', { command: 'ls' })).toBeNull();
   });
 });
 

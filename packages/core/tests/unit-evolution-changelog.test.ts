@@ -27,6 +27,7 @@ import {
   type AgentRuntime, type EvolutionEvent,
 } from '../src/index';
 import { describePathology } from '../src/evolution/pathology';
+import { createRefinementStore, initRefinementTables } from '../src/evolution/refinement';
 import { createTestRuntime } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
 
@@ -45,6 +46,7 @@ function setup() {
   initReplayTables(execRaw);
   initFactsTable(execRaw);
   initGepaTables(execRaw);
+  initRefinementTables(execRaw);
 
   return { rt, facts: createFactsStore(rt.storage.sql, rt.actor) };
 }
@@ -298,6 +300,35 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('every ledger present and empty produces an empty digest', () => {
     const { rt } = setup();
     expect(buildChangelog(rt.storage.sql, rt.actor)).toEqual([]);
+  });
+
+  test('a refinement that changed nothing is marked at the source, and only the changes-only page drops it', () => {
+    // OWNER, 2026-09-16: "I reviewed my own recent failures and changed
+    // nothing" was reported beside the changes that moved behaviour. The run
+    // is real and Self-changes keeps it; what it is NOT is a change, and the
+    // flag is set here so no surface has to read that out of the prose.
+    const { rt } = setup();
+    const store = createRefinementStore(rt.storage.sql, rt.actor);
+    const refused = store.open({ trigger: 'explicit', scope: 'workspace', turnIds: ['t-1'] }).request;
+
+    expect(store.advance(refused.id, 'requested', 'refused', {
+      detail: 'the refiner proposed no edits',
+    })).toBe(true);
+
+    const applied = store.open({ trigger: 'explicit', scope: 'workspace', turnIds: ['t-2'] }).request;
+
+    expect(store.advance(applied.id, 'requested', 'applied', { detail: '1 edit in effect' })).toBe(true);
+
+    const entries = buildChangelog(rt.storage.sql, rt.actor);
+    const refusedId = `refinement:${refused.id}:refused`;
+    const appliedId = `refinement:${applied.id}:applied`;
+
+    expect(entries.find((entry) => entry.id === refusedId)?.noChange).toBe(true);
+    expect(entries.find((entry) => entry.id === appliedId)?.noChange).toBeUndefined();
+
+    const changes = buildChangelog(rt.storage.sql, rt.actor, { changesOnly: true });
+    expect(changes.map((entry) => entry.id)).not.toContain(refusedId);
+    expect(changes.map((entry) => entry.id)).toContain(appliedId);
   });
 
   test('orders newest first and respects the limit', () => {

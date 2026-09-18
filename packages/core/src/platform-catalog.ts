@@ -950,7 +950,7 @@ export const PLATFORM_CATALOG = {
       + 'new Function() with NO arguments succeeds everywhere, and WebAssembly.validate is '
       + 'allowed everywhere. WebAssembly.compileStreaming does not exist in workerd at all. '
       + 'This is the single most load-bearing platform fact in this repo: it is why crafted '
-      + 'tools cannot be compiled in-process on the hosted backend and why execute_tools goes '
+      + 'tools cannot be compiled in-process on the hosted backend and why eval goes '
       + 'through the Worker Loader.',
   },
 

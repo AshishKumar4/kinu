@@ -9,14 +9,14 @@ const call = (name: string, args: JsonObject = {}): ToolCallRecord =>
   ({ name, args, result: null });
 
 const write = (path: string): ToolCallRecord =>
-  call('execute_tools', { code: `await workspace.writeFile("${path}", body);` });
+  call('eval', { code: `await workspace.writeFile("${path}", body);` });
 
 describe('delegationFeatures', () => {
   test('counts agents actions from a completed turn record', () => {
     // Live turns call the unified `agents` tool; the evidence separates the
     // persistent, search and messaging rungs by ACTION.
     const toolCalls: ToolCallRecord[] = [
-      call('execute_tools', { code: 'a()' }),
+      call('eval', { code: 'a()' }),
       call('agents', { action: 'hire', role: 'r' }),
       call('agents', { action: 'list' }),
       call('agents', { action: 'dismiss', agent: 'a' }),
@@ -24,7 +24,7 @@ describe('delegationFeatures', () => {
       call('agents', { action: 'msg', agent: 'b' }),
       call('agents', { action: 'send', agent: 'b', text: 'hi' }),
       call('agents', { action: 'msg', event_id: 'e1', message: 'ok' }),
-      call('run', { command: 'ls' }),
+      call('shell', { command: 'ls' }),
     ];
 
     expect(delegationFeatures({ toolCalls, steps: 41, durationMs: 372_000 })).toEqual({
@@ -32,7 +32,7 @@ describe('delegationFeatures', () => {
       teamCalls: 3,
       thinkCalls: 1,
       peerCalls: 3,
-      executeToolsCalls: 1,
+      executeCodemodeCalls: 1,
       wallClockMs: 372_000,
       loopedCalls: 0,
       redundantCalls: 0,
@@ -46,7 +46,7 @@ describe('delegationFeatures', () => {
     }));
 
     expect(line).toBe(
-      'Turn process: 41 sequential steps, 0 hiring, 0 exploration, 0 messaging, 0 execute_tools, 6.2min wall clock',
+      'Turn process: 41 sequential steps, 0 hiring, 0 exploration, 0 messaging, 0 eval, 6.2min wall clock',
     );
   });
 
@@ -55,7 +55,7 @@ describe('delegationFeatures', () => {
       call('web_search', { query: 'wilson interval' }),
       call('web_search', { query: 'wilson interval' }),
       write('/notes.md'),
-      call('run', { command: 'cat /notes.md' }),
+      call('shell', { command: 'cat /notes.md' }),
     ];
 
     const line = renderDelegationFeatures(delegationFeatures({ toolCalls, steps: 4, durationMs: 8_000 }));
@@ -65,23 +65,23 @@ describe('delegationFeatures', () => {
 
 describe('executionPathSignals — loops', () => {
   test('the same call repeated back to back is a loop', () => {
-    const repeated = call('run', { command: 'bun test' });
+    const repeated = call('shell', { command: 'bun test' });
     expect(executionPathSignals([repeated, repeated, repeated, repeated])).toMatchObject({
       loopedCalls: 3, redundantCalls: 3,
     });
   });
 
   test('an alternating two-call cycle is a loop', () => {
-    const a = call('run', { command: 'bun test' });
-    const b = call('execute_tools', { code: 'fix()' });
+    const a = call('shell', { command: 'bun test' });
+    const b = call('eval', { code: 'fix()' });
     expect(executionPathSignals([a, b, a, b, a, b])).toMatchObject({
       loopedCalls: 4, redundantCalls: 4,
     });
   });
 
   test('revisiting an earlier call later is redundant but not a loop', () => {
-    const a = call('run', { command: 'bun test' });
-    const trace = [a, call('run', { command: 'ls' }), call('run', { command: 'pwd' }), a];
+    const a = call('shell', { command: 'bun test' });
+    const trace = [a, call('shell', { command: 'ls' }), call('shell', { command: 'pwd' }), a];
     expect(executionPathSignals(trace)).toMatchObject({ loopedCalls: 0, redundantCalls: 1 });
   });
 
@@ -89,7 +89,7 @@ describe('executionPathSignals — loops', () => {
     const trace = [
       call('memory', { action: 'search', query: 'auth' }),
       write('/src/auth.ts'),
-      call('run', { command: 'bun test packages/core' }),
+      call('shell', { command: 'bun test packages/core' }),
       call('report', { status: 'completed', content: 'done' }),
     ];
 
@@ -121,7 +121,7 @@ describe('executionPathSignals — redundancy', () => {
   // evidence of repeated work. This also keeps the run-events reconstruction
   // (which records names without arguments) from manufacturing signal.
   test('argument-less calls are never counted as repeats', () => {
-    const bare = call('execute_tools');
+    const bare = call('eval');
     expect(executionPathSignals([bare, bare, bare, bare])).toEqual({
       loopedCalls: 0, redundantCalls: 0, backtrackCalls: 0,
     });
@@ -132,7 +132,7 @@ describe('executionPathSignals — backtracking', () => {
   test('re-reading a file the turn just wrote via code-mode', () => {
     const trace = [
       write('/src/auth.ts'),
-      call('execute_tools', { code: 'const prev = await workspace.readFile("/src/auth.ts");' }),
+      call('eval', { code: 'const prev = await workspace.readFile("/src/auth.ts");' }),
     ];
 
     expect(executionPathSignals(trace).backtrackCalls).toBe(1);
@@ -140,20 +140,20 @@ describe('executionPathSignals — backtracking', () => {
 
   test('undoing a shell-written file counts, in either direction of the vocabulary', () => {
     expect(executionPathSignals([
-      call('run', { command: 'echo hi > /tmp/out.txt' }),
-      call('run', { command: 'rm -f /tmp/out.txt' }),
+      call('shell', { command: 'echo hi > /tmp/out.txt' }),
+      call('shell', { command: 'rm -f /tmp/out.txt' }),
     ]).backtrackCalls).toBe(1);
 
     expect(executionPathSignals([
       write('/src/main.ts'),
-      call('run', { command: 'git checkout -- /src/main.ts' }),
+      call('shell', { command: 'git checkout -- /src/main.ts' }),
     ]).backtrackCalls).toBe(1);
   });
 
   test('reading a file the turn never wrote is ordinary work', () => {
     const trace = [
       write('/src/auth.ts'),
-      call('run', { command: 'cat /src/other.ts' }),
+      call('shell', { command: 'cat /src/other.ts' }),
     ];
 
     expect(executionPathSignals(trace).backtrackCalls).toBe(0);
@@ -161,7 +161,7 @@ describe('executionPathSignals — backtracking', () => {
 
   test('order matters: reading before writing is not backtracking', () => {
     const trace = [
-      call('execute_tools', { code: 'await workspace.readFile("/src/auth.ts");' }),
+      call('eval', { code: 'await workspace.readFile("/src/auth.ts");' }),
       write('/src/auth.ts'),
     ];
 
@@ -170,7 +170,7 @@ describe('executionPathSignals — backtracking', () => {
 
   test('a call cannot backtrack over its own write', () => {
     const trace = [
-      call('execute_tools', {
+      call('eval', {
         code: 'await workspace.writeFile("/a.ts", x); await workspace.readFile("/a.ts");',
       }),
     ];
@@ -183,8 +183,8 @@ describe('executionPathSignals — backtracking', () => {
   // risk a `>` comparison or an English phrase inventing a backtrack.
   test('tokens that do not look like paths are ignored on both sides', () => {
     const trace = [
-      call('run', { command: 'echo done > marker' }),
-      call('run', { command: 'cat marker' }),
+      call('shell', { command: 'echo done > marker' }),
+      call('shell', { command: 'cat marker' }),
     ];
 
     expect(executionPathSignals(trace).backtrackCalls).toBe(0);
@@ -192,8 +192,8 @@ describe('executionPathSignals — backtracking', () => {
 
   test('paths are found in nested argument values, not just top-level strings', () => {
     const trace = [
-      call('run', { action: 'spawn', task: { brief: 'run: echo x > /work/plan.md' } }),
-      call('run', { action: 'spawn', task: { brief: 'run: rm /work/plan.md' } }),
+      call('shell', { action: 'spawn', task: { brief: 'run: echo x > /work/plan.md' } }),
+      call('shell', { action: 'spawn', task: { brief: 'run: rm /work/plan.md' } }),
     ];
 
     expect(executionPathSignals(trace).backtrackCalls).toBe(1);
@@ -209,11 +209,11 @@ describe('executionPathSignals — backtracking', () => {
     ]).backtrackCalls).toBe(1);
     expect(executionPathSignals([
       call('file', { action: 'edit', path: '/src/auth.ts', edits: [{ old_text: 'a', new_text: 'b' }] }),
-      call('run', { command: 'cat /src/auth.ts' }),
+      call('shell', { command: 'cat /src/auth.ts' }),
     ]).backtrackCalls).toBe(1);
     // The shell vocabulary and the file plane are one path set.
     expect(executionPathSignals([
-      call('run', { command: 'echo hi > /tmp/out.txt' }),
+      call('shell', { command: 'echo hi > /tmp/out.txt' }),
       call('file', { action: 'read', path: '/tmp/out.txt' }),
     ]).backtrackCalls).toBe(1);
   });

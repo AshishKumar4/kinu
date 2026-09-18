@@ -260,7 +260,7 @@ export interface EnsemblePanel {
  *
  * Turns a judge has already answered are skipped, and each verdict is written
  * the moment it lands rather than in a batch at the end, so a pass that is
- * interrupted — a rate limit, an evicted Durable Object, a closed laptop —
+ * interrupted — a rate limit, an evicted Durable Object, a closed device —
  * keeps every model call it already paid for and the next run tops up from
  * there. At two judges over a hundred turns that is two hundred calls; losing
  * them to a retry is the difference between an affordable command and one

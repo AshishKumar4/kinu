@@ -70,7 +70,7 @@ export function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): Stat
   // answered only while the machine is connected, so a pairing with a
   // not-live mount is a stale row and the honest word stays offline.
   // Scoped to the device, because `granted` is its field.
-  if (mount.live && mount.name === "laptop" && exec?.granted === false) {
+  if (mount.live && mount.name === "device" && exec?.granted === false) {
     return { word: "needs approval", dotClass: "p-info" };
   }
 
@@ -247,7 +247,7 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnect
             title={`Open ${title}'s terminal`}
           ><TerminalIcon size={12} />Terminal</button>
         )}
-        {!mount.live && executor === "laptop" && (
+        {!mount.live && executor === "device" && (
           <button
             data-env-connect
             onClick={onConnectDevice}
@@ -267,9 +267,9 @@ function UnavailableMount({ mount, exec, onConnectDevice }: {
   exec: ExecutorInfo | undefined;
   onConnectDevice: () => void;
 }) {
-  // `laptop`, not `pc`: rows are named by their EXECUTOR now, and the old
+  // `device`, not `pc`: rows are named by their EXECUTOR now, and the old
   // mount name left this branch — the whole connect call-to-action — dead.
-  if (mount.name === "laptop") return <PcConnectCta onConnectDevice={onConnectDevice} />;
+  if (mount.name === "device") return <PcConnectCta onConnectDevice={onConnectDevice} />;
 
   const docs = mount.name === "sandbox"
       ? { text: "This deployment has no Linux sandbox. Use the Workspace shell instead.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
@@ -312,7 +312,7 @@ function NeedsApprovalMount({ exec }: { exec: ExecutorInfo }) {
   );
 }
 
-/** The laptop executor's connect call-to-action: one button. */
+/** The device executor's connect call-to-action: one button. */
 function PcConnectCta({ onConnectDevice }: { onConnectDevice: () => void }) {
   return (
     <div className="h-full flex items-center justify-center overflow-y-auto p-6">

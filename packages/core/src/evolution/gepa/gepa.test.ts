@@ -176,7 +176,7 @@ describe('renderReflectionPrompt', () => {
       parent,
       minibatch: [{
         ...mkInstance('i1', 'task input'),
-        evidence: 'Outcome: corrected\nTurn process: 41 sequential steps, 0 team, 0 think, 0 peers, 0 execute_tools, 6.2min wall clock',
+        evidence: 'Outcome: corrected\nTurn process: 41 sequential steps, 0 team, 0 think, 0 peers, 0 eval, 6.2min wall clock',
       }],
       rollout: {
         outcomes: [{ instanceId: 'i1', outcome: { score: 0.4, feedback: 'too verbose' } }],

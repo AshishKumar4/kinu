@@ -25,7 +25,7 @@
 // surface at all.
 //
 // `codemode` is a NAMESPACE and not a boolean because it is not always the
-// capability's own name: `run` and `file` are reached inside the sandbox
+// capability's own name: `shell` and `file` are reached inside the sandbox
 // through the shared `workspace` primitives they already dispatch into, so
 // they own no namespace of their own. A capability OWNS its namespace exactly
 // when `codemode` equals its own key, which is what every *-codemode.ts factory
@@ -74,14 +74,14 @@ export type ToolReach =
  *
  * The claim is enforced at the PROVIDER tool-call boundary, which is where a
  * replay re-enters. A codemode-only capability is reached from inside
- * `execute_tools`, so its own row states the policy of the calls it makes and
- * the claim that actually covers it is the enclosing `execute_tools` one.
+ * `eval`, so its own row states the policy of the calls it makes and
+ * the claim that actually covers it is the enclosing `eval` one.
  */
 export const TOOL_REACH = {
   // Arbitrary code with the whole executor surface behind it: nothing about a
   // second run of it is safe.
-  execute_tools: { native: true, codemode: null, replay: 'claimed' },
-  run: { native: true, codemode: 'workspace', replay: 'claimed' },
+  eval: { native: true, codemode: null, replay: 'claimed' },
+  shell: { native: true, codemode: 'workspace', replay: 'claimed' },
   // `file` reads AND writes, and one policy covers the capability, so the
   // answer is the one that is never wrong for a write.
   file: { native: true, codemode: 'workspace', replay: 'claimed' },
@@ -219,7 +219,7 @@ const CODEMODE_ONLY_REACH: readonly CapabilityReach[] = Object.freeze(
 );
 
 /** Which capabilities reach one codemode namespace. Plural because two do:
- *  `run` and `file` both reach `workspace`, so that namespace survives while
+ *  `shell` and `file` both reach `workspace`, so that namespace survives while
  *  EITHER of them does. Derived from the reach table at load, so a namespace
  *  cannot join the surface without joining this index. */
 const CAPABILITIES_BY_NAMESPACE: Readonly<Record<string, readonly CapabilityName[]>> = (() => {
@@ -262,8 +262,8 @@ export function codemodeCapabilitiesFor(
  * One role's tool surface, over BOTH places a capability can be reached.
  *
  * THE POINT IS THE SINGLE SET. Both surfaces read the same merged list, so they
- * cannot disagree. Narrow the native ToolSet alone and `execute_tools` builds
- * its codemode providers from unfiltered deps — a role allowed `execute_tools`
+ * cannot disagree. Narrow the native ToolSet alone and `eval` builds
+ * its codemode providers from unfiltered deps — a role allowed `eval`
  * and denied `agents` still delegates, hires and writes memory through
  * `agents.*`, and the narrowing is decorative for any role that keeps the
  * sandbox.
@@ -271,7 +271,7 @@ export function codemodeCapabilitiesFor(
 export interface ToolSurfaceNarrowing {
   /** Whether a native tool id survives. */
   allowsTool(name: string): boolean;
-  /** Whether a codemode namespace may be bound inside `execute_tools`. */
+  /** Whether a codemode namespace may be bound inside `eval`. */
   allowsNamespace(namespace: string): boolean;
   /** The provider list narrowed to the namespaces this role may reach. */
   narrowProviders<P extends { readonly name: string }>(providers: readonly P[]): P[];
@@ -289,7 +289,7 @@ export interface ToolSurfaceNarrowing {
  *
  * An EXTERNAL namespace — an executor plane like `pc` or `sandbox`, or any
  * provider a backend wired without a reach row — is exposed when
- * `execute_tools` itself is. Core does not invent a per-namespace denial for a
+ * `eval` itself is. Core does not invent a per-namespace denial for a
  * name the owner cannot write in a role's list: that would silently take away
  * the filesystem from every narrowed role, which is a worse failure than the
  * one being fixed and a much quieter one.
@@ -306,7 +306,7 @@ export function narrowToolSurface(
   }
 
   const allowed = new Set(allowedTools);
-  const sandbox = allowed.has('execute_tools');
+  const sandbox = allowed.has('eval');
 
   const allowsNamespace = (namespace: string): boolean => {
     const reaching = CAPABILITIES_BY_NAMESPACE[namespace];
@@ -777,22 +777,22 @@ export function releaseToolActions(hasEngine: boolean): readonly ReleaseToolActi
  * tool call.
  */
 export const BUILTIN_TOOL_SPECS = {
-  execute_tools: {
-    name: 'execute_tools',
+  eval: {
+    name: 'eval',
     summary:
       'Run a JavaScript program in a Node-like sandbox where every tool you have is callable as `tools.<name>(input)`, files and shells are namespaces, and `state.*` keeps values between programs.',
     whenToUse: 'Use when a step needs real logic: loops, branching, several calls whose results feed each other, calling a tool you crafted, fetching over HTTP, or holding state between calls.',
-    whenNotToUse: 'Do not use for a single shell command when `run` is enough, or to read and edit one file when `file` is enough.',
+    whenNotToUse: 'Do not use for a single shell command when `shell` is enough, or to read and edit one file when `file` is enough.',
     // Other runtimes still own their own paths. The workspace namespace is the
-    // stable anchor: the same canonical bytes as `file` and `run` workspace.
+    // stable anchor: the same canonical bytes as `file` and `shell` workspace.
     doctrine:
-      'workspace.* is the agent\'s canonical durable workspace: the same files addressed by the `file` tool and `run` with runtime "workspace". '
+      'workspace.* is the agent\'s canonical durable workspace: the same files addressed by the `file` tool and `shell` with runtime "workspace". '
       + 'A separate container or machine keeps its commands behind its own runtime; when live, its files also sit in the workspace plane at /pc or /sandbox.',
     result: 'Returns whatever the program returns, plus everything it logged with console.*, or the error it threw. Binding failures resolve to { success: false, reason, error, execution? }, with the same reason as the native tool. Inspect success === false to recover; returning that refusal propagates it on the tool error channel. Inner failures remain in the call census even when the program recovers.',
-    example: "execute_tools({code:\"// List the newest reports\\nconst fs = require('fs/promises');\\nconst files = await fs.readdir('reports');\\nreturn files.slice(0, 5)\"})",
+    example: "eval({code:\"// List the newest reports\\nconst fs = require('fs/promises');\\nconst files = await fs.readdir('reports');\\nreturn files.slice(0, 5)\"})",
   },
-  run: {
-    name: 'run',
+  shell: {
+    name: 'shell',
     summary: 'Run one shell command in one explicitly selected available runtime.',
     whenToUse: 'Use for a direct command in the same runtime where its files and dependencies live.',
     whenNotToUse: 'Do not use for multi-step logic, cross-runtime file access, or a runtime that is not explicitly listed as available.',
@@ -823,7 +823,7 @@ export const BUILTIN_TOOL_SPECS = {
       + 'write creates a file, or replaces one whole.',
     whenNotToUse:
       'Do not rewrite a whole file with write to change part of it — edit it. '
-      + 'Do not change files by pointing `run` at sed -i, a heredoc, or an inline python/perl script: those write whether or not the text they aimed at was there.',
+      + 'Do not change files by pointing `shell` at sed -i, a heredoc, or an inline python/perl script: those write whether or not the text they aimed at was there.',
     // The two rules that make an edit safe, stated where the model decides how
     // to write the call — not after it has already failed one.
     doctrine:
@@ -940,8 +940,8 @@ export function renderToolSchemaDescription(spec: BuiltinToolSpec): string {
  *  reach table. Deriving it would trade a compiler-checked list for a type
  *  assertion, which is the worse of the two. */
 export const BUILTIN_TOOL_DESCRIPTIONS = {
-  execute_tools: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.execute_tools),
-  run: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.run),
+  eval: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.eval),
+  shell: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.shell),
   file: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.file),
   tasks: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.tasks),
   agents: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.agents),
@@ -965,16 +965,16 @@ const SANDBOX_FACTS = {
     + 'The Node builtins, `require` and `fetch` are the machine\'s own; the `workspace` namespace is the durable workspace, which is not the machine\'s filesystem. `console.log` output comes back beside the result.',
 } satisfies Record<SandboxSubstrate, string>;
 
-/** The `code` field's own description on the `execute_tools` input schema.
+/** The `code` field's own description on the `eval` input schema.
  *  Codemode's `createCodeTool` ships it as "JavaScript async arrow function to
  *  execute" — a shape NEITHER sandbox accepts, since both run the body as a
  *  script (the normalizer takes the bare body). Both backends read this one
- *  constant through `executeToolsInputSchema` (sandbox-contract.ts), so the
+ *  constant through `codemodeInputSchema` (sandbox-contract.ts), so the
  *  field can never contradict the docstring again. */
-export const EXECUTE_TOOLS_CODE_DESCRIPTION = 'The JavaScript program: top-level statements, `await` allowed, `return` (or a trailing expression) hands back the result.';
+export const CODEMODE_CODE_DESCRIPTION = 'The JavaScript program: top-level statements, `await` allowed, `return` (or a trailing expression) hands back the result.';
 
 /**
- * The `execute_tools` docstring the model actually receives: this registry's
+ * The `eval` docstring the model actually receives: this registry's
  * doctrine for the tool, the standing facts about the sandbox itself, then the
  * TypeScript declaration of every namespace that sandbox binds. BOTH backends
  * compose it here so one tool is described one way.
@@ -983,9 +983,9 @@ export const EXECUTE_TOOLS_CODE_DESCRIPTION = 'The JavaScript program: top-level
  * codemode its own `{{types}}` placeholder and lets it substitute; the CLI
  * joins its providers' declared `types`.
  */
-export function renderExecuteToolsDescription(typeBlock: string, substrate: SandboxSubstrate = 'hosted'): string {
+export function renderCodemodeDescription(typeBlock: string, substrate: SandboxSubstrate = 'hosted'): string {
   return [
-    BUILTIN_TOOL_DESCRIPTIONS.execute_tools,
+    BUILTIN_TOOL_DESCRIPTIONS.eval,
     SANDBOX_FACTS[substrate],
     'Every native tool is `tools.<name>(input)` here with the same input object. Tools saved with `workspace.createTool` are callable as `tools.<name>(...)`; their current declarations are in dynamic_context. The declaration below lists the native tools. Variables do not survive between programs; `state.set`/`state.get` do.',
     'Start every program with exactly one `//` comment on the first nonblank line. State the operation and target in plain language, for example `// Read package.json to inspect its scripts`. The interface shows this line to the user as the call intent.',

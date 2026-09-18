@@ -49,14 +49,14 @@ interface Problem {
 }
 
 const PROBLEMS: Problem[] = [
-  { id: 1, question: 'What is the sum of all prime numbers below 100? Use the execute_tools tool to compute it. Return ONLY the number.', answer: 1060, difficulty: 'easy' },
-  { id: 2, question: 'How many structurally unique BSTs with 7 nodes? (7th Catalan number.) Use execute_tools. Return ONLY the number.', answer: 429, difficulty: 'easy' },
-  { id: 3, question: 'Length of longest strictly increasing subsequence of [3,1,4,1,5,9,2,6,5,3,5,8,9,7,9]? Use execute_tools. ONLY the number.', answer: 6, difficulty: 'medium' },
-  { id: 4, question: 'Min coins (denominations 1,5,10,25) for 97 cents? Use execute_tools. ONLY the number.', answer: 7, difficulty: 'medium' },
-  { id: 5, question: 'How many ways to partition 30 into distinct positive integers? Use execute_tools. ONLY the number.', answer: 296, difficulty: 'medium' },
+  { id: 1, question: 'What is the sum of all prime numbers below 100? Use the eval tool to compute it. Return ONLY the number.', answer: 1060, difficulty: 'easy' },
+  { id: 2, question: 'How many structurally unique BSTs with 7 nodes? (7th Catalan number.) Use eval. Return ONLY the number.', answer: 429, difficulty: 'easy' },
+  { id: 3, question: 'Length of longest strictly increasing subsequence of [3,1,4,1,5,9,2,6,5,3,5,8,9,7,9]? Use eval. ONLY the number.', answer: 6, difficulty: 'medium' },
+  { id: 4, question: 'Min coins (denominations 1,5,10,25) for 97 cents? Use eval. ONLY the number.', answer: 7, difficulty: 'medium' },
+  { id: 5, question: 'How many ways to partition 30 into distinct positive integers? Use eval. ONLY the number.', answer: 296, difficulty: 'medium' },
   { id: 6, question: 'Chromatic number of the Petersen graph? ONLY the number.', answer: 3, difficulty: 'hard' },
-  { id: 7, question: 'Fibonacci(20) mod 997? (F(1)=1,F(2)=1,F(3)=2,...) Use execute_tools. ONLY the number.', answer: 783, difficulty: 'medium' },
-  { id: 8, question: '4x4 grid (0-3), paths from (0,0) to (3,3), right/down only, cells (1,1) and (2,2) blocked. How many? Use execute_tools. ONLY the number.', answer: 4, difficulty: 'hard' },
+  { id: 7, question: 'Fibonacci(20) mod 997? (F(1)=1,F(2)=1,F(3)=2,...) Use eval. ONLY the number.', answer: 783, difficulty: 'medium' },
+  { id: 8, question: '4x4 grid (0-3), paths from (0,0) to (3,3), right/down only, cells (1,1) and (2,2) blocked. How many? Use eval. ONLY the number.', answer: 4, difficulty: 'hard' },
 ];
 
 /** Run one problem using native AI SDK tool calling */
@@ -74,7 +74,7 @@ async function solveProblem(
 
   const result = await generateText({
     model,
-    system: `${soul}\n\nKnowledge:\n${knowledge}\n\nAlways use execute_tools to compute and verify answers. Never guess.`,
+    system: `${soul}\n\nKnowledge:\n${knowledge}\n\nAlways use eval to compute and verify answers. Never guess.`,
     messages: [{ role: 'user' as const, content: problem.question }],
     tools,
     stopWhen: stepCountIs(500),
@@ -131,7 +131,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     target = await provisionLocalTarget({
       dir: TEST_DIR,
       workspace: 'algo-solver',
-      purpose: 'An algorithmic problem solver. Always use execute_tools to compute answers. Never guess.',
+      purpose: 'An algorithmic problem solver. Always use eval to compute answers. Never guess.',
       llm: LLM_CONFIG,
       model: liveChatModel(LLM_CONFIG),
       evolution: true,
@@ -173,7 +173,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
       // rule and the credential-free test below guards it.
       const answered = finalIntegerAnswer(response);
       const correct = answered === problem.answer;
-      const usedExecuteCode = toolNames.includes('execute_tools');
+      const usedExecuteCode = toolNames.includes('eval');
 
       scorecard.push({
         id: problem.id, difficulty: problem.difficulty, correct, answered, usedExecuteCode,
@@ -184,7 +184,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
       console.log(`  Tools: ${toolNames.length > 0 ? toolNames.join(', ') : 'none'}`);
       console.log(`  Answered: ${answered === null ? 'nothing extractable' : String(answered)}`);
       console.log(`  Expected: ${problem.answer}`);
-      console.log(`  ${correct ? '✅ CORRECT' : '❌ WRONG'} ${usedExecuteCode ? '(used execute_tools)' : '(no code execution)'}`);
+      console.log(`  ${correct ? '✅ CORRECT' : '❌ WRONG'} ${usedExecuteCode ? '(used eval)' : '(no code execution)'}`);
     }
 
     const correctCount = scorecard.filter(s => s.correct).length;
@@ -225,7 +225,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     }
 
     console.log(`\n  Results: ${correct} correct, ${PROBLEMS.length - correct} wrong out of ${PROBLEMS.length}`);
-    console.log(`  Used execute_tools: ${usedCode}/${PROBLEMS.length}`);
+    console.log(`  Used eval: ${usedCode}/${PROBLEMS.length}`);
     console.log(`\n  Evolution events: ${events.length}`);
     const byType: Record<string, number> = {};
 

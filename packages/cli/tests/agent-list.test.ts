@@ -300,7 +300,7 @@ describe('the sidebar roster for one directory', () => {
     // source for a local agent. The other fixtures carry no title row, so
     // they list under their directory names.
     const oldbotDb = new Database(join(home, 'oldbot', 'agent.db'));
-    createCLIRuntime(oldbotDb, { dbPath: oldbotDb.filename, llm: null, hostRoot: null, agentName: 'oldbot' }).actor.config.setDisplayName('Old Bot');
+    createCLIRuntime(oldbotDb, { dbPath: oldbotDb.filename, llm: null, agentName: 'oldbot' }).actor.config.setDisplayName('Old Bot');
     oldbotDb.close();
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       agents: {

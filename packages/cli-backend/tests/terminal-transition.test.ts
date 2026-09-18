@@ -4,7 +4,7 @@
 // the alternate-takes claim, the completion gate, the evolution recording, the
 // shadow trial, the auto title — is a claimed, recoverable sequence. As
 // straight-line code releasing its turn claims as soon as the transcript hit
-// disk, a laptop killed anywhere inside it loses every remaining step with
+// disk, a device killed anywhere inside it loses every remaining step with
 // nothing on disk saying which ones had happened.
 //
 // So the subject here is not "does the sequence run" — the ordinary session

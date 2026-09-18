@@ -6,31 +6,15 @@ import {
   BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, withSpawnDetach,
   isBackgroundHandle, serializeJobResult, BACKGROUND_POLICY, readSpawnStarted, SPAWN_STARTED_OPTION,
 } from '../src/jobs/index';
-import { isBackgroundOutcomeText, type ThresholdSchedule } from '../src/jobs/threshold';
+import { isBackgroundOutcomeText } from '../src/jobs/threshold';
 import { makeSql, makeExecRaw } from './helpers';
-import { createTestActorsOver } from '@kinu.run/test-utils';
+import { createTestActorsOver, handClock } from '@kinu.run/test-utils';
 
 function newStore() {
   const db = new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db));
 
   return new BackgroundJobStore(makeSql(db), createTestActorsOver(db).main);
-}
-
-/** A threshold timer the test fires by hand: the D19 pattern — time inside
- *  the subject is a clock the subject is handed, so "the work outran the
- *  window" is a call here and never a real timer racing real work. */
-function handTimer() {
-  let armed: (() => void) | undefined;
-  let cancelled = false;
-
-  const schedule: ThresholdSchedule = (fire) => {
-    armed = fire;
-
-    return () => { cancelled = true; };
-  };
-
-  return { schedule, fire: () => { armed?.(); }, cancelled: () => cancelled };
 }
 
 /** Work that ends when the test says: the promise the subject is handed, and
@@ -67,7 +51,7 @@ describe('BackgroundJobStore', () => {
 
   test('fail marks failed; list reflects state', () => {
     const s = newStore();
-    s.create({ id: 'a', kind: 'run', workMode: 'build', now: 1 });
+    s.create({ id: 'a', kind: 'shell', workMode: 'build', now: 1 });
     s.create({ id: 'b', kind: 'think', workMode: 'build', now: 2 });
     s.fail('a', 0, 'boom', 3);
     expect(s.get('a')?.status).toBe('failed');
@@ -81,7 +65,7 @@ describe('BackgroundJobStore', () => {
     // crowd the still-running work out of the block entirely.
     const s = newStore();
 
-    for (let i = 0; i < 5; i++) s.create({ id: `j${i}`, kind: 'run', workMode: 'build', now: i });
+    for (let i = 0; i < 5; i++) s.create({ id: `j${i}`, kind: 'shell', workMode: 'build', now: i });
     s.settle('j1', 0, 'ok', 9);
     s.fail('j3', 0, 'boom', 9);
     expect(s.listRunning().items.map((j) => j.id)).toEqual(['j4', 'j2', 'j0']);
@@ -186,21 +170,21 @@ describe('BackgroundJobStore', () => {
 
   test('create stores input_json; getInput round-trips it for retry', () => {
     const s = newStore();
-    s.create({ id: 'd', kind: 'execute_tools', workMode: 'build', input: '{"code":"1+1"}', now: 1 });
+    s.create({ id: 'd', kind: 'eval', workMode: 'build', input: '{"code":"1+1"}', now: 1 });
     expect(s.getInput('d')).toBe('{"code":"1+1"}');
     expect(s.getInput('missing')).toBeNull();
   });
 
   test('replacement creation and retry lineage are one durable write', () => {
     const s = newStore();
-    s.create({ id: 'failed', kind: 'run', workMode: 'build', input: '{}', now: 1 });
+    s.create({ id: 'failed', kind: 'shell', workMode: 'build', input: '{}', now: 1 });
     s.fail('failed', 0, 'boom', 2);
     expect(s.createRetry({
-      sourceId: 'failed', id: 'replacement-1', kind: 'run',
+      sourceId: 'failed', id: 'replacement-1', kind: 'shell',
       workMode: 'build', input: '{}', now: 3,
     })).toBe(true);
     expect(s.createRetry({
-      sourceId: 'failed', id: 'replacement-2', kind: 'run',
+      sourceId: 'failed', id: 'replacement-2', kind: 'shell',
       workMode: 'build', input: '{}', now: 4,
     })).toBe(false);
     expect(s.get('failed')?.retriedBy).toBe('replacement-1');
@@ -210,7 +194,7 @@ describe('BackgroundJobStore', () => {
 
   test('dismiss removes only settled jobs; clearSettled keeps running ones', () => {
     const s = newStore();
-    s.create({ id: 'run1', kind: 'run', workMode: 'build', now: 1 });
+    s.create({ id: 'run1', kind: 'shell', workMode: 'build', now: 1 });
     s.create({ id: 'done1', kind: 'think', workMode: 'build', now: 2 });
     s.settle('done1', 0, 'ok', 3);
     // Can't dismiss a running job.
@@ -235,7 +219,7 @@ describe('serializeJobResult', () => {
   });
 
   test('non-serializable success (BigInt) degrades to a named reason, never thrown', () => {
-    // A backgrounded execute_tools can resolve a BigInt — JSON.stringify throws
+    // A backgrounded eval can resolve a BigInt — JSON.stringify throws
     // on it; the helper must degrade to a string that says so and carries the
     // thrown reason, so settle() still records it.
     expect(serializeJobResult(10n)).toMatch(/^unserializable job result: /);
@@ -277,12 +261,12 @@ describe('withBackgroundThreshold', () => {
 
   test('slow work returns a BackgroundHandle + detaches the live promise', async () => {
     const detached: Array<Promise<unknown>> = [];
-    const timer = handTimer();
+    const timer = handClock();
     const slow = heldWork('slow-result');
 
     const pending = withBackgroundThreshold('heads', slow.work, {
       thresholdMs: 20,
-      schedule: timer.schedule,
+      clock: timer,
       onThreshold: (_kind, p) => {
         detached.push(p);
 
@@ -290,7 +274,7 @@ describe('withBackgroundThreshold', () => {
       },
     });
 
-    timer.fire();
+    timer.tick();
     const out = await pending;
 
     expect(isBackgroundHandle(out)).toBe(true);
@@ -303,41 +287,41 @@ describe('withBackgroundThreshold', () => {
   });
 
   test('a refused detach keeps the same live work foreground-owned through completion', async () => {
-    const timer = handTimer();
+    const timer = handClock();
     const slow = heldWork('completed after the capacity refusal');
 
-    const pending = withBackgroundThreshold('run', slow.work, {
+    const pending = withBackgroundThreshold('shell', slow.work, {
       thresholdMs: 20,
-      schedule: timer.schedule,
+      clock: timer,
       onThreshold: () => ({ detached: false, reason: 'too many jobs already running' }),
     });
 
-    timer.fire();
+    timer.tick();
     slow.release();
 
     expect(await pending).toBe('completed after the capacity refusal');
   });
 
   test('a refused detach preserves a later tool failure', async () => {
-    const timer = handTimer();
+    const timer = handClock();
     const { promise: held, resolve: release } = Promise.withResolvers<void>();
 
-    const pending = withBackgroundThreshold('run', async () => {
+    const pending = withBackgroundThreshold('shell', async () => {
       await held;
       throw new Error('failed after the capacity refusal');
     }, {
       thresholdMs: 20,
-      schedule: timer.schedule,
+      clock: timer,
       onThreshold: () => ({ detached: false, reason: 'too many jobs already running' }),
     });
 
-    timer.fire();
+    timer.tick();
     release();
     await expect(pending).rejects.toThrow('failed after the capacity refusal');
   });
 
   test('fast rejection propagates inline (no background)', async () => {
-    await expect(withBackgroundThreshold('run', async () => { throw new Error('quick fail'); }, {
+    await expect(withBackgroundThreshold('shell', async () => { throw new Error('quick fail'); }, {
       thresholdMs: 1000,
       onThreshold: () => { throw new Error('should not detach'); },
     })).rejects.toThrow('quick fail');
@@ -348,7 +332,7 @@ describe('withBackgroundThreshold', () => {
     // human is waiting on, never an unbounded inline wait.
     expect(BACKGROUND_POLICY.interactive.detachAfterMs).toBe(30_000);
 
-    const out = await withBackgroundThreshold('run', async () => 'inline', {
+    const out = await withBackgroundThreshold('shell', async () => 'inline', {
       onThreshold: () => { throw new Error('should not detach'); },
     });
 
@@ -358,12 +342,12 @@ describe('withBackgroundThreshold', () => {
 
 describe('isBackgroundOutcomeText — a handle names its job', () => {
   test('background:true without a jobId is not a background outcome; the historical refusal still is', () => {
-    expect(isBackgroundOutcomeText('{"background":true,"kind":"execute_tools"}')).toBe(false);
+    expect(isBackgroundOutcomeText('{"background":true,"kind":"eval"}')).toBe(false);
     expect(isBackgroundOutcomeText(
-      '{"background":true,"jobId":"j1","kind":"execute_tools","message":"still running"}',
+      '{"background":true,"jobId":"j1","kind":"eval","message":"still running"}',
     )).toBe(true);
     expect(isBackgroundOutcomeText(
-      '{"background":false,"kind":"execute_tools","message":"stayed foreground"}',
+      '{"background":false,"kind":"eval","message":"stayed foreground"}',
     )).toBe(true);
   });
 });

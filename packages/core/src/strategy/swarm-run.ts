@@ -110,6 +110,7 @@
  * REPORTS, never on a diff of a tree every node wrote — which is why the grading
  * rule is the same under both values and needs no theorem at all.
  */
+import type { Clock } from '../types/clock';
 import type { LanguageModel, ModelMessage } from 'ai';
 import { DEFAULT_CONFIG } from '../config';
 import type { PersistedSearchKnobs } from '../mcts/search-store';
@@ -188,6 +189,8 @@ export interface SwarmRunDeps {
   readonly model: LanguageModel;
   readonly mode: WorkMode;
   readonly signal?: AbortSignal;
+  /** The clock every node's wall time is measured on; see HeadInferenceDeps.clock. */
+  readonly clock?: Clock;
   /** Where this run's model calls are reported. Absent = unreported, which the spend
    *  coverage fraction states rather than hides. */
   readonly reportModelCall?: ModelCallSink;
@@ -263,9 +266,9 @@ export interface SwarmRunDeps {
   /** How a node's own runtime is built once it has a home — see
    *  {@link NodeAgentDeps.runtimeForWorkspace}. */
   readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
-  /** Backend-built `execute_tools` and live research, handed to every agent node.
+  /** Backend-built `eval` and live research, handed to every agent node.
    *  Absent means the node's surface is narrower, not broken. */
-  readonly executeTool?: unknown;
+  readonly codemodeTool?: unknown;
   readonly webSearch?: WebSearchProvider;
   /**
    * The compaction barrier over *Inherited context*: rewrite one parent's context
@@ -628,10 +631,10 @@ export async function runSwarm(
 
   const nodeDeps = buildNodeDeps({
     hostNode: deps.hostNode, model: nodeModel, journal, logger: log,
-    signal: deps.signal, reportModelCall: deps.reportModelCall,
+    signal: deps.signal, clock: deps.clock, reportModelCall: deps.reportModelCall,
     maxWallClockMs: deps.maxWallClockMs, mission: deps.mission,
     provisionHome: deps.provisionHome, runtimeForWorkspace: deps.runtimeForWorkspace,
-    executeTool: deps.executeTool, webSearch: deps.webSearch,
+    codemodeTool: deps.codemodeTool, webSearch: deps.webSearch,
     publishHeadStream: deps.publishHeadStream,
   });
 

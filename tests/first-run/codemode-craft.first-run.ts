@@ -25,7 +25,7 @@
  *   crafted    the workspace's crafted set holds a tool that was not there when
  *              the case opened. Read off `getToolDescriptions`, the RPC the
  *              Tools pane is bound to.
- *   executed   an `execute_tools` call closed with NO error, and its own
+ *   executed   an `eval` call closed with NO error, and its own
  *              arguments show the crafted tool being CALLED (`tools.<name>(`),
  *              not merely created. A tool that was created and never invoked is
  *              exactly the half-success this case exists to refuse.
@@ -33,11 +33,11 @@
  *              independently. A refusal, an apology, a plan, or the right shape
  *              with the wrong number is RED.
  *
- * WHY `execute_tools` AND NOT A ROW PER CRAFTED CALL: a crafted tool runs INSIDE
+ * WHY `eval` AND NOT A ROW PER CRAFTED CALL: a crafted tool runs INSIDE
  * the codemode program — the preamble splices its body into the sandbox arrow —
- * so the ledger's unit is the `execute_tools` call that ran it. Confirmed with
+ * so the ledger's unit is the `eval` call that ran it. Confirmed with
  * the lane rebuilding crafted execution on codemode's modules+prelude
- * (2026-09-03): the dispatch shape `tools.<name>(` inside `execute_tools` is
+ * (2026-09-03): the dispatch shape `tools.<name>(` inside `eval` is
  * preserved by that rebuild, and no per-tool row is planned.
  *
  * RED, DELIBERATELY, AS THIS TIER'S OWN RULE APPLIED TO ITSELF. Crafted
@@ -124,7 +124,7 @@ describe(SUITE, () => {
         });
 
         const calls = events.filter(isToolCallEnd);
-        const codemode = calls.filter((call) => call.name === 'execute_tools');
+        const codemode = calls.filter((call) => call.name === 'eval');
 
         const crafted = (await session.craftedTools()).filter((tool) => !before.has(tool.name));
         const names = crafted.map((tool) => tool.name);
@@ -171,8 +171,8 @@ describe(SUITE, () => {
             what: 'executed',
             reached: invoked.length > 0,
             detail: invoked.length > 0
-              ? `${String(invoked.length)} execute_tools call(s) ran the crafted tool clean`
-              : `no execute_tools call ran the crafted tool and closed clean — `
+              ? `${String(invoked.length)} eval call(s) ran the crafted tool clean`
+              : `no eval call ran the crafted tool and closed clean — `
                 + `${String(codemode.length)} codemode call(s), `
                 + `${String(failures.length)} of them failed`
                 + (failures.length > 0 ? `: ${failures.join('; ')}` : ''),

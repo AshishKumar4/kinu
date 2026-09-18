@@ -562,7 +562,7 @@ describe('sandbox file view — bounded range reads', () => {
 });
 
 describe('device file view — bounded range reads', () => {
-  test('the laptop range stays within its consented device path and admitted window', async () => {
+  test('the device range stays within its consented device path and admitted window', async () => {
     const fs = new MemFs();
     const all = new Uint8Array(512 * 1024 + 32).fill(0x61);
     all[512 * 1024] = 0x00;

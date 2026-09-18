@@ -39,7 +39,7 @@ function PlatformSection({ install }: { install: string }): ReactElement {
       <div className="grid overflow-hidden rounded-2xl border p-border p-surface md:grid-cols-2">
         <article className="flex min-w-0 flex-col p-6 sm:p-8">
           <span className="mb-6 font-mono text-[11px] uppercase tracking-[.14em] p-accent">Cloud agents</span>
-          <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Close the laptop.<br />The agent keeps working.</h3>
+          <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Close the device.<br />The agent keeps working.</h3>
           <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Hosted on Cloudflare, so the agent keeps working with your device off. It can start its own work on a schedule, or when a webhook arrives.</p>
           <ul className="mb-6 space-y-3 text-sm leading-[1.65] p-text-2">
             <li>Each workspace gets its own webhook URL. Point something at it and the agent starts when the event lands.</li>

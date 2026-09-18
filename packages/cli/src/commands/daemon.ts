@@ -88,7 +88,7 @@ export async function daemonCommand(action: string | undefined, agent?: string):
     return;
   }
 
-  if (sub === 'run') {
+  if (sub === 'shell') {
     await runDaemonLoop();
 
     return;
@@ -172,7 +172,7 @@ function startDaemon(opts: { quiet?: boolean } = {}): number | null {
   const logFd = openSync(LOG_PATH, 'a');
 
   try {
-    const child = spawn(process.execPath, [entry, 'daemon', 'run'], {
+    const child = spawn(process.execPath, [entry, 'daemon', 'shell'], {
       detached: true,
       stdio: ['ignore', logFd, logFd],
       env: process.env,

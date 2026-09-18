@@ -20,7 +20,7 @@ import { LIVE_DATA_REFRESH_MS } from '../src/hooks/use-kinu';
 
 function job(over: Partial<BackgroundJob> & { id: string }): BackgroundJob {
   return {
-    kind: 'run', label: null, workMode: 'build', status: 'completed', result: null, error: null,
+    kind: 'shell', label: null, workMode: 'build', status: 'completed', result: null, error: null,
     createdAt: 0, settledAt: 0, ...over,
   };
 }
@@ -46,15 +46,32 @@ describe('the work journal', () => {
     ]);
   });
 
-  test('every row carries the chip that filters it, so the chips are views over one list', () => {
+  test('every row carries the chips it answers to, so the chips are views over one list', () => {
     const rows = buildJournal([job({ id: 'j' })], [task('t', 1)], [entry('c', 2)]);
-    expect(new Set(rows.map((r) => r.filter))).toEqual(new Set(['jobs', 'self']));
+    expect(new Set(rows.flatMap((r) => r.chips))).toEqual(new Set(['all', 'jobs', 'self']));
 
-    // …and each chip selects exactly its own rows out of that one list — the
-    // closed task rides `self` beside the changelog entry, never a second Plan.
-    expect(rows.filter((r) => r.filter === 'jobs')).toHaveLength(1);
-    expect(rows.filter((r) => r.filter === 'self')).toHaveLength(2);
-    expect(rows.map((r) => r.filter)).not.toContain('plan');
+    // …and each chip selects exactly its own rows out of that one list, while
+    // All holds every one of them. The closed task rides `self` beside the
+    // changelog entry, never a second Plan.
+    expect(rows.filter((r) => r.chips.includes('jobs'))).toHaveLength(1);
+    expect(rows.filter((r) => r.chips.includes('self'))).toHaveLength(2);
+    expect(rows.flatMap((r) => r.chips)).not.toContain('plan');
+    expect(rows.filter((r) => r.chips.includes('all'))).toHaveLength(3);
+  });
+
+  test('a self-change that changed nothing answers to Self-changes and never to All', () => {
+    // OWNER, 2026-09-16: a refused self-review ("I reviewed my own recent
+    // failures and changed nothing") sat in All between the things that did
+    // happen. It is kept where it answers a question — Self-changes — and the
+    // run that moved behaviour stays in both.
+    const noop: ChangelogEntry = { ...entry('c-refused', 2), kind: 'refinement', noChange: true };
+    const changed: ChangelogEntry = { ...entry('c-applied', 3), kind: 'refinement' };
+    const rows = buildJournal([job({ id: 'j' })], [task('t', 1)], [noop, changed]);
+
+    expect(rows.filter((r) => r.chips.includes('all')).map((r) => r.key))
+      .toEqual(['self:c-applied', 'task:t', 'job:j']);
+    expect(rows.filter((r) => r.chips.includes('self')).map((r) => r.key))
+      .toEqual(['self:c-applied', 'self:c-refused', 'task:t']);
   });
 
   test('a job that never settled is placed by when it started, not dropped', () => {

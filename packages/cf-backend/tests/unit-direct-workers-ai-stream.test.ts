@@ -97,7 +97,7 @@ interface RecordedRun {
   options: RunOptions | undefined;
 }
 
-/** A binding whose only member is `run`, answering with whatever the test
+/** A binding whose only member is `shell`, answering with whatever the test
  *  returns. Any other member the adapter reached for would fail loudly here
  *  rather than becoming a silent undefined. */
 function directFetch(answer: (run: RecordedRun) => BindingAnswer, retry: RateLimitRetryOptions = {}) {
@@ -508,8 +508,8 @@ describe('direct Workers AI binding — usage and finish frames', () => {
         { name: 'read_file', arguments: { path: 'README.md' } },
       ] }),
       sse({ tool_calls: [
-        { name: 'run', arguments: { cmd: 'ls' } },
-        { id: 'call-upstream', name: 'run', arguments: '{"cmd":"pwd"}' },
+        { name: 'shell', arguments: { cmd: 'ls' } },
+        { id: 'call-upstream', name: 'shell', arguments: '{"cmd":"pwd"}' },
       ] }),
       DONE,
     ].join('')));
@@ -534,11 +534,11 @@ describe('direct Workers AI binding — usage and finish frames', () => {
       },
       {
         index: 2, id: `call-${streamed.responseId}-i-3`, type: 'function',
-        function: { name: 'run', arguments: '{"cmd":"ls"}' },
+        function: { name: 'shell', arguments: '{"cmd":"ls"}' },
       },
       {
         index: 3, id: `call-${streamed.responseId}-n-call-upstream`, type: 'function',
-        function: { name: 'run', arguments: '{"cmd":"pwd"}' },
+        function: { name: 'shell', arguments: '{"cmd":"pwd"}' },
       },
     ]);
     expect(streamed.chunks.at(-1)?.choices[0]?.finish_reason).toBe('tool_calls');
@@ -551,7 +551,7 @@ describe('direct Workers AI binding — usage and finish frames', () => {
     // with a call by it, and the surface renders a row by it — so the second
     // step's result could land against the first step's call.
     const { fetch: direct } = directFetch(() => eventStreamOf([
-      sse({ tool_calls: [{ name: 'run', arguments: { cmd: 'ls' } }] }),
+      sse({ tool_calls: [{ name: 'shell', arguments: { cmd: 'ls' } }] }),
       DONE,
     ].join('')));
 
@@ -571,7 +571,7 @@ describe('direct Workers AI binding — usage and finish frames', () => {
     // turn, so forwarding it verbatim reproduced exactly the collision the
     // position had — and `??` never fired, because the id was present.
     const { fetch: direct } = directFetch(() => eventStreamOf([
-      sse({ tool_calls: [{ id: '0', name: 'run', arguments: { cmd: 'ls' } }] }),
+      sse({ tool_calls: [{ id: '0', name: 'shell', arguments: { cmd: 'ls' } }] }),
       DONE,
     ].join('')));
 
@@ -591,9 +591,9 @@ describe('direct Workers AI binding — usage and finish frames', () => {
     // position, which is unique within the response.
     const { fetch: direct } = directFetch(() => eventStreamOf([
       sse({ tool_calls: [
-        { id: '', name: 'run', arguments: { cmd: 'ls' } },
-        { id: '   ', name: 'run', arguments: { cmd: 'pwd' } },
-        { id: 'read file/1', name: 'run', arguments: { cmd: 'id' } },
+        { id: '', name: 'shell', arguments: { cmd: 'ls' } },
+        { id: '   ', name: 'shell', arguments: { cmd: 'pwd' } },
+        { id: 'read file/1', name: 'shell', arguments: { cmd: 'id' } },
       ] }),
       DONE,
     ].join('')));
@@ -820,8 +820,8 @@ describe('direct Workers AI binding — whole completions', () => {
     const { fetch: direct } = directFetch(() => ({
       response: '',
       tool_calls: [
-        { name: 'run', arguments: { cmd: 'ls' } },
-        { name: 'run', arguments: { cmd: 'pwd' } },
+        { name: 'shell', arguments: { cmd: 'ls' } },
+        { name: 'shell', arguments: { cmd: 'pwd' } },
       ],
     }));
 
@@ -840,7 +840,7 @@ describe('direct Workers AI binding — whole completions', () => {
   test('two non-streamed responses in one turn cannot produce the same tool-call id', async () => {
     const { fetch: direct } = directFetch(() => ({
       response: '',
-      tool_calls: [{ name: 'run', arguments: { cmd: 'ls' } }],
+      tool_calls: [{ name: 'shell', arguments: { cmd: 'ls' } }],
     }));
 
     const completions = [];
@@ -972,7 +972,7 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
     let step = 0;
 
     const { fetch: direct } = directFetch(() => eventStreamOf([
-      sse({ tool_calls: [{ name: 'run', arguments: commands[step++] ?? {} }] }),
+      sse({ tool_calls: [{ name: 'shell', arguments: commands[step++] ?? {} }] }),
       DONE,
     ].join('')));
 

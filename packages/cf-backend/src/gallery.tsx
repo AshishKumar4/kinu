@@ -19,7 +19,7 @@
  *                                  names the provider and the retry window
  *                                  instead of reading "working" over silence.
  *                                    (quiet failure, protocol failure, a
- *                                    multi-line `run`, an MCP tool, a failing
+ *                                    multi-line `shell`, an MCP tool, a failing
  *                                    group)
  *   /gallery.html?frame=advisor  → the advisor's note card, once per severity
  *                                  (nit / concern / blocker), full ladder in
@@ -59,7 +59,7 @@
  *   /gallery.html?frame=files    → the Files tab: the composite drive (the
  *                                  workspace tree with /pc and /sandbox as
  *                                  mounted folders), stateful, so rename and
- *                                  delete are provable; `&offline=laptop`
+ *                                  delete are provable; `&offline=device`
  *                                  photographs the disconnected-device row,
  *                                  and `&connect=1` drives the connect panel
  *                                  that row opens: register, the server's
@@ -195,6 +195,12 @@ import * as v from "valibot";
 import { galleryServerPush, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
+
+// The gallery is the one page that steps the app background by hand (the
+// mesh readbacks in scripts/app-background-ux.test.ts): declared before the
+// shell mounts, so the background attaches its stepping controls here and
+// nowhere the shipped app runs.
+window.__kinuGalleryStepping = true;
 
 const squareButtonVariant = "square";
 
@@ -709,7 +715,7 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
 
 /* The connect flow, end to end.
 
-   `?frame=environment&offline=laptop&connect=1` — the account has no machines
+   `?frame=environment&offline=device&connect=1` — the account has no machines
    until the panel registers one; the roster read after that POST carries the
    machine, CONNECTED, which is the arrival the panel closes itself on.
 
@@ -1303,7 +1309,7 @@ const MESSAGES: UIMessage[] = [
     parts: [
       { type: "reasoning", text: "The coupon path goes through /api/cart/apply. I should reproduce first, then bisect: the handler, the pricing service, then the migration that landed Tuesday. The 500 with SAVE20 but not SAVE10 suggests a percentage-vs-fixed branch." },
       { type: "tool-run", toolCallId: "t1", state: "output-available", input: { runtime: "sandbox", command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: "HTTP 500\n{\"error\":\"TypeError: Cannot read properties of undefined (reading 'percent')\"}" },
-      { type: "tool-execute_tools", toolCallId: "t2", state: "output-available", input: { code: "// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons WHERE code LIKE 'SAVE%'`;\nreturn rows;" }, output: '[{"code":"SAVE10","kind":"fixed","value":10},{"code":"SAVE20","kind":null,"value":20}]' },
+      { type: "tool-eval", toolCallId: "t2", state: "output-available", input: { code: "// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons WHERE code LIKE 'SAVE%'`;\nreturn rows;" }, output: '[{"code":"SAVE10","kind":"fixed","value":10},{"code":"SAVE20","kind":null,"value":20}]' },
       { type: "text", text: "Found it. Tuesday's migration backfilled `kind` for fixed coupons only — percentage coupons have `kind: null`, and `applyCoupon` dereferences `rules[kind].percent`.\n\n```ts\nconst rule = rules[coupon.kind ?? inferKind(coupon)];\n```\n\nI'll patch the migration, add a regression test, and run the suite." },
       // A real repair is a RUN of calls, not one — this is the case the chat
       // has to survive without becoming a wall of identical rows.
@@ -2296,7 +2302,7 @@ const TRANSCRIPTS = {
         reasoning: "Guarding at the edge would still let a null through the cart serializer, which reads the same table on the lazy path.",
         toolCalls: [
           { name: "file", input: { action: "edit", path: "packages/checkout/src/apply-coupon.ts" }, output: "2 hunks applied" },
-          { name: "run", input: { command: "bun test packages/checkout" }, output: "42 pass\n0 fail\nRan 42 tests across 6 files. [1.21s]" },
+          { name: "shell", input: { command: "bun test packages/checkout" }, output: "42 pass\n0 fail\nRan 42 tests across 6 files. [1.21s]" },
         ],
       },
     ] },
@@ -2381,7 +2387,7 @@ const TRANSCRIPTS = {
         text: "Checking whether Tuesday's migration reached staging at all.",
         reasoning: "If staging never ran it, the null `kind` column there proves nothing about production and the whole comparison is off.",
         toolCalls: [
-          { name: "run", input: { command: "./scripts/migrations.sh status --env staging" }, output: "0007_coupon_kind.sql  applied 2026-08-11" },
+          { name: "shell", input: { command: "./scripts/migrations.sh status --env staging" }, output: "0007_coupon_kind.sql  applied 2026-08-11" },
         ],
       },
       {
@@ -2415,7 +2421,7 @@ const TRANSCRIPTS = {
         reasoning: "The task names one file but the serializer re-exports from two others, so grepping the package is cheaper than reading it and less likely to miss a caller.",
         toolCalls: [
           {
-            name: "run",
+            name: "shell",
             input: { command: "rg -n 'coupon\\.kind|rules\\[' packages/cart/src" },
             output: "src/serializer.ts:88:  const rule = rules[coupon.kind];\nsrc/serializer.ts:141:  if (coupon.kind === 'fixed') {\nsrc/totals.ts:52:  const pct = rules[coupon.kind].percent;",
           },
@@ -2459,7 +2465,7 @@ const TRANSCRIPTS = {
         reasoning: "A read that lost its guard and a read that never had one need different fixes, and only the history tells them apart.",
         toolCalls: [
           {
-            name: "run",
+            name: "shell",
             input: { command: "git log --oneline -S'rules[' -- packages/pricing/src" },
             output: "8c1f20a1 refactor(pricing): one rate table, read through a resolver",
           },
@@ -2470,7 +2476,7 @@ const TRANSCRIPTS = {
         // as still running.
         text: "Reading that commit.",
         toolCalls: [
-          { name: "run", input: { command: "git show 8c1f20a1 --stat" } },
+          { name: "shell", input: { command: "git show 8c1f20a1 --stat" } },
         ],
       },
     ] },
@@ -3037,12 +3043,12 @@ function ChatMessages() {
       ))}
       <DeviceConsentCard
         consent={{
-          consentId: "c1", deviceLabel: "ashish-laptop", method: "exec",
+          consentId: "c1", deviceLabel: "ashish-device", method: "exec",
           command: "git push origin fix/coupon-kind", createdAt: NOW,
         }}
         onResolve={() => {}}
       />
-      <DeviceOfflineRow devices={[{ id: "dev-1", label: "ashish-laptop", lastSeenAt: NOW }]} />
+      <DeviceOfflineRow devices={[{ id: "dev-1", label: "ashish-device", lastSeenAt: NOW }]} />
       <ChatErrorCard message="fetch failed: provider stream reset before completion (anthropic/claude-opus-4)" streaming={false} onRetry={() => {}} onDismiss={() => {}} />
       {/* The same card re-serving an OLDER turn's outcome. `sunlit-stone-4a20`
           answers a resume ACK with exactly this body today, from a turn that
@@ -3146,14 +3152,14 @@ function Controls() {
       <div className="flex flex-wrap items-center gap-2">
         <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-neutral">workspace</span>
         <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-success">sandbox</span>
-        <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-warning">laptop</span>
+        <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-warning">device</span>
         <span className="px-1.5 py-0.5 rounded-sm text-[10px] p-badge-danger">failed</span>
         <span className="size-1.5 rounded-full p-dot-success animate-pulse" title="working" />
         <span className="size-1.5 rounded-full p-dot-accent" title="unseen" />
       </div>
       <div className="space-y-2">
         <div className="p-notice-success text-xs rounded-md px-3 py-2">Deployed to staging — 14 tests green.</div>
-        <div className="p-notice-warning text-xs rounded-md px-3 py-2">The laptop runtime is not provisioned yet.</div>
+        <div className="p-notice-warning text-xs rounded-md px-3 py-2">The device runtime is not provisioned yet.</div>
         <div className="p-notice-danger text-xs rounded-md px-3 py-2">Could not remove: workspace has a live turn.</div>
         <div className="p-notice-info text-xs rounded-md px-3 py-2">Evolution changelog has 3 unseen entries.</div>
       </div>
@@ -3167,7 +3173,7 @@ function Controls() {
 }
 
 /* The chat column at the width Column A actually gets — 42% of the shell, so
-   roughly 540px on a laptop. Rendering it full-bleed would flatter every
+   roughly 540px on a device. Rendering it full-bleed would flatter every
    truncation and every line length the real column does not have. */
 function ChatFrame() {
   return (
@@ -4271,7 +4277,7 @@ function MarksFrame() {
 
    `exposure` here is the registry's DECLARED reach (TOOL_REACH), so the eight
    builtins are "both" — every one of them is also a codemode namespace or, for
-   run/file, reachable through `workspace.*`; only execute_tools is native-only,
+   run/file, reachable through `workspace.*`; only eval is native-only,
    because it IS the sandbox. `wired` is the second, separate fact: whether this
    agent has the capability at all. `report` is photographed at wired:false
    because that is what an orchestrator looks like — it IS the report sink — and
@@ -4462,12 +4468,12 @@ const BACKGROUND_JOBS = [
     workMode: "build" as const, status: "running" as const, result: null, error: null, createdAt: NOW - 9e5, settledAt: null,
   },
   {
-    id: "bgjob-2f8b1d04", kind: "execute_tools", label: "bun test packages/core",
+    id: "bgjob-2f8b1d04", kind: "eval", label: "bun test packages/core",
     workMode: "build" as const, status: "completed" as const, result: "2,633 pass · 0 fail · 187 files", error: null,
     createdAt: NOW - 42e5, settledAt: NOW - 33e5,
   },
   {
-    id: "bgjob-9d3c6e11", kind: "run", label: "wrangler deploy --dry-run",
+    id: "bgjob-9d3c6e11", kind: "shell", label: "wrangler deploy --dry-run",
     workMode: "build" as const, status: "failed" as const, result: null, error: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
     createdAt: NOW - 61e5, settledAt: NOW - 58e5,
   },
@@ -4504,12 +4510,12 @@ const PENDING_ACTIONS: PendingAction[] = [
   // sitting is the whole point of the card.
   {
     id: "defer-9y2n8ixor8", kind: "deferred_action", at: NOW - 40 * 60e3,
-    title: "Approve: a command the agent wants to run on laptop",
+    title: "Approve: a command the agent wants to run on device",
     detail: "cd ~/Kinu && rm -rf node_modules && bun install",
   },
   {
     id: "defer-4k1m2pqw7z", kind: "deferred_action", at: NOW - 36 * 60e3,
-    title: "Approve: a command the agent wants to run on laptop",
+    title: "Approve: a command the agent wants to run on device",
     detail: "sudo launchctl kickstart -k system/com.docker.dockerd",
   },
   {
@@ -4596,7 +4602,7 @@ const SHARE_GRAPH: SlateCapabilityGraph = {
       { member: "send", effect: "mutate", risk: RISK("Sends a message to your agent's inbox as this slate. Your agent reads it and acts on it in workspace checkout-fixes.") },
     ] },
     { slate: "issue-triage", name: "BRAIN", kind: "ai", capability: { kind: "model", tier: "fast" }, members: [
-      { member: "run", effect: "mutate", risk: RISK("Runs a model call on your fast tier. Every call spends your inference.") },
+      { member: "shell", effect: "mutate", risk: RISK("Runs a model call on your fast tier. Every call spends your inference.") },
     ] },
     { slate: "issue-triage", name: "PEER", kind: "app", capability: { kind: "slate", id: "digest" }, members: [] },
     { slate: "digest", name: "DIGEST_FILES", kind: "namespace", capability: { kind: "executor", namespace: "workspace" }, members: [
@@ -4725,8 +4731,8 @@ function WorkFrame() {
  * all is exactly the kind of gap a photograph closes.
  */
 const SHELL_GRANTS = [
-  { rule: "rm-recursive", executor: "laptop" },
-  { rule: "sudo", executor: "laptop" },
+  { rule: "rm-recursive", executor: "device" },
+  { rule: "sudo", executor: "device" },
   { rule: "docker-destructive", executor: "sandbox" },
 ];
 
@@ -4801,9 +4807,9 @@ function WorkEmptyFrame() {
  */
 const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
   {
-    name: "laptop", kind: "laptop", available: true, configured: true, active: true, status: "active",
+    name: "device", kind: "device", available: true, configured: true, active: true, status: "active",
     // The user's own name for the device, exactly as the consent contract
-    // carries it — the card renders THIS, never "laptop".
+    // carries it — the card renders THIS, never "device".
     label: "Ashish's MacBook",
     capabilities: ["shell", "npm", "git", "docker", "fs_owned", "process_spawn"],
   },
@@ -4826,11 +4832,11 @@ const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
  * prove rename and delete against the real components. Contents feed the
  * text preview; `binary-weights.bin` exercises the honest binary refusal.
  */
-function seedCompositeTree(offlineLaptop: boolean): Map<string, DirEntry[]> {
+function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
   const tree = new Map<string, DirEntry[]>([
     ["/", [
       { name: "home", type: "dir", mtimeMs: NOW - 4 * 36e5 },
-      ...(offlineLaptop ? [] : [{ name: "pc", type: "dir" as const, mtimeMs: NOW - 60e3 }]),
+      ...(offlineDevice ? [] : [{ name: "pc", type: "dir" as const, mtimeMs: NOW - 60e3 }]),
       { name: "sandbox", type: "dir", mtimeMs: NOW - 30 * 60e3 },
     ]],
     ["/home", [{ name: "user", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
@@ -4852,12 +4858,14 @@ function seedCompositeTree(offlineLaptop: boolean): Map<string, DirEntry[]> {
     ["/sandbox/workspace/dist", [{ name: "app.js", type: "file", size: 220_114, mtimeMs: NOW - 30 * 60e3 }]],
   ]);
 
-  if (!offlineLaptop) {
-    // The device tree BELOW its consented root. `/pc` and `/pc/home` are
-    // deliberately absent: the machine's own path guard refuses everything
-    // outside `PC_CONSENTED_ROOT`, and a fixture that listed them could not
-    // fail the way the owner's report failed.
-    tree.set("/pc/home/dev", [
+  if (!offlineDevice) {
+    // `/pc` is the roster: one entry per live machine, by its mount segment.
+    // The machine's tree BELOW its consented root follows; `/pc/<name>` and
+    // `/pc/<name>/home` are deliberately absent: the machine's own path guard
+    // refuses everything outside `PC_CONSENTED_ROOT`, and a fixture that
+    // listed them could not fail the way the owner's report failed.
+    tree.set("/pc", [{ name: PC_SEGMENT, type: "dir", mtimeMs: NOW - 36e5 }]);
+    tree.set(PC_CONSENTED_ROOT, [
       { name: "quarterly-report.txt", type: "file", size: 8_412, mtimeMs: NOW - 2 * 36e5 },
       { name: "shot.png", type: "file", size: 1_204_002, mtimeMs: NOW - 5 * 36e5 },
       { name: "notes.html", type: "file", size: 402, mtimeMs: NOW - 36e5 },
@@ -4867,19 +4875,26 @@ function seedCompositeTree(offlineLaptop: boolean): Map<string, DirEntry[]> {
   return tree;
 }
 
+/** The machine's mount segment under `/pc`: its own name, as
+ *  `deviceMountSegment` keys a fleet of one. */
+const PC_SEGMENT = "Ashish's MacBook";
+
+/** The machine's mount point: every machine sits at `/pc/<name>`. */
+const PC_MOUNT = `/pc/${PC_SEGMENT}`;
+
 /**
  * The device's consented directory. Production learns it from the machine
- * (`deviceFiles`' homeDir), and a bare `/pc` lands here instead of on the
- * device root nobody consented to.
+ * (`deviceFiles`' homeDir), and a bare `/pc/<name>` lands here instead of on
+ * the device root nobody consented to.
  */
-const PC_CONSENTED_ROOT = "/pc/home/dev";
+const PC_CONSENTED_ROOT = `${PC_MOUNT}/home/dev`;
 
 const FILES_TEXT = {
   "/home/user/notes.md": "# Checkout coupon regression\n\n- kind:null rows come from the 0412 migration\n- the serializer guards only percentage coupons\n- fix drafted in packages/checkout/src/apply-coupon.ts\n",
   "/home/user/SOUL.md": "I keep this workspace's changes small and proven.\n",
   "/home/user/AGENTS.md": "## Working agreements\n\nRun the checkout suite before claiming a fix.\n",
-  "/pc/home/dev/quarterly-report.txt": "Q3 numbers, draft 2 — do not circulate.\n",
-  "/pc/home/dev/notes.html": "<h1>Q3 close</h1><p>Signed off by finance.</p>\n",
+  [`${PC_CONSENTED_ROOT}/quarterly-report.txt`]: "Q3 numbers, draft 2 — do not circulate.\n",
+  [`${PC_CONSENTED_ROOT}/notes.html`]: "<h1>Q3 close</h1><p>Signed off by finance.</p>\n",
   "/sandbox/workspace/build.log": "$ bun run build\nbundled 412 modules in 1.9s\nok\n",
 } satisfies Record<string, string>;
 
@@ -4895,9 +4910,9 @@ interface PreviewDeferred {
  * proves. `frame=environment` and `frame=files` differ only in where they
  * start and how wide they photograph.
  */
-function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false }: {
+function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false }: {
   initialSurface: SurfaceKind;
-  offlineLaptop: boolean;
+  offlineDevice: boolean;
   width: string;
   /** Fixture control for the real FilesSurface stale-preview proof. The held
    *  value is transport input only; FilesSurface/FileViewer decide whether it
@@ -4906,15 +4921,15 @@ function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false
 }) {
   const [surface, setSurface] = useState<SurfaceKind>(initialSurface);
 
-  const executors = useMemo<ExecutorInfo[]>(() => offlineLaptop
-    ? ENVIRONMENT_EXECUTORS.map((exec) => exec.name === "laptop"
+  const executors = useMemo<ExecutorInfo[]>(() => offlineDevice
+    ? ENVIRONMENT_EXECUTORS.map((exec) => exec.name === "device"
       ? { ...exec, available: false, active: false, status: "disconnected" as const, reason: "no device connected" }
       : exec)
-    : ENVIRONMENT_EXECUTORS, [offlineLaptop]);
+    : ENVIRONMENT_EXECUTORS, [offlineDevice]);
 
   const tree = useRef<Map<string, DirEntry[]> | null>(null);
 
-  if (tree.current === null) tree.current = seedCompositeTree(offlineLaptop);
+  if (tree.current === null) tree.current = seedCompositeTree(offlineDevice);
   const text = useRef<Map<string, string> | null>(null);
 
   if (text.current === null) text.current = new Map(Object.entries(FILES_TEXT));
@@ -4924,9 +4939,9 @@ function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false
 
   const mounts: MountInfo[] = [
     { name: "workspace", prefix: "workspace.*", live: true, policy: { readOnly: false, consistency: "durable" }, reason: null },
-    offlineLaptop
-      ? { name: "laptop", prefix: "laptop.*", live: false, policy: { readOnly: false, consistency: "live-shared" }, reason: "no device connected" }
-      : { name: "laptop", prefix: "laptop.*", live: true, policy: { readOnly: false, consistency: "live-shared" }, reason: null },
+    offlineDevice
+      ? { name: "device", prefix: "device.*", live: false, policy: { readOnly: false, consistency: "live-shared" }, reason: "no device connected" }
+      : { name: "device", prefix: "device.*", live: true, policy: { readOnly: false, consistency: "live-shared" }, reason: null },
     { name: "sandbox", prefix: "sandbox.*", live: true, policy: { readOnly: false, consistency: "ephemeral" }, reason: null },
   ];
 
@@ -4943,19 +4958,20 @@ function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false
 
       if (execName !== "workspace") return rpcResult({ error: `Executor "${execName}" has no listing here` }).json<T>();
       const asked = path === "" ? "/" : path;
-      // A bare mount point lands on the machine's consented root, exactly as
-      // `read-models/files.ts` mountLanding resolves it server-side.
-      const dir = asked === "/pc" ? PC_CONSENTED_ROOT : asked;
+      // A bare machine root lands on that machine's consented root, exactly
+      // as `read-models/files.ts` mountLanding resolves it server-side; the
+      // fleet root `/pc` is the roster and lands on itself.
+      const dir = asked === PC_MOUNT ? PC_CONSENTED_ROOT : asked;
       const entries = store.get(dir);
 
       if (entries !== undefined) return rpcResult({ path: dir, entries }).json<T>();
 
-      // Inside the mount but outside the consented root: the device's own
-      // refusal, in the words `deviceFiles`' path guard uses.
-      const error = dir.startsWith("/pc")
-        ? `EACCES: '${dir.slice("/pc".length) || "/"}' is outside the consented device directory `
-          + `'${PC_CONSENTED_ROOT.slice("/pc".length)}' — grant this agent the full-filesystem `
-          + `consent tier to reach it, list '${dir.slice("/pc".length) || "/"}'`
+      // Inside the machine's mount but outside the consented root: the
+      // device's own refusal, in the words `deviceFiles`' path guard uses.
+      const error = dir.startsWith(PC_MOUNT)
+        ? `EACCES: '${dir.slice(PC_MOUNT.length) || "/"}' is outside the consented device directory `
+          + `'${PC_CONSENTED_ROOT.slice(PC_MOUNT.length)}' — grant this agent the full-filesystem `
+          + `consent tier to reach it, list '${dir.slice(PC_MOUNT.length) || "/"}'`
         : `ENOENT: ${dir}`;
 
       return rpcResult({ error }).json<T>();
@@ -5398,7 +5414,7 @@ const ACTIVITY_CONTEXT: ContextComposition = {
   segments: [
     { plane: "system", label: "Core instructions", chars: 18_400, items: 1 },
     { plane: "system", label: "Workspace brief", chars: 3_120, items: 1 },
-    { plane: "tools", label: "run", chars: 2_840, items: 1 },
+    { plane: "tools", label: "shell", chars: 2_840, items: 1 },
     { plane: "tools", label: "edit", chars: 3_610, items: 1 },
     { plane: "tools", label: "read", chars: 2_180, items: 1 },
     { plane: "messages", label: "tool", chars: 328_900, items: 96 },
@@ -5450,7 +5466,7 @@ const ACTIVITY_LOG: ActivitySnapshot["log"] = [
   { event: "steer_queued", detail: "look at the tests too", elapsedMs: 0, createdAt: NOW - 96e3 },
   { event: "beforeturn", detail: "streamText() called next", elapsedMs: 4, createdAt: NOW - 95e3 },
   {
-    event: "gettools_rebuilding", detail: "build:execute_tools,run,file,agents,memory,tasks,web:3:1757011200000:0 → build:execute_tools,run,file,agents,memory,tasks,web:4:1757011260000:0",
+    event: "gettools_rebuilding", detail: "build:eval,run,file,agents,memory,tasks,web:3:1757011200000:0 → build:eval,run,file,agents,memory,tasks,web:4:1757011260000:0",
     elapsedMs: 11, createdAt: NOW - 95e3,
   },
   {
@@ -5559,7 +5575,7 @@ const activityRpc = (snapshot: ActivitySnapshot): Rpc =>
 /** One message per state that the `chat` frame either folds into a group or
  *  can't show pre-expanded: a quiet failure (the tool caught it and returned
  *  it as a normal result), a protocol-level failure (the executor itself
- *  crashed — errorText, no output), a clean multi-line `run`, and an MCP tool
+ *  crashed — errorText, no output), a clean multi-line `shell`, and an MCP tool
  *  with no known summarizer contract. Auto-expanded on mount below so the
  *  input/output panel is the thing the screenshot shows. */
 const TOOLCALL_MESSAGES: UIMessage[] = [
@@ -5580,7 +5596,7 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
   msg({
     id: "tc-run", role: "assistant",
     parts: [
-      { type: "text", text: "A multi-line `run` command, expanded — a shell script, not an escaped JSON string." },
+      { type: "text", text: "A multi-line `shell` command, expanded — a shell script, not an escaped JSON string." },
       {
         type: "tool-run", toolCallId: "tc3", state: "output-available",
         input: { runtime: "sandbox", command: "for f in packages/checkout/migrations/*.sql; do\n  echo \"-- checking $f\"\n  sqlite3 :memory: < \"$f\" || exit 1\ndone" },
@@ -6413,7 +6429,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
 const SANDBOX_DEVICES: readonly UserDevice[] = [
   galleryDevice("dev-sandboxed", "workstation", { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: ["/dev/nvidia0", "/dev/nvidiactl"] }),
   galleryDevice("dev-raw", "build-box", { tier: "raw", capability: "sandboxed", reason: null, detail: null, gpu: [] }),
-  galleryDevice("dev-cannot", "old-laptop", { tier: "sandboxed", capability: "files_only", reason: "no_bwrap", detail: null, gpu: [] }),
+  galleryDevice("dev-cannot", "old-device", { tier: "sandboxed", capability: "files_only", reason: "no_bwrap", detail: null, gpu: [] }),
 ];
 
 function DeviceSandboxFrame() {
@@ -6718,7 +6734,7 @@ async function mount() {
   // The Environment tab and the composite drive share one stateful frame, so
   // an Environment card's Files action genuinely lands the drive. Routed: the
   // Files surface reads `agentId` off the route to address the raw-bytes HTTP
-  // route. `&offline=laptop` photographs the stated-absence row for a
+  // route. `&offline=device` photographs the stated-absence row for a
   // disconnected device; `&wide=1` the ≥64rem side-panel preview.
   else if (frame === "environment" || frame === "files") {
     const params = new URLSearchParams(location.search);
@@ -6728,7 +6744,7 @@ async function mount() {
         <Route path="/workspace/:agentId"
           element={<DriveFrame
             initialSurface={frame === "files" ? "Files" : "Environment"}
-            offlineLaptop={params.get("offline") === "laptop"}
+            offlineDevice={params.get("offline") === "device"}
             width={params.get("wide") === null ? (frame === "files" ? "w-[860px]" : "w-[720px]") : "w-[1240px]"}
             deferPreview={params.get("deferpreview") === "1"}
           />} />
