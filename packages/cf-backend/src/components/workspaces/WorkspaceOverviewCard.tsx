@@ -10,7 +10,8 @@
  * the roster lands; the overview is the shared per-name read
  * (`use-workspace-overviews`) and fails independently. The retry button sits
  * BESIDE the link — a button inside an anchor is nested interactive content,
- * so the card is a wrapper holding the link and the action separately.
+ * so the card is a wrapper holding the link and the action separately, and
+ * the tile's slate picture hangs off that same wrapper.
  */
 import { Link } from "react-router-dom";
 import { overviewHeadline, timeAgo, workspaceDisplayTitle, type WorkspaceHeadline, type WorkspaceOverview } from "@kinu.run/core";
@@ -71,6 +72,40 @@ function hueOf(name: string): number {
   for (const char of name) hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
 
   return hash % 360;
+}
+
+/**
+ * The tile's picture: the workspace's primary slate, live, at a quarter
+ * scale. A slate is a durable application on a URL that outlives its
+ * process, so the tile can hold the app itself — there is no screenshot
+ * service and no capture to go stale.
+ *
+ * The frame renders at four times the box and is scaled down from its top
+ * left, so the app lays out at a real viewport width instead of reflowing
+ * into a phone column. It is inert in every direction: no pointer events, no
+ * tab stop, out of the accessibility tree, and `sandbox` without
+ * `allow-top-navigation` or `allow-forms`. The workspace's own colour is the
+ * ground under it, so a slate that has not painted yet still reads as a tile.
+ */
+function SlateFrame({ slate, hue }: { slate: NonNullable<WorkspaceOverview["primarySlate"]>; hue: number }) {
+  return (
+    <span
+      data-slate-frame
+      className="relative block aspect-[16/10] w-full overflow-hidden"
+      style={{ background: `linear-gradient(180deg, oklch(62% 0.13 ${hue} / 0.28), oklch(62% 0.13 ${hue} / 0.08))` }}
+    >
+      <iframe
+        src={slate.url}
+        title={slate.title}
+        loading="lazy"
+        sandbox="allow-scripts allow-same-origin"
+        tabIndex={-1}
+        aria-hidden
+        className="absolute left-0 top-0 border-0"
+        style={{ width: "400%", height: "400%", transform: "scale(0.25)", transformOrigin: "top left", pointerEvents: "none" }}
+      />
+    </span>
+  );
 }
 
 export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
@@ -149,23 +184,35 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   }
 
   const hue = hueOf(workspace.name);
+  const slate = overview?.primarySlate ?? null;
 
   return (
-    <div className="p-card flex min-h-[150px] flex-col overflow-hidden transition-colors hover:p-elevated">
-      <Link to={`/workspace/${workspace.name}`} className="flex min-h-0 flex-1 flex-col">
-        {/* The tile's own colour: a band and a monogram in the workspace's hue. */}
-        <span
-          className="flex h-14 items-end px-4 pb-2"
-          style={{ background: `linear-gradient(180deg, oklch(62% 0.13 ${hue} / 0.28), oklch(62% 0.13 ${hue} / 0.08))` }}
-        >
+    <div className="p-card relative flex min-h-[150px] flex-col overflow-hidden transition-colors hover:p-elevated">
+      {/* The picture is the link's SIBLING, never its child: an iframe inside
+          an anchor is nested interactive content. The link stretches over the
+          whole tile instead, so a click on the picture still opens the
+          workspace. */}
+      {slate !== null && <SlateFrame slate={slate} hue={hue} />}
+      <Link
+        to={`/workspace/${workspace.name}`}
+        className="flex min-h-0 flex-1 flex-col after:absolute after:inset-0 after:content-['']"
+      >
+        {slate === null && (
+          // The tile's own colour where there is nothing to show: a band and
+          // a monogram in the workspace's hue.
           <span
-            className="flex size-8 items-center justify-center rounded-lg text-sm font-semibold"
-            style={{ background: `oklch(62% 0.14 ${hue} / 0.35)`, color: `oklch(78% 0.12 ${hue})` }}
-            aria-hidden="true"
+            className="flex h-14 items-end px-4 pb-2"
+            style={{ background: `linear-gradient(180deg, oklch(62% 0.13 ${hue} / 0.28), oklch(62% 0.13 ${hue} / 0.08))` }}
           >
-            {title.trim().charAt(0).toUpperCase() || "·"}
+            <span
+              className="flex size-8 items-center justify-center rounded-lg text-sm font-semibold"
+              style={{ background: `oklch(62% 0.14 ${hue} / 0.35)`, color: `oklch(78% 0.12 ${hue})` }}
+              aria-hidden="true"
+            >
+              {title.trim().charAt(0).toUpperCase() || "·"}
+            </span>
           </span>
-        </span>
+        )}
         <span className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-2.5">
           <span className="truncate p-row-text font-medium p-text">{title}</span>
           <span className="mt-1"><StatusChip overview={overview} stale={stale} loading={resource.status === "loading"} unavailable={unavailable} /></span>
@@ -175,7 +222,9 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
           )}
         </span>
       </Link>
-      {retry && <span className="px-4 pb-3">{retry}</span>}
+      {/* Above the link's overlay, or the one action on a failed card would
+          open the workspace instead of retrying its read. */}
+      {retry && <span className="relative px-4 pb-3">{retry}</span>}
     </div>
   );
 }

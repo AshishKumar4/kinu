@@ -450,6 +450,16 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
 
         return { port: reserved.port, capability: reserved.capability };
       },
+      // Straight off the reservation record, with no session composed and no
+      // process driven: a capability is minted when the application is first
+      // reserved, so a held one is enough to build its URL from.
+      async reserved(owner) {
+        const held = await readPortReservationByOwner(deps.ctx, owner);
+
+        return held === null || held.reservation.capability === null
+          ? null
+          : { port: held.port, capability: held.reservation.capability };
+      },
       async remove(owner) {
         const removed = await (await compose()).facets.apps.removeDurableApp(owner);
 

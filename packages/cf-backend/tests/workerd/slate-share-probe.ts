@@ -111,6 +111,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       },
       apps: {
         ensure: async () => { throw new Error('a share probe reserves no durable app'); },
+        reserved: async () => null,
         remove: async () => ({ removed: false, port: null }),
         url: async () => { throw new Error('a share probe publishes no preview URL'); },
       },
