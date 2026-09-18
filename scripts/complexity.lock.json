@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-18",
   "files": 2484,
-  "functions": 61112,
+  "functions": 61136,
   "ceiling": 125,
   "line": 35,
   "inventory": [
@@ -99,10 +99,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
-      "complexity": 45
-    },
-    {
-      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
       "complexity": 45
     },
     {
