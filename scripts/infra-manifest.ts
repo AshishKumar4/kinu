@@ -535,6 +535,7 @@ const R2_PURPOSE = {
   NIMBUS_RUNTIME_CACHE:
     'the Nimbus runtime artifact store a hosted workspace installs its toolchain from',
   FEEDBACK_BUCKET: 'screenshots attached to in-product feedback reports',
+  RELEASES_BUCKET: 'the worker release artifact each self-hosted deployment installs and updates from',
 } satisfies Record<string, string>;
 
 const R2_HOLDS = {
@@ -544,6 +545,9 @@ const R2_HOLDS = {
     + 'ruby, bash, cpython). Deleting it makes every hosted `python3` exit 127.',
   FEEDBACK_BUCKET: 'every submitted screenshot. The metadata rows in ControlPlaneDO survive '
     + 'independently, so deleting it leaves each report readable with its image gone.',
+  RELEASES_BUCKET: 'every published worker release tarball. Deleting it leaves `release.json` '
+    + 'naming an artifact that answers 404, so a self-hosted deployment cannot install or update '
+    + 'until the next deploy republishes one.',
 } satisfies Record<string, string>;
 
 /** Read one of the two closed tables above by a binding name the config supplied.

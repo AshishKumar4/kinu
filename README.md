@@ -20,11 +20,6 @@
 </p>
 
 <p align="center">
-  <b>6</b> named searches &nbsp;·&nbsp; <b>8</b> built-in tools &nbsp;·&nbsp;
-  <b>2</b> backends, one core &nbsp;·&nbsp; <b>4</b> execution environments
-</p>
-
-<p align="center">
   <a href="QUICKSTART.md">Quick start</a> &nbsp;·&nbsp;
   <a href="docs/USER-GUIDE.md">User guide</a> &nbsp;·&nbsp;
   <a href="docs/EXPLORATION.md">Swarms</a> &nbsp;·&nbsp;
@@ -34,10 +29,10 @@
 ## Demo
 
 <p align="center">
-  <img alt="Animated walkthrough: the agent plans the checkout fix, submits the plan for review, the cursor approves it, and the support-queue slate builds and opens, using sample data." src="docs/assets/kinu-plan-demo.gif" width="976" height="818">
+  <img alt="Animated walkthrough: the agent plans the checkout fix, submits the plan for review, the cursor approves it, and the support-queue slate builds and opens, using sample data." src="docs/assets/kinu-plan-demo.gif" width="1200" height="750">
 </p>
 
-<p align="center"><em>The planning walkthrough with sample data, recorded from the live interface. Try it at <a href="https://kinu.run">kinu.run</a>.</em></p>
+<p align="center"><em>The planning walkthrough, recorded from the product at build <code>89bb99e85</code> — a real workspace driven through its own controls, with a stand-in model. Try it at <a href="https://kinu.run">kinu.run</a>.</em></p>
 
 ## What Kinu is
 

@@ -174,12 +174,42 @@ describe('Plan mode tool lifecycle', () => {
     setMode(agent, 'plan');
     // A Plan turn RUNNING: admitted in that mode and parked at its model call.
     const turns = chatSessionTurns(agent);
-    await turns.prepare({ messages: [{ role: 'user', content: 'plan this change' }], body: { kinuMode: 'plan' } });
+    await turns.prepare({ messages: [{ role: 'user', content: 'plan this change' }] });
 
     await expect(agent.branchTurn('implement this in parallel')).resolves.toEqual({
       accepted: false,
       reason: 'Plan turns cannot start mutating branches. Review or finish the plan first.',
     });
+    await turns.settle({ messageId: 'a-plan', text: 'planned' });
+  });
+
+  /**
+   * THE PLAN TURN THE BROWSER SENDS, WITH A TURN ALREADY BEHIND IT.
+   *
+   * The composer's Plan press rides as `metadata.kinuMode` on the message
+   * (use-kinu `sendChat`), reaches `ChatSession.send` as its `mode`, and is
+   * the turn item's metadata by the time the turn is prepared. A workspace's
+   * SECOND turn is where that broke: the previous turn's resolved profile was
+   * still bound when the new turn built its tools, so `turnWorkMode()`
+   * answered the OLD turn's mode and the model was offered a build surface
+   * with the Plan bar stated. Measured against the live product on
+   * 2026-09-18: a Plan message sent from the composer reached the provider as
+   * `tools=eval,shell,file,memory,tasks,web,agents`, no `submit_plan`.
+   */
+  test('offers submit_plan on a Plan turn that follows another turn', async () => {
+    const harness = orchestratorHarness();
+    const agent = harness.agent;
+    const turns = chatSessionTurns(agent);
+
+    setMode(agent, 'build');
+    await turns.prepare({ messages: [{ role: 'user', content: 'build this change' }] });
+    await turns.settle({ messageId: 'a-build', text: 'built' });
+
+    setMode(agent, 'plan');
+    const planned = await turns.prepare({ messages: [{ role: 'user', content: 'plan this change' }] });
+
+    expect(planned.activeTools).toContain('submit_plan');
+    expect(Object.keys(planned.tools)).toContain('submit_plan');
     await turns.settle({ messageId: 'a-plan', text: 'planned' });
   });
 

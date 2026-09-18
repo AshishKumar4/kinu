@@ -856,6 +856,15 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  rather than a re-declaration of it. */
   observeExplorationSeams(): ExplorationHostSeams { return this.explorationSeams(); }
 
+  /** THE profile one hosted actor's turn resolves under — the authority every
+   *  hosted kind reaches (`resolveProfile` on both host seams), asked here
+   *  directly so a suite can read the resolution rather than a turn's effect
+   *  on a model it cannot call under bun. */
+  observeHostedActorProfile(actor: HostedActor, workMode: WorkMode = 'build'): Promise<ResolvedTurnProfile> {
+    return this.hostedActorProfile({ actor: actor.handle, availableTools: [], workMode })
+      .then((resolved) => resolved.profile);
+  }
+
   /** A hired child's DELEGATED-turn profile, as the runner received it: the
    *  ToolSet it may call and the framing it was told it runs under.
    *
@@ -1440,7 +1449,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
 
   /** Admit a turn under the ids the suite named (the opened turn, the answer
    *  it will settle with) and park it at its first model call. */
-  const admit = async (text: string, mode: WorkMode | undefined, answerId: string | undefined, signal?: AbortSignal): Promise<ParkedTurn> => {
+  const admit = async (text: string, answerId: string | undefined, signal?: AbortSignal): Promise<ParkedTurn> => {
     const arrived = Promise.withResolvers<ScriptedTurnOptions>();
     const answer = Promise.withResolvers<ScriptedAnswer>();
     const model = parkingModel(arrived, answer.promise);
@@ -1453,7 +1462,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     const turnId = openedTurns.get(agent) ?? driving?.id;
     openedTurns.delete(agent);
     const drivingMode = v.safeParse(v.string(), driving?.metadata?.kinuMode);
-    const chosenMode = mode ?? (drivingMode.success && isWorkMode(drivingMode.output) ? drivingMode.output : undefined);
+    const chosenMode = drivingMode.success && isWorkMode(drivingMode.output) ? drivingMode.output : undefined;
 
     // A stamped driving message (a signal's `kinuEvent`) is a programmatic
     // turn, admitted through the queue with its metadata; a client's message
@@ -1557,7 +1566,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
         return { status: landing === 'turn' ? 'completed' : 'skipped', message: last?.role === 'assistant' ? last : undefined };
       }
 
-      const parked = await admit(text, undefined, undefined, options?.signal);
+      const parked = await admit(text, undefined, options?.signal);
       parked.answer.resolve({ messageId: parked.identity.messageId, text: 'ok' });
       const landing = await parked.landed;
       await agent.harnessChatLoop.pumpPromise;
@@ -1638,9 +1647,12 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       if (prior.length > 0) agent.harnessSeedHistory(prior);
       const content = user?.content;
       const text = content === undefined ? '' : v.is(v.string(), content) ? content : content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('');
-      const mode = v.safeParse(v.object({ kinuMode: v.string() }), input.body);
+      // ONE mode carrier, the product's: the composer stamps `kinuMode` on
+      // the message it sends, so the driving message's metadata is where
+      // `admit` reads it. A second copy on the request body proved a mode the
+      // browser never sends that way.
       agent.harnessSupplyTools(input.tools);
-      const parked = await admit(text, mode.success && isWorkMode(mode.output.kinuMode) ? mode.output.kinuMode : undefined, undefined, input.signal);
+      const parked = await admit(text, undefined, input.signal);
 
       return parked.request;
     },
@@ -1659,7 +1671,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       // is consumed, so the next settle starts a new turn.
 
       if (answer.turnId !== undefined && !parkedTurns.has(agent) && !openedTurns.has(agent)) openedTurns.set(agent, answer.turnId);
-      const parked = parkedTurns.get(agent) ?? await admit(answer.turnId ?? answer.messageId, undefined, answer.messageId);
+      const parked = parkedTurns.get(agent) ?? await admit(answer.turnId ?? answer.messageId, answer.messageId);
       parkedTurns.delete(agent);
 
       return finish(parked, answer);
@@ -1671,7 +1683,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
 
     async openInFlight(turnId) {
       openedTurns.set(agent, turnId);
-      await admit('a live turn', undefined, undefined);
+      await admit('a live turn', undefined);
     },
   };
 }

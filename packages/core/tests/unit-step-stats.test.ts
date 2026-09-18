@@ -70,6 +70,28 @@ describe('summarizeSteps', () => {
     expect(summarizeSteps([], { windowLimit: 100 }).cacheHit.p99).toBeNull();
   });
 
+  test('a cache warm is counted, and moves no number the conversation earned', () => {
+    const turns = [step({ input: 100, cacheRead: 40 }), step({ input: 100, cacheRead: 60 })];
+    const bare = summarizeSteps(turns, { windowLimit: 100 });
+    // A warm reads the whole prefix and writes nothing, so its own rate is ~1.
+
+    const warmed = summarizeSteps(turns, {
+      windowLimit: 100,
+      warms: [step({ input: 40_004, cacheRead: 40_000 }), step({ input: 40_004, cacheRead: 40_000 })],
+    });
+
+    expect(warmed.cacheHit.warms).toBe(2);
+    expect(bare.cacheHit.warms).toBe(0);
+    expect(warmed.cacheHit.samples).toBe(bare.cacheHit.samples);
+    expect(warmed.cacheHit.ema).toBe(bare.cacheHit.ema);
+    expect(warmed.cacheHit.mean).toBe(bare.cacheHit.mean);
+    expect(warmed.cacheHit.p95).toBe(bare.cacheHit.p95);
+    expect(warmed.cacheHit.p99).toBe(bare.cacheHit.p99);
+    expect(warmed.cacheHit.last).toBe(bare.cacheHit.last);
+    expect(warmed.steps).toBe(2);
+    expect(warmed.tokens).toEqual(bare.tokens);
+  });
+
   test('sums the provider-reported tokens verbatim', () => {
     const t = summarizeSteps([
       step({ input: 100, cacheRead: 50, output: 10, reasoning: 5 }),

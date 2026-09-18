@@ -197,6 +197,8 @@ fi
 # Every gate is a plain argv of words — the plan carries no quotes — and
 # `flush_gates` splits it on whitespace; bash expands a glob word against the
 # tree, which is how the UI row's `scripts/*-ux.test.ts` reaches its family.
+# Its `--path-ignore-patterns=<suite>` word holds no glob character, so bash
+# passes it through and bun subtracts the suite that is a row of its own.
 PLAN_PHASE=()
 PLAN_LABEL=()
 PLAN_THREADS=()
@@ -587,6 +589,19 @@ else
   bunx vite build || { echo -e "${RED}vite build failed${NC}"; exit 1; }
 fi
 
+# The worker release artifact, BEFORE the CLI distribution: `build-cli-dist.sh`
+# signs every artifact it finds in the downloads directory, so writing this one
+# first is what puts its checksum in `kinu-version.json` beside the CLI's. The
+# self-deploy flow reads `release.json` and verifies the tarball against that
+# signed checksum exactly the way the CLI launcher does (docs/SELF-DEPLOY.md).
+KINU_RELEASE_VERSION="$(bun -e '
+  const manifest = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  process.stdout.write(manifest.version.split("+")[0]);
+' "$KINU_ROOT/packages/cli/package.json")+$KINU_SHA"
+echo "Building the worker release artifact ($KINU_RELEASE_VERSION)"
+bun "$KINU_ROOT/scripts/build-worker-release.ts" "$KINU_RELEASE_VERSION" "$KINU_SHA" \
+  || { echo -e "${RED}worker release artifact build failed${NC}"; exit 1; }
+
 echo "Building the CLI distribution"
 bash "$KINU_ROOT/scripts/build-cli-dist.sh" || { echo -e "${RED}CLI distribution build failed${NC}"; exit 1; }
 
@@ -597,13 +612,34 @@ KINU_CLI_ARTIFACTS=(kinu-runtime-cpython.tar.gz)
 for platform in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
   KINU_CLI_ARTIFACTS+=("kinu-cli-$platform.tar.gz")
 done
-for file in kinu-version.json "${KINU_CLI_ARTIFACTS[@]}" "${KINU_CLI_ARTIFACTS[@]/%/.sha256}"; do
+KINU_WORKER_ARTIFACT="kinu-worker-$KINU_RELEASE_VERSION.tar.gz"
+KINU_WORKER_ARTIFACT_PATH="$KINU_ROOT/packages/cf-backend/dist/worker-release/$KINU_WORKER_ARTIFACT"
+for file in kinu-version.json release.json "$KINU_WORKER_ARTIFACT.sha256" \
+  "${KINU_CLI_ARTIFACTS[@]}" "${KINU_CLI_ARTIFACTS[@]/%/.sha256}"; do
   if [ ! -s "$KINU_ASSETS_DIR/downloads/$file" ]; then
     echo -e "${RED}❌ Missing build output: $KINU_ASSETS_DIR/downloads/$file${NC}"
     exit 1
   fi
 done
-echo -e "${GREEN}✅ CLI download assets staged in $KINU_ASSETS_DIR/downloads${NC}"
+if [ ! -s "$KINU_WORKER_ARTIFACT_PATH" ]; then
+  echo -e "${RED}❌ Missing build output: $KINU_WORKER_ARTIFACT_PATH${NC}"
+  exit 1
+fi
+echo -e "${GREEN}✅ CLI and worker release assets staged in $KINU_ASSETS_DIR/downloads${NC}"
+
+# The worker artifact is larger than Cloudflare's 25 MiB per-file asset limit,
+# so it is published into R2 and streamed by the Worker instead. BEFORE the
+# deploy, never after: the release.json this deploy publishes names this
+# artifact, and a manifest that names an object nobody uploaded yet sends every
+# self-deploy run at a 404.
+echo "Publishing $KINU_WORKER_ARTIFACT to r2://kinu-releases"
+npx wrangler r2 object put "kinu-releases/$KINU_WORKER_ARTIFACT" \
+  --file "$KINU_WORKER_ARTIFACT_PATH" --content-type application/gzip --remote \
+  || { echo -e "${RED}❌ uploading the worker release artifact failed${NC}"; exit 1; }
+npx wrangler r2 object put "kinu-releases/$KINU_WORKER_ARTIFACT.sha256" \
+  --file "$KINU_ASSETS_DIR/downloads/$KINU_WORKER_ARTIFACT.sha256" --content-type text/plain --remote \
+  || { echo -e "${RED}❌ uploading the worker release checksum failed${NC}"; exit 1; }
+echo -e "${GREEN}✅ Worker release artifact published to R2${NC}"
 
 # ── Step 3: Deploy Kinu ───────────────────────────────────────
 echo ""
@@ -713,6 +749,27 @@ if [ "$VERSION_SHA" = "$KINU_SHA" ]; then
   echo -e "${GREEN}✅ Published kinu-version.json is real JSON for this build${NC}"
 else
   echo -e "${RED}❌ Published kinu-version.json sha is '${VERSION_SHA:-<unparseable>}', expected '$KINU_SHA'${NC}"
+  SMOKE_FAIL=1
+fi
+
+# The self-deploy channel. Same SPA-shell hazard as the stamp above, and worse
+# consequences: a deployment reading a shell instead of a manifest would try to
+# upload a Worker made of an HTML page.
+RELEASE_SHA=""
+for _try in 1 2 3 4 5 6 7 8; do
+  RELEASE_SHA=$(curl -fsSL --max-time 15 "${KINU_URL}downloads/release.json?smoke=$_try" 2>/dev/null | json_field sha)
+  [ "$RELEASE_SHA" = "$KINU_SHA" ] && break
+  sleep 15
+done
+RELEASE_ARTIFACT_SHA="$(curl -fsSL --max-time 15 "${KINU_URL}downloads/$KINU_WORKER_ARTIFACT.sha256" 2>/dev/null | awk '{print $1}')"
+SIGNED_ARTIFACT_SHA="$(curl -fsSL --max-time 15 "${KINU_URL}downloads/kinu-version.json" 2>/dev/null \
+  | bun -e 'const m=JSON.parse(await Bun.stdin.text()); process.stdout.write(m.checksums?.["/downloads/"+process.argv[1]] ?? "")' "$KINU_WORKER_ARTIFACT")"
+ARTIFACT_STATUS="$(curl -s -o /dev/null -w '%{http_code}' -I --max-time 30 "${KINU_URL}downloads/$KINU_WORKER_ARTIFACT" 2>/dev/null)"
+if [ "$RELEASE_SHA" = "$KINU_SHA" ] && [ -n "$RELEASE_ARTIFACT_SHA" ] \
+  && [ "$RELEASE_ARTIFACT_SHA" = "$SIGNED_ARTIFACT_SHA" ] && [ "$ARTIFACT_STATUS" = "200" ]; then
+  echo -e "${GREEN}✅ release.json names this build, the artifact route answers, and its checksum is the signed one${NC}"
+else
+  echo -e "${RED}❌ release.json sha is '${RELEASE_SHA:-<unparseable>}' (expected '$KINU_SHA'); worker artifact checksum '${RELEASE_ARTIFACT_SHA:-<none>}' vs signed '${SIGNED_ARTIFACT_SHA:-<none>}'; artifact route answered ${ARTIFACT_STATUS:-<none>}${NC}"
   SMOKE_FAIL=1
 fi
 

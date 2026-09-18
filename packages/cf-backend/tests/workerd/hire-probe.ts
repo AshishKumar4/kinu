@@ -246,12 +246,13 @@ export { HireOrchestrator as OrchestratorAgent };
  *  judge, which resolve their own models and must be answered for every
  *  workspace here.
  *
- *  The CHILD's turn is deliberately NOT on this binding. The fixture pins the
- *  profile catalog's default tier to an `openai-compat` spec so a delegated
- *  turn travels the same HTTP seam the two-turn tier already proves — the
- *  direct Workers AI streaming path hangs a delegated turn for a minute and
- *  then reports "ReadableStream reader has been released", which is its own
- *  finding and not something the delegation assertions should ride on. */
+ *  The CHILD's turn is deliberately NOT on this binding: the workspace is
+ *  pinned to an `openai-compat` spec and a hosted actor's turn runs on that
+ *  pin, so a delegated turn travels the same HTTP seam the two-turn tier
+ *  already proves — the direct Workers AI streaming path hangs a delegated
+ *  turn for a minute and then reports "ReadableStream reader has been
+ *  released", which is its own finding and not something the delegation
+ *  assertions should ride on. */
 export class HireAI extends WorkerEntrypoint {
   async run(
     _model: string,
@@ -337,10 +338,12 @@ export class HireProbeRoot extends Agent<ProbeEnv> {
     await userDO.setCredential(caller, 'openai-compat.default', {
       kind: 'openai-compat', baseURL: 'http://hire-models.invalid/v1', apiKey: 'hire-fixture-key',
     });
-    // A hosted actor resolves its model from the catalog's TIER, not from the
-    // workspace pin, so the child's wire is chosen here — through the account
-    // catalog's own compare-and-swap write, a product surface, rather than by
-    // reaching into the child's config.
+    // The default tier, written through the account catalog's own
+    // compare-and-swap rather than by reaching into any actor's config: every
+    // tier slot is checked against the provider listing at the turn boundary,
+    // so the default has to name a spec this fixture's host offers. The
+    // child's own turn runs on the workspace pin below, as every turn of a
+    // pinned workspace does.
     const catalog = await userDO.getProfileCatalog(caller);
 
     await userDO.putProfileCatalog(

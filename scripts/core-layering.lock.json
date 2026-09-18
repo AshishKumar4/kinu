@@ -1,7 +1,6 @@
 [
   "packages/core/src/config/store.ts -> packages/core/src/advisor/review.ts (value)",
   "packages/core/src/config/store.ts -> packages/core/src/profiles/catalog.ts (value)",
-  "packages/core/src/config/store.ts -> packages/core/src/prompting/cache-breakpoints.ts (value)",
   "packages/core/src/config/store.ts -> packages/core/src/strategy/effort.ts (value)",
   "packages/core/src/context-meter.ts -> packages/core/src/prompting/sections.ts (value)",
   "packages/core/src/craft/conflict.ts -> packages/core/src/scaffold/misevolution.ts (value)",

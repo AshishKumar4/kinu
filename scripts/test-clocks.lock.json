@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-09-16",
+  "measuredAt": "2026-09-18",
   "total": 238,
   "files": {
     "packages/cf-backend/tests/fixtures/nimbus-capability-websocket-workerd.mjs": {
@@ -238,14 +238,14 @@
       "sleep": 1,
       "clock-compare": 1
     },
+    "tests/evals/prompt-ledger.ts": {
+      "sleep": 1
+    },
     "tests/evals/public-session.ts": {
       "clock-compare": 1,
       "sleep": 1
     },
     "tests/evals/swarm.eval.ts": {
-      "sleep": 1
-    },
-    "tests/evals/trajectory.eval.ts": {
       "sleep": 1
     },
     "tests/first-run/background-settle.first-run.ts": {

@@ -5,7 +5,7 @@ import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { childEnv, scratchDir } from "@kinu.run/test-utils";
 import {
-  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, claims, deployPlan, printPlan,
+  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, PATH_IGNORE_FLAG, claims, deployPlan, printPlan,
 } from "./ladder";
 import { costRssMb, costThreads, readCosts } from "./gate-cost";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
@@ -33,7 +33,7 @@ function expandGlobs(run: string): string {
   const words = run.split(" ");
   const files = claims(run, tracked);
 
-  return [...words.filter((word) => !word.includes("/")), ...files].join(" ");
+  return [...words.filter((word) => !word.includes("/") || word.startsWith(PATH_IGNORE_FLAG)), ...files].join(" ");
 }
 
 const GLOB_EXPANDED_FILES = [...new Set(PLAN.filter((row) => row.run.includes("*")).flatMap((row) => claims(row.run, tracked)))];
@@ -1243,5 +1243,75 @@ describe("CLI distribution artifacts", () => {
 
     expect(help.exitCode, launchFailure(help)).toBe(0);
     expect(decoder.decode(help.stdout)).toMatch(/^[ \t]+setup[ \t]/m);
+  });
+});
+
+/**
+ * The worker release artifact is ~29 MB and Cloudflare's per-file asset limit
+ * is 25 MiB, which the CLI distribution row above already measures for the
+ * tarballs it publishes. Staging this one beside them would fail the deploy at
+ * asset upload, so it is published into R2 and streamed by the Worker at the
+ * same public path; only the manifest and the checksum stay assets.
+ */
+describe("worker release artifact", () => {
+  const MAX_ASSET_BYTES = 25 * 1024 * 1024;
+
+  const VERSION = "0.0.0+deploytest";
+
+  const ARTIFACT = `kinu-worker-${VERSION}.tar.gz`;
+
+  let dist: string;
+
+  beforeAll(() => {
+    dist = scratchDir("worker-release-test");
+    mkdirSync(join(dist, "kinu", "assets"), { recursive: true });
+    mkdirSync(join(dist, "client", "assets"), { recursive: true });
+    mkdirSync(join(dist, "client", "downloads"), { recursive: true });
+    writeFileSync(join(dist, "kinu", "index.js"), "export default { fetch() { return new Response('k'); } };\n");
+    writeFileSync(join(dist, "kinu", "index.js.map"), "{}\n");
+    writeFileSync(join(dist, "kinu", "wrangler.json"), "{}\n");
+    writeFileSync(join(dist, "kinu", "assets", "chunk.js"), "export const a = 1;\n");
+    writeFileSync(join(dist, "client", "index.html"), "<!doctype html><title>k</title>\n");
+    writeFileSync(join(dist, "client", "assets", "app.js"), "console.log('app');\n");
+    writeFileSync(join(dist, "client", "downloads", "kinu-cli-linux-x64.tar.gz"), "not really a tarball\n");
+
+    const build = Bun.spawnSync(
+      ["bun", join(REPO_ROOT, "scripts", "build-worker-release.ts"), VERSION, "deploytest", dist],
+      { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe", env: childEnv() },
+    );
+
+    expect(build.exitCode, new TextDecoder().decode(build.stderr)).toBe(0);
+  });
+
+  test("the tarball is not under the assets directory at all", () => {
+    expect(existsSync(join(dist, "client", "downloads", ARTIFACT))).toBe(false);
+    expect(existsSync(join(dist, "worker-release", ARTIFACT))).toBe(true);
+  });
+
+  test("what does stay an asset is under Cloudflare's per-file limit", () => {
+    for (const name of ["release.json", `${ARTIFACT}.sha256`]) {
+      const published = join(dist, "client", "downloads", name);
+
+      expect(existsSync(published)).toBe(true);
+      expect(statSync(published).size).toBeLessThan(MAX_ASSET_BYTES);
+    }
+  });
+
+  test("the published checksum is the artifact's", () => {
+    const stated = readFileSync(join(dist, "client", "downloads", `${ARTIFACT}.sha256`), "utf8").trim().split(/\s+/)[0];
+    const measured = createHash("sha256").update(readFileSync(join(dist, "worker-release", ARTIFACT))).digest("hex");
+
+    expect(stated).toBe(measured);
+  });
+
+  test("the artifact carries the worker's modules and the client's assets, and neither the maps nor the downloads", () => {
+    const listed = Bun.spawnSync(["tar", "-tzf", join(dist, "worker-release", ARTIFACT)], { stdout: "pipe" });
+    const entries = new TextDecoder().decode(listed.stdout).split("\n").filter((line) => line.trim() !== "");
+
+    expect(entries).toContain("worker/index.js");
+    expect(entries).toContain("client/index.html");
+    expect(entries.some((entry) => entry.endsWith(".map"))).toBe(false);
+    expect(entries.some((entry) => entry.startsWith("client/downloads/"))).toBe(false);
+    expect(entries).toContain("release.json");
   });
 });

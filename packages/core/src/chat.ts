@@ -25,7 +25,8 @@ import {
   assertToolsSupportedByModel,
   type PromptModelContext,
 } from './prompting/model-profile';
-import { applyCacheBreakpoints, hasCacheMarkers, type CacheRetention } from './prompting/cache-breakpoints';
+import { applyCacheBreakpoints, hasCacheMarkers } from './prompting/cache-breakpoints';
+import type { CacheRetention } from './providers/types';
 import type { TurnContextMeter } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import type { MissionGovernor } from './mission-budget';
@@ -100,6 +101,14 @@ export type ChatEvent =
     text?: string;
     toolCalls?: ReadonlyArray<{ toolName: string }>;
     toolResults?: ReadonlyArray<unknown>;
+    /** The body this step actually sent, as the provider adapter reports it
+     *  (`StepResult.request.body`), and the instant the request left. Carried
+     *  out of the loop so a prompt-cache warm can re-send the last request of
+     *  the turn BYTE-IDENTICALLY, counting its TTL from that instant, instead
+     *  of re-assembling a request that only resembles it
+     *  (providers/cache-warming.ts). By reference, never copied, for the
+     *  reason `responseMessages` is. */
+    request?: { body?: unknown; sentAt?: number };
   }
   /** A failure the turn survived. `runChat` itself never yields this — it
    *  throws, and the caller owns the turn-failure policy. The scaffold seam
@@ -430,6 +439,7 @@ interface PendingStepEvent {
   text?: string;
   toolCalls?: ReadonlyArray<{ toolName: string }>;
   toolResults?: ReadonlyArray<unknown>;
+  request?: { body?: unknown; sentAt?: number };
 }
 
 /** What ONE provider call of a turn ended with. */
@@ -501,6 +511,23 @@ class ProviderCall {
    *  includes the input prefix, so this is what the call generated. */
   private responseSoFar: readonly ModelMessage[] = [];
   private readonly pendingStepEvents: PendingStepEvent[] = [];
+  /**
+   * When the request for the step now in flight left this process.
+   *
+   * Stamped in `prepareStep`, which the SDK calls immediately before it builds
+   * each request, so this is the REQUEST's own start rather than its answer's
+   * end — the anchor a prompt-cache warm counts a five-minute TTL from ("Count
+   * from the request's start, not its response's end",
+   * docs/research/harness/anthropic-sources.md §2). Initialized at
+   * construction, which is the line before `streamText`, so a step the SDK
+   * somehow ran without preparing still carries this call's own start rather
+   * than the epoch.
+   */
+  private stepSentAt = Date.now();
+
+  requestStarting(): void {
+    this.stepSentAt = Date.now();
+  }
 
   dispatched(toolCall: { toolCallId: string; toolName: string; input: unknown }): void {
     this.dispatchedCalls.set(toolCall.toolCallId, { startedAt: Date.now(), call: { type: 'tool-call',
@@ -527,6 +554,7 @@ class ProviderCall {
       stepIndex, responseMessages: this.responseSoFar,
       finishReason: step.finishReason, text: step.text,
       toolCalls: step.toolCalls.map((call) => ({ toolName: call.toolName })), toolResults: step.toolResults,
+      request: { body: step.request.body, sentAt: this.stepSentAt },
       ...(usageReported(usage) && { usage }),
     });
   }
@@ -894,8 +922,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // The shared step pipeline projects native error feedback before extension
       // rewrites, pruning, dynamic context, destination normalization and cache
       // markers. Think's beforeStep uses the same composition and SDK history.
-      prepareStep: ({ stepNumber, messages, steps }) =>
-        composePrepareStep({
+      //
+      // The SDK calls this immediately before it builds the step's request, so
+      // it is also where the request's own start is stamped — see
+      // `ProviderCall.requestStarting`.
+      prepareStep: ({ stepNumber, messages, steps }) => {
+        call.requestStarting();
+
+        return composePrepareStep({
           extensions,
           abortSignal: opts.signal,
           cache: rollTail ? { strategy: cache.strategy } : null,
@@ -905,7 +939,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           destinationProviderId: opts.cache?.providerId,
           meter: opts.meter,
           context: opts.stepContext,
-        }, { stepNumber: stepOffset + stepNumber, messages, steps }),
+        }, { stepNumber: stepOffset + stepNumber, messages, steps });
+      },
       onStepFinish: async (step) => {
         stepCount++;
         call.stepFinished(step, stepCount);

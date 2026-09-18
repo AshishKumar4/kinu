@@ -1642,8 +1642,111 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   listPendingConsents: () => [],
 }));
 
+/** One gallery RPC answer, or null for a method the surface asked does not own.
+ *  Wrapped rather than bare, so `null` stays available as "not mine" while an
+ *  answer of its own may be anything a route serialises. */
+type GalleryAnswer = { readonly value: unknown } | null;
+
+/** The PLAN surface's own answers: the review pane's read of this workspace's
+ *  plans, and its decision on the one in front of it. */
+function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
+  if (method === "inspectSubordinate") {
+    return { value: galleryPlanInspection(args?.[0], [galleryAgentPlan]) };
+  }
+
+  if (method !== "decidePlanReview") return null;
+
+  const [, , decision, feedback] = v.parse(
+    v.tuple([v.string(), v.number(), v.picklist(["approve", "request_changes"]), v.optional(v.string())]),
+    args,
+  );
+
+  galleryAgentPlan = {
+    ...galleryAgentPlan,
+    status: decision === "approve" ? "approved" : "changes_requested",
+    feedback: feedback ?? null,
+    handoffAccepted: true,
+    updatedAt: Date.now(),
+    decidedAt: Date.now(),
+  };
+
+  return { value: { ok: true, plan: galleryAgentPlan, queued: true } };
+}
+
+/** The ROSTER surface's own answers: the subordinate list, the three writes the
+ *  agents pane makes on it, and one hosted actor's view of itself. */
+function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
+  if (method === "listSubordinates") return { value: [...GALLERY_SUBS] };
+
+  if (method === "createSubordinateAgent") {
+    maybeRefuseCreate();
+    const name = `agent-${++gallerySubSeq}`;
+
+    const entry = {
+      name, displayName: "", role: "agent", createdBy: "user",
+      status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
+    };
+
+    GALLERY_SUBS.push(entry);
+    galleryAgentPlan = {
+      ...galleryAgentPlan,
+      status: "pending",
+      annotations: GALLERY_PLAN_ANNOTATIONS,
+      feedback: null,
+      handoffAccepted: false,
+      updatedAt: NOW,
+      decidedAt: null,
+    };
+
+    return { value: { name, displayName: "", subordinate: entry } };
+  }
+
+  if (method === "renameSubordinateAgent") {
+    const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
+    const entry = GALLERY_SUBS.find((sub) => sub.name === name);
+
+    if (!entry) throw new Error(`gallery: no subordinate "${name}"`);
+    entry.displayName = displayName;
+
+    return { value: { ok: true, name, displayName, subordinate: { ...entry } } };
+  }
+
+  if (method === "dismissSubordinate") {
+    const [name, keepHistory] = v.parse(v.tuple([v.string(), v.optional(v.boolean())]), args);
+    const index = GALLERY_SUBS.findIndex((sub) => sub.name === name);
+
+    if (index >= 0) GALLERY_SUBS.splice(index, 1);
+
+    return { value: { ok: true, name, historyKept: keepHistory ?? true } };
+  }
+
+  if (method !== "getActorSnapshot") return null;
+
+  // The hosted actor's own view, answered by the ROOT now rather than by a
+  // facet over a stub. Identity mirrors the roster; the mission stays
+  // internal — the header renders the ROSTER title, never this field.
+  const [name] = v.parse(v.tuple([v.string()]), args);
+  const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
+  const actor = latest?.name ?? "agent-0";
+
+  return {
+    value: {
+      name: actor,
+      actorId: galleryActorId(actor),
+      displayName: latest?.displayName ?? "",
+      role: "task",
+      mission: "",
+      model: null,
+      activePlan: galleryAgentPlan,
+      pendingSteers: [],
+    } satisfies SubordinateSnapshot,
+  };
+}
+
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "inspectSubordinate") return rpcResult(galleryPlanInspection(args?.[0], [galleryAgentPlan])).json<T>();
+  const plan = galleryPlanRpc(method, args);
+
+  if (plan) return rpcResult(plan.value).json<T>();
 
   if (new URLSearchParams(location.search).has("workspaceFault")) {
     const state = document.documentElement.dataset;
@@ -1671,86 +1774,9 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return new Promise<T>(() => {});
   }
 
-  if (method === "listSubordinates") return rpcResult([...GALLERY_SUBS]).json<T>();
+  const roster = galleryRosterRpc(method, args);
 
-  if (method === "createSubordinateAgent") {
-    maybeRefuseCreate();
-    const name = `agent-${++gallerySubSeq}`;
-
-    const entry = {
-      name, displayName: "", role: "agent", createdBy: "user",
-      status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
-    };
-
-    GALLERY_SUBS.push(entry);
-    galleryAgentPlan = {
-      ...galleryAgentPlan,
-      status: "pending",
-      annotations: GALLERY_PLAN_ANNOTATIONS,
-      feedback: null,
-      handoffAccepted: false,
-      updatedAt: NOW,
-      decidedAt: null,
-    };
-
-    return rpcResult({ name, displayName: "", subordinate: entry }).json<T>();
-  }
-
-  if (method === "renameSubordinateAgent") {
-    const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
-    const entry = GALLERY_SUBS.find((sub) => sub.name === name);
-
-    if (!entry) throw new Error(`gallery: no subordinate "${name}"`);
-    entry.displayName = displayName;
-
-    return rpcResult({ ok: true, name, displayName, subordinate: { ...entry } }).json<T>();
-  }
-
-  if (method === "dismissSubordinate") {
-    const [name, keepHistory] = v.parse(v.tuple([v.string(), v.optional(v.boolean())]), args);
-    const index = GALLERY_SUBS.findIndex((sub) => sub.name === name);
-
-    if (index >= 0) GALLERY_SUBS.splice(index, 1);
-
-    return rpcResult({ ok: true, name, historyKept: keepHistory ?? true }).json<T>();
-  }
-
-  if (method === "getActorSnapshot") {
-    // The hosted actor's own view, answered by the ROOT now rather than by a
-    // facet over a stub. Identity mirrors the roster; the mission stays
-    // internal — the header renders the ROSTER title, never this field.
-    const [name] = v.parse(v.tuple([v.string()]), args);
-    const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
-
-    return rpcResult({
-      name: latest?.name ?? "agent-0",
-      actorId: galleryActorId(latest?.name ?? "agent-0"),
-      displayName: latest?.displayName ?? "",
-      role: "task",
-      mission: "",
-      model: null,
-      activePlan: galleryAgentPlan,
-      pendingSteers: [],
-    } satisfies SubordinateSnapshot).json<T>();
-  }
-
-  if (method === "decidePlanReview") {
-    const [, , decision, feedback] = v.parse(
-      v.tuple([v.string(), v.number(), v.picklist(["approve", "request_changes"]), v.optional(v.string())]),
-      args,
-    );
-
-    galleryAgentPlan = {
-      ...galleryAgentPlan,
-      status: decision === "approve" ? "approved" : "changes_requested",
-      feedback: feedback ?? null,
-      handoffAccepted: true,
-      updatedAt: Date.now(),
-      decidedAt: Date.now(),
-    };
-
-    return rpcResult({ ok: true, plan: galleryAgentPlan, queued: true }).json<T>();
-  }
+  if (roster) return rpcResult(roster.value).json<T>();
 
   // A preview that arrives after first paint: the gate sets the dataset flag
   // once the page has settled, and the next live refresh lists a port the
@@ -5614,7 +5640,7 @@ const ACTIVITY_LATEST = {
 } satisfies NonNullable<ActivitySnapshot["latest"]>;
 
 const ACTIVITY_CACHE_HIT = {
-  samples: 344, last: 0.94, ema: 0.91, mean: 0.88, p95: 0.97, p99: 0.99, emaAlpha: 0.2,
+  samples: 344, last: 0.94, ema: 0.91, mean: 0.88, p95: 0.97, p99: 0.99, emaAlpha: 0.2, warms: 2,
 };
 
 /** Two labels, one nested inside the other and one already spent — the mission
@@ -5730,7 +5756,7 @@ const ACTIVITY_FRESH: ActivitySnapshot = {
   telemetry: {
     steps: 0, windowLimit: 2000, tokens: {}, usd: 0, pricedSteps: 0, unpricedSteps: 0,
     stepsWithoutUsage: 0,
-    cacheHit: { samples: 0, last: null, ema: null, mean: null, p95: null, p99: null, emaAlpha: 0.2 },
+    cacheHit: { samples: 0, last: null, ema: null, mean: null, p95: null, p99: null, emaAlpha: 0.2, warms: 0 },
   },
   spend: {
     producers: [],

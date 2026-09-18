@@ -134,7 +134,7 @@ import {
   explorePrompt, reflectionPrompt,
   // Non-turn model calls: the row type, its sink, and where a call with no run
   // open is filed. The other 25 producers of workspace spend arrive this way.
-  WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
+  WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent, type CacheWarmingLane,
   recordModelOperations, type ProviderWaitInfo,
   // The one builder for a model_call row: its shape AND the price-only-when-the
   // -rate-is-this-call's-own guard, spelled once for all three call sites.
@@ -2602,6 +2602,10 @@ export abstract class ActorAgent extends Think<Env> {
           driverGate: () => this.driverGate(),
           // The workspace UI IS the review surface: a plan turn is admitted.
           planTurnRefusal: () => null,
+          // Prompt-cache warming is the ROOT actor's: it owns the workspace's
+          // one wake chain and the conversation whose prefix stays warm. A
+          // hosted actor's own loop wires none, so its turns arm nothing.
+          ...(this.cacheWarmingLane() && { cacheWarming: this.cacheWarmingLane() }),
           // The turn's own wake at its open: a kill mid-turn leaves the run
           // row AND the wake that re-drives what it owed. The loop names the
           // instant; the tick keeps a row while the turn is open.
@@ -3525,6 +3529,14 @@ export abstract class ActorAgent extends Think<Env> {
         usd: this.priceAt(this.acc.usage),
       });
     });
+  }
+
+  /** The workspace's prompt-cache warming lane, for the root actor that owns
+   *  one. Undefined here: a hosted actor (subordinate, exploration head, swarm
+   *  node) has neither the workspace's wake chain nor the conversation whose
+   *  prefix a refresh keeps alive. */
+  protected cacheWarmingLane(): CacheWarmingLane | undefined {
+    return undefined;
   }
 
   /** The actor's durable claim ledger — the identity a turn's effects are
@@ -6038,6 +6050,14 @@ export abstract class ActorAgent extends Think<Env> {
   protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
     this._turnItem = item;
     this._turnProgram = null;
+
+    // The previous turn's resolved profile ends HERE, before anything reads a
+    // mode: `turnWorkMode()` prefers the bound profile over the driving
+    // message, so a profile left bound from the last turn answered for this
+    // one — and the tool build below is the first reader. Clearing it in the
+    // owner-side reads instead ran one call too late and cost a composer's
+    // Plan press its `submit_plan` on every turn but a workspace's first.
+    this._turnOperation = null;
     // The CHAT view, not the raw surface: a slow `run` must detach into a
     // background job whose settle wakes a turn, and that wrap lives here. The
     // workerd background-wake proof is what tells the two apart.
@@ -6159,7 +6179,6 @@ export abstract class ActorAgent extends Think<Env> {
     await this.ensureOwnedScaffold();
 
     if (this._cachedSoulText === null) await this.refreshSoulText();
-    this._turnOperation = null;
 
     // Four reads of the owner's UserDO, each a Durable Object hop, started
     // together: the profile catalog, the MCP descriptor surface, the device
@@ -6715,6 +6734,16 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * The requested actor resolves its own authority; the root's admitted
    * operation is not this actor's profile.
+   *
+   * THE WORKSPACE'S PINNED MODEL IS PASSED, exactly as the root's own chat turn
+   * passes it (`beforeTurn`), because the pin is the workspace's and a hosted
+   * actor's turn is one of that workspace's turns. Without it every hosted turn
+   * — an actor pane's chat, a hire's delegated turn, a head, a node — ran on
+   * the account catalog's tier model while the workspace said it was pinned:
+   * measured 2026-09-18 on a local dev build, a workspace pinned to
+   * `openai-compat/fake-live` answered its subordinate pane's message on
+   * `workers-ai/@cf/zai-org/glm-5.3`. The role still decides the TIER; the pin
+   * decides the model, and `tier.source` records which one the turn ran under.
    */
   protected async hostedActorProfile(input: {
     readonly actor: ActorHandle;
@@ -6734,6 +6763,7 @@ export abstract class ActorAgent extends Think<Env> {
         availableTools: [...input.availableTools],
         activeSkills: [],
         explicitTier: input.explicitTier ?? config.getAssignedTier() ?? undefined,
+        workspaceModel: this.config.getModel(),
       }),
       inputs,
     };

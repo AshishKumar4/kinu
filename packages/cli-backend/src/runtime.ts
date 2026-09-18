@@ -70,7 +70,7 @@ import {
 } from './profile-authority';
 import type { LocalCodexAuthStore } from './codex-auth-store';
 import type { FileCheckpoints } from '@kinu.run/core';
-import { diagnostics, KinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import { adoptLocalActorHandle, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
 import * as v from 'valibot';
 
@@ -527,7 +527,29 @@ export function createCLIRuntime(
   const llm = createRoutedModelLane(actor, 'reflection', modelLanes);
 
   const schedule: Schedule = {
-    after: async (_ms, fn) => { setTimeout(fn, 0); },
+    // HONOURS THE DELAY. This read `setTimeout(fn, 0)` and ignored `ms`
+    // entirely, so every `after` fired on the next tick — a deferral seam that
+    // deferred nothing. Unreferenced, so a one-shot `kinu` command still exits
+    // when its work is done rather than being held open by a pending timer (the
+    // same `unref` oh-my-pi's own refresh timer takes,
+    // `packages/ai/src/stream.ts:1257`).
+    after: async (ms, fn) => {
+      // The deferred body owns its own failure: by the time it runs there is no
+      // caller left to reach, so a rejection is recorded as a domain failure
+      // and the session continues.
+      const deferred = async (): Promise<void> => {
+        try {
+          await fn();
+        } catch (cause) {
+          diagnostics.failure('schedule.deferred_failed', toKinuError({
+            doing: 'running work this session deferred', cause, otherwise: 'io',
+          }));
+        }
+      };
+
+      const timer = setTimeout(deferred, Math.max(0, ms));
+      timer.unref?.();
+    },
     cron: async () => {},
     fiber: createSqlFiber(sql, actor),
   };

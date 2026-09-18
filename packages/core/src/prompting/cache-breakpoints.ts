@@ -29,31 +29,10 @@
  * idles pays the extended-TTL write premium for nothing.
  */
 import type { ModelMessage, SystemModelMessage, ToolSet } from 'ai';
+import { DEFAULT_CACHE_RETENTION, type CacheRetention } from '../providers/types';
 
 /** The AI SDK's provider-options bag (not re-exported by `ai` itself). */
 type ProviderOptions = NonNullable<ModelMessage['providerOptions']>;
-
-/**
- * How long a provider should keep the prefix this turn writes.
- *
- *   none   don't address the provider's cache at all — no breakpoints, no
- *          cache key. The escape hatch for a turn that must not write a cache
- *          entry (and not pay a cache-write premium for one read).
- *   short  the provider's default TTL (Anthropic/OpenRouter 5m, OpenAI
- *          in-memory). Sends nothing extra, so the request bytes are exactly
- *          what a caller with no opinion produced.
- *   long   the extended TTL — Anthropic `ttl: '1h'`, OpenAI
- *          `prompt_cache_retention: '24h'`. Costs more per cache WRITE and
- *          pays for itself only when turns are minutes-to-hours apart.
- */
-export type CacheRetention = 'none' | 'short' | 'long';
-
-/** The default every caller gets: cache normally, at the provider's own TTL. */
-export const DEFAULT_CACHE_RETENTION: CacheRetention = 'short';
-
-export function isCacheRetention(value: string | null): value is CacheRetention {
-  return value === 'none' || value === 'short' || value === 'long';
-}
 
 /** How a provider's prompt cache is addressed. Closed union — every provider
  *  id the registries can resolve maps to exactly one entry; unknown ids are
