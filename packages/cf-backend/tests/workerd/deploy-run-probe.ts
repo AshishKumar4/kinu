@@ -14,7 +14,8 @@
  *
  * WHAT IS ADDED: two read-only windows the production class does not expose,
  * because exposing them in production would be a way to read a run's vault
- * over RPC. `heldSecretNames` lists the vault's keys and never its values;
+ * over RPC. `heldSecretNames` lists the vault's keys and never its values,
+ * through the run's own vault port rather than a second copy of its prefix;
  * `rowText` returns every SQL row as text, which is how the test asserts that
  * a digest, a token or a minted secret is not in one.
  *
@@ -36,14 +37,12 @@ import {
 } from './deploy-fake';
 import * as v from 'valibot';
 
-const SECRET_PREFIX = 'secret.';
-
 export class DeployRunProbeDO extends DeployRunDO {
-  /** The vault's keys. A run that is over must answer with none. */
+  /** The vault's keys, read through the production port that owns them
+   *  (`vault().names()`), so the prefix the run stores under is stated once, in
+   *  the class that stores it. A run that is over must answer with none. */
   async heldSecretNames(): Promise<readonly string[]> {
-    const held = await this.ctx.storage.list<string>({ prefix: SECRET_PREFIX });
-
-    return [...held.keys()];
+    return await this.vault().names();
   }
 
   /** Everything this object holds, dropped. The self-update ledger lives under

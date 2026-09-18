@@ -320,14 +320,20 @@ describe('claims() resolves a glob against whatever tree it is given', () => {
   });
 
   test('a suite carved out of a family glob is claimed by the row that names it, once', () => {
+    // What the family claims over this tree, written out: `ux.test.ts` has no
+    // `-ux` before it and `z-ux.helper.ts` is not a suite. The partition is
+    // asserted against THIS list rather than against `claims(family)`, so a
+    // resolver that dropped a file from both sides could not satisfy it.
+    const whole = ['scripts/x-ux.test.ts', 'scripts/y-ux.test.ts'];
     const family = 'bun test scripts/*-ux.test.ts';
     const carved = 'bun test --path-ignore-patterns=scripts/y-ux.test.ts scripts/*-ux.test.ts';
 
+    expect(claims(family, tree)).toEqual(whole);
     expect(claims(carved, tree)).toEqual(['scripts/x-ux.test.ts']);
     // The pair partitions what the one row claimed: nothing runs twice, and
     // the suite the flag removed is still claimed where it is named.
     expect([...claims(carved, tree), ...claims('bun test scripts/y-ux.test.ts', tree)].sort())
-      .toEqual(claims(family, tree).sort());
+      .toEqual(whole);
   });
 
   test('a glob beside named files claims the union once, in resolution order', () => {
