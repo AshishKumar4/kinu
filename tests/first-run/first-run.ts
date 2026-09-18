@@ -96,6 +96,7 @@ export const FIRST_RUN_CASES = [
   'background-wake',
   'delegation',
   'agent-tab',
+  'deploy-door',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -368,6 +369,23 @@ export const FIRST_RUN_DEFECTS = {
       + 'and the ledger recorded zero model calls. That is B10\'s self-feeding reactor keeping a '
       + 'hosted actor permanently busy, which is also why the owner\'s tab showed a skeleton.',
   },
+  'deploy-door': {
+    id: 'deploy-door',
+    found: 'The Cloudflare door is new surface, so no owner has driven it by hand yet. What the '
+      + 'row exists for is the failure it would hide: a deployed door whose authorize URL is '
+      + 'missing `code_challenge_method`, or carries an empty `client_id`, renders a working '
+      + 'sign-in button and dies on Cloudflare\'s own page, where nothing of ours can see it.',
+    missedBecause: 'the authorize URL is built from a deployment VAR. Every pre-deploy proof '
+      + 'supplies that var itself — the unit rows call `authorizeUrl` with a literal, and the '
+      + 'workerd rows bind a fake authorization server — so no gate reads the URL the deployed '
+      + 'build actually mints, nor what it answers when the var is unset.',
+    provedRedAt: null,
+    redDirection: 'Not proved red against a deployed sha: the door has never been deployed. The '
+      + 'red direction is the URL, parameter by parameter — drop `code_challenge_method` from '
+      + '`authorizeUrl`, or leave `CLOUDFLARE_DEPLOY_CLIENT_ID` set to a blank string, and the '
+      + 'row fails on the shape while the page still renders. The first deployed run of this '
+      + 'tier is what turns that into a measurement.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
@@ -477,6 +495,7 @@ const SHORT_SUBJECT = {
   'background-wake': 'bgwake',
   'delegation': 'deleg',
   'agent-tab': 'tab',
+  'deploy-door': 'door',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */
