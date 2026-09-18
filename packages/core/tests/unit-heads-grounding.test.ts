@@ -172,7 +172,7 @@ describe('grounded head outcome scores', () => {
     // propagates a judge FAILURE deliberately (mcts/evaluation.ts) because the
     // MCTS engine answers one per branch under its own allSettled; this caller
     // has no branch to fail, so an unreachable or rate-limited judge must not
-    // reject `run` and take the whole split with it — that discards both
+    // reject `shell` and take the whole split with it — that discards both
     // reports, the merge that would have carried them, and the `head_merge`
     // phase that is the only durable trace a fork ran at all.
     const { journal } = newJournal();

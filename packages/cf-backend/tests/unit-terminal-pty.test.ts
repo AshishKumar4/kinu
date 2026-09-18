@@ -188,7 +188,7 @@ async function body(response: Response | null | undefined) {
 describe('which environments can have a terminal', () => {
   test('the container and the owner machine are the PTY lanes', () => {
     expect(terminalLane('sandbox')).toEqual({ mode: 'pty' });
-    expect(terminalLane('laptop')).toEqual({ mode: 'pty' });
+    expect(terminalLane('device')).toEqual({ mode: 'pty' });
   });
 
   // THE CONTRACT CHANGED HERE, and this case is what enforces the new one.
@@ -199,7 +199,7 @@ describe('which environments can have a terminal', () => {
   // carries a mode and nothing else, and there is no field a sentence can
   // reach the screen through.
   //
-  // `laptop` left this list on 2026-09-03, when the machine's own agent grew a
+  // `device` left this list on 2026-09-03, when the machine's own agent grew a
   // real terminal. The lane table states what an ENVIRONMENT can give; whether
   // one particular machine is attached right now is the route's preflight.
   test.each(['workspace', 'parent', 'something-invented'])(

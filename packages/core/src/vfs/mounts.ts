@@ -37,9 +37,14 @@ export interface VfsMount {
 /** The mount point each executor namespace's files are served under. One
  *  table so prompt text and documentation cannot drift from routing. */
 export const EXECUTOR_MOUNTS = {
-	laptop: '/pc',
+	device: '/pc',
 	sandbox: '/sandbox',
 } as const satisfies Record<string, string>;
+
+/** The reference roots every backend reserves (`vfs/references.ts`): never a
+ *  machine's mount segment, so `local` — the CLI's alias of its own workspace
+ *  — and the two fixed planes can never be shadowed by a device's name. */
+export const RESERVED_REFERENCE_ROOTS: readonly string[] = ['vfs', 'sandbox', 'local'];
 
 /** The same table read the other way: mount point → the executor serving it.
  *  Here rather than at each reader, because three readers had each inverted it
@@ -69,11 +74,11 @@ export interface MountableProvider {
 export function standardMounts(provider: (name: string) => MountableProvider | undefined): VfsMount[] {
 	return [
 		{
-			name: EXECUTOR_MOUNTS.laptop.slice(1),
+			name: EXECUTOR_MOUNTS.device.slice(1),
 			files: () => {
-				const laptop = provider('laptop');
+				const device = provider('device');
 
-				return laptop && laptop.isAvailable() ? laptop.files ?? null : null;
+				return device && device.isAvailable() ? device.files ?? null : null;
 			},
 			absentReason: () => 'no device connected',
 		},

@@ -12,7 +12,7 @@
 //  * a request-supplied `authorization` header OVERRIDES the binding's
 //    in-account pre-authentication and the gateway answers 401. Auth headers are
 //    stripped here; nothing upstream may add one back.
-//  * `run` is the only binding call that hands back a `Response`, which is what
+//  * `shell` is the only binding call that hands back a `Response`, which is what
 //    an AI SDK `fetch` seam consumes — `env.AI.run()` returns a parsed object and
 //    would force a hand-rolled SSE re-serializer. It carries the non-deprecated
 //    `v1/chat/completions` endpoint and streams incrementally (measured: headers

@@ -75,7 +75,7 @@ export const EXECUTOR_CAPABILITIES = [
 
 export type ExecutorCapability = (typeof EXECUTOR_CAPABILITIES)[number];
 
-export type ExecutorKind = 'workspace' | 'nimbus' | 'sandbox' | 'laptop' | 'parent';
+export type ExecutorKind = 'workspace' | 'nimbus' | 'sandbox' | 'device' | 'parent';
 
 export type ExecutorLifecycleStatus =
   | 'not_configured'
@@ -110,7 +110,7 @@ export interface ExecutorStatus {
   status: ExecutorLifecycleStatus;
   reason?: string;
   /** The environment's own name, when it HAS one the user chose — a linked
-   *  device is "ashish@studio", not "laptop". Absent where the namespace is
+   *  device is "ashish@studio", not "device". Absent where the namespace is
    *  the only name there is (workspace, sandbox). */
   label?: string;
   /** Whether this agent already holds the environment's access grant. Only a
@@ -130,7 +130,7 @@ export interface ExecutorStatus {
  * @cloudflare/codemode's interface exactly.
  */
 export interface ExecutorProvider {
-  /** Namespace in the codemode sandbox (e.g. "workspace", "sandbox", "laptop") */
+  /** Namespace in the codemode sandbox (e.g. "workspace", "sandbox", "device") */
   readonly name: string;
 
   /** Which kind of executor this is */
@@ -159,8 +159,13 @@ export interface ExecutorProvider {
    * The alternative the file browser shipped with was a literal `'.'` reported
    * for every environment, which turned "go up one level" into path arithmetic
    * on a token no host could resolve.
+   *
+   * A plane composed of several machines (the device fleet, always mounted at
+   * `/pc/<name>`) opens on its roster with no argument, and on ONE machine's
+   * home when handed that machine's mount segment. Every other executor is
+   * one machine and ignores the segment.
    */
-  homeDir(): Promise<string>;
+  homeDir(segment?: string): Promise<string>;
 
   /** Declared capabilities — everything this environment can be shown to have. */
   readonly capabilities: ReadonlySet<ExecutorCapability>;
@@ -205,7 +210,7 @@ export interface ExecutorProvider {
    * This matches codemode's SimpleToolRecord shape so it can be passed
    * directly as a ToolProvider to createExecuteTool({ providers: [...] }).
    *
-   * Cancellation contract: in-process callers (the `run` tool) pass a
+   * Cancellation contract: in-process callers (the `shell` tool) pass a
    * trailing `{ signal }` options argument to `exec`. Implementations honor it
    * at the strongest level their transport supports, and those levels are not
    * interchangeable — one kills the work, another can only stop waiting for it.
@@ -227,7 +232,7 @@ export interface ExecutorProvider {
   /**
    * Generic port-exposure surface. Returns the public preview URL when
    * supported, or a `{supported: false}` rejection with a clear reason
-   * for executors that can't open inbound ports (for example, laptop).
+   * for executors that can't open inbound ports (for example, device).
    *
    * Real implementation: sandbox (via @cloudflare/sandbox SDK).
    *

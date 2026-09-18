@@ -1,8 +1,9 @@
 // The subordinate event spine — parent↔facet task/report admission.
-// Mirrors the same-owner peer class: trust `authenticated`; assignments wake
-// the subordinate promptly (`normal`), reports roll into the orchestrator's
-// next turn (`background`). Round-trips a real EventLog publish → pending →
-// drain to pin the whole admission shape, not just the derivation table.
+// Mirrors the same-owner peer class: trust `authenticated`; assignments pend at
+// `normal` — the priority the delegation runner selects them by — and reports
+// roll into the orchestrator's next turn (`background`). Round-trips a real
+// EventLog publish → pending → drain to pin the whole admission shape,
+// including which of the two a reactor may take.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -138,7 +139,7 @@ describe('one report per sequence on the parent rail', () => {
 });
 
 describe('subordinate event admission (EventLog round-trip)', () => {
-  test('a published task admits, pends, and drains with the workspace source line', () => {
+  test('a published task admits and pends, and no drain may take it', () => {
     const { sql, actor } = makeSql();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
@@ -154,12 +155,11 @@ describe('subordinate event admission (EventLog round-trip)', () => {
     expect(event.trust).toBe('authenticated');
     expect(event.priority).toBe('normal');
 
-    const batch = buildDrainBatch(pending);
-    expect(batch).not.toBeNull();
-    expect(batch!.ids).toEqual([id]);
-    expect(batch!.text).toContain('workspace orchestrator (jarvis)');
-    expect(batch!.text).toContain('task: Survey the auth module');
-    expect(batch!.text).toContain('deliverable:');
+    // An assignment IS the subordinate's whole turn input and belongs to the
+    // delegation runner, so the reactor refuses it: a drain would render the
+    // brief as one line of a "1 event arrived while you were idle" summary and
+    // the child would work from a paraphrase of its own instructions.
+    expect(buildDrainBatch(pending)).toBeNull();
   });
 
   test('a published report admits and drains with the subordinate source line', () => {

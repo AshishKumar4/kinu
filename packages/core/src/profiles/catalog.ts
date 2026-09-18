@@ -247,7 +247,7 @@ export function profileCatalogDigest(catalog: ProfileCatalog): string {
  * contract's blocked rule and its no-project-wide-validation
  * rule beside concurrent siblings (`system/subagent-system-prompt.md`).
  *
- * What the text names is only what every actor has: the `file`, `run`, `web`,
+ * What the text names is only what every actor has: the `file`, `shell`, `web`,
  * `memory` and `agents` tools, the workspace file plane, and the `report`
  * handoff fields (events/hub/types.ts SUBORDINATE_REPORT_HANDOFF_FIELDS),
  * gated on "when you were hired" because `report` is a subordinate's tool.

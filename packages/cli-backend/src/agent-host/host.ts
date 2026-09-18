@@ -32,6 +32,7 @@ import {
   SubordinateRosterStore,
   SubordinateIdentityStore,
   admitSubordinateTask,
+  drainAssignments,
   type SubordinateInheritedContext,
   actorReferenceOf,
   canonicalConversationId,
@@ -117,6 +118,30 @@ import {
 import type { LocalModelResolver } from '../model-resolver';
 import type { ProfileEnvelopeSource } from '../profile-authority';
 import type { McpServerConfig } from '../mcp';
+
+/**
+ * Assignments one pass may spend, and the grace an open delivery lease gets.
+ *
+ * The budget bounds ONE pass, not the backlog: a pass that fills it re-wakes
+ * this agent, so the driver lease can change hands between turns instead of
+ * one agent's queue holding it for as long as the queue is long. Separate from
+ * the cloud sweep's `HOSTED_DELEGATION_DRAIN_BUDGET`, which happens to be the
+ * same number for a different reason: there it is what fits ONE Durable Object
+ * activation across every actor of a workspace, here it is one actor's share of
+ * a process that has no frame to fit inside. Either may move without the other.
+ *
+ * The grace is zero for the same reason core's `NO_STRANDED_DELIVERY_GRACE` is
+ * — this is that rule applied to the assignment queue, not a second decision:
+ * every conversion here happens under the cross-process driver lease, so no
+ * other process can be mid-delivery on these rows, and this actor's own
+ * conversions are serialized by `host.run`. An open lease is therefore a failed
+ * run's leftovers, and the next pass is the retry. The cloud sweep's
+ * `STALE_EVENT_DELIVERY_MS` is ten minutes because a Durable Object activation
+ * may be racing its own predecessor, which is the case this lease rules out.
+ */
+const LOCAL_ASSIGNMENT_BUDGET = 8;
+
+const LOCAL_ASSIGNMENT_LEASE_GRACE_MS = 0;
 
 /** Runtime inputs fixed for one bound agent while this host process is alive. */
 export interface LocalHostedAgent {
@@ -274,7 +299,7 @@ interface HostEntry {
   eventLog: EventLog;
   roster: SubordinateRosterStore;
   /** The ONE temporary-agent port for this actor. It holds the live waiters, so
-   *  it is built with the entry and never per call: `run` parks on it and the
+   *  it is built with the entry and never per call: `shell` parks on it and the
    *  report ingress resolves it. */
   temporary: TemporaryAgentPort;
   team: TeamToolDeps | null;
@@ -929,11 +954,12 @@ export class LocalAgentHost {
       // A previous process could die after publishing but before its debounce
       // timer fired, or AFTER a drain bound its rows to a turn it never ran.
       // EventLog rows are the queue: reclaim what the dead process left leased,
-      // then drain everything pending — in that order, so the reclaimed rows
-      // land in this same drain's selection.
+      // then run both halves of that queue — the reactor's external events and
+      // the assignments this agent's parent admitted — in that order, so the
+      // reclaimed rows land in this same selection.
       //
-      // Under the lease bracket, because both halves convert rows exactly as a
-      // pass does: the drain binds pending events to a synthetic turn, and the
+      // Under the lease bracket, because all three convert rows exactly as a
+      // pass does: each binds pending events to a synthetic turn, and the
       // reclaim's whole authority for calling an open lease dead is that no
       // other process may be driving while this one holds the lease. Opening an
       // agent is not a licence to drive one somebody else is driving, and gating
@@ -941,8 +967,11 @@ export class LocalAgentHost {
       // and compensated back a moment later.
       //
       // This is also why a local task child needs no `recovered` report: the
-      // reclaim hands its assignment back to the pending pool and the drain
-      // below RE-RUNS it, so the child answers normally. Its caller's waiter
+      // reclaim hands its assignment back to the pending pool and
+      // `drainAssignedWork` RE-RUNS it, so the child answers normally. Nothing
+      // else re-drives an assignment after a restart — the process's own wake
+      // fold counts triggers and peer mail, never a pending assignment — which
+      // is why this call is here and not only on the tick. Its caller's waiter
       // died with the previous process, so that answer takes the waiter-absent
       // path — a correlated report event, and the row released by the roster's
       // own report policy. The cloud child recovers differently (its terminal
@@ -952,6 +981,7 @@ export class LocalAgentHost {
         await session.recoverBackgroundJobs();
         session.reclaimStrandedEventDeliveries();
         await session.flushPendingDrains();
+        await this.drainAssignedWork(entry);
       });
 
       return entry;
@@ -1240,6 +1270,9 @@ export class LocalAgentHost {
 
     if (!hold.held()) return nextTriggerAt(entry.tree.db);
     await entry.session.flushPendingDrains();
+
+    if (!hold.held()) return nextTriggerAt(entry.tree.db);
+    await this.drainAssignedWork(entry);
 
     if (!hold.held()) return nextTriggerAt(entry.tree.db);
     await entry.session.runDueEvolution();
@@ -1819,6 +1852,69 @@ export class LocalAgentHost {
     await parent.tree.host.retire(parent.actor.reference, retirement);
   }
 
+  /**
+   * Run the assignments this agent's parent admitted — the local half of the
+   * one delegation runner.
+   *
+   * THE BRIEF IS THE TURN. `drainAssignments` binds each row and hands it here
+   * verbatim, and this admits it through the child's OWN turn admission, the
+   * lane the reactor's queued half uses. No reactor sees these rows any more
+   * (`wakesADrain` excludes them), which is the whole point: the reactor
+   * DIGESTS its batch into "1 event arrived while you were idle …", and a child
+   * that reads a paraphrase of its brief is working from a summary of its
+   * instructions.
+   *
+   * `drainTurnId` is the synthetic turn the row is bound to, and naming it is
+   * what splices the birth context: `ChatSession.runTurn` resolves it through
+   * `subordinateTurnContext(log, drainTurnId)`, so a child hired with a fork of
+   * its hirer's conversation is born from it. `kinuMode` carries the trusted
+   * Plan/Build mode the assignment was admitted under.
+   *
+   * The relay is untouched. `observeChildTurn` reads this turn as
+   * parent-driven (`kind === 'programmatic'`), which opens the `report` surface
+   * and is the same fact `subordinateRelaysTurnEnd` reads, so the report this
+   * child owes its parent is decided exactly as before.
+   *
+   * A ROOT HAS NO ASSIGNMENTS — nobody hired it — so it is skipped rather than
+   * asked, the same shape cf's sweep takes when it skips a non-subordinate
+   * actor.
+   */
+  private async drainAssignedWork(entry: HostEntry): Promise<void> {
+    if (entry.parentKey === null) return;
+
+    const swept = await drainAssignments(entry.eventLog, {
+      now: Date.now(),
+      budget: LOCAL_ASSIGNMENT_BUDGET,
+      staleMs: LOCAL_ASSIGNMENT_LEASE_GRACE_MS,
+      run: async (task) => {
+        const admitted = await entry.session.enqueueTurn({
+          text: task.body,
+          metadata: { kinuEvent: 'subordinate_task', kinuMode: task.mode, drainTurnId: task.turnId },
+          // The ROW's id, so a re-delivery of one assignment lands on the
+          // durable message the first attempt wrote instead of beside it.
+          idempotencyKey: task.sequenceId,
+        });
+
+        // The turn did not happen: the session is ending, or another process
+        // took the driver lease at the queue slot. Thrown so the lease on this
+        // row stays open and the next pass re-pends it — the same compensation
+        // the signal seam performs for a pre-empted drain.
+        if (admitted.status !== 'queued') {
+          throw new KinuError('unavailable', `the local turn queue answered "${admitted.status}"`);
+        }
+      },
+      onFailure: ({ cause }) => {
+        diagnostics.failure(
+          'host.assignment_turn_failed',
+          toKinuError({ doing: 'running an assignment this agent\'s parent admitted', cause, otherwise: 'io' }),
+          { agent: entry.key },
+        );
+      },
+    });
+
+    if (swept.truncated) this.wake(entry, 'assignment backlog');
+  }
+
   /** Drain now because something landed in this agent's inbox. Bracketed like
    *  every other converting operation here: a wake that meets another driver is
    *  simply that driver's work, and its rows are still pending for them. */
@@ -1830,7 +1926,10 @@ export class LocalAgentHost {
       if (this.closed) return;
 
       try {
-        await this.drive(entry, () => entry.session.flushPendingDrains());
+        await this.drive(entry, async () => {
+          await entry.session.flushPendingDrains();
+          await this.drainAssignedWork(entry);
+        });
       } catch (cause) {
         diagnostics.failure(
           'host.event_drain_failed',

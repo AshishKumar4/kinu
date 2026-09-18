@@ -1,22 +1,24 @@
 /**
- * Clamp-marker honesty on the LOCAL backend. Here rt.shell is the HOST shell
- * (the user's machine at cwd) while the clamp offloads full outputs to the
- * workspace filesystem — two different filesystems. The marker's advertised
- * remedy must therefore be workspace.readFile (execute_tools, same VFS on
- * every backend), never a host-shell grep of the offload path.
+ * Clamp-marker honesty on the LOCAL backend. The clamp offloads full outputs
+ * to the workspace filesystem, and the marker's advertised remedy is
+ * workspace.readFile (eval, same VFS on every backend) — the one path that
+ * restores the bytes whichever plane the session is bound to.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { buildBuiltinTools, DEFAULT_TOOL_RESULT_MAX_CHARS } from '@kinu.run/core';
 import { createCLIRuntime } from '../src/runtime';
-import { scratchPath, toolExecute } from '@kinu.run/test-utils';
+import { scratchDir, scratchPath, toolExecute } from '@kinu.run/test-utils';
 
+/** A session bound to a directory: the machine is the workspace, and its
+ *  shell is the real one there. */
 function localRuntime() {
   const db = new Database(scratchPath('clamp-marker', 'agent.db'), { create: true });
 
   return createCLIRuntime(db, {
     dbPath: db.filename,
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
+    cwd: scratchDir('clamp-marker-cwd'),
   });
 }
 
@@ -24,13 +26,11 @@ describe('clamped run output on the local backend', () => {
   test('the marker remedy round-trips: workspace.readFile restores what the host shell cannot see', async () => {
     const rt = localRuntime();
     const tools = buildBuiltinTools({ rt });
-    const run = toolExecute<{ command: string; runtime?: string }, string>(tools.run);
+    const run = toolExecute<{ command: string; runtime?: string }, string>(tools.shell);
 
-    // A real HOST command whose output blows the clamp budget. `laptop` is
-    // where the machine is now — the default `workspace` runtime is the
-    // agent's own filesystem and its own shell.
+    // A real host command whose output blows the clamp budget, on the one
+    // runtime the CLI has: the workspace shell, which here is the machine's.
     const clamped = await run({
-      runtime: 'laptop',
       command: `awk 'BEGIN { for (i = 0; i < 9000; i++) print "padding log line", i; print "FINAL-ERROR-LINE" }'`,
     });
 
@@ -38,13 +38,13 @@ describe('clamped run output on the local backend', () => {
     expect(clamped).toContain('chars omitted');
     expect(clamped).toContain('FINAL-ERROR-LINE');
     // The marker advertises only the remedy that works here.
-    expect(clamped).toContain('workspace.readFile inside execute_tools');
+    expect(clamped).toContain('workspace.readFile inside eval');
     expect(clamped).not.toContain('runtime "workspace"');
 
     const path = /full output saved to (\S+) —/.exec(clamped)?.[1];
     expect(path).toBeTruthy();
 
-    // Following the marker's own instruction: the execute_tools workspace
+    // Following the marker's own instruction: the eval workspace
     // surface restores the full text.
     const workspace = rt.executionRouter!.getProvider('workspace')!;
     const restored = await workspace.tools.readFile!.execute(path);
@@ -57,10 +57,9 @@ describe('clamped run output on the local backend', () => {
     // was an emulator over a different plane.
     const grepped = await run({ command: `grep FINAL-ERROR-LINE ${path}` });
     expect(grepped).toContain('FINAL-ERROR-LINE');
-    // The host shell cannot: it is a different machine with a different
-    // filesystem, which is exactly why the marker names workspace.readFile.
-    const onHost = run({ runtime: 'laptop', command: `grep FINAL-ERROR-LINE ${path}` });
-    await expect(onHost).rejects.toMatchObject({ code: 'io', execution: { exitCode: 2 }, message: expect.stringContaining('No such file or directory') });
-    await expect(onHost).rejects.toMatchObject({ message: expect.not.stringContaining('FINAL-ERROR-LINE') });
+    // There is no other runtime to name: a machine nickname is refused as an
+    // unregistered machine, never routed to a second shell over this tree.
+    const elsewhere = run({ runtime: 'device', command: `grep FINAL-ERROR-LINE ${path}` });
+    await expect(elsewhere).rejects.toMatchObject({ code: 'unavailable' });
   });
 });

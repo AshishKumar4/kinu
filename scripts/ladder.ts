@@ -35,9 +35,10 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { arch, cpus, platform as osPlatform } from 'node:os';
+import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
+import { DEADLINE_EXIT_CODE, runUnderDeadline } from './deadline';
 import { CACHE_BLIND_SPOTS, defaultStoreDirectory, planGate, recordGreen, storeAt, toolVersions } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
 import { deriveClosure, repoAt } from './ladder-closure';
@@ -47,6 +48,7 @@ import {
 } from './sources';
 import { CLI_TEST_ROOT } from './test-cli';
 import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, LIVE_MODEL_ENV } from '../packages/test-utils/src/index';
+import { COST_TABLE, type CostTable, costRssMb, costThreads, machineName, readCosts } from './gate-cost';
 
 /** DERIVED, because it was hardcoded as 21 while the config carried 22 — a stale count in the
  *  document that tells a reader what a rung catches. Read from the enabled rules rather than from the
@@ -116,11 +118,6 @@ export interface Gate {
   readonly tier: Tier;
   /** Measured wall clock in seconds. Every entry carries its own date and box beside it; re-validated 2026-09-05 on the 24-thread workstation. */
   readonly seconds: number;
-  /** Hardware threads the gate occupies at peak, for the deploy wave's thread
-   *  budget. Absent means one. Declared only where measured above one: a
-   *  browser suite's Chrome, a `--parallel=4` row's four workers. See
-   *  {@link gateWeight} for the measurement behind the figures. */
-  readonly weight?: number;
   /** The defect class this makes impossible. Not what it "checks". */
   readonly catches: string;
   /** What it does NOT catch. A gate whose blind spot nobody wrote down gets
@@ -978,7 +975,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts',
+    run: 'bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts',
     label: 'Gate ladder wiring and cache soundness',
     tier: 'push',
     // Measured 2026-09-16 on the 24-thread workstation (load 8.1): 1.25/1.20 s
@@ -1018,7 +1015,6 @@ export const LADDER: readonly Gate[] = [
     // is secret-scan.test.ts at 16.0s — the history walk grows with the object store —
     // plus workspace-name-ux at 1.9s. Replaces 1.2s.
     seconds: 19,
-    weight: 5,
     catches: 'a secret scanner that stopped matching, an exact historical adjudication that '
       + 'widened into a path or test exemption, or an enumeration that stopped treating '
       + 'tracked-ness as authoritative. The red fixture puts a credential only on a non-current '
@@ -1088,7 +1084,6 @@ export const LADDER: readonly Gate[] = [
     // 5,645 tests. Split out of `bun run test` (44 s) so a change under
     // `packages/core` re-runs this and a change elsewhere does not.
     seconds: 43,
-    weight: 11,
     catches: 'behavioural regressions in core — the whole shared spine both backends run on. '
       + 'No test COUNT is quoted as a contract: the old row carried 3,105 against a measured '
       + '3,917. Spelled ROOT-RELATIVE (`bun test packages/x/`) rather than `--cwd packages/x`: '
@@ -1181,7 +1176,6 @@ export const LADDER: readonly Gate[] = [
     label: 'Cloudflare backend and conformance suite',
     tier: 'push',
     seconds: 13,
-    weight: 11,
     catches: 'the Cloudflare composition root observed against the capability manifest '
       + '— the conformance gate.',
     blind: 'anything needing a Workers runtime rather than a composition root — every '
@@ -1241,7 +1235,6 @@ export const LADDER: readonly Gate[] = [
     label: 'CLI backend and conformance suite',
     tier: 'ci',
     seconds: 19,
-    weight: 11,
     catches: 'the local composition root and its conformance gate, plus the real host '
       + 'filesystem and checkpoint paths.',
     blind: 'the CLI surface above it.',
@@ -1255,7 +1248,6 @@ export const LADDER: readonly Gate[] = [
     label: 'Full production CLI suite',
     tier: 'ci',
     seconds: 41,
-    weight: 11,
     catches: 'the production CLI end to end, including the PTY and subprocess paths. Every '
       + 'file it claims runs in no other tier. The runner derives all files in the directory, '
       + 'isolates the measured contention-sensitive file, then runs the remainder at parallel=4. '
@@ -1448,7 +1440,6 @@ export const LADDER: readonly Gate[] = [
     // client-failure trio (45 s, measured 13.84 s on 2026-09-06) and
     // `workspace-name-ux` fold in; their declared seconds are added here.
     seconds: 420,
-    weight: 5,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
@@ -1528,7 +1519,6 @@ export const LADDER: readonly Gate[] = [
     tier: 'ci',
     // Measured 2026-08-24 after the bug-fix drive and six-width clipping sweep: 51.28s.
     seconds: 55,
-    weight: 5,
     catches: 'the signed-out pages as a browser renders them: the hero tree grows and '
       + 'settles on the landing page, the sign-in and install pages carry the shell, '
       + 'and the landing landmarks and deploy link name the product Kinu. '
@@ -1555,7 +1545,6 @@ export const LADDER: readonly Gate[] = [
     // Runs the real client build twice, then drives three routes in Chromium.
     // Measured 2026-08-27: 8.92s.
     seconds: 20,
-    weight: 5,
     catches: 'which React the shipped bundle contains and which dispatcher the page '
       + 'runs on. It builds with the production Vite config the deploy uses, then '
       + 'asserts one React runtime module in one chunk, zero development-only text '
@@ -1590,7 +1579,6 @@ export const LADDER: readonly Gate[] = [
     label: 'Swarm-tree geometry',
     tier: 'ci',
     seconds: 29,
-    weight: 5,
     catches: 'where the swarm trees LAND, at 640px and 1280px in both palettes — the '
       + 'class of defect no source-reading instrument in this repository can see. Six '
       + 'wires, each proven red by reverting it: a node label clipped at a flat 20 '
@@ -1618,7 +1606,6 @@ export const LADDER: readonly Gate[] = [
     label: 'Chat infinite scroll',
     tier: 'ci',
     seconds: 34,
-    weight: 5,
     catches: 'whether older history arriving above the viewport moves the message the '
       + 'reader is looking at — measured, in a real cascade, at 0px over four prepends '
       + 'of 1190px each. `gallery.tsx`\'s `chathistory` frame was built expressly to be '
@@ -2089,80 +2076,131 @@ export const LADDER: readonly Gate[] = [
 
 
 /**
+ * Every deploy-tier gate in the order the runner walks it: phases in
+ * {@link DEPLOY_PHASES} order, ladder order inside a phase. The plan and the
+ * command list are both projections of this, so the order lives once.
+ */
+export function deployOrder(): Gate[] {
+  const gates = gatesFor('deploy').filter((gate) => gate.tier !== 'evals');
+
+  return DEPLOY_PHASES.flatMap((phase) => gates.filter((gate) => (gate.phase ?? 'source') === phase));
+}
+
+/**
  * The deploy tier's commands, in the order the runner walks them. Until
  * 2026-09-15 this PARSED deploy.sh's `run_required_gate` lines, and deploy.sh
  * carried a second copy of every row's weight, deadline and phase in bash
  * tables `deploy.test.ts` held equal to this file. Now deploy.sh consumes
  * `--plan` and there is one copy: this one.
+ *
+ * Reads no cost, because its callers — `gate:set-equality` and the test
+ * census — ask which gates exist and not what they take. A commit-tier gate
+ * that needed the cost table would make an unmeasured row block a commit
+ * rather than a deploy.
  */
 export function deployGates(): string[] {
-  return deployPlan().map((row) => row.run);
+  return deployOrder().map((gate) => gate.run);
 }
 
-/** One row of the deploy plan, as the runner reads it. */
+/** One row of the deploy plan, as the runner reads it. `threads` and `rssMb`
+ *  are MEASURED (scripts/gate-cost.json), never declared: a row that says what
+ *  it costs is the defect this replaced. */
 export interface PlanRow {
   readonly phase: DeployPhase;
   readonly label: string;
-  readonly weight: number;
+  readonly threads: number;
+  readonly rssMb: number;
   readonly deadline: number;
   readonly run: string;
 }
 
 /**
- * The deploy plan: every deploy-tier gate with its phase, label, weight and
- * deadline, in phase order and, within a phase, in ladder order. This is
+ * The deploy plan: every deploy-tier gate with its phase, label, measured cost
+ * and deadline, in phase order and, within a phase, in ladder order. This is
  * what `bash scripts/deploy.sh` schedules from — the single source of what
  * blocks a publish.
+ *
+ * REFUSES rather than defaults. A `source` row is admitted CONCURRENTLY, so a
+ * row there with no measurement is a row the wave would schedule against a
+ * number nobody took: exactly the 2026-09-16 failure. Outside `source` every
+ * phase's rows are declared to run alone or are the two post-publish live
+ * probes whose cost is a network wait, so the cap is not what decides them and
+ * an unmeasured row there carries one thread and one MiB.
  */
-export function deployPlan(): PlanRow[] {
-  const gates = gatesFor('deploy').filter((gate) => gate.tier !== 'evals');
-  const rows: PlanRow[] = [];
+export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
+  return deployOrder().map((gate) => {
+    const phase = gate.phase ?? 'source';
+    const cost = costs.rows[gate.run];
 
-  for (const phase of DEPLOY_PHASES) {
-    for (const gate of gates) {
-      if ((gate.phase ?? 'source') !== phase) continue;
-      rows.push({
-        phase, label: gate.label, weight: gateWeight(gate), deadline: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS, run: gate.run,
-      });
+    if (cost === undefined && phase === 'source') {
+      throw new Error(
+        `${gate.run} is scheduled in the concurrent source wave and has no measured cost in `
+        + `${COST_TABLE}. Measure it alone — bun scripts/gate-cost-measure.ts --only="${gate.run}" `
+        + '— and commit the figures. A row admitted against a number nobody took is how five rows '
+        + 'died on their deadline on 2026-09-16.',
+      );
     }
-  }
 
-  return rows;
+    return {
+      phase,
+      label: gate.label,
+      threads: cost === undefined ? 1 : costThreads(cost, gate.seconds),
+      rssMb: cost === undefined ? 1 : costRssMb(cost),
+      deadline: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS,
+      run: gate.run,
+    };
+  });
 }
 
-/** The plan as the runner reads it: one tab-separated line per row —
- *  phase, label, weight, deadline, command. Tabs, because a command holds
- *  spaces and a label holds punctuation, and neither holds a tab. */
+/** The plan as the runner reads it: one tab-separated line per row — phase,
+ *  label, threads, resident MiB, deadline, command. Tabs, because a command
+ *  holds spaces and a label holds punctuation, and neither holds a tab. */
 export function printPlan(rows: readonly PlanRow[]): string {
-  return rows.map((row) => [row.phase, row.label, String(row.weight), String(row.deadline), row.run].join('\t')).join('\n');
+  return rows
+    .map((row) => [row.phase, row.label, String(row.threads), String(row.rssMb), String(row.deadline), row.run].join('\t'))
+    .join('\n');
 }
 
 /**
- * A gate's weight: the hardware threads it occupies at peak, one unless the
- * row declares more. The deploy wave is scheduled by this budget against the
- * machine's thread count, not by a count of gates.
+ * THE WAVE'S COST MODEL, AND WHY IT IS MEASURED.
  *
- * Why. Measured 2026-09-16 on the 24-thread workstation: the eleven-suite UI
- * row passes alone in 361 s and failed every deploy attempt at width 6 AND at
- * width 4, each time a different puppeteer `waitForSelector` past its 30 s
- * wall — the false-timeout mode deploy.sh recorded on 2026-08-23. The rows
- * beside it were the two `--parallel=4` package suites. A width counts gates,
- * and a gate is not a unit of load: sampled by process tree on the same day,
- * one browser suite peaks at 4.3 threads (`bun test
- * scripts/react-runtime-identity.test.ts`, 11 samples, mean 2.4), the
- * cf-backend `--parallel=4` row at 10.5 (23 samples, mean 5.1), and
- * `gate:dead-code` at 1.7 (37 samples, mean 0.9). Six of the first beside two
- * of the second is forty threads on a box with twenty-four.
+ * A row's cost is its measured peak parallelism and its measured peak resident
+ * set ({@link costThreads}, {@link costRssMb} over scripts/gate-cost.json),
+ * and the wave admits rows while the sum of both stays under a cap derived
+ * from the box — `nproc` and `MemAvailable`, read by scripts/deploy.sh at the
+ * start of each phase.
  *
- * The declared figures are the measured PEAKS, rounded up, because a wall
- * clock inside a gate is hit by the peak and not by the mean: a browser row
- * weighs its one Chrome instance's peak (5); every `--parallel=4` row weighs
- * the peak of four workers each running its own thread pool (11), and
- * `bun run test:cli` runs the same four workers through `scripts/test-cli.ts`.
+ * It used to be a DECLARED thread figure, one unless a row said otherwise, and
+ * no memory dimension at all. Two things followed.
+ *
+ * Measured 2026-08-23: a half-thread rule launched 12 outer gates and up to 48
+ * inner workers here, turned a 23.67s CLI file into a 173.54s run and produced
+ * nine false timeout failures. Measured 2026-09-16: a six-gate width — the
+ * rule that replaced it — put the eleven-suite UI row beside two `--parallel=4`
+ * package suites and failed every deploy that day on a puppeteer wall, while
+ * the same row passed alone in 361s. Both are one defect: a count of gates is
+ * not a measure of load.
+ *
+ * The declared figures that replaced the count were closer and still wrong.
+ * The three rows that run workerd declared one thread each; measured alone on
+ * 2026-09-17 they take far more, and they hold gigabytes nothing was counting.
+ * A wave with no memory dimension cannot see a SIGKILL coming, and on
+ * 2026-09-16 the gate self-tests row settled at 137 — the kernel's, not the
+ * deadline's, which reports 124.
+ *
+ * So no row declares its cost any more. The deadline is unchanged and stays
+ * what it always was: the hang detector.
  */
-export function gateWeight(gate: Pick<Gate, 'weight'>): number {
-  return gate.weight ?? 1;
-}
+
+/** A row that reaches the workerd pool, a dev server or Chrome, matched
+ *  against the row's command, the package script it resolves to, and the
+ *  imports of every file it claims. Those are ONE machine resource shared by
+ *  every worktree, so `gate-cost-measure.ts` waits another checkout's out rather
+ *  than starting a second one beside it — and a browser row measured against a
+ *  port another worktree's dev server holds is not a measurement at all. */
+export const SHARED_POOL = /(?:vitest|workerd|vite )/u;
+
+export const SHARED_BROWSER = /from ['"](?:\.\/gallery-harness|puppeteer)['"]/u;
 
 /** The path of the Python suites' runner, as its gate spells it. */
 export const PYTHON_SUITES_SCRIPT = 'scripts/python-suites.ts';
@@ -2370,6 +2408,12 @@ export function bunWouldSkip(path: string): boolean {
 export function claims(command: string, tracked: readonly string[]): string[] {
   const words = command.split(/\s+/).filter((word) => word.length > 0);
 
+  // The deadline wrapper runs the command that follows it and claims nothing
+  // of its own, so the claim is the wrapped command's.
+  if (words[0] === 'bun' && words[1] === 'scripts/ladder.ts' && words[2] === '--run') {
+    return claims(words.slice(3).join(' '), tracked);
+  }
+
   if (words[0] === 'bun' && words[1] === 'run') {
     const body = packageScripts()[words[2] ?? ''];
 
@@ -2482,6 +2526,18 @@ export function claims(command: string, tracked: readonly string[]): string[] {
  * construction rather than two spellings that happen to agree. A glob matching
  * no tracked test file is a fault and says so, never an empty pass.
  */
+/** The deadline a package script runs under: its ladder row's when a row runs
+ *  `bun run <script>`, and the shared default otherwise. */
+export interface ScriptDeadline { readonly seconds: number; readonly label: string }
+
+export function scriptDeadline(script: string | undefined): ScriptDeadline {
+  const row = script === undefined ? undefined : LADDER.find((gate) => gate.run === `bun run ${script}`);
+
+  if (row !== undefined) return { seconds: row.deadline?.seconds ?? GATE_DEADLINE_SECONDS, label: row.label };
+
+  return { seconds: GATE_DEADLINE_SECONDS, label: script ?? 'command' };
+}
+
 export function runnableArgv(run: string, tracked: readonly string[]): string[] {
   const words = run.split(' ');
 
@@ -2714,8 +2770,62 @@ if (import.meta.main) {
     process.exit(0);
   }
 
+  // `--run <argv…>`: run a package script's command under its own row's
+  // deadline. `bun run` sets `npm_lifecycle_event` to the script's name, so
+  // the script needs no argument to find its row; a script no row runs gets
+  // the shared default. The hand run and the ladder row are one figure.
+  const runAt = process.argv.indexOf('--run');
+
+  if (runAt !== -1) {
+    const argv = process.argv.slice(runAt + 1);
+
+    if (argv.length === 0) {
+      console.error('usage: bun scripts/ladder.ts --run <command…>');
+      process.exit(2);
+    }
+
+    const outcome = await runUnderDeadline({ argv, ...scriptDeadline(process.env.npm_lifecycle_event) });
+    process.exit(outcome.exitCode);
+  }
+
   if (process.argv.includes('--matrix')) {
     printMatrix();
+    process.exit(0);
+  }
+
+  // The measured table as a reader sees it, heaviest first, with the two
+  // figures the wave admits against and the deadline each row's SOLO wall is
+  // measured against. A row near its own deadline alone is reported, never
+  // fixed by moving the deadline.
+  if (process.argv.includes('--costs')) {
+    const plan = deployPlan();
+    const costs = readCosts();
+    const width = Math.max(...plan.map((row) => row.label.length));
+    console.log(`${costs.measuredAt}  ${costs.machine}`);
+    console.log(`${'row'.padEnd(width)}  thr   MiB      wall      cpu   deadline`);
+
+    for (const row of [...plan].sort((left, right) => right.rssMb - left.rssMb)) {
+      const cost = costs.rows[row.run];
+
+      if (cost === undefined) {
+        console.log(`${row.label.padEnd(width)}    -     -         -        -   ${String(row.deadline).padStart(4)}s  unmeasured, runs alone`);
+        continue;
+      }
+
+      console.log(
+        `${row.label.padEnd(width)}  ${String(row.threads).padStart(3)}  ${String(row.rssMb).padStart(5)}  `
+        + `${cost.wallSeconds.toFixed(1).padStart(8)}s ${cost.cpuSeconds.toFixed(1).padStart(8)}s  ${String(row.deadline).padStart(4)}s`
+        + (cost.wallSeconds > row.deadline * 0.8 ? `  ⚠ ${(cost.wallSeconds / row.deadline * 100).toFixed(0)}% ALONE` : ''),
+      );
+    }
+
+    const source = plan.filter((row) => row.phase === 'source');
+    console.log(
+      `\nsource wave: ${String(source.length)} rows, `
+      + `${String(source.reduce((sum, row) => sum + row.threads, 0))} threads and `
+      + `${String(source.reduce((sum, row) => sum + row.rssMb, 0))} MiB if every row ran at once; `
+      + `this box offers ${String(cpus().length)} threads`,
+    );
     process.exit(0);
   }
 
@@ -2851,8 +2961,7 @@ if (import.meta.main) {
       process.exit(2);
     }
 
-    const machine = `${osPlatform()} ${arch()}, ${cpus()[0]?.model ?? 'unknown cpu'} `
-      + `(${String(cpus().length)} threads)`;
+    const machine = machineName();
 
     const today = new Date().toISOString().slice(0, 10);
     const commit = declaredTierCost('commit');
@@ -2886,7 +2995,7 @@ if (import.meta.main) {
 
   if (tier === undefined) {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --plan | --audit-closure [--tier=<tier>] | --matrix | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --plan | --audit-closure [--tier=<tier>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
     );
     process.exit(2);
   }
@@ -2896,7 +3005,7 @@ if (import.meta.main) {
 
   const measured = assertMeasured(`ladder --tier=${tier}`, [
     ['gates in this tier', gates.length],
-    ['gates in the deploy plan', deployPlan().length],
+    ['gates in the deploy plan', deployOrder().length],
   ]);
 
   // A ladder is a description; something has to make it true. This repo has
@@ -2959,11 +3068,17 @@ if (import.meta.main) {
       for (const note of plan.closure.notes) notes.add(`${gate.run}: ${note}`);
     }
 
-    const at = performance.now();
-    const proc = Bun.spawnSync(runnableArgv(gate.run, tracked), { cwd: root, stdout: 'inherit', stderr: 'inherit' });
-    const seconds = (performance.now() - at) / 1000;
+    // Under the row's own deadline: the one hang detector this tier has,
+    // now that no test carries a clock. A row that hangs is killed and named
+    // here instead of holding the hook — and `git push` — open forever.
+    const outcome = await runUnderDeadline({
+      argv: runnableArgv(gate.run, tracked), cwd: root,
+      seconds: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS, label: gate.label,
+    });
 
-    if (proc.exitCode === 0) {
+    const { seconds } = outcome;
+
+    if (outcome.exitCode === 0) {
       console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s)`);
 
       if (plan?.kind === 'miss') {
@@ -2980,7 +3095,9 @@ if (import.meta.main) {
     console.error(finding({
       at: gate.run,
       invariant: gate.catches,
-      found: 'the command exited non-zero; its own output is immediately above',
+      found: outcome.exitCode === DEADLINE_EXIT_CODE
+        ? `the run hung and was killed at the row's ${String(gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS)}s deadline; its own output is immediately above`
+        : 'the command exited non-zero; its own output is immediately above',
       silently: `every later tier assumes this held. What this gate does NOT cover: ${gate.blind}`,
       fix: `${gate.run}   # reproduce exactly this, nothing else`,
     }));

@@ -4,7 +4,7 @@
  * function: the hosted head and the CLI in-process head runtime.
  *
  * A head IS a fork: it reaches the parent's real execution surface through the
- * same `run`, `execute_tools`, and `web` vocabulary. Hosted heads share the
+ * same `shell`, `eval`, and `web` vocabulary. Hosted heads share the
  * canonical workspace directly; local heads expose it as `parent.*` beside a
  * private scratch workspace. The prompt receives that backend layout explicitly.
  *
@@ -23,7 +23,7 @@
  * deadline is checked when the tool executes.
  *
  * The `allowedTools` filter runs LAST over the head's real vocabulary, so a
- * parent fork request naming `run` / `execute_tools` / `web` maps onto the
+ * parent fork request naming `shell` / `eval` / `web` maps onto the
  * head's actual tools instead of silently emptying the set (the old bug: the
  * parent's vocabulary was filtered against a disjoint `sandbox_*` head surface).
  *
@@ -62,14 +62,14 @@ export interface HeadToolDeps {
   /** The findings accumulator every tool in the surface writes into. */
   capture: HeadCapture;
   /** The head's forked runtime. Its exact file topology is supplied separately
-   *  to the inference prompt; this value backs `run`, `file`, and execute_tools. */
+   *  to the inference prompt; this value backs `shell`, `file`, and eval. */
   rt: AgentRuntime;
-  /** Pre-built `execute_tools`; the backend owns it because codemode
+  /** Pre-built `eval`; the backend owns it because codemode
    *  construction differs per platform (cf: LOADER Worker; CLI: Node eval).
    *  A FUNCTION is called with the finished head surface and its result
-   *  replaces `execute_tools` in it — the hosted sandbox declares every tool
+   *  replaces `eval` in it — the hosted sandbox declares every tool
    *  of that surface as `tools.*`, so it needs the surface first. */
-  executeTool: unknown;
+  codemodeTool: unknown;
   webSearch: WebSearchProvider;
   /** Recursive split. The backend owns the spawn substrate; the budget gate in
    *  front of it lives here, with the rest of the head's policy. */
@@ -173,6 +173,6 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     wrapAdmitted: (admitted) => withHeadCaptureRecording(admitted, capture),
     extra,
     allowed: input.allowedTools,
-    executeTool: deps.executeTool,
+    codemodeTool: deps.codemodeTool,
   });
 }

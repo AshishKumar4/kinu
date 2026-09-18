@@ -110,7 +110,7 @@ export const CONSECUTIVE_FAILURES_BEFORE_STEER = 3;
 export const STEPS_WITHOUT_PROGRESS_BEFORE_STEER = 12;
 
 /** How much of a repeated call's arguments the steer quotes back. Enough to
- *  name a command; never a whole `execute_tools` program. */
+ *  name a command; never a whole `eval` program. */
 const ARGS_ECHO_MAX_CHARS = 200;
 
 /** Marks the line as runtime-authored, exactly as the ephemeral context and
@@ -148,7 +148,7 @@ export function isFailingToolResult(ctx: ToolResultContext): boolean {
   return !ctx.success;
 }
 
-/** One tool called one way. Hashed rather than stored: an `execute_tools`
+/** One tool called one way. Hashed rather than stored: an `eval`
  *  program is tens of kilobytes and a turn runs hundreds of steps. */
 function callSignature(toolName: string, args: JsonObject): string {
   return `${toolName}${fnv1a64(stableArgs(args))}`;
@@ -324,7 +324,7 @@ export class TurnSteering {
    *   • `repeats.size` — distinct (tool, arguments) calls issued. The repeat
    *     detector's own keyset, read for what it is rather than for what
    *     repeats in it: every entry is a call this turn had not made before. It
-   *     is also, for `run`, exactly "distinct commands run".
+   *     is also, for `shell`, exactly "distinct commands run".
    *   • `filesTouched` — paths read or written for the first time, off the
    *     turn's file ledger.
    *   • `editsApplied` — edits that actually changed a file. `sed -i` exits 0
@@ -337,7 +337,7 @@ export class TurnSteering {
    * reached anywhere new, and re-running the same command does not — which is
    * exactly the loop shape the identical-output detector cannot see.
    *
-   * The known limit, stated rather than hidden: `execute_tools` sends a fresh
+   * The known limit, stated rather than hidden: `eval` sends a fresh
    * program almost every step, so its signature diversity always reads as new
    * ground. The harness cannot see inside one tool call; what it CAN see of a
    * codemode turn is the file work, because the inline executor writes to this

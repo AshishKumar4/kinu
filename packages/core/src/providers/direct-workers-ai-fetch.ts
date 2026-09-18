@@ -10,24 +10,24 @@
  * the shipped implementation, workerd v1.20260820.1
  * `src/cloudflare/internal/ai-api.ts`:
  *
- *  1. `run` streams. With `inputs.stream = true` the upstream answers
- *     `text/event-stream` and `run` returns the untouched `res.body`, so bytes
+ *  1. `shell` streams. With `inputs.stream = true` the upstream answers
+ *     `text/event-stream` and `shell` returns the untouched `res.body`, so bytes
  *     reach the caller as the model produces them. There is no reason to buffer
  *     a completion and replay it as one synthetic frame.
  *  2. `options.returnRawResponse` is the only way to get the HTTP envelope.
- *     Without it `run` throws `InferenceUpstreamError` for any non-ok status and
+ *     Without it `shell` throws `InferenceUpstreamError` for any non-ok status and
  *     the status code is lost, and it decides JSON by comparing the content type
  *     for EQUALITY with `application/json`, so a `charset` parameter alone makes
  *     it hand back a raw body instead of a parsed object. The envelope carries
  *     the status and the content type, which is what a fetch seam needs.
- *  3. `run` stores its options on the BINDING (`this.#options = options`) and
+ *  3. `shell` stores its options on the BINDING (`this.#options = options`) and
  *     reads them again AFTER awaiting the upstream fetch, to choose between
  *     returning the `Response`, the parsed JSON and the raw body. One binding
  *     instance serves every concurrent turn, so a second call in flight can
  *     decide the first call's return shape. Per-call values that are read before
  *     that await, `extraHeaders` and `signal`, are safe.
  *
- * Fact 3 is why this adapter accepts every shape `run` can return rather than
+ * Fact 3 is why this adapter accepts every shape `shell` can return rather than
  * the one it asked for. Trusting the requested shape is how a parallel turn
  * turns into an empty stream.
  *
@@ -103,7 +103,7 @@ interface DirectWorkersAIRunOptions {
 }
 
 /** The one binding method this adapter calls, typed by every shape workerd's
- *  `run` can hand back. The union is not caution: each arm is reachable, and
+ *  `shell` can hand back. The union is not caution: each arm is reachable, and
  *  which one arrives is decided by binding state a concurrent call also writes. */
 interface DirectWorkersAIRunner {
   run(

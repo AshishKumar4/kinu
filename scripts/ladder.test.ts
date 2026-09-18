@@ -32,6 +32,7 @@ import {
   isRunnableSuite, isVitestEvalSuite,
 } from './sources';
 import { SKIP_RATCHET_VITEST_TARGETS } from './skip-ratchet';
+import { QUIET_LOAD, readCosts } from './gate-cost';
 
 const root = resolve(import.meta.dir, '..');
 
@@ -129,8 +130,38 @@ describe('the ladder measures something', () => {
     expect([...phaseIndex].sort((a, b) => a - b)).toEqual(phaseIndex);
     // The printed form round-trips: what the runner reads is what was planned.
     const printed = printPlan(plan).split('\n').map((line) => line.split('\t'));
-    expect(printed.map((fields) => fields[4])).toEqual(plan.map((row) => row.run));
+    expect(printed.map((fields) => fields[5])).toEqual(plan.map((row) => row.run));
     expect(printed.map((fields) => fields[0])).toEqual(plan.map((row) => row.phase));
+  });
+
+  // THE COST TABLE IS THE WAVE'S ONE SET OF FIGURES, and a figure for a row
+  // that no longer exists is the same defect as a row with no figure: both are
+  // a scheduler deciding from something nobody measured. `deployPlan()`
+  // refuses the second at plan time; this names the first, which it cannot
+  // see, and names the rows whose figures were taken on a busy box.
+  test('the cost table measures exactly the rows the wave schedules concurrently', () => {
+    const costs = readCosts();
+    const runs = new Set(LADDER.map((gate) => gate.run));
+    const stale = Object.keys(costs.rows).filter((run) => !runs.has(run));
+    expect(stale, 'measured figures kept for rows that are no longer gates').toEqual([]);
+
+    const unmeasured = deployPlan()
+      .filter((row) => row.phase === 'source' && costs.rows[row.run] === undefined)
+      .map((row) => row.run);
+
+    expect(unmeasured, 'rows the wave runs concurrently with no measured cost').toEqual([]);
+
+    // A row measured under load reads its achieved parallelism LOW, and a cost
+    // read low is a row the wave over-admits. The runnable-task figure carries
+    // such a row (gate-cost.ts), so this is a report and not a verdict — but
+    // an unrepeated figure has to be visible somewhere.
+    const contended = Object.entries(costs.rows)
+      .filter(([, cost]) => cost.loadAtStart >= QUIET_LOAD)
+      .map(([run]) => run);
+
+    if (contended.length > 0) {
+      console.log(`cost table: ${String(contended.length)} row(s) measured above load ${String(QUIET_LOAD)}; re-run with gate-cost-measure.ts --contended on a quiet box`);
+    }
   });
 
   test('git reports a non-empty set of test files', () => {
@@ -793,7 +824,7 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
     }
 
     const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
-    expect(packageJson).toContain('"test:core": "bun test --timeout=0 --parallel=4 packages/core/"');
+    expect(packageJson).toContain('"test:core": "bun scripts/ladder.ts --run bun test --timeout=0 --parallel=4 packages/core/"');
     // The root script still fans out to every spine package, so `bun run test`
     // stays the most-typed command and `claims()` keeps resolving it whole.
     expect(packageJson).toContain('"test": "bun run test:core && bun run test:spine"');

@@ -4,7 +4,7 @@
  * The rule changed shape once the engine bounded its walk. Before that, a
  * project marker above the temp directory WAS the defect: `workdirForPath`
  * walked to it and every host write beneath resolved its checkpoint working
- * directory there, measured at 24,483 ms for one `laptop.writeFile`. With the
+ * directory there, measured at 24,483 ms for one `device.writeFile`. With the
  * bound in place the same marker claims nothing, so refusing a push for it is
  * a false blocker — and a gate that fires on a fixed pathology is the gate
  * somebody switches off. What must stay red is the case that still bites:

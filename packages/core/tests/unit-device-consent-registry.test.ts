@@ -17,7 +17,7 @@ import { makeExecRaw, makeSql } from './helpers';
 
 const REQUEST: DeviceConsentRequest = {
   deviceId: 'dev-1',
-  deviceLabel: "ashish's laptop",
+  deviceLabel: "ashish's device",
   method: 'exec',
   command: 'git status',
 };
@@ -106,7 +106,7 @@ describe('DeviceConsentRegistry', () => {
     expect(reg.approvals()).toEqual([{
       id: 'cons-1',
       kind: 'device consent',
-      detail: "ashish's laptop: git status",
+      detail: "ashish's device: git status",
     }]);
     expect(reg.resolve('cons-1', 'deny')).toBe(true);
     expect(await pending).toBe('deny');
@@ -138,7 +138,7 @@ describe('DeviceConsentRegistry identity', () => {
   test('a refreshed device label joins the pending action on that device', async () => {
     const { reg } = registry();
     const first = reg.request(REQUEST);
-    const retry = reg.request({ ...REQUEST, deviceLabel: 'Ashish’s laptop' });
+    const retry = reg.request({ ...REQUEST, deviceLabel: 'Ashish’s device' });
 
     expect(reg.list()).toHaveLength(1);
     reg.resolve('cons-1', 'once');

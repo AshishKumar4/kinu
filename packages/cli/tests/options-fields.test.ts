@@ -1,4 +1,4 @@
-// The shared record-field contract both `run` (command payloads) and `debug`
+// The shared record-field contract both `shell` (command payloads) and `debug`
 // (bundle identity) read through: blank strings read as absent, numeric
 // strings read as their number, and non-finite numbers never pass.
 import { describe, expect, test } from 'bun:test';

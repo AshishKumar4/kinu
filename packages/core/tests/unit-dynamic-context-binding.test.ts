@@ -102,10 +102,10 @@ test('the current actor profile supplies mode and actual plan-submission reach t
 
 test('crafted declarations follow the installed sandbox reader and the bound grant', () => {
   const o = setup();
-  const profile: DynamicContextInput['profile'] = { workMode: 'build', allowedTools: ['execute_tools'] };
+  const profile: DynamicContextInput['profile'] = { workMode: 'build', allowedTools: ['eval'] };
   let declarations = [{ name: 'live_echo', description: 'Initial implementation' }];
 
-  const tools = { execute_tools: withCraftedToolDeclarations(
+  const tools = { eval: withCraftedToolDeclarations(
     tool({ inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'executed' }),
     () => declarations,
   ) };
@@ -219,7 +219,7 @@ describe('collectDynamicContext', () => {
     // mid-turn has to be visible on the very next one.
     const o = setup();
     expect(collect(o).jobs).toEqual({ items: [], total: 0 });
-    o.stores.jobs.create({ id: 'j1', kind: 'run', workMode: 'build', now: 1 });
+    o.stores.jobs.create({ id: 'j1', kind: 'shell', workMode: 'build', now: 1 });
     expect(collect(o).jobs!.items).toHaveLength(1);
   });
 });
@@ -255,13 +255,13 @@ describe('the backend-only planes ride the typed source callbacks', () => {
       approvals: () => {
         parked += 1;
 
-        return { items: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push' }], total: 1 };
+        return { items: [{ id: 'cons-1', kind: 'device consent', detail: 'device: git push' }], total: 1 };
       },
       missingCapabilities: [{ source: 'inbox', reason: 'no transport bound' }],
     });
 
     expect(ctx.approvals).toEqual({
-      items: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push' }],
+      items: [{ id: 'cons-1', kind: 'device consent', detail: 'device: git push' }],
       total: 1,
     });
     expect(ctx.missingCapabilities).toContainEqual({ source: 'inbox', reason: 'no transport bound' });

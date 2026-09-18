@@ -282,19 +282,21 @@ describe('drained event parsing', () => {
   });
 
   test('a multi-line brief keeps its continuation lines', () => {
+    // A REPORT, because an assignment never reaches a drain: `wakesADrain`
+    // excludes `subordinate_task`, the delegation runner owns it, and a report
+    // up is the multi-line sender-written body the reactor does still render.
     const batch = buildDrainBatch([event({
       ...EVENT_BASE,
-      id: 's1', ingress: 'subordinate', variant: 'subordinate_task' as const,
+      id: 's1', ingress: 'subordinate', variant: 'subordinate_report' as const,
       payload: {
-        from_workspace: 'atlas', kind: 'task' as const, body: 'check the CLI',
-        inherited_context: { kind: 'digest', text: 'Context line one.\nContext line two.' },
-        kinu_mode: 'build',
-        creation_id: 'seq-1',
+        from_subordinate: 'cli-auditor', status: 'completed' as const,
+        content: 'Report line one.\nReport line two.',
+        sequence_id: 'seq-1', kinu_mode: 'build',
       },
     })])!;
 
     const [parsed] = parseDrainedEvents(batch.text);
-    expect(parsed!.brief).toBe('Context line one.\nContext line two.\n\ntask: check the CLI');
+    expect(parsed!.brief).toBe('completed: Report line one.\nReport line two.');
   });
 
   test('text that is not a drain listing yields nothing to fabricate a card from', () => {

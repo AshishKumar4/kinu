@@ -190,7 +190,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
 
   test("jobResult on a SETTLED job passes the row through unchanged — the result is there to read", async () => {
     const settled: BackgroundJob = {
-      id: "bgjob-1", kind: "run", label: null, workMode: "build", status: "completed",
+      id: "bgjob-1", kind: "shell", label: null, workMode: "build", status: "completed",
       result: '"the output"', error: null, createdAt: 1, settledAt: 2, epoch: 0, resumeAttempts: 0,
       retriedBy: null,
       attemptStartedAt: 1, resumeAfter: null,

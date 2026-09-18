@@ -114,8 +114,8 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // (identity/create.ts:57-68). An MCTS suite driving that stub is scoring
     // the stub, not exploration. `initWorkspaceSchema` is also what makes
     // `head_journal` exist at all, which this suite's settle-visibility
-    // assertion requires of both halves. `hostRoot: null` keeps every executor
-    // off the repo this suite launched from, asserted rather than trusted
+    // assertion requires of both halves. Binding no directory keeps every
+    // executor off the repo this suite launched from, asserted rather than trusted
     // because this suite spends real money to find out.
     target = await provisionLocalTarget({
       dir: TEST_DIR,

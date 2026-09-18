@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/prompt.ts b/packages/core/src/prompt.ts
+index 468a2a21..d341dfcf 100644
+--- a/packages/core/src/prompt.ts
++++ b/packages/core/src/prompt.ts
+@@ -185,7 +185,7 @@ function renderExecutorLine(
+ 
+ function offlineDevice(executors: readonly PromptExecutorInfo[]): PromptExecutorInfo | undefined {
+   return executors.find((exec) =>
+-    exec.name === 'device' && exec.configured === true && !executorIsSelectable(exec));
++    exec.name === 'device' && exec.configured === true && executorIsSelectable(exec));
+ }
+ 
+ function renderExecutorSection(surface: PromptSurface, render: RenderSection): string {

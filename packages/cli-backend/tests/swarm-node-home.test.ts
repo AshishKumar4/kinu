@@ -99,7 +99,6 @@ function cliRuntime(label: string): CLIRuntime {
   return createCLIRuntime(database, {
     dbPath: database.filename,
     llm: DUMMY_LLM,
-    hostRoot: null,
   });
 }
 
@@ -210,7 +209,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
   test('a local node keeps its home and private scratch through runtime reset', async () => {
     const database = new Database(scratchPath('node-reset', 'agent.db'));
     databases.push(database);
-    const config = { dbPath: database.filename, llm: DUMMY_LLM, hostRoot: null };
+    const config = { dbPath: database.filename, llm: DUMMY_LLM };
     const first = createCLIRuntime(database, config);
     const provision = nodeHomeWiring(first).provisionNodeHome();
     const home = await provision({ nodeId: 'reset', rootId: 'reset', depth: 1 });

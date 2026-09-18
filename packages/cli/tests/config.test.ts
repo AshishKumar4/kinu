@@ -106,7 +106,7 @@ describe("CLI config safety", () => {
     const dbPath = join(dir, "agent.db");
     const db = new Database(dbPath, { create: true });
     db.exec("PRAGMA journal_mode = WAL");
-    const rt = createCLIRuntime(db, { dbPath, llm: null, hostRoot: null, agentName: 'Smokey' });
+    const rt = createCLIRuntime(db, { dbPath, llm: null, agentName: 'Smokey' });
     rt.actor.config.setDisplayName('Smokey');
     const identityId = readWorkspaceIdentityId(dbPath);
     db.query("PRAGMA wal_checkpoint(TRUNCATE)").get();

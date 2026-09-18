@@ -25,7 +25,7 @@ const parentDbPath = join(dir, 'parent.db');
 
 const parentDb = new Database(parentDbPath, { create: true });
 
-const parentRuntime = createCLIRuntime(parentDb, { dbPath: parentDbPath, llm: null, hostRoot: null, agentName: 'branch-parent' });
+const parentRuntime = createCLIRuntime(parentDb, { dbPath: parentDbPath, llm: null, agentName: 'branch-parent' });
 
 initActorStateSchema(makeWorkspaceSchemaSql(parentDb));
 

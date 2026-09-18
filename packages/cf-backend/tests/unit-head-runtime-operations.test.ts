@@ -83,7 +83,7 @@ const neverHost: ExplorationHostSeams = {
   resolveModel() { throw new Error('mergeLLM resolved a model through the seams'); },
   webSearch() { throw new Error('mergeLLM reached the web search provider'); },
   nodeHome() { throw new Error('mergeLLM provisioned a node home'); },
-  executeTool() { throw new Error('mergeLLM built an execute_tools surface'); },
+  codemodeTool() { throw new Error('mergeLLM built an eval surface'); },
   recordStep() { throw new Error('mergeLLM recorded a head step'); },
   publishDelta() { throw new Error('mergeLLM published a head stream frame'); },
   mission() { throw new Error('mergeLLM read the mission ledger'); },

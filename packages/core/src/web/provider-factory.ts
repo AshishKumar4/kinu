@@ -6,7 +6,8 @@
  * every hosted actor alike — so the wiring cannot drift between them.
  */
 
-import { createDefaultWebSearchProvider, REAL_WEB_SCHEDULE, type WebSearchProvider } from './provider';
+import { createDefaultWebSearchProvider, type WebSearchProvider } from './provider';
+import { REAL_CLOCK } from '../types/clock';
 import type { AuthResolver } from '../providers/types';
 import type { ModelCallSink } from '../events/model-call';
 
@@ -39,7 +40,7 @@ export function buildCfWebSearchProvider(
 
   const options: Parameters<typeof createDefaultWebSearchProvider>[0] = {
     fetch: globalThis.fetch,
-    schedule: REAL_WEB_SCHEDULE,
+    clock: REAL_CLOCK,
     getAuth: async (key, opts) => {
       const auth = resolveAuth();
 

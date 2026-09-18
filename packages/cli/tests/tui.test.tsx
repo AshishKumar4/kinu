@@ -1389,7 +1389,7 @@ function runHomeScreen(options: {
     const db = new Database(resolve(home, name, 'agent.db'), { create: true });
 
     try {
-      createCLIRuntime(db, { dbPath: db.filename, llm: null, hostRoot: null, agentName: name }).actor.config.setDisplayName(workspaceTitle(name));
+      createCLIRuntime(db, { dbPath: db.filename, llm: null, agentName: name }).actor.config.setDisplayName(workspaceTitle(name));
     } finally {
       db.close();
     }

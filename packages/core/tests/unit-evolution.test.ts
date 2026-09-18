@@ -76,7 +76,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(renderRecentLessons(rt.storage.sql, rt.actor)).not.toBe('');
     const reflectionPrompt = prompts.find((prompt) => prompt.includes('In one sentence')) ?? '';
     expect(reflectionPrompt).toContain(
-      'Turn process: 41 sequential steps, 0 hiring, 0 exploration, 0 messaging, 0 execute_tools, 6.2min wall clock',
+      'Turn process: 41 sequential steps, 0 hiring, 0 exploration, 0 messaging, 0 eval, 6.2min wall clock',
     );
     // One shared rubric string, in the vocabulary the evidence line above it
     // prints. The two inline copies had drifted into two vocabularies for one
@@ -99,7 +99,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     engine.onEvent(e => events.push(e));
 
     const turn = makeTurn({
-      toolCalls: [{ name: 'execute_tools', args: { code: 'return 42' }, result: 42 }],
+      toolCalls: [{ name: 'eval', args: { code: 'return 42' }, result: 42 }],
     });
 
     await engine.reviewTurn(turn, 'great, now do the same for the prod cluster');
@@ -117,7 +117,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const engine = new EvolutionEngine(rt);
 
     const turn = makeTurn({
-      toolCalls: [{ name: 'execute_tools', args: {}, result: 'x' }],
+      toolCalls: [{ name: 'eval', args: {}, result: 'x' }],
       craftedToolsUsed: ['my_crafted_tool'],
     });
 
@@ -136,7 +136,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
         VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
     const engine2 = new EvolutionEngine(rt2);
     await engine2.reviewTurn(makeTurn({
-      toolCalls: [{ name: 'execute_tools', args: {}, result: 'x' }],
+      toolCalls: [{ name: 'eval', args: {}, result: 'x' }],
       craftedToolsUsed: ['my_crafted_tool'],
     }), 'thanks, that worked — next please deploy it');
 
@@ -207,7 +207,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
     const turn = makeTurn({
       turnId: 'exec-1',
-      toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } }],
+      toolCalls: [{ name: 'shell', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } }],
     });
 
     await engine.reviewTurn(turn, null);
@@ -234,7 +234,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     });
 
     const acted: Partial<CompletedTurn> = {
-      toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } }],
+      toolCalls: [{ name: 'shell', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } }],
     };
 
     const headless = createTestRuntime({ llmResponses: { 'Extract a reusable pattern': pattern } });
@@ -270,7 +270,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
     await engine.reviewTurn(makeTurn({
       turnId: 'exec-2', hadError: true,
-      toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: { error: 'exit 1' } }],
+      toolCalls: [{ name: 'shell', args: { command: 'bun test' }, result: { error: 'exit 1' } }],
     }), null);
 
     const [row] = listTurnOutcomes(rt.storage.sql, rt.actor);
@@ -289,7 +289,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const engine = new EvolutionEngine(rt);
     await engine.reviewTurn(makeTurn({
       turnId: 'exec-3', hadError: true,
-      toolCalls: [{ name: 'run', args: {}, result: { error: 'boom' } }],
+      toolCalls: [{ name: 'shell', args: {}, result: { error: 'boom' } }],
     }), null);
 
     const k = alignmentConvergence(rt.storage.sql, rt.actor);

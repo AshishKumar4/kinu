@@ -124,7 +124,7 @@ export async function execCommand(promptParts: string[], opts: ExecOptions): Pro
  * A one-shot run is over once its turn and its bounded background drain are:
  * there is nothing left for this process to do. It still cannot simply return,
  * because the shell it ran commands through keeps a handle on every child it
- * spawned — so a `run` the agent deliberately left running in the background (a
+ * spawned — so a `shell` the agent deliberately left running in the background (a
  * server, a VM, a training job) holds the process open long after the answer was
  * printed. That was measured at 6.4 of 16.2 agent-hours of pure idle tail across
  * an 89-task benchmark run, all of it after the agent had already finished.

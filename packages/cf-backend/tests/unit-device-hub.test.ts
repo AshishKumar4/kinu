@@ -286,7 +286,7 @@ describe('DeviceSocketHub toolchain probe', () => {
     await probing;
     expect(hub.toolchain('dev-a', NOW)).not.toBeNull();
 
-    // A DIFFERENT laptop can reconnect under the same device row. Recording the
+    // A DIFFERENT device can reconnect under the same device row. Recording the
     // answer on the socket rather than in SQL is what keeps it from inheriting
     // its predecessor's capabilities.
     hub.accept('dev-a', fakeSocket());
@@ -381,7 +381,7 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
 
   test('a device that stopped connecting is refused and cannot mint a ticket', async () => {
     const harness = createTestUserDO();
-    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'laptop');
+    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'device');
     ageDevice(harness, deviceId, Date.now() - day);
 
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: false });
@@ -404,7 +404,7 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
 
   test('the listing reports the window so the owner can see a link about to lapse', async () => {
     const harness = createTestUserDO();
-    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'laptop');
+    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'device');
     ageDevice(harness, deviceId, 12345);
     expect(await harness.userDO.listDevices(await testOwner()))
       .toMatchObject([{ id: deviceId, expiresAt: 12345 }]);
@@ -413,7 +413,7 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
 
   test('the runtime status separates "no device" from "registered but away", with nothing claimed', async () => {
     const harness = createTestUserDO();
-    // Nothing registered: the agent's laptop row is not configured at all, and
+    // Nothing registered: the agent's device row is not configured at all, and
     // the fleet it can see is empty rather than unknown.
     expect(await harness.userDO.deviceRuntimeStatus(await testOwner()))
       .toEqual({ connected: false, registered: false, toolchain: null, devices: [] });

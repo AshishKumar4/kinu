@@ -9,7 +9,7 @@ import { CHECKOUT_FRAME_CAPTION } from './landing-fixtures';
 import { SearchTreeHero } from './search-tree/SearchTreeHero';
 import { useWideHero } from './search-tree/stage';
 
-const PHRASES = ['get better with use.', 'build their own tools.', 'run in the cloud or on your machine.', 'connect to multiple devices.', 'work while your laptop is closed.'] as const;
+const PHRASES = ['get better with use.', 'build their own tools.', 'run in the cloud or on your machine.', 'connect to multiple devices.', 'work while your device is closed.'] as const;
 
 /**
  * The heading a screen reader gets, DERIVED rather than restated.

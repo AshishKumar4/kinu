@@ -109,7 +109,7 @@ function promptFor(opts: Partial<SystemPromptOptions>): string {
 
   return buildSystemPromptSync(rt, {
     soulOverride: 'You are Kinu.',
-    availableTools: ['file', 'run'],
+    availableTools: ['file', 'shell'],
     model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
     currentDate: '2026-01-01',
     ...opts,
@@ -194,26 +194,26 @@ describe('skills the agent could have written', () => {
     // and the union is a WIDENING operation — so an unapproved file could hand
     // itself a tool an approved skill had excluded, or invent a restriction the
     // owner never asked for.
-    const poisoned = skill({ allowed_tools: ['run'], trust: 'unverified' });
-    const tools = toolMap('file', 'run', 'web');
+    const poisoned = skill({ allowed_tools: ['shell'], trust: 'unverified' });
+    const tools = toolMap('file', 'shell', 'web');
 
     expect(Object.keys(filterToolSetBySkills(tools, skillSet(poisoned))).sort())
-      .toEqual(['file', 'run', 'web']);
+      .toEqual(['file', 'shell', 'web']);
   });
 
   test('an approved skill still restricts the tool surface', () => {
-    const approved = skill({ allowed_tools: ['run'], trust: 'approved' });
-    const tools = toolMap('file', 'run', 'web');
+    const approved = skill({ allowed_tools: ['shell'], trust: 'approved' });
+    const tools = toolMap('file', 'shell', 'web');
 
-    expect(Object.keys(filterToolSetBySkills(tools, skillSet(approved)))).toEqual(['run']);
+    expect(Object.keys(filterToolSetBySkills(tools, skillSet(approved)))).toEqual(['shell']);
     expect(promptFor({ activeSkills: skillSet(approved) }))
-      .toContain('Your tool surface for this turn is restricted to: run');
+      .toContain('Your tool surface for this turn is restricted to: shell');
   });
 
   test('an unapproved skill cannot widen an approved skill\'s restriction', () => {
     const approved = skill({ name: 'narrow', allowed_tools: ['file'], trust: 'approved' });
-    const poisoned = skill({ name: 'wide', allowed_tools: ['run'], trust: 'unverified' });
-    const tools = toolMap('file', 'run');
+    const poisoned = skill({ name: 'wide', allowed_tools: ['shell'], trust: 'unverified' });
+    const tools = toolMap('file', 'shell');
 
     expect(Object.keys(filterToolSetBySkills(tools, skillSet(approved, poisoned))))
       .toEqual(['file']);

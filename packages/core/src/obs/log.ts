@@ -383,6 +383,12 @@ export interface RecordingLogger extends Logger {
    *  non-zero length — an empty array is the shape of a log site that was never
    *  reached, which is the defect a logging test exists to catch. */
   readonly emitted: readonly RecordedLog[];
+  /** Resolves once `holds` is true of the lines emitted, now or after a later
+   *  line: how a test joins on the product's own evidence — an event the code
+   *  under test emits when it is done — instead of polling the array against
+   *  a clock. Nothing here bounds the wait; a line that never comes is a hang
+   *  the runner's deadline ends and names. */
+  until(holds: (emitted: readonly RecordedLog[]) => boolean): Promise<void>;
 }
 
 /**
@@ -393,19 +399,36 @@ export interface RecordingLogger extends Logger {
  */
 export function createRecordingLogger(): RecordingLogger {
   const emitted: RecordedLog[] = [];
+  const waiting: { readonly holds: (emitted: readonly RecordedLog[]) => boolean; readonly resolve: () => void }[] = [];
+
+  const record = (line: RecordedLog): void => {
+    emitted.push(line);
+
+    for (const waiter of waiting.splice(0)) {
+      if (waiter.holds(emitted)) waiter.resolve();
+      else waiting.push(waiter);
+    }
+  };
 
   return {
     emitted,
     event(name: LogEventName, fields?: LogFields): void {
-      emitted.push({ event: name, code: null, cause: null, fields: fields ? { ...fields } : {} });
+      record({ event: name, code: null, cause: null, fields: fields ? { ...fields } : {} });
     },
     failure(name: LogEventName, error: KinuError, fields?: LogFields): void {
-      emitted.push({
+      record({
         event: name,
         code: error.code,
         cause: renderCauseChain(error),
         fields: fields ? { ...fields } : {},
       });
+    },
+    until(holds) {
+      if (holds(emitted)) return Promise.resolve();
+      const { promise, resolve } = Promise.withResolvers<void>();
+      waiting.push({ holds, resolve });
+
+      return promise;
     },
   };
 }

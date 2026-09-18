@@ -68,7 +68,7 @@ describe('buildWorkspaceOverview', () => {
     const overview = buildWorkspaceOverview({
       ...EMPTY,
       pendingConsents: [{
-        consentId: 'con-1', createdAt: NOW, deviceId: 'dev-1', deviceLabel: 'laptop',
+        consentId: 'con-1', createdAt: NOW, deviceId: 'dev-1', deviceLabel: 'device',
         method: 'shell', command: 'git push',
       }],
       activePlan: { status: 'pending' },

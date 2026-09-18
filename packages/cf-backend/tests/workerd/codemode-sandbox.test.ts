@@ -1,5 +1,5 @@
 /**
- * The `execute_tools` sandbox, run for real: the @cloudflare/codemode
+ * The `eval` sandbox, run for real: the @cloudflare/codemode
  * DynamicWorkerExecutor over `env.LOADER`, loading Kinu's `kinu-node.js`
  * module beside the program, with the `tools` prelude defining crafted tools.
  *
@@ -74,7 +74,7 @@ const stateProvider = {
   },
 };
 
-describe('the execute_tools sandbox under workerd', () => {
+describe('the eval sandbox under workerd', () => {
   const executor = new KinuSandboxExecutor({ loader: env.LOADER, egress: null });
 
   test('hosted codemode distinguishes returned data, handled refusal, and unhandled failure', async () => {
@@ -236,7 +236,7 @@ describe('the execute_tools sandbox under workerd', () => {
     const run = (code: string) => withCodemodeProgram(() => executor.execute(code, providers));
     const recovered = await run('const failure = await tools.file({action:"read"}); if (failure.success === false) return failure.reason; throw new Error("missing failure shape");');
     expect(recovered.result).toBe('unavailable');
-    expect(successfulToolOutcome('execute_tools', recovered)).toEqual({ success: true, failures: [
+    expect(successfulToolOutcome('eval', recovered)).toEqual({ success: true, failures: [
       { success: false, tool: 'file', action: 'read', reason: 'unavailable', error: 'file plane offline' },
     ] });
 
@@ -290,8 +290,8 @@ describe('the execute_tools sandbox under workerd', () => {
   });
 
   test('a bare native tool name is corrected toward tools.<name>', async () => {
-    const result = await executor.execute("// misuse\nreturn await run({ command: 'ls' })", [toolsProvider([]), stateProvider, workspace]);
-    expect(result.error).toContain('"run" is a native Kinu tool');
-    expect(result.error).toContain('`tools.run(input)`');
+    const result = await executor.execute("// misuse\nreturn await shell({ command: 'ls' })", [toolsProvider([]), stateProvider, workspace]);
+    expect(result.error).toContain('"shell" is a native Kinu tool');
+    expect(result.error).toContain('`tools.shell(input)`');
   });
 });

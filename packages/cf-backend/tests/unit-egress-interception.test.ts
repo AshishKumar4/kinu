@@ -249,7 +249,7 @@ describe('what the container is configured with', () => {
   test('a grant on another executor does not widen the container', () => {
     const params = kinuEgressParams({
       workspaceName: 'w', ownerUserId: 'u', vault: [BINDING],
-      grants: [{ rule: 'egress-secret:stripe', executor: 'laptop' }],
+      grants: [{ rule: 'egress-secret:stripe', executor: 'device' }],
     });
 
     expect(params.bindings).toEqual([]);
