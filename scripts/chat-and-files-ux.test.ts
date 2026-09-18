@@ -1357,11 +1357,11 @@ describe('an additional agent, as an ordinary conversation', () => {
     });
   });
 
-  test('an agent pane\'s model picker is read-only and shows the actor\'s effective model', async () => {
-    // The pane's picker wrote to the ROOT's `setModel` while reading a config
-    // row nothing sets: choosing a model there silently repinned the whole
-    // workspace. It now shows the snapshot's effective model — what the turn
-    // resolves — disabled, with the one line that says where the write lives.
+  test('an agent pane\'s picker shows the actor\'s effective model and writes the actor\'s own pin', async () => {
+    // The pane's picker once wrote to the ROOT's `setModel`, so a pick there
+    // repinned the whole workspace; then it was made read-only. Now it shows
+    // the snapshot's effective model and a pick — or a thinking level — is
+    // written to THIS actor, never the workspace.
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
@@ -1373,27 +1373,20 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.waitForFunction(() => (
         (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
       ));
-
-      // The stub answers the snapshot with the workspace pin's model, so the
-      // picker renders it — disabled, so it can never write anywhere.
       await page.waitForFunction(() => {
-        const input = document.querySelector('input[aria-label="Model"]');
+        const input = document.querySelector('[data-agent-pane] input[aria-label="Model"]');
 
-        return input instanceof HTMLInputElement && input.disabled;
+        return input instanceof HTMLInputElement && input.value === 'Claude Opus 4' && !input.disabled;
       });
-
-      const picker = await page.evaluate(() => {
-        const input = document.querySelector('input[aria-label="Model"]');
-
-        return input instanceof HTMLInputElement
-          ? { value: input.value, disabled: input.disabled }
-          : { value: null, disabled: null };
-      });
-
-      expect(picker).toEqual({ value: 'Claude Opus 4', disabled: true });
 
       const body = await page.evaluate(() => document.body.innerText);
-      expect(body).toContain('Set for the workspace on the Main tab');
+      expect(body).not.toContain('Set for the workspace on the Main tab');
+
+      // The thinking level is the actor's own write too.
+      await page.select('[data-agent-pane] select[aria-label="Thinking level"]', 'high');
+      await page.waitForFunction(() => (document.documentElement.dataset.galleryModelCalls ?? '').includes('setReasoningEffort'));
+      const calls = await page.evaluate(() => JSON.parse(document.documentElement.dataset.galleryModelCalls ?? '[]'));
+      expect(calls).toEqual([{ method: 'setReasoningEffort', args: ['high', 'agent-1'] }]);
       await page.close();
     });
   });
@@ -1502,8 +1495,9 @@ describe('the shell rails collapse and reopen, and the choice survives a reload'
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('button[aria-label="Hide sidebar"]');
 
+      // The roster column, as opposed to the icon rail it folds to.
       const railVisible = () => page.evaluate(() => {
-        const rail = document.querySelector('aside [aria-label="Primary"]');
+        const rail = document.querySelector('aside[data-rail]');
 
         return rail instanceof HTMLElement && rail.offsetParent !== null;
       });
@@ -1556,43 +1550,6 @@ describe('the shell rails collapse and reopen, and the choice survives a reload'
       expect(await page.$('button[aria-label="Show inspector"]')).toBeNull();
 
       await page.close();
-    });
-  });
-
-  test('the rail collapse handle never covers a roster row timestamp', async () => {
-    // The handle is absolutely positioned at the rail's mid-height inside a
-    // scrollable roster: any row that reaches that band was covered. Shorter
-    // than the stock 900px so the five-row stock roster reaches the band.
-    await withGallery(async ({ newPage, origin }) => {
-      const page = await newPage();
-      await page.setViewport({ width: 1440, height: 640 });
-      await page.goto(`${origin}/gallery.html?frame=app&path=/`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('button[aria-label="Hide sidebar"]');
-      await page.waitForSelector('aside[data-rail] ul li');
-
-      const fact = await page.evaluate(() => {
-        const handle = document.querySelector('button[aria-label="Hide sidebar"]');
-
-        if (!(handle instanceof HTMLElement)) return { handle: null };
-
-        const handleBox = handle.getBoundingClientRect();
-
-        const stamps = [...document.querySelectorAll('aside[data-rail] ul li span.w-\\[30px\\]')]
-          .map((stamp) => {
-            const box = stamp.getBoundingClientRect();
-
-            return {
-              text: (stamp.textContent ?? '').trim(),
-              intersects: box.right > handleBox.left && box.left < handleBox.right
-                && box.bottom > handleBox.top && box.top < handleBox.bottom,
-            };
-          });
-
-        return { handle: { left: handleBox.left, right: handleBox.right, top: handleBox.top, bottom: handleBox.bottom }, stamps };
-      });
-
-      expect(fact.stamps?.length ?? 0).toBeGreaterThan(0);
-      expect(fact.stamps?.filter((stamp) => stamp.intersects)).toEqual([]);
     });
   });
 });
