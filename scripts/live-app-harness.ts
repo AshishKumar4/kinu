@@ -18,7 +18,8 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Subprocess } from 'bun';
 import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppeteer';
-import { tolerate } from '@kinu.run/core/obs';
+import { holdForRelease } from '../packages/test-utils/src/scratch';
+import { signalGroup } from './process-group';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -139,6 +140,24 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
     },
   );
 
+  // Resolved once the browser is up; held from here so a row killed during
+  // the dev server's own boot still lets vite go.
+  let browserGroup: number | undefined;
+
+  const held = holdForRelease('the live app and its browser', () => {
+    // Both groups, in one hold, because both of this row's heavy children
+    // leave its process group: vite leads its own (setsid, above) and
+    // puppeteer spawns Chrome detached. A killed row leaks whichever it is
+    // not told to end, and under `bun test` this is the ONLY teardown that
+    // runs — the preload's signal listener releases and then ends the process
+    // inside its own re-raise, so neither `finally` below ever opens
+    // (scripts/test-scratch-home.ts; gallery-harness.ts says the same).
+    signalGroup(child.pid, 'SIGTERM');
+    signalGroup(browserGroup, 'SIGTERM');
+    signalGroup(child.pid, 'SIGKILL');
+    signalGroup(browserGroup, 'SIGKILL');
+  });
+
   try {
     const origin = await waitForDevServer(child, port, output);
     const executablePath = chromePath();
@@ -155,6 +174,7 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
 
     if (executablePath) launchOptions.executablePath = executablePath;
     const browser = await puppeteer.launch(launchOptions);
+    browserGroup = browser.process()?.pid;
 
     const newPage = async (): Promise<Page> => {
       const page = await browser.newPage();
@@ -168,15 +188,18 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
     try {
       return await body({ browser, newPage, origin });
     } finally {
+      signalGroup(browserGroup, 'SIGTERM');
       await browser.close();
+      signalGroup(browserGroup, 'SIGKILL');
     }
   } finally {
+    held();
     // The group, not just vite: workerd outlives a lone-parent kill. SIGTERM
     // first so the Cloudflare plugin's own shutdown runs; SIGKILL is the
     // backstop for a group that never took it. An already-exited group raises
     // ESRCH, an expected absence here.
-    tolerate(() => process.kill(-child.pid, 'SIGTERM'), 'esrch');
+    signalGroup(child.pid, 'SIGTERM');
     await child.exited;
-    tolerate(() => process.kill(-child.pid, 'SIGKILL'), 'esrch');
+    signalGroup(child.pid, 'SIGKILL');
   }
 }
