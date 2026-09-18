@@ -1309,11 +1309,17 @@ export default function WorkspacePage() {
             )}
         </>}
         inspector={(onCollapse) => (
+          // `planOwner` is the pane's own actor AS THE WORK READ NAMES IT:
+          // every owner `listWorkspaceWork` reports is an actor's registered
+          // name, and the root's is the workspace's own
+          // (`createMain({ name: this.name })`). A literal "main" matched no
+          // owner at all, so the root's own plan read as a foreign actor's —
+          // read-only, with no decision on it and no review when it arrived.
           <WorkSurface
             surface={surface}
             previewFocus={state.previewFocus}
             planFocus={state.planFocus}
-            planOwner="main"
+            planOwner={subName ?? agentId ?? "main"}
             workspacePlanArrival={state.workspacePlanArrival}
             onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${encodeURIComponent(name)}`); }}
             onSurface={setSurface}
