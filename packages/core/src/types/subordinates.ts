@@ -9,31 +9,44 @@ import type { RoleId } from './profile';
 import * as v from 'valibot';
 import type { SerializedMessage } from './heads';
 
-export const SubordinateInheritedContextSchema = v.variant('kind', [
-  v.strictObject({ kind: v.literal('digest'), text: v.string() }),
-  v.strictObject({
-    kind: v.literal('fork'),
-    messages: v.array(v.strictObject({
-      id: v.string(),
-      role: v.picklist(['system', 'user', 'assistant', 'tool']),
-      content: v.string(),
-      createdAt: v.number(),
-      toolName: v.optional(v.string()),
-    })),
-  }),
-]);
+/**
+ * The conversation a child is born from, when it is born from one.
+ *
+ * ONE KIND, and the second one is gone rather than unread. A `digest` arm
+ * carried the parent's recent conversation as prose, and its only reader was
+ * ever the reactor's rendering of an assignment row — the very path B10 removed
+ * (`wakesADrain` excludes `subordinate_task`). The turn runners on both
+ * backends read the messages and answered `[]` for a digest, so from
+ * e6e24f547 the arm reached nobody; and the product's own pin says it should
+ * not: `cf-backend/tests/unit-hire-fork.test.ts`, "a cf hire context=fresh
+ * starts from its birth-time conversation", requires a fresh hire's first
+ * message to BE its mission and refuses any parent message in its
+ * conversation. A fresh hire starts fresh; an inheriting one is forked. There
+ * was never a third thing for a digest to be.
+ *
+ * The `kind` tag stays on the surviving shape: this value is persisted in an
+ * `agent_log` payload, and a tagged row is what makes a future second shape a
+ * schema change instead of a silent reinterpretation of the rows on disk.
+ */
+export const SubordinateInheritedContextSchema = v.strictObject({
+  kind: v.literal('fork'),
+  messages: v.array(v.strictObject({
+    id: v.string(),
+    role: v.picklist(['system', 'user', 'assistant', 'tool']),
+    content: v.string(),
+    createdAt: v.number(),
+    toolName: v.optional(v.string()),
+  })),
+});
 
 export type SubordinateInheritedContext = v.InferOutput<typeof SubordinateInheritedContextSchema>;
 
-/** A fork replaces the digest, rather than repeating the same context as prose. */
+/** The birth context of one child: the parent's messages when it forks, and
+ *  nothing at all when it does not. */
 export function subordinateBirthContext(
   messages: SerializedMessage[] | undefined,
-  digest: () => string | undefined,
 ): SubordinateInheritedContext | undefined {
-  if (messages !== undefined) return { kind: 'fork', messages };
-  const text = digest();
-
-  return text ? { kind: 'digest', text } : undefined;
+  return messages === undefined ? undefined : { kind: 'fork', messages };
 }
 
 /** The lifetime a task-lifetime hire is listed under. */

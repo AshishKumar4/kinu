@@ -222,16 +222,6 @@ export function createTemporaryAgentPort(deps: {
   runtime: SubordinateRuntime;
   createName(role: string): string;
   now(): number;
-  /**
-   * The bounded conversational digest a child is handed, ALREADY RENDERED.
-   *
-   * Rendered by the caller rather than here, and that is what keeps this module
-   * free of a runtime edge back to the orchestration policy: how much of a
-   * parent's conversation a child may see is one decision
-   * (`renderSubordinateInheritedContext`), owned by the module that owns every
-   * other handoff rule, and this rung consumes it rather than re-deciding it.
-   */
-  renderInheritedContext(): string | undefined;
 }): TemporaryAgentPort {
   // A task-lifetime agent receives one assignment. Its name exists before the assignment RPC can report.
   const waiters = new Map<string, (answer: TemporarySettlement) => void>();
@@ -324,7 +314,7 @@ export function createTemporaryAgentPort(deps: {
         body: renderTemporaryTaskBrief({ task, contextRefs: refs }), mode: request.mode,
       };
 
-      const inherited = subordinateBirthContext(request.inheritedContext, deps.renderInheritedContext);
+      const inherited = subordinateBirthContext(request.inheritedContext);
 
       if (inherited) assignment.inheritedContext = inherited;
 
