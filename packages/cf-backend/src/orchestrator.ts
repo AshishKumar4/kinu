@@ -2238,11 +2238,14 @@ export class OrchestratorAgent extends ActorAgent {
         });
 
         // NOTHING IS ARMED HERE, and that is a decision rather than an
-        // omission. `admitHostedTask` arms the WORKSPACE wake itself
-        // (`seams.armWake`, subordinate-hosting.ts), and `nextWakeAt` folds
-        // `hasAdmittedDelegations()` at `now`, so the runner
-        // (`drainAdmittedDelegations`) is due in the next alarm frame. A
-        // second arm from this seam would be one more row for the same fact.
+        // omission: `admitHostedTask` already arms it (`seams.armWake`,
+        // subordinate-hosting.ts), and which CHAIN that is belongs to that one
+        // seam. The distinction is load-bearing and was measured: the arm has
+        // to land on the chain whose frame reaches `drainAdmittedDelegations`,
+        // and an arm on the other chain wakes a frame that reads no
+        // `subordinate_task` row and re-arms itself, which held every hire for
+        // a full minute. A second arm from here would either duplicate that
+        // row or, worse, name the wrong chain beside the seam that owns it.
 
         // A message the actor takes now opened its turn; one that joined work
         // already running landed mid-turn, which is what the composer reports.
