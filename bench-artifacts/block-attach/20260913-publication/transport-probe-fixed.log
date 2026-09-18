@@ -1,6 +1,0 @@
-{"mode":"off","length":5,"ms":86,"status":200,"result":{"size":5,"events":["begin",{"bytes":null,"observedBytes":null,"bodyError":"the binding stream has no transport body observation","outcome":"returned","error":null},"begin",{"bytes":0,"observedBytes":0,"bodyError":null,"outcome":"returned","error":null}]}}
-{"mode":"off","length":4194304,"ms":30,"status":200,"result":{"size":4194304,"events":["begin",{"bytes":null,"observedBytes":null,"bodyError":"the binding stream has no transport body observation","outcome":"returned","error":null},"begin",{"bytes":0,"observedBytes":0,"bodyError":null,"outcome":"returned","error":null}]}}
-{"mode":"idle","length":5,"ms":2,"status":200,"result":{"size":5,"events":["begin","begin"]}}
-{"mode":"idle","length":4194304,"ms":48,"status":200,"result":{"size":4194304,"events":["begin","begin"]}}
-{"mode":"active","length":5,"ms":2,"status":200,"result":{"size":5,"events":["begin",{"bytes":5,"observedBytes":5,"bodyError":null,"outcome":"returned","error":null},"begin",{"bytes":0,"observedBytes":0,"bodyError":null,"outcome":"returned","error":null}]}}
-{"mode":"active","length":4194304,"ms":48,"status":200,"result":{"size":4194304,"events":["begin",{"bytes":4194304,"observedBytes":4194304,"bodyError":null,"outcome":"returned","error":null},"begin",{"bytes":0,"observedBytes":0,"bodyError":null,"outcome":"returned","error":null}]}}
