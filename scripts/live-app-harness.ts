@@ -14,16 +14,52 @@
  * ephemeral one and the harness reads the actual port back.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { git } from '@kinu.run/test-utils';
 import type { Subprocess } from 'bun';
 import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppeteer';
+import * as v from 'valibot';
+import { parseJsonValue, type JsonValue } from '@kinu.run/core';
 import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { signalGroup } from './process-group';
 
 const REPO = join(import.meta.dir, '..');
 
 const CF = join(REPO, 'packages', 'cf-backend');
+
+/** The route's JSON answer, parsed as a value rather than passed as unknown.
+ *  A non-ok answer throws with its body: a live-app caller that gets HTML
+ *  where it expected JSON has hit the app, not the API, and the text says so. */
+export async function apiJson(origin: string, path: string, init?: RequestInit): Promise<JsonValue> {
+  const response = await fetch(`${origin}${path}`, {
+    ...init,
+    headers: { 'content-type': 'application/json', ...init?.headers },
+  });
+
+  const text = await response.text();
+
+  if (!response.ok) throw new Error(`${init?.method ?? 'GET'} ${path} -> ${String(response.status)}: ${text.slice(0, 200)}`);
+
+  return text ? parseJsonValue(text) : null;
+}
+
+const WorkspaceEntrySchema = v.object({ name: v.string() });
+
+/** Create a workspace through the app's own route; the name it answers with is
+ *  the one the URL takes, which is not always the one asked for. */
+export async function createWorkspace(
+  origin: string, name: string, purpose: string, model: string,
+): Promise<string> {
+  const created = v.parse(
+    WorkspaceEntrySchema,
+    await apiJson(origin, '/api/user/workspaces', {
+      method: 'POST', body: JSON.stringify({ name, purpose, model }),
+    }),
+  );
+
+  return created.name;
+}
 
 export interface LiveApp {
   readonly browser: Browser;
@@ -99,12 +135,71 @@ async function waitForDevServer(child: Subprocess<'ignore', 'pipe', 'pipe'>, por
   return Promise.race([up, failed.promise]);
 }
 
+/** The key=value lines of a .dev.vars file, merged left to right. Only
+ *  process-env ABSENT keys are supplied: an explicit export always wins, and
+ *  nothing the shell already provides is shadowed by a file. */
+function loadDevVars(paths: readonly string[]) {
+  const env: Record<string, string> = {};
+
+  for (const path of paths) {
+    if (!existsSync(path)) continue;
+
+    const text = readFileSync(path, 'utf8');
+
+    for (const line of text.split('\n')) {
+      const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(line.trim());
+
+      if (match === null) continue;
+
+      const [, key, value] = match;
+
+      if (key === undefined || value === undefined) continue;
+
+      if (process.env[key] !== undefined) continue;
+
+      env[key] = value;
+    }
+  }
+
+  return env;
+}
+
+/** The worktree's own `.dev.vars` files first (checkout-local wins), then the
+ *  primary checkout's root and cf-backend `.dev.vars` — where the
+ *  containers-registry token and CREDENTIAL_ENCRYPTION_KEY live — resolved
+ *  through `git worktree list` row one, never a literal path. vite dev needs
+ *  these in PROCESS env for the container registry; wrangler's own secret
+ *  injection does not cover that check (measured 2026-09-17: dev exits "error
+ *  when starting dev server" without CLOUDFLARE_API_TOKEN), and the boot's
+ *  credential path 503s without the cf-backend file plus CLOUDFLARE_INCLUDE_
+ *  PROCESS_ENV below. */
+function liveAppEnv() {
+  const primary = /^worktree (.+)$/mu.exec(git(REPO, 'worktree', 'list', '--porcelain'))?.[1];
+
+  const env = loadDevVars([
+    join(REPO, '.dev.vars'),
+    join(REPO, 'packages', 'cf-backend', '.dev.vars'),
+    ...(primary !== undefined
+      ? [join(primary, '.dev.vars'), join(primary, 'packages', 'cf-backend', '.dev.vars')]
+      : []),
+  ]);
+
+  // Secrets reach workerd from .dev.vars on disk — a fresh worktree has none —
+  // or from process.env when the flag is on (wrangler: CLOUDFLARE_INCLUDE_
+  // PROCESS_ENV defaults false, and then a secret only ever binds from a
+  // file). The flag is how the loaded vars become bindings without copying
+  // .dev.vars into the worktree.
+  env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'true';
+
+  return env;
+}
+
 export interface LiveAppOptions {
   /** Port for vite dev. Reserved 3000 is refused; 0 picks an ephemeral port. */
   readonly port?: number;
   /** Extra args appended to the puppeteer launch (default lane disables WebGPU etc). */
   readonly browserArgs?: string[];
-  /** Environment for the dev child (tokens the container registry needs). */
+  /** Extra environment for the dev child, over the `.dev.vars` this loads. */
   readonly env?: Record<string, string | undefined>;
 }
 
@@ -132,7 +227,7 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
     {
       cwd: CF,
       stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
-      env: { ...process.env, ...options.env },
+      env: { ...process.env, ...liveAppEnv(), ...options.env },
       // setsid, so vite leads its own process group: teardown can signal the
       // workerd children with it rather than orphaning them to systemd
       // (deploy.sh:357-362 — this accumulation OOM-killed the box once).
