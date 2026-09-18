@@ -44,7 +44,8 @@ import { auditClosure } from './ladder-audit';
 import { deriveClosure, repoAt } from './ladder-closure';
 import type { Inputs } from './ladder-closure';
 import {
-  isBunDiscoverableSuite, isPythonSuite, isRunnableSuite, isVitestEvalSuite, trackedFiles,
+  isBunDiscoverableSuite, isParseable, isPythonSuite, isRunnableSuite, isVitestEvalSuite, readMatching,
+  trackedFiles,
 } from './sources';
 import { CLI_TEST_ROOT } from './test-cli';
 import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, LIVE_MODEL_ENV } from '../packages/test-utils/src/index';
@@ -99,6 +100,39 @@ export const GATE_DEADLINE_SECONDS = 480;
 
 export type Tier = (typeof TIERS)[number];
 
+/**
+ * THE ONE RESOURCE THE COST MODEL CANNOT SEE — DECLARED AS A HYPOTHESIS.
+ *
+ * A row that boots a headless browser takes the box's browser lane whole: the
+ * Chrome tree, the dev server behind it and — for the live-app row — the
+ * workerd the Cloudflare vite plugin runs the product in. The wave admits at
+ * most ONE holder of that lane at a time, and every row's declared seconds
+ * were measured alone, which is what serial admission already assumed.
+ *
+ * WHAT IS MEASURED AND WHAT IS NOT. Measured 2026-09-18 on the 24-thread
+ * workstation, quiet box (load 1.04 concurrent / 0.45 serial, 41.2 GiB
+ * MemAvailable, both caps slack), the three browser rows of that day's red
+ * wave:
+ *
+ * | row | concurrent | serial |
+ * | --- | --- | --- |
+ * | UI gate self-tests | 480.1 s, 124 | 480.2 s, 124 |
+ * | Public pages render | 480.1 s, 124 | 480.2 s, 124 |
+ * | Live app in a browser | 152.8 s, 1 | 149.7 s, 1 |
+ *
+ * So the overlap is NOT what reddened them: all three are red alone, on one
+ * product defect (the plan-review surface never mounts — see L9). The lane is
+ * therefore a hypothesis about contention, not a measured cause, and it is
+ * enforced because the cost model provably cannot express it: those rows are
+ * admitted at 1, 1 and 3 threads and 2,534, 2,458 and 6,446 MiB, so no cap
+ * refuses the overlap at any value the box can carry. L9 in
+ * docs/ARCHITECTURE-DECISIONS.md, which names the entry it amends (L6, the
+ * measured-cost admission, B9 @10ba05d74).
+ */
+export const SHARED_RESOURCES = ['browser'] as const;
+
+export type SharedResource = (typeof SHARED_RESOURCES)[number];
+
 export interface Gate {
   /** The exact command as invoked. */
   readonly run: string;
@@ -111,6 +145,12 @@ export interface Gate {
   readonly phase?: Exclude<DeployPhase, 'source'>;
   /** Why the gate runs alone. Required with `phase`. */
   readonly alone?: string;
+  /** The machine resource the row takes WHOLE, where the derivation below
+   *  cannot see it from the files the row claims. DERIVED for every row that
+   *  claims a module reaching puppeteer ({@link sharedOf}); a declaration is
+   *  for a row that takes the resource some other way, and a declaration no
+   *  derivation confirms is refused by the census in `ladder.test.ts`. */
+  readonly shared?: SharedResource;
   /** Seconds before the deploy runner kills the gate's process tree, where
    *  the shared `GATE_DEADLINE_SECONDS` does not fit; with the reason. */
   readonly deadline?: { readonly seconds: number; readonly why: string };
@@ -2258,6 +2298,9 @@ export interface PlanRow {
   readonly threads: number;
   readonly rssMb: number;
   readonly deadline: number;
+  /** The resource the row holds whole, or `none`. The wave admits one row
+   *  holding a resource at a time; see {@link SHARED_RESOURCES}. */
+  readonly shared: SharedResource | 'none';
   readonly run: string;
 }
 
@@ -2275,6 +2318,9 @@ export interface PlanRow {
  * an unmeasured row there carries one thread and one MiB.
  */
 export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
+  const tracked = trackedTestFiles();
+  const browsers = sharedBrowserModules();
+
   return deployOrder().map((gate) => {
     const phase = gate.phase ?? 'source';
     const cost = costs.rows[gate.run];
@@ -2294,17 +2340,22 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
       threads: cost === undefined ? 1 : costThreads(cost, gate.seconds),
       rssMb: cost === undefined ? 1 : costRssMb(cost),
       deadline: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS,
+      shared: sharedOf(gate, tracked, browsers) ?? 'none',
       run: gate.run,
     };
   });
 }
 
 /** The plan as the runner reads it: one tab-separated line per row — phase,
- *  label, threads, resident MiB, deadline, command. Tabs, because a command
- *  holds spaces and a label holds punctuation, and neither holds a tab. */
+ *  label, threads, resident MiB, deadline, shared resource, command. Tabs,
+ *  because a command holds spaces and a label holds punctuation, and neither
+ *  holds a tab; the command stays LAST, so a field added here cannot be eaten
+ *  by the runner's `read` of it. */
 export function printPlan(rows: readonly PlanRow[]): string {
   return rows
-    .map((row) => [row.phase, row.label, String(row.threads), String(row.rssMb), String(row.deadline), row.run].join('\t'))
+    .map((row) => [
+      row.phase, row.label, String(row.threads), String(row.rssMb), String(row.deadline), row.shared, row.run,
+    ].join('\t'))
     .join('\n');
 }
 
@@ -2347,7 +2398,113 @@ export function printPlan(rows: readonly PlanRow[]): string {
  *  port another worktree's dev server holds is not a measurement at all. */
 export const SHARED_POOL = /(?:vitest|workerd|vite )/u;
 
-export const SHARED_BROWSER = /from ['"](?:\.\/gallery-harness|puppeteer)['"]/u;
+/** A module that reaches the browser ITSELF, as the seed of the closure
+ *  below. One signal, never a list of suites: the harnesses are the only
+ *  place puppeteer is imported, and a suite reaches Chrome by importing one
+ *  of them — often two hops out (`computed-style.test.ts` →
+ *  `computed-style.ts` → `gallery-harness.ts` → puppeteer). */
+const BROWSER_IMPORT = /from ['"]puppeteer['"]/u;
+
+/** A relative module edge, as this repository spells one: extensionless, so
+ *  the resolution below appends `.ts` and keeps only what the corpus holds. */
+const RELATIVE_IMPORT = /(?:from|import)\s*\(?\s*['"](\.[^'"]+)['"]/gu;
+
+function collapseRelative(from: string, specifier: string): string {
+  const parts = `${from.slice(0, from.lastIndexOf('/'))}/${specifier}`.split('/');
+  const out: string[] = [];
+
+  for (const part of parts) {
+    if (part === '.' || part === '') continue;
+
+    if (part === '..') out.pop();
+    else out.push(part);
+  }
+
+  return out.join('/');
+}
+
+/**
+ * Every module in `sources` that reaches a headless browser: one that imports
+ * puppeteer, or one that imports — however many hops out — a module that does.
+ *
+ * A CLOSURE AND NOT A TEXT MATCH ON THE SUITE. `SHARED_BROWSER` was one regex
+ * over one file naming `./gallery-harness` or `puppeteer`, and six of the
+ * sixteen suites in the UI row reach Chrome through neither string:
+ * `provider-wait-ux`, `models-section-ux`, `workspace-snapshot-ux`,
+ * `computed-style`, `plan-demo-film` and `gallery-harness`'s own self-test all
+ * import a harness that imports another one. A row whose browser cost is
+ * invisible to the derivation is a row the wave admits beside another browser
+ * row, which is the 2026-09-18 failure.
+ *
+ * Pure over the map it is given, so the fixture in `ladder.test.ts` proves
+ * both directions without the tree.
+ */
+export function browserModules(sources: ReadonlyMap<string, string>): ReadonlySet<string> {
+  const reaching = new Set<string>();
+  const importers = new Map<string, string[]>();
+
+  for (const [file, text] of sources) {
+    if (BROWSER_IMPORT.test(text)) reaching.add(file);
+
+    for (const [, specifier] of text.matchAll(RELATIVE_IMPORT)) {
+      if (specifier === undefined) continue;
+      const base = collapseRelative(file, specifier);
+
+      for (const target of [base, `${base}.ts`]) {
+        if (!sources.has(target)) continue;
+        const seen = importers.get(target);
+
+        if (seen === undefined) importers.set(target, [file]);
+        else seen.push(file);
+      }
+    }
+  }
+
+  // Reverse edges, so the walk is over importers of what already reaches a
+  // browser: one pass per newly reached module, never a re-scan of the corpus.
+  const pending = [...reaching];
+
+  while (pending.length > 0) {
+    const next = pending.pop();
+
+    if (next === undefined) continue;
+
+    for (const importer of importers.get(next) ?? []) {
+      if (reaching.has(importer)) continue;
+      reaching.add(importer);
+      pending.push(importer);
+    }
+  }
+
+  return reaching;
+}
+
+/** The corpus the closure reads: every parseable tracked file. Measured
+ *  2026-09-18 on this box, 2,484 files and 35 MB read in 49 ms, so the plan
+ *  reads the whole tree rather than a directory somebody expected the
+ *  harnesses to stay in — narrowed to `scripts/` it missed
+ *  `tests/live-smoke.test.ts`, which launches puppeteer itself inside the
+ *  `Root end-to-end lifecycle suites` row. */
+let corpusBrowserModules: ReadonlySet<string> | null = null;
+
+export function sharedBrowserModules(): ReadonlySet<string> {
+  corpusBrowserModules ??= browserModules(readMatching(isParseable));
+
+  return corpusBrowserModules;
+}
+
+/** The resource a row holds whole, DERIVED from the files it claims and
+ *  overridden by nothing: a row may declare one the derivation cannot see,
+ *  and `ladder.test.ts` refuses a declaration no browser module confirms. */
+export function sharedOf(
+  gate: Gate,
+  tracked: readonly string[],
+  browsers: ReadonlySet<string> = sharedBrowserModules(),
+): SharedResource | undefined {
+  if (claims(gate.run, tracked).some((file) => browsers.has(file))) return 'browser';
+
+  return gate.shared;
+}
 
 /** The path of the Python suites' runner, as its gate spells it. */
 export const PYTHON_SUITES_SCRIPT = 'scripts/python-suites.ts';

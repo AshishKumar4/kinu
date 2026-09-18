@@ -656,6 +656,58 @@ box holds ~700 processes and most of them are somebody else's — a pid that
 died between the listing and the read contributes zero, exactly as a dead pid
 contributes nothing to `stat`.
 
+L9. The wave admits at most ONE row holding the browser lane at a time, beside
+the measured-cost caps. Decided 2026-09-18. This AMENDS L6 (the measured-cost
+admission, owner bug B9, fixed @10ba05d74) and reverses nothing in it: both
+caps still decide every other row, and no row declares a cost. Which rows hold
+the lane is derived, never listed — the closure of tracked modules that reach
+puppeteer (`browserModules` in `scripts/ladder.ts`), intersected with the files
+each row claims. Nine rows hold it today: the two UI self-test rows, Public
+pages render, Live app in a browser, React runtime identity, Swarm-tree
+geometry, Chat infinite scroll, Root end-to-end lifecycle suites and the
+secrets/corpus/preflight self-tests. The plan carries it as a column and
+`scripts/deploy.sh` holds one holder in flight; `scripts/deploy.test.ts` pins
+that two holders never overlap in the run's span log while the unshared rows
+still do — red on the pre-mutex scheduler with twelve overlapping pairs.
+
+What is measured, and what is a hypothesis. Measured on the 24-thread
+workstation, 2026-09-18, quiet box (load 1.04 concurrent / 0.45 serial,
+41,197 MiB MemAvailable), the three rows that reddened the c80cb4141 wave, run
+exactly as the wave launches them (`timeout --signal=TERM --kill-after=5s 480`
+per row):
+
+| row | concurrent | serial | admitted cost |
+| --- | --- | --- | --- |
+| UI gate self-tests | 480.1 s, exit 124 | 480.2 s, exit 124 | 1 thr, 2,534 MiB |
+| Public pages render | 480.1 s, exit 124 | 480.2 s, exit 124 | 1 thr, 2,458 MiB |
+| Live app in a browser | 152.8 s, exit 1 | 149.7 s, exit 1 | 3 thr, 6,446 MiB |
+
+So the overlap is NOT the cause of that wave's three reds: every one of them is
+red alone on a quiet box. The lane is enforced on the measured fact that no cap
+can express it — 11.4 GiB and 5 threads of admitted cost against 24 threads and
+30.7 GiB, so those three rows fit beside each other at every cap value this box
+can carry — and the claim that overlapping browser rows harm each other stays a
+HYPOTHESIS until a wave is measured green under one shape and red under the
+other.
+
+What the three reds actually are, one defect. The plan-review surface never
+mounts. `scripts/plan-review-ux.test.ts` alone hangs past 240 s (exit 124,
+2026-09-18), its first test waiting on `[data-plan-review-root]`; the live-app
+row reports `the turn beat never landed … #inspector [data-plan-status]` with
+the plan submitted in the transcript; and Public pages render hangs in
+`public-pages.test.ts` at `waitForSelector('[data-landing-frame="plan"]
+[data-plan-decisions]')` with the landing movie parked at t=6400 ms
+(`planReady` + 200), because `LandingWorkspaceFrame`'s `seek` polls a BOUNDED
+90 animation frames for the lazy plan chunk and then returns. Read off the hung
+Chrome over its own DevTools port: the `workspacepage` frame stops at "Loading
+this conversation… / Tools could not be refreshed. / Cannot read properties of
+undefined (reading 'map')" — `mapToolDescriptions` reading `r.builtIn.map`
+over the gallery's blanket `stubRpc` answer for `getToolDescriptions`, which
+returns `[]` for any `get*` method while that read is record-shaped. That is
+the fourth member of the class `scripts/../gallery.tsx` already documents for
+`getExposedPorts`, `getExecutorDiff` and `listWorkspaceWork`. Unfixed here and
+recorded as O3.
+
 
 
 
@@ -689,3 +741,9 @@ file with no shared-worker or isolated-storage option in its own code. No
 single lever cuts 60 s without a redesign: the lever is splitting the main
 test worker so a file boots only the probe family it drives, which is a
 harness change across 36 files and stays open.
+
+O3. The plan-review surface does not mount in the gallery's `workspacepage`
+frame or in the live app: measured 2026-09-18 at c80cb4141, three deploy rows
+red alone on it (L9). The named seam is the gallery's blanket `[]` answer for
+the record-shaped `getToolDescriptions` read, plus `LandingWorkspaceFrame`'s
+bounded 90-frame poll for the lazy plan chunk. Unfixed.
