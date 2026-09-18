@@ -129,28 +129,6 @@ export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): Workspa
   };
 }
 
-/** The one slot a card may speak from, in precedence order. Text and tone are
- *  the caller's; the ordering is shared so no surface can green a run the log
- *  did not seal or outrank a waiting decision with live work. */
-export type WorkspaceOverviewStatus =
-  | { readonly kind: 'attention' }
-  | { readonly kind: 'working' }
-  | { readonly kind: 'unfinished' }
-  | { readonly kind: 'run'; readonly status: string | null }
-  | { readonly kind: 'idle' };
-
-export function workspaceOverviewStatus(overview: WorkspaceOverview): WorkspaceOverviewStatus {
-  if (overview.decisionsWaiting > 0) return { kind: 'attention' };
-
-  if (overview.activity === 'working') return { kind: 'working' };
-
-  if (overview.activity === 'unfinished') return { kind: 'unfinished' };
-
-  if (overview.latestRun !== null) return { kind: 'run', status: overview.latestRun.status };
-
-  return { kind: 'idle' };
-}
-
 /** What the one chip on a workspace's card says: the label, and the tone the
  *  surface resolves to a token — `accent` needs the owner, `live` is moving,
  *  `danger` is a sealed failure, `muted` is everything quiet. */
@@ -159,10 +137,8 @@ export interface WorkspaceHeadline {
   readonly tone: 'accent' | 'live' | 'danger' | 'muted';
 }
 
-/** The single state a workspace's card states, first match wins. Where
- *  {@link workspaceOverviewStatus} names a SLOT the surface fills with its own
- *  words, the headline is the shared one-rule answer: text and tone together,
- *  so no surface orders them differently. A run only reads as failed when it
+/** The single state a workspace's card states, first match wins: text and
+ *  tone together, one rule, so no surface orders them differently. A run only reads as failed when it
  *  can speak at all — working and durable leftovers outrank its end, because
  *  a stale verdict beside live work would say two things at once. */
 export function overviewHeadline(o: WorkspaceOverview): WorkspaceHeadline {
@@ -177,62 +153,6 @@ export function overviewHeadline(o: WorkspaceOverview): WorkspaceHeadline {
   if (o.hasUpdates) return { label: 'Updated', tone: 'muted' };
 
   return { label: 'Idle', tone: 'muted' };
-}
-
-/** One fact a card can show beneath its lead line. `tone` is a surface-
- *  neutral word — `warning`, `accent`, `muted`, `quiet`, `success` — and the
- *  caller owns the class it maps to, same split as the status slot: core
- *  decides WHICH facts exist, the surface decides how they look. */
-export interface WorkspaceOverviewFact {
-  readonly key: 'decisions' | 'working' | 'unfinished' | 'updates' | 'run' | 'task' | 'empty';
-  readonly text: string;
-  readonly tone: 'warning' | 'accent' | 'muted' | 'quiet' | 'success';
-}
-
-/** Every fact the overview holds, in the order a card lists them: what waits
- *  on the owner, what is moving, what remains, what is unread, then how the
- *  last run sealed and what it was doing.
- *
- *  A run status is quoted verbatim: `completed` earns `success`, a run that
- *  was reported `failed` or `cancelled` warns, and anything else — an
- *  `error`, an `aborted`, a run whose end never recorded a reason — is plain
- *  text, because this row may describe but never decorate. The task preview
- *  re-applies the wire bound so a caller-built overview cannot pin one fact
- *  to a full-width line the row cannot hold.
- *  Idle is evidence of nothing: "No runs yet" is the row's content only when
- *  the list is empty, so a quiet workspace can never sit beside a word that
- *  reads as finished work — and one with unread updates still names them. */
-export function workspaceOverviewEvidence(overview: WorkspaceOverview): readonly WorkspaceOverviewFact[] {
-  const facts: WorkspaceOverviewFact[] = [];
-
-  if (overview.decisionsWaiting > 0) {
-    facts.push({ key: 'decisions', text: `${overview.decisionsWaiting} decisions waiting`, tone: 'warning' });
-  }
-
-  if (overview.activity === 'working') facts.push({ key: 'working', text: 'Working now', tone: 'accent' });
-
-  if (overview.activity === 'unfinished') facts.push({ key: 'unfinished', text: 'Unfinished work', tone: 'muted' });
-
-  if (overview.hasUpdates) facts.push({ key: 'updates', text: 'Updates to read', tone: 'muted' });
-
-  const run = overview.latestRun;
-
-  if (run !== null) {
-    const status = run.status ?? 'unknown';
-
-    const tone: WorkspaceOverviewFact['tone'] =
-      run.status === 'completed' ? 'success'
-      : run.status === 'failed' || run.status === 'cancelled' ? 'warning'
-      : 'muted';
-
-    facts.push({ key: 'run', text: `Last run: ${status}`, tone });
-
-    if (run.task !== null && run.task !== '') {
-      facts.push({ key: 'task', text: run.task.slice(0, TASK_PREVIEW_MAX), tone: 'quiet' });
-    }
-  }
-
-  return facts.length === 0 ? [{ key: 'empty', text: 'No runs yet', tone: 'quiet' }] : facts;
 }
 
 /** What the workspaces a shell watches add up to: whether any turn is live,
