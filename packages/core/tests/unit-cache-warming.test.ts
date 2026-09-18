@@ -20,6 +20,7 @@ import {
   CacheWarmStore, CacheWarmingLane, initCacheWarmTable, warmUsage,
   type CacheWarmSeams, type JsonObject, type ModelCallReport, type ModelSpec, type Usage,
 } from '../src/index';
+import { KinuError } from '../src/obs/index';
 import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 
@@ -251,6 +252,37 @@ describe('when the chain stops', () => {
 
     expect(await probe.lane.runDue(at)).not.toBeNull();
     expect(probe.lane.nextWarmAt()).toBeNull();
+  });
+
+  test('a warm whose request FAILED retires the row instead of leaving a past-due wake', async () => {
+    const db = new Database(':memory:');
+    initCacheWarmTable(makeExecRaw(db));
+    const sql = makeSql(db);
+    const store = new CacheWarmStore(sql, testActorHandle(sql));
+    let sends = 0;
+
+    const lane = new CacheWarmingLane({
+      store,
+      wake: () => {},
+      send: async () => {
+        sends += 1;
+
+        throw new KinuError('unavailable', 'the cache warm answered 401: {"type":"error"}');
+      },
+      spend: () => {},
+      now: () => SENT_AT + 1_000,
+    });
+
+    lane.armAfterTurn({ modelSpec: ANTHROPIC, retention: 'short', lastRequest: lastRequest() });
+
+    // The failure reaches the caller ONCE, wrapped, so the tick diagnoses it.
+    await expect(lane.runDue(DUE_AT)).rejects.toThrow(KinuError);
+    // And the obligation is gone: a row left armed with a past due_at is a wake
+    // the fold answers every tick, which is one request a second against a
+    // provider that just refused one.
+    expect(lane.nextWarmAt()).toBeNull();
+    expect(await lane.runDue(DUE_AT)).toBeNull();
+    expect(sends).toBe(1);
   });
 
   test('a provider that cannot warm ends the chain rather than retrying forever', async () => {

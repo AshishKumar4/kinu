@@ -20,6 +20,7 @@ import * as v from 'valibot';
 import { ANTHROPIC_VERSION } from './anthropic-count';
 import { warmUsage } from './cache-warming';
 import { createAuthedFetch } from './util';
+import { KinuError } from '../obs/index';
 import type { ProviderDeps } from './types';
 import type { Usage } from '../usage';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
@@ -53,7 +54,14 @@ export async function warmAnthropicCache(input: {
   });
 
   if (!response.ok) {
-    throw new Error(`the cache warm answered ${response.status}: ${(await response.text()).slice(0, 400)}`);
+    // The STATUS and the vendor's own words, carried as values: the refusal is
+    // a fact about this request, not a code to guess at. The caller retires the
+    // chain on it rather than retrying — a warm that failed costs one cache
+    // write on the next real turn, and a retry loop costs one request a second.
+    throw new KinuError(
+      'unavailable',
+      `the cache warm answered ${response.status}: ${(await response.text()).slice(0, 400)}`,
+    );
   }
 
   const parsed = v.parse(WarmResponseSchema, await response.json());

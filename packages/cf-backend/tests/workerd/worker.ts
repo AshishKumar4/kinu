@@ -67,6 +67,7 @@ import {
   bindActorHandle, CacheWarmStore, CacheWarmingLane, initCacheWarmTable,
   type SqlExecutor, type SqlValue,
 } from '@kinu.run/core';
+import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 
 /** The two fields the warm assertion reads off the replay the lane sent.
  *  Parsed rather than probed, so the probe reports the request's own values or
@@ -584,6 +585,8 @@ export interface CacheWarmReport {
   readonly wakes: readonly number[];
   /** The obligation still owed, as the durable row answers it. */
   readonly nextWarmAt: number | null;
+  /** The message of a refused replay, once one has been refused. */
+  readonly refused: string | null;
   /** Alarm deliveries this object has taken. */
   readonly fires: number;
 }
@@ -613,6 +616,10 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
   private sentStreaming = false;
   private fires = 0;
   private armed: Promise<void> = Promise.resolve();
+  /** Armed by `refuseNextSend`: the next replay is refused the way a rotated
+   *  key refuses one, so the row's fate after a failure is observable. */
+  private refuseNext = false;
+  private refused: string | null = null;
   private lane: CacheWarmingLane | undefined;
 
   private get warming(): CacheWarmingLane {
@@ -640,6 +647,13 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
         },
         send: async ({ modelSpec, body }) => {
           if (modelSpec.provider !== 'anthropic') return null;
+
+          if (this.refuseNext) {
+            this.refuseNext = false;
+
+            throw new KinuError('unavailable', 'the cache warm answered 401: {"type":"error"}');
+          }
+
           const replay = v.parse(ReplayBodySchema, body);
           this.sentMaxTokens.push(replay.max_tokens);
 
@@ -685,6 +699,11 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
     return at;
   }
 
+  /** The next replay is refused once, as a 401 from a rotated key would. */
+  async refuseNextSend(): Promise<void> {
+    this.refuseNext = true;
+  }
+
   /** A real provider request starting — the counter bump the session makes. */
   async noteRealRequest(): Promise<void> {
     this.warming.noteRequest();
@@ -693,7 +712,17 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
   /** The tick's `alarm.cache_warm` phase, in the frame the platform woke. */
   override async alarm(): Promise<void> {
     this.fires += 1;
-    await this.warming.runDue(Date.now());
+
+    // The tick's `alarm.cache_warm` phase catches, diagnoses and continues; the
+    // probe does the same so a refused warm is observable as state rather than
+    // as an unhandled alarm.
+    try {
+      await this.warming.runDue(Date.now());
+    } catch (cause) {
+      // The CHAIN, not the wrapper's own line: `toKinuError` puts the doing on
+      // the message and the provider's refusal underneath it.
+      this.refused = renderThrownChain({ cause }).slice(0, 120);
+    }
   }
 
   async report(): Promise<CacheWarmReport> {
@@ -703,6 +732,7 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
       spendSources: [...this.spendSources],
       wakes: [...this.wakes],
       nextWarmAt: this.warming.nextWarmAt(),
+      refused: this.refused,
       fires: this.fires,
     };
   }

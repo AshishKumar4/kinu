@@ -114,6 +114,25 @@ describe('the prompt-cache warm on the wake chain', () => {
     expect((await wrote.report()).nextWarmAt).toBeNull();
   });
 
+  it('a refused replay retires the row instead of leaving a wake to re-fire every tick', async () => {
+    const probe = open('refused');
+    await probe.armFromTurn({
+      provider: 'anthropic', retention: 'short', sentAtOffsetMs: DUE_AGE_MS, cacheRead: 40_000, cacheWrite: 0,
+    });
+    await probe.refuseNextSend();
+
+    const report = await settle('refused', (r) => r.refused !== null);
+
+    // The failure is diagnosed exactly once …
+    expect(report.refused).toContain('401');
+    expect(report.fires).toBeGreaterThan(0);
+    // … and the obligation is gone, so the fold that arms the chain has nothing
+    // past-due to answer: a row left armed here is one request a second against
+    // a provider that just refused one.
+    expect(report.nextWarmAt).toBeNull();
+    expect(report.spendSources).toEqual([]);
+  });
+
   it('a warm still ahead of its TTL waits, and the row survives to say so', async () => {
     const probe = open('waiting');
 
