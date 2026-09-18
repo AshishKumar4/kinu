@@ -69,6 +69,7 @@ import type { ActivitySnapshot, TabPresence } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
+import { CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
 import {
   EvolutionEngine, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
   readActivityLog,
@@ -1561,6 +1562,46 @@ export class OrchestratorAgent extends ActorAgent {
 
   private _triggerRegistry: TriggerRegistry | null = null;
   private _replyChannels: ReplyChannelStore | null = null;
+  private _cacheWarming: CacheWarmingLane | null = null;
+
+  /**
+   * This workspace's prompt-cache warming lane.
+   *
+   * FOUR SEAMS, and each is the cloud backend's own answer to a question the
+   * lane does not have: the row lives in this object's SQLite, the wake is the
+   * ONE Kinu schedule row (`armTimer`, never a `setTimeout` — nothing in this
+   * isolate outlives the hibernation a warm waits through), the request goes
+   * out through the provider that served the frozen one, and the spend is
+   * reported where every non-turn model call is.
+   */
+  protected get cacheWarming(): CacheWarmingLane {
+    if (!this._cacheWarming) {
+      this._cacheWarming = new CacheWarmingLane({
+        store: new CacheWarmStore(this.boundSql, this.actorHandle()),
+        // The armed instant is not passed on: `armDurableWake` re-derives the
+        // soonest wake this workspace owes over every source, the warm row now
+        // among them, so one fold decides and one row carries it.
+        wake: () => { this.armDurableWake(); },
+        send: async ({ modelSpec, body }) => {
+          const providers = this.providerRegistry();
+          const provider = providers.registry.get(modelSpec.provider);
+
+          if (provider?.warmCache === undefined) return null;
+
+          return { usage: await provider.warmCache(modelSpec.modelId, providers.deps, body) };
+        },
+        spend: (report) => { this.reportModelCall(report); },
+        now: () => Date.now(),
+      });
+    }
+
+    return this._cacheWarming;
+  }
+
+  protected override cacheWarmingLane(): CacheWarmingLane {
+    return this.cacheWarming;
+  }
+
   /** Per-activation guard so the full table-init DDL runs once, not on every
    *  onStart + claimOwner. Resets on DO eviction, so a cold start always
    *  re-creates any newly-added tables (no schema-version bookkeeping). */
@@ -1797,6 +1838,12 @@ export class OrchestratorAgent extends ActorAgent {
       this.peerHub.nextRetryAt(),
       this.emailOutbox.nextRetryAt(),
       this.eventLog.nextPendingDrainAt(now),
+      // The prompt-cache warm: a due-trigger-shaped obligation on the root
+      // actor, folded here so an eviction cannot lose it — the row is durable
+      // and the activation reconcile re-arms from this same fold. Its phase in
+      // `_kinuTimerTick` is `alarm.cache_warm`, which is the other half of this
+      // file's one rule for the chain.
+      this.cacheWarming.nextWarmAt(),
     );
   }
 
@@ -3831,6 +3878,28 @@ export class OrchestratorAgent extends ActorAgent {
         }
       });
 
+      // THE PROMPT-CACHE WARM this wake may have been armed for. A SIBLING
+      // phase, never a branch inside another: `nextWakeAt` folds the warm row,
+      // and this file's one rule for the chain is that every source it folds
+      // owes a phase here. The lane re-checks the durable request counter
+      // itself, so a turn that started after the arm suppresses the refresh
+      // rather than racing it.
+      await tick.span('alarm.cache_warm', async (span) => {
+        try {
+          const warmed = await this.cacheWarming.runDue(now);
+          span.setAttribute('kinu.cache_warmed', warmed !== null);
+        } catch (err) {
+          const failure = toKinuError({
+            doing: 'refreshing the prompt-cache prefix this wake was armed for',
+            cause: err,
+            otherwise: 'unavailable',
+          });
+
+          span.fail(failure);
+          diagnostics.failure('cache.warm_failed', failure);
+        }
+      });
+
       // Re-arm for the next-soonest wake (triggers ∪ peer-outbox ∪ email-outbox
       // retries). A due/past-due retry is clamped to `now` (see nextAlarmTime),
       // and the arm is soonest-wins so this never clobbers a sooner wake armed
@@ -5140,6 +5209,15 @@ export class OrchestratorAgent extends ActorAgent {
     const logLimit = clampLimit(opts?.logs, ACTIVITY_LOG_WINDOW);
     const events = this.eventRecorder.readRecentByType('step_finish', windowLimit);
     const steps = events.flatMap((e) => (e.type === 'step_finish' ? [e] : []));
+
+    // The same window's cache WARMS. A warm is a `model_call` row, never a
+    // step, so it cannot reach the EMA or the percentiles by construction —
+    // `summarizeSteps` takes the rows only to count them, because a refresh
+    // reads the whole prefix and writes nothing and would pull the
+    // conversation's hit rate toward 100% it never earned.
+    const warms = this.eventRecorder.readRecentByType('model_call', windowLimit)
+      .flatMap((e) => (e.type === 'model_call' && e.source === 'warming' ? [e] : []));
+
     // An all-absent Usage is still a truthy object, so "the provider said
     // something" is `usageReported` — never a presence check on the field.
     const measured = steps.filter((e) => usageReported(e.usage ?? {}));
@@ -5162,7 +5240,7 @@ export class OrchestratorAgent extends ActorAgent {
       // Every step in the window, reporting or not: `summarizeSteps` counts the
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.
-      telemetry: summarizeSteps(steps, { windowLimit }),
+      telemetry: summarizeSteps(steps, { windowLimit, warms }),
       // Both axes of the same money, from one read: the producer rows and the
       // per-mission rows. `this.budget.snapshot()` is deliberately NOT read
       // beside it — it answers a narrower question (the labels the turn in
