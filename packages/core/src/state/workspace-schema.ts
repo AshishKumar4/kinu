@@ -53,6 +53,7 @@ import { initSlateStateTable } from '../slates/state';
 import { initExplorationRecordsTable } from '../strategy/records';
 import { initSwarmNodeRecords } from '../strategy/swarm-resume';
 import { initAgentDataTables } from '../tools/db-codemode';
+import { initCacheWarmTable } from '../providers/cache-warming';
 
 /**
  * The three SQL handles onto one workspace database.
@@ -265,6 +266,13 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initCompactionStateTables(execRaw);
   // Typed key/value config: model spec, reasoning effort, always-active skills.
   initAgentConfigTable(execRaw);
+  // The prompt-cache warm obligation: one row per actor holding the request a
+  // refresh would replay, when it is owed, and how many real requests this
+  // actor has made. Created on every root because the arm runs at the end of
+  // every turn everywhere — and it is durable rather than in-memory precisely
+  // because a Durable Object hibernates within seconds of going idle, which is
+  // the whole interval a warm waits out.
+  initCacheWarmTable(execRaw);
   // The catalogue of agent data tables — the `db` capability's own authority
   // record (tools/db-codemode.ts). Created on every root rather than by the
   // first `db.createTable`, for the reason the takes and records tables above

@@ -63,6 +63,28 @@ export { CodemodeEgress } from '../../src/codemode-egress';
 export { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 
 import * as v from 'valibot';
+import {
+  bindActorHandle, CacheWarmStore, CacheWarmingLane, initCacheWarmTable,
+  type SqlExecutor, type SqlValue,
+} from '@kinu.run/core';
+import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
+
+/** The two fields the warm assertion reads off the replay the lane sent.
+ *  Parsed rather than probed, so the probe reports the request's own values or
+ *  fails on a body that is not a replay at all. */
+const ReplayBodySchema = v.looseObject({ max_tokens: v.number(), stream: v.optional(v.boolean()) });
+
+/** The DO's positional SQL as the tagged-template primitive core's stores take.
+ *  The pool's probes hold `ctx.storage.sql` directly rather than an Agents-SDK
+ *  `Agent`, so `bindAgentSql` (which binds THAT protocol) does not fit. */
+function doSqlExecutor(sql: SqlStorage): SqlExecutor {
+  // SAFETY: constructed — the sole caller is `CacheWarmProbeDO` below, and the
+  // sole holder is `CacheWarmStore`, whose every statement binds a number, a
+  // string or null from its own columns; `SqlStorage.exec` accepts all three.
+  // The widening admits ArrayBuffer, which no statement in that store passes.
+  return ((strings: TemplateStringsArray, ...values: SqlValue[]) =>
+    sql.exec(strings.join('?'), ...values as SqlStorageValue[]).toArray()) as SqlExecutor;
+}
 
 /**
  * Cap'n Web owns a transferred writable stream after the RPC invocation that
@@ -550,3 +572,168 @@ export default {
     });
   },
 } satisfies ExportedHandler<Cloudflare.Env>;
+
+/** What the cache-warm probe has observed. */
+export interface CacheWarmReport {
+  /** The `max_tokens` of every replay the provider seam was handed, in order. */
+  readonly sentMaxTokens: readonly number[];
+  /** Whether any replay dropped the streaming flag the real request carried. */
+  readonly sentStreaming: boolean;
+  /** Spend rows the lane reported, by producer. */
+  readonly spendSources: readonly string[];
+  /** The instants the lane asked for a wake. */
+  readonly wakes: readonly number[];
+  /** The obligation still owed, as the durable row answers it. */
+  readonly nextWarmAt: number | null;
+  /** The message of a refused replay, once one has been refused. */
+  readonly refused: string | null;
+  /** Alarm deliveries this object has taken. */
+  readonly fires: number;
+}
+
+/**
+ * The prompt-cache warm, on the platform it has to survive.
+ *
+ * WHY WORKERD AND NOT `bun test`. Three of the four things this proves are
+ * platform behaviour, not policy: the obligation is an UPSERT into Durable
+ * Object SQLite (`ON CONFLICT` under the DO's own SQLite build), the wake is a
+ * real `setAlarm` delivery into a real `alarm()` frame, and the counter that
+ * suppresses a warm has to be read back from storage in the frame the platform
+ * woke — not from a field the arming activation happened to still hold. The
+ * policy itself is proved in `packages/core/tests/unit-cache-warming.test.ts`.
+ *
+ * The production classes do the work: `CacheWarmStore` over `this.ctx.storage`,
+ * `CacheWarmingLane` over the real policy. The four seams are the probe's —
+ * the wake is armed the way the orchestrator arms it (one `setAlarm`, soonest
+ * wins), and `send` records the replay the way the pool's fake provider does,
+ * so the assertion reads the request's own `max_tokens` rather than a claim
+ * about it.
+ */
+export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
+  private readonly sentMaxTokens: number[] = [];
+  private readonly spendSources: string[] = [];
+  private readonly wakes: number[] = [];
+  private sentStreaming = false;
+  private fires = 0;
+  private armed: Promise<void> = Promise.resolve();
+  /** Armed by `refuseNextSend`: the next replay is refused the way a rotated
+   *  key refuses one, so the row's fate after a failure is observable. */
+  private refuseNext = false;
+  private refused: string | null = null;
+  private lane: CacheWarmingLane | undefined;
+
+  private get warming(): CacheWarmingLane {
+    if (!this.lane) {
+      initCacheWarmTable((ddl: string) => { this.ctx.storage.sql.exec(ddl); });
+
+      const sql = doSqlExecutor(this.ctx.storage.sql);
+
+      const actor = bindActorHandle(sql, {
+        actorId: 'cache-warm-probe', workspaceId: 'ws-probe', parentActorId: null,
+        name: 'cache-warm-probe', storageKey: 'agent:cache-warm-probe',
+      }, () => {});
+
+      this.lane = new CacheWarmingLane({
+        store: new CacheWarmStore(sql, actor),
+        wake: (at) => {
+          this.wakes.push(at);
+
+          // Soonest-wins, exactly as `armTimer` collapses onto one row: the
+          // object has ONE alarm slot and the warm shares it with everything
+          // else the workspace owes. Retained rather than dropped, and awaited
+          // by whatever RPC armed it, so the arm is durable before the caller
+          // is answered.
+          this.armed = this.ctx.storage.setAlarm(Math.max(at, Date.now()));
+        },
+        send: async ({ modelSpec, body }) => {
+          if (modelSpec.provider !== 'anthropic') return null;
+
+          if (this.refuseNext) {
+            this.refuseNext = false;
+
+            throw new KinuError('unavailable', 'the cache warm answered 401: {"type":"error"}');
+          }
+
+          const replay = v.parse(ReplayBodySchema, body);
+          this.sentMaxTokens.push(replay.max_tokens);
+
+          if (replay.stream !== undefined) this.sentStreaming = true;
+
+          return { usage: { input: 40_004, cacheRead: 40_000, cacheWrite: 0, output: 0 } };
+        },
+        spend: (report) => { this.spendSources.push(report.source); },
+        now: () => Date.now(),
+      });
+    }
+
+    return this.lane;
+  }
+
+  /** One finished turn, as the session hands it over: the frozen request, when
+   *  it was sent, and what its answer reported. `sentAtOffsetMs` moves the send
+   *  instant into the past so the TTL-minus-lead point is reachable in a test
+   *  without waiting five minutes for a platform clock nobody can advance. */
+  async armFromTurn(input: {
+    provider: string;
+    retention: 'none' | 'short' | 'long';
+    sentAtOffsetMs: number;
+    cacheRead: number;
+    cacheWrite: number;
+  }): Promise<number | null> {
+    const at = this.warming.armAfterTurn({
+      modelSpec: { provider: input.provider, modelId: 'claude-opus-4-7' },
+      retention: input.retention,
+      lastRequest: {
+        body: {
+          model: 'claude-opus-4-7', max_tokens: 64_000, stream: true,
+          system: [{ type: 'text', text: 'system', cache_control: { type: 'ephemeral' } }],
+          messages: [{ role: 'user', content: 'hello' }],
+        },
+        sentAt: Date.now() - input.sentAtOffsetMs,
+        usage: { input: 40_004, cacheRead: input.cacheRead, cacheWrite: input.cacheWrite },
+      },
+    });
+
+    await this.armed;
+
+    return at;
+  }
+
+  /** The next replay is refused once, as a 401 from a rotated key would. */
+  async refuseNextSend(): Promise<void> {
+    this.refuseNext = true;
+  }
+
+  /** A real provider request starting — the counter bump the session makes. */
+  async noteRealRequest(): Promise<void> {
+    this.warming.noteRequest();
+  }
+
+  /** The tick's `alarm.cache_warm` phase, in the frame the platform woke. */
+  override async alarm(): Promise<void> {
+    this.fires += 1;
+
+    // The tick's `alarm.cache_warm` phase catches, diagnoses and continues; the
+    // probe does the same so a refused warm is observable as state rather than
+    // as an unhandled alarm.
+    try {
+      await this.warming.runDue(Date.now());
+    } catch (cause) {
+      // The CHAIN, not the wrapper's own line: `toKinuError` puts the doing on
+      // the message and the provider's refusal underneath it.
+      this.refused = renderThrownChain({ cause }).slice(0, 120);
+    }
+  }
+
+  async report(): Promise<CacheWarmReport> {
+    return {
+      sentMaxTokens: [...this.sentMaxTokens],
+      sentStreaming: this.sentStreaming,
+      spendSources: [...this.spendSources],
+      wakes: [...this.wakes],
+      nextWarmAt: this.warming.nextWarmAt(),
+      refused: this.refused,
+      fires: this.fires,
+    };
+  }
+}

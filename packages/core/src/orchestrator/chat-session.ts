@@ -70,6 +70,8 @@ import { diagnostics, KinuError, renderThrownChain, toKinuError, type Refusal } 
 import { stepContextLimit, type ModelWindow } from '../prompting/step-prune';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
+import type { CacheWarmingLane } from '../providers/cache-warming';
+import { DEFAULT_CACHE_RETENTION } from '../providers/types';
 import type { ToolOutcome } from '../tools/outcome';
 import { OVERFLOW_RETRY_EVENT } from '../turn-failure';
 import type {
@@ -454,6 +456,16 @@ export interface ChatSessionPorts {
    *  with no review surface refuses the turn at admission rather than run a
    *  plan nobody can approve. */
   planTurnRefusal(): string | null;
+  /**
+   * The workspace's prompt-cache warming lane, when the backend wired one.
+   *
+   * The SESSION drives it because the two instants it needs are the session's:
+   * a real provider request is starting, and the turn that just ended left a
+   * replayable request behind. Everything else about warming — the policy, the
+   * durable row, the accounting — is the lane's, and a backend with no durable
+   * wake wires none.
+   */
+  readonly cacheWarming?: CacheWarmingLane;
 }
 
 export interface ChatSessionOptions {
@@ -1336,6 +1348,12 @@ export class ChatSession {
      *  or a call. A Stop before that leaves the operator's row alone. */
     let streamed = item.continuation?.partial !== null && item.continuation?.partial !== undefined;
 
+    // A REAL provider request is about to run. It reads and rewrites the prefix
+    // itself, so any warm armed for the previous turn is void from here — and
+    // the durable counter this bumps is what stops a wake that fires mid-turn
+    // from adding a refresh beside the request in flight.
+    this.ports.cacheWarming?.noteRequest();
+
     const execution = await this.actorSession.execute(lease, {
       task: item.text,
       ...prepared.execution,
@@ -1421,6 +1439,11 @@ export class ChatSession {
     try {
       // The NEXT turn's measured compaction trigger (core turn-lifecycle).
       persistMeasuredPromptTokens(this.compactionState, prepared.sessionKey, this.actorSession.orchestrator.acc.lastPromptTokens, prepared.historyLength);
+      // The prefix this turn's LAST request left warm, if the provider's answer
+      // says it is worth keeping. The lane decides — one policy, both backends
+      // — and arms the backend's own durable wake; the request it would replay
+      // is the accumulator's, byte for byte.
+      this.armCacheWarm(prepared);
 
       this.closeRun(facts, lease);
       // Core drives everything the settled turn causes from here: the in-process
@@ -1467,6 +1490,27 @@ export class ChatSession {
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn });
     }
+  }
+
+  /**
+   * Hand the finished turn's last request to the warming lane.
+   *
+   * The spec comes from the turn's own prompt-cache identity, because that is
+   * what the request was addressed to and what the replay must be addressed to:
+   * a turn whose cache plan names no provider addressed no cache, so there is
+   * nothing to keep warm. Nothing here decides whether a warm happens — the
+   * lane's policy does.
+   */
+  private armCacheWarm(prepared: PreparedTurn): void {
+    const lane = this.ports.cacheWarming;
+    const cache = prepared.execution.chat.cache;
+
+    if (lane === undefined || cache?.providerId === undefined || cache.modelId === undefined) return;
+    lane.armAfterTurn({
+      modelSpec: { provider: cache.providerId, modelId: cache.modelId },
+      retention: cache.retention ?? DEFAULT_CACHE_RETENTION,
+      lastRequest: this.actorSession.orchestrator.acc.lastRequest,
+    });
   }
 
   /**

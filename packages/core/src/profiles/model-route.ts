@@ -62,6 +62,11 @@ const MODEL_ROUTE_POLICY = {
   reflection: { kind: 'fixed', tier: 'fast' },
   // Embeddings and other binding-bound calls: no profile route exists.
   platform: { kind: 'platform' },
+  // A cache warm re-sends a request that already ran, addressed by the spec
+  // frozen beside it (providers/cache-warming.ts). No profile is resolved for a
+  // refresh — it runs on a durable wake, outside every turn — and a tier lookup
+  // at wake time could only answer a model that did not write the entry.
+  warming: { kind: 'platform' },
 } as const satisfies Record<SpendSource, ModelRoutePolicy>;
 
 /** Producers whose model the turn profile decides — everything but `platform`. */

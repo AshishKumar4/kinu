@@ -7,7 +7,7 @@
 // not the bare global `Env`.
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type {
-  AlarmDO, GatedDO, NeighbourDO, RetentionDO, SocketDO, SteerProbeDO, StreamLifecycleDO, TransactionDO,
+  AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, SocketDO, SteerProbeDO, StreamLifecycleDO, TransactionDO,
 } from './worker';
 import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { HireObservation } from './hire-shapes';
@@ -169,6 +169,7 @@ declare global {
       TRANSACTION: DurableObjectNamespace<TransactionDO>;
       SOCKET: DurableObjectNamespace<SocketDO>;
       ALARMED: DurableObjectNamespace<AlarmDO>;
+      CACHE_WARM_PROBE: DurableObjectNamespace<CacheWarmProbeDO>;
       STEER_PROBE: DurableObjectNamespace<SteerProbeDO>;
       EVICTION_PROBE: DurableObjectNamespace<EvictionProbeDO>;
       WITNESS: DurableObjectNamespace<WitnessDO>;

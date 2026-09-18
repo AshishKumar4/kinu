@@ -469,6 +469,7 @@ export default defineConfig({
           TRANSACTION: { className: 'TransactionDO', useSQLite: true },
           SOCKET: { className: 'SocketDO', useSQLite: true },
           ALARMED: { className: 'AlarmDO', useSQLite: true },
+          CACHE_WARM_PROBE: { className: 'CacheWarmProbeDO', useSQLite: true },
           STEER_PROBE: { className: 'SteerProbeDO', useSQLite: true },
           EVICTION_PROBE: { className: 'EvictionProbeDO', useSQLite: true },
           WITNESS: { className: 'WitnessDO', useSQLite: true },

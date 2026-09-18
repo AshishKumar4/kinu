@@ -1,6 +1,15 @@
 // Runtime-agnostic model providers over caller-supplied credentials and transports.
 export * from './types';
 
+export {
+  CacheWarmStore,
+  CacheWarmingLane,
+  initCacheWarmTable,
+  warmUsage,
+  type CacheWarmSeams,
+  type WarmOutcome,
+} from './cache-warming';
+
 export * from './reasoning-effort';
 
 export * from './input-tokens';

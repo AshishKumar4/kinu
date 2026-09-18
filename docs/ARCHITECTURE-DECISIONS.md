@@ -86,6 +86,68 @@ Neither inspected path implements the proposed marker. This is a finding
 about those paths, not proof that every part of either project lacks a
 context-removal mechanism.
 
+C6. An idle prompt-cache prefix is kept warm by re-sending the last request
+with `max_tokens: 0`, and only where the vendor documents that shape:
+eligibility is the direct Anthropic Messages provider (`provider ===
+'anthropic'`, which `providers/anthropic.ts` builds against the official base
+URL with no redirect), the SHORT five-minute retention, and a last answer that
+read the cache and wrote nothing. The refresh fires at five minutes minus
+fifteen seconds counted from the REQUEST's send instant, at most three times
+per idle stretch, and a real provider request re-arms the chain from zero.
+Decided 2026-09-18.
+
+The owner's rule was "the cache warming thing should only work for now for
+expensive models like fable or astra". The lane's first design read a
+model-class gate off the catalog's per-1M rates; the decision taken instead is
+that no model list or price threshold is consulted, because the provider rule
+already excludes everything the vendor's mechanism does not cover, and a price
+threshold would be a number nobody measured. `warmingPlan` reads no pricing.
+
+The measurement this rests on is the vendor's, not ours: keeping the 5-minute
+entry warm cost 13% to 20% less per session than buying the 1-hour entry
+whenever pauses ran for minutes, and only near 45-minute pauses did the 1-hour
+entry win, by about 12 cents a session
+(docs/research/harness/anthropic-sources.md §2, read 2026-09-13). The same
+source states the mechanics this implements verbatim — "send the previous
+request again with `max_tokens` set to 0 … Count from the request's start, not
+its response's end … Do not change a byte of the prefix, and do not use
+`max_tokens: 1`" — which is why the replay is the provider body ai v6 already
+sent (`StepResult.request.body`) with two keys changed (`max_tokens` to 0,
+`stream` dropped) rather than a second assembly of the same prompt.
+
+The cadence and the eligibility mirror oh-my-pi's shipped loop
+(`packages/ai/src/stream.ts:1209-1211, 1292-1299, 1435, 1458-1473`, read
+2026-09-17) with ONE declared divergence: oh-my-pi ARMS on `cacheRead +
+cacheWrite > 0` (:1462) and only CONTINUES on read-and-no-write (:1393), so
+its first refresh can follow a turn that merely wrote the entry. Here one
+predicate governs both, so a workspace whose prefix is still being rewritten
+every turn never starts a chain it would only pay cache writes for.
+
+Scheduling is the DURABLE wake, never a timer: a Durable Object hibernates
+within seconds of going idle, which is the whole interval a warm waits out, so
+the obligation is a row in `cache_warm` folded into `nextWakeAt` beside the
+trigger, peer-outbox, email-outbox and event-log sources, with its own
+`alarm.cache_warm` phase on the tick. A warm fires only while the actor's
+durable request counter still matches the value stored at arm time, and the
+fold asks that same question — a fold that answered "owed" while the fire
+refused would arm a wake at `now` on every tick and never take the work. The
+CLI's `Schedule.after` ignored its delay (`setTimeout(fn, 0)`) and now honours
+it, unreferenced so a one-shot command still exits.
+
+A warm's spend is its own producer (`SpendSource 'warming'`), and it is
+deliberately absent from the conversation's cache-hit distribution: a refresh
+reads the whole prefix and writes nothing, so its own hit rate is ~100% and
+folding it into the EMA, mean, p95 or p99 would report a cache health the turns
+never had. `summarizeSteps` takes the warm rows only to count them, and the
+Activity panel shows that count beside the EMA.
+
+Proof: `packages/core/tests/unit-cache-warming.test.ts` (the policy, every
+refusal, the replay shape, the three-refresh cap) and
+`packages/cf-backend/tests/workerd/cache-warm.test.ts` (the upsert, a real
+alarm delivery, the counter read back in the woken frame). Both were proved red
+in every direction they claim: logs under
+`kinu-logs/wave4-0917/warm/workerd-cache-warm-{green2,red,red-counter}.log`.
+
 ## Codemode and slates
 
 M1. Agent code runs in Cloudflare's codemode sandbox on the hosted backend
