@@ -1638,8 +1638,111 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   listPendingConsents: () => [],
 }));
 
+/** One gallery RPC answer, or null for a method the surface asked does not own.
+ *  Wrapped rather than bare, so `null` stays available as "not mine" while an
+ *  answer of its own may be anything a route serialises. */
+type GalleryAnswer = { readonly value: unknown } | null;
+
+/** The PLAN surface's own answers: the review pane's read of this workspace's
+ *  plans, and its decision on the one in front of it. */
+function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
+  if (method === "inspectSubordinate") {
+    return { value: galleryPlanInspection(args?.[0], [galleryAgentPlan]) };
+  }
+
+  if (method !== "decidePlanReview") return null;
+
+  const [, , decision, feedback] = v.parse(
+    v.tuple([v.string(), v.number(), v.picklist(["approve", "request_changes"]), v.optional(v.string())]),
+    args,
+  );
+
+  galleryAgentPlan = {
+    ...galleryAgentPlan,
+    status: decision === "approve" ? "approved" : "changes_requested",
+    feedback: feedback ?? null,
+    handoffAccepted: true,
+    updatedAt: Date.now(),
+    decidedAt: Date.now(),
+  };
+
+  return { value: { ok: true, plan: galleryAgentPlan, queued: true } };
+}
+
+/** The ROSTER surface's own answers: the subordinate list, the three writes the
+ *  agents pane makes on it, and one hosted actor's view of itself. */
+function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
+  if (method === "listSubordinates") return { value: [...GALLERY_SUBS] };
+
+  if (method === "createSubordinateAgent") {
+    maybeRefuseCreate();
+    const name = `agent-${++gallerySubSeq}`;
+
+    const entry = {
+      name, displayName: "", role: "agent", createdBy: "user",
+      status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
+    };
+
+    GALLERY_SUBS.push(entry);
+    galleryAgentPlan = {
+      ...galleryAgentPlan,
+      status: "pending",
+      annotations: GALLERY_PLAN_ANNOTATIONS,
+      feedback: null,
+      handoffAccepted: false,
+      updatedAt: NOW,
+      decidedAt: null,
+    };
+
+    return { value: { name, displayName: "", subordinate: entry } };
+  }
+
+  if (method === "renameSubordinateAgent") {
+    const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
+    const entry = GALLERY_SUBS.find((sub) => sub.name === name);
+
+    if (!entry) throw new Error(`gallery: no subordinate "${name}"`);
+    entry.displayName = displayName;
+
+    return { value: { ok: true, name, displayName, subordinate: { ...entry } } };
+  }
+
+  if (method === "dismissSubordinate") {
+    const [name, keepHistory] = v.parse(v.tuple([v.string(), v.optional(v.boolean())]), args);
+    const index = GALLERY_SUBS.findIndex((sub) => sub.name === name);
+
+    if (index >= 0) GALLERY_SUBS.splice(index, 1);
+
+    return { value: { ok: true, name, historyKept: keepHistory ?? true } };
+  }
+
+  if (method !== "getActorSnapshot") return null;
+
+  // The hosted actor's own view, answered by the ROOT now rather than by a
+  // facet over a stub. Identity mirrors the roster; the mission stays
+  // internal — the header renders the ROSTER title, never this field.
+  const [name] = v.parse(v.tuple([v.string()]), args);
+  const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
+  const actor = latest?.name ?? "agent-0";
+
+  return {
+    value: {
+      name: actor,
+      actorId: galleryActorId(actor),
+      displayName: latest?.displayName ?? "",
+      role: "task",
+      mission: "",
+      model: null,
+      activePlan: galleryAgentPlan,
+      pendingSteers: [],
+    } satisfies SubordinateSnapshot,
+  };
+}
+
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "inspectSubordinate") return rpcResult(galleryPlanInspection(args?.[0], [galleryAgentPlan])).json<T>();
+  const plan = galleryPlanRpc(method, args);
+
+  if (plan) return rpcResult(plan.value).json<T>();
 
   if (new URLSearchParams(location.search).has("workspaceFault")) {
     const state = document.documentElement.dataset;
@@ -1667,86 +1770,9 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return new Promise<T>(() => {});
   }
 
-  if (method === "listSubordinates") return rpcResult([...GALLERY_SUBS]).json<T>();
+  const roster = galleryRosterRpc(method, args);
 
-  if (method === "createSubordinateAgent") {
-    maybeRefuseCreate();
-    const name = `agent-${++gallerySubSeq}`;
-
-    const entry = {
-      name, displayName: "", role: "agent", createdBy: "user",
-      status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
-    };
-
-    GALLERY_SUBS.push(entry);
-    galleryAgentPlan = {
-      ...galleryAgentPlan,
-      status: "pending",
-      annotations: GALLERY_PLAN_ANNOTATIONS,
-      feedback: null,
-      handoffAccepted: false,
-      updatedAt: NOW,
-      decidedAt: null,
-    };
-
-    return rpcResult({ name, displayName: "", subordinate: entry }).json<T>();
-  }
-
-  if (method === "renameSubordinateAgent") {
-    const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
-    const entry = GALLERY_SUBS.find((sub) => sub.name === name);
-
-    if (!entry) throw new Error(`gallery: no subordinate "${name}"`);
-    entry.displayName = displayName;
-
-    return rpcResult({ ok: true, name, displayName, subordinate: { ...entry } }).json<T>();
-  }
-
-  if (method === "dismissSubordinate") {
-    const [name, keepHistory] = v.parse(v.tuple([v.string(), v.optional(v.boolean())]), args);
-    const index = GALLERY_SUBS.findIndex((sub) => sub.name === name);
-
-    if (index >= 0) GALLERY_SUBS.splice(index, 1);
-
-    return rpcResult({ ok: true, name, historyKept: keepHistory ?? true }).json<T>();
-  }
-
-  if (method === "getActorSnapshot") {
-    // The hosted actor's own view, answered by the ROOT now rather than by a
-    // facet over a stub. Identity mirrors the roster; the mission stays
-    // internal — the header renders the ROSTER title, never this field.
-    const [name] = v.parse(v.tuple([v.string()]), args);
-    const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
-
-    return rpcResult({
-      name: latest?.name ?? "agent-0",
-      actorId: galleryActorId(latest?.name ?? "agent-0"),
-      displayName: latest?.displayName ?? "",
-      role: "task",
-      mission: "",
-      model: null,
-      activePlan: galleryAgentPlan,
-      pendingSteers: [],
-    } satisfies SubordinateSnapshot).json<T>();
-  }
-
-  if (method === "decidePlanReview") {
-    const [, , decision, feedback] = v.parse(
-      v.tuple([v.string(), v.number(), v.picklist(["approve", "request_changes"]), v.optional(v.string())]),
-      args,
-    );
-
-    galleryAgentPlan = {
-      ...galleryAgentPlan,
-      status: decision === "approve" ? "approved" : "changes_requested",
-      feedback: feedback ?? null,
-      handoffAccepted: true,
-      updatedAt: Date.now(),
-      decidedAt: Date.now(),
-    };
-
-    return rpcResult({ ok: true, plan: galleryAgentPlan, queued: true }).json<T>();
-  }
+  if (roster) return rpcResult(roster.value).json<T>();
 
   // A preview that arrives after first paint: the gate sets the dataset flag
   // once the page has settled, and the next live refresh lists a port the
@@ -6651,6 +6677,60 @@ const GALLERY_UPDATE_RUN: DeploySnapshot = {
   ],
 };
 
+/** The self-deploy door as a visitor gets it before the owner has registered
+ *  the OAuth client; `?state=configured` photographs the sign-in state. Same
+ *  dynamic import every frame here uses, because the frame name is the
+ *  runtime selector. */
+async function deployFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
+  const { default: DeployPage } = await import("@/pages/DeployPage");
+  const configured = new URLSearchParams(location.search).get("state") === "configured";
+
+  return {
+    entries: ["/deploy"],
+    node: (
+      <div className="h-screen overflow-auto">
+        <DeployPage
+          fixtureOptions={{
+            cloudflare: configured,
+            clientId: configured ? "gallery-client" : "",
+            version: "0.4.0+gallery",
+            prompts: [],
+            reason: configured
+              ? ""
+              : "The Cloudflare door needs an OAuth client, and this deployment has none configured yet.",
+          }}
+        />
+      </div>
+    ),
+  };
+}
+
+/** The deployment's own Updates page. `?state=running` photographs a run in
+ *  flight; without it, a deployment one build behind its channel. */
+async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
+  const { default: UpdatesPage } = await import("@/pages/UpdatesPage");
+  const running = new URLSearchParams(location.search).get("state") === "running";
+
+  return {
+    entries: ["/updates"],
+    node: (
+      <div className="h-screen overflow-auto p-bg p-text">
+        <UpdatesPage
+          fixture={{
+            current: { version: "0.3.9+aa11bb2", sha: "aa11bb2", builtAt: "2026-09-10T08:00:00.000Z" },
+            available: { version: "0.4.0+cc33dd4", sha: "cc33dd4", builtAt: "2026-09-17T10:00:00.000Z" },
+            channelOrigin: "https://kinu.run",
+            upToDate: false,
+            installable: true,
+            reason: "",
+          }}
+          {...(running ? { fixtureRun: GALLERY_UPDATE_RUN } : {})}
+        />
+      </div>
+    ),
+  };
+}
+
 async function mount() {
   // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
@@ -6724,6 +6804,16 @@ async function mount() {
   ]);
 
   const fixture = fixtureFrames.get(frame);
+
+  // Same dispatch for the frames whose module or fixture is runtime-loaded:
+  // the name selects an async loader instead of a branch.
+  const dynamicFrames = new Map<string, () => Promise<{ node: React.ReactNode; entries: string[] }>>([
+    ["deploy", deployFrame],
+    ["updates", updatesFrame],
+    ["app", appShellFrame],
+  ]);
+
+  const dynamicFixture = dynamicFrames.get(frame);
 
   if (frame === "shell") node = <Shell />;
   else if (frame === "forks") node = <Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={forkRpc} />;
@@ -6943,52 +7033,7 @@ async function mount() {
       </Routes>
     );
   }
-  // The self-deploy door as a visitor gets it before the owner has registered
-  // the OAuth client; `?state=configured` photographs the sign-in state. Same
-  // dynamic import every frame here uses, because the frame name is the
-  // runtime selector.
-  else if (frame === "deploy") {
-    const { default: DeployPage } = await import("@/pages/DeployPage");
-    const configured = new URLSearchParams(location.search).get("state") === "configured";
-    entries = ["/deploy"];
-    node = (
-      <div className="h-screen overflow-auto">
-        <DeployPage
-          fixtureOptions={{
-            cloudflare: configured,
-            clientId: configured ? "gallery-client" : "",
-            version: "0.4.0+gallery",
-            prompts: [],
-            reason: configured
-              ? ""
-              : "The Cloudflare door needs an OAuth client, and this deployment has none configured yet.",
-          }}
-        />
-      </div>
-    );
-  }
-  // The deployment's own Updates page. `?state=running` photographs a run in
-  // flight; without it, a deployment one build behind its channel.
-  else if (frame === "updates") {
-    const { default: UpdatesPage } = await import("@/pages/UpdatesPage");
-    const running = new URLSearchParams(location.search).get("state") === "running";
-    entries = ["/updates"];
-    node = (
-      <div className="h-screen overflow-auto p-bg p-text">
-        <UpdatesPage
-          fixture={{
-            current: { version: "0.3.9+aa11bb2", sha: "aa11bb2", builtAt: "2026-09-10T08:00:00.000Z" },
-            available: { version: "0.4.0+cc33dd4", sha: "cc33dd4", builtAt: "2026-09-17T10:00:00.000Z" },
-            channelOrigin: "https://kinu.run",
-            upToDate: false,
-            installable: true,
-            reason: "",
-          }}
-          {...(running ? { fixtureRun: GALLERY_UPDATE_RUN } : {})}
-        />
-      </div>
-    );
-  }
+  else if (dynamicFixture !== undefined) ({ node, entries } = await dynamicFixture());
   else if (frame === "home") {
     const { default: HomePage } = await import("@/pages/HomePage");
     // The real chrome, not the page alone: the sidebar's own route logic
@@ -7002,10 +7047,6 @@ async function mount() {
       </div>
     );
   }
-  // The shipped shell as App.tsx composes it — `Layout` owns the rail, the
-  // overview store and the living background — routed to one of the surfaces
-  // the background shows under.
-  else if (frame === "app") ({ node, entries } = await appShellFrame());
   else node = <All />;
 
   ({ node, entries } = explore(node, entries, frame));

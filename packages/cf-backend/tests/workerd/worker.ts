@@ -616,6 +616,9 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
   private sentStreaming = false;
   private fires = 0;
   private armed: Promise<void> = Promise.resolve();
+  /** Callers waiting for an alarm frame to finish, resolved at the end of the
+   *  one the platform delivers. */
+  private readonly woken: (() => void)[] = [];
   /** Armed by `refuseNextSend`: the next replay is refused the way a rotated
    *  key refuses one, so the row's fate after a failure is observable. */
   private refuseNext = false;
@@ -723,6 +726,20 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
       // the message and the provider's refusal underneath it.
       this.refused = renderThrownChain({ cause }).slice(0, 120);
     }
+
+    // The frame is over and its state is written: whoever is waiting for this
+    // delivery reads it now.
+    for (const resolve of this.woken.splice(0)) resolve();
+  }
+
+  /** The report of the alarm frame the platform delivers, awaited rather than
+   *  polled: a caller hands the wait to the probe and the frame ends it. A
+   *  frame already taken answers at once, so the wait is on the STATE the
+   *  delivery leaves rather than on catching it live. */
+  async reportAfterWake(): Promise<CacheWarmReport> {
+    if (this.fires === 0) await new Promise<void>((resolve) => { this.woken.push(resolve); });
+
+    return this.report();
   }
 
   async report(): Promise<CacheWarmReport> {

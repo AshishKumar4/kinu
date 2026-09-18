@@ -272,6 +272,31 @@ export class TurnAccumulator {
     this.sinks.onToolCallEvent?.(event);
   }
 
+  /**
+   * What the newest reporting step leaves standing for a later reader: the
+   * prompt size, and the request a cache warm would replay.
+   *
+   * Each step is one request, so the newest reporting step carries the whole
+   * current prompt (`input` is the cache-inclusive total). A step that reported
+   * no prompt size leaves the last real measurement standing; a step that
+   * reported 0 overwrites it, because that is a measurement too.
+   *
+   * The bytes this step sent ride beside when it left and what the answer cost:
+   * a warm replays the TURN'S LAST request, so the newest step with a body and
+   * a send instant wins, and a step whose adapter reported neither leaves the
+   * previous one standing rather than clearing the only replayable request the
+   * turn has.
+   */
+  private noteLastRequest(ctx: StepLike, usage: Usage): void {
+    if (usage.input !== undefined) this.lastPromptTokens = usage.input;
+
+    const sent = ctx.request;
+
+    if (sent?.body !== undefined && sent.sentAt !== undefined) {
+      this.lastRequest = { body: sent.body, sentAt: sent.sentAt, usage };
+    }
+  }
+
   /** A model step finished. Accumulates usage + fires the step sinks. */
   recordStep(ctx: StepLike): void {
     this.stepCount++;
@@ -292,22 +317,8 @@ export class TurnAccumulator {
     // ledger can charge each part at its own rate.
     if (reported) this.budget?.debit(usageTotal(usage) ?? 0, { calls: 1, usage });
 
-    // Each step is one request, so the newest reporting step carries the whole
-    // current prompt (`input` is the cache-inclusive total). A step that
-    // reported no prompt size leaves the last real measurement standing; a step
-    // that reported 0 overwrites it, because that is a measurement too.
-    if (usage.input !== undefined) this.lastPromptTokens = usage.input;
+    this.noteLastRequest(ctx, usage);
 
-    // The bytes this step sent, beside when it left and what the answer cost: a
-    // warm replays the TURN'S LAST request, so the newest step with a body and
-    // a send instant wins, and a step whose adapter reported neither leaves the
-    // previous one standing rather than clearing the only replayable request
-    // the turn has.
-    const sent = ctx.request;
-
-    if (sent?.body !== undefined && sent.sentAt !== undefined) {
-      this.lastRequest = { body: sent.body, sentAt: sent.sentAt, usage };
-    }
     // Every field the provider actually mentioned, zeros included: a reported
     // `cacheRead=0` is a cold prefix on a working cache plan, and hiding it
     // makes that indistinguishable from a provider that never mentions caching.
