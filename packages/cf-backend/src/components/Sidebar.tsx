@@ -359,7 +359,7 @@ export default function Sidebar() {
                       <NavLink
                         to={`/workspace/${a.name}`}
                         className={({ isActive: linkActive }) =>
-                          `flex items-center gap-2 rounded-lg py-[7px] pl-3 pr-16 lg:pr-3 lg:group-hover:pr-16 lg:group-focus-within:pr-16 transition-colors ${
+                          `flex items-center gap-2 rounded-lg py-[7px] pl-3 pr-16 lg:pr-5 lg:group-hover:pr-16 lg:group-focus-within:pr-16 transition-colors ${
                             linkActive ? 'bg-[var(--c-elevated)]' : 'hover:bg-[var(--c-elevated)]'
                           }`
                         }

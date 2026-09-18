@@ -16,7 +16,7 @@ import { join, resolve } from 'node:path';
 
 import { scratchDir } from '../packages/test-utils/src/scratch';
 
-import { GIF_WIDTH, VIEWPORT, concatManifest, muxGif, probeGif } from './plan-demo-film';
+import { GIF_WIDTH, VIEWPORT, OPENING_LINE, concatManifest, filmScript, muxGif, probeGif } from './plan-demo-film';
 import { FALLBACK_ANSWER, PLAN_MISSION, SLATE_TITLE, planWalkthrough, readScriptedRequest } from './scripted-model';
 
 const REPO = resolve(import.meta.dir, '..');
@@ -176,6 +176,21 @@ describe('the recorded agent follows the walkthrough', () => {
   test('a request that offers no tools is answered with prose, whatever it asks', () => {
     // The workspace's own titling call carries the mission and no tools. A
     // script that read only the text would answer it with a tool call.
+    expect(planWalkthrough(request({ messages: [MISSION], available: [] })))
+      .toEqual({ text: FALLBACK_ANSWER });
+  });
+
+  test('the film answers its first request with the opening line', () => {
+    // The create queues the genesis turn before the browser opens and nothing
+    // else has spoken, so the run's first model request IS that turn: the film
+    // script counts, it does not match on text. Later requests delegate, and
+    // the shared walkthrough still serves the fallback — the live tier waits
+    // on those words.
+    const script = filmScript();
+    const any = request({ messages: [MISSION], available: PLAN_TOOLS });
+
+    expect(script(any)).toEqual({ text: OPENING_LINE });
+    expect(script(any)).toEqual(planWalkthrough(any));
     expect(planWalkthrough(request({ messages: [MISSION], available: [] })))
       .toEqual({ text: FALLBACK_ANSWER });
   });
