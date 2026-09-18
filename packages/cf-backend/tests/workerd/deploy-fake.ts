@@ -103,27 +103,97 @@ const FILES = {
   'client/app.js': 'console.log("probe");\n',
 } satisfies Record<string, string>;
 
-/** The heavy asset's body, made once per weight. A fresh one per call would
- *  hash differently from the release the run already downloaded, and the
- *  upload would ask this artifact for an asset it does not carry. */
-const weighed = new Map<number, string>();
-
 /**
- * The release's files, at the weight a row asked for.
+ * A release the size and shape of a published one.
  *
- * A row that measures what one release costs the object needs an artifact the
- * size of a real one; the four files above are bytes. `weigh` adds one asset
- * of that many bytes, random hex rather than a repeated character so gzip
- * cannot make the served object a hundredth of what it unpacks to.
+ * The four files above are bytes; a row that measures what one release costs
+ * the installing object needs the real thing. Measured 2026-09-18 from
+ * `packages/cf-backend/dist` (built 2026-09-16 in the primary checkout, maps
+ * and `wrangler.json` excluded): 120 modules of 29.19 MiB and 421 assets of
+ * 78.01 MiB, the largest of them 21.55 MiB.
  */
-function files() {
-  if (held.weigh === 0) return { ...FILES };
+export interface DeployFakeWeight {
+  readonly modules: number;
+  readonly moduleBytes: number;
+  readonly assets: number;
+  readonly assetBytes: number;
+  readonly largestAsset: number;
+}
 
-  const body = weighed.get(held.weigh) ?? randomBytes(held.weigh / 2).toString('hex');
+const WeighSchema: v.GenericSchema<DeployFakeWeight> = v.object({
+  modules: v.number(),
+  moduleBytes: v.number(),
+  assets: v.number(),
+  assetBytes: v.number(),
+  largestAsset: v.number(),
+});
 
-  weighed.set(held.weigh, body);
+/** Half of every 64 KiB is fresh random hex and half is a block the release
+ *  repeats. Deflate's window is 32 KiB, so the repeated half all but vanishes
+ *  and the random half halves: the artifact lands near the 0.25 ratio the
+ *  real one has (27.35 MiB compressed, 107.99 MiB unpacked, 2026-09-18).
+ *  A body of one repeated character would gzip to a thousandth of itself and
+ *  the row would measure a download nobody has. */
+const BLOCK_CHARS = 32 * 1024;
 
-  return { ...FILES, 'client/heavy.bin': body };
+const FILLER = 'k'.repeat(BLOCK_CHARS);
+
+function releaseBody(size: number): string {
+  const pieces: string[] = [];
+
+  for (let made = 0; made < size;) {
+    const random = Math.min(BLOCK_CHARS, size - made);
+
+    pieces.push(randomBytes(Math.ceil(random / 2)).toString('hex').slice(0, random));
+    made += random;
+
+    if (made >= size) break;
+
+    const flat = Math.min(BLOCK_CHARS, size - made);
+
+    pieces.push(FILLER.slice(0, flat));
+    made += flat;
+  }
+
+  return pieces.join('');
+}
+
+/** One file of the release: its archive path and its bytes. */
+type ReleaseEntry = readonly [path: string, body: string];
+
+/** The release's files, at the weight a row asked for. Made once per weight:
+ *  a fresh body would hash differently from the release the run already
+ *  downloaded, and the upload would ask the artifact for a file it does not
+ *  carry. */
+const weighed = new Map<string, readonly ReleaseEntry[]>();
+
+function files(): readonly ReleaseEntry[] {
+  const asked = held.weigh;
+
+  if (asked === null) return Object.entries(FILES);
+
+  const key = JSON.stringify(asked);
+  const made = weighed.get(key);
+
+  if (made !== undefined) return made;
+
+  const built: ReleaseEntry[] = Object.entries(FILES);
+  const each = Math.floor(asked.moduleBytes / Math.max(asked.modules, 1));
+  const rest = Math.floor(Math.max(asked.assetBytes - asked.largestAsset, 0) / Math.max(asked.assets - 1, 1));
+
+  for (let index = 0; index < asked.modules; index += 1) {
+    built.push([`worker/chunk-${String(index)}.js`, releaseBody(each)]);
+  }
+
+  built.push(['client/_assets/heavy.json', releaseBody(asked.largestAsset)]);
+
+  for (let index = 0; index + 1 < asked.assets; index += 1) {
+    built.push([`client/_assets/piece-${String(index)}.js`, releaseBody(rest)]);
+  }
+
+  weighed.set(key, built);
+
+  return built;
 }
 
 function sha256(bytes: Uint8Array | string): string {
@@ -169,7 +239,7 @@ function manifestText(build: DeployFakeServedBuild): string {
       mainModule: 'index.js',
       compatibilityDate: '2025-12-01',
       compatibilityFlags: ['nodejs_compat'],
-      modules: ['index.js', 'chunk.js'],
+      modules: files().filter(([path]) => path.startsWith('worker/')).map(([path]) => path.slice('worker/'.length)),
       modulesPath: 'worker',
       assets: 'client',
       assetsBinding: 'ASSETS',
@@ -190,7 +260,7 @@ function manifestText(build: DeployFakeServedBuild): string {
       { name: 'WEBHOOK_ROUTE_SECRET', handling: 'prompted', required: true, prompt: '32 random bytes' },
     ],
     vars: [{ name: 'SANDBOX_TRANSPORT', policy: 'carried', value: 'rpc' }],
-    files: Object.entries(files()).map(([path, body]) => ({
+    files: files().map(([path, body]) => ({
       path,
       sha256: sha256(body),
       size: Buffer.byteLength(body),
@@ -204,9 +274,14 @@ interface Release {
   readonly text: string;
   readonly archive: Buffer<ArrayBuffer>;
   readonly digest: string;
-  /** What the archive unpacks to: the bytes the object under test holds for
-   *  the length of the plan, which is the figure the footprint row is about. */
+  /** What the archive unpacks to. NOT what the object holds any more: the
+   *  reader walks it a member at a time, and what the run held at its peak is
+   *  the fact the upload step records (`FACT_UPLOAD_PEAK`). This is here so a
+   *  row can hold that peak against the size of the release it installed. */
   readonly unpacked: number;
+  /** The largest single member, which is what the peak is supposed to be
+   *  bounded by instead of the release. */
+  readonly largestMember: number;
 }
 
 /** The channel's two objects for one version: the manifest and the tarball that
@@ -216,20 +291,36 @@ interface Release {
 const releases = new Map<string, Release>();
 
 function release(): Release {
-  const key = `${held.published.version}:${String(held.weigh)}`;
+  const key = `${held.published.version}:${JSON.stringify(held.weigh)}`;
   const built = releases.get(key);
 
   if (built !== undefined) return built;
   const text = manifestText(held.published);
+  const carried = files();
+
+  // Assets before modules, the order `scripts/build-worker-release.ts` writes
+  // them in: a single-pass installer holds the module set to the end, so the
+  // archive puts it last.
+  const ordered = [
+    ...carried.filter(([path]) => !path.startsWith('worker/')),
+    ...carried.filter(([path]) => path.startsWith('worker/')),
+  ];
 
   const members = [
     tarMember('release.json', text),
-    ...Object.entries(files()).map(([path, body]) => tarMember(path, body)),
+    ...ordered.map(([path, body]) => tarMember(path, body)),
   ];
 
   const tar = Buffer.concat([...members, Buffer.alloc(1024)]);
   const archive = gzipSync(tar);
-  const made: Release = { text, archive, digest: sha256(archive), unpacked: tar.length };
+
+  const made: Release = {
+    text,
+    archive,
+    digest: sha256(archive),
+    unpacked: tar.length,
+    largestMember: Math.max(...carried.map(([, body]) => Buffer.byteLength(body))),
+  };
 
   releases.set(key, made);
 
@@ -241,18 +332,22 @@ function release(): Release {
  * rather than computed from the code.
  *
  * `served` is the compressed artifact this channel handed over; `unpacked` is
- * what that archive expands to, which is what the object holds for the length
- * of the plan; `assetBody` and `versionBody` are the largest multipart bodies
- * it built and sent. The isolate offers no memory reading at all (measured
- * 2026-09-18 on `@cloudflare/workerd-linux-64` through `vitest-pool-workers`:
+ * what that archive expands to and `largestMember` is its biggest single
+ * file; `assetBody` and `versionBody` are the largest multipart bodies the
+ * object built and sent, and `assetBatches` is how many asset requests it
+ * took. The isolate offers no memory reading at all (measured 2026-09-18 on
+ * `@cloudflare/workerd-linux-64` through `vitest-pool-workers`:
  * `performance.measureUserAgentSpecificMemory` is undefined and
- * `process.memoryUsage()` answers zeroes), so these four are the footprint
- * that can be measured instead of asserted.
+ * `process.memoryUsage()` answers zeroes), so these are the footprint that
+ * can be measured from outside; what the object HELD is its own count, kept
+ * on the upload step's ledger row (`FACT_UPLOAD_PEAK`).
  */
 export interface DeployFakeFootprint {
   readonly served: number;
   readonly unpacked: number;
+  readonly largestMember: number;
   readonly assetBody: number;
+  readonly assetBatches: number;
   readonly versionBody: number;
 }
 
@@ -278,7 +373,9 @@ export const DeployFakeStateSchema = v.object({
   footprint: v.object({
     served: v.number(),
     unpacked: v.number(),
+    largestMember: v.number(),
     assetBody: v.number(),
+    assetBatches: v.number(),
     versionBody: v.number(),
   }),
 });
@@ -345,10 +442,10 @@ interface Held {
   scriptExists: boolean;
   refuseOnce: DeployFakeRefusal | null;
   served: DeployFakeServedBuild | null;
-  /** Bytes of extra asset the channel's release carries, 0 for the four small
-   *  files. Set by a row that measures the footprint at a real release's
-   *  size. */
-  weigh: number;
+  /** The shape of the release the channel serves, or null for the four small
+   *  files. Set by a row that measures what a published release costs the
+   *  object that installs it. */
+  weigh: DeployFakeWeight | null;
   /** The lifetime the next authorization-code grant answers with, and — once
    *  it has been issued — the first access token is dead: every call bearing
    *  it is answered 401 until the run refreshes. `null` is the ordinary hour,
@@ -360,7 +457,15 @@ interface Held {
    *  which a Durable Object dies having written to somebody's account without
    *  learning that it did. */
   stallOnce: DeployFakeStall | null;
-  footprint: { served: number; unpacked: number; assetBody: number; versionBody: number };
+  /** Which asset hashes the open upload session still wants, and which have
+   *  arrived: the completion token is answered when the second covers the
+   *  first, the way the reference describes it. */
+  assetsWanted: Set<string>;
+  assetsUploaded: Set<string>;
+  footprint: {
+    served: number; unpacked: number; largestMember: number;
+    assetBody: number; assetBatches: number; versionBody: number;
+  };
 }
 
 const held: Held = fresh();
@@ -381,12 +486,14 @@ function fresh(): Held {
     scriptExists: false,
     refuseOnce: null,
     served: null,
-    weigh: 0,
+    weigh: null,
     shortGrant: null,
     refreshes: 0,
     expiredCalls: 0,
     stallOnce: null,
-    footprint: { served: 0, unpacked: 0, assetBody: 0, versionBody: 0 },
+    assetsWanted: new Set<string>(),
+    assetsUploaded: new Set<string>(),
+    footprint: { served: 0, unpacked: 0, largestMember: 0, assetBody: 0, assetBatches: 0, versionBody: 0 },
   };
 }
 
@@ -407,12 +514,14 @@ function reset(): void {
   held.scriptExists = false;
   held.refuseOnce = null;
   held.served = null;
-  held.weigh = 0;
+  held.weigh = null;
   held.shortGrant = null;
   held.refreshes = 0;
   held.expiredCalls = 0;
   held.stallOnce = null;
-  held.footprint = { served: 0, unpacked: 0, assetBody: 0, versionBody: 0 };
+  held.assetsWanted = new Set<string>();
+  held.assetsUploaded = new Set<string>();
+  held.footprint = { served: 0, unpacked: 0, largestMember: 0, assetBody: 0, assetBatches: 0, versionBody: 0 };
 }
 
 function snapshot(): DeployFakeState {
@@ -449,8 +558,6 @@ export interface DeployFakeStall {
 }
 
 const StallSchema = v.object({ method: v.string(), path: v.string(), ms: v.number() });
-
-const WeighSchema = v.object({ bytes: v.number() });
 
 const ExpireSchema = v.object({ expiresIn: v.number() });
 
@@ -615,11 +722,17 @@ async function api(url: URL, request: Request): Promise<Response> {
   }
 
   if (path.endsWith('/assets-upload-session')) {
-    // One batch holding every asset hash: the upload step reads the batches
-    // back and asks the artifact for exactly the files named here.
-    const wanted = Object.entries(files())
+    // One bucket holding every asset hash, which is Cloudflare's own advice
+    // shape ("how to optimally batch upload your files"). The installer is
+    // free to send it in several requests, and this plane answers the
+    // completion token the way the reference describes: once every file in
+    // the manifest has arrived, not once a bucket has.
+    const wanted = files()
       .filter(([name]) => name.startsWith('client/'))
       .map(([, body]) => sha256(body).slice(0, 32));
+
+    held.assetsWanted = new Set(wanted);
+    held.assetsUploaded = new Set<string>();
 
     return envelope({ jwt: 'session-token', buckets: [wanted] });
   }
@@ -642,12 +755,24 @@ async function multipart(url: URL, request: Request): Promise<Response> {
 
   // The body this object built and sent, measured: base64 of every asset in
   // the batch, in one multipart envelope. What the footprint row is about.
-  const sent = (await request.arrayBuffer()).byteLength;
+  const raw = await request.arrayBuffer();
+  const sent = raw.byteLength;
 
   if (path.includes('/workers/assets/upload')) {
-    held.footprint.assetBody = Math.max(held.footprint.assetBody, sent);
+    const form = await new Response(raw, {
+      headers: { 'content-type': request.headers.get('content-type') ?? '' },
+    }).formData();
 
-    return envelope({ jwt: 'completion-token' }, 201);
+    for (const name of form.keys()) held.assetsUploaded.add(name);
+
+    held.footprint.assetBody = Math.max(held.footprint.assetBody, sent);
+    held.footprint.assetBatches += 1;
+
+    const missing = [...held.assetsWanted].filter((hash) => !held.assetsUploaded.has(hash));
+
+    return missing.length === 0
+      ? envelope({ jwt: 'completion-token' }, 201)
+      : envelope({ uploaded: held.assetsUploaded.size }, 202);
   }
 
   held.footprint.versionBody = Math.max(held.footprint.versionBody, sent);
@@ -736,7 +861,7 @@ async function control(url: URL, request: Request): Promise<Response> {
 
   if (url.pathname === '/stall') held.stallOnce = v.parse(StallSchema, await request.json());
 
-  if (url.pathname === '/weigh') held.weigh = v.parse(WeighSchema, await request.json()).bytes;
+  if (url.pathname === '/weigh') held.weigh = v.parse(WeighSchema, await request.json());
 
   if (url.pathname === '/expire') held.shortGrant = v.parse(ExpireSchema, await request.json()).expiresIn;
 
@@ -805,6 +930,7 @@ export async function deployOutbound(request: Request): Promise<Response> {
     if (url.pathname === artifact) {
       held.footprint.served = published.archive.length;
       held.footprint.unpacked = published.unpacked;
+      held.footprint.largestMember = published.largestMember;
 
       return new Response(published.archive, { headers: { 'content-type': 'application/gzip' } });
     }
