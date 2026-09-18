@@ -23,7 +23,7 @@ import * as v from 'valibot';
 import type { DeployInputs, DeploySnapshot } from '@kinu.run/core/deploy';
 import {
   DEPLOY_FAKE_ACCESS_TOKEN, DEPLOY_FAKE_ACCOUNT, DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_REFRESH_TOKEN,
-  DEPLOY_FAKE_SUBDOMAIN, DEPLOY_FAKE_VERSION,
+  DEPLOY_FAKE_ROTATED_REFRESH, DEPLOY_FAKE_SUBDOMAIN, DEPLOY_FAKE_VERSION,
 } from './deploy-fake';
 
 /** The binding cookie's name, spelled here rather than imported: this file runs
@@ -53,6 +53,14 @@ let runs = 0;
 function openRun() {
   runs += 1;
 
+  return env.DEPLOY_RUN_PROBE.get(env.DEPLOY_RUN_PROBE.idFromName(`probe-run-${String(runs)}`));
+}
+
+/** Another stub for the object the last `openRun` named. A stub whose object
+ *  was aborted is poisoned — every call on it answers with the abort — so the
+ *  row that killed one reaches it again through a new stub, the way the next
+ *  request would. */
+function reopenRun() {
   return env.DEPLOY_RUN_PROBE.get(env.DEPLOY_RUN_PROBE.idFromName(`probe-run-${String(runs)}`));
 }
 
@@ -387,5 +395,141 @@ describe('a run nobody finished', () => {
 
     expect(await stub.snapshot()).toEqual({ runId: '', state: 'collecting', address: '', version: '', steps: [] });
     expect(await stub.admits(run.runKey)).toBe(false);
+  });
+});
+
+/**
+ * The eviction a run cannot control, delivered on purpose.
+ *
+ * WHAT IS PLATFORM HERE AND NOWHERE ELSE: the runtime redelivers an alarm
+ * whose handler did not finish. `ctx.abort()` destroys the activation driving
+ * the plan mid-step, so the intent is still stored, the row the step was on is
+ * still `running`, and nothing recorded an outcome — and the deployment must
+ * carry on from there rather than start again. The worst moment to die is
+ * chosen on purpose: the account already holds the bucket the step created and
+ * the object never learned it, which is exactly what "the steps look before
+ * they create" is for.
+ */
+describe('a run the runtime could not finish', () => {
+  it('carries on from the redelivered alarm and creates nothing twice', async () => {
+    const stub = await authorized();
+
+    // The R2 creation is answered late: while this call hangs the bucket
+    // exists in the account and the run does not know it.
+    await env.DEPLOY_FAKE.stallOnce({
+      method: 'POST', path: `/accounts/${DEPLOY_FAKE_ACCOUNT}/r2/buckets`, ms: 2_000,
+    });
+    await stub.start(INPUTS);
+
+    const deadline = Date.now() + DEADLINE_MS;
+
+    while (stateOf(await stub.snapshot(), 'r2') !== 'running' && Date.now() < deadline) {
+      await scheduler.wait(POLL_MS);
+    }
+
+    expect(stateOf(await stub.snapshot(), 'r2')).toBe('running');
+    expect((await env.DEPLOY_FAKE.state()).buckets).not.toEqual([]);
+
+    // The abort takes the caller's own RPC with it, and poisons the stub: from
+    // here the object is reached the way the next request reaches it.
+    await expect(stub.abort('probe: the object died mid-plan')).rejects.toThrow();
+
+    const again = reopenRun();
+    const resumed = await settled(again);
+    const made = await env.DEPLOY_FAKE.state();
+    const twice = made.creates.filter((name, at) => made.creates.indexOf(name) !== at);
+
+    expect(resumed.state).toBe('done');
+    expect(twice).toEqual([]);
+    expect(made.uploads).toBe(1);
+    expect(made.buckets.length).toBe(new Set(made.buckets).size);
+    expect(await again.heldSecretNames()).toEqual([]);
+  });
+});
+
+/**
+ * The hour a Cloudflare access token lasts, against a plan that outlives it.
+ *
+ * A person who answers the questions, hits a refusal, and comes back after
+ * lunch is the ordinary case: the run holds a token the API no longer accepts.
+ * The fake's authorization server hands out a lifetime this row chooses and
+ * then refuses that access token on every call, the way Cloudflare refuses an
+ * expired one, so a run that did not renew fails every step with 401 instead
+ * of passing.
+ */
+describe('a run whose access token expired', () => {
+  it('renews it inside the plan and finishes on the token the renewal minted', async () => {
+    await env.DEPLOY_FAKE.expireGrant(30);
+
+    const stub = await authorized();
+
+    await stub.start(INPUTS);
+
+    const snapshot = await settled(stub);
+    const made = await env.DEPLOY_FAKE.state();
+
+    expect(snapshot.state).toBe('done');
+    expect(made.refreshes).toBe(1);
+    // Not one call was answered 401: the renewal happened before the plan's
+    // first write, not after a step had already failed.
+    expect(made.expiredCalls).toBe(0);
+    expect(made.uploads).toBe(1);
+    // And the pair the deployment is left with is the rotated one, so its own
+    // first self-update spends a grant that still exists.
+    expect(made.secrets.KINU_SELF_DEPLOY_REFRESH_TOKEN).toBe(DEPLOY_FAKE_ROTATED_REFRESH);
+  });
+});
+
+/**
+ * What one release costs the object that installs it.
+ *
+ * MEASURED, NOT ASSERTED, and measured by the plane rather than by the code:
+ * the isolate offers no memory reading at all (2026-09-18, workerd through
+ * `vitest-pool-workers`: `performance.measureUserAgentSpecificMemory` is
+ * undefined and `process.memoryUsage()` answers zeroes; the pool enforces no
+ * memory ceiling either — 400 MiB allocated there without complaint — so a row
+ * cannot reach `do.isolate.transient_alloc_reset` by trying). The four figures
+ * below are bytes this channel really served and bodies the object really
+ * built and sent.
+ *
+ * THE MULTIPLE, 2026-09-18 on this tree, for an 8 MiB release: served
+ * 4.34 MiB compressed, 8.01 MiB unpacked and held for the length of the plan,
+ * one 10.67 MiB asset body, 1.6 KiB version body — 23.01 MiB at the peak,
+ * 2.87x the unpacked release.
+ *
+ * AND THE RELEASE THIS TREE PUBLISHES DOES NOT FIT. Measured the same day from
+ * `scripts/build-worker-release.ts` at f75d4745b: the artifact is 27.35 MiB
+ * compressed and 107.99 MiB unpacked, so the digest check (which holds the
+ * compressed bytes) and the unpacked archive come to 135.34 MiB together,
+ * before one asset is base64'd. `do.isolate.transient_alloc_reset` is the
+ * entry that governs it — a transient allocate-and-free of that size in a
+ * Durable Object context resets the object about 1.7 s later, after the
+ * request returned 200 — so the guided door cannot install today's release
+ * from inside `DeployRunDO`. docs/SELF-DEPLOY.md carries the finding.
+ *
+ * WHAT THE BOUND DEFENDS: the multiple, not the size. An upload that base64'd
+ * every asset before sending any grows with the release instead of with its
+ * largest batch, and the artifact is the one thing here that only gets bigger.
+ */
+describe('the artifact in a Durable Object', () => {
+  const MIB = 1024 * 1024;
+
+  it('holds one unpacked release and one batch of assets', async () => {
+    await env.DEPLOY_FAKE.weigh(8 * MIB);
+
+    const stub = await authorized();
+
+    await stub.start(INPUTS);
+
+    expect((await settled(stub)).state).toBe('done');
+
+    const { footprint } = await env.DEPLOY_FAKE.state();
+    const peak = footprint.served + footprint.unpacked + footprint.assetBody;
+
+    expect(footprint.unpacked).toBeGreaterThan(8 * MIB);
+    // base64 of the batch plus its multipart envelope, and nothing else: a
+    // body that carried a second copy of the release fails here.
+    expect(footprint.assetBody).toBeLessThan(footprint.unpacked * 1.5);
+    expect(peak).toBeLessThan(footprint.unpacked * 4);
   });
 });

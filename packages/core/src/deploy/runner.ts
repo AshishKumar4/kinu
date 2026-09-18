@@ -14,6 +14,7 @@
  * those live in the vault and the vault is wiped by the last step.
  */
 import { CloudflareApiError } from './cloudflare';
+import { FACT_ADDRESS } from './context';
 import type { DeployContext, DeployFacts } from './context';
 import type { DeployStep } from './steps';
 import { renderThrownChain } from '../obs/index';
@@ -147,8 +148,7 @@ export async function runDeployPlan(
 
   const rows = await ledger.rows();
 
-  const address = rows.flatMap((row) => Object.entries(row.facts))
-    .find(([key]) => key === 'worker.address')?.[1] ?? '';
+  const address = factsFrom(rows).get(FACT_ADDRESS) ?? '';
 
   onProgress({ kind: 'run-done', address });
 

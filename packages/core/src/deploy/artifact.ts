@@ -96,9 +96,15 @@ async function gunzip(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayB
 /**
  * The artifact's files, read out of one downloaded tarball.
  *
- * The digest is checked before anything is read out of it: the flow verifies
- * the artifact against the signed release the same way the CLI launcher does,
- * and an artifact that does not match is not opened at all.
+ * The digest is checked before anything is read out of it (`channel.ts`), so
+ * an artifact that does not match is not opened at all. WHAT THAT CHECK IS
+ * WORTH: the channel's `<artifact>.sha256` is a plain static file beside the
+ * artifact, so the comparison is integrity over the same TLS connection — it
+ * catches a truncated or swapped object, not a channel that serves two
+ * matching lies. The signature lives in `kinu-version.json`
+ * (`http/release-signing.ts`), which the CLI launcher verifies against its
+ * pinned key and `scripts/deploy.sh` holds this sidecar against at publish
+ * time; nothing in this flow verifies it yet.
  */
 export class TarArtifact {
   private constructor(
@@ -116,11 +122,20 @@ export class TarArtifact {
     return [...this.index.keys()];
   }
 
-  async read(path: string): Promise<Uint8Array<ArrayBuffer>> {
+  /**
+   * One member, as a view into the archive this object already holds.
+   *
+   * NOT A COPY. Every caller only reads it — an upload part's body, a base64,
+   * a `writeFileSync` — and the biggest member of the release this tree
+   * publishes is 21.5 MiB (`client/_assets/opencode/1.16.2/chunks.json`,
+   * measured 2026-09-18). A copy of it inside a Durable Object is that much
+   * of `do.isolate.transient_alloc_reset` spent on bytes nobody writes to.
+   */
+  read(path: string): Promise<Uint8Array<ArrayBuffer>> {
     const member = this.index.get(path);
 
     if (member === undefined) throw new Error(`the release artifact carries no ${path}`);
 
-    return new Uint8Array(this.bytes.subarray(member.start, member.start + member.size));
+    return Promise.resolve(this.bytes.subarray(member.start, member.start + member.size));
   }
 }

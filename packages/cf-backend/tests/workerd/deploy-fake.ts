@@ -18,7 +18,7 @@
  * something plausible: a run that reached an unnamed network is a finding, not
  * a pass.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import * as v from 'valibot';
 import type { JsonValue } from '@kinu.run/core';
@@ -49,6 +49,11 @@ export const DEPLOY_FAKE_REFRESH_TOKEN = 'probe-refresh-token';
  *  grant a self-update spends. Distinct from the first pair on purpose: the
  *  token the update writes back into the deployment must be the rotated one. */
 export const DEPLOY_FAKE_ROTATED_REFRESH = 'probe-refresh-token-2';
+
+/** The access token a REFRESH grant hands back. Distinct from the first one so
+ *  this plane can tell a run that renewed an expiring token from one still
+ *  presenting the dead one — see `expireGrant`. */
+export const DEPLOY_FAKE_REFRESHED_ACCESS_TOKEN = 'probe-access-token-2';
 
 /** The address the probe deployment was created for, and therefore the only
  *  session its Updates surface answers. */
@@ -97,6 +102,29 @@ const FILES = {
   'client/index.html': '<!doctype html><title>probe</title>\n',
   'client/app.js': 'console.log("probe");\n',
 } satisfies Record<string, string>;
+
+/** The heavy asset's body, made once per weight. A fresh one per call would
+ *  hash differently from the release the run already downloaded, and the
+ *  upload would ask this artifact for an asset it does not carry. */
+const weighed = new Map<number, string>();
+
+/**
+ * The release's files, at the weight a row asked for.
+ *
+ * A row that measures what one release costs the object needs an artifact the
+ * size of a real one; the four files above are bytes. `weigh` adds one asset
+ * of that many bytes, random hex rather than a repeated character so gzip
+ * cannot make the served object a hundredth of what it unpacks to.
+ */
+function files() {
+  if (held.weigh === 0) return { ...FILES };
+
+  const body = weighed.get(held.weigh) ?? randomBytes(held.weigh / 2).toString('hex');
+
+  weighed.set(held.weigh, body);
+
+  return { ...FILES, 'client/heavy.bin': body };
+}
 
 function sha256(bytes: Uint8Array | string): string {
   return createHash('sha256').update(bytes).digest('hex');
@@ -162,7 +190,7 @@ function manifestText(build: DeployFakeServedBuild): string {
       { name: 'WEBHOOK_ROUTE_SECRET', handling: 'prompted', required: true, prompt: '32 random bytes' },
     ],
     vars: [{ name: 'SANDBOX_TRANSPORT', policy: 'carried', value: 'rpc' }],
-    files: Object.entries(FILES).map(([path, body]) => ({
+    files: Object.entries(files()).map(([path, body]) => ({
       path,
       sha256: sha256(body),
       size: Buffer.byteLength(body),
@@ -176,32 +204,56 @@ interface Release {
   readonly text: string;
   readonly archive: Buffer<ArrayBuffer>;
   readonly digest: string;
+  /** What the archive unpacks to: the bytes the object under test holds for
+   *  the length of the plan, which is the figure the footprint row is about. */
+  readonly unpacked: number;
 }
 
 /** The channel's two objects for one version: the manifest and the tarball that
  *  carries it plus every file it names. Built per version and kept, because a
- *  row that publishes a second build asks for both again. */
+ *  row that publishes a second build asks for both again — and keyed by the
+ *  weight too, because a weighed release is a different artifact. */
 const releases = new Map<string, Release>();
 
 function release(): Release {
-  const version = held.published.version;
-  const built = releases.get(version);
+  const key = `${held.published.version}:${String(held.weigh)}`;
+  const built = releases.get(key);
 
   if (built !== undefined) return built;
   const text = manifestText(held.published);
 
   const members = [
     tarMember('release.json', text),
-    ...Object.entries(FILES).map(([path, body]) => tarMember(path, body)),
+    ...Object.entries(files()).map(([path, body]) => tarMember(path, body)),
   ];
 
   const tar = Buffer.concat([...members, Buffer.alloc(1024)]);
   const archive = gzipSync(tar);
-  const made: Release = { text, archive, digest: sha256(archive) };
+  const made: Release = { text, archive, digest: sha256(archive), unpacked: tar.length };
 
-  releases.set(version, made);
+  releases.set(key, made);
 
   return made;
+}
+
+/**
+ * What one release cost the Durable Object, measured by the plane it talked to
+ * rather than computed from the code.
+ *
+ * `served` is the compressed artifact this channel handed over; `unpacked` is
+ * what that archive expands to, which is what the object holds for the length
+ * of the plan; `assetBody` and `versionBody` are the largest multipart bodies
+ * it built and sent. The isolate offers no memory reading at all (measured
+ * 2026-09-18 on `@cloudflare/workerd-linux-64` through `vitest-pool-workers`:
+ * `performance.measureUserAgentSpecificMemory` is undefined and
+ * `process.memoryUsage()` answers zeroes), so these four are the footprint
+ * that can be measured instead of asserted.
+ */
+export interface DeployFakeFootprint {
+  readonly served: number;
+  readonly unpacked: number;
+  readonly assetBody: number;
+  readonly versionBody: number;
 }
 
 export interface DeployFakeRefusal {
@@ -221,6 +273,14 @@ export const DeployFakeStateSchema = v.object({
   secrets: v.record(v.string(), v.string()),
   uploads: v.number(),
   creates: v.array(v.string()),
+  refreshes: v.number(),
+  expiredCalls: v.number(),
+  footprint: v.object({
+    served: v.number(),
+    unpacked: v.number(),
+    assetBody: v.number(),
+    versionBody: v.number(),
+  }),
 });
 
 export interface DeployFakeState {
@@ -237,6 +297,15 @@ export interface DeployFakeState {
   readonly secrets: Readonly<Record<string, string>>;
   readonly uploads: number;
   readonly creates: readonly string[];
+  /** How many REFRESH grants this authorization server issued. A guided run
+   *  whose access token expired mid-plan shows up here as 1. */
+  readonly refreshes: number;
+  /** Calls that presented an access token this server had already expired.
+   *  Every one of them was answered 401, the way Cloudflare answers. */
+  readonly expiredCalls: number;
+  /** What one release cost the object, in bytes this plane really served and
+   *  really received (§ the footprint row in `deploy-ledger.test.ts`). */
+  readonly footprint: DeployFakeFootprint;
 }
 
 /** The build this plane serves as the deployment's own `kinu-version.json`,
@@ -276,6 +345,22 @@ interface Held {
   scriptExists: boolean;
   refuseOnce: DeployFakeRefusal | null;
   served: DeployFakeServedBuild | null;
+  /** Bytes of extra asset the channel's release carries, 0 for the four small
+   *  files. Set by a row that measures the footprint at a real release's
+   *  size. */
+  weigh: number;
+  /** The lifetime the next authorization-code grant answers with, and — once
+   *  it has been issued — the first access token is dead: every call bearing
+   *  it is answered 401 until the run refreshes. `null` is the ordinary hour,
+   *  and the strictness is off. */
+  shortGrant: number | null;
+  refreshes: number;
+  expiredCalls: number;
+  /** One call this plane answers LATE, after doing its work: the window in
+   *  which a Durable Object dies having written to somebody's account without
+   *  learning that it did. */
+  stallOnce: DeployFakeStall | null;
+  footprint: { served: number; unpacked: number; assetBody: number; versionBody: number };
 }
 
 const held: Held = fresh();
@@ -296,6 +381,12 @@ function fresh(): Held {
     scriptExists: false,
     refuseOnce: null,
     served: null,
+    weigh: 0,
+    shortGrant: null,
+    refreshes: 0,
+    expiredCalls: 0,
+    stallOnce: null,
+    footprint: { served: 0, unpacked: 0, assetBody: 0, versionBody: 0 },
   };
 }
 
@@ -316,6 +407,12 @@ function reset(): void {
   held.scriptExists = false;
   held.refuseOnce = null;
   held.served = null;
+  held.weigh = 0;
+  held.shortGrant = null;
+  held.refreshes = 0;
+  held.expiredCalls = 0;
+  held.stallOnce = null;
+  held.footprint = { served: 0, unpacked: 0, assetBody: 0, versionBody: 0 };
 }
 
 function snapshot(): DeployFakeState {
@@ -329,6 +426,9 @@ function snapshot(): DeployFakeState {
     secrets: Object.fromEntries(held.secrets),
     uploads: held.uploads,
     creates: [...held.creates],
+    refreshes: held.refreshes,
+    expiredCalls: held.expiredCalls,
+    footprint: { ...held.footprint },
   };
 }
 
@@ -339,9 +439,26 @@ const RefusalSchema = v.object({
   message: v.string(),
 });
 
+/** One call answered late: the method and path it matches, and the delay in
+ *  ms. The method is part of it because a step LOOKS before it creates, and
+ *  the call worth delaying is the one that wrote. */
+export interface DeployFakeStall {
+  readonly method: string;
+  readonly path: string;
+  readonly ms: number;
+}
+
+const StallSchema = v.object({ method: v.string(), path: v.string(), ms: v.number() });
+
+const WeighSchema = v.object({ bytes: v.number() });
+
+const ExpireSchema = v.object({ expiresIn: v.number() });
+
 /** The control surface, named once: anything else is a caller's typo and this
  *  plane refuses it rather than answering a state nobody asked to change. */
-const CONTROL_PATHS: readonly string[] = ['/reset', '/refuse', '/serve', '/publish', '/state'];
+const CONTROL_PATHS: readonly string[] = [
+  '/reset', '/refuse', '/serve', '/publish', '/state', '/stall', '/weigh', '/expire',
+];
 
 function envelope(result: JsonValue, status = 200): Response {
   return Response.json({ success: true, errors: [], result }, { status });
@@ -349,6 +466,35 @@ function envelope(result: JsonValue, status = 200): Response {
 
 function refusal(status: number, code: number, message: string): Response {
   return Response.json({ success: false, errors: [{ code, message }], result: null }, { status });
+}
+
+/** The bearer a call presented, or ''. */
+function bearerOf(request: Request): string {
+  const held = request.headers.get('authorization') ?? '';
+
+  return /^bearer /iu.test(held) ? held.slice('bearer '.length).trim() : '';
+}
+
+/**
+ * The armed delay, spent AFTER the call it matched has already done its work.
+ *
+ * The window a deployment cannot avoid: the account was written to and the
+ * object has not learned it yet. A row aborts the object inside this window,
+ * and what must happen next is that the redelivered alarm looks before it
+ * creates rather than creating a second one.
+ */
+async function stalled(method: string, path: string, answer: Response): Promise<Response> {
+  const armed = held.stallOnce;
+
+  if (armed === null || method !== armed.method || !path.startsWith(armed.path)) return answer;
+  held.stallOnce = null;
+
+  const { promise, resolve } = Promise.withResolvers<void>();
+
+  setTimeout(resolve, armed.ms);
+  await promise;
+
+  return answer;
 }
 
 /** The API's answer for one call, and the record of what it created. `creates`
@@ -362,6 +508,14 @@ async function api(url: URL, request: Request): Promise<Response> {
     held.refuseOnce = null;
 
     return refusal(armed.status, armed.code, armed.message);
+  }
+
+  // An access token this server has expired, answered the way Cloudflare
+  // answers one: the run either renews it or fails every step from here.
+  if (held.shortGrant !== null && bearerOf(request) === DEPLOY_FAKE_ACCESS_TOKEN) {
+    held.expiredCalls += 1;
+
+    return refusal(401, 10_000, 'Authentication error');
   }
 
   const body = request.method === 'GET' || request.body === null
@@ -463,7 +617,7 @@ async function api(url: URL, request: Request): Promise<Response> {
   if (path.endsWith('/assets-upload-session')) {
     // One batch holding every asset hash: the upload step reads the batches
     // back and asks the artifact for exactly the files named here.
-    const wanted = Object.entries(FILES)
+    const wanted = Object.entries(files())
       .filter(([name]) => name.startsWith('client/'))
       .map(([, body]) => sha256(body).slice(0, 32));
 
@@ -486,12 +640,17 @@ async function multipart(url: URL, request: Request): Promise<Response> {
     return refusal(armed.status, armed.code, armed.message);
   }
 
-  await request.arrayBuffer();
+  // The body this object built and sent, measured: base64 of every asset in
+  // the batch, in one multipart envelope. What the footprint row is about.
+  const sent = (await request.arrayBuffer()).byteLength;
 
   if (path.includes('/workers/assets/upload')) {
+    held.footprint.assetBody = Math.max(held.footprint.assetBody, sent);
+
     return envelope({ jwt: 'completion-token' }, 201);
   }
 
+  held.footprint.versionBody = Math.max(held.footprint.versionBody, sent);
   held.scriptExists = true;
   held.uploads += 1;
   held.creates.push('version');
@@ -533,8 +692,12 @@ async function token(request: Request): Promise<Response> {
       return Response.json({ error: 'invalid_grant', error_description: 'that refresh token is not one this server issued' }, { status: 400 });
     }
 
+    held.refreshes += 1;
+
     return Response.json({
-      access_token: DEPLOY_FAKE_ACCESS_TOKEN,
+      // A DIFFERENT access token, so a call that still carries the expired one
+      // is visible here as a call this server refuses.
+      access_token: DEPLOY_FAKE_REFRESHED_ACCESS_TOKEN,
       refresh_token: DEPLOY_FAKE_ROTATED_REFRESH,
       expires_in: 3600,
       token_type: 'bearer',
@@ -554,7 +717,10 @@ async function token(request: Request): Promise<Response> {
   return Response.json({
     access_token: DEPLOY_FAKE_ACCESS_TOKEN,
     refresh_token: DEPLOY_FAKE_REFRESH_TOKEN,
-    expires_in: 3600,
+    // The lifetime a row asked for, when one did: a grant that is already
+    // inside the run's renewal floor is how an expired authorization is
+    // reached without waiting an hour for one.
+    expires_in: held.shortGrant ?? 3600,
     token_type: 'bearer',
   });
 }
@@ -567,6 +733,12 @@ async function control(url: URL, request: Request): Promise<Response> {
   if (url.pathname === '/serve') held.served = v.parse(ServedBuildSchema, await request.json());
 
   if (url.pathname === '/publish') held.published = v.parse(ServedBuildSchema, await request.json());
+
+  if (url.pathname === '/stall') held.stallOnce = v.parse(StallSchema, await request.json());
+
+  if (url.pathname === '/weigh') held.weigh = v.parse(WeighSchema, await request.json()).bytes;
+
+  if (url.pathname === '/expire') held.shortGrant = v.parse(ExpireSchema, await request.json()).expiresIn;
 
   if (!CONTROL_PATHS.includes(url.pathname)) {
     throw new Error(`the deploy fake has no control surface at ${url.pathname}`);
@@ -613,9 +785,13 @@ export async function deployOutbound(request: Request): Promise<Response> {
   if (url.host === 'dash.cloudflare.com' && url.pathname === '/oauth2/token') return token(request);
 
   if (url.host === 'api.cloudflare.com') {
-    return request.headers.get('content-type')?.includes('multipart/form-data') === true
-      ? multipart(url, request)
-      : api(url, request);
+    const path = url.pathname.replace('/client/v4', '');
+
+    const answer = request.headers.get('content-type')?.includes('multipart/form-data') === true
+      ? await multipart(url, request)
+      : await api(url, request);
+
+    return stalled(request.method, path, answer);
   }
 
   if (url.origin === DEPLOY_FAKE_CHANNEL) {
@@ -627,6 +803,9 @@ export async function deployOutbound(request: Request): Promise<Response> {
     }
 
     if (url.pathname === artifact) {
+      held.footprint.served = published.archive.length;
+      held.footprint.unpacked = published.unpacked;
+
       return new Response(published.archive, { headers: { 'content-type': 'application/gzip' } });
     }
 

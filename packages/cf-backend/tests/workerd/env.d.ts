@@ -18,7 +18,9 @@ import type { DbCapabilityProbeDO } from './db-capability-probe';
 import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
-import type { DeployFakeRefusal, DeployFakeServedBuild, DeployFakeState } from './deploy-fake';
+import type {
+  DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState,
+} from './deploy-fake';
 import type { DeployInputs, DeploySnapshot } from '@kinu.run/core/deploy';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
@@ -182,6 +184,7 @@ interface DeployRunProbeRpc extends Rpc.DurableObjectBranded {
   alarmAt(): Promise<number>;
   expireSoon(): Promise<boolean>;
   rowText(): Promise<string>;
+  abort(reason: string): Promise<void>;
 }
 
 interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
@@ -190,6 +193,9 @@ interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
   refuseOnce(refusal: DeployFakeRefusal): Promise<void>;
   serve(build: DeployFakeServedBuild): Promise<void>;
   publish(build: DeployFakeServedBuild): Promise<void>;
+  stallOnce(stall: DeployFakeStall): Promise<void>;
+  weigh(bytes: number): Promise<void>;
+  expireGrant(expiresIn: number): Promise<void>;
 }
 
 /** A session as the Updates gate reads one: an email, and the two fields that
