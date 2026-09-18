@@ -2394,30 +2394,53 @@ test('file navigation does not pair a new breadcrumb with the old directory', as
     await page.goto(`${origin}/gallery.html?frame=files`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('[data-files-entry][title="sandbox"]');
 
-    const mismatches = await page.evaluate(() => new Promise<string[]>((resolve) => {
+    const mismatches = await page.evaluate(async () => {
+      const titles = (): string[] => [...document.querySelectorAll('[data-files-entry]')]
+        .map((row) => row.getAttribute('title') ?? '');
+
+      const trail = (): string => [...document.querySelectorAll('[data-files-crumb]')]
+        .map((node) => node.textContent ?? '').join('/');
+
       const seen: string[] = [];
 
-      const observe = (): void => {
-        const crumbs = [...document.querySelectorAll('[data-files-crumb]')]
-          .map((node) => node.textContent ?? '').join('/');
+      /**
+       * Cross one level and settle when `arrived` is drawn, recording every
+       * frame where the trail already names the destination while `stale` — a
+       * row that belongs only to the listing being left — is still on screen.
+       */
+      const cross = (row: string, crumb: string, stale: string, arrived: string): Promise<void> => {
+        const { promise, resolve } = Promise.withResolvers<void>();
 
-        if (crumbs.includes('pc') && document.querySelector('[data-files-entry][title="sandbox"]')) {
-          seen.push(crumbs);
-        }
+        const observe = (): void => {
+          if (trail().includes(crumb) && titles().includes(stale)) seen.push(trail());
 
-        if (document.querySelector('[data-files-entry][title="quarterly-report.txt"]')) {
-          changes.disconnect();
-          resolve(seen);
-        }
+          if (titles().includes(arrived)) {
+            changes.disconnect();
+            resolve();
+          }
+        };
+
+        const changes = new MutationObserver(observe);
+        changes.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+        const target = document.querySelector<HTMLElement>(`[data-files-entry][title="${row}"]`);
+
+        if (target === null) throw new Error(`the ${row} row is absent`);
+        target.click();
+
+        return promise;
       };
 
-      const changes = new MutationObserver(observe);
-      changes.observe(document.body, { childList: true, subtree: true, characterData: true });
-      const target = document.querySelector<HTMLElement>('[data-files-entry][title="pc"]');
+      // `/pc` is the roster and `/pc/<name>` the machine's consented directory,
+      // so reaching a file on the device is TWO crossings and each one swaps a
+      // trail and a listing together. Watching only the first and settling on a
+      // file two levels down is a condition that cannot arrive: it hung this
+      // suite, and with it the row, from 0cdf5d9b3 until this line.
+      await cross('pc', 'pc', 'sandbox', "Ashish's MacBook");
+      await cross("Ashish's MacBook", "Ashish's MacBook", "Ashish's MacBook", 'quarterly-report.txt');
 
-      if (target === null) throw new Error('the pc mount row is absent');
-      target.click();
-    }));
+      return seen;
+    });
 
     expect(mismatches).toEqual([]);
   });
