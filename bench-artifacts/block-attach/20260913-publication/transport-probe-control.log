@@ -1,6 +1,0 @@
-{"mode":"off","length":5,"ms":88,"status":200,"result":{"size":5,"events":["begin",{"bytes":null,"observedBytes":null,"bodyError":"the binding stream has no transport body observation","outcome":"returned","error":null},"begin",{"bytes":0,"observedBytes":0,"bodyError":null,"outcome":"returned","error":null}]}}
-{"mode":"off","length":4194304,"ms":34,"status":200,"result":{"size":4194304,"events":["begin",{"bytes":null,"observedBytes":null,"bodyError":"the binding stream has no transport body observation","outcome":"returned","error":null},"begin",{"bytes":0,"observedBytes":0,"bodyError":null,"outcome":"returned","error":null}]}}
-{"mode":"idle","length":5,"ms":5001,"error":"TimeoutError: The operation timed out."}
-{"mode":"idle","length":4194304,"ms":5000,"error":"TimeoutError: The operation timed out."}
-{"mode":"active","length":5,"ms":5000,"error":"TimeoutError: The operation timed out."}
-{"mode":"active","length":4194304,"ms":5001,"error":"TimeoutError: The operation timed out."}

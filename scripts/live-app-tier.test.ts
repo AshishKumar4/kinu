@@ -175,20 +175,34 @@ function loadDevVars(paths: readonly string[]) {
 }
 
 /** The worktree's own `.dev.vars` files first (checkout-local wins), then the
- *  primary checkout's root `.dev.vars` — where the containers-registry token
- *  lives — resolved through `git worktree list` row one, never a literal path.
- *  vite dev needs these in PROCESS env for the container registry; wrangler's
- *  own secret injection does not cover that check (measured 2026-09-17: dev
- *  exits "error when starting dev server" without CLOUDFLARE_API_TOKEN). */
+ *  primary checkout's root and cf-backend `.dev.vars` — where the
+ *  containers-registry token and CREDENTIAL_ENCRYPTION_KEY live — resolved
+ *  through `git worktree list` row one, never a literal path. vite dev needs
+ *  these in PROCESS env for the container registry; wrangler's own secret
+ *  injection does not cover that check (measured 2026-09-17: dev exits "error
+ *  when starting dev server" without CLOUDFLARE_API_TOKEN), and the boot's
+ *  credential path 503s without the cf-backend file plus CLOUDFLARE_INCLUDE_
+ *  PROCESS_ENV below. */
 function liveAppEnv() {
   const repo = join(import.meta.dir, '..');
   const primary = /^worktree (.+)$/mu.exec(git(repo, 'worktree', 'list', '--porcelain'))?.[1];
 
-  return loadDevVars([
+  const env = loadDevVars([
     join(repo, '.dev.vars'),
     join(repo, 'packages', 'cf-backend', '.dev.vars'),
-    ...(primary !== undefined ? [join(primary, '.dev.vars')] : []),
+    ...(primary !== undefined
+      ? [join(primary, '.dev.vars'), join(primary, 'packages', 'cf-backend', '.dev.vars')]
+      : []),
   ]);
+
+  // Secrets reach workerd from .dev.vars on disk — this worktree has none —
+  // or from process.env when the flag is on (wrangler: CLOUDFLARE_INCLUDE_
+  // PROCESS_ENV defaults false, and then a secret only ever binds from a
+  // file). The flag is how the loaded vars become bindings without copying
+  // .dev.vars into the worktree.
+  env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'true';
+
+  return env;
 }
 
 /** This run's own workspace suffix. The local dev server keeps its Durable
