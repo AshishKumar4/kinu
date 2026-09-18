@@ -14,8 +14,8 @@ import * as v from 'valibot';
 import {
   ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY,
   LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS,
-  REFRESH_TOKEN_KEY, deployDoor, deployPlan, factsFrom, localLayout, releaseDir, renderLocalConfig,
-  renderWorkerdConfig, runDeployPlan, unhostedBindings, workerdDirectories,
+  REFRESH_TOKEN_KEY, deployDoor, deployPlan, factsFrom, localLayout, parseReleaseManifest, releaseDir,
+  renderLocalConfig, renderWorkerdConfig, runDeployPlan, unhostedBindings, workerdDirectories,
 } from '../src/deploy/index';
 import type {
   CloudflareCall, CloudflareHttpResponse, CloudflareTransport, DeployContext, DeployInputs,
@@ -661,6 +661,50 @@ describe('the door client', () => {
     ) satisfies typeof fetch);
 
     await expect(misrouted.snapshot()).rejects.toThrow('/api/deploy/runs/run-1?key=k did not answer JSON');
+  });
+});
+
+/**
+ * The manifest a channel publishes, as the thing that decides where bytes
+ * land. `install()` on the local door writes `join(releaseDir(version), path)`
+ * for every file the manifest names, so a path or a version the channel chose
+ * is a host file write — and a channel is chosen with `--origin`.
+ */
+describe('a release manifest a channel publishes', () => {
+  const manifestWith = (over: JsonObject): string =>
+    JSON.stringify({ ...parseJsonObject(JSON.stringify(MANIFEST)), ...over });
+
+  test('refuses a file path that leaves the release directory', () => {
+    const escaping = [
+      'worker/../../escape.js',
+      '/etc/cron.d/escape',
+      'worker\\..\\escape.js',
+      './worker/index.js',
+      'worker//index.js',
+      '..',
+    ];
+
+    for (const path of escaping) {
+      const files = [{ path, sha256: 'a'.repeat(64), size: 1, assetHash: null }];
+
+      expect(() => parseReleaseManifest(manifestWith({ files })))
+        .toThrow('a release file path must stay inside its release');
+    }
+
+    expect(parseReleaseManifest(manifestWith({})).files.map((file) => file.path))
+      .toEqual(['worker/index.js', 'worker/chunk.js', 'client/index.html', 'client/app.js']);
+  });
+
+  test('refuses a version that is not a path segment, and a module that escapes', () => {
+    expect(() => parseReleaseManifest(manifestWith({ version: '../../0.4.0' }))).toThrow();
+    expect(() => parseReleaseManifest(manifestWith({ version: '0.4.0/etc' }))).toThrow();
+    expect(() => parseReleaseManifest(manifestWith({
+      worker: { ...parseJsonObject(JSON.stringify(MANIFEST.worker)), modules: ['../../../etc/passwd'] },
+    }))).toThrow('a release file path must stay inside its release');
+
+    // The build stamps a real release carries: `+` and `.` are the two
+    // characters a version is allowed to be interesting with.
+    expect(parseReleaseManifest(manifestWith({ version: '0.4.0+abc1234' })).version).toBe('0.4.0+abc1234');
   });
 });
 
