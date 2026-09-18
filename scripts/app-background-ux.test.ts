@@ -165,7 +165,7 @@ async function setOverview(page: Page, name: string, body: JsonValue): Promise<v
 
 /** An idle overview row at this instant. */
 function idleBody(): JsonValue {
-  return { observedAt: Date.now(), activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null };
+  return { observedAt: Date.now(), activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, primarySlate: null };
 }
 
 /** The mode the tissue reports, with the read model's poll behind it. */
@@ -391,7 +391,7 @@ describe('the living background', () => {
         // Everyone working at once.
         for (const name of DISPLAYED) {
           await setOverview(page, name, {
-            observedAt: Date.now(), activity: 'working', decisionsWaiting: 0, hasUpdates: false, latestRun: null,
+            observedAt: Date.now(), activity: 'working', decisionsWaiting: 0, hasUpdates: false, latestRun: null, primarySlate: null,
           });
         }
 
@@ -399,7 +399,7 @@ describe('the living background', () => {
 
         // One decision waiting: a flash, then back under the working hum.
         await setOverview(page, 'checkout-fixes', {
-          observedAt: Date.now(), activity: 'working', decisionsWaiting: 1, hasUpdates: false, latestRun: null,
+          observedAt: Date.now(), activity: 'working', decisionsWaiting: 1, hasUpdates: false, latestRun: null, primarySlate: null,
         });
         await waitForMode(page, 'attention');
         await waitForMode(page, 'working', 3_000);

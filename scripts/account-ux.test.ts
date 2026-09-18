@@ -24,6 +24,11 @@ mkdirSync(SHOTS, { recursive: true });
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
 
+/** The URL the gallery's slate stand-in serves at — `SLATE_GALLERY_URL` in
+ *  `packages/cf-backend/src/gallery-slate-fallback.tsx`, which the workspaces
+ *  fixture hands the one workspace that has a primary slate. */
+const SLATE_FIXTURE_URL = 'https://6s5-abcdef0123-aaaaaaaaaaaaaaa-gallery.preview.example.test/';
+
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light', viewport: keyof typeof VIEWPORTS): Promise<Page> {
   const page = await gallery.newPage();
   await page.setViewport(VIEWPORTS[viewport]);
@@ -343,6 +348,27 @@ describe('account panels', () => {
               const body2 = await page.evaluate(() => document.body.innerText);
               expect(body2).toContain('Needs you · 2');
               expect(body2).toContain('Last run failed');
+
+              // The tile of the one workspace with a primary slate holds the
+              // slate itself — live, and inert in every direction a reader
+              // could touch it. The other four tiles, and every row of the
+              // list, hold no frame at all.
+              const frames = await page.$$eval('[data-workspaces-view] iframe', (nodes) => nodes.map((node) => ({
+                src: node.getAttribute('src'),
+                tabIndex: node.tabIndex,
+                pointerEvents: getComputedStyle(node).pointerEvents,
+                card: node.closest('[data-slate-frame]')?.parentElement?.textContent ?? '',
+              })));
+
+              expect(frames.length).toBe(view === 'tiled' ? 1 : 0);
+
+              if (view === 'tiled') {
+                expect(frames[0]?.src).toBe(SLATE_FIXTURE_URL);
+                expect(frames[0]?.tabIndex).toBe(-1);
+                expect(frames[0]?.pointerEvents).toBe('none');
+                expect(frames[0]?.card).toContain('Checkout coupon bug');
+              }
+
               // The filter tabs and the page's own create action sit in the
               // control row; the count is a tabular "N of M", not a sentence.
               const tabs = await page.$$eval('[aria-label="Workspace state"] [role="tab"]', (els) => els.map((el) => el.textContent?.trim() ?? ''));

@@ -14,7 +14,7 @@ import {
   routeViewerBindingCall, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
   type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
-  type SlateBindingCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim,
+  type SlateBindingCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim, type WorkspaceOverviewSlate,
 } from '@kinu.run/core';
 import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
@@ -522,6 +522,26 @@ export class SlateHost {
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: 'slate ' + id + ' preview', cause, otherwise: 'io' })) };
     }
+  }
+
+  /**
+   * Every slate the caller can see, each with the URL its durable
+   * application ALREADY answers at — the same `apps.url` mint `preview`
+   * ends on, over the reservation `apps.reserved` reads instead of the
+   * identity `serve` boots. A slate nothing has reserved yet answers `null`
+   * rather than a launch, so a roster read costs a storage read and no
+   * process. A slate this deployment cannot mint a URL for answers `null`
+   * too: there is no picture to draw either way.
+   */
+  async addressed(caller: SlateCaller): Promise<WorkspaceOverviewSlate[]> {
+    const { slates } = await this.list(caller);
+
+    return Promise.all(slates.map(async (slate) => {
+      const app = await this.deps.apps.reserved(slate.id);
+      const preview = app === null ? null : await this.deps.apps.url(app.port, app.capability);
+
+      return { id: slate.id, title: slate.title, url: preview?.url ?? null };
+    }));
   }
 
   /**
