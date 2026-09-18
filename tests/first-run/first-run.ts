@@ -94,6 +94,8 @@ export const FIRST_RUN_CASES = [
   'device-link',
   'background-settle',
   'background-wake',
+  'delegation',
+  'agent-tab',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -334,8 +336,39 @@ export const FIRST_RUN_DEFECTS = {
       + '(ARCHITECTURE-DECISIONS C3) to end an activation on the deployed build, so its first live '
       + 'run is on the build that carries both.',
   },
+  'delegation': {
+    id: 'delegation',
+    found: 'A lead was asked for a helper that says one word and reports back. The owner saw the '
+      + 'conversation keep gaining "system, to be shown to the agent" cards as delegation ran — '
+      + 'growth with no bound anyone could name.',
+    missedBecause: 'every-tool deliberately EXCLUDES hire and asserts the agents tool was never '
+      + 'called; the unit proofs drive that tool against fixtures the test author wrote. Nothing '
+      + 'asked the deployed agent to hire and then read back the settle, the relay, and the retire.',
+    provedRedAt: 'cba44dcb9',
+    redDirection: 'RED by reading on build cba44dcb9, measured 2026-09-17: the workspace\'s '
+      + 'opening turn never closed inside the 20-minute case budget, no `hire` call ever '
+      + 'settled, no model call was accounted, and the ledger reads hung on the unresponsive '
+      + 'object until the row\'s own test bound ended it. The card ceiling never reached '
+      + 'counting — the product was dead before a second turn could be sent.',
+  },
+  'agent-tab': {
+    id: 'agent-tab',
+    found: 'The "+" tab created the agent and then sat on "Disconnected · Untitled agent" over a '
+      + 'skeleton: the two reads the tab makes on mount, getActorSnapshot and listAgentTasks, '
+      + 'never answered.',
+    missedBecause: 'the workerd proof drives hosted actors through the object and the routing '
+      + 'pin proves the grammar over literals the test writes; nothing opens the actor\'s own '
+      + 'socket path the way the browser does, so a client-built dead facet path stayed invisible.',
+    provedRedAt: 'cba44dcb9',
+    redDirection: 'RED by reading on build cba44dcb9, measured 2026-09-17, on a different link of '
+      + 'the chain than reported: the transport-admitted actor path `/actor/<name>` upgraded and '
+      + 'BOTH mount reads answered — proving the socket grammar was never the server\'s defect and '
+      + 'B1 lives entirely in the client\'s address — but the hosted actor was already inside a '
+      + 'turn when the tab\'s message landed, the send spliced mid-turn and was never answered, '
+      + 'and the ledger recorded zero model calls. That is B10\'s self-feeding reactor keeping a '
+      + 'hosted actor permanently busy, which is also why the owner\'s tab showed a skeleton.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
-
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
 export const FIRST_RUN_TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
@@ -442,6 +475,8 @@ const SHORT_SUBJECT = {
   'device-link': 'link',
   'background-settle': 'wake',
   'background-wake': 'bgwake',
+  'delegation': 'deleg',
+  'agent-tab': 'tab',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */

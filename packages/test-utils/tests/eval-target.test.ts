@@ -161,7 +161,7 @@ describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
     // Named, because "0 tool calls" is equally consistent with a model that
     // declined to act and a provider that rejected every request, and a
     // degenerate run that cannot say which is a dead end for whoever reads it.
-    expect(totals.failures).toEqual(['run: exit 127', 'run_end: provider refused']);
+    expect(totals.failures).toEqual(['shell: exit 127', 'run_end: provider refused']);
   });
 
   test('typed outcomes control failure while reported diagnostics stay intact', () => {
@@ -171,7 +171,7 @@ describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
       event({ type: 'tool_call_end', name: 'shell', toolCallId: 'untyped', error: 'a bare error string, no outcome' }),
     ]);
 
-    expect(totals.failures).toEqual(['run: test command failed with useful details', 'run: a bare error string, no outcome']);
+    expect(totals.failures).toEqual(['shell: test command failed with useful details', 'shell: a bare error string, no outcome']);
   });
 
   test('an empty ledger reports zeroes rather than throwing', () => {
@@ -396,7 +396,7 @@ describe('RUN_END_FAILURE_PREFIX — one spelling, producer and consumer', () =>
     // infra-vs-behaviour rule matches on it. Two literals would agree until one
     // of them changed.
     expect(totals.failures).toEqual([
-      'run: exit 1',
+      'shell: exit 1',
       `${RUN_END_FAILURE_PREFIX}Internal Server Error`,
     ]);
   });
