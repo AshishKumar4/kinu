@@ -6029,6 +6029,14 @@ export abstract class ActorAgent extends Think<Env> {
   protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
     this._turnItem = item;
     this._turnProgram = null;
+
+    // The previous turn's resolved profile ends HERE, before anything reads a
+    // mode: `turnWorkMode()` prefers the bound profile over the driving
+    // message, so a profile left bound from the last turn answered for this
+    // one — and the tool build below is the first reader. Clearing it in the
+    // owner-side reads instead ran one call too late and cost a composer's
+    // Plan press its `submit_plan` on every turn but a workspace's first.
+    this._turnOperation = null;
     // The CHAT view, not the raw surface: a slow `run` must detach into a
     // background job whose settle wakes a turn, and that wrap lives here. The
     // workerd background-wake proof is what tells the two apart.
@@ -6150,7 +6158,6 @@ export abstract class ActorAgent extends Think<Env> {
     await this.ensureOwnedScaffold();
 
     if (this._cachedSoulText === null) await this.refreshSoulText();
-    this._turnOperation = null;
 
     // Four reads of the owner's UserDO, each a Durable Object hop, started
     // together: the profile catalog, the MCP descriptor surface, the device
