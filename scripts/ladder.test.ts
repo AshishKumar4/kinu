@@ -74,12 +74,14 @@ const NON_BUN_RUNNERS: readonly {
  * Suites whose ONLY runner sits after the CI tier, each naming the gate that
  * claims it. Pinned by equality below, so a new one is a deliberate edit here.
  *
- * These are the `*.eval.ts` files. They exist because the eval tier is the one
- * tier a pull request does not wait on, and until `claims()` learned bun's real
- * matcher they were credited to `bun test ./tests/` at the ci tier — a bun gate
- * that cannot select a `.eval.ts` at all. Four live eval suites therefore read
- * as CI-covered while the only thing that ran them was `bun run test:eval`,
- * which claimed nothing.
+ * The `*.eval.ts` files are here because the eval tier is the one tier a pull
+ * request does not wait on, and until `claims()` learned bun's real matcher they
+ * were credited to `bun test ./tests/` at the ci tier — a bun gate that cannot
+ * select a `.eval.ts` at all. Four live eval suites therefore read as CI-covered
+ * while the only thing that ran them was `bun run test:eval`, which claimed
+ * nothing. The live-app suite is here because its own deploy row is its only
+ * runner: CI_EXEMPT carries why a pull request cannot boot the product's dev
+ * server.
  */
 const AFTER_CI_SUITES = {
   'tests/evals/behaviour.eval.ts': 'bun run test:eval',
@@ -88,6 +90,7 @@ const AFTER_CI_SUITES = {
   'tests/evals/research.eval.ts': 'bun run test:eval',
   'tests/evals/swarm.eval.ts': 'bun run test:eval',
   'tests/evals/trajectory.eval.ts': 'bun run test:eval',
+  'scripts/live-app-tier.test.ts': 'bun test --timeout=0 scripts/live-app-tier.test.ts',
 } satisfies Record<string, string>;
 
 /**
