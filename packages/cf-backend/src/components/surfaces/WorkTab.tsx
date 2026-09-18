@@ -35,12 +35,12 @@ import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FilledButton } from "@/components/ui/FilledButton";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import { Section } from "./shared";
 import { timeAgo } from "@kinu.run/core";
 import { isClosedTree, isSettled, PlanProgress, TaskTree } from "./work-tasks";
 import { JobCard } from "./work-jobs";
-import { ChangelogEntryCard, ChangelogFailure, useChangelog } from "./changelog-entries";
+import { ChangelogEntryCard, ChangelogFailure, useChangelog, type ChangelogView } from "./changelog-entries";
 import type { SurfaceKind } from "./WorkSurface";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { WorkPlans } from "./WorkPlans";
@@ -188,23 +188,6 @@ export function WorkTab({
     [settledJobs, closedTasks, changelog],
   );
 
-  const visible = journal.filter((row) => row.chips.includes(filter));
-
-  // Commands the agent parked on the owner decide HERE — grouped so a night's
-  // worth is one decision rather than N scattered rows. Everything else keeps
-  // its deep link to where its decision is really made.
-  const parkedCommands = pendingActions.filter((a) => a.kind === "deferred_action");
-
-  const elsewhere = pendingActions.filter(
-    (a): a is DecidedElsewhere => a.kind !== "deferred_action");
-
-  /** A queue row naming a plan opens that plan's review in place — the row's
-   *  own `planRef`, no second lookup: the render below resolves the live row
-   *  out of the shared read anyway, so a reference is all this needs. */
-  const openQueuedReview = useCallback((action: DecidedElsewhere) => {
-    if (action.planRef !== undefined) setReview(action.planRef);
-  }, []);
-
   /** The open review's row, resolved out of the shared read each render — a
    *  revision that left the page (superseded, or the read still out) closes
    *  the view rather than deciding against a plan the workspace no longer
@@ -222,32 +205,9 @@ export function WorkTab({
   // an arrival that opens a review on a workspace with nothing else must land
   // on the review, not flash "Nothing yet" for a frame.
   if (review !== null && reviewed !== undefined) {
-    const mine = reviewed.owner.name === (planOwner ?? "main");
-
-    return (
-      <div className="flex h-full min-h-0 flex-col space-y-3 animate-fade-in">
-        <div className="flex shrink-0 items-center gap-3">
-          <button type="button" data-back-to-work onClick={() => setReview(null)}
-            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs p-accent transition-colors hover:p-elevated">
-            <ArrowLeftIcon size={12} /> Back to Work
-          </button>
-          {!mine && <span className="p-meta p-text-3">Read-only — {reviewed.owner.name}'s plan
-            {onReviewActor && <button type="button" className="ml-2 p-accent" onClick={() => void onReviewActor(reviewed.owner.name)}>Review in {reviewed.owner.name} conversation</button>}
-          </span>}
-        </div>
-        {/* The shared read's failure belongs on whichever surface is open —
-            behind a review, Now's retry line is unmounted, so the same read
-            owes its retry here instead. */}
-        {taskResource.status === "error" && (
-          <LoadFailure what="the workspace's work" message={taskResource.message} onRetry={reloadTasks} />
-        )}
-        <div className="min-h-0 flex-1">
-          <Suspense fallback={<div className="flex justify-center py-8"><Loader size="sm" /></div>}>
-            <PlanReviewView plan={reviewed.plan} rpc={reviewed.owner.name === "main" ? rpc : planRpc} readOnly={!mine || reviewed.plan.status !== "pending"} />
-          </Suspense>
-        </div>
-      </div>
-    );
+    return <WorkReview item={reviewed} owner={planOwner ?? "main"} rpc={rpc} planRpc={planRpc}
+      onReviewActor={onReviewActor} resource={taskResource} onRetry={reloadTasks}
+      onBack={() => setReview(null)} />;
   }
 
   // Empty sections render nothing: the tab opens with one pending action and
@@ -262,130 +222,268 @@ export function WorkTab({
     );
   }
 
-  const nowEmpty = work !== null && openTasks.length === 0 && runningJobs.length === 0;
-
   return (
     <div className="space-y-6 animate-fade-in">
       <WorkPlans work={work} owner={planOwner ?? "main"} arrival={workspacePlanArrival} onPresence={setHasPlans} onNewPlan={onNewPlan} onOpenReview={openReview} />
-      {pendingActions.length > 0 && (
-        <div className="rounded-lg border border-[rgba(224,164,88,.32)] bg-[rgba(224,164,88,.06)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
-          <Section id="work-needs-you" title="Needs you"
-            icon={<WarningCircleIcon size={14} className="p-accent" />}
-            badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
-            <div className="divide-y divide-dashed divide-[var(--c-dash)]">
-              {parkedCommands.length > 0 && (
-                <ParkedCommands actions={parkedCommands} rpc={rpc} onDecided={onRefreshQueue} />
-              )}
-              {elsewhere.map((action) => (
-                <PendingRow key={action.id} action={action} onOpenSurface={onOpenSurface}
-                  onOpen={action.kind === "plan_review" ? () => openQueuedReview(action) : undefined} />
-              ))}
-            </div>
-          </Section>
-        </div>
-      )}
-
-      {(!nowEmpty || taskResource.status === "error") && (
-      <Section id="work-now" title="Now" icon={<PulseIcon size={14} className="p-text-2" />}>
-        <div className="space-y-3">
-          {/* The read's tri-state covers the WORK half only — gating the whole
-              section on it put a running job behind the plan's spinner. And
-              the last good read stays on screen under the failure it owes,
-              the way the plan history did. */}
-          {taskResource.status === "error" && (
-            <LoadFailure what="the workspace's work" message={taskResource.message} onRetry={reloadTasks} />
-          )}
-          {work === null ? (
-            taskResource.status !== "error" && <div className="flex justify-center py-4"><Loader size="sm" /></div>
-          ) : (
-            <>
-              {taskRows.length > 0 && <PlanProgress tasks={taskRows.map(({ task }) => task)} />}
-              {openTasks.length > 0 && (
-                <div className="space-y-2">
-                  {openTasks.map(({ task, owner }) => <TaskTree key={`${owner}:${task.id}`} task={task} owner={owner} />)}
-                </div>
-              )}
-            </>
-          )}
-          {runningJobs.length > 0 && (
-            <div className="space-y-2">
-              {runningJobs.map((job) => (
-                <JobCard key={job.id} job={job} onRefresh={onRefreshJobs} rpc={rpc} />
-              ))}
-            </div>
-          )}
-        </div>
-      </Section>
-      )}
-      {(journal.length > 0 || changelogResource.status === "error") && (
-      <Section id="work-journal" title="Journal"
-        icon={<ClockIcon size={14} className="p-text-2" />}
-        badge={journal.length > 0 ? <Badge variant="secondary">{journal.length}</Badge> : undefined}>
-        <div className="space-y-3">
-          {journal.length > 0 && (
-            <div className="flex items-center gap-1 flex-wrap">
-              {FILTERS.map((chip) => (
-                <button key={chip.id} type="button" onClick={() => setFilter(chip.id)}
-                  aria-pressed={filter === chip.id}
-                  className={`px-2.5 py-0.5 p-t-control rounded-full transition-colors ${filter === chip.id ? "bg-[rgba(224,164,88,.1)] p-accent" : "p-text-3 hover:p-accent"}`}>
-                  {chip.label}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Spinner until the digest has loaded once, and the failure on every
-              read that breaks after — including a revalidation over a snapshot
-              still on screen, which would otherwise go stale in silence. The
-              failure is also why this section renders over an empty feed: gated
-              on rows alone, a broken digest read left the whole tab blank. */}
-          {(changelog === null || changelogResource.status === "error") && (
-            <ChangelogFailure resource={changelogResource} reload={reloadChangelog} />
-          )}
-          {changelogSeenError && (
-            <div className="text-xs p-warning p-card rounded-lg px-3 py-1.5">
-              Couldn't mark the changelog as seen: {changelogSeenError}
-            </div>
-          )}
-
-          {journal.length > 0 && (visible.length > 0 ? (
-            <div className="p-group">
-              {visible.map((row) => (
-                <div key={row.key}>
-                  {row.kind === "job" && <JobCard grouped job={row.job} onRefresh={onRefreshJobs} rpc={rpc} />}
-                  {row.kind === "task" && <TaskTree grouped task={row.task} />}
-                  {row.kind === "self" && (
-                    <ChangelogEntryCard grouped entry={row.entry} seenAt={changelogSeenAt}
-                      rpc={rpc} onReverted={reloadChangelog} />
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="p-row-text p-text-3">Nothing under this chip</p>
-          ))}
-        </div>
-      </Section>
-      )}
-      {/* What the workspace remembered — the tail of the same MEMORY.md the
-          Agent surface's Memory view renders whole. A row opens that view;
-          the section itself draws only once there is a note to list. */}
-      {memory.length > 0 && (
-      <Section id="work-learnings" title="Learnings"
-        icon={<DatabaseIcon size={14} className="p-text-2" />}
-        badge={<Badge variant="secondary">{memory.length}</Badge>}>
-        <div data-learnings className="p-group">
-          {[...memory].reverse().map((entry, i) => (
-            <button key={i} type="button" data-learning onClick={() => onOpenSurface("Agent")}
-              className="w-full rounded-md px-3 py-2 text-left transition-colors hover:p-elevated">
-              <span className="p-row-text p-text line-clamp-1">{entry.content.split("\n")[0]}</span>
-              <span className="p-meta p-text-3 mt-0.5 block">{entry.updatedAt}{entry.savedBy ? ` · ${entry.savedBy}` : ""}</span>
-            </button>
-          ))}
-        </div>
-      </Section>
-      )}
+      <NeedsYou pendingActions={pendingActions} rpc={rpc} onDecided={onRefreshQueue} onOpenSurface={onOpenSurface} onOpenReview={setReview} />
+      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} runningJobs={runningJobs} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} rpc={rpc} />
+      <WorkJournal journal={journal} filter={filter} onFilter={setFilter} view={changelog} seenAt={changelogSeenAt} seenError={changelogSeenError} resource={changelogResource} onReload={reloadChangelog} rpc={rpc} onRefreshJobs={onRefreshJobs} />
+      <Learnings memory={memory} onOpenSurface={onOpenSurface} />
     </div>
+  );
+}
+
+/* ── the sections ────────────────────────────────────────────────── */
+
+/**
+ * The plan-review takeover: the plan is the thing being decided, so it holds
+ * the whole tab. The shared read's failure belongs on whichever surface is
+ * open — behind a review, Now's retry line is unmounted, so the same read
+ * owes its retry here instead.
+ */
+function WorkReview({ item, owner, rpc, planRpc, onReviewActor, resource, onRetry, onBack }: {
+  /** The open review's row, resolved live out of the shared read each render. */
+  item: OwnedPlan;
+  /** The conversation's own actor name — 'main' at the root pane. */
+  owner: string;
+  rpc: Rpc;
+  /** The RPC a non-main owner's review is decided over. */
+  planRpc: Rpc;
+  /** Open the owning actor's own conversation — where a foreign pending
+   *  plan's review is actually decided. */
+  onReviewActor?: (name: string) => void | Promise<void>;
+  resource: AsyncResource<WorkspaceWork>;
+  onRetry: () => void;
+  onBack: () => void;
+}) {
+  const mine = item.owner.name === owner;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col space-y-3 animate-fade-in">
+      <div className="flex shrink-0 items-center gap-3">
+        <button type="button" data-back-to-work onClick={onBack}
+          className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs p-accent transition-colors hover:p-elevated">
+          <ArrowLeftIcon size={12} /> Back to Work
+        </button>
+        {!mine && <span className="p-meta p-text-3">Read-only — {item.owner.name}'s plan
+          {onReviewActor && <button type="button" className="ml-2 p-accent" onClick={() => void onReviewActor(item.owner.name)}>Review in {item.owner.name} conversation</button>}
+        </span>}
+      </div>
+      {resource.status === "error" && (
+        <LoadFailure what="the workspace's work" message={resource.message} onRetry={onRetry} />
+      )}
+      <div className="min-h-0 flex-1">
+        <Suspense fallback={<div className="flex justify-center py-8"><Loader size="sm" /></div>}>
+          <PlanReviewView plan={item.plan} rpc={item.owner.name === "main" ? rpc : planRpc} readOnly={!mine || item.plan.status !== "pending"} />
+        </Suspense>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The pending-action queue — rendered only while it holds something. Commands
+ * the agent parked on the owner decide HERE — grouped so a night's worth is
+ * one decision rather than N scattered rows. Everything else keeps its deep
+ * link to where its decision is really made.
+ */
+function NeedsYou({ pendingActions, rpc, onDecided, onOpenSurface, onOpenReview }: {
+  pendingActions: PendingAction[];
+  rpc: Rpc;
+  /** Re-read the queue after a decision, so decided rows leave on the click
+   *  rather than on the next ambient poll. */
+  onDecided?: () => void;
+  onOpenSurface: (surface: SurfaceKind) => void;
+  onOpenReview: (ref: { owner: string; id: string; revision: number }) => void;
+}) {
+  const parkedCommands = pendingActions.filter((a) => a.kind === "deferred_action");
+
+  const elsewhere = pendingActions.filter(
+    (a): a is DecidedElsewhere => a.kind !== "deferred_action");
+
+  /** A queue row naming a plan opens that plan's review in place — the row's
+   *  own `planRef`, no second lookup: the tab resolves the live row out of
+   *  the shared read anyway, so a reference is all this needs. */
+  const openQueuedReview = useCallback((action: DecidedElsewhere) => {
+    if (action.planRef !== undefined) onOpenReview(action.planRef);
+  }, [onOpenReview]);
+
+  if (pendingActions.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-[rgba(224,164,88,.32)] bg-[rgba(224,164,88,.06)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
+      <Section id="work-needs-you" title="Needs you"
+        icon={<WarningCircleIcon size={14} className="p-accent" />}
+        badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
+        <div className="divide-y divide-dashed divide-[var(--c-dash)]">
+          {parkedCommands.length > 0 && (
+            <ParkedCommands actions={parkedCommands} rpc={rpc} onDecided={onDecided} />
+          )}
+          {elsewhere.map((action) => (
+            <PendingRow key={action.id} action={action} onOpenSurface={onOpenSurface}
+              onOpen={action.kind === "plan_review" ? () => openQueuedReview(action) : undefined} />
+          ))}
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+/** One task with the actor whose ledger it came from — plan-linked or not, a
+ *  task's owner is the actor whose list it came from, and a subordinate's
+ *  open item is the workspace's open item. */
+interface WorkTaskRow {
+  task: AgentTaskTree;
+  owner: string;
+}
+
+/**
+ * Now — the plan's open half and the jobs still running, drawn while either
+ * holds something or the read that feeds the first owes a retry. The read's
+ * tri-state covers the WORK half only — gating the whole section on it put a
+ * running job behind the plan's spinner. And the last good read stays on
+ * screen under the failure it owes, the way the plan history did.
+ */
+function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, onRefreshJobs, rpc }: {
+  work: WorkspaceWork | null;
+  taskRows: WorkTaskRow[];
+  openTasks: WorkTaskRow[];
+  runningJobs: BackgroundJob[];
+  resource: AsyncResource<WorkspaceWork>;
+  onRetry: () => void;
+  onRefreshJobs: () => void;
+  rpc: Rpc;
+}) {
+  const nowEmpty = work !== null && openTasks.length === 0 && runningJobs.length === 0;
+
+  if (nowEmpty && resource.status !== "error") return null;
+
+  return (
+    <Section id="work-now" title="Now" icon={<PulseIcon size={14} className="p-text-2" />}>
+      <div className="space-y-3">
+        {resource.status === "error" && (
+          <LoadFailure what="the workspace's work" message={resource.message} onRetry={onRetry} />
+        )}
+        {work === null ? (
+          resource.status !== "error" && <div className="flex justify-center py-4"><Loader size="sm" /></div>
+        ) : (
+          <>
+            {taskRows.length > 0 && <PlanProgress tasks={taskRows.map(({ task }) => task)} />}
+            {openTasks.length > 0 && (
+              <div className="space-y-2">
+                {openTasks.map(({ task, owner }) => <TaskTree key={`${owner}:${task.id}`} task={task} owner={owner} />)}
+              </div>
+            )}
+          </>
+        )}
+        {runningJobs.length > 0 && (
+          <div className="space-y-2">
+            {runningJobs.map((job) => (
+              <JobCard key={job.id} job={job} onRefresh={onRefreshJobs} rpc={rpc} />
+            ))}
+          </div>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * Journal — one reverse-chronological feed of everything settled, under the
+ * chips that filter it. Drawn once it holds a row, or while the digest read
+ * owes a retry: gated on rows alone, a broken digest read left the whole tab
+ * blank. The spinner holds until the digest has loaded once, and the failure
+ * shows on every read that breaks after — including a revalidation over a
+ * snapshot still on screen, which would otherwise go stale in silence.
+ */
+function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resource, onReload, rpc, onRefreshJobs }: {
+  journal: JournalRow[];
+  filter: JournalFilter;
+  onFilter: (filter: JournalFilter) => void;
+  /** The changelog read's bundle: `view` the last good digest, `resource` its
+   *  tri-state, `onReload` its retry. */
+  view: ChangelogView | null;
+  seenAt: number;
+  seenError: string | null;
+  resource: AsyncResource<ChangelogView>;
+  onReload: () => void;
+  rpc: Rpc;
+  onRefreshJobs: () => void;
+}) {
+  const visible = journal.filter((row) => row.chips.includes(filter));
+
+  if (journal.length === 0 && resource.status !== "error") return null;
+
+  return (
+    <Section id="work-journal" title="Journal"
+      icon={<ClockIcon size={14} className="p-text-2" />}
+      badge={journal.length > 0 ? <Badge variant="secondary">{journal.length}</Badge> : undefined}>
+      <div className="space-y-3">
+        {journal.length > 0 && (
+          <div className="flex items-center gap-1 flex-wrap">
+            {FILTERS.map((chip) => (
+              <button key={chip.id} type="button" onClick={() => onFilter(chip.id)}
+                aria-pressed={filter === chip.id}
+                className={`px-2.5 py-0.5 p-t-control rounded-full transition-colors ${filter === chip.id ? "bg-[rgba(224,164,88,.1)] p-accent" : "p-text-3 hover:p-accent"}`}>
+                {chip.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {(view === null || resource.status === "error") && (
+          <ChangelogFailure resource={resource} reload={onReload} />
+        )}
+        {seenError && (
+          <div className="text-xs p-warning p-card rounded-lg px-3 py-1.5">
+            Couldn't mark the changelog as seen: {seenError}
+          </div>
+        )}
+
+        {journal.length > 0 && (visible.length > 0 ? (
+          <div className="p-group">
+            {visible.map((row) => (
+              <div key={row.key}>
+                {row.kind === "job" && <JobCard grouped job={row.job} onRefresh={onRefreshJobs} rpc={rpc} />}
+                {row.kind === "task" && <TaskTree grouped task={row.task} />}
+                {row.kind === "self" && (
+                  <ChangelogEntryCard grouped entry={row.entry} seenAt={seenAt}
+                    rpc={rpc} onReverted={onReload} />
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="p-row-text p-text-3">Nothing under this chip</p>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+/** What the workspace remembered — the tail of the same MEMORY.md the Agent
+ *  surface's Memory view renders whole. A row opens that view; the section
+ *  itself draws only once there is a note to list. */
+function Learnings({ memory, onOpenSurface }: {
+  memory: MemoryEntry[];
+  onOpenSurface: (surface: SurfaceKind) => void;
+}) {
+  if (memory.length === 0) return null;
+
+  return (
+    <Section id="work-learnings" title="Learnings"
+      icon={<DatabaseIcon size={14} className="p-text-2" />}
+      badge={<Badge variant="secondary">{memory.length}</Badge>}>
+      <div data-learnings className="p-group">
+        {[...memory].reverse().map((entry, i) => (
+          <button key={i} type="button" data-learning onClick={() => onOpenSurface("Agent")}
+            className="w-full rounded-md px-3 py-2 text-left transition-colors hover:p-elevated">
+            <span className="p-row-text p-text line-clamp-1">{entry.content.split("\n")[0]}</span>
+            <span className="p-meta p-text-3 mt-0.5 block">{entry.updatedAt}{entry.savedBy ? ` · ${entry.savedBy}` : ""}</span>
+          </button>
+        ))}
+      </div>
+    </Section>
   );
 }
 
