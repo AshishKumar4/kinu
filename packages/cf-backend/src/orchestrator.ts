@@ -789,7 +789,7 @@ export class OrchestratorAgent extends ActorAgent {
       mission: () => null,
       announce: () => { this.broadcastSubordinatesChanged(); },
       scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
-      armWake: () => { this.durableWakeOwner()(); },
+      armWake: () => { this.armDelegationWake(); },
       temporary: () => this.temporaryAgentPort(),
     };
   }
@@ -1484,7 +1484,7 @@ export class OrchestratorAgent extends ActorAgent {
       );
 
       if (reconciledEventIds.length > 0) {
-        diagnostics.event('event.deliveries_repended', { events: reconciledEventIds.length });
+        diagnostics.event('event.deliveries_repended', { workspace: this.name, events: reconciledEventIds.length });
         this.orch.scheduleDrain();
       }
     } catch (err) {
@@ -1776,14 +1776,45 @@ export class OrchestratorAgent extends ActorAgent {
       this.peerHub.nextRetryAt(),
       this.emailOutbox.nextRetryAt(),
       this.eventLog.nextPendingDrainAt(now),
-      // An ADMITTED DELEGATION is due at once. It is not in
-      // `nextPendingDrainAt` and must not be: that read is the reactor's
-      // backlog and `wakesADrain` excludes an assignment, whose runner is
-      // `drainAdmittedDelegations` under this same wake. Without this line the
-      // arm `admitHostedTask` asks for computed null and the hire waited for an
-      // unrelated wake — the turn-open recovery row, one minute out.
-      this.hasAdmittedDelegations() ? now : null,
     );
+  }
+
+  /**
+   * Arm the wake that RUNS an admitted delegation.
+   *
+   * TWO wake chains exist and only one of them drains an assignment:
+   * `drainAdmittedDelegations` is reachable from {@link maintenanceWork}
+   * alone, and `_kinuTerminalRetryTick` is the only caller of that, so the arm
+   * an admission owes is the terminal-retry row. `armTimer` is the other
+   * chain: `_kinuTimerTick` fires due triggers, re-drives the peer outbox,
+   * reconciles outbound email and re-arms itself, and touches no actor's
+   * assignment queue.
+   *
+   * REVERSES the arm half of D3 (docs/ARCHITECTURE-DECISIONS.md), which folded
+   * `hasAdmittedDelegations()` into `nextWakeAt` and therefore armed the chain
+   * that cannot take the row: the tick woke at once, ran three phases that do
+   * not look at `subordinate_task`, and re-armed at `now` from the same fold,
+   * while the child's assignment waited for whatever unrelated obligation next
+   * put a row on the retry chain. D3 carries the measurement under both
+   * shapes; its headline is the hire tier's first four rows at 60,722 /
+   * 67,002 / 61,003 / 60,988 ms under the fold against 640 / 6,995 / 1,006 /
+   * 983 ms under this arm.
+   *
+   * The predicate stays where it already was — `owedUntimedWork` counts an
+   * admitted delegation, so the retry chain KEEPS its lap row while one is
+   * pending and the activation arms it through `owedWorkExists`. What was
+   * missing is only the arm at admission time.
+   */
+  private armDelegationWake(): void {
+    this.detachOwned(async () => {
+      try {
+        await this.scheduleTerminalRetry(Date.now());
+      } catch (cause) {
+        diagnostics.failure('subordinate.delegation_wake_arm_failed', toKinuError({
+          doing: 'arming the wake that runs an admitted delegation', cause, otherwise: 'io',
+        }), { workspace: this.name });
+      }
+    });
   }
 
   /**
