@@ -48,22 +48,34 @@
  * other branch — `abortActivation()` — would measure the one thing the
  * contract explicitly does not carry.
  *
- * CASE 2 SUBGOAL 2 — CANNOT BE BUILT AS WRITTEN, AND IS ABSENT RATHER THAN
- * APPROXIMATED. Its predicate is "the second hire's `tool_call_start` precedes
- * the first hire's `tool_call_end`", and there is no `tool_call_start` row:
- * `packages/core/src/events/types.ts:147-151` — "There is no matching
- * `tool_call_start`. One existed, declared in this union and read by three
- * readers, and no producer ever wrote it" — with the same finding recorded at
- * `tests/evals/harness-wiring.test.ts:743` and `packages/cli/src/commands/
- * debug.ts:547`. The spec's alternative branch is also closed: the `agents`
- * tool does NOT batch hires. `hire`'s whole field list is scalar
+ * CASE 2 SUBGOAL 2 — `parallel-delegation`, READ OFF THE STEP BOUNDARIES. The
+ * contract is "both hires were issued in ONE model step", and the predicate is
+ * exactly that: THE TWO `agents` HIRE `tool_call_end` ROWS OF TURN 1's RUN SIT
+ * BETWEEN THE SAME PAIR OF CONSECUTIVE `step_finish` ROWS — that is, they share
+ * a `runId` and NO `step_finish` row of that run lies between their
+ * `eventIndex` values.
+ *
+ * That is the same question the spec asked, over the rows the ledger really
+ * writes. There is no `tool_call_start`: `packages/core/src/events/types.ts:
+ * 147-151` — "There is no matching `tool_call_start`. One existed, declared in
+ * this union and read by three readers, and no producer ever wrote it" — and
+ * the same finding is recorded at `tests/evals/harness-wiring.test.ts:743` and
+ * `packages/cli/src/commands/debug.ts:547`. What the ledger does write is one
+ * `tool_call_end` per completed call and one `step_finish` per model request,
+ * from the same accumulator and in that order
+ * (`packages/core/src/orchestrator/turn-accumulator.ts:202-251` records the
+ * call, `:254-297` records the step), so a step's tool rows precede its
+ * `step_finish` and the next step's rows follow it. Two hire rows with no
+ * `step_finish` between them were therefore issued by ONE assistant message —
+ * which is what a tool-calling agent doing two things "at the same time" is.
+ *
+ * The spec's other branch is closed and stays closed: the `agents` tool does
+ * NOT batch hires. `hire`'s whole field list is scalar
  * (`packages/core/src/delegation/agents-tool.ts:740`, and the wire declaration
  * at :1890-1918 types `agent`, `role` and `mission` as single strings), one
  * call creates one helper, and `gate:agents-fields` refuses any field that is
  * not on that list — so "both names in one ok call" is a shape the product
- * cannot produce. A substitute predicate of this lane's own invention would be
- * a different contract wearing the spec's subgoal number, so the row is
- * reported instead. Every other subgoal of case 2 is here verbatim.
+ * cannot produce, and the step-boundary reading is the only one available.
  *
  * CASE 3 SUBGOAL 8 — MEASURED ON THE DEPLOYMENT, 2026-09-18T04:55Z, against
  * https://kinu.run serving `0.2.0+cba44dcb9` (built 2026-09-16T04:31Z), as the
@@ -829,6 +841,45 @@ const CASE_DELEGATE_TURNS = (nonce: string): readonly string[] => [
  *  number, and a reviewing brief or a re-inlined digest breaks it. */
 const SYSTEM_CARD_CEILING = 2;
 
+/**
+ * Were these calls issued in ONE model step?
+ *
+ * They share a run and NO `step_finish` row of that run lies between their
+ * `eventIndex` values — the two calls sit between the same pair of consecutive
+ * step boundaries, which is the ledger's own record of one assistant message
+ * having issued both. See the header for why this, and not a
+ * `tool_call_start` ordering, is the reading available.
+ */
+function issuedInOneStep(events: readonly RunEvent[], calls: readonly ToolCallEnd[]): boolean {
+  if (calls.length < 2) return false;
+  const runs = new Set(calls.map((call) => call.runId));
+
+  if (runs.size !== 1) return false;
+  const indices = calls.map((call) => call.eventIndex);
+  const from = Math.min(...indices);
+  const to = Math.max(...indices);
+
+  return !events.some((event) => event.type === 'step_finish'
+    && calls[0] !== undefined && event.runId === calls[0].runId
+    && event.eventIndex > from && event.eventIndex < to);
+}
+
+/** Which step boundary broke the pair, or that none did. */
+function oneStepDetail(events: readonly RunEvent[], calls: readonly ToolCallEnd[]): string {
+  const runs = [...new Set(calls.map((call) => call.runId))];
+
+  const between = calls.length < 2 || runs.length !== 1
+    ? []
+    : events.filter((event) => event.type === 'step_finish' && event.runId === runs[0]
+      && event.eventIndex > Math.min(...calls.map((call) => call.eventIndex))
+      && event.eventIndex < Math.max(...calls.map((call) => call.eventIndex)));
+
+  return `${String(calls.length)} settled hire row(s) in run(s) ${JSON.stringify(runs)} at `
+    + `${JSON.stringify(calls.map((call) => call.eventIndex))}; `
+    + `${String(between.length)} step_finish row(s) between them`
+    + `${between.length === 0 ? ' — one model step issued both' : ` (steps ${JSON.stringify(between.map((event) => event.type === 'step_finish' ? event.stepIndex : -1))})`}`;
+}
+
 /** A numbered plan step, as the prompt asked for them. */
 const PLAN_STEP = /^\d+\./u;
 
@@ -913,6 +964,11 @@ const DELEGATE_AND_BUILD: KinuTaskCase = {
               reached: settled.length === 2 && new Set(names).size === 2,
               detail: `${String(hires.length)} hire call(s), ${String(settled.length)} settled, `
                 + `names ${JSON.stringify(names)}`,
+            },
+            {
+              what: 'parallel-delegation',
+              reached: issuedInOneStep(io.events, settled),
+              detail: oneStepDetail(io.events, settled),
             },
             {
               what: 'files',
@@ -1843,6 +1899,16 @@ function runEnd(runId: string, at: number, index = 99): RunEvent {
   };
 }
 
+/** A model step's boundary row. `stepIndex` is the accumulator's own counter
+ *  (`turn-accumulator.ts:255`), which is what makes "the same pair of
+ *  consecutive step boundaries" a thing a fixture can state. */
+function stepRow(runId: string, index: number, at: number, stepIndex: number): RunEvent {
+  return {
+    type: 'step_finish', runId, eventIndex: index,
+    timestamp: new Date(at).toISOString(), stepIndex, reason: 'tool-calls',
+  };
+}
+
 function toolRow(input: {
   readonly runId: string; readonly index: number; readonly at: number; readonly name: string;
   readonly id: string; readonly args?: Record<string, JsonValue>; readonly result?: JsonValue;
@@ -2174,6 +2240,9 @@ describe('Kinu task evals — red probes over credential-free fixtures', () => {
 // ── Case 2's fixture: two hires, a plan, an approval, two slates ──
 
 interface DelegateFixtureOptions {
+  /** Close the step between the two hires — the lead that hired one after the
+   *  other, which is what the prompt forbade. */
+  readonly sequentialHires?: boolean;
   readonly wrongNonce?: boolean;
   readonly lowercaseRelay?: boolean;
   readonly twoStepPlan?: boolean;
@@ -2251,11 +2320,16 @@ function delegateWorld(options: DelegateFixtureOptions): FixtureWorld {
       toolRow({ runId: 'd0', index: 1, at: base + 1_000, name: 'agents', id: 'hire-a',
         args: { action: 'hire', role: 'task', lifetime: 'task', mission: 'write alpha' },
         result: { name: FIRST_HIRE, answer: 'ALPHA' } }),
-      toolRow({ runId: 'd0', index: 2, at: base + 1_500, name: 'agents', id: 'hire-b',
+      // THE STEP BOUNDARY THE SUBGOAL READS: absent in the correct fixture, so
+      // both hires sit between the same pair of consecutive `step_finish` rows.
+      ...(options.sequentialHires === true ? [stepRow('d0', 2, base + 1_200, 1)] : []),
+      toolRow({ runId: 'd0', index: 3, at: base + 1_500, name: 'agents', id: 'hire-b',
         args: { action: 'hire', role: 'task', lifetime: 'task', mission: 'write beta' },
         result: { name: SECOND_HIRE, answer: 'BETA' } }),
-      toolRow({ runId: 'd0', index: 3, at: base + 5_000, name: 'eval', id: 'submit-plan',
+      stepRow('d0', 4, base + 1_800, options.sequentialHires === true ? 2 : 1),
+      toolRow({ runId: 'd0', index: 5, at: base + 5_000, name: 'eval', id: 'submit-plan',
         args: { action: 'submit_plan' }, result: { id: 'plan-1', revision: 1 } }),
+      stepRow('d0', 6, base + 5_200, options.sequentialHires === true ? 3 : 2),
       runEnd('d0', base + 6_000),
     ],
     [runStart('d1', turns[1] ?? '', base + 60_000), runEnd('d1', base + 61_000)],
@@ -2510,6 +2584,7 @@ function continuityWorld(options: ContinuityFixtureOptions): FixtureWorld {
 describe('Kinu task evals — red probes over the three canned worlds', () => {
   test('delegate-and-build: a correct delegation passes, and each mutation flips its own subgoal', async () => {
     await probe(DELEGATE_AND_BUILD, 'minimal correct', delegateWorld({}), []);
+    await probe(DELEGATE_AND_BUILD, 'hires split by a step boundary', delegateWorld({ sequentialHires: true }), ['parallel-delegation']);
     await probe(DELEGATE_AND_BUILD, 'beta file carries the wrong nonce', delegateWorld({ wrongNonce: true }), ['files']);
     await probe(DELEGATE_AND_BUILD, 'relay lowercased', delegateWorld({ lowercaseRelay: true }), ['answers-relayed']);
     await probe(DELEGATE_AND_BUILD, 'plan with two steps', delegateWorld({ twoStepPlan: true }), ['plan-submitted']);
