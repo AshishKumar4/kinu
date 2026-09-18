@@ -3028,7 +3028,7 @@ describe('WorkTab draws a section only when it has something to show', () => {
 
       const sections = await workSections(page);
 
-      expect(sections.map((section) => section.title)).toEqual(['Plans', 'Needs you', 'Now', 'Journal']);
+      expect(sections.map((section) => section.title)).toEqual(['Plans', 'Needs you', 'Now', 'Journal', 'Learnings']);
 
       for (const chip of chips) {
         const label = await chip.evaluate((node) => node.textContent?.trim() ?? '');
