@@ -33,7 +33,7 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   ACCESS_TOKEN_KEY, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, DEPLOY_SOCKET_PROTOCOL,
   DeployInputsSchema, DeployRunPhaseSchema, DeployStepRowSchema, DeploymentRecordSchema,
-  FACT_ADDRESS, MINTED_SECRETS, REFRESH_TOKEN_KEY, SELF_UPDATE_RUN_ID,
+  FACT_ADDRESS, REFRESH_TOKEN_KEY, SELF_UPDATE_RUN_ID,
   bearerTransport, cloudflareResult, deployPlan, exchangeDeployCode, factsFrom,
   fetchReleaseArtifact, fetchReleaseManifest, refreshDeployToken, runDeployPlan, runKeyAdmits,
   type DeployChoice, type DeployInputs, type DeployLedger,
@@ -399,11 +399,7 @@ export class DeployRunDO extends DurableObject<Env> {
       return;
     }
 
-    await this.drive(
-      v.parse(DeployInputsSchema, JSON.parse(inputs)),
-      held.channelOrigin,
-      this.vault(record === undefined ? null : v.parse(DeploymentRecordSchema, JSON.parse(record))),
-    );
+    await this.drive(v.parse(DeployInputsSchema, JSON.parse(inputs)), held.channelOrigin, record !== undefined);
 
     // Only after the plan settled: an intent still stored is a plan the next
     // alarm must carry on with.
@@ -517,7 +513,7 @@ export class DeployRunDO extends DurableObject<Env> {
     );
   }
 
-  private async drive(inputs: DeployInputs, channelOrigin: string, vault: DeploySecretVault): Promise<void> {
+  private async drive(inputs: DeployInputs, channelOrigin: string, update: boolean): Promise<void> {
     const token = await this.accessToken();
 
     // The release this deployment gets, read through the one channel reader
@@ -546,7 +542,8 @@ export class DeployRunDO extends DurableObject<Env> {
         inputs,
         transport: bearerTransport(token),
         artifact,
-        vault,
+        vault: this.vault(),
+        update,
         facts: factsFrom(this.rows()),
         http: (url: string) => fetch(url),
         note: () => undefined,
@@ -567,34 +564,25 @@ export class DeployRunDO extends DurableObject<Env> {
   }
 
   /**
-   * The run's secret material.
+   * The run's secret material, and nothing else's.
    *
-   * `record` non-null is a self-update, and then a name this object does not
-   * hold reads through to the Worker's own bindings: the minted root secrets
-   * and the provider keys the first run supplied are live in `env`, and they
-   * are exactly what the new version must be re-bound with. A guided run has
-   * no such fallback — there is no deployment yet — so it passes null and a
-   * missing name stays missing.
+   * No read-through to this Worker's own bindings. An update keeps the secrets
+   * it is already running with through `keep_bindings` on the version upload
+   * (`steps.ts versionMetadata`), so a name this object does not hold is a name
+   * this run has no business sending: copying live secrets out of `env` into an
+   * upload payload was only ever compensating for a binding list that dropped
+   * them.
    */
-  private vault(record: DeploymentRecord | null): DeploySecretVault {
-    const carried = record === null
-      ? new Map<string, string>()
-      : deploymentSecrets(this.env, record.inputs.providerKeyNames);
-
+  private vault(): DeploySecretVault {
     return {
-      read: async (name: string) =>
-        await this.ctx.storage.get<string>(`${SECRET_PREFIX}${name}`) ?? carried.get(name) ?? null,
+      read: async (name: string) => await this.ctx.storage.get<string>(`${SECRET_PREFIX}${name}`) ?? null,
       write: async (name: string, value: string) => {
         await this.ctx.storage.put(`${SECRET_PREFIX}${name}`, value);
       },
       names: async () => {
-        const held = new Set(carried.keys());
+        const held = await this.ctx.storage.list<string>({ prefix: SECRET_PREFIX });
 
-        for (const key of (await this.ctx.storage.list<string>({ prefix: SECRET_PREFIX })).keys()) {
-          held.add(key.slice(SECRET_PREFIX.length));
-        }
-
-        return [...held];
+        return [...held.keys()].map((key) => key.slice(SECRET_PREFIX.length));
       },
       wipe: async () => {
         const held = await this.ctx.storage.list<string>({ prefix: SECRET_PREFIX });
@@ -720,30 +708,4 @@ export class DeployRunDO extends DurableObject<Env> {
       });
     }
   }
-}
-
-/** A binding that carries a secret's text. A binding that is a namespace, a
- *  bucket or a fetcher parses as none, which is what keeps this to secrets. */
-const SecretTextSchema = v.pipe(v.string(), v.minLength(1));
-
-/**
- * The secrets this Worker is running with, by the names an update must re-bind.
- *
- * NARROWED BY NAME: what a self-update needs is the two minted root secrets
- * plus the provider keys the first run supplied, and the record names those.
- * Every other binding this Worker holds is dropped before it can reach an
- * upload payload.
- */
-function deploymentSecrets(env: Env, providerKeyNames: readonly string[]) {
-  const wanted = new Set<string>([...MINTED_SECRETS, ...providerKeyNames]);
-  const held = new Map<string, string>();
-
-  for (const [name, binding] of Object.entries(env)) {
-    if (!wanted.has(name)) continue;
-    const text = v.safeParse(SecretTextSchema, binding);
-
-    if (text.success) held.set(name, text.output);
-  }
-
-  return held;
 }

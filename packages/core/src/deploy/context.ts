@@ -55,6 +55,10 @@ export interface DeployContext {
   readonly vault: DeploySecretVault;
   readonly facts: DeployFacts;
   readonly http: HttpGet;
+  /** Whether this run is a deployment updating itself rather than a first
+   *  sitting. Two steps must know: the root secrets are minted once and never
+   *  again, and an upload onto an existing script declares no migrations. */
+  readonly update: boolean;
   /** A line of progress inside a step, streamed to the page and kept on the
    *  step's row. Never a secret: steps pass resource names, not values. */
   note(message: string): void;
