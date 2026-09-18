@@ -34,7 +34,23 @@ const binDir = join(repoRoot, 'node_modules/.bin');
 
 const VERSION = '0.4.0+local01';
 
-const WORKER = `export default { fetch: () => new Response('local probe') };
+/**
+ * The probe release's Worker.
+ *
+ * `/kv` is the row that matters for the bindings: it writes and reads back
+ * through `env.AUTH_KV`, which exists as a KvNamespace only when the rendered
+ * config binds the disk service with `kvNamespace`. Under a plain `service`
+ * binding the Worker gets a Fetcher and `put` is not a function, so this route
+ * answers 500.
+ */
+const WORKER = `export default { async fetch(request, env) {
+  const path = new URL(request.url).pathname;
+  if (path === '/kv') {
+    await env.AUTH_KV.put('session:probe', 'kv round trip');
+    return new Response(await env.AUTH_KV.get('session:probe'));
+  }
+  return new Response('local probe');
+} };
 export class LocalProbe { constructor(state, env) { this.state = state; this.env = env; } }
 `;
 
@@ -79,6 +95,7 @@ function manifestOf(): string {
       { binding: 'AUTH_KV', kind: 'kv', resource: 'kinu-auth-kv', required: true },
       { binding: 'LocalProbe', kind: 'durable-object', resource: 'LocalProbe', required: true },
       { binding: 'ASSETS', kind: 'assets', resource: '', required: true },
+      { binding: 'BACKUP_BUCKET', kind: 'r2', resource: 'kinu-backups', required: false },
       { binding: 'MEMORY_VECTORS', kind: 'vectorize', resource: 'kinu-memory', required: false },
     ],
     vectorIndexes: [{ name: 'kinu-memory', dimensions: 384, metric: 'cosine' }],
@@ -234,8 +251,10 @@ describe('kinu deploy local', () => {
     expect(installed.stdout).toContain(VERSION);
     expect(installed.stdout).toContain(`http://127.0.0.1:${String(port)}`);
     // A capability workerd has no implementation of is named, not silently
-    // dropped.
+    // dropped — R2 among them, because `r2Bucket` over a disk service speaks a
+    // protocol a directory does not answer.
     expect(installed.stdout).toContain('MEMORY_VECTORS');
+    expect(installed.stdout).toContain('BACKUP_BUCKET');
 
     const layout = join(home, 'local');
     const config = v.parse(LocalConfigSchema, JSON.parse(readFileSync(join(layout, 'config.json'), 'utf8')));
@@ -254,6 +273,14 @@ describe('kinu deploy local', () => {
 
     expect(answer.status).toBe(200);
     expect(await answer.text()).toBe('local probe');
+
+    // KV is on disk and is a KV namespace: the Worker's own `put` then `get`
+    // round-trips, and the value is a file under the binding's directory.
+    const roundTrip = await fetch(new URL('/kv', config.address));
+
+    expect(roundTrip.status).toBe(200);
+    expect(await roundTrip.text()).toBe('kv round trip');
+    expect(readFileSync(join(layout, 'state/kv/kinu-auth-kv/session:probe'), 'utf8')).toBe('kv round trip');
 
     const pid = readPid(home);
 
