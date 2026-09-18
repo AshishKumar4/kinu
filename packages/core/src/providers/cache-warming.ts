@@ -53,6 +53,7 @@ import type { Usage } from '../usage';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ModelCallReport } from '../events/model-call';
+import { toKinuError } from '../obs/index';
 import * as v from 'valibot';
 import { isJsonObject, JsonObjectSchema, parseJsonObject, type JsonObject } from '../utils/json';
 
@@ -508,7 +509,22 @@ export class CacheWarmingLane {
     }
 
     const sentAt = this.seams.now();
-    const outcome = await this.seams.send({ modelSpec: due.modelSpec, body });
+    let outcome: WarmOutcome | null;
+
+    try {
+      outcome = await this.seams.send({ modelSpec: due.modelSpec, body });
+    } catch (cause) {
+      // A FAILED WARM IS NOT RETRIED, and the row is retired BEFORE the throw
+      // leaves. The chain is opportunistic — the vendor's own reading of a
+      // missed refresh is one cache write on the next real turn, never a
+      // retry — and a row left armed with a past `due_at` is the shape that
+      // turns a rotated key or a 429 into one request per second: the fold
+      // would answer due, the phase would fail, and the tick would re-arm from
+      // the same fold. Retire first, then let the caller diagnose it once.
+      this.seams.store.retire();
+
+      throw toKinuError({ doing: 'warming the prompt-cache prefix', cause, otherwise: 'unavailable' });
+    }
 
     if (outcome === null) {
       this.seams.store.retire();
