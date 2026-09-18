@@ -18,7 +18,7 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
-import { CaretLeftIcon } from "@phosphor-icons/react";
+import { SidebarSimpleIcon } from "@phosphor-icons/react";
 import type { PendingAction, PendingConsent, PinnedPreviewPort, PlanReview, SlateSummary } from "@kinu.run/core";
 
 import { useInspectorLayout } from "@/hooks/use-inspector-layout";
@@ -53,13 +53,35 @@ export interface WorkbenchPanelsProps {
    */
   readonly scope?: string;
   readonly contents: WorkbenchContents;
-  /** The conversation column's body, under its own tab strip. */
-  readonly chat: ReactNode;
-  /**
-   * The inspector column's body. `onCollapse` is the column's own hide
-   * control, absent where the column cannot collapse (a phone pane).
-   */
-  readonly inspector: (onCollapse: (() => void) | undefined) => ReactNode;
+  /** The conversation column's body, under its own tab strip. Handed the
+   *  inspector's one control (absent on a phone pane, where the switch above
+   *  the panes is the control) so its strip can carry the toggle. */
+  readonly chat: (inspector: InspectorControl | null) => ReactNode;
+  /** The inspector column's body. */
+  readonly inspector: ReactNode;
+}
+
+/** Show or hide the inspector column: one control, in the chat's own strip. */
+export interface InspectorControl {
+  readonly collapsed: boolean;
+  readonly toggle: () => void;
+}
+
+export function InspectorToggle({ control }: { control: InspectorControl }) {
+  return (
+    <button
+      type="button"
+      onClick={control.toggle}
+      aria-label={control.collapsed ? "Show inspector" : "Hide inspector"}
+      title={control.collapsed ? "Show inspector" : "Hide inspector"}
+      aria-pressed={!control.collapsed}
+      data-inspector-toggle
+      {...(control.collapsed ? { "data-inspector-expand": "" } : { "data-inspector-collapse": "" })}
+      className={`flex size-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--c-elevated)] ${control.collapsed ? "p-text-3 hover:p-text" : "p-text-2"}`}
+    >
+      <SidebarSimpleIcon size={16} style={{ transform: "scaleX(-1)" }} />
+    </button>
+  );
 }
 
 export function WorkbenchPanels({ workspace, scope, contents, chat, inspector }: WorkbenchPanelsProps) {
@@ -114,7 +136,9 @@ export function WorkbenchPanels({ workspace, scope, contents, chat, inspector }:
             : { minSize: "0%", defaultSize: mobilePane === "chat" ? "100%" : "0%" })}
           groupResizeBehavior="preserve-relative-size"
         >
-          <div className="flex flex-col h-full border-r p-border">{chat}</div>
+          <div className="flex flex-col h-full border-r p-border">
+            {chat(desktopPanels ? { collapsed: layout.collapsed, toggle: layout.toggleCollapsed } : null)}
+          </div>
         </Panel>
 
         {desktopPanels && (
@@ -135,20 +159,8 @@ export function WorkbenchPanels({ workspace, scope, contents, chat, inspector }:
         )}
 
         <Panel {...layout.panelProps} groupResizeBehavior="preserve-pixel-size">
-          {inspector(layout.collapseControl)}
+          {inspector}
         </Panel>
-        {layout.expandVisible && (
-          <button
-            type="button"
-            onClick={layout.toggleCollapsed}
-            aria-label="Show inspector"
-            title="Show inspector"
-            data-inspector-expand
-            className="absolute right-0 top-1/2 z-[3] flex h-16 w-5 -translate-y-1/2 items-center justify-center rounded-l-md border border-r-0 p-border p-elevated p-text-3 shadow-sm transition-colors hover:p-text hover:p-accent-subtle focus-visible:outline-2"
-          >
-            <CaretLeftIcon size={12} weight="bold" />
-          </button>
-        )}
       </PanelGroup>
     </>
   );

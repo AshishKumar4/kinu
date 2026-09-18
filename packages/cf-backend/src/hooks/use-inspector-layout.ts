@@ -106,8 +106,6 @@ export interface InspectorLayout {
   readonly collapsed: boolean;
   readonly onLayoutChanged: (layout: Layout) => void;
   readonly toggleCollapsed: () => void;
-  readonly collapseControl: (() => void) | undefined;
-  readonly expandVisible: boolean;
   readonly resetToDefault: () => void;
   readonly ready: boolean;
   readonly panelRef: RefObject<PanelImperativeHandle | null>;
@@ -433,8 +431,6 @@ export function useInspectorLayout(input: {
     collapsed,
     onLayoutChanged,
     toggleCollapsed,
-    collapseControl: desktopPanels && !collapsed ? collapse : undefined,
-    expandVisible: desktopPanels && collapsed,
     resetToDefault,
     ready,
     panelRef,

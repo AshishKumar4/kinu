@@ -25,7 +25,7 @@
  */
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
-import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, ShareNetworkIcon,
+import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, ShareNetworkIcon, SidebarSimpleIcon,
   HouseIcon, SquaresFourIcon, PuzzlePieceIcon,
 } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
@@ -72,7 +72,7 @@ function PrimaryNavRow({ to, label, Icon, end }: {
   );
 }
 
-const PRIMARY_NAV = [
+export const PRIMARY_NAV = [
   { to: APP_ROUTES.home, label: "Home", Icon: HouseIcon, end: true },
   { to: APP_ROUTES.workspaces, label: "Workspaces", Icon: SquaresFourIcon, end: false },
   { to: APP_ROUTES.shared, label: "Shared", Icon: ShareNetworkIcon, end: false },
@@ -197,7 +197,7 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
   );
 }
 
-export default function Sidebar() {
+export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}) {
   // useParams can't see :agentId from here (the Sidebar renders outside the
   // route's Outlet) — match the location directly instead.
   const sectionMatch = useMatch({ path: "/:section/:agentId/*", end: false });
@@ -290,10 +290,22 @@ export default function Sidebar() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2.5 px-5 pt-[18px] pb-2">
+      <div className="flex items-center justify-between gap-2.5 pl-5 pr-3 pt-[18px] pb-2">
         <Link to="/" className="flex items-center" aria-label="Kinu home">
           <KinuLogo />
         </Link>
+        {onCollapse && (
+          <button
+            type="button"
+            onClick={onCollapse}
+            aria-label="Hide sidebar"
+            title="Hide sidebar"
+            data-rail-collapse
+            className="rounded-md p-1.5 p-text-3 transition-colors hover:bg-[var(--c-elevated)] hover:p-text"
+          >
+            <SidebarSimpleIcon size={17} />
+          </button>
+        )}
       </div>
 
       {/* New workspace — the outlined control the mock draws, into the
@@ -462,11 +474,6 @@ export default function Sidebar() {
               className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover">
               <GearIcon size={14} />
               <span>Account settings</span>
-            </Link>
-            <Link to="/shared" onClick={() => setShowUserMenu(false)}
-              className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover">
-              <ShareNetworkIcon size={14} />
-              <span>Shared blueprints</span>
             </Link>
             {profile?.controlPlane === true && (
               <Link to="/control" onClick={() => setShowUserMenu(false)}

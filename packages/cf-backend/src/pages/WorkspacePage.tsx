@@ -26,7 +26,6 @@ import { touchWorkspace } from "@/lib/user-api";
 import { describeError } from "@/hooks/use-async-resource";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { ConnectionIndicator } from "@/components/connection-indicator";
 import { Modal } from "@/components/ui/Modal";
 import { DeviceOfflineRow, MessageView, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
@@ -39,11 +38,11 @@ import { ConversationStartBoundary, HistoryBoundary } from "@/components/surface
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
-import { WorkspaceBar, InlineRenameTitle, type Altitude } from "@/components/WorkspaceBar";
+import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import { workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
-import { WorkbenchPanels } from "@/components/WorkbenchPanels";
+import { InspectorToggle, WorkbenchPanels } from "@/components/WorkbenchPanels";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
 
@@ -367,16 +366,13 @@ function ForkModal({
  *  conversation's own, carried by useConversationUiState across tab switches.
  *
  *  `title` is the parent roster's name for this agent — the roster is the
- *  source of truth the tabs and sidebar read, so the header reads it too and
- *  the first-message auto-title lands everywhere in one broadcast. `onRename`
- *  goes through the parent for the same reason. */
+ *  source of truth the tabs and sidebar read, so the composer reads it too. */
 function SubordinateChatColumn({
-  workspace, subName, title, onRename,
+  workspace, subName, title,
 }: {
   workspace: string;
   subName: string;
   title: string;
-  onRename: (displayName: string) => Promise<string>;
 }) {
   const state = useKinu({ workspace, subordinate: subName });
 
@@ -451,32 +447,6 @@ function SubordinateChatColumn({
 
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0">
-      <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b p-border">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <ConnectionIndicator status={state.connectionStatus} />
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <InlineRenameTitle title={title} onRename={onRename} subject="agent" textClass="text-sm font-medium" />
-              {state.isStreaming && (
-                  <span
-                    className="shrink-0 inline-flex items-center gap-1.5 px-1.5 @[34rem]:px-2 py-0.5 rounded-full p-accent-subtle"
-                    title={state.providerWait
-                      ? `Waiting on ${state.providerWait.provider} — retry in ${Math.ceil(state.providerWait.waitMs / 1000)}s`
-                      : "The agent is working"}
-                  >
-                    <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
-                    <span className="hidden @[34rem]:inline p-meta p-accent font-medium">
-                      {state.providerWait
-                        ? `waiting on ${state.providerWait.provider} · ${Math.ceil(state.providerWait.waitMs / 1000)}s`
-                        : "working"}
-                    </span>
-                  </span>
-                )}
-            </div>
-          </div>
-        </div>
-      </div>
-
       <ErrorBoundary label="Agent chat">
         <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column py-5 space-y-5">
           {/* Above the oldest message, exactly as the workspace column has it:
@@ -540,9 +510,9 @@ function SubordinateChatColumn({
           streaming={state.isStreaming}
           onStop={stop}
           mode={{ value: effectiveMode, onChange: ui.setMode, locked: planGate.locked }}
-          modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={() => {}} size="xs" disabled />}
+          modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={state.setModel} size="xs"
+            effort={{ value: as?.reasoningEffort ?? null, onChange: state.setReasoningEffort }} />}
           notices={[
-            { id: "model-readonly", tone: "info" as const, text: "Set for the workspace on the Main tab" },
             ...(loadNotices(state.error, state.retryLoad)),
             ...(state.newerDeployedBuild ? [{
               id: "version", tone: "info" as const,
@@ -1124,7 +1094,7 @@ export default function WorkspacePage() {
           pinnedPorts: state.pinnedPorts,
           activePlan: state.activePlan,
         }}
-        chat={<>
+        chat={(inspectorControl) => <>
             {/* Agent tabs — the workspace's orchestrator + durable subordinates.
                 Roster + live status ride the parent socket; the CHAT below
                 switches per tab while Columns B/C stay workspace-scoped. This
@@ -1137,11 +1107,15 @@ export default function WorkspacePage() {
               onCreate={createAndOpenAgent}
               creating={creatingAgent}
               onDismiss={(name, keepHistory) => state.dismissSubordinate(name, keepHistory).then(() => {})}
-              trailing={!subName && state.messages.length > 0 && (
-                <Button variant="ghost" {...SQUARE_BUTTON_PROPS} size="sm"
-                  onClick={() => setShowClearConfirm(true)}
-                  icon={<TrashIcon size={12} />} aria-label="Clear history" />
-              )}
+              onRename={(name, displayName) => state.renameSubordinate(name, displayName).then((entry) => entry.displayName)}
+              trailing={<>
+                {!subName && state.messages.length > 0 && (
+                  <Button variant="ghost" {...SQUARE_BUTTON_PROPS} size="sm"
+                    onClick={() => setShowClearConfirm(true)}
+                    icon={<TrashIcon size={12} />} aria-label="Clear history" />
+                )}
+                {inspectorControl && <InspectorToggle control={inspectorControl} />}
+              </>}
             />
             {subName ? (() => {
               // The parent roster is the one source the tabs and sidebar read,
@@ -1155,7 +1129,6 @@ export default function WorkspacePage() {
                   workspace={agentId}
                   subName={subName}
                   title={rosterEntry ? agentTitle(rosterEntry.displayName) : subName}
-                  onRename={(displayName) => state.renameSubordinate(subName, displayName).then((entry) => entry.displayName)}
                 />
               );
             })() : (
@@ -1273,7 +1246,8 @@ export default function WorkspacePage() {
                   onAdd: attachments.add,
                   onRemove: attachments.remove,
                 }}
-                modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" />}
+                modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs"
+                  effort={{ value: as?.reasoningEffort ?? null, onChange: state.setReasoningEffort }} />}
                 notices={[
                   ...(loadNotices(state.error, state.retryLoad)),
                   ...(state.newerDeployedBuild ? [{
@@ -1308,7 +1282,7 @@ export default function WorkspacePage() {
             </div>
             )}
         </>}
-        inspector={(onCollapse) => (
+        inspector={(
           // `planOwner` is the pane's own actor AS THE WORK READ NAMES IT:
           // every owner `listWorkspaceWork` reports is an actor's registered
           // name, and the root's is the workspace's own
@@ -1323,7 +1297,6 @@ export default function WorkspacePage() {
             workspacePlanArrival={state.workspacePlanArrival}
             onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${encodeURIComponent(name)}`); }}
             onSurface={setSurface}
-            onCollapse={onCollapse}
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}
             onRefreshPorts={state.refreshExposedPorts}

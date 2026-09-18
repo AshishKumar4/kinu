@@ -777,11 +777,10 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
 });
 
 describe('feedback on a settled turn', () => {
-  test('the buttons sit in the timestamp row at rest, and a click records one vote', async () => {
-    // The 2026-09 regression this pins: the footer row moved outside every
-    // `.group` when messages split into segments, and the buttons' reveal was
-    // `group-hover` — nothing hovered, so they were permanently invisible.
-    // The contract is presence at rest plus a recorded write, not a hover.
+  test('the buttons appear when the message is hovered, and a click records one vote', async () => {
+    // Hidden at rest, revealed by hovering the MESSAGE (not the footer row):
+    // the 2026-09 regression put the reveal on a `.group` the footer had left,
+    // so nothing hovered and the buttons were invisible for good.
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 1400 });
@@ -795,10 +794,7 @@ describe('feedback on a settled turn', () => {
         {}, buttons,
       );
 
-      // At REST — no hover, no focus — the buttons are drawn, not stacked
-      // behind an invisible wrapper. The old `opacity-0 group-hover` pair on
-      // the row read '0' through the ancestor chain.
-      const atRest = await page.$$eval(buttons, (nodes) => nodes.map((node) => {
+      const effectiveOpacity = (selector: string) => page.$$eval(selector, (nodes) => nodes.map((node) => {
         let visible = 1;
 
         for (let el: Element | null = node; el; el = el.parentElement) {
@@ -808,7 +804,19 @@ describe('feedback on a settled turn', () => {
         return visible;
       }));
 
-      expect(atRest).toEqual([1, 1]);
+      expect(await effectiveOpacity(buttons)).toEqual([0, 0]);
+
+      await page.hover('[data-chat-row="a1"]');
+      await page.waitForFunction(
+        (selector: string) => [...document.querySelectorAll(selector)].every((node) => {
+          let visible = 1;
+
+          for (let el: Element | null = node; el; el = el.parentElement) visible *= Number(getComputedStyle(el).opacity);
+
+          return visible === 1;
+        }),
+        {}, buttons,
+      );
 
       const up = '[data-chat-row="a1"] button[title^="Mark this response helpful"]';
 

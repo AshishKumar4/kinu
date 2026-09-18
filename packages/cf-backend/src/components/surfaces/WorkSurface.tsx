@@ -2,7 +2,7 @@
  * Preview identity comes from the existing slate and executor owners. */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  CaretRightIcon, GaugeIcon, SparkleIcon,
+  GaugeIcon, SparkleIcon,
 } from "@phosphor-icons/react";
 import type { SlateSummary, PendingAction, PlanReview } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
@@ -69,8 +69,6 @@ export interface WorkSurfaceProps {
   workspacePlanArrival?: WorkspacePlanArrival | null;
   onReviewActor?: (name: string) => void | Promise<void>;
   onSurface: (s: SurfaceKind) => void;
-  /** Hide the inspector column. Present only where the column can collapse. */
-  onCollapse?: () => void;
   // Preview and actor-owned plans
   pinnedPorts: PinnedPort[];
   previewError: string | null;
@@ -209,7 +207,10 @@ export function WorkSurface(props: WorkSurfaceProps) {
           the strip overflows and an `ml-auto` button scrolls away with
           everything else. */}
       <div className={`border-b p-border shrink-0 flex items-stretch ${tabStripH}`}>
-        <div ref={strip} className={`p-tabstrip flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px ${tabStripH}`}>
+        {/* The strip's scroll covers are painted in ITS ground — this column is
+            `p-sidebar`, not the canvas — or they show as darker bands and
+            hairlines at both ends of the tabs. */}
+        <div ref={strip} className={`p-tabstrip [--scroll-ground:var(--c-sidebar)] flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px ${tabStripH}`}>
           {props.slates?.map(slate => {
             const kind = slateSurface(slate.id);
 
@@ -262,18 +263,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
           className={`${tabCls} mr-2 px-2.5 ${surface === ACTIVITY_SURFACE ? "p-tab-active" : ""}`}>
           <GaugeIcon size={14} />
         </button>
-        {props.onCollapse && (
-          <button
-            type="button"
-            onClick={props.onCollapse}
-            data-inspector-collapse
-            aria-label="Hide inspector"
-            title="Hide inspector"
-            className={`${tabCls} px-2 p-text-3`}
-          >
-            <CaretRightIcon size={14} />
-          </button>
-        )}
         </div>
       </div>
 

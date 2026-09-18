@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { tabCls, tabStripH } from "./ui/form";
+import { InlineRenameTitle } from "./WorkspaceBar";
 import { HouseIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { Modal } from "./ui/Modal";
@@ -38,6 +39,8 @@ interface SubordinateTabsProps {
   onCreate(): Promise<void>;
   creating: boolean;
   onDismiss(name: string, keepHistory?: boolean): Promise<void>;
+  /** Retitle the open agent from its own tab; resolves to the saved title. */
+  onRename(name: string, displayName: string): Promise<string>;
   /** Controls for the conversation this strip has open, pinned to its right
    *  edge — the chat column has no other chrome row to hang them on. */
   trailing?: ReactNode;
@@ -57,7 +60,7 @@ function StatusMark({ subordinate }: { subordinate: SubordinateRosterEntry }) {
 }
 
 export function SubordinateTabs({
-  workspace, subordinates, activeName, onCreate, creating, onDismiss, trailing,
+  workspace, subordinates, activeName, onCreate, creating, onDismiss, onRename, trailing,
 }: SubordinateTabsProps) {
   const navigate = useNavigate();
   const [dismissTarget, setDismissTarget] = useState<SubordinateRosterEntry | null>(null);
@@ -94,15 +97,28 @@ export function SubordinateTabs({
 
             return (
               <div key={subordinate.name} className="group/tab relative shrink-0">
-                <Link
-                  to={`${mainPath}/agents/${subordinate.name}`}
-                  aria-current={active ? "page" : undefined}
-                  title={subordinate.currentTask ?? title}
-                  className={`${tabCls} h-full max-w-52 pl-3 pr-8 ${active ? "p-tab-active font-medium" : ""}`}
-                >
-                  <span className={`truncate ${subordinate.displayName ? "" : "italic p-text-3"}`}>{title}</span>
-                  <StatusMark subordinate={subordinate} />
-                </Link>
+                {active ? (
+                  // The open tab is not a link anywhere; it is where the agent is renamed.
+                  <div aria-current="page" className={`${tabCls} p-tab-active h-full max-w-64 pl-3 pr-8 font-medium`}>
+                    <InlineRenameTitle
+                      title={title}
+                      editValue={subordinate.displayName}
+                      onRename={(displayName) => onRename(subordinate.name, displayName)}
+                      subject="agent"
+                      textClass={`p-t-control font-medium ${subordinate.displayName ? "" : "italic p-text-3"}`}
+                    />
+                    <StatusMark subordinate={subordinate} />
+                  </div>
+                ) : (
+                  <Link
+                    to={`${mainPath}/agents/${subordinate.name}`}
+                    title={subordinate.currentTask ?? title}
+                    className={`${tabCls} h-full max-w-52 pl-3 pr-8`}
+                  >
+                    <span className={`truncate ${subordinate.displayName ? "" : "italic p-text-3"}`}>{title}</span>
+                    <StatusMark subordinate={subordinate} />
+                  </Link>
+                )}
                 <button
                   type="button"
                   disabled={deleting === subordinate.name}
