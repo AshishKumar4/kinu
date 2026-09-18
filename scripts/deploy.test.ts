@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { childEnv, scratchDir } from "@kinu.run/test-utils";
 import {
-  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, claims, deployPlan, gateWeight, printPlan,
+  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, claims, deployPlan, printPlan,
 } from "./ladder";
+import { costRssMb, costThreads, readCosts } from "./gate-cost";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
 import { isControlPlaneSurface } from "../packages/cf-backend/src/control-plane/access-gate";
 import { isDocument, readRepositoryFile, trackedFiles } from "./sources";
@@ -132,8 +133,10 @@ interface DeployRun {
   /** Further options after `option`, for the combinations the script accepts. */
   readonly options?: readonly string[];
   readonly ambientPhase?: string;
-  /** The thread budget the wave schedules against; the box's count when absent. */
+  /** The thread cap the wave schedules against; the box's count when absent. */
   readonly threads?: number;
+  /** The resident-set cap in MiB; derived from MemAvailable when absent. */
+  readonly rssMb?: number;
 }
 
 function runDeploy({
@@ -145,6 +148,7 @@ function runDeploy({
   options = [],
   ambientPhase = "",
   threads,
+  rssMb,
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
   const log = join(fixture, "events.log");
@@ -199,6 +203,8 @@ exit 87
   const budget: Record<string, string> = {};
 
   if (threads !== undefined) budget.KINU_DEPLOY_THREADS = String(threads);
+
+  if (rssMb !== undefined) budget.KINU_DEPLOY_RSS_MB = String(rssMb);
 
   const run = Bun.spawnSync(argv, {
     cwd: fixture,
@@ -347,16 +353,17 @@ describe("deploy gate", () => {
     expect(source).toContain("run_phase post-publish");
     expect(source).not.toContain("run_required_gate");
 
-    // The plan is machine-readable and complete: one line per gate, five
+    // The plan is machine-readable and complete: one line per gate, six
     // tab-separated fields, no quotes, and every command a plain argv.
     for (const line of PLAN_TEXT.split("\n")) {
       const fields = line.split("\t");
-      expect(fields).toHaveLength(5);
+      expect(fields).toHaveLength(6);
       const phases: readonly string[] = DEPLOY_PHASES;
       expect(phases).toContain(fields[0] ?? "");
       expect(Number(fields[2])).toBeGreaterThan(0);
       expect(Number(fields[3])).toBeGreaterThan(0);
-      expect(fields[4]).not.toMatch(/['"]/u);
+      expect(Number(fields[4])).toBeGreaterThan(0);
+      expect(fields[5]).not.toMatch(/['"]/u);
     }
   });
 
@@ -385,27 +392,47 @@ describe("deploy gate", () => {
     expect(run.events).toEqual([]);
   });
 
-  // THE WAVE IS SCHEDULED BY THREAD BUDGET. A count of gates is not a measure of
-  // load: on 2026-09-16 a six-gate width put the eleven-suite UI row beside two
-  // `--parallel=4` package suites and failed every deploy on a puppeteer wall,
-  // while the same row passed alone. Each heavy gate declares the threads it
-  // occupies at peak on its row; the plan carries it; the runner reads it.
-  test("every browser or multi-worker gate weighs more than one, and the plan carries it", () => {
+  // THE WAVE IS SCHEDULED BY MEASURED COST IN TWO DIMENSIONS. A count of gates
+  // is not a measure of load, and neither is a declared thread figure: on
+  // 2026-09-16 five source rows died on their deadline across two deploys —
+  // one of them at 137, a SIGKILL no thread budget can predict — while each
+  // passed alone. The three workerd rows declared one thread each and no
+  // memory at all. Nothing declares a cost now; scripts/gate-cost.json holds
+  // what each row was measured to take, and the runner admits against both
+  // figures under a cap read from the box.
+  test("the wave admits on measured threads AND resident set, both under a machine cap", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    expect(source).toContain('weight="${GATE_WEIGHTS[index]}"');
-    expect(source).toContain('if [ "$running" -gt 0 ] && [ $((load + weight)) -gt "$budget" ]; then continue; fi');
+    expect(source).toContain('threads="${GATE_THREADS[index]}"');
+    expect(source).toContain('rss="${GATE_RSS[index]}"');
+    expect(source).toContain('if [ $((load + threads)) -gt "$thread_cap" ] || [ $((held + rss)) -gt "$rss_cap" ]; then continue; fi');
+    // Both caps come from the box, and the memory one from the field the
+    // kernel means by it: MemTotal includes memory nothing can have.
+    expect(source).toContain("nproc");
+    expect(source).toContain("MemAvailable");
+    expect(source).not.toContain("MemTotal");
+
+    const costs = readCosts();
 
     for (const row of PLAN) {
+      const cost = costs.rows[row.run];
       const gate = LADDER.find((candidate) => candidate.run === row.run);
-      expect(row.weight).toBe(gate === undefined ? 1 : gateWeight(gate));
 
-      // A weight of one is the default and a declaration of it is noise.
-      if (gate?.weight !== undefined) expect(gate.weight, `${row.run} declares a weight of one`).toBeGreaterThan(1);
+      // Outside the one concurrent wave a row is declared to run alone or is a
+      // live probe against the deployment, so its cost is not what admits it.
+      if (row.phase !== "source") continue;
+
+      if (cost === undefined || gate === undefined) {
+        expect(cost, `${row.run} runs in the concurrent wave with no measured cost`).toBeDefined();
+        continue;
+      }
+
+      expect(row.threads).toBe(costThreads(cost, gate.seconds));
+      expect(row.rssMb).toBe(costRssMb(cost));
     }
 
-    // Every browser suite and every multi-worker suite weighs more than one:
-    // a row that opens Chrome or four workers and weighs one is the 2026-09-16
-    // defect written back down. Derived from the tree, not from a list.
+    // Every browser suite and every multi-worker suite measures more than one
+    // thread: a row that opens Chrome or four workers and costs one is the
+    // 2026-09-16 defect written back down. Derived from the tree, not a list.
     const browserSuites = tracked.filter((file) => file.startsWith("scripts/") && file.endsWith(".test.ts")
       && /from ['"](?:\.\/gallery-harness|puppeteer)['"]/.test(readRepositoryFile(REPO_ROOT, file)));
 
@@ -414,8 +441,21 @@ describe("deploy gate", () => {
       const opensChrome = browserSuites.some((file) => expanded.split(" ").includes(file));
       const multiWorker = row.run.includes("--parallel=") || row.run === "bun run test:core" || row.run === "bun run test:cli";
 
-      if (opensChrome || multiWorker) expect(row.weight, `${row.run} opens Chrome or workers and weighs one`).toBeGreaterThan(1);
+      if (opensChrome || multiWorker) expect(row.threads, `${row.run} opens Chrome or workers and costs one thread`).toBeGreaterThan(1);
     }
+  });
+
+  // THE MEMORY DIMENSION DECIDES, not just the thread one. The gate self-tests
+  // row settled at 137 on 2026-09-16 — the kernel's status for a SIGKILL — and
+  // a wave that counts only threads cannot see that coming. With a cap of one
+  // MiB no row fits beside a running row, so the event log is the declared
+  // order: the same observation as the thread test, through the other figure.
+  test("a resident-set cap of one MiB runs the wave one gate at a time", () => {
+    const run = runDeploy({ rssMb: 1 });
+    const gates = run.events.filter((event) => !event.startsWith("MUTATE "));
+
+    expect(gates).toEqual([...REQUIRED_GATES]);
+    expect(run.stdout).toContain("1 MiB");
   });
 
   test("a budget of one thread runs the wave in declared order, one gate at a time", () => {

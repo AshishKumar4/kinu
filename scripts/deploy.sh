@@ -95,10 +95,11 @@ KINU_WRANGLER_ARGS=()
 # environments, and its findings fail the deployment.
 KINU_BOOTSTRAP=0
 # `--gates-only` runs every pre-publish wave exactly as a deploy would — same
-# gates, same barriers, same thread budget — and stops before the build. It
-# is how the wave is MEASURED: the width figures in scripts/ladder.ts come
-# from this path, on the argv and never from the environment, so no ambient
-# variable can turn a deploy into a rehearsal.
+# gates, same barriers, same cost caps — and stops before the build. It is how
+# the WAVE is measured, as opposed to how a row is: a row's own figures come
+# from `bun scripts/gate-cost-measure.ts`, which runs it alone. On the
+# argv and never from the environment, so no ambient variable can turn a
+# deploy into a rehearsal.
 KINU_GATES_ONLY=0
 # `--all` is the full audit: a wave keeps LAUNCHING after its first red, so
 # every red in the tier is reported in one run rather than the first few. The
@@ -179,13 +180,14 @@ fi
 # ── The gate plan ────────────────────────────────────────────────
 #
 # WHAT RUNS IS READ, NOT WRITTEN HERE. `bun scripts/ladder.ts --plan` prints
-# every deploy-tier gate as one tab-separated line — phase, label, weight,
-# deadline, command — in the order the phases run. This script loads that
-# once and `run_phase <name>` schedules the phase's gates concurrently under
-# the thread budget, then waits: a barrier. Until 2026-09-15 this file held a
-# second copy of every row (the command lines, a weight table, a deadline
-# table, an exclusion table) that deploy.test.ts held equal to the ladder, and
-# every new suite was a hand edit in three files. There is one copy now.
+# every deploy-tier gate as one tab-separated line — phase, label, measured
+# threads, measured resident MiB, deadline, command — in the order the phases
+# run. This script loads that once and `run_phase <name>` schedules the phase's
+# gates concurrently under the machine cap, then waits: a barrier. Until
+# 2026-09-15 this file held a second copy of every row (the command lines, a
+# weight table, a deadline table, an exclusion table) that deploy.test.ts held
+# equal to the ladder, and every new suite was a hand edit in three files.
+# There is one copy now.
 #
 # Phases, in the ladder's DEPLOY_PHASES order: `preflight` alone before
 # anything; `source`, the one concurrent wave; `hammer` and `infra` alone after
@@ -197,7 +199,8 @@ fi
 # tree, which is how the UI row's `scripts/*-ux.test.ts` reaches its family.
 PLAN_PHASE=()
 PLAN_LABEL=()
-PLAN_WEIGHT=()
+PLAN_THREADS=()
+PLAN_RSS=()
 PLAN_DEADLINE=()
 PLAN_CMD=()
 
@@ -207,12 +210,13 @@ load_plan() {
     echo -e "${RED}❌ the ladder printed no plan; nothing is scheduled without one.${NC}"
     exit 1
   }
-  local phase label weight deadline cmd
-  while IFS=$'\t' read -r phase label weight deadline cmd; do
+  local phase label threads rss deadline cmd
+  while IFS=$'\t' read -r phase label threads rss deadline cmd; do
     [ -n "$cmd" ] || continue
     PLAN_PHASE+=("$phase")
     PLAN_LABEL+=("$label")
-    PLAN_WEIGHT+=("$weight")
+    PLAN_THREADS+=("$threads")
+    PLAN_RSS+=("$rss")
     PLAN_DEADLINE+=("$deadline")
     PLAN_CMD+=("$cmd")
   done <<< "$plan"
@@ -225,17 +229,19 @@ load_plan() {
 # The gates of one phase, as the queue flush_gates runs.
 GATE_LABELS=()
 GATE_CMDS=()
-GATE_WEIGHTS=()
+GATE_THREADS=()
+GATE_RSS=()
 GATE_DEADLINE=()
 
 run_phase() {
   local wanted="$1" index
-  GATE_LABELS=(); GATE_CMDS=(); GATE_WEIGHTS=(); GATE_DEADLINE=()
+  GATE_LABELS=(); GATE_CMDS=(); GATE_THREADS=(); GATE_RSS=(); GATE_DEADLINE=()
   for ((index = 0; index < ${#PLAN_CMD[@]}; index++)); do
     if [ "${PLAN_PHASE[index]}" != "$wanted" ]; then continue; fi
     GATE_LABELS+=("${PLAN_LABEL[index]}")
     GATE_CMDS+=("${PLAN_CMD[index]}")
-    GATE_WEIGHTS+=("${PLAN_WEIGHT[index]}")
+    GATE_THREADS+=("${PLAN_THREADS[index]}")
+    GATE_RSS+=("${PLAN_RSS[index]}")
     GATE_DEADLINE+=("${PLAN_DEADLINE[index]}")
   done
   if [ "${#GATE_CMDS[@]}" -eq 0 ]; then
@@ -245,21 +251,51 @@ run_phase() {
   flush_gates
 }
 
-# The wave is scheduled by THREAD BUDGET, not by a count of gates. Each gate
-# weighs the hardware threads it occupies at peak — its row's `weight`, one by
-# default — and a gate launches only while the running weight plus its own
-# fits the budget. A gate heavier than the whole budget still launches when
-# nothing else is running, so the budget can never wedge.
+# THE WAVE IS SCHEDULED BY MEASURED COST, IN TWO DIMENSIONS, UNDER A CAP THIS
+# BOX ANSWERS FOR. A row carries what it was measured to take when it ran alone
+# (scripts/gate-cost.json, written by `bun scripts/gate-cost-measure.ts`):
+# the threads it burns at peak and the resident set it holds at peak. A row
+# launches only while BOTH the running threads plus its own fit `nproc` and the
+# running resident set plus its own fits the memory the kernel says is
+# available. A row heavier than the whole cap still launches when nothing else
+# is running, so the cap can never wedge.
 #
 # Measured 2026-08-23: a half-thread rule launched 12 outer gates and up to 48
 # inner workers here, turned a 23.67s CLI file into a 173.54s run and produced
-# nine false timeout failures. Measured 2026-09-16: a six-gate width — the
-# rule that replaced it — put the eleven-suite UI row beside two `--parallel=4`
+# nine false timeout failures. Measured 2026-09-16: a six-gate width — the rule
+# that replaced it — put the eleven-suite UI row beside two `--parallel=4`
 # package suites and failed every deploy that day on a puppeteer wall, while
-# the same row passed alone in 361s. Both are the same defect: a count of
-# gates is not a measure of load. The budget is the box's thread count.
-gate_threads() {
+# the same row passed alone in 361s. The DECLARED thread figure that replaced
+# the width then failed the same way for the same reason: five rows died on
+# their per-row deadline across the two deploys of 2026-09-16, one of them at
+# 137 — the kernel's status for a SIGKILL, which no thread budget can predict —
+# and the three rows that run workerd had each declared one thread and no
+# memory at all. A count of gates is not a measure of load; neither is a
+# number a row wrote about itself.
+#
+# MemAvailable, not MemTotal: MemTotal includes memory nothing can have, and a
+# cap taken from it is a cap that admits rows onto swap. The reserve is the
+# fraction of what is available that the wave does not claim — page cache for
+# the suites' own I/O, and whatever else on this box grows while the wave runs.
+# Measured 2026-09-17: the source wave's summed admitted peaks ran 5.9 GiB
+# under the machine's own MemAvailable floor at a 75% reserve line, and no row
+# was killed under either loaded run.
+GATE_RESERVE_PERCENT=75
+
+gate_thread_cap() {
   echo "${KINU_DEPLOY_THREADS:-$(nproc 2>/dev/null || echo 4)}"
+}
+
+# Prints nothing it cannot read: the CALLER refuses, because an `exit` inside a
+# command substitution ends only the subshell and would leave the wave running
+# with an empty cap.
+gate_rss_cap() {
+  if [ -n "${KINU_DEPLOY_RSS_MB:-}" ]; then
+    echo "$KINU_DEPLOY_RSS_MB"
+    return 0
+  fi
+  awk -v reserve="$GATE_RESERVE_PERCENT" \
+    '/^MemAvailable:/ { print int($2 / 1024 * reserve / 100) }' /proc/meminfo 2>/dev/null
 }
 
 # Run everything enqueued, then clear the queue. Each gate's output goes to its
@@ -291,7 +327,17 @@ flush_gates() {
   local total=${#GATE_LABELS[@]}
   if [ "$total" -eq 0 ]; then return 0; fi
 
-  local budget; budget="$(gate_threads)"
+  local thread_cap rss_cap
+  thread_cap="$(gate_thread_cap)"
+  rss_cap="$(gate_rss_cap)"
+  if [ -z "$rss_cap" ] || [ "$rss_cap" -le 0 ]; then
+    # A cap nobody can read is a wave with no memory dimension at all, which is
+    # the defect this scheduling came from. Refused rather than defaulted.
+    echo -e "${RED}❌ cannot read MemAvailable from /proc/meminfo; the wave has no memory cap to schedule under.${NC}"
+    echo "   Set KINU_DEPLOY_RSS_MB to schedule against a figure you name instead."
+    exit 1
+  fi
+
   # Every gate writes its output here and every failure is reported out of it, so
   # a directory that could not be created is a wave that cannot be reported on.
   # Refused rather than worked around: with `$dir` empty the redirections below
@@ -325,33 +371,37 @@ flush_gates() {
 
   local -a launched=() statuses=()
   local -A gate_of_pid=()
-  local pick finished status weight
-  local running=0 load=0 settled=0 failures=0
+  local pick finished status threads rss
+  local running=0 load=0 held=0 settled=0 failures=0
   for ((index = 0; index < total; index++)); do launched[index]=0; statuses[index]=-1; done
 
   if [ "$KINU_GATES_ALL" = "1" ]; then
-    echo "Running $total gate(s) within a budget of $budget threads, every gate regardless of failures (--all)"
+    echo "Running $total gate(s) within $thread_cap threads and $rss_cap MiB of measured cost, every gate regardless of failures (--all)"
   else
-    echo "Running $total gate(s) within a budget of $budget threads, stopping new launches at the first failure"
+    echo "Running $total gate(s) within $thread_cap threads and $rss_cap MiB of measured cost, stopping new launches at the first failure"
   fi
   while [ "$settled" -lt "$total" ]; do
-    # Take the FIRST gate that is neither launched nor blocked by a peer in its
-    # own group and whose weight fits the remaining budget — or, when nothing
-    # is running, the first gate regardless, so a gate heavier than the whole
-    # budget still runs. A plain queue pointer would stall the whole wave
-    # behind a gallery gate waiting for its turn.
+    # Take the FIRST gate that is not launched and whose MEASURED cost fits
+    # what is left of both caps — or, when nothing is running, the first gate
+    # regardless, so a gate heavier than the whole cap still runs and the cap
+    # can never wedge. A plain queue pointer would stall the whole wave behind
+    # a gallery gate waiting for its turn.
     while [ "$failures" -eq 0 ] || [ "$KINU_GATES_ALL" = "1" ]; do
       pick=-1
       for ((index = 0; index < total; index++)); do
         if [ "${launched[index]}" -eq 1 ]; then continue; fi
-        weight="${GATE_WEIGHTS[index]}"
-        if [ "$running" -gt 0 ] && [ $((load + weight)) -gt "$budget" ]; then continue; fi
+        threads="${GATE_THREADS[index]}"
+        rss="${GATE_RSS[index]}"
+        if [ "$running" -gt 0 ]; then
+          if [ $((load + threads)) -gt "$thread_cap" ] || [ $((held + rss)) -gt "$rss_cap" ]; then continue; fi
+        fi
         pick=$index
         break
       done
       if [ "$pick" -lt 0 ]; then break; fi
       launched[pick]=1
-      load=$((load + GATE_WEIGHTS[pick]))
+      load=$((load + GATE_THREADS[pick]))
+      held=$((held + GATE_RSS[pick]))
       # `timeout` signals the gate's process group and escalates after five
       # seconds. That kills the gate command tree, and no more: a child that
       # calls setsid (a detached dev server, a daemonized browser helper)
@@ -374,7 +424,7 @@ flush_gates() {
     if [ "$running" -eq 0 ]; then
       # Nothing running and nothing launchable: after a failure that is the
       # planned end of the wave, and with nothing running every unlaunched gate
-      # fits the budget by construction, so anything else here is a scheduler
+      # fits both caps by construction, so anything else here is a scheduler
       # defect and fails rather than looping over a queue that cannot move.
       if [ "$failures" -ne 0 ]; then break; fi
       echo -e "${RED}❌ $((total - settled)) gate(s) can never launch with nothing running.${NC}"
@@ -394,7 +444,8 @@ flush_gates() {
     index="${gate_of_pid[$finished]}"
     unset "gate_of_pid[$finished]"
     running=$((running - 1))
-    load=$((load - GATE_WEIGHTS[index]))
+    load=$((load - GATE_THREADS[index]))
+    held=$((held - GATE_RSS[index]))
     settled=$((settled + 1))
     statuses[index]=$status
     if [ "$status" -eq 0 ]; then
