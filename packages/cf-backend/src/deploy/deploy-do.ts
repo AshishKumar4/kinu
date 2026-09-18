@@ -9,11 +9,21 @@
  * middle of a step leaves that row `running` and the next activation does it
  * again — which is safe because the steps look before they create.
  *
+ * THE ALARM IS THE RUNNER. `start` and `selfUpdate` write down what to run and
+ * return at once; `alarm()` is where every step actually happens. Three things
+ * fall out of that and none of them needed its own mechanism: a caller is never
+ * held for the length of a deployment, a handler the runtime could not finish
+ * is redelivered — which is how a run survives an eviction, and how a
+ * self-update survives the restart its own upload causes — and the same timer,
+ * with no plan to run, is the vault's clock.
+ *
  * WHAT IT HOLDS AND FOR HOW LONG. The person's access and refresh tokens, their
  * provider keys and the two minted root secrets live in the object's key-value
  * storage, never in a SQL row and never in a frame. The last step writes the
  * refresh token into the new Worker as its own secret and wipes the lot; from
- * then on the deployment owns its key and kinu.run holds nothing.
+ * then on the deployment owns its key and kinu.run holds nothing. A run that
+ * stops moving for an hour loses them to the alarm instead, because a tab
+ * somebody closed must not leave their account writable from here.
  *
  * WHAT THE KEY IS FOR. The door is public, so the run key is the whole of the
  * authorization: 192 bits minted at creation, presented on every call and on
@@ -21,9 +31,9 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import {
-  ACCESS_TOKEN_KEY, DEPLOY_CLIENT_ID_KEY, DEPLOY_SOCKET_PROTOCOL, DeployInputsSchema,
-  DeployRunPhaseSchema, DeployStepRowSchema, FACT_ADDRESS, MINTED_SECRETS, REFRESH_TOKEN_KEY,
-  SELF_UPDATE_RUN_ID,
+  ACCESS_TOKEN_KEY, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, DEPLOY_SOCKET_PROTOCOL,
+  DeployInputsSchema, DeployRunPhaseSchema, DeployStepRowSchema, DeploymentRecordSchema,
+  FACT_ADDRESS, MINTED_SECRETS, REFRESH_TOKEN_KEY, SELF_UPDATE_RUN_ID,
   bearerTransport, cloudflareResult, deployPlan, exchangeDeployCode, factsFrom,
   fetchReleaseArtifact, fetchReleaseManifest, refreshDeployToken, runDeployPlan, runKeyAdmits,
   type DeployChoice, type DeployInputs, type DeployLedger,
@@ -83,14 +93,54 @@ const SECRET_PREFIX = 'secret.';
  *  `state` is not guessable by somebody who knows which run is authorizing. */
 const NONCE_BYTES = 16;
 
+/** What the alarm is holding: a plan to run, and where its release comes from.
+ *  Durable, because the activation that wrote it is often not the one that
+ *  runs it. */
+const IntentSchema = v.object({
+  kind: v.picklist(['guided', 'update']),
+  channelOrigin: v.pipe(v.string(), v.minLength(1)),
+});
+
+type DeployIntent = v.InferOutput<typeof IntentSchema>;
+
+const INTENT_KEY = 'run.intent';
+
+/** The deployment's own record, for an update: what to re-run, and where to
+ *  write the rotated refresh token. */
+const RECORD_KEY = 'run.record';
+
+/** When the stored access token stops working. Not a secret, so not under the
+ *  `secret.` prefix — the wipe takes the token and this is left as a fact
+ *  about a token that is gone. */
+const TOKEN_EXPIRES_KEY = 'run.token_expires_at';
+
+/**
+ * How long a run may hold a person's Cloudflare tokens without moving.
+ *
+ * A run is resumable for as long as it holds them, which is why this is an
+ * hour rather than minutes: a person who hits "R2 needs a payment method"
+ * fixes that in another tab and retries. Past it, the tokens are the only
+ * thing left of a sitting nobody finished, and a lost tab must not leave an
+ * account writable from here.
+ */
+const VAULT_TTL_MS = 3_600_000;
+
+/** How much life an access token must have left to be worth using. A minute:
+ *  a plan's next call must not land on the far side of the expiry. */
+const TOKEN_FLOOR_MS = 60_000;
+
 export class DeployRunDO extends DurableObject<Env> {
   private readonly sql: SqlStorage;
-
-  private running = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    this.initSchema();
+  }
+
+  /** The ledger's one table. Idempotent, and called again after `deleteAll` —
+   *  which drops the table under a still-live activation. */
+  private initSchema(): void {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS deploy_step (
       id TEXT PRIMARY KEY,
       seq INTEGER NOT NULL,
@@ -113,11 +163,14 @@ export class DeployRunDO extends DurableObject<Env> {
   }
 
   /** Created before anything else exists: the run's key digest is written here
-   *  and the key itself is returned to the caller once, by the route. */
+   *  and the key itself is returned to the caller once, by the route. The
+   *  expiry alarm starts now, so an object minted by a probe that never comes
+   *  back deletes itself rather than sitting in the namespace forever. */
   async open(runId: string, keyDigest: string): Promise<void> {
     await this.ctx.storage.put(RUN_ID_KEY, runId);
     await this.ctx.storage.put(KEY_DIGEST_KEY, keyDigest);
     await this.ctx.storage.put(RUN_STATE_KEY, 'collecting');
+    await this.armExpiry();
   }
 
   async admits(runKey: string): Promise<boolean> {
@@ -161,7 +214,7 @@ export class DeployRunDO extends DurableObject<Env> {
     const token = await exchangeDeployCode({ clientId, redirectUri, code, verifier });
 
     await this.ctx.storage.delete([VERIFIER_KEY, STATE_KEY]);
-    await this.landToken(clientId, token.accessToken, token.refreshToken);
+    await this.landToken(clientId, token.accessToken, token.refreshToken, token.expiresInSeconds);
 
     return true;
   }
@@ -172,12 +225,24 @@ export class DeployRunDO extends DurableObject<Env> {
    *
    *  The client id rides with the pair because the last step writes it into the
    *  deployment: a refresh names its client, and the two doors authorize
-   *  against the same one. */
-  async landToken(clientId: string, accessToken: string, refreshToken: string): Promise<void> {
+   *  against the same one. The lifetime rides with it because a run retried an
+   *  hour later must renew the token rather than fail every step with a 401.
+   */
+  async landToken(
+    clientId: string,
+    accessToken: string,
+    refreshToken: string,
+    expiresInSeconds: number,
+  ): Promise<void> {
     await this.ctx.storage.put(`${SECRET_PREFIX}${DEPLOY_CLIENT_ID_KEY}`, clientId);
     await this.ctx.storage.put(`${SECRET_PREFIX}${ACCESS_TOKEN_KEY}`, accessToken);
     await this.ctx.storage.put(`${SECRET_PREFIX}${REFRESH_TOKEN_KEY}`, refreshToken);
-    await this.ctx.storage.put(RUN_STATE_KEY, 'collecting');
+    await this.ctx.storage.put(TOKEN_EXPIRES_KEY, expiresInSeconds === 0 ? 0 : Date.now() + expiresInSeconds * 1000);
+
+    // A leg that just landed leaves the run collecting answers; a refresh in
+    // the middle of a plan must not send the page back to the form.
+    if (await this.runState() === 'authorizing') await this.ctx.storage.put(RUN_STATE_KEY, 'collecting');
+    await this.armExpiry();
   }
 
   async authorized(): Promise<boolean> {
@@ -188,6 +253,7 @@ export class DeployRunDO extends DurableObject<Env> {
    *  into the inputs row, because the row is readable for the run's lifetime. */
   async holdProviderKey(name: string, value: string): Promise<void> {
     await this.ctx.storage.put(`${SECRET_PREFIX}${name}`, value);
+    await this.armExpiry();
   }
 
   /** The accounts this authorization can deploy into, and the zones it can
@@ -217,33 +283,31 @@ export class DeployRunDO extends DurableObject<Env> {
   /** One question answered with the run's token: the id and name of each thing
    *  the person may choose. A refusal reaches the caller as it came. */
   private async choices(path: string): Promise<readonly DeployChoice[]> {
-    const token = await this.ctx.storage.get<string>(`${SECRET_PREFIX}${ACCESS_TOKEN_KEY}`);
-
-    if (token === undefined) throw new Error('this run holds no Cloudflare authorization');
-
-    return cloudflareResult(bearerTransport(token), { method: 'GET', path }, ChoicesSchema);
+    return cloudflareResult(bearerTransport(await this.accessToken()), { method: 'GET', path }, ChoicesSchema);
   }
 
   /**
-   * Run, or carry on running.
+   * Start the run, or answer the one that is already going.
    *
-   * One entry point for the first start, for a reload that finds the run
-   * unfinished, and for a retry of a step that refused. `running` keeps two
-   * activations of the same object from driving one plan twice; it is an
-   * in-memory flag on purpose, because an eviction that clears it is exactly
-   * the case where the run SHOULD be startable again.
+   * THE PLAN DOES NOT RUN IN THIS CALL. A deployment is minutes of network
+   * writes and the caller is a browser tab or a terminal; what this does is
+   * record what to run and wake the object's alarm, which is also what makes
+   * a run survive the thing it cannot avoid — the object being evicted, or
+   * restarted by the very deployment it is performing. The runtime redelivers
+   * an alarm whose handler did not finish, and the steps look before they
+   * create, so a redelivery carries on rather than starting again.
+   *
+   * Answers parsed BEFORE they are stored, and refused while a plan is going:
+   * a second `start` with a different instance name would otherwise change
+   * what the remaining steps deploy.
    */
   async start(inputs: DeployInputs): Promise<DeploySnapshot> {
-    await this.ctx.storage.put(INPUTS_KEY, JSON.stringify(inputs));
+    const parsed = v.parse(DeployInputsSchema, inputs);
 
-    if (this.running) return this.snapshot();
-    this.running = true;
+    if (await this.going()) return this.snapshot();
 
-    try {
-      await this.drive(v.parse(DeployInputsSchema, inputs), this.channelOrigin(), this.vault(null));
-    } finally {
-      this.running = false;
-    }
+    await this.ctx.storage.put(INPUTS_KEY, JSON.stringify(parsed));
+    await this.wake({ kind: 'guided', channelOrigin: this.channelOrigin() });
 
     return this.snapshot();
   }
@@ -252,12 +316,19 @@ export class DeployRunDO extends DurableObject<Env> {
    *  again, which re-enters at exactly that step because everything before it
    *  is `done`. */
   async retry(stepId: string): Promise<DeploySnapshot> {
-    this.sql.exec(`UPDATE deploy_step SET state = 'pending', failure = NULL WHERE id = ? AND state = 'failed'`, stepId);
+    if (await this.going()) return this.snapshot();
     const inputs = await this.ctx.storage.get<string>(INPUTS_KEY);
 
     if (inputs === undefined) return this.snapshot();
+    this.sql.exec(`UPDATE deploy_step SET state = 'pending', failure = NULL WHERE id = ? AND state = 'failed'`, stepId);
 
-    return this.start(v.parse(DeployInputsSchema, JSON.parse(inputs)));
+    const record = await this.ctx.storage.get<string>(RECORD_KEY);
+
+    await this.wake(record === undefined
+      ? { kind: 'guided', channelOrigin: this.channelOrigin() }
+      : { kind: 'update', channelOrigin: v.parse(DeploymentRecordSchema, JSON.parse(record)).channelOrigin });
+
+    return this.snapshot();
   }
 
   /**
@@ -271,40 +342,199 @@ export class DeployRunDO extends DurableObject<Env> {
    * deployment's own refresh token, and the channel is the one the record
    * names rather than this Worker's own origin.
    *
-   * The secrets the upload must re-bind are the ones this Worker is already
-   * running with, which is why the vault reads through to `env`: a version
-   * uploaded without them would bind a new encryption key over the credentials
-   * this deployment has already stored.
+   * THE GRANT IS SPENT HERE AND PERSISTED HERE. Cloudflare rotates the refresh
+   * token on every refresh, so the pair this call receives is the only one that
+   * will ever work again: it goes into the Worker's own secret immediately,
+   * before a single step runs. Written by the last step instead, any failure in
+   * between — or the restart this deployment's own upload causes — would leave
+   * the Worker holding a spent token and self-update dead for good.
+   *
+   * The token it spends is the deployment's own when this object holds a newer
+   * one than `env` does, which is exactly the retry after a half-finished
+   * update: `env` still carries the token the first attempt already spent.
    */
   async selfUpdate(record: DeploymentRecord, refreshToken: string): Promise<DeploySnapshot> {
     await this.ctx.storage.put(RUN_ID_KEY, SELF_UPDATE_RUN_ID);
 
-    if (this.running) return this.snapshot();
-    this.running = true;
+    if (await this.going()) return this.snapshot();
 
-    try {
-      const token = await refreshDeployToken({ clientId: record.clientId, refreshToken });
+    const held = await this.ctx.storage.get<string>(`${SECRET_PREFIX}${REFRESH_TOKEN_KEY}`);
+    const token = await refreshDeployToken({ clientId: record.clientId, refreshToken: held ?? refreshToken });
 
-      await this.landToken(record.clientId, token.accessToken, token.refreshToken);
-      await this.ctx.storage.put(INPUTS_KEY, JSON.stringify(record.inputs));
-      await this.drive(record.inputs, record.channelOrigin, this.vault(record));
-    } finally {
-      this.running = false;
-    }
+    await this.landToken(record.clientId, token.accessToken, token.refreshToken, token.expiresInSeconds);
+    await this.persistRefreshToken(record, token.accessToken, token.refreshToken);
+    await this.ctx.storage.put(INPUTS_KEY, JSON.stringify(record.inputs));
+    await this.ctx.storage.put(RECORD_KEY, JSON.stringify(record));
+    await this.wake({ kind: 'update', channelOrigin: record.channelOrigin });
 
     return this.snapshot();
   }
 
-  private async drive(inputs: DeployInputs, channelOrigin: string, vault: DeploySecretVault): Promise<void> {
-    const token = await this.ctx.storage.get<string>(`${SECRET_PREFIX}${ACCESS_TOKEN_KEY}`);
+  /**
+   * The object's one timer, doing both of its jobs.
+   *
+   * An intent is a plan to run: this is where every deployment actually
+   * happens, and a handler that did not finish is redelivered by the runtime,
+   * which is how a run resumes after an eviction or after its own upload
+   * replaced the Worker hosting it. No intent means the timer is the vault's:
+   * a run that has held somebody's Cloudflare tokens for an hour without
+   * moving loses them.
+   */
+  override async alarm(): Promise<void> {
+    const intent = await this.ctx.storage.get<string>(INTENT_KEY);
 
-    if (token === undefined) throw new Error('this run holds no Cloudflare authorization');
+    if (intent === undefined) {
+      await this.expire();
+
+      return;
+    }
+
+    const held = v.parse(IntentSchema, JSON.parse(intent));
+    const record = await this.ctx.storage.get<string>(RECORD_KEY);
+    const inputs = await this.ctx.storage.get<string>(INPUTS_KEY);
+
+    if (inputs === undefined) {
+      await this.ctx.storage.delete(INTENT_KEY);
+
+      return;
+    }
+
+    await this.drive(
+      v.parse(DeployInputsSchema, JSON.parse(inputs)),
+      held.channelOrigin,
+      this.vault(record === undefined ? null : v.parse(DeploymentRecordSchema, JSON.parse(record))),
+    );
+
+    // Only after the plan settled: an intent still stored is a plan the next
+    // alarm must carry on with.
+    await this.ctx.storage.delete(INTENT_KEY);
+    await this.armExpiry();
+  }
+
+  /** Whether a plan is between its first step and its outcome. The stored
+   *  intent rather than a field: an in-memory flag is lost by the eviction that
+   *  makes resuming necessary, and two activations must not drive one plan. */
+  private async going(): Promise<boolean> {
+    return await this.ctx.storage.get<string>(INTENT_KEY) !== undefined;
+  }
+
+  /** Record what to run and hand it to the alarm.
+   *
+   *  `Date.now()` rather than `0`: workerd refuses a non-positive alarm time
+   *  outright — `TypeError: setAlarm() cannot be called with an alarm time <= 0`,
+   *  measured 2026-09-18 on `@cloudflare/workerd-linux-64` through
+   *  `vitest-pool-workers` — and a time already past fires as soon as the
+   *  runtime can, which is after this call has answered. */
+  private async wake(intent: DeployIntent): Promise<void> {
+    await this.ctx.storage.put(INTENT_KEY, JSON.stringify(intent));
+    await this.ctx.storage.put(RUN_STATE_KEY, 'running');
+    await this.ctx.storage.setAlarm(Date.now());
+  }
+
+  /** The vault's clock, restarted. Never while a plan is waiting for the alarm:
+   *  the object has one timer slot, and arming the expiry over a pending run
+   *  would drop the run instead of starting it. */
+  private async armExpiry(): Promise<void> {
+    if (await this.going()) return;
+
+    await this.ctx.storage.setAlarm(Date.now() + VAULT_TTL_MS);
+  }
+
+  /**
+   * The end of a run nobody finished.
+   *
+   * A person's access and refresh tokens, their provider keys and the minted
+   * root secrets are gone, and the run says so: the page offers signing in
+   * again rather than a ledger that cannot move. An object that never got as
+   * far as a single step deletes itself outright — `POST /api/deploy/runs` is
+   * public, so an object per probe is the shape this bounds.
+   */
+  private async expire(): Promise<void> {
+    const held = await this.ctx.storage.list<string>({ prefix: SECRET_PREFIX });
+    const run = await this.runId();
+
+    await this.ctx.storage.delete([...held.keys()]);
+
+    if (this.rows().length === 0) {
+      await this.ctx.storage.deleteAll();
+      this.initSchema();
+      diagnostics.event('deploy.run_dropped', { run, secrets: held.size });
+
+      return;
+    }
+
+    await this.ctx.storage.put(RUN_STATE_KEY, 'expired');
+    diagnostics.event('deploy.run_expired', { run, secrets: held.size });
+    await this.broadcast();
+  }
+
+  /**
+   * A live access token for this run.
+   *
+   * Cloudflare's access tokens last about an hour and a plan can be retried
+   * long after the person walked away, so an expiry in the past is a refresh
+   * rather than a step that fails with 401. The rotated pair is persisted the
+   * moment it exists, for the same reason `selfUpdate` persists its own.
+   */
+  private async accessToken(): Promise<string> {
+    const held = await this.ctx.storage.get<string>(`${SECRET_PREFIX}${ACCESS_TOKEN_KEY}`);
+
+    if (held === undefined) throw new Error('this run holds no Cloudflare authorization');
+    const expiresAt = await this.ctx.storage.get<number>(TOKEN_EXPIRES_KEY) ?? 0;
+
+    if (expiresAt === 0 || expiresAt > Date.now() + TOKEN_FLOOR_MS) return held;
+
+    const clientId = await this.ctx.storage.get<string>(`${SECRET_PREFIX}${DEPLOY_CLIENT_ID_KEY}`);
+    const refreshToken = await this.ctx.storage.get<string>(`${SECRET_PREFIX}${REFRESH_TOKEN_KEY}`);
+
+    if (clientId === undefined || refreshToken === undefined) return held;
+    const minted = await refreshDeployToken({ clientId, refreshToken });
+
+    await this.landToken(clientId, minted.accessToken, minted.refreshToken, minted.expiresInSeconds);
+    const record = await this.ctx.storage.get<string>(RECORD_KEY);
+
+    if (record !== undefined) {
+      await this.persistRefreshToken(
+        v.parse(DeploymentRecordSchema, JSON.parse(record)), minted.accessToken, minted.refreshToken,
+      );
+    }
+
+    return minted.accessToken;
+  }
+
+  /** The rotated refresh token, into the deployment that owns it. Only an
+   *  update has somewhere to put it: a guided run's Worker does not exist yet,
+   *  and the handover step is what gives it its first one. */
+  private async persistRefreshToken(record: DeploymentRecord, accessToken: string, refreshToken: string): Promise<void> {
+    await cloudflareResult(
+      bearerTransport(accessToken),
+      {
+        method: 'PUT',
+        path: `/accounts/${record.inputs.accountId}/workers/scripts/${record.inputs.instanceName}/secrets`,
+        body: { name: DEPLOYMENT_REFRESH_SECRET, text: refreshToken, type: 'secret_text' },
+      },
+      v.object({ name: v.optional(v.string()) }),
+    );
+  }
+
+  private async drive(inputs: DeployInputs, channelOrigin: string, vault: DeploySecretVault): Promise<void> {
+    const token = await this.accessToken();
 
     // The release this deployment gets, read through the one channel reader
     // every door uses: the manifest, and the artifact it names verified
     // against the digest the channel publishes.
     const manifest = await fetchReleaseManifest(channelOrigin);
     const artifact = await fetchReleaseArtifact(manifest, channelOrigin);
+    const ran = await this.ctx.storage.get<string>(VERSION_KEY) ?? '';
+
+    // A LEDGER BELONGS TO ONE RELEASE. `runDeployPlan` skips what is `done`,
+    // which is exactly right for a resume and exactly wrong for the next
+    // version: the self-update object is addressed by a fixed id, so a second
+    // release over a finished ledger would upload nothing and report done. The
+    // rows are keyed by nothing but this object, so the reset is here — where
+    // the version the channel publishes is finally known — and a resume, whose
+    // version is the one already recorded, keeps every row it had.
+    if (ran !== '' && ran !== manifest.version) this.sql.exec(`DELETE FROM deploy_step`);
 
     await this.ctx.storage.put(VERSION_KEY, manifest.version);
     await this.ctx.storage.put(RUN_STATE_KEY, 'running');

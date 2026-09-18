@@ -37,9 +37,13 @@ export const DeployOptionsSchema: v.GenericSchema<DeployOptions> = v.object({
   reason: v.string(),
 });
 
-export type DeployRunPhase = 'collecting' | 'authorizing' | 'running' | 'failed' | 'done';
+/** `expired` is the vault's clock running out on a run nobody finished: the
+ *  ledger is still readable, and the tokens it was holding are gone. */
+export type DeployRunPhase = 'collecting' | 'authorizing' | 'running' | 'failed' | 'done' | 'expired';
 
-export const DeployRunPhaseSchema = v.picklist(['collecting', 'authorizing', 'running', 'failed', 'done']);
+export const DeployRunPhaseSchema = v.picklist([
+  'collecting', 'authorizing', 'running', 'failed', 'done', 'expired',
+]);
 
 const DeployStepStateSchema = v.picklist(['pending', 'running', 'done', 'failed']);
 

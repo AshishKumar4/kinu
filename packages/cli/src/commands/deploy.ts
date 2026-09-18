@@ -98,7 +98,11 @@ async function authorize(door: DeployDoor, clientId: string): Promise<void> {
     clientId, redirectUri: CLI_DEPLOY_REDIRECT_URI, code, verifier: pkce.verifier,
   });
 
-  await door.holdToken({ accessToken: token.accessToken, refreshToken: token.refreshToken });
+  await door.holdToken({
+    accessToken: token.accessToken,
+    refreshToken: token.refreshToken,
+    expiresInSeconds: token.expiresInSeconds,
+  });
 }
 
 /**

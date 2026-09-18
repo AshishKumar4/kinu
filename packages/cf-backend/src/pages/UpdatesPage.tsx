@@ -83,6 +83,13 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
       .then((held) => { if (mounted) setOffer(held); })
       .catch(failed);
 
+    // The run this deployment is already installing, if any. `apply` answers
+    // before the first step runs, so a page opened or reloaded in the middle of
+    // an update reads the ledger rather than waiting for a click.
+    read(DeploySnapshotSchema, "/api/updates/run")
+      .then((held) => { if (mounted && held.steps.length > 0) setRun(held); })
+      .catch(failed);
+
     return () => { mounted = false; };
   }, [live]);
 

@@ -45,6 +45,9 @@ const ProviderKeySchema = v.object({
 const TokenSchema = v.object({
   accessToken: v.pipe(v.string(), v.minLength(1)),
   refreshToken: v.pipe(v.string(), v.minLength(1)),
+  /** What the token endpoint said the access token's life is. The run stores
+   *  it so a retry an hour later refreshes instead of failing every step. */
+  expiresInSeconds: v.pipe(v.number(), v.minValue(0)),
 });
 
 function runStub(env: Env, runId: string): DurableObjectStub<DeployRunDO> {
@@ -154,7 +157,7 @@ export async function handleDeployRequest(request: Request, env: Env): Promise<R
     const clientId = deployClientId(env);
 
     if (clientId === '') return err(503, 'The Cloudflare door has no OAuth client configured.');
-    await stub.landToken(clientId, parsed.accessToken, parsed.refreshToken);
+    await stub.landToken(clientId, parsed.accessToken, parsed.refreshToken, parsed.expiresInSeconds);
 
     return json({ authorized: true });
   }

@@ -130,11 +130,11 @@ function tarMember(path: string, body: string): Buffer {
   return Buffer.concat([header, bytes, padding]);
 }
 
-function manifestText(): string {
+function manifestText(build: DeployFakeServedBuild): string {
   return JSON.stringify({
-    version: DEPLOY_FAKE_CHANNEL_BUILD.version,
-    sha: DEPLOY_FAKE_CHANNEL_BUILD.sha,
-    builtAt: DEPLOY_FAKE_CHANNEL_BUILD.builtAt,
+    version: build.version,
+    sha: build.sha,
+    builtAt: build.builtAt,
     channelOrigin: DEPLOY_FAKE_CHANNEL,
     worker: {
       name: 'kinu',
@@ -172,10 +172,23 @@ function manifestText(): string {
   });
 }
 
-/** The channel's two objects, built once: the manifest and the tarball that
- *  carries it plus every file it names. */
-const RELEASE = (() => {
-  const text = manifestText();
+interface Release {
+  readonly text: string;
+  readonly archive: Buffer<ArrayBuffer>;
+  readonly digest: string;
+}
+
+/** The channel's two objects for one version: the manifest and the tarball that
+ *  carries it plus every file it names. Built per version and kept, because a
+ *  row that publishes a second build asks for both again. */
+const releases = new Map<string, Release>();
+
+function release(): Release {
+  const version = held.published.version;
+  const built = releases.get(version);
+
+  if (built !== undefined) return built;
+  const text = manifestText(held.published);
 
   const members = [
     tarMember('release.json', text),
@@ -184,9 +197,12 @@ const RELEASE = (() => {
 
   const tar = Buffer.concat([...members, Buffer.alloc(1024)]);
   const archive = gzipSync(tar);
+  const made: Release = { text, archive, digest: sha256(archive) };
 
-  return { text, archive, digest: sha256(archive) };
-})();
+  releases.set(version, made);
+
+  return made;
+}
 
 export interface DeployFakeRefusal {
   readonly path: string;
@@ -196,6 +212,7 @@ export interface DeployFakeRefusal {
 }
 
 export const DeployFakeStateSchema = v.object({
+  deployments: v.array(v.string()),
   namespaces: v.array(v.string()),
   buckets: v.array(v.string()),
   indexes: v.array(v.string()),
@@ -207,6 +224,8 @@ export const DeployFakeStateSchema = v.object({
 });
 
 export interface DeployFakeState {
+  /** Every version id the deployment pointer was moved to, in order. */
+  readonly deployments: readonly string[];
   readonly namespaces: readonly string[];
   readonly buckets: readonly string[];
   readonly indexes: readonly string[];
@@ -236,6 +255,16 @@ const ServedBuildSchema = v.object({
 });
 
 interface Held {
+  /** What the channel publishes right now. A row that installs two releases in
+   *  a row moves this between the two applies. */
+  published: DeployFakeServedBuild;
+  /** Every version id a deployment pointer was moved to, in order. Two
+   *  successive releases must leave two entries: an update that uploaded and
+   *  never repointed is the silent no-op this records. */
+  deployments: string[];
+  /** Which release each uploaded version id carries, so `/api/health` can
+   *  answer what the Worker actually serves. */
+  versions: Map<string, string>;
   namespaces: string[];
   buckets: string[];
   indexes: string[];
@@ -253,6 +282,9 @@ const held: Held = fresh();
 
 function fresh(): Held {
   return {
+    published: DEPLOY_FAKE_CHANNEL_BUILD,
+    deployments: [],
+    versions: new Map<string, string>(),
     namespaces: [],
     buckets: [],
     indexes: [],
@@ -270,6 +302,9 @@ function fresh(): Held {
 function reset(): void {
   const empty = fresh();
 
+  held.published = empty.published;
+  held.deployments = [];
+  held.versions = new Map<string, string>();
   held.namespaces = empty.namespaces;
   held.buckets = empty.buckets;
   held.indexes = empty.indexes;
@@ -285,6 +320,7 @@ function reset(): void {
 
 function snapshot(): DeployFakeState {
   return {
+    deployments: [...held.deployments],
     namespaces: [...held.namespaces],
     buckets: [...held.buckets],
     indexes: [...held.indexes],
@@ -305,7 +341,7 @@ const RefusalSchema = v.object({
 
 /** The control surface, named once: anything else is a caller's typo and this
  *  plane refuses it rather than answering a state nobody asked to change. */
-const CONTROL_PATHS: readonly string[] = ['/reset', '/refuse', '/serve', '/state'];
+const CONTROL_PATHS: readonly string[] = ['/reset', '/refuse', '/serve', '/publish', '/state'];
 
 function envelope(result: JsonValue, status = 200): Response {
   return Response.json({ success: true, errors: [], result }, { status });
@@ -399,7 +435,18 @@ async function api(url: URL, request: Request): Promise<Response> {
 
   if (path.endsWith('/subdomain')) return envelope({ enabled: true });
 
-  if (path.endsWith('/deployments')) return envelope({ id: 'deployment-1' });
+  if (path.endsWith('/deployments')) {
+    // What the pointer now serves. A row asserting "the deployment moved" reads
+    // this, and `/api/health` below answers the release it names.
+    const versions = v.parse(
+      v.object({ versions: v.array(v.object({ version_id: v.string() })) }),
+      body,
+    ).versions;
+
+    for (const named of versions) held.deployments.push(named.version_id);
+
+    return envelope({ id: `deployment-${String(held.deployments.length)}` });
+  }
 
   if (path.endsWith('/secrets')) {
     held.secrets.set(named('name'), named('text'));
@@ -448,8 +495,11 @@ async function multipart(url: URL, request: Request): Promise<Response> {
   held.scriptExists = true;
   held.uploads += 1;
   held.creates.push('version');
+  const id = `version-${String(held.uploads)}`;
 
-  return envelope({ id: `version-${String(held.uploads)}` });
+  held.versions.set(id, held.published.version);
+
+  return envelope({ id });
 }
 
 /**
@@ -473,7 +523,13 @@ async function token(request: Request): Promise<Response> {
   }
 
   if (grant === 'refresh_token') {
-    if (form.get('refresh_token') !== DEPLOY_FAKE_REFRESH_TOKEN) {
+    // The seed pair's token, or one this server already rotated to: a
+    // deployment that spent a grant and failed mid-update presents the rotated
+    // one on its next attempt, and a server that refused it would make the
+    // retry path untestable rather than safe.
+    const spendable = [DEPLOY_FAKE_REFRESH_TOKEN, DEPLOY_FAKE_ROTATED_REFRESH];
+
+    if (!spendable.includes(form.get('refresh_token') ?? '')) {
       return Response.json({ error: 'invalid_grant', error_description: 'that refresh token is not one this server issued' }, { status: 400 });
     }
 
@@ -509,6 +565,8 @@ async function control(url: URL, request: Request): Promise<Response> {
   if (url.pathname === '/refuse') held.refuseOnce = v.parse(RefusalSchema, await request.json());
 
   if (url.pathname === '/serve') held.served = v.parse(ServedBuildSchema, await request.json());
+
+  if (url.pathname === '/publish') held.published = v.parse(ServedBuildSchema, await request.json());
 
   if (!CONTROL_PATHS.includes(url.pathname)) {
     throw new Error(`the deploy fake has no control surface at ${url.pathname}`);
@@ -561,22 +619,41 @@ export async function deployOutbound(request: Request): Promise<Response> {
   }
 
   if (url.origin === DEPLOY_FAKE_CHANNEL) {
+    const published = release();
+    const artifact = `/downloads/kinu-worker-${held.published.version}.tar.gz`;
+
     if (url.pathname === '/downloads/release.json') {
-      return new Response(RELEASE.text, { headers: { 'content-type': 'application/json' } });
+      return new Response(published.text, { headers: { 'content-type': 'application/json' } });
     }
 
-    if (url.pathname === `/downloads/kinu-worker-${VERSION}.tar.gz`) {
-      return new Response(RELEASE.archive, { headers: { 'content-type': 'application/gzip' } });
+    if (url.pathname === artifact) {
+      return new Response(published.archive, { headers: { 'content-type': 'application/gzip' } });
     }
 
-    if (url.pathname === `/downloads/kinu-worker-${VERSION}.tar.gz.sha256`) {
-      return new Response(`${RELEASE.digest}  kinu-worker-${VERSION}.tar.gz\n`);
+    if (url.pathname === `${artifact}.sha256`) {
+      return new Response(`${published.digest}  kinu-worker-${held.published.version}.tar.gz\n`);
     }
   }
 
-  // The deployment's own smoke check, answered as the new Worker would.
+  // The deployment's own smoke check, answered as the new Worker would: the
+  // release the LAST deployment pointer named, which is what makes an
+  // unchecked pointer move visible to a smoke step that compares versions.
   if (url.pathname === '/api/health' && url.host.endsWith('.workers.dev')) {
-    return Response.json(DEPLOY_FAKE_CHANNEL_BUILD);
+    const armed = held.refuseOnce;
+
+    if (armed !== null && armed.path === '/api/health') {
+      held.refuseOnce = null;
+
+      return new Response('the new Worker is not answering yet', { status: armed.status });
+    }
+
+    const pointed = held.deployments.at(-1) ?? '';
+    const serving = held.versions.get(pointed);
+
+    if (serving === undefined) return Response.json(DEPLOY_FAKE_OLDER_BUILD);
+    const build = serving === held.published.version ? held.published : DEPLOY_FAKE_OLDER_BUILD;
+
+    return Response.json(build);
   }
 
   throw new Error(`the deploy probe reached an unnamed network: ${request.method} ${request.url}`);

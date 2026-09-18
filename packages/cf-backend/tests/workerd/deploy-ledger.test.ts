@@ -71,6 +71,38 @@ async function authorized() {
   return stub;
 }
 
+/** Generous, and never spent on a passing run: the wait stops at the outcome. */
+const DEADLINE_MS = 20_000;
+
+const POLL_MS = 25;
+
+/**
+ * The run, driven to its outcome.
+ *
+ * `start` answers before the first step exists — the plan runs on the object's
+ * alarm — so a row that wants the finished ledger waits for the state the alarm
+ * wrote. Waiting for the CONDITION rather than sleeping: a broken runner spends
+ * the deadline and the assertion then reports whatever state it reached.
+ */
+async function settled(stub: { snapshot(): Promise<DeploySnapshot> }): Promise<DeploySnapshot> {
+  const deadline = Date.now() + DEADLINE_MS;
+  let held = await stub.snapshot();
+
+  while (held.state !== 'done' && held.state !== 'failed' && Date.now() < deadline) {
+    await scheduler.wait(POLL_MS);
+    held = await stub.snapshot();
+  }
+
+  return held;
+}
+
+/** A run minted the way the page mints one, and the key it answered with. */
+async function mintedRun(): Promise<{ runId: string; runKey: string }> {
+  const minted = await env.DEPLOY_DOOR_PROBE.hit('POST', '/api/deploy/runs');
+
+  return v.parse(v.object({ runId: v.string(), runKey: v.string() }), JSON.parse(minted.body));
+}
+
 function stateOf(snapshot: DeploySnapshot, id: string): string {
   return snapshot.steps.find((row) => row.id === id)?.state ?? 'absent';
 }
@@ -85,7 +117,9 @@ describe('a guided run in a Durable Object', () => {
 
     expect(await stub.authorized()).toBe(true);
 
-    const snapshot = await stub.start(INPUTS);
+    await stub.start(INPUTS);
+
+    const snapshot = await settled(stub);
     const made = await env.DEPLOY_FAKE.state();
 
     expect(snapshot.state).toBe('done');
@@ -104,6 +138,7 @@ describe('a guided run in a Durable Object', () => {
     const stub = await authorized();
 
     await stub.start(INPUTS);
+    await settled(stub);
 
     const rows = await stub.rowText();
 
@@ -124,7 +159,9 @@ describe('a guided run in a Durable Object', () => {
       message: 'R2 is not enabled for this account. Add a payment method to enable R2.',
     });
 
-    const snapshot = await stub.start(INPUTS);
+    await stub.start(INPUTS);
+
+    const snapshot = await settled(stub);
     const refused = snapshot.steps.find((row) => row.id === 'r2');
 
     expect(snapshot.state).toBe('failed');
@@ -147,11 +184,12 @@ describe('a guided run in a Durable Object', () => {
       message: 'internal error',
     });
 
-    const stopped = await stub.start(INPUTS);
+    await stub.start(INPUTS);
 
-    expect(stopped.state).toBe('failed');
+    expect((await settled(stub)).state).toBe('failed');
+    await stub.retry('ai-gateway');
 
-    const resumed = await stub.retry('ai-gateway');
+    const resumed = await settled(stub);
     const made = await env.DEPLOY_FAKE.state();
     const twice = made.creates.filter((name, at) => made.creates.indexOf(name) !== at);
 
@@ -175,12 +213,6 @@ describe('a guided run in a Durable Object', () => {
  * for that state, and the run must come out as unauthorized as it went in.
  */
 describe('the door\'s authorization leg', () => {
-  /** A run minted the way the page mints one, and the key it answered with. */
-  const mint = async (): Promise<{ runId: string; runKey: string }> => {
-    const minted = await env.DEPLOY_DOOR_PROBE.hit('POST', '/api/deploy/runs');
-
-    return v.parse(v.object({ runId: v.string(), runKey: v.string() }), JSON.parse(minted.body));
-  };
 
   /** The `__Host-kinu_deploy_state` value a `set-cookie` carries, or ''. */
   const bindingOf = (answer: { setCookie: readonly string[] }): string => {
@@ -194,7 +226,7 @@ describe('the door\'s authorization leg', () => {
     new URL(v.parse(v.object({ location: v.string() }), JSON.parse(location)).location).searchParams.get('state') ?? '';
 
   it('refuses a callback from a browser that did not start the leg, and the run stays unauthorized', async () => {
-    const run = await mint();
+    const run = await mintedRun();
 
     const handoff = await env.DEPLOY_DOOR_PROBE.hit(
       'POST', `/api/deploy/runs/${run.runId}/authorize`, { authorization: `Bearer ${run.runKey}` },
@@ -234,7 +266,7 @@ describe('the door\'s authorization leg', () => {
   });
 
   it('refuses a state no leg minted, and a state already spent', async () => {
-    const run = await mint();
+    const run = await mintedRun();
 
     const handoff = await env.DEPLOY_DOOR_PROBE.hit(
       'POST', `/api/deploy/runs/${run.runId}/authorize`, { authorization: `Bearer ${run.runKey}` },
@@ -271,7 +303,7 @@ describe('the door\'s authorization leg', () => {
   });
 
   it('takes the run key from a header and from the socket subprotocol, never from a query', async () => {
-    const run = await mint();
+    const run = await mintedRun();
 
     const byHeader = await env.DEPLOY_DOOR_PROBE.hit(
       'GET', `/api/deploy/runs/${run.runId}`, { authorization: `Bearer ${run.runKey}` },
@@ -289,5 +321,71 @@ describe('the door\'s authorization leg', () => {
     // refused, which is what keeps it out of the logs.
     expect(byQuery.status).toBe(403);
     expect(bySocket.status).toBe(101);
+  });
+});
+
+/**
+ * The vault's bound: an hour of not moving, and the tokens are gone.
+ *
+ * WHY THIS IS TWO ASSERTIONS AND NOT ONE. That the bound EXISTS is the armed
+ * alarm — a run holding somebody's Cloudflare tokens with no timer is the
+ * defect, and `alarmAt` reads the object's own slot. That it WORKS is the
+ * runtime delivering that alarm to the production `alarm()`: the row brings the
+ * expiry forward and waits for the wipe, so what empties the vault is a real
+ * dispatch and not a method the test called.
+ */
+describe('a run nobody finished', () => {
+  it('arms a bounded lifetime for the tokens it holds, and loses them when it fires', async () => {
+    const stub = await authorized();
+
+    await env.DEPLOY_FAKE.refuseOnce({
+      path: `/accounts/${DEPLOY_FAKE_ACCOUNT}/r2/buckets`,
+      status: 403,
+      code: 10_042,
+      message: 'R2 is not enabled for this account. Add a payment method to enable R2.',
+    });
+    await stub.start(INPUTS);
+
+    expect((await settled(stub)).state).toBe('failed');
+    // Still held right after the refusal: a refusal is not a reason to drop the
+    // authorization a person gave, and the run is resumable.
+    expect(await stub.heldSecretNames()).not.toEqual([]);
+
+    const due = await stub.alarmAt();
+
+    // An hour, give or take the time the plan took.
+    expect(due - Date.now()).toBeGreaterThan(3_000_000);
+    expect(due - Date.now()).toBeLessThanOrEqual(3_600_000);
+
+    expect(await stub.expireSoon()).toBe(true);
+
+    const deadline = Date.now() + DEADLINE_MS;
+
+    while ((await stub.heldSecretNames()).length > 0 && Date.now() < deadline) {
+      await scheduler.wait(POLL_MS);
+    }
+
+    expect(await stub.heldSecretNames()).toEqual([]);
+    // The ledger survives and says what happened, so the page can offer signing
+    // in again into the same run rather than a second set of everything.
+    expect((await stub.snapshot()).state).toBe('expired');
+    expect((await stub.snapshot()).steps.length).toBeGreaterThan(0);
+  });
+
+  it('deletes an object that never got past minting', async () => {
+    const run = await mintedRun();
+    const stub = env.DEPLOY_RUN_PROBE.get(env.DEPLOY_RUN_PROBE.idFromName(run.runId));
+
+    // `POST /api/deploy/runs` is public, so every probe of the door leaves an
+    // object behind. One that never ran a step leaves nothing at all.
+    expect(await stub.alarmAt()).toBeGreaterThan(Date.now());
+    expect(await stub.expireSoon()).toBe(true);
+
+    const deadline = Date.now() + DEADLINE_MS;
+
+    while (await stub.alarmAt() !== 0 && Date.now() < deadline) await scheduler.wait(POLL_MS);
+
+    expect(await stub.snapshot()).toEqual({ runId: '', state: 'collecting', address: '', version: '', steps: [] });
+    expect(await stub.admits(run.runKey)).toBe(false);
   });
 });
