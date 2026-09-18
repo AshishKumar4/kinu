@@ -2357,6 +2357,10 @@ export {
 } from './http/deployed-assets';
 
 export {
+  handleReleaseArtifactRequest, type ReleaseArtifactObject, type ReleaseArtifactStore,
+} from './http/release-artifact';
+
+export {
   RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, SignedReleaseSchema,
   signRelease, verifyRelease, generateReleaseSigningKey, type ReleaseChecksums, type SignedRelease,
 } from './http/release-signing';
