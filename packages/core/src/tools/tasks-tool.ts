@@ -88,6 +88,57 @@ interface RoleSet {
 
 export type TasksToolResult = TasksAdded | TaskUpdated | TasksListed | RoleSet;
 
+/** `tasks.add` — one title row per task, rejections carried alongside. */
+function addTasks(taskList: TaskListStore, args: TasksToolInput, now: number): TasksAdded {
+  const titles = v.safeParse(TitlesSchema, args.titles ?? []);
+
+  if (!titles.success) throw new KinuError('bad_input', 'tasks.add requires `titles` — an array of task titles');
+
+  if (titles.output.length === 0) throw new KinuError('bad_input', 'tasks.add requires `titles` — one or more task titles');
+  const { added, rejected } = taskList.add(titles.output, args.parent ?? null, now);
+
+  const result: TasksAdded = {
+    added: added.map((task) => ({ id: task.id, title: task.title, parent: task.parentId })),
+  };
+
+  if (rejected.length > 0) result.rejected = rejected;
+
+  return result;
+}
+
+/** `tasks.update` — a status move, a note write, or both on one task. */
+function updateTask(taskList: TaskListStore, args: TasksToolInput, now: number): TaskUpdated {
+  if (!args.id) throw new KinuError('bad_input', 'tasks.update requires `id`');
+  const status = args.status === undefined ? undefined : v.safeParse(TaskStatusSchema, args.status);
+
+  if (status !== undefined && !status.success) {
+    throw new KinuError('bad_input', 'tasks.update requires `status` — one of ' + TASK_STATUSES.join(', '));
+  }
+
+  if (status === undefined && args.note === undefined) {
+    throw new KinuError('bad_input', 'tasks.update requires `status` or `note`');
+  }
+
+  const noteParsed = args.note === undefined ? undefined : (args.note === null ? null : v.safeParse(v.string(), args.note));
+
+  if (noteParsed !== undefined && noteParsed !== null && !noteParsed.success) {
+    throw new KinuError('bad_input', 'tasks.update requires `note` — a string, or null to clear');
+  }
+
+  const note = noteParsed === undefined || noteParsed === null ? noteParsed : noteParsed.output;
+  const task = taskList.update(args.id, { status: status?.output, note }, now);
+
+  if (!task) throw new KinuError('missing', 'no task ' + args.id);
+  // The one thing closing a parent hides: work filed under it that is
+  // still open. Said at the moment the model would otherwise move on.
+  const openSubtasks = status?.output === 'done' ? taskList.countOpenSubtasks(task.id) : 0;
+  const result: TaskUpdated = { id: task.id, title: task.title, status: task.status };
+
+  if (openSubtasks > 0) result.open_subtasks = openSubtasks;
+
+  return result;
+}
+
 /** Build a tasks dispatcher over one runtime's task list and config. Both
  *  stores are injected, not constructed: the codemode projection must share
  *  the caller's exact TaskListStore instance (the one the dynamic-context
@@ -121,54 +172,11 @@ export function createTasksDispatcher(
     }
 
     switch (action.output) {
-      case 'add': {
-        const titles = v.safeParse(TitlesSchema, args.titles ?? []);
+      case 'add':
+        return addTasks(taskList, args, now);
 
-        if (!titles.success) throw new KinuError('bad_input', 'tasks.add requires `titles` — an array of task titles');
-
-        if (titles.output.length === 0) throw new KinuError('bad_input', 'tasks.add requires `titles` — one or more task titles');
-        const { added, rejected } = taskList.add(titles.output, args.parent ?? null, now);
-
-        const result: TasksAdded = {
-          added: added.map((task) => ({ id: task.id, title: task.title, parent: task.parentId })),
-        };
-
-        if (rejected.length > 0) result.rejected = rejected;
-
-        return result;
-      }
-
-      case 'update': {
-        if (!args.id) throw new KinuError('bad_input', 'tasks.update requires `id`');
-        const status = args.status === undefined ? undefined : v.safeParse(TaskStatusSchema, args.status);
-
-        if (status !== undefined && !status.success) {
-          throw new KinuError('bad_input', 'tasks.update requires `status` — one of ' + TASK_STATUSES.join(', '));
-        }
-
-        if (status === undefined && args.note === undefined) {
-          throw new KinuError('bad_input', 'tasks.update requires `status` or `note`');
-        }
-
-        const noteParsed = args.note === undefined ? undefined : (args.note === null ? null : v.safeParse(v.string(), args.note));
-
-        if (noteParsed !== undefined && noteParsed !== null && !noteParsed.success) {
-          throw new KinuError('bad_input', 'tasks.update requires `note` — a string, or null to clear');
-        }
-
-        const note = noteParsed === undefined || noteParsed === null ? noteParsed : noteParsed.output;
-        const task = taskList.update(args.id, { status: status?.output, note }, now);
-
-        if (!task) throw new KinuError('missing', 'no task ' + args.id);
-        // The one thing closing a parent hides: work filed under it that is
-        // still open. Said at the moment the model would otherwise move on.
-        const openSubtasks = status?.output === 'done' ? taskList.countOpenSubtasks(task.id) : 0;
-        const result: TaskUpdated = { id: task.id, title: task.title, status: task.status };
-
-        if (openSubtasks > 0) result.open_subtasks = openSubtasks;
-
-        return result;
-      }
+      case 'update':
+        return updateTask(taskList, args, now);
 
       case 'list': {
         const tasks = taskList.list();
