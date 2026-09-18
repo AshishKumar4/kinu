@@ -7,8 +7,8 @@
  * copy of its shape — opens a span tree when it runs, and the tree has the
  * structure and the attributes the contract requires. Every layer above the
  * platform is production code: `createWorkersTracer`, `createAgentTracing`,
- * `AgentConfigStore.countIsolateGeneration`, `renderSelfPath`, and the four
- * `tick.span` call sites. The ONLY substitution is `tracing.enterSpan` itself
+ * `AgentConfigStore.countIsolateGeneration`, `renderSelfPath`, and every
+ * `tick.span` call site. The ONLY substitution is `tracing.enterSpan` itself
  * (`tests/helpers/agents-sdk.ts`), which cannot exist under bun because
  * `cloudflare:workers` is a workerd module — and that is the platform boundary,
  * so a substitution there is the most faithful one available. A test that
@@ -35,10 +35,11 @@ import {
   type AgentTracing, type RecordingTracer, type SpanAttributeValue, type TracedInvocation,
 } from '@kinu.run/core/obs';
 
-/** The four phases, in the order `_kinuTimerTick` runs them. Named here so a
- *  phase silently dropped from the method fails rather than shrinking the tree. */
+/** The phases, in the order `_kinuTimerTick` runs them. Named here so a phase
+ *  silently dropped from the method fails rather than shrinking the tree. */
 const PHASES = [
   'alarm.due_triggers',
+  'alarm.event_drain',
   'alarm.peer_dispatch',
   'alarm.email_reconcile',
   'alarm.timer_rearm',
@@ -66,7 +67,7 @@ describe('alarm tick tracing', () => {
     // durable timer chain does, not just what the trace looks like.
     expect(children.map((span) => span.name)).toEqual([...PHASES]);
 
-    // No phase nested inside another. Four siblings, not a chain — which is the
+    // No phase nested inside another. Siblings, not a chain — which is the
     // difference between "the alarm was slow" and "the email reconcile was slow",
     // and is exactly what a flat list of span names cannot distinguish.
     expect(spans.filter((span) => span.parent !== null && span.parent !== rootIndex)).toEqual([]);
@@ -137,6 +138,7 @@ describe('alarm tick tracing', () => {
       [
         'alarm.tick  [isolate_gen=1 invocation=1]',
         '  alarm.due_triggers  [isolate_gen=1 invocation=1 triggers_fired=0]',
+        '  alarm.event_drain  [isolate_gen=1 invocation=1 drain_due=false]',
         '  alarm.peer_dispatch  [isolate_gen=1 invocation=1]',
         '  alarm.email_reconcile  [isolate_gen=1 invocation=1]',
         '  alarm.timer_rearm  [isolate_gen=1 invocation=1 rearmed=false]',

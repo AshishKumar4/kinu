@@ -24,7 +24,7 @@ import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
 import type {
-  AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
+  AgentLogEvent, ArmedWake, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueueProbeMode,
   ParityCompleted, ParityPrepared, WakeDriveResult, WakeHoldPlacement,
 } from './two-turn-shapes';
@@ -80,6 +80,12 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   agentLogEventsFor(workspace: string): Promise<AgentLogEvent[]>;
   seedStaleDrainEventFor(workspace: string, marker: string): Promise<void>;
   runEventWakeFor(workspace: string, marker: string): Promise<void>;
+  claimReactorWakeWorkspace(): Promise<{ workspace: string; owner: string }>;
+  publishPeerEvent(workspace: string, owner: string, body: string): Promise<ArmedWake[]>;
+  armedWakesFor(workspace: string): Promise<ArmedWake[]>;
+  driveArmedWakesFor(workspace: string): Promise<string[]>;
+  runStartCausesFor(workspace: string): Promise<string[]>;
+  awaitWireMarker(marker: string): Promise<void>;
   firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: Array<{ id: string; role: string }>; factsCompressed: number }>;
   twinSends(): Promise<{ http: HttpCall[]; transcript: Array<{ id: string; role: string }>; steers: PendingSteer[]; runEnds: Array<{ runId: string; reason: string }> }>;
   evalAbort(): Promise<{ receipt: string | null; alive: boolean }>;
