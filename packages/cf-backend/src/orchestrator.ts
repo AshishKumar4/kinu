@@ -4824,6 +4824,10 @@ export class OrchestratorAgent extends ActorAgent {
 
     return {
       name: entry.name,
+      // The actor this name resolves to, which is the id every frame the
+      // hosting seam broadcasts for it is stamped with. The pane reads it to
+      // tell its own stamped frames from a sibling's on the shared socket.
+      actorId: child.handle.actorId,
       displayName: child.stores.config.getDisplayName() ?? entry.name,
       role: child.stores.config.getRoleSelection(),
       mission: entry.birth?.seed.mission ?? '',
