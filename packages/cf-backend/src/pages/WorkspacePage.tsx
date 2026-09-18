@@ -15,7 +15,7 @@ import {
 } from "@kinu.run/core";
 import type {
   AlternateTakeSet, FileCheckpointEntry, FileCheckpointListing,
-  FileRestoreChange, FileRestorePlan, PlanReview, TakePickOutcome,
+  FileRestoreChange, FileRestorePlan, TakePickOutcome,
 } from "@kinu.run/core";
 import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
@@ -43,7 +43,7 @@ import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { WorkspaceBar, InlineRenameTitle, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
-import { workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type Rpc, type SubordinateActivityEvent } from "@kinu.run/core";
+import { workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { useInspectorLayout } from "@/hooks/use-inspector-layout";
 // The model picker reads /api/user/models (which unions the connected
@@ -361,13 +361,6 @@ function ForkModal({
 
 /* ── Subordinate chat (Column A body when a subordinate tab is active) ── */
 
-interface SubordinatePlanContext {
-  name: string;
-  plan: PlanReview | null;
-  focus: string | null;
-  rpc: Rpc;
-}
-
 /** Drives one additional agent's conversation over its own facet socket. The
  *  Work Surface and Timeline stay workspace-scoped on the parent socket (§A5) —
  *  only the chat switches here. An ordinary conversation: messages, model pick,
@@ -380,20 +373,14 @@ interface SubordinatePlanContext {
  *  the first-message auto-title lands everywhere in one broadcast. `onRename`
  *  goes through the parent for the same reason. */
 function SubordinateChatColumn({
-  workspace, subName, title, onRename, onPlanContext,
+  workspace, subName, title, onRename,
 }: {
   workspace: string;
   subName: string;
   title: string;
   onRename: (displayName: string) => Promise<string>;
-  onPlanContext: (context: SubordinatePlanContext | null) => void;
 }) {
   const state = useKinu({ workspace, subordinate: subName });
-  useEffect(() => {
-    onPlanContext({ name: subName, plan: state.activePlan, focus: state.planFocus, rpc: state.rpc });
-
-    return () => onPlanContext(null);
-  }, [onPlanContext, state.activePlan, state.planFocus, state.rpc, subName]);
 
   // The picker awaits its own write. `setModel` records the failure on
   // `state.error` and rolls the picker back to the stored spec before it
@@ -612,13 +599,6 @@ export default function WorkspacePage() {
   const state = useKinu(agentId);
   const { entries: workspaceEntries } = useWorkspaceRoster();
 
-  const [subordinatePlanContext, setSubordinatePlanContext] =
-    useState<SubordinatePlanContext | null>(null);
-
-  const syncSubordinatePlanContext = useCallback((context: SubordinatePlanContext | null) => {
-    setSubordinatePlanContext(context);
-  }, []);
-
   const [creatingAgent, setCreatingAgent] = useState(false);
   const creatingAgentRef = useRef(false);
   const [createAgentError, setCreateAgentError] = useState<string | null>(null);
@@ -717,13 +697,10 @@ export default function WorkspacePage() {
     ].some(Boolean),
   });
 
-  // Plan decisions use the selected actor; previews remain workspace-scoped.
-  const subordinateReview = subName !== undefined
-    && subordinatePlanContext?.name === subName
-    ? subordinatePlanContext
-    : null;
-
-  const visiblePlan = subName === undefined ? state.activePlan : subordinateReview?.plan ?? null;
+  // Work stays workspace-scoped: the panel is the same panel whichever chat
+  // tab is open, so it shows the workspace's own plan — only Agent and
+  // Activity are per agent.
+  const visiblePlan = state.activePlan;
   const [surface, setSurface] = useState<SurfaceKind>("Work");
   // `?slate=<id>&unmapped=1` is where a blueprint fork lands: the slate's tab,
   // on its unmapped-bindings panel. The tab exists only once the listing names
@@ -1203,7 +1180,7 @@ export default function WorkspacePage() {
               activeName={subName}
               onCreate={createAndOpenAgent}
               creating={creatingAgent}
-              onDismiss={(name) => state.dismissSubordinate(name).then(() => {})}
+              onDismiss={(name, keepHistory) => state.dismissSubordinate(name, keepHistory).then(() => {})}
               trailing={!subName && state.messages.length > 0 && (
                 <Button variant="ghost" {...SQUARE_BUTTON_PROPS} size="sm"
                   onClick={() => setShowClearConfirm(true)}
@@ -1223,7 +1200,6 @@ export default function WorkspacePage() {
                   subName={subName}
                   title={rosterEntry ? agentTitle(rosterEntry.displayName) : subName}
                   onRename={(displayName) => state.renameSubordinate(subName, displayName).then((entry) => entry.displayName)}
-                  onPlanContext={syncSubordinatePlanContext}
                 />
               );
             })() : (
@@ -1399,8 +1375,8 @@ export default function WorkspacePage() {
           <WorkSurface
             surface={surface}
             previewFocus={state.previewFocus}
-            planFocus={subName === undefined ? state.planFocus : subordinateReview?.focus}
-            planOwner={subName ?? "main"}
+            planFocus={state.planFocus}
+            planOwner="main"
             workspacePlanArrival={state.workspacePlanArrival}
             activePlanActors={state.subordinates.filter(actor => actor.status !== "dismissed").map(actor => actor.name)}
             onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${encodeURIComponent(name)}`); }}
@@ -1410,7 +1386,6 @@ export default function WorkspacePage() {
             previewError={state.previewError}
             onRefreshPorts={state.refreshExposedPorts}
             plan={visiblePlan}
-            planRpc={subordinateReview?.rpc}
             snapshot={state.snapshot}
             onRetryLoad={state.retryLoad}
             tools={state.tools}

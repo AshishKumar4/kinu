@@ -200,19 +200,26 @@ describe('the workspace snapshot contract', () => {
   });
 
   /**
-   * WHAT THIS FILE DOES NOT COVER, stated because the hole is real and is not
-   * this file's to close.
-   *
    * `SubordinateSnapshot` is the other interface the client reads over this
    * rail: `hooks/use-kinu.ts` takes it from `rpc("getActorSnapshot", …)`, which
    * the orchestrator answers IN PROCESS off
    * `actorHost().bindStores(...).stores.config` — `actor_id`-scoped rows in the
-   * ONE workspace database, no stub and no hop. That return literal is a
-   * declared-field-set contract exactly the way `getWorkspaceSnapshot`'s is,
-   * and nothing holds the two together: a return answering `roleId` where the
-   * client reads `role` typechecks in neither direction and fails only in the
-   * tab.
+   * ONE workspace database, no stub and no hop. Same declared-field-set
+   * contract, held the same way, because one of its fields now decides what a
+   * pane applies: `actorId` is what a stamped socket frame is compared
+   * against, and a read of `undefined` would silently close admission on the
+   * pane's own frames rather than fail.
+   *
+   * The gallery's answer is not derived here. It carries
+   * `satisfies SubordinateSnapshot`, so the compiler already refuses a stub
+   * that drops a field — a stronger check than this one.
    */
+  test('every field a facet tab declares is returned by getActorSnapshot', () => {
+    const declared = interfaceFields(CLIENT, 'SubordinateSnapshot');
+    const returned = returnedKeys(SERVER, 'getActorSnapshot');
+
+    expect(declared.filter((field) => !returned.includes(field))).toEqual([]);
+  });
 
   test('the gallery stub supplies each field a current snapshot reads', () => {
     const stubbed = stubbedKeys(GALLERY, 'AGENT_RPC_DATA', 'getWorkspaceSnapshot');
