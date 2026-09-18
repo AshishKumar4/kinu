@@ -131,7 +131,7 @@ import Sidebar from "@/components/Sidebar";
 import Layout from "@/components/layout";
 import { ModelPicker } from "@/components/ModelPicker";
 import { Composer, type ChatMode, type ComposerNotice } from "@/components/Composer";
-import { WorkspaceBar, InlineRenameTitle } from "@/components/WorkspaceBar";
+import { WorkspaceBar } from "@/components/WorkspaceBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
@@ -145,7 +145,7 @@ import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { CacheBlock, LogBlock } from "@/components/surfaces/ActivitySurface";
 import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { QualityView } from "@/components/surfaces/evolution-panels";
-import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
+import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { FeedbackButton } from "@/components/FeedbackButton";
@@ -903,7 +903,7 @@ const rosterAuthorityHold = Promise.withResolvers<Response>();
 
 function MODEL_STUBS(): ModelMenuEntry[] {
   return [
-    { spec: "anthropic/claude-opus-4", label: "Claude Opus 4", provider: "Anthropic" },
+    { spec: "anthropic/claude-opus-4", label: "Claude Opus 4", provider: "Anthropic", reasoningEfforts: ["low", "medium", "high"] },
     { spec: "workers-ai/llama-4", label: "Llama 4 (Workers AI)", provider: "Workers AI" },
     { spec: "openai/gpt-5.6", label: "GPT-5.6", provider: "OpenAI" },
   ];
@@ -1700,6 +1700,17 @@ function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
  *  agents pane makes on it, and one hosted actor's view of itself. */
 function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
   if (method === "listSubordinates") return { value: [...GALLERY_SUBS] };
+
+  // An agent pane's own pin, recorded so a gate can read WHICH actor a pick wrote.
+  if (method === "setActorModel" || method === "setReasoningEffort") {
+    const root = document.documentElement;
+    const calls: unknown[] = JSON.parse(root.dataset.galleryModelCalls ?? "[]");
+
+    calls.push({ method, args });
+    root.dataset.galleryModelCalls = JSON.stringify(calls);
+
+    return { value: method === "setActorModel" ? { ok: true, spec: args?.[1] } : { ok: true, effort: args?.[0] ?? null } };
+  }
 
   if (method === "createSubordinateAgent") {
     maybeRefuseCreate();
@@ -3946,13 +3957,12 @@ const AGENTCHATS_SEED: readonly GalleryRosterEntry[] = [
 const AGENTCHATS_ROWS = 40;
 
 /** One conversation pane, wired the way SubordinateChatColumn wires the real
- *  ones: the same rename editor, the same composer mode segment, and the same
- *  per-conversation state hook carrying draft/mode/scroll across switches. */
-function AgentChatsPane({ conversation, title, transcript, onRename, onSend }: {
+ *  ones: no title bar of its own (the tab is where the agent is renamed), the
+ *  same composer mode segment, and the same per-conversation state hook
+ *  carrying draft/mode/scroll across switches. */
+function AgentChatsPane({ conversation, transcript, onSend }: {
   conversation: string;
-  title: string;
   transcript: readonly string[];
-  onRename: ((displayName: string) => Promise<string>) | null;
   onSend: (text: string, mode: ChatMode) => void;
 }) {
   const ui = useConversationUiState(conversation);
@@ -3968,11 +3978,6 @@ function AgentChatsPane({ conversation, title, transcript, onRename, onSend }: {
 
   return (
     <div className="@container relative flex min-h-0 flex-1 flex-col" data-agent-pane={conversation}>
-      <div className="flex items-center gap-3 border-b p-border px-5 py-3.5">
-        {onRename
-          ? <InlineRenameTitle title={title} onRename={onRename} subject="agent" textClass="text-sm font-medium" />
-          : <span className="truncate text-sm font-medium p-text" data-agent-header>{title}</span>}
-      </div>
       <div ref={scrollRef} data-agent-scroll className="flex-1 space-y-3 overflow-y-auto px-6 py-5">
         {transcript.length === 0
           ? <p className="text-sm p-text-3">This agent's conversation starts here.</p>
@@ -3991,7 +3996,7 @@ function AgentChatsPane({ conversation, title, transcript, onRename, onSend }: {
             onSend(text, ui.mode);
             ui.setDraft("");
           }}
-          placeholder={`Message ${title}…`}
+          placeholder="Send a message..."
           disabled={false}
           streaming={false}
           onStop={() => {}}
@@ -4053,7 +4058,12 @@ function AgentChatsScene() {
           activeName={subName}
           onCreate={create}
           creating={false}
-          onRename={async (_name, displayName) => displayName}
+          onRename={async (name, displayName) => {
+            setRoster((current) => current.map((entry) =>
+              entry.name === name ? { ...entry, displayName } : entry));
+
+            return displayName;
+          }}
           onDismiss={async (name, keepHistory) => {
             setRoster((current) => current.filter((entry) => entry.name !== name));
             // What the backend does with the THREAD, mirrored: `keepHistory`
@@ -4074,23 +4084,14 @@ function AgentChatsScene() {
           <AgentChatsPane
             key={subName}
             conversation={`checkout-fixes/agents/${subName}`}
-            title={agentTitle(active.displayName)}
             transcript={transcripts[subName] ?? []}
-            onRename={async (displayName) => {
-              setRoster((current) => current.map((entry) =>
-                entry.name === subName ? { ...entry, displayName } : entry));
-
-              return displayName;
-            }}
             onSend={send(subName)}
           />
         ) : (
           <AgentChatsPane
             key="main"
             conversation="checkout-fixes/main"
-            title="Checkout fixes"
             transcript={transcripts["main"] ?? []}
-            onRename={null}
             onSend={send("main")}
           />
         )}

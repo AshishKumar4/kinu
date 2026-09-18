@@ -446,7 +446,7 @@ function SubordinateChatColumn({
   const as = state.agentStatus;
 
   return (
-    <div className="@container relative flex flex-col flex-1 min-h-0">
+    <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${workspace}/agents/${subName}`}>
       <ErrorBoundary label="Agent chat">
         <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column py-5 space-y-5">
           {/* Above the oldest message, exactly as the workspace column has it:
@@ -1132,7 +1132,7 @@ export default function WorkspacePage() {
                 />
               );
             })() : (
-            <div className="@container relative flex flex-col flex-1 min-h-0"
+            <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${agentId}/main`}
               onDragOver={onChatDragOver} onDragLeave={onChatDragLeave} onDrop={onChatDrop}>
             {dragOver && (
               <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center rounded-lg border-2 border-dashed"
