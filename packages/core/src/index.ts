@@ -22,7 +22,7 @@ export {
 
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
-  outputLimitContinuationTerminalEffect,
+  outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
   takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect,
   terminalEffectKey, terminalEffectBackoffMs, keyedScope, TerminalEffectInterrupt,
@@ -1794,6 +1794,12 @@ export {
 } from './tasks/store';
 
 export { withTaskPlan, bindTaskPlan, type TaskPlan, type TaskPlanContext } from './tasks/plan-scope';
+
+// The stop-time reminder a turn owes when it settles with open tasks.
+export {
+  TaskReminders, TASK_REMINDER_EVENT,
+  taskReminderIdempotencyKey,
+} from './tasks/reminder';
 
 // Backend-agnostic orchestration — per-turn accounting shared by both backends.
 export {
