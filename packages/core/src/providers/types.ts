@@ -11,6 +11,8 @@
 import type { LanguageModel } from 'ai';
 import type { CountableRequest, InputTokenCount } from './input-tokens';
 import type { ReasoningEffort } from './reasoning-effort';
+import type { JsonObject } from '../utils/json';
+import type { Usage } from '../usage';
 
 /** Parsed `<provider>/<modelId>`. */
 export interface ModelSpec { provider: string; modelId: string; }
@@ -37,6 +39,33 @@ export interface ModelPricing {
   output: number;
   cacheRead?: number;
   cacheWrite?: number;
+}
+
+/**
+ * How long a provider should keep the prefix a request writes.
+ *
+ *   none   don't address the provider's cache at all — no breakpoints, no
+ *          cache key. The escape hatch for a turn that must not write a cache
+ *          entry (and not pay a cache-write premium for one read).
+ *   short  the provider's default TTL (Anthropic/OpenRouter 5m, OpenAI
+ *          in-memory). Sends nothing extra, so the request bytes are exactly
+ *          what a caller with no opinion produced.
+ *   long   the extended TTL — Anthropic `ttl: '1h'`, OpenAI
+ *          `prompt_cache_retention: '24h'`. Costs more per cache WRITE and
+ *          pays for itself only when turns are minutes-to-hours apart.
+ *
+ * A PROVIDER fact, beside the rates and the capabilities, because two platform
+ * readers need it: `prompting/cache-breakpoints.ts` renders it onto the wire,
+ * and `providers/cache-warming.ts` decides whether an idle prefix is worth a
+ * refresh at all (only a short entry expires soon enough to be).
+ */
+export type CacheRetention = 'none' | 'short' | 'long';
+
+/** The default every caller gets: cache normally, at the provider's own TTL. */
+export const DEFAULT_CACHE_RETENTION: CacheRetention = 'short';
+
+export function isCacheRetention(value: string | null): value is CacheRetention {
+  return value === 'none' || value === 'short' || value === 'long';
 }
 
 export interface ModelInfo {
@@ -220,6 +249,24 @@ export interface ModelProvider {
     deps: ProviderDeps,
     request: CountableRequest,
   ): Promise<InputTokenCount>;
+
+  /**
+   * Re-send one already-sent request body with no completion, to keep the
+   * prompt-cache entry it wrote alive across an idle gap.
+   *
+   * Optional, and the ONE structural half of the warm's eligibility rule: a
+   * provider without this method cannot be warmed, however the policy in
+   * `cache-warming.ts` reads its id. Only the direct Anthropic Messages
+   * provider implements it — the vendor documents the `max_tokens: 0` refresh
+   * for its own endpoint, and a Claude model behind a gateway is a prefix that
+   * endpoint never saw.
+   *
+   * `body` is the frozen body of the request being refreshed, already shaped by
+   * `warmRequestBody`. The answer is the provider's usage report for the warm
+   * and nothing else; a failure THROWS, and the caller's chain retires rather
+   * than the turn failing for a refresh it did not need.
+   */
+  warmCache?(modelId: string, deps: ProviderDeps, body: JsonObject): Promise<Usage>;
 }
 
 /** Split on the FIRST slash so slashful ids such as `@cf/deepseek-ai/deepseek-v4-pro-0813` survive intact. */
