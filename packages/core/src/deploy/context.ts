@@ -6,14 +6,23 @@
  * is a port so the same steps run in the deploy Durable Object, in a
  * deployment updating itself, and in a test with no network.
  */
+import type { ArtifactMember, HeldBytes } from './artifact';
 import type { CloudflareTransport } from './cloudflare';
 import type { DeployInputs } from './inputs';
 import type { ReleaseManifest } from './manifest';
 
-/** The artifact's files by their manifest path. The Durable Object serves
- *  these out of the published tarball; a test serves them from a map. */
+/**
+ * The artifact's files, in the order the archive carries them.
+ *
+ * A WALK RATHER THAN A LOOKUP. The Durable Object that installs a release
+ * cannot hold the unpacked archive (docs/SELF-DEPLOY.md § What the artifact
+ * weighs), so a step takes each member as it arrives and keeps only what it
+ * has to. `held` is the run's accountant: the reader charges the compressed
+ * buffer, and a step charges whatever it keeps out of a member.
+ */
 export interface ArtifactSource {
-  read(path: string): Promise<Uint8Array<ArrayBuffer>>;
+  readonly held: HeldBytes;
+  members(): AsyncIterable<ArtifactMember>;
 }
 
 /** Reading a URL that is not the Cloudflare API: the runtime cache seed and the
@@ -78,6 +87,13 @@ export const FACT_ACCESS_APP = 'access.app_id';
 export const FACT_OWNER_EMAIL = 'access.owner_email';
 
 export const FACT_VERSION_ID = 'worker.version_id';
+
+/** The most the upload step was holding at once, in bytes: the compressed
+ *  artifact, the module set it must send in one request, and the asset batch
+ *  in flight. Durable because it is what says whether the next release still
+ *  installs from inside a Durable Object, and a run that reset would leave no
+ *  other trace of how close it came. */
+export const FACT_UPLOAD_PEAK = 'worker.held_peak_bytes';
 
 export const FACT_ADDRESS = 'worker.address';
 

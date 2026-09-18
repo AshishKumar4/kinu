@@ -149,7 +149,13 @@ mkdirSync(artifactDir, { recursive: true });
 
 const artifact = `kinu-worker-${version}.tar.gz`;
 
-const tar = Bun.spawnSync(['tar', '-czf', join(artifactDir, artifact), '-C', staging, 'release.json', 'worker', 'client']);
+// ASSETS BEFORE MODULES, and it is load-bearing. The Cloudflare door installs
+// this artifact with one pass of the stream (`core/src/deploy/artifact.ts`),
+// uploading each asset as it arrives and holding the module set to the end,
+// because a version is one multipart request. In this order the compressed
+// archive is let go of before the module set is held, and the peak inside the
+// Durable Object is set by the largest member rather than by the release.
+const tar = Bun.spawnSync(['tar', '-czf', join(artifactDir, artifact), '-C', staging, 'release.json', 'client', 'worker']);
 
 if (tar.exitCode !== 0) {
   console.error(`build-worker-release: tar failed — ${new TextDecoder().decode(tar.stderr)}`);

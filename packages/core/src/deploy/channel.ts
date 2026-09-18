@@ -5,8 +5,10 @@
  * deployment updating itself and `kinu deploy local` all install the same two
  * objects: the manifest a channel publishes and the tarball it names. The
  * digest is verified against the channel's own `.sha256` before a byte of the
- * archive is opened, so an artifact that does not match is never unpacked,
- * never uploaded and never written to disk.
+ * archive is decompressed, so an artifact that does not match is never
+ * unpacked, never uploaded and never written to disk. The compressed bytes
+ * are the one whole copy the run holds; everything after that is a walk
+ * (`artifact.ts`).
  */
 import { TarArtifact } from './artifact';
 import { sha256Hex } from '../safety/argument-digest';

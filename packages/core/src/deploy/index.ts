@@ -11,7 +11,7 @@ export {
   type ReleaseVectorIndex, type ReleaseWorker, type SecretHandling, type VarPolicy,
 } from './manifest';
 
-export { TarArtifact } from './artifact';
+export { HeldBytes, TarArtifact, type ArtifactMember } from './artifact';
 
 export {
   DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_PAGE_PATH, isDeployPath,
@@ -51,7 +51,7 @@ export {
 
 export {
   FACT_ACCESS_APP, FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
-  FACT_VERSION_ID,
+  FACT_UPLOAD_PEAK, FACT_VERSION_ID,
   FACT_WORKERS_SUBDOMAIN, kvFact,
   type ArtifactSource, type DeployContext, type DeployFacts, type DeploySecretVault, type HttpGet,
 } from './context';

@@ -17,6 +17,29 @@
  * 32 hex characters), and the KV, R2, Vectorize, AI Gateway, Access, DNS and
  * Workers domains resources.
  *
+ * HOW MUCH OF A RELEASE HAS TO BE IN MEMORY AT ONCE, read 2026-09-18 from the
+ * same two pages:
+ *   - THE MODULE SET, MEASURED. A version is created by ONE multipart request
+ *     carrying `metadata` and every module part; the reference describes no
+ *     second request and no resumable form, so the whole module set is held
+ *     together. This tree's modules are 120 files and 29.19 MiB
+ *     (`packages/cf-backend/dist/kinu` built 2026-09-16, `.map` and
+ *     `wrangler.json` excluded, measured 2026-09-18). It fits: the module set
+ *     plus the copy the transport makes of it is 58.4 MiB, and the whole
+ *     upload holds 88.18 MiB at its peak — measured the same day in
+ *     `packages/cf-backend/tests/workerd/deploy-ledger.test.ts` on a release
+ *     of this size — against the `do.isolate.transient_alloc_reset` ceiling
+ *     the catalog records.
+ *   - THE ASSET BATCH, ASSUMED. The upload session answers with `buckets`,
+ *     which the reference calls instructions on how to "optimally batch
+ *     upload your files", and says the completion token comes back "once
+ *     every file in the manifest has been uploaded" — a per-manifest
+ *     condition, not a per-bucket one. Uploading a bucket in several smaller
+ *     requests therefore reads as allowed, and this flow does it
+ *     (`ASSET_BATCH_BYTES`), because one bucket of this release's assets is
+ *     104 MiB of base64 in a single body. UNMEASURED against the live API:
+ *     the one real run (below) never reached the upload.
+ *
  * WHAT ONE REAL RUN MEASURED, 2026-09-18, account f44999d1, instance
  * `kinu-probe-202609181030`, release 0.4.0+probe-d5d744899 driven through this
  * plan with an account API token as the bearer:
@@ -50,15 +73,16 @@ import * as v from 'valibot';
 import { cloudflareResult, readEnvelope, type CloudflareTransport, type UploadPart } from './cloudflare';
 import {
   FACT_ACCESS_APP, FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
-  FACT_VERSION_ID, FACT_WORKERS_SUBDOMAIN, kvFact, type DeployContext,
+  FACT_UPLOAD_PEAK, FACT_VERSION_ID, FACT_WORKERS_SUBDOMAIN, kvFact, type DeployContext,
 } from './context';
 import {
   DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, MINTED_SECRETS,
   REFRESH_TOKEN_KEY,
   type DeployInputs, type DeploymentRecord,
 } from './inputs';
+import type { ArtifactMember, HeldBytes } from './artifact';
 import type { JsonObject, JsonValue } from '../utils/json';
-import type { ReleaseBinding, ReleaseFile, ReleaseManifest } from './manifest';
+import type { ReleaseBinding, ReleaseManifest } from './manifest';
 
 export interface DeployStep {
   readonly id: string;
@@ -88,6 +112,24 @@ const ASSET_CONTENT_TYPES = {
   sh: 'text/x-shellscript', wgsl: 'text/plain', tar: 'application/x-tar',
   gz: 'application/gzip', webmanifest: 'application/manifest+json',
 } satisfies Record<string, string>;
+
+/**
+ * How much base64 an asset batch carries before it is sent.
+ *
+ * The upload session's `buckets` are Cloudflare's batching advice, and for
+ * this release one bucket is every asset: 78 MiB of files, 104 MiB once
+ * base64'd, in one body — over the `do.isolate.transient_alloc_reset`
+ * ceiling the catalog records, so the object that installs the release
+ * cannot build it. The bound is bytes rather than files because the bundle's
+ * files differ by four orders of magnitude. A member larger than this is a
+ * batch of its own — an asset is uploaded whole or not at all.
+ */
+const ASSET_BATCH_BYTES = 8 * 1024 * 1024;
+
+/** Base64's alphabet as bytes, so an asset is encoded straight into the body
+ *  it is sent as and never exists as a 28 MiB string on the way. */
+const BASE64_ALPHABET = new TextEncoder()
+  .encode('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/');
 
 /** The step list for one release and one set of answers. */
 export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): readonly DeployStep[] {
@@ -453,6 +495,16 @@ function secretsStep(manifest: ReleaseManifest): DeployStep {
   };
 }
 
+/**
+ * The Worker, uploaded out of one walk of the artifact.
+ *
+ * THE ORDER IS FORCED. The asset session is opened first because it needs
+ * only the manifest and it says which assets Cloudflare still wants; then the
+ * archive is walked once, each asset going out in a bounded batch as it
+ * arrives and each module kept, because a version is one multipart request.
+ * The release is never in memory as a whole: what the run holds at its peak
+ * is recorded as a fact (`FACT_UPLOAD_PEAK`) and the ledger row carries it.
+ */
 function uploadStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'upload',
@@ -460,39 +512,40 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
     async run(context: DeployContext): Promise<string> {
       const accountId = context.inputs.accountId;
       const script = context.inputs.instanceName;
-      const completion = await uploadAssets(context, manifest, script);
-      const modules: UploadPart[] = [];
-
-      for (const path of manifest.worker.modules) {
-        modules.push({
-          name: path,
-          filename: path,
-          contentType: path.endsWith('.wasm') ? 'application/wasm' : 'application/javascript+module',
-          body: await context.artifact.read(`${manifest.worker.modulesPath}/${path}`),
-        });
-      }
-
+      const session = await openAssetSession(context, manifest, script);
+      const carried = await carryArtifact(context, manifest, session);
       const exists = await scriptExists(context.transport, accountId, script);
-      const metadata = await versionMetadata(context, manifest, completion, exists);
+      const metadata = await versionMetadata(context, manifest, carried.token, exists);
 
       const path = exists
         ? `/accounts/${accountId}/workers/scripts/${script}/versions`
         : `/accounts/${accountId}/workers/scripts/${script}`;
+
+      // The transport copies every part into the multipart body
+      // (`cloudflare.ts`), so the module set exists twice while this request
+      // is in flight, and the peak has to say so.
+      context.artifact.held.hold(carried.bytes);
 
       const response = await context.transport.upload({
         method: exists ? 'POST' : 'PUT',
         path,
         parts: [
           { name: 'metadata', contentType: 'application/json', body: JSON.stringify(metadata) },
-          ...modules,
+          ...carried.modules,
         ],
       });
 
+      // The modules and the transport's copy of them, both let go of.
+      context.artifact.held.release(carried.bytes * 2);
+
       const version = readEnvelope(path, response, VersionSchema);
+      const peak = context.artifact.held.peak();
 
       context.facts.set(FACT_VERSION_ID, version.id);
+      context.facts.set(FACT_UPLOAD_PEAK, String(peak));
 
-      return `Version ${version.id} uploaded with ${modules.length} module(s).`;
+      return `Version ${version.id} uploaded with ${carried.modules.length} module(s), `
+        + `holding ${mebibytes(peak)} at the peak.`;
     },
   };
 }
@@ -646,25 +699,40 @@ function handoverStep(manifest: ReleaseManifest): DeployStep {
 
 /* ── the upload's three phases ────────────────────────────────────────── */
 
-async function uploadAssets(
+/** The asset upload session: the token every batch presents, and the hashes
+ *  Cloudflare has not got yet. */
+interface AssetSession {
+  readonly token: string;
+  readonly wanted: ReadonlySet<string>;
+  /** The asset hash of every member the release serves, by archive path,
+   *  which is how a member coming off the stream is recognised. */
+  readonly hashes: ReadonlyMap<string, string>;
+}
+
+/**
+ * Phase one: register the manifest.
+ *
+ * An empty token means the release carries no assets at all, which is what
+ * `keep_assets` is for. A token with no wanted hashes is the completion token
+ * already — every file was uploaded by an earlier version.
+ */
+async function openAssetSession(
   context: DeployContext,
   manifest: ReleaseManifest,
   script: string,
-): Promise<string> {
+): Promise<AssetSession> {
   const prefix = `${manifest.worker.assets}/`;
-  const assets = manifest.files.filter((file) => file.path.startsWith(prefix) && file.assetHash !== null);
-
-  if (assets.length === 0) return '';
-
-  const catalog = new Map<string, ReleaseFile>();
+  const hashes = new Map<string, string>();
   const wire: JsonObject = {};
 
-  for (const asset of assets) {
-    const served = `/${asset.path.slice(prefix.length)}`;
+  for (const file of manifest.files) {
+    if (!file.path.startsWith(prefix) || file.assetHash === null) continue;
 
-    catalog.set(asset.assetHash ?? '', asset);
-    wire[served] = { hash: asset.assetHash ?? '', size: asset.size };
+    hashes.set(file.path, file.assetHash);
+    wire[`/${file.path.slice(prefix.length)}`] = { hash: file.assetHash, size: file.size };
   }
+
+  if (hashes.size === 0) return { token: '', wanted: new Set(), hashes };
 
   const sessionPath = `/accounts/${context.inputs.accountId}/workers/scripts/${script}/assets-upload-session`;
 
@@ -674,36 +742,198 @@ async function uploadAssets(
     AssetSessionSchema,
   );
 
-  let token = session.jwt ?? '';
-  const buckets = session.buckets ?? [];
+  const wanted = new Set((session.buckets ?? []).flat());
 
-  context.note(`${assets.length} asset(s), ${buckets.length} batch(es) to upload.`);
+  context.note(`${hashes.size} asset(s), ${wanted.size} of them to upload.`);
 
-  for (const bucket of buckets) {
-    const parts: UploadPart[] = [];
+  return { token: session.jwt ?? '', wanted, hashes };
+}
 
-    for (const hash of bucket) {
-      const asset = catalog.get(hash);
+/** What one walk of the artifact produced: the assets are already uploaded,
+ *  and the modules are the parts the version request still has to carry. */
+interface CarriedRelease {
+  readonly token: string;
+  readonly modules: readonly UploadPart[];
+  /** What the modules weigh, so the caller can account for the copy the
+   *  transport makes of them and let go of both afterwards. */
+  readonly bytes: number;
+}
 
-      if (asset === undefined) throw new Error(`Cloudflare asked for asset ${hash}, which this release does not carry`);
-      const bytes = await context.artifact.read(asset.path);
+/**
+ * Phase two: one pass over the archive, uploading the assets as they arrive.
+ *
+ * WHAT IS HELD AND FOR HOW LONG. An asset is encoded into the body it is sent
+ * as and let go of when its batch lands; a module is kept until the version
+ * request, because there is only one. The artifact is ordered assets-then-
+ * modules by `scripts/build-worker-release.ts` for exactly this reason: the
+ * compressed archive is released when the walk ends, so the module set and
+ * the compressed bytes are not both held while the largest asset is encoded.
+ * An artifact in the other order still installs; it just costs more.
+ */
+async function carryArtifact(
+  context: DeployContext,
+  manifest: ReleaseManifest,
+  session: AssetSession,
+): Promise<CarriedRelease> {
+  const held = context.artifact.held;
+  const prefix = `${manifest.worker.modulesPath}/`;
+  const named = new Set(manifest.worker.modules);
+  const modules: UploadPart[] = [];
+  let moduleBytes = 0;
+  let batch: UploadPart[] = [];
+  let batchBytes = 0;
+  let uploaded = 0;
+  let token = session.token;
 
-      parts.push({
-        name: hash,
-        filename: hash,
-        contentType: contentTypeOf(asset.path),
-        body: base64(bytes),
+  for await (const member of context.artifact.members()) {
+    const moduleName = member.path.startsWith(prefix) ? member.path.slice(prefix.length) : '';
+
+    if (named.has(moduleName)) {
+      const body = await member.bytes();
+
+      held.hold(body.length);
+      moduleBytes += body.length;
+      modules.push({
+        name: moduleName,
+        filename: moduleName,
+        contentType: moduleName.endsWith('.wasm') ? 'application/wasm' : 'application/javascript+module',
+        body,
       });
+      continue;
     }
 
-    const uploadPath = `/accounts/${context.inputs.accountId}/workers/assets/upload?base64=true`;
-    const response = await context.transport.upload({ method: 'POST', path: uploadPath, bearer: token, parts });
-    const answer = readEnvelope(uploadPath, response, v.object({ jwt: v.optional(v.string()) }));
+    const hash = session.hashes.get(member.path);
 
-    token = answer.jwt ?? token;
+    if (hash === undefined || !session.wanted.has(hash)) continue;
+
+    // Sent BEFORE this member joins, not after it overflowed: a member larger
+    // than the bound then travels on its own, and the biggest body the object
+    // ever builds is one member's base64 rather than that plus a full batch.
+    if (batchBytes > 0 && batchBytes + member.size > ASSET_BATCH_BYTES) {
+      token = await sendAssets(context, batch, token, held);
+      uploaded += batch.length;
+      held.release(batchBytes);
+      batch = [];
+      batchBytes = 0;
+    }
+
+    const body = await base64Member(member, held);
+
+    batch.push({ name: hash, filename: hash, contentType: contentTypeOf(member.path), body });
+    batchBytes += body.length;
   }
 
-  return token;
+  if (batch.length > 0) {
+    token = await sendAssets(context, batch, token, held);
+    uploaded += batch.length;
+    held.release(batchBytes);
+  }
+
+  if (uploaded !== session.wanted.size) {
+    throw new Error(`Cloudflare asked for ${String(session.wanted.size)} asset(s) and the release artifact carries ${String(uploaded)}`);
+  }
+
+  if (modules.length !== manifest.worker.modules.length) {
+    throw new Error(`the release artifact carries ${String(modules.length)} of the ${String(manifest.worker.modules.length)} module(s) the manifest names`);
+  }
+
+  context.note(`${uploaded} asset(s) uploaded, ${modules.length} module(s) held for the version.`);
+
+  return { token, modules, bytes: moduleBytes };
+}
+
+/** One batch, sent. The batch exists twice while the request is in flight —
+ *  the parts, and the copy the transport makes of them into the multipart
+ *  body — and only the copy is released here; the parts belong to the caller. */
+async function sendAssets(
+  context: DeployContext,
+  parts: readonly UploadPart[],
+  token: string,
+  held: HeldBytes,
+): Promise<string> {
+  const bytes = parts.reduce((total, part) => total + part.body.length, 0);
+  const uploadPath = `/accounts/${context.inputs.accountId}/workers/assets/upload?base64=true`;
+
+  held.hold(bytes);
+
+  const response = await context.transport.upload({ method: 'POST', path: uploadPath, bearer: token, parts });
+
+  held.release(bytes);
+  const answer = readEnvelope(uploadPath, response, v.object({ jwt: v.optional(v.string()) }));
+
+  return answer.jwt ?? token;
+}
+
+/**
+ * A member as the base64 the asset endpoint takes (`?base64=true`), written
+ * straight out of the stream into the body it is sent as.
+ *
+ * NOT `btoa` OVER THE WHOLE MEMBER. That holds the member, a binary string of
+ * it and its encoding at once — three copies of a file that is 21.5 MiB in
+ * this release, inside an object with a 128 MiB allocation ceiling.
+ */
+async function base64Member(member: ArtifactMember, held: HeldBytes): Promise<Uint8Array<ArrayBuffer>> {
+  const encoded = new Uint8Array(Math.ceil(member.size / 3) * 4);
+  const carry = new Uint8Array(3);
+  let carried = 0;
+  let at = 0;
+
+  held.hold(encoded.length);
+
+  for await (const piece of member.chunks()) {
+    let from = 0;
+
+    if (carried > 0) {
+      from = Math.min(3 - carried, piece.length);
+      carry.set(piece.subarray(0, from), carried);
+      carried += from;
+
+      if (carried < 3) continue;
+
+      at = writeBase64(encoded, at, carry);
+      carried = 0;
+    }
+
+    const whole = from + Math.floor((piece.length - from) / 3) * 3;
+
+    at = writeBase64(encoded, at, piece.subarray(from, whole));
+
+    if (whole < piece.length) {
+      carry.set(piece.subarray(whole), 0);
+      carried = piece.length - whole;
+    }
+  }
+
+  if (carried > 0) at = writeBase64(encoded, at, carry.subarray(0, carried));
+
+  if (at !== encoded.length) throw new Error(`${member.path} is ${String(member.size)} bytes and encoded to ${String(at)}`);
+
+  return encoded;
+}
+
+/** Three bytes to four characters, into `out` at `at`; a final group of one
+ *  or two bytes is padded. Returns where the next group goes. */
+function writeBase64(out: Uint8Array, at: number, bytes: Uint8Array): number {
+  let cursor = at;
+
+  for (let index = 0; index < bytes.length; index += 3) {
+    const first = bytes[index] ?? 0;
+    const second = bytes[index + 1];
+    const third = bytes[index + 2];
+
+    out[cursor] = BASE64_ALPHABET[first >> 2] ?? 0;
+    out[cursor + 1] = BASE64_ALPHABET[((first & 0x03) << 4) | ((second ?? 0) >> 4)] ?? 0;
+    out[cursor + 2] = second === undefined ? 0x3d : BASE64_ALPHABET[((second & 0x0f) << 2) | ((third ?? 0) >> 6)] ?? 0;
+    out[cursor + 3] = third === undefined ? 0x3d : BASE64_ALPHABET[third & 0x3f] ?? 0;
+    cursor += 4;
+  }
+
+  return cursor;
+}
+
+/** A byte count as a person reads it, for the one line the ledger shows. */
+function mebibytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
 }
 
 async function scriptExists(transport: CloudflareTransport, accountId: string, script: string): Promise<boolean> {
@@ -889,15 +1119,9 @@ function extensionOf(path: string): string {
   return dot === -1 ? '' : path.slice(dot + 1).toLowerCase();
 }
 
-/** Base64 in chunks: `String.fromCharCode(...bytes)` on a megabyte-sized asset
- *  overflows the argument stack, which is a crash on exactly the biggest file
- *  in the bundle and on nothing smaller. */
+/** The minted root secrets, as text. Thirty-two random bytes each, which is
+ *  why one `String.fromCharCode` call is enough; the asset upload encodes its
+ *  members out of the archive stream instead (`base64Member`). */
 function base64(bytes: Uint8Array): string {
-  let binary = '';
-
-  for (let index = 0; index < bytes.length; index += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
-  }
-
-  return btoa(binary);
+  return btoa(String.fromCharCode(...bytes));
 }

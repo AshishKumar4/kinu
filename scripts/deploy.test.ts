@@ -1314,4 +1314,22 @@ describe("worker release artifact", () => {
     expect(entries.some((entry) => entry.startsWith("client/downloads/"))).toBe(false);
     expect(entries).toContain("release.json");
   });
+
+  /**
+   * The order is part of the artifact, not an accident of the tar line. The
+   * Cloudflare door installs this with one pass of the stream and holds the
+   * module set to the end, because a version is one multipart request
+   * (`packages/core/src/deploy/steps.ts`). Modules first would mean holding
+   * them through every asset, which is the difference between a peak set by
+   * the largest member and one set by the release.
+   */
+  test("every asset comes before every module", () => {
+    const listed = Bun.spawnSync(["tar", "-tzf", join(dist, "worker-release", ARTIFACT)], { stdout: "pipe" });
+    const entries = new TextDecoder().decode(listed.stdout).split("\n").filter((line) => line.trim() !== "");
+    const lastAsset = entries.reduce((last, entry, at) => (entry.startsWith("client/") ? at : last), -1);
+    const firstModule = entries.findIndex((entry) => entry.startsWith("worker/"));
+
+    expect(lastAsset).toBeGreaterThan(-1);
+    expect(firstModule).toBeGreaterThan(lastAsset);
+  });
 });
