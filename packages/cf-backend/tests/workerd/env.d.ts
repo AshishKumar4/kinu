@@ -21,7 +21,7 @@ import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
 } from './deploy-fake';
-import type { DeployInputs, DeploySnapshot } from '@kinu.run/core/deploy';
+import type { DeployInputs, DeployRunPhase, DeploySnapshot } from '@kinu.run/core/deploy';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
@@ -182,6 +182,9 @@ interface DeployRunProbeRpc extends Rpc.DurableObjectBranded {
   heldSecretNames(): Promise<readonly string[]>;
   forget(): Promise<void>;
   alarmAt(): Promise<number>;
+  armedAt(): Promise<number>;
+  settledAfter(states: readonly DeployRunPhase[]): Promise<DeploySnapshot>;
+  reportAfterAlarm(): Promise<DeploySnapshot>;
   expireSoon(): Promise<boolean>;
   rowText(): Promise<string>;
   abort(reason: string): Promise<void>;
@@ -194,6 +197,8 @@ interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
   serve(build: DeployFakeServedBuild): Promise<void>;
   publish(build: DeployFakeServedBuild): Promise<void>;
   stallOnce(stall: DeployFakeStall): Promise<void>;
+  stallReached(): Promise<void>;
+  releaseStall(): Promise<void>;
   weigh(weight: DeployFakeWeight): Promise<void>;
   expireGrant(expiresIn: number): Promise<void>;
 }

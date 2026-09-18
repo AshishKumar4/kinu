@@ -70,7 +70,11 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
   const [offer, setOffer] = useState<UpdateOffer | null>(fixture ?? null);
   const [run, setRun] = useState<DeploySnapshot | null>(fixtureRun ?? null);
   const [err, setErr] = useState<string | null>(null);
-  const [restarting, setRestarting] = useState(false);
+  /** What the last poll failed with, or null while the polls are answering. A
+   *  mid-run read that does not answer is expected — the Worker being replaced
+   *  is the update working — but the page holds WHAT did not answer, so a poll
+   *  failing for any other reason is on the page instead of nowhere. */
+  const [restarting, setRestarting] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -99,16 +103,23 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
     if (!live || !going) return;
     let mounted = true;
 
+    // The Worker this page is talking to is the one being replaced. A read that
+    // does not answer mid-run is that replacement, not a failure — so the cause
+    // is held as the reason the rows are late, beside the restart notice, and
+    // never dropped: a poll that stopped answering for any other reason then
+    // says so on the page instead of nowhere.
+    const late = <Thrown,>(cause: Thrown): void => {
+      if (mounted) setRestarting(renderThrownChain({ cause }));
+    };
+
     const timer = setInterval(() => {
       read(DeploySnapshotSchema, "/api/updates/run")
         .then((held) => {
           if (!mounted) return;
-          setRestarting(false);
+          setRestarting(null);
           setRun(held);
         })
-        // The Worker this page is talking to is the one being replaced. A read
-        // that does not answer mid-run is that replacement, not a failure.
-        .catch(() => { if (mounted) setRestarting(true); });
+        .catch(late);
     }, RUN_POLL_MS);
 
     return () => {
@@ -166,9 +177,10 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
       {run !== null && run.steps.length > 0 && (
         <section className="space-y-2" aria-label="Update steps">
           <h2 className="p-eyebrow">{run.state === "done" ? "What it did" : "Installing"}</h2>
-          {restarting && (
-            <p className="p-meta p-text-3">
+          {restarting !== null && (
+            <p className="p-meta p-text-3" data-updates="restarting">
               This deployment is restarting on the new version, so the last rows may arrive late.
+              The last read said: {restarting}
             </p>
           )}
           <ul className="space-y-2">

@@ -453,10 +453,11 @@ interface Held {
   shortGrant: number | null;
   refreshes: number;
   expiredCalls: number;
-  /** One call this plane answers LATE, after doing its work: the window in
-   *  which a Durable Object dies having written to somebody's account without
-   *  learning that it did. */
-  stallOnce: DeployFakeStall | null;
+  /** One call this plane HOLDS after doing its work: the window in which a
+   *  Durable Object dies having written to somebody's account without learning
+   *  that it did. Held until the row that armed it says so, never for a
+   *  duration — the row is what observes the abort and then releases. */
+  stallOnce: ArmedStall | null;
   /** Which asset hashes the open upload session still wants, and which have
    *  arrived: the completion token is answered when the second covers the
    *  first, the way the reference describes it. */
@@ -518,6 +519,10 @@ function reset(): void {
   held.shortGrant = null;
   held.refreshes = 0;
   held.expiredCalls = 0;
+  // A hold the previous row left open is answered rather than dropped: the call
+  // waiting on it belongs to an object that is gone, and a promise nobody
+  // resolves would keep that activation's fetch alive into the next row.
+  held.stallOnce?.answer();
   held.stallOnce = null;
   held.assetsWanted = new Set<string>();
   held.assetsUploaded = new Set<string>();
@@ -548,23 +553,53 @@ const RefusalSchema = v.object({
   message: v.string(),
 });
 
-/** One call answered late: the method and path it matches, and the delay in
- *  ms. The method is part of it because a step LOOKS before it creates, and
- *  the call worth delaying is the one that wrote. */
+/** One call held open: the method and path it matches. The method is part of
+ *  it because a step LOOKS before it creates, and the call worth holding is the
+ *  one that wrote. No duration — the row that armed it decides when it is
+ *  answered, so the window is a signal and not a race with the machine. */
 export interface DeployFakeStall {
   readonly method: string;
   readonly path: string;
-  readonly ms: number;
 }
 
-const StallSchema = v.object({ method: v.string(), path: v.string(), ms: v.number() });
+const StallSchema = v.object({ method: v.string(), path: v.string() });
+
+/** An armed stall and its two signals: `reached` settles when the matched call
+ *  has done its work and is being held, and `answer` is what the row calls to
+ *  let that call return. Deferreds rather than events, so a row that asks after
+ *  the call arrived is answered instead of waiting for a second one. */
+interface ArmedStall {
+  readonly match: DeployFakeStall;
+  /** Whether the matched call has already been taken: the hold is one call,
+   *  and the arming outlives it so the row can still ask and release. */
+  taken: boolean;
+  readonly reached: Promise<void>;
+  readonly enter: () => void;
+  readonly released: Promise<void>;
+  readonly answer: () => void;
+}
+
+function armStall(match: DeployFakeStall): ArmedStall {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+
+  return {
+    match,
+    taken: false,
+    reached: entered.promise,
+    enter: entered.resolve,
+    released: release.promise,
+    answer: release.resolve,
+  };
+}
 
 const ExpireSchema = v.object({ expiresIn: v.number() });
 
 /** The control surface, named once: anything else is a caller's typo and this
  *  plane refuses it rather than answering a state nobody asked to change. */
 const CONTROL_PATHS: readonly string[] = [
-  '/reset', '/refuse', '/serve', '/publish', '/state', '/stall', '/weigh', '/expire',
+  '/reset', '/refuse', '/serve', '/publish', '/state', '/stall', '/stall/reached',
+  '/stall/release', '/weigh', '/expire',
 ];
 
 function envelope(result: JsonValue, status = 200): Response {
@@ -583,23 +618,24 @@ function bearerOf(request: Request): string {
 }
 
 /**
- * The armed delay, spent AFTER the call it matched has already done its work.
+ * The armed hold, entered AFTER the call it matched has already done its work.
  *
  * The window a deployment cannot avoid: the account was written to and the
- * object has not learned it yet. A row aborts the object inside this window,
- * and what must happen next is that the redelivered alarm looks before it
- * creates rather than creating a second one.
+ * object has not learned it yet. The row that armed the hold is told when this
+ * call reached it (`/stall/reached`), aborts the object, and then releases it;
+ * what must happen next is that the redelivered alarm looks before it creates
+ * rather than creating a second one. A hold bounded by a duration instead would
+ * end on whichever of the two the machine got to first.
  */
 async function stalled(method: string, path: string, answer: Response): Promise<Response> {
   const armed = held.stallOnce;
 
-  if (armed === null || method !== armed.method || !path.startsWith(armed.path)) return answer;
-  held.stallOnce = null;
+  if (armed === null || armed.taken) return answer;
 
-  const { promise, resolve } = Promise.withResolvers<void>();
-
-  setTimeout(resolve, armed.ms);
-  await promise;
+  if (method !== armed.match.method || !path.startsWith(armed.match.path)) return answer;
+  armed.taken = true;
+  armed.enter();
+  await armed.released;
 
   return answer;
 }
@@ -859,7 +895,15 @@ async function control(url: URL, request: Request): Promise<Response> {
 
   if (url.pathname === '/publish') held.published = v.parse(ServedBuildSchema, await request.json());
 
-  if (url.pathname === '/stall') held.stallOnce = v.parse(StallSchema, await request.json());
+  if (url.pathname === '/stall') held.stallOnce = armStall(v.parse(StallSchema, await request.json()));
+
+  // The two halves of the hold, both answered on the hold itself rather than on
+  // a clock: `reached` settles once the matched call has written and is being
+  // held, and `release` lets it answer. An unarmed plane answers both at once —
+  // a row that did not arm one is not waiting for one.
+  if (url.pathname === '/stall/reached') await held.stallOnce?.reached;
+
+  if (url.pathname === '/stall/release') held.stallOnce?.answer();
 
   if (url.pathname === '/weigh') held.weigh = v.parse(WeighSchema, await request.json());
 

@@ -574,7 +574,7 @@ export class DeployRunDO extends DurableObject<Env> {
    * upload payload was only ever compensating for a binding list that dropped
    * them.
    */
-  private vault(): DeploySecretVault {
+  protected vault(): DeploySecretVault {
     return {
       read: async (name: string) => await this.ctx.storage.get<string>(`${SECRET_PREFIX}${name}`) ?? null,
       write: async (name: string, value: string) => {
