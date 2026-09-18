@@ -175,11 +175,13 @@ function loadDevVars(paths: readonly string[]) {
 }
 
 /** The worktree's own `.dev.vars` files first (checkout-local wins), then the
- *  primary checkout's root `.dev.vars` — where the containers-registry token
- *  lives — resolved through `git worktree list` row one, never a literal path.
- *  vite dev needs these in PROCESS env for the container registry; wrangler's
- *  own secret injection does not cover that check (measured 2026-09-17: dev
- *  exits "error when starting dev server" without CLOUDFLARE_API_TOKEN). */
+ *  primary checkout's root and cf-backend `.dev.vars` — where the
+ *  containers-registry token and CREDENTIAL_ENCRYPTION_KEY live — resolved
+ *  through `git worktree list` row one, never a literal path. vite dev needs
+ *  these in PROCESS env for the container registry; wrangler's own secret
+ *  injection does not cover that check (measured 2026-09-17: dev exits "error
+ *  when starting dev server" without CLOUDFLARE_API_TOKEN), and the boot's
+ *  credential path 503s without the cf-backend file. */
 function liveAppEnv() {
   const repo = join(import.meta.dir, '..');
   const primary = /^worktree (.+)$/mu.exec(git(repo, 'worktree', 'list', '--porcelain'))?.[1];
@@ -187,7 +189,9 @@ function liveAppEnv() {
   return loadDevVars([
     join(repo, '.dev.vars'),
     join(repo, 'packages', 'cf-backend', '.dev.vars'),
-    ...(primary !== undefined ? [join(primary, '.dev.vars')] : []),
+    ...(primary !== undefined
+      ? [join(primary, '.dev.vars'), join(primary, 'packages', 'cf-backend', '.dev.vars')]
+      : []),
   ]);
 }
 
