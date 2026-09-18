@@ -15,10 +15,22 @@
  * the three-phase asset upload (.../workers/static-assets/direct-upload/, which
  * also fixes the asset hash: `sha256(base64(content) + extension)` truncated to
  * 32 hex characters), and the KV, R2, Vectorize, AI Gateway, Access, DNS and
- * Workers domains resources. None of them is measured against a live account
- * from this tree — there is no Cloudflare credential here — so the proof that
- * the flow holds is the fake transport in the suite, and the first real run is
- * the measurement.
+ * Workers domains resources.
+ *
+ * WHAT IS STILL UNMEASURED, and must be, against a live account before the
+ * update path is trusted (AGENTS.md: a claim about platform behaviour cites a
+ * dated measurement):
+ *   - `migrations` is sent only on the first upload (`PUT .../scripts/<name>`)
+ *     and never on `POST .../versions`. The premise is that re-declaring
+ *     `new_sqlite_classes` under a tag the script already applied is refused
+ *     rather than ignored. UNMEASURED.
+ *   - `keep_bindings: ['secret_text', 'secret_key']` is what carries the
+ *     secrets this deployment already runs with — the ones nobody typed into
+ *     this flow — into the new version. The premise is that a version upload
+ *     replaces the whole binding list unless told otherwise. UNMEASURED; the
+ *     `deploymentSecrets` read-through it replaced was the compensation for it.
+ * Everything else here is proved against the fake transport in the suite, and
+ * the first real run is the measurement.
  */
 import * as v from 'valibot';
 import { cloudflareResult, readEnvelope, type CloudflareTransport, type UploadPart } from './cloudflare';
@@ -392,6 +404,16 @@ function secretsStep(manifest: ReleaseManifest): DeployStep {
       // Before the upload, not after: a version's secrets are bindings of that
       // version, so a version uploaded without them runs a deployment whose
       // signed-in surfaces all answer 503.
+      // A DEPLOYMENT'S ROOT KEYS ARE MINTED ONCE AND NEVER AGAIN. An update
+      // does not mint and does not need to: the live keys are bindings of the
+      // running Worker and `keep_bindings` on the version upload carries them
+      // forward untouched. Minting here would bind a fresh
+      // `CREDENTIAL_ENCRYPTION_KEY` over the one every stored credential was
+      // sealed with, which is unreadable data rather than a failed step.
+      if (context.update) {
+        return `${MINTED_SECRETS.length} secret(s) kept from the running version.`;
+      }
+
       for (const name of MINTED_SECRETS) {
         if (await context.vault.read(name) !== null) continue;
         const bytes = new Uint8Array(32);
@@ -436,8 +458,8 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
         });
       }
 
-      const metadata = await versionMetadata(context, manifest, completion);
       const exists = await scriptExists(context.transport, accountId, script);
+      const metadata = await versionMetadata(context, manifest, completion, exists);
 
       const path = exists
         ? `/accounts/${accountId}/workers/scripts/${script}/versions`
@@ -499,11 +521,20 @@ function addressStep(inputs: DeployInputs): DeployStep {
         // A version upload does not serve traffic until a deployment points at
         // it. The first upload (`PUT .../scripts/<name>`) already deployed, and
         // pointing a deployment at the same version again is a no-op.
-        await context.transport.request({
-          method: 'POST',
-          path: `/accounts/${accountId}/workers/scripts/${script}/deployments`,
-          body: { strategy: 'percentage', versions: [{ version_id: version, percentage: 100 }] },
-        });
+        //
+        // Read through the same envelope as every other write here: a refused
+        // pointer move — a scope the token lacks, a version the account will
+        // not deploy — leaves the OLD build serving, and a step that discarded
+        // this answer would report the new one as live.
+        await cloudflareResult(
+          context.transport,
+          {
+            method: 'POST',
+            path: `/accounts/${accountId}/workers/scripts/${script}/deployments`,
+            body: { strategy: 'percentage', versions: [{ version_id: version, percentage: 100 }] },
+          },
+          v.object({ id: v.optional(v.string()) }),
+        );
       }
 
       return `Answering on ${context.facts.get(FACT_ADDRESS) ?? ''}.`;
@@ -531,7 +562,20 @@ function smokeStep(): DeployStep {
         await response.json(),
       );
 
-      return `Health answers ${health.version ?? 'an unstamped build'}.`;
+      // THE CHECK IS WHICH BUILD ANSWERED, not that something did. On an update
+      // the old version answers 200 from the same address, so a smoke step that
+      // only read `response.ok` would pass while the deployment still served
+      // the previous build — and the next apply, over a finished ledger, would
+      // have nothing left to repair.
+      if (health.version !== context.manifest.version || health.sha !== context.manifest.sha) {
+        throw new Error(
+          `https://${address}/api/health answers ${health.version ?? 'an unstamped build'}`
+          + ` (${health.sha ?? 'no sha'}), and this release is ${context.manifest.version}`
+          + ` (${context.manifest.sha})`,
+        );
+      }
+
+      return `Health answers ${health.version}.`;
     },
   };
 }
@@ -666,10 +710,26 @@ async function objectExists(transport: CloudflareTransport, path: string): Promi
   return response.status >= 200 && response.status < 300;
 }
 
+/**
+ * The upload's metadata.
+ *
+ * MIGRATIONS ONLY ON THE FIRST UPLOAD. `new_sqlite_classes` declares a class
+ * that did not exist; re-sending the same declaration against a script that
+ * already applied that tag is an error, not a no-op, so an update sends none.
+ *
+ * `keep_bindings` IS WHY AN UPDATE CAN BE PARTIAL. A version upload replaces the
+ * whole binding list, so every secret not named here — anything the owner set
+ * by hand, and the deployment's own refresh token and record — would be dropped
+ * from the new version. Naming the two secret kinds keeps them, which is also
+ * what lets the vault stop reading through to this Worker's live `env`.
+ *
+ * MEASURED: see the file header.
+ */
 async function versionMetadata(
   context: DeployContext,
   manifest: ReleaseManifest,
   assetsToken: string,
+  exists: boolean,
 ): Promise<JsonObject> {
   const bindings: JsonValue[] = [];
 
@@ -695,22 +755,27 @@ async function versionMetadata(
   const classes = manifest.migrations.flatMap((migration) => migration.newSqliteClasses);
   const tag = manifest.migrations.at(-1)?.tag ?? 'v1';
 
-  return {
+  const metadata: JsonObject = {
     main_module: manifest.worker.mainModule,
     compatibility_date: manifest.worker.compatibilityDate,
     compatibility_flags: [...manifest.worker.compatibilityFlags],
     bindings,
-    migrations: { new_tag: tag, new_sqlite_classes: classes },
-    ...(assetsToken === ''
-      ? { keep_assets: true }
-      : {
-        assets: {
-          jwt: assetsToken,
-          config: { not_found_handling: 'single-page-application', run_worker_first: true },
-        },
-      }),
+    keep_bindings: ['secret_text', 'secret_key'],
     observability: { enabled: true },
   };
+
+  if (!exists) metadata.migrations = { new_tag: tag, new_sqlite_classes: classes };
+
+  if (assetsToken === '') {
+    metadata.keep_assets = true;
+  } else {
+    metadata.assets = {
+      jwt: assetsToken,
+      config: { not_found_handling: 'single-page-application', run_worker_first: true },
+    };
+  }
+
+  return metadata;
 }
 
 /** One binding as the upload metadata spells it, or null for a binding this

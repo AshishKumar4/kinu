@@ -21,7 +21,7 @@ import type {
   CloudflareCall, CloudflareHttpResponse, CloudflareTransport, DeployContext, DeployInputs,
   ArtifactSource, DeployLedger, DeployProgress, DeploySecretVault, DeployStepFailure, DeployStepRow,
   DeployStepSeed, HttpGet,
-  MultipartUpload, ReleaseManifest,
+  MultipartUpload, ReleaseManifest, UpdateBuild,
 } from '../src/deploy/index';
 import { parseJsonObject, type JsonObject, type JsonValue } from '../src/utils/json';
 
@@ -375,10 +375,18 @@ let progress: DeployProgress[];
 
 let health: number;
 
+/** Whether the run under construction is an update. A first sitting by
+ *  default; the rows that are an update say so. */
+let updating = false;
+
+/** Which build the new address answers with. The release's own by default; a
+ *  row that is measuring the smoke check sets the previous one. */
+let served: UpdateBuild;
+
 const healthFetch: HttpGet = async (url) => {
   if (!url.endsWith('/api/health')) throw new Error(`unexpected fetch ${url}`);
 
-  return new Response(JSON.stringify({ version: MANIFEST.version, sha: MANIFEST.sha }), {
+  return new Response(JSON.stringify(served), {
     status: health,
     headers: { 'content-type': 'application/json' },
   });
@@ -393,6 +401,7 @@ async function contextFor(): Promise<DeployContext> {
     vault,
     facts: factsFrom(await ledger.rows()),
     http: healthFetch,
+    update: updating,
     note: () => undefined,
   };
 }
@@ -414,6 +423,8 @@ beforeEach(async () => {
   vault = new MemoryVault();
   progress = [];
   health = 200;
+  updating = false;
+  served = { version: MANIFEST.version, sha: MANIFEST.sha, builtAt: MANIFEST.builtAt };
   await vault.write(ACCESS_TOKEN_KEY, 'access-token-value');
   await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
   await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
@@ -803,5 +814,62 @@ describe('the workerd configuration for a local instance', () => {
       address: 'http://127.0.0.1:8787',
       renderedAt: '2026-09-18T00:00:00.000Z',
     });
+  });
+});
+
+/**
+ * The two answers a step must read rather than assume: Cloudflare's reply to
+ * the pointer move, and which build the new address serves.
+ */
+describe('what the address and smoke steps check', () => {
+  test('a refused deployment pointer fails the address step', async () => {
+    cloudflare.refuseOnce = {
+      path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu/deployments`,
+      status: 403,
+      code: 10_026,
+      message: 'workers.api.error.deployment_not_permitted',
+    };
+
+    const rows = await run();
+
+    expect(rows.find((row) => row.id === 'address')?.state).toBe('failed');
+    expect(rows.find((row) => row.id === 'address')?.failure?.code).toBe(10_026);
+    // Nothing after it ran, so the run never claims an address it did not bind.
+    expect(rows.find((row) => row.id === 'smoke')?.state).toBe('pending');
+  });
+
+  test('a smoke check that finds the previous build still serving fails', async () => {
+    served = { version: '0.3.9+old0000', sha: 'old0000', builtAt: MANIFEST.builtAt };
+
+    const rows = await run();
+    const smoke = rows.find((row) => row.id === 'smoke');
+
+    expect(smoke?.state).toBe('failed');
+    expect(smoke?.failure?.detail).toContain('0.3.9+old0000');
+    expect(smoke?.failure?.detail).toContain(MANIFEST.version);
+    // A failed smoke keeps the run's authorization: this is the case the
+    // deployment pointer is rolled back from, by hand or by a retry.
+    expect(await vault.read(REFRESH_TOKEN_KEY)).toBe('refresh-token-value');
+  });
+
+  test('an update mints no root secret and keeps the running version\'s', async () => {
+    // A self-update's vault holds the token pair and nothing else: it reads
+    // through to no live binding, so "absent here" is the ordinary state.
+    updating = true;
+    cloudflare.scriptExists = true;
+
+    const rows = await run();
+    const upload = cloudflare.calls.find((call) => call.path.endsWith('/versions'));
+    const bindings = uploadedBindings(upload);
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+    expect(rows.find((row) => row.id === 'secrets')?.detail).toContain('kept from the running version');
+    // Nothing minted, and nothing sent: what keeps the live keys is
+    // `keep_bindings`, and what would destroy them is a fresh one in this list.
+    expect(await vault.read('CREDENTIAL_ENCRYPTION_KEY')).toBeNull();
+    expect(bindings.map((binding) => binding.name)).not.toContain('CREDENTIAL_ENCRYPTION_KEY');
+    expect(upload?.body?.keep_bindings).toEqual(['secret_text', 'secret_key']);
+    // And no migration is re-declared onto a script that already applied it.
+    expect(upload?.body?.migrations).toBeUndefined();
   });
 });
