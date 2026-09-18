@@ -55,3 +55,5 @@ export * from './parity-normalizer';
 export * from './slate-viewer';
 
 export * from './awaited-list';
+
+export * from './hand-clock';

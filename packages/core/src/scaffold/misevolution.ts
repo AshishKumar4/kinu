@@ -113,7 +113,7 @@ const SAFETY_MACHINERY_CRITERIA = [
  * asymmetry is deliberate and it is the incoherence being removed, not
  * introduced: the codemode Worker exposes raw network globals, so the very
  * same `fetch(...)` the criterion forbids runs freely in an ephemeral
- * `execute_tools` call one line earlier. Vetoing only the PERSISTED form of
+ * `eval` call one line earlier. Vetoing only the PERSISTED form of
  * code the agent may already execute buys no containment — it just makes
  * "wrap this HTTP call as a reusable tool" impossible while "make the HTTP
  * call" stays trivial. What persistence genuinely changes is blast radius over

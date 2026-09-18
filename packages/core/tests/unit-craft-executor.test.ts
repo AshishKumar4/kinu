@@ -1,7 +1,7 @@
 /**
  * Crafted-tool integration evidence: a stored tool is filtered by effective
  * score, materialised into the codemode map, and invoked through the platform
- * execute-tools factory.
+ * codemode-tool factory.
  *
  * The platform compiler itself belongs to each backend's suite. This test
  * keeps core independent of those downstream packages and pins the shared
@@ -17,7 +17,7 @@ import {
   selectInjectableCraftedTools,
   type ActorToolsetDeps,
   type CraftedToolSet,
-  type ExecuteToolsBuilder,
+  type CodemodeBuilder,
   type CraftedToolExecute,
   type CraftedToolSource,
   type JsonValue,
@@ -39,13 +39,13 @@ const createTestCraftedExecute = (): CraftedToolExecute => (source) => async (ar
   throw new Error(`unexpected crafted tool ${source.name}`);
 };
 
-// Minimal Node execute_tools builder — sandboxes LLM code with a `codemode`
+// Minimal Node eval builder — sandboxes LLM code with a `codemode`
 // binding holding pre-materialised crafted-tool executes. Mirrors
-// @kinu.run/cli-backend/createNodeExecuteToolFactory at the level this test
+// @kinu.run/cli-backend/createNodeCodemodeToolFactory at the level this test
 // needs.
-function createTestExecBuilder(
+function createTestCodemodeBuilder(
   invoke: (tools: CraftedToolSet) => Promise<JsonValue | undefined>,
-): ExecuteToolsBuilder {
+): CodemodeBuilder {
   return (surface) => {
     return tool({
       description: 'test exec_tools',
@@ -63,8 +63,8 @@ function createTestExecBuilder(
   };
 }
 
-/** An actor surface over `rt` whose sandbox is `executeTools`. */
-function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'craftedToolExecute' | 'executeTools'>) {
+/** An actor surface over `rt` whose sandbox is `codemode`. */
+function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'craftedToolExecute' | 'codemode'>) {
   return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' }, ...deps });
 }
 
@@ -81,7 +81,7 @@ describe('crafted-tool execution integration', () => {
     const { rt } = createTestRuntime();
 
     for (const [name, code] of [
-      ['healthy', '  async () => 1  '], ['run', 'async () => 2'],
+      ['healthy', '  async () => 1  '], ['shell', 'async () => 2'],
       ['mcp_shadow', 'async () => 3'], ['empty', '   '], ['comment', '  // disabled'],
       ['retired', 'async () => 4'],
     ] as const) {
@@ -97,10 +97,10 @@ describe('crafted-tool execution integration', () => {
 
         return async () => null;
       },
-      executeTools: createTestExecBuilder(async (crafted) => Object.keys(crafted).join(',')),
+      codemode: createTestCodemodeBuilder(async (crafted) => Object.keys(crafted).join(',')),
     });
 
-    const execute = toolExecute<{ code: string }, JsonValue>(tools.execute_tools);
+    const execute = toolExecute<{ code: string }, JsonValue>(tools.eval);
     const result = v.parse(ExecuteResultSchema, await execute({ code: 'list crafted tools' }));
     expect(result.result).toBe('healthy');
     expect(compiled).toEqual(selectInjectableCraftedTools(rt.craftStore, rt.storage.sql));
@@ -113,11 +113,11 @@ describe('crafted-tool execution integration', () => {
 
     const tools = actorTools(rt, {
       craftedToolExecute: createTestCraftedExecute(),
-      executeTools: createTestExecBuilder(async (crafted) => Object.keys(crafted).join(',')),
+      codemode: createTestCodemodeBuilder(async (crafted) => Object.keys(crafted).join(',')),
     });
 
     expect(() => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql)).toThrow('crafted store unavailable');
-    const execute = toolExecute<{ code: string }, JsonValue>(tools.execute_tools);
+    const execute = toolExecute<{ code: string }, JsonValue>(tools.eval);
     const result = v.parse(ExecuteResultSchema, await execute({ code: 'list unavailable crafted tools' }));
     expect(result.error).toBe('crafted store unavailable');
     expect(result.result).toBeUndefined();
@@ -137,11 +137,11 @@ describe('crafted-tool execution integration', () => {
 
     const tools = actorTools(rt, {
       craftedToolExecute: createTestCraftedExecute(),
-      executeTools: createTestExecBuilder(async (crafted) =>
+      codemode: createTestCodemodeBuilder(async (crafted) =>
         requiredCraftedTool(crafted, 'double').execute(21)),
     });
 
-    const execTool = toolExecute<{ code: string }, JsonValue>(tools.execute_tools);
+    const execTool = toolExecute<{ code: string }, JsonValue>(tools.eval);
 
     const res = v.parse(ExecuteResultSchema, await execTool({
       code: 'return await tools.double(21);',
@@ -163,11 +163,11 @@ describe('crafted-tool execution integration', () => {
 
     const tools = actorTools(rt, {
       craftedToolExecute: createTestCraftedExecute(),
-      executeTools: createTestExecBuilder(async (crafted) =>
+      codemode: createTestCodemodeBuilder(async (crafted) =>
         requiredCraftedTool(crafted, 'exploder').execute(null)),
     });
 
-    const execTool = toolExecute<{ code: string }, JsonValue>(tools.execute_tools);
+    const execTool = toolExecute<{ code: string }, JsonValue>(tools.eval);
 
     const res = v.parse(ExecuteResultSchema, await execTool({ code: 'return await tools.exploder();' }));
     // The model is told WHICH of its own tools broke, and the in-episode
@@ -185,11 +185,11 @@ describe('crafted-tool execution integration', () => {
 
     const tools = actorTools(rt, {
       craftedToolExecute: createTestCraftedExecute(),
-      executeTools: createTestExecBuilder(async (crafted) =>
+      codemode: createTestCodemodeBuilder(async (crafted) =>
         requiredCraftedTool(crafted, 'quiet').execute(null)),
     });
 
-    const res = v.parse(ExecuteResultSchema, await toolExecute<{ code: string }, JsonValue>(tools.execute_tools)(
+    const res = v.parse(ExecuteResultSchema, await toolExecute<{ code: string }, JsonValue>(tools.eval)(
       { code: 'return await tools.quiet();' },
     ));
 
@@ -217,7 +217,7 @@ describe('crafted-tool execution integration', () => {
 
     let resolve: (() => CraftedToolSet) | undefined;
 
-    const captureBuilder: ExecuteToolsBuilder = (surface) => {
+    const captureBuilder: CodemodeBuilder = (surface) => {
       resolve = surface.craftedTools;
 
       return tool({
@@ -227,12 +227,12 @@ describe('crafted-tool execution integration', () => {
       });
     };
 
-    actorTools(rt, { craftedToolExecute: factory, executeTools: captureBuilder });
+    actorTools(rt, { craftedToolExecute: factory, codemode: captureBuilder });
     // Building resolves nothing — the sandbox asks per execute, which is what
     // makes a tool crafted mid-turn callable on the next call.
     expect(factoryCalls).toBe(0);
 
-    if (!resolve) throw new Error('execute-tools factory was not built');
+    if (!resolve) throw new Error('codemode-tool factory was not built');
     resolve();
     resolve();
     // …and asking repeatedly costs one compile, not one per call.
@@ -266,7 +266,7 @@ describe('crafted-tool execution integration', () => {
     let resolve: (() => CraftedToolSet) | undefined;
     actorTools(rt, {
       craftedToolExecute: factory,
-      executeTools: (surface) => {
+      codemode: (surface) => {
         resolve = surface.craftedTools;
 
         return tool({
@@ -277,7 +277,7 @@ describe('crafted-tool execution integration', () => {
       },
     });
 
-    if (!resolve) throw new Error('execute-tools builder was not called');
+    if (!resolve) throw new Error('codemode-tool builder was not called');
     expect(Object.keys(resolve())).toEqual([]);
     expect(factoryCalls).toBe(0);
   });

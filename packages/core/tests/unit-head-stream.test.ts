@@ -12,6 +12,7 @@
  * held, so nothing can cross a step boundary — the durable row simply replaces
  * what was painted.
  */
+import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestRuntime, scriptedTurnModel, type ModelStreamPart } from '@kinu.run/test-utils';
@@ -135,7 +136,7 @@ async function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): Pr
 
   return {
     ...seat,
-    model, tools: {}, capture: new HeadCapture(), isAborted: () => false,
+    model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
     workspaceLayout: 'shared-workspace', ...over,
   };
 }
@@ -277,7 +278,7 @@ test('a cancelled head retains its already-settled SDK tool conversation', async
   } });
 
   const running = runHeadInference(headInput(), await deps(model, {
-    signal: abort.signal, isAborted: () => abort.signal.aborted,
+    signal: abort.signal, clock: REAL_CLOCK, isAborted: () => abort.signal.aborted,
     tools: { probe: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
       execute: async () => value,
     }) },

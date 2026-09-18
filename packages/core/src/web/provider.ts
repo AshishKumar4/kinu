@@ -28,6 +28,7 @@ import type { AuthResolver } from '../providers/types';
 import { TOOL_REACH } from '../tools/registry';
 import { readExecSignal } from '../execution/signal';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
+import { REAL_CLOCK, type Clock } from '../types/clock';
 
 /** Credential key for the optional Tavily search upgrade. */
 export const TAVILY_CRED_KEY = 'tavily';
@@ -86,17 +87,11 @@ export interface DefaultWebSearchProviderDeps {
    * refused.
    */
   timeoutMs?: number;
-  /** How `timeoutMs` is scheduled: `setTimeout` unless a test hands in a timer
-   *  it fires itself, so a body trickling past the budget is a call the test
-   *  makes rather than a real timer racing a real stream. */
-  schedule?: (fire: () => void, afterMs: number) => () => void;
+  /** The budget's clock: real unless a test hands in one it advances, so a
+   *  body trickling past the budget is a step the test takes rather than a
+   *  real timer racing a real stream. */
+  clock?: Clock;
 }
-
-export const REAL_WEB_SCHEDULE: NonNullable<DefaultWebSearchProviderDeps['schedule']> = (fire, afterMs) => {
-  const timer = setTimeout(fire, afterMs);
-
-  return () => { clearTimeout(timer); };
-};
 
 const DEFAULT_SEARCH_LIMIT = 5;
 
@@ -135,7 +130,7 @@ class WebFetchError extends Error {
  *  their own `fetch` + auth seam; no per-backend search/fetch logic exists. */
 export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDeps): WebSearchProvider {
   const budgetMs = deps.timeoutMs;
-  const schedule = deps.schedule ?? REAL_WEB_SCHEDULE;
+  const clock = deps.clock ?? REAL_CLOCK;
   // workerd's fetch enforces its `this` binding: invoking the dependency as
   // a member of `deps` sets `this = deps` and throws "Illegal invocation".
   // Detach once so every call goes out with `this = undefined`, exactly like
@@ -152,7 +147,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     if (budgetMs === undefined) return run(caller);
     const ctrl = new AbortController();
     caller?.addEventListener('abort', () => ctrl.abort(caller.reason), { once: true });
-    const cancelBudget = schedule(() => { ctrl.abort(); }, budgetMs);
+    const cancelBudget = clock.after(budgetMs, () => { ctrl.abort(); });
 
     const onAbort = new Promise<never>((_, reject) => {
       ctrl.signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), { once: true });
@@ -456,7 +451,7 @@ const TYPES = `export declare const web: {
 };
 `;
 
-/** Codemode provider exposing the same web capability inside execute_tools as
+/** Codemode provider exposing the same web capability inside eval as
  *  `web.search(query, { limit })` / `web.fetch(url)`, so agents can loop
  *  searches and fetch in parallel from one JS block. Shape is the shared
  *  `{ name, tools }` codemode contract both backends already inject. */

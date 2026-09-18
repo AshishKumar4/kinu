@@ -50,7 +50,7 @@ describe('isTrivialTurn — the LLM-call pre-filter', () => {
   });
 
   test('a turn that ran tools is never trivial', () => {
-    expect(isTrivialTurn(turn('ok', [{ name: 'execute_tools', args: {}, result: 1 }]))).toBe(false);
+    expect(isTrivialTurn(turn('ok', [{ name: 'eval', args: {}, result: 1 }]))).toBe(false);
   });
 });
 
@@ -156,7 +156,7 @@ describe('outcome mappings', () => {
 
 describe('executionVerdict — the environment\'s verdict, read symmetrically', () => {
   const turn = (over: Partial<{ hadError: boolean; toolCalls: ToolCallRecord[] }> = {}) =>
-    ({ hadError: false, toolCalls: [{ name: 'run', args: { command: 'make' }, result: 'ok', outcome: { success: true } } satisfies ToolCallRecord], ...over });
+    ({ hadError: false, toolCalls: [{ name: 'shell', args: { command: 'make' }, result: 'ok', outcome: { success: true } } satisfies ToolCallRecord], ...over });
 
   test('a turn that acted on the world and finished clean SUCCEEDED', () => {
     expect(executionVerdict(turn())).toBe('succeeded');
@@ -184,23 +184,23 @@ describe('executionVerdict — the environment\'s verdict, read symmetrically', 
     expect(isPureLookupCall({ name: 'memory', args: { action: 'search' } })).toBe(true);
     expect(isPureLookupCall({ name: 'fact', args: { action: 'recall' } })).toBe(true);
     expect(isPureLookupCall({ name: 'memory', args: { action: 'append' } })).toBe(false);
-    expect(isPureLookupCall({ name: 'run', args: {} })).toBe(false);
+    expect(isPureLookupCall({ name: 'shell', args: {} })).toBe(false);
   });
 
   test('a recorded non-zero exit FAILED without inspecting the rendered output', () => {
     expect(executionVerdict(turn({
-      toolCalls: [{ name: 'run', args: { command: 'test' }, result: '(display omitted)', outcome: { success: false, reason: 'io', execution: { exitCode: 3 } } }],
+      toolCalls: [{ name: 'shell', args: { command: 'test' }, result: '(display omitted)', outcome: { success: false, reason: 'io', execution: { exitCode: 3 } } }],
     }))).toBe('failed');
   });
 
   test('historical calls without outcome evidence remain unmeasured', () => {
-    expect(executionVerdict(turn({ toolCalls: [{ name: 'run', args: {}, result: 'ok' }] }))).toBeNull();
-    expect(executionVerdict(turn({ toolCalls: [{ name: 'run', args: {}, result: '{"error":"old payload"}' }] }))).toBeNull();
+    expect(executionVerdict(turn({ toolCalls: [{ name: 'shell', args: {}, result: 'ok' }] }))).toBeNull();
+    expect(executionVerdict(turn({ toolCalls: [{ name: 'shell', args: {}, result: '{"error":"old payload"}' }] }))).toBeNull();
   });
 
   test('a result that merely MENTIONS an error is not a failure', () => {
     expect(executionVerdict(turn({
-      toolCalls: [{ name: 'run', args: {}, result: '{"reason":"denied","error":"historical incident"}', outcome: { success: true } }],
+      toolCalls: [{ name: 'shell', args: {}, result: '{"reason":"denied","error":"historical incident"}', outcome: { success: true } }],
     }))).toBe('succeeded');
   });
 
@@ -210,9 +210,9 @@ describe('executionVerdict — the environment\'s verdict, read symmetrically', 
   test('a failure the turn went on to FIX still SUCCEEDED', () => {
     expect(executionVerdict(turn({
       toolCalls: [
-        { name: 'run', args: { command: 'python3 test_calc.py' }, result: 'failed', outcome: { success: false, reason: 'io', execution: { exitCode: 1 } } },
+        { name: 'shell', args: { command: 'python3 test_calc.py' }, result: 'failed', outcome: { success: false, reason: 'io', execution: { exitCode: 1 } } },
         { name: 'edit', args: { path: 'calc.py' }, result: 'ok', outcome: { success: true } },
-        { name: 'run', args: { command: 'python3 test_calc.py' }, result: 'ALL PASS', outcome: { success: true } },
+        { name: 'shell', args: { command: 'python3 test_calc.py' }, result: 'ALL PASS', outcome: { success: true } },
       ],
     }))).toBe('succeeded');
   });
@@ -220,7 +220,7 @@ describe('executionVerdict — the environment\'s verdict, read symmetrically', 
   test('a lookup after a failed action cannot launder the verdict', () => {
     expect(executionVerdict(turn({
       toolCalls: [
-        { name: 'run', args: { command: 'make' }, result: 'failed', outcome: { success: false, reason: 'io', execution: { exitCode: 2 } } },
+        { name: 'shell', args: { command: 'make' }, result: 'failed', outcome: { success: false, reason: 'io', execution: { exitCode: 2 } } },
         { name: 'memory', args: { action: 'search' }, result: [] },
       ],
     }))).toBe('failed');
@@ -505,18 +505,18 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
       type: 'step_finish',
       stepIndex: 2,
       messages: [
-        { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'tc-2', toolName: 'execute_tools', input: { code: 'ls' } }] },
-        { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'tc-2', toolName: 'execute_tools', output: { type: 'text', value: 'done' } }] },
+        { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'tc-2', toolName: 'eval', input: { code: 'ls' } }] },
+        { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'tc-2', toolName: 'eval', output: { type: 'text', value: 'done' } }] },
       ],
     });
-    recorder.emit('run-1', { type: 'tool_call_end', name: 'execute_tools', toolCallId: 'tc-2', result: 'done', outcome: { success: true } });
+    recorder.emit('run-1', { type: 'tool_call_end', name: 'eval', toolCallId: 'tc-2', result: 'done', outcome: { success: true } });
     recorder.emit('run-1', { type: 'run_end', reason: 'completed' });
     seed(sql, actor, 1, 0);
 
     const instance = buildOutcomeEvalSplit(sql, actor, 2).train[0];
     expect(instance.evidence).toContain('Outcome: corrected');
     expect(instance.evidence).toContain(
-      'Turn process: 2 sequential steps, 1 hiring, 0 exploration, 0 messaging, 1 execute_tools',
+      'Turn process: 2 sequential steps, 1 hiring, 0 exploration, 0 messaging, 1 eval',
     );
   });
 

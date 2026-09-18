@@ -153,7 +153,7 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
  *
  * Production calls `createWorkspace` exactly once, at workspace BIRTH; every
  * running surface opens through `openWorkspaceCLI` -> `createCLIRuntime`, which
- * registers the inline and laptop providers. So "zero providers" always means the
+ * registers the inline and device providers. So "zero providers" always means the
  * harness is pointed at the wrong runtime, never that the agent had a bad turn.
  *
  * It THROWS, and callers must call it before the first turn — upstream of every

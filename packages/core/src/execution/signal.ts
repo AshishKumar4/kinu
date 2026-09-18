@@ -1,7 +1,7 @@
 /**
  * Cancellation convention for executor tools.
  *
- * The `run` tool (and other in-process callers) pass a trailing `{ signal }`
+ * The `shell` tool (and other in-process callers) pass a trailing `{ signal }`
  * options argument to an executor's `exec` tool; codemode sandbox calls pass
  * nothing. Executors honor the signal at the strongest level their transport
  * supports, and the levels are not interchangeable:

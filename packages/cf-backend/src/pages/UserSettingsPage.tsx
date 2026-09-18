@@ -175,7 +175,7 @@ export default function UserSettingsPage() {
 
         {section === "cli" && <CliInstallCard />}
 
-        {/* Devices — account-level PC/laptop registration; every agent can use
+        {/* Devices — account-level PC/device registration; every agent can use
             a connected device (with consent). The workspace surfaces open the
             same connect panel in place; this is where the roster lives. */}
         {section === "devices" && <DevicesCard />}

@@ -1,5 +1,5 @@
 /**
- * The `execute_tools` codemode tool — one construction, shared by every CF
+ * The `eval` codemode tool — one construction, shared by every CF
  * actor that has a runtime.
  *
  * The model's program runs in a codemode sandbox (codemode-sandbox.ts) where
@@ -12,10 +12,10 @@
  *   state.*     the key/value store that survives between programs
  *   agents.*    delegation (orchestrators only; heads get none)
  *   web.*, memory.*, tasks.*, agent.*, release.*, report.*   the projections
- *   workspace.* / sandbox.* / laptop.* / parent.*   one per live executor
+ *   workspace.* / sandbox.* / device.* / parent.*   one per live executor
  *
  * plus `require()` and `fetch` from the prelude. Actors differ only in the
- * fields of `ExecuteToolsFactoryOptions`: an orchestrator adds its delegation deps
+ * fields of `CodemodeFactoryOptions`: an orchestrator adds its delegation deps
  * and records the last-active executor for the UI; a head supplies neither.
  */
 
@@ -25,11 +25,11 @@ import { type Tool, type ToolSet } from 'ai';
 import type { ActorHandle, AgentsToolDeps, DeviceRequestChannel, SqlExecutor, CraftStore, ExecutionRouter } from "@kinu.run/core";
 import {
   createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider,
-  renderExecuteToolsDescription, renderToolsDeclaration, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE,
+  renderCodemodeDescription, renderToolsDeclaration, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE,
   type WebSearchProvider, type CodemodeProvider, type WorkMode,
   currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode,
   selectInjectableCraftedTools,
-  withCraftedToolDeclarations, executeToolsInputSchema,
+  withCraftedToolDeclarations, codemodeInputSchema,
   withCodemodeProgram, craftedFailureFunctions,
   codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing,
 } from "@kinu.run/core";
@@ -38,13 +38,13 @@ import {
   KinuSandboxExecutor, renderToolsPrelude,
 } from "./codemode-sandbox";
 
-export interface ExecuteToolsFactoryOptions {
+export interface CodemodeFactoryOptions {
   /** env.LOADER — the WorkerLoader every sandboxed execute runs inside. */
   loader: WorkerLoader;
   /** The loopback Fetcher the sandbox's `fetch` rides; null keeps it offline. */
   egress: Fetcher | null;
   /** The actor's runtime: craftStore (crafted source) and executionRouter
-   *  (the `workspace` / `sandbox` / `laptop` namespaces). */
+   *  (the `workspace` / `sandbox` / `device` namespaces). */
   rt: { actor: ActorHandle; craftStore: Pick<CraftStore, 'list'>; executionRouter?: Pick<ExecutionRouter, 'getProviders'> };
   /** The actor's bound SQL — craft-score lookups and the `state` store. */
   sql: SqlExecutor;
@@ -63,7 +63,7 @@ export interface ExecuteToolsFactoryOptions {
    *  diff default); callers that don't care omit it. */
   onExecutorUsed?: (name: string) => void;
   /**
-   * THIS `execute_tools` invocation's device-request ownership channel, or
+   * THIS `eval` invocation's device-request ownership channel, or
    * undefined when nothing owns it yet. Read per provider call, not at
    * construction: the tool is built once per DO lifetime, and which job owns
    * a device request changes every time a call detaches.
@@ -97,9 +97,9 @@ function withDeviceOwnership(args: unknown[], channel: DeviceRequestChannel | un
   return [args[0], merged, ...args.slice(2)];
 }
 
-/** What `createExecuteToolsFactory` hands back: one `execute_tools` tool per
+/** What `createCodemodeToolFactory` hands back: one `eval` tool per
  *  finished native tool set. */
-export interface ExecuteToolsFactory {
+export interface CodemodeFactory {
   /** The tool for a FINISHED native surface. Native declarations are static;
    *  its attached live reader describes the same crafted resolver it calls. */
   toolFor(native: ToolSet): Tool;
@@ -107,7 +107,7 @@ export interface ExecuteToolsFactory {
   callTool(native: ToolSet, name: string, input: JsonObject): Promise<JsonValue | undefined>;
 }
 
-export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): ExecuteToolsFactory {
+export function createCodemodeToolFactory(options: CodemodeFactoryOptions): CodemodeFactory {
   const { loader, rt, sql, webSearch } = options;
 
   if (!loader) throw new Error("CF runtime missing LOADER binding");
@@ -158,7 +158,7 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
           return entry.execute(input);
         }
 
-        if (name === 'execute_tools' || (options.reach !== undefined && !options.reach.allowsTool(name) && !options.reach.allowsNamespace(CRAFTED_TOOL_NAMESPACE))) {
+        if (name === 'eval' || (options.reach !== undefined && !options.reach.allowsTool(name) && !options.reach.allowsNamespace(CRAFTED_TOOL_NAMESPACE))) {
           throw new KinuError('denied', `${name} is not within this actor's reach right now`);
         }
 
@@ -208,10 +208,10 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
         providers.push(webProvider, ...executorProviders);
   
         const built = createCodeTool({
-          // The docstring is core's (registry.renderExecuteToolsDescription):
+          // The docstring is core's (registry.renderCodemodeDescription):
           // `{{types}}` is the token createCodeTool substitutes the assembled
           // namespace declarations into.
-          description: renderExecuteToolsDescription('{{types}}'),
+          description: renderCodemodeDescription('{{types}}'),
           tools: providersInWorkMode(mode, options.reach?.narrowProviders(providers) ?? providers),
           executor: {
             // Per call: the crafted set is re-read so a tool saved a program ago
@@ -244,7 +244,7 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
         // `code` as "JavaScript async arrow function to execute", while the
         // docstring and the normalizer both take a plain script body. Every
         // other property the tool carries passes through untouched.
-        return { ...built, inputSchema: executeToolsInputSchema() };
+        return { ...built, inputSchema: codemodeInputSchema() };
       };
 
       const unrestricted = build('build');

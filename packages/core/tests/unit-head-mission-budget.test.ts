@@ -16,6 +16,7 @@
  * counting every statement the head's runtime issues.
  */
 
+import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
@@ -105,7 +106,7 @@ async function runHead(mission: MissionScope | null, opts: { stopAfter?: number 
     tools: buildHeadAccumulatorTools(capture),
     capture,
     workspaceLayout: 'shared-workspace',
-    isAborted: () => false,
+    clock: REAL_CLOCK, isAborted: () => false,
   };
 
   if (mission) deps.mission = mission;

@@ -262,18 +262,18 @@ class TurnSignals(unittest.TestCase):
 
     def test_tool_calls_are_listed_in_order(self) -> None:
         events = [
-            {"type": "tool_call", "toolName": "run", "args": {}},
-            {"type": "tool_result", "toolName": "run", "result": "ok"},
+            {"type": "tool_call", "toolName": "shell", "args": {}},
+            {"type": "tool_result", "toolName": "shell", "result": "ok"},
             {"type": "tool_call", "toolName": "memory", "args": {}},
         ]
-        self.assertEqual(tool_calls(events), ["run", "memory"])
+        self.assertEqual(tool_calls(events), ["shell", "memory"])
         self.assertEqual(tool_calls(parse_events(REAL_TURN)), [])
 
 
 class RunEvents(unittest.TestCase):
     LEDGER = [
         {"type": "run_event", "event": {"type": "run_start", "runId": "r1", "agentId": "a"}},
-        {"type": "tool_call", "toolName": "run", "args": {}},
+        {"type": "tool_call", "toolName": "shell", "args": {}},
         {
             "type": "run_event",
             "event": {
@@ -359,7 +359,7 @@ class ActivityVersusEvolutionTest(unittest.TestCase):
 
     def test_non_activity_events_are_ignored_entirely(self) -> None:
         activity, evolution = events.split_activity([
-            {"type": "tool_call", "toolName": "run"},
+            {"type": "tool_call", "toolName": "shell"},
             {"type": "error", "message": "boom"},
         ])
         self.assertEqual(activity, [])

@@ -215,7 +215,7 @@ interface ClaudePrompt {
  *  conversation is flattened into the prompt arg with role labels so multi-turn
  *  context (including prior tool results, surfaced by Kinu's own loop as
  *  assistant/tool text) is carried faithfully. The binary's own tools stay OFF —
- *  Kinu's execute_tools/run loop wraps this provider — so requested tools ride
+ *  Kinu's eval/run loop wraps this provider — so requested tools ride
  *  the system prompt as a manifest in the block form the stream parser reads
  *  back. */
 export function buildClaudePrompt(options: LanguageModelV2CallOptions): ClaudePrompt {

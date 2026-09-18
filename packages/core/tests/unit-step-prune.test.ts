@@ -23,13 +23,13 @@ function toolExchange(i: number, outputChars: number): ModelMessage[] {
       role: 'assistant',
       content: [
         { type: 'text', text: `Running step ${i}.` },
-        { type: 'tool-call', toolCallId: id, toolName: 'run', input: { command: `step-${i}.sh` } },
+        { type: 'tool-call', toolCallId: id, toolName: 'shell', input: { command: `step-${i}.sh` } },
       ],
     },
     {
       role: 'tool',
       content: [{
-        type: 'tool-result', toolCallId: id, toolName: 'run',
+        type: 'tool-result', toolCallId: id, toolName: 'shell',
         output: { type: 'text', value: `output-${i} ${'x'.repeat(outputChars)}` },
       }],
     },
@@ -159,7 +159,7 @@ describe('pruneStepToolOutputs', () => {
 
     if (!message || message.role !== 'tool') throw new Error('expected tool message');
     message.content[0] = {
-      type: 'tool-result', toolCallId: 'call_0', toolName: 'run',
+      type: 'tool-result', toolCallId: 'call_0', toolName: 'shell',
       output: { type: 'error-text', value: `boom ${'e'.repeat(40_000)}` },
     };
     const pruned = pruneStepToolOutputs(messages, budgetFor(WINDOW))!;

@@ -309,11 +309,11 @@ describe('the workspace plane mount table', () => {
 	});
 
 	test('standardMounts gate per environment kind', async () => {
-		const laptopFiles = fakeTree({ '/home/dev/a.txt': 'x' });
+		const deviceFiles = fakeTree({ '/home/dev/a.txt': 'x' });
 		const sandboxFiles = fakeTree({ '/workspace/b.txt': 'y' });
 
 		const mounts = standardMounts((name) => {
-			if (name === "laptop") return { files: laptopFiles, isAvailable: () => false };
+			if (name === "device") return { files: deviceFiles, isAvailable: () => false };
 
 			if (name === "sandbox") return { files: sandboxFiles, isAvailable: () => false };
 
@@ -329,7 +329,7 @@ describe('the workspace plane mount table', () => {
 		// A container is a binding: it provisions on first touch, so the mount
 		// stands whenever the binding does.
 		expect(await mounted.readFile('/sandbox/workspace/b.txt', { encoding: 'utf8' })).toBe('y');
-		expect(EXECUTOR_MOUNTS.laptop).toBe('/pc');
+		expect(EXECUTOR_MOUNTS.device).toBe('/pc');
 		expect(EXECUTOR_MOUNTS.sandbox).toBe('/sandbox');
 	});
 });
@@ -469,7 +469,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 	test('a mount point is part of this plane and cannot be mutated', async () => {
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', fakeTree({ '/a.txt': 'x' }))]);
 
-		await expect(mounted.rename('/pc', '/laptop')).rejects.toMatchObject({ code: 'EPERM' });
+		await expect(mounted.rename('/pc', '/device')).rejects.toMatchObject({ code: 'EPERM' });
 		await expect(mounted.removeRecursive('/pc')).rejects.toMatchObject({ code: 'EPERM' });
 		await expect(mounted.writeFile('/pc', 'x')).rejects.toMatchObject({ code: 'EPERM' });
 		await expect(mounted.unlink('/pc')).rejects.toMatchObject({ code: 'EPERM' });

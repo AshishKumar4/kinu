@@ -6,7 +6,7 @@
  * synchronous writes, nor state that wrongly survives on the runtime object.
  * This is the real boundary: a child process, over a file-backed workspace, that
  * SIGKILLs ITSELF at a named durable instant. Nothing runs after `SIGKILL` — no
- * `finally`, no flush, no close — which is what an interrupted laptop actually
+ * `finally`, no flush, no close — which is what an interrupted device actually
  * does and what a thrown fault cannot imitate.
  *
  * Three instants, and each is a claim recovery has to answer:

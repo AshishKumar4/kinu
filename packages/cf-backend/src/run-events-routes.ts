@@ -22,7 +22,7 @@ import * as v from 'valibot';
 import {
   decodeRunEventWire, resumeIndexFromLastEventId, type RunEventWire,
 } from '@kinu.run/core';
-import { err, json } from "@kinu.run/core";
+import { err, json, waitOn, type Clock } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 /**
@@ -47,24 +47,6 @@ function reportRouteFailure(input: { surface: string; cause: unknown }): Respons
 }
 
 const SSE_POLL_MS = 500;
-
-/** The stream's clock: what time it is, and a pause between polls. Real in
- *  production; a test hands one it drives, so a poll iteration is a call the
- *  test makes rather than 500 ms it sleeps through. */
-export interface SsePacing {
-  now(): number;
-  wait(ms: number): Promise<void>;
-}
-
-export const REAL_SSE_PACING: SsePacing = {
-  now: () => Date.now(),
-  wait: (ms) => {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, ms);
-
-    return promise;
-  },
-};
 
 /** How long one browser SSE subscription stays open before the client
  *  reconnects. Unrelated to core's `DEVICE_CONSENT_TIMEOUT_MS`, the same five
@@ -101,7 +83,7 @@ function parseTypesParam(s: string | null): RunEventType[] | undefined {
   return valid.length > 0 ? valid : undefined;
 }
 
-export async function handleRunEventsRequest(request: Request, env: Env, pacing: SsePacing): Promise<Response | null> {
+export async function handleRunEventsRequest(request: Request, env: Env, clock: Clock): Promise<Response | null> {
   const url = new URL(request.url);
   const path = url.pathname;
 
@@ -170,7 +152,7 @@ export async function handleRunEventsRequest(request: Request, env: Env, pacing:
     const lastEventId = request.headers.get('Last-Event-ID') ?? request.headers.get('last-event-id');
 
     return streamRunEvents(
-      env, agentName, runId, resumeIndexFromLastEventId(lastEventId), request.signal, pacing,
+      env, agentName, runId, resumeIndexFromLastEventId(lastEventId), request.signal, clock,
     );
   }
 
@@ -184,23 +166,29 @@ function streamRunEvents(
   runId: string,
   sinceIndex: number,
   signal: AbortSignal,
-  pacing: SsePacing,
+  // The stream's clock (D19): a test hands one it drives, so a poll
+  // iteration is a step the test takes rather than 500 ms it sleeps through.
+  clock: Clock,
 ): Response {
   const encoder = new TextEncoder();
   // Stop polling the DO the moment the client goes away — via stream
   // cancel() (reader released) or the request abort signal — instead of
   // burning DO requests for up to 5 minutes against a dead connection.
   let closed = false;
+  // Which way it went: a cancelled stream's controller is already unusable,
+  // an aborted request's is still open and is closed below so a reader that
+  // is still attached sees the end rather than a stream that never ends.
+  let cancelled = false;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const startedAt = pacing.now();
+      const startedAt = clock.now();
       let cursor = sinceIndex;
-      let heartbeatAt = pacing.now();
+      let heartbeatAt = clock.now();
       signal.addEventListener('abort', () => { closed = true; }, { once: true });
 
       const stub = await resolveAgent(env, agentName);
-      const resolvedAt = pacing.now();
+      const resolvedAt = clock.now();
 
       // First byte, measured once. What a reader of this stream actually waits
       // for is not the response headers — those return immediately, because the
@@ -213,7 +201,7 @@ function streamRunEvents(
         if (firstByteReported) return;
         firstByteReported = true;
         diagnostics.event('sse.run_events_first_byte', {
-          ms: pacing.now() - startedAt,
+          ms: clock.now() - startedAt,
           resolveMs: resolvedAt - startedAt,
           events,
           resumed: sinceIndex > 0,
@@ -231,7 +219,7 @@ function streamRunEvents(
 
         controller.enqueue(encoder.encode(lines.join('\n')));
         cursor = Math.max(cursor, ev.eventIndex);
-        heartbeatAt = pacing.now();
+        heartbeatAt = clock.now();
       };
 
       try {
@@ -259,8 +247,8 @@ function streamRunEvents(
         // Poll loop until run_end, client disconnect, or timeout. Cloudflare
         // Workers can hold a single SSE connection for up to several minutes;
         // the client's EventSource auto-reconnects with Last-Event-ID.
-        while (!closed && pacing.now() - startedAt < SSE_TIMEOUT_MS) {
-          await pacing.wait(SSE_POLL_MS);
+        while (!closed && clock.now() - startedAt < SSE_TIMEOUT_MS) {
+          await waitOn(clock, SSE_POLL_MS);
 
           if (closed) break;
           backlog = decodeRunEventWire(
@@ -272,15 +260,15 @@ function streamRunEvents(
 
           if (hasRunEnd) break;
 
-          if (pacing.now() - heartbeatAt >= SSE_HEARTBEAT_MS) {
-            controller.enqueue(encoder.encode(`:heartbeat ${pacing.now()}\n\n`));
-            heartbeatAt = pacing.now();
+          if (clock.now() - heartbeatAt >= SSE_HEARTBEAT_MS) {
+            controller.enqueue(encoder.encode(`:heartbeat ${clock.now()}\n\n`));
+            heartbeatAt = clock.now();
           }
         }
 
-        if (!closed) controller.close();
+        if (!cancelled) controller.close();
       } catch (err) {
-        if (!closed) {
+        if (!cancelled) {
           controller.enqueue(encoder.encode(
             `event: error\ndata: ${JSON.stringify({ error: renderThrownChain({ cause: err }) })}\n\n`,
           ));
@@ -290,6 +278,7 @@ function streamRunEvents(
     },
     cancel() {
       closed = true;
+      cancelled = true;
     },
   });
 

@@ -99,7 +99,7 @@ describe('the bar against promotion is mechanical', () => {
 
 describe('admissibility rests on the outcome, not on mechanism coverage', () => {
   const behaved = {
-    turns: 3, toolCalls: 9, toolNames: ['run', 'file'], tokensIn: 100, tokensOut: 10, ms: 1,
+    turns: 3, toolCalls: 9, toolNames: ['shell', 'file'], tokensIn: 100, tokensOut: 10, ms: 1,
   };
 
   const row = (name: string, eligible: number, passed: number) =>

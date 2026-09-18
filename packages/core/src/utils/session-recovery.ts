@@ -4,7 +4,7 @@
  * A deploy kills the workspace's isolate mid-session. When the browser learns
  * about it (a close event), partysocket redials and React re-runs the loads
  * keyed on connection status. When it does NOT learn — the close frame lost,
- * hibernation reattach gone quiet, laptop network transitioned — the socket
+ * hibernation reattach gone quiet, device network transitioned — the socket
  * becomes a CORPSE: `readyState` says OPEN, every send vanishes, every RPC
  * dies at the agents SDK's `DEFAULT_CALL_TIMEOUT_MS` backstop, the degraded
  * banner sets, and nothing ever forces a redial. That is the shape behind

@@ -1,5 +1,5 @@
 /**
- * Device tunnel — reverse-WebSocket from the user's laptop, at the USER level.
+ * Device tunnel — reverse-WebSocket from the user's device, at the USER level.
  *
  * Routes:
  *   POST /pc/connect-ticket         — exchange local device token for short-lived WS ticket

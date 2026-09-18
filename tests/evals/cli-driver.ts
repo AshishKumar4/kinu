@@ -45,16 +45,16 @@ const CLI_BIN = join(REPO_ROOT, 'packages/cli/bin/cli.ts');
  * The spawned agent's own project root, and it is NOT this repository.
  *
  * MEASURED. Both calls below used `cwd: REPO_ROOT`, and
- * `createCLIRuntime` roots the `laptop` executor at `cwd ?? process.cwd()`
+ * `createCLIRuntime` roots the `device` executor at `cwd ?? process.cwd()`
  * unless told otherwise (`cli-backend/src/runtime.ts:545`) — so the child's host
  * plane WAS the repository, and an episode reaches every registered provider
- * through `execute_tools`. The eval runs of 2026-08-24 left `reference.mjs`,
+ * through `eval`. The eval runs of 2026-08-24 left `reference.mjs`,
  * `solution.mjs` and `test-eval.mjs` (a corpus task's seed files and the agent's
  * own harness) plus core's spill directories `.kinu/tool-output/` and
  * `attachments/` in the repository root.
  *
- * The in-process suites close this with `hostRoot: null`, which a spawned CLI has
- * no flag for; the equivalent is to hand the child a cwd it may own. A
+ * The in-process suites close this by binding no directory, which a spawned
+ * CLI cannot do; the equivalent is to hand the child a cwd it may own. A
  * subdirectory of the scratch home rather than the home itself, so the agent's
  * files cannot land beside `config.json` and the workspace stores the driver
  * reads its ledgers from — and because `canonicalProjectRoot` derives a project

@@ -44,6 +44,15 @@ export interface CapturedHttpCall {
 
 const log: CapturedHttpCall[] = [];
 
+/** Readers parked on `/log/until?marker=`: released by the call that carries
+ *  the marker, the moment it is recorded — the wake proof's end condition,
+ *  never a poll against a clock. */
+const logWaiters: { readonly marker: string; readonly resolve: () => void }[] = [];
+
+function carriesMarker(call: CapturedHttpCall, marker: string): boolean {
+  return call.conversation.some((m) => m.content.includes(marker));
+}
+
 /** How many times the worker asked for the provider catalog. Read through
  *  `/log`, so a suite can assert the catalog was served rather than refused. */
 let catalogHits = 0;
@@ -204,6 +213,15 @@ function recordCall(url: URL, request: Request, body: OutboundBody): void {
       .filter((m) => m.role === 'tool')
       .map((m) => textOf(m.content)),
   });
+
+  const recorded = log[log.length - 1];
+
+  if (recorded === undefined) return;
+
+  for (const waiter of logWaiters.splice(0)) {
+    if (carriesMarker(recorded, waiter.marker)) waiter.resolve();
+    else logWaiters.push(waiter);
+  }
 }
 
 function sseChunk(delta: SseDelta, finishReason?: string): string {
@@ -247,12 +265,12 @@ function sseResponse(chunks: readonly string[]): Response {
  * The background-wake conversation's model. One lane, keyed on the request
  * shape, so the whole scripted exchange runs on one pin:
  *
- *   - the opening request answers with a real `run` tool call — the command
+ *   - the opening request answers with a real `shell` tool call — the command
  *     that sleeps past the detach window and prints the marker;
  *   - the request carrying that call's result (the detach handle) answers
  *     `echo:detached`, which ends the turn — the settle then owes the title;
  *   - the WOKEN turn's request — its typed line is the runner's own wake
- *     message, naming the job — answers with an `execute_tools` call that reads
+ *     message, naming the job — answers with an `eval` call that reads
  *     the job's result through the one seam the wake message names;
  *   - the request carrying that result answers with the result's text, which
  *     is how the reply carries the job's output.
@@ -263,7 +281,7 @@ async function wakeBody(body: OutboundBody): Promise<Response> {
   const toolResults = messages.filter((m) => m.role === 'tool').map((m) => textOf(m.content));
   // The runner's wake message is a user line among the runtime's own context
   // lines; the turn it opens is told apart by that line, wherever it sits.
-  const woken = users.map((line) => /Background run job (\S+) completed/.exec(line)).find((match) => match !== null) ?? null;
+  const woken = users.map((line) => /Background shell job (\S+) completed/.exec(line)).find((match) => match !== null) ?? null;
 
   const answer = (content: string): Response => sseResponse([
     sseChunk({ content }), sseChunk({ role: 'assistant' }, 'stop'), sseDone(),
@@ -280,7 +298,7 @@ async function wakeBody(body: OutboundBody): Promise<Response> {
 
     if (read !== undefined) return answer(`echo:${read}`);
 
-    return call('call_wake_read_1', 'execute_tools', { code: `return await agent.jobResult(${JSON.stringify(woken[1])});` });
+    return call('call_wake_read_1', 'eval', { code: `return await agent.jobResult(${JSON.stringify(woken[1])});` });
   }
 
   if (toolResults.length > 0) {
@@ -291,7 +309,7 @@ async function wakeBody(body: OutboundBody): Promise<Response> {
     return answer('echo:detached');
   }
 
-  return call('call_wake_run_1', 'run', { runtime: 'workspace', command: `sleep 45 && echo ${WAKE_MARKER}` });
+  return call('call_wake_run_1', 'shell', { runtime: 'workspace', command: `sleep 45 && echo ${WAKE_MARKER}` });
 }
 
 async function echoBody(body: OutboundBody): Promise<Response> {
@@ -606,8 +624,21 @@ async function probeControl(url: URL, request: Request): Promise<Response> {
     return Response.json({ calls: [...log], catalogHits });
   }
 
+  if (url.pathname === '/log/until' && request.method === 'GET') {
+    const marker = url.searchParams.get('marker') ?? '';
+
+    if (!log.some((call) => carriesMarker(call, marker))) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      logWaiters.push({ marker, resolve });
+      await promise;
+    }
+
+    return Response.json({ ok: true });
+  }
+
   if (url.pathname === '/reset' && request.method === 'POST') {
     log.length = 0;
+    logWaiters.length = 0;
     catalogHits = 0;
 
     return Response.json({ ok: true });

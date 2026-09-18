@@ -8,7 +8,7 @@
 // the refusal string parsed as a success, and the grant read as "no device
 // consent card was ever raised". The contract (docs/EXECUTION-LAYER-SPEC.md
 // "The user's account is a fleet", AGENTS.md § Execution Layer) says every
-// laptop call names its machine when several are live.
+// device call names its machine when several are live.
 import { describe, expect, test, afterEach } from 'bun:test';
 import * as v from 'valibot';
 import { asFetchFunction } from '@kinu.run/core';
@@ -59,7 +59,7 @@ describe('grantDeviceAccess names its machine', () => {
 
         // The workspace's device snapshot starts cold: "not available" first,
         // then the fleet answer before the snapshot knows the machine.
-        if (raises === 1) return answer({ result: { error: 'Executor "laptop" is not available' } });
+        if (raises === 1) return answer({ result: { error: 'Executor "device" is not available' } });
 
         if (raises === 2) {
           return answer({ result: { stdout: '{"reason":"unavailable","error":"the device list is not known here yet"}' } });
@@ -96,7 +96,7 @@ describe('grantDeviceAccess names its machine', () => {
     expect(raiseArgs.length).toBeGreaterThanOrEqual(3);
 
     for (const args of raiseArgs) {
-      expect(v.parse(v.array(v.string()), args)).toEqual(['laptop', 'true', 'kinu-beta']);
+      expect(v.parse(v.array(v.string()), args)).toEqual(['device', 'true', 'kinu-beta']);
     }
 
     // The card the polls found is the one answered `always`.

@@ -157,16 +157,28 @@ describe('createDeviceTunnelExecutor', () => {
     expect(t.calls).toEqual([]);
 
     // The full tier still opens somewhere, from the home the machine reported
-    // on HELLO rather than a command run on it.
-    const full = createDeviceTunnelExecutor(t, {
+    // on HELLO rather than a command run on it. The provider opens on the
+    // roster; the machine's own opening dir is asked by its mount segment.
+    const calls: Array<{ method: string; params: JsonValue[] }> = [];
+
+    const described = staticTransport({
+      connected: true, registered: true, toolchain: null,
+      devices: [{ id: 'dev-1', name: 'box', os: 'linux', hostname: 'box', connected: true }],
+    }, async (method, params) => {
+      calls.push({ method, params });
+
+      return undefined;
+    });
+
+    const full = createDeviceTunnelExecutor(described, {
       consentedRoot: async () => null,
       deviceHome: async () => '/home/dev',
       unconfined: async () => true,
     });
 
-    // `homeDir` is the provider's own answer, not the VFS's.
-    expect(await full.homeDir?.()).toBe('/home/dev');
-    expect(t.calls).toEqual([]);
+    expect(await full.homeDir()).toBe('/');
+    expect(await full.homeDir('box')).toBe('/home/dev');
+    expect(calls).toEqual([]);
   });
 
   test('the row carries the machine\'s own name and this agent\'s grant state', () => {
@@ -373,7 +385,7 @@ describe('createDeviceTunnelExecutor', () => {
     // Pooling the two would read a permission problem as an absent machine.
     expect(await createDeviceTunnelExecutor(t).tools.exec.execute('ls')).toEqual({
       reason: 'io',
-      error: 'laptop exec `ls`: permission denied',
+      error: 'device exec `ls`: permission denied',
     });
   });
 

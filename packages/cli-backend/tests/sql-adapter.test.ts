@@ -39,7 +39,7 @@ function approvedGrant(db: Database): DeferredApprovalStore {
   store.create({
     id: 'act-1',
     command: 'rm -rf ./build',
-    executor: 'laptop',
+    executor: 'device',
     reason: 'the build directory is stale',
     requestedAt: 1,
   });
@@ -61,14 +61,14 @@ describe('the local SQL adapter returns the rows a write produces', () => {
     expect(claimed?.action).toMatchObject({
       id: 'act-1',
       command: 'rm -rf ./build',
-      executor: 'laptop',
+      executor: 'device',
       status: 'spent',
     });
     expect(claimed?.spend).toEqual({ approvalId: 'act-1', spend: 1 });
 
     // And exactly once: the grant is out, so a second claim has nothing to take.
     expect(store.spend('act-1')).toBeNull();
-    expect(store.standing('rm -rf ./build', 'laptop', Date.now())).toBeNull();
+    expect(store.standing('rm -rf ./build', 'device', Date.now())).toBeNull();
 
     if (!claimed) throw new Error('the approved grant must be claimable');
 

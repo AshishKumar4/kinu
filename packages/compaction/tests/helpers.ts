@@ -33,9 +33,9 @@ export function exchange(i: number, outputChars: number): ModelMessage[] {
     user(`Task ${i}: please run step ${i} of the plan.`),
     assistant([
       { type: 'text', text: `Running step ${i} now.` },
-      toolCall(id, 'run', { command: `step-${i}.sh` }),
+      toolCall(id, 'shell', { command: `step-${i}.sh` }),
     ]),
-    toolMessage([toolResult(id, 'run', `output-${i} ${'x'.repeat(outputChars)}`)]),
+    toolMessage([toolResult(id, 'shell', `output-${i} ${'x'.repeat(outputChars)}`)]),
   ];
 }
 

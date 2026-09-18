@@ -296,7 +296,7 @@ describe('kinu debug — local backend', () => {
     const counts = new Map<string, number>();
 
     for (const rec of records) counts.set(rec.t, (counts.get(rec.t) ?? 0) + 1);
-    expect(counts.get('run')).toBe(2);
+    expect(counts.get('shell')).toBe(2);
     expect(counts.get('head_run')).toBe(3);
     expect(counts.get('mcts_search_run')).toBe(2);
     expect(counts.get('mcts_node')).toBe(4);

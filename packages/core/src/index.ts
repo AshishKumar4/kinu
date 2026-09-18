@@ -283,6 +283,10 @@ export {
 // Types
 export type * from './types/primitives';
 
+export { REAL_CLOCK, waitOn, every, type Clock } from './types/clock';
+
+export { referenceRoots, formatReference, type ReferenceRoot } from './vfs/references';
+
 export type * from './types/agent-runtime';
 
 export type * from './types/backend-host';
@@ -607,14 +611,14 @@ export {
   DELEGATION_RUNGS,
   DELEGATION_CONVERSE,
   renderToolSchemaDescription,
-  renderExecuteToolsDescription, EXECUTE_TOOLS_CODE_DESCRIPTION,
+  renderCodemodeDescription, CODEMODE_CODE_DESCRIPTION,
   // The reach axis — which surfaces each capability is projected onto, and the
   // codemode namespace it owns. Read by both surface builders and by the Tools
   // panel, so none of them has to guess it from ToolSet keys.
   TOOL_REACH,
   isBuiltinToolName,
   // Role narrowing over BOTH surfaces from ONE merged allowed-tool set: the
-  // native ToolSet and the codemode namespaces `execute_tools` binds.
+  // native ToolSet and the codemode namespaces `eval` binds.
   narrowToolSurface,
   codemodeCapabilitiesFor,
   type ToolSurfaceNarrowing,
@@ -627,7 +631,7 @@ export {
 
 export {
   CRAFTED_TOOL_NAMESPACE,
-  craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema, executeToolsInputSchema,
+  craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema, codemodeInputSchema,
   renderToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions, slateToolReach, callCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   type CraftedDeclaration,
@@ -760,7 +764,7 @@ export {
 export {
   buildBuiltinTools,
   type BuiltinToolDeps,
-  type CraftedToolSet, type ExecuteToolsBuilder, type ExecuteToolsSurface,
+  type CraftedToolSet, type CodemodeBuilder, type CodemodeSurface,
   type ReportToolDeps,
 } from './tools/builtins';
 
@@ -789,7 +793,7 @@ export {
 // Web search + fetch — provider seam + key-less default + codemode provider.
 export * from './web/index';
 
-// The release lane — codemode-only (release.* inside execute_tools). No
+// The release lane — codemode-only (release.* inside eval). No
 // native tool: see tools/builtins.ts's header for why.
 export {
   createReleaseCodemodeProvider, runReleaseAction,
@@ -838,7 +842,7 @@ export {
   type ClampToolResultOptions,
 } from './tools/clamp';
 
-export { handRolledFileWrite, createFileToolSteer } from './tools/run-file-steer';
+export { handRolledFileWrite, createFileToolSteer } from './tools/shell-file-steer';
 
 export {
   toCraftedToolSource,
@@ -1303,7 +1307,7 @@ export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observ
 export { ensureDir } from './utils/vfs-helpers';
 
 export {
-  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
+  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, RESERVED_REFERENCE_ROOTS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
   type VfsMount, type MountableProvider,
   type VfsNativeMutations, type VfsNativeReads, type VfsListedEntry,
@@ -1747,7 +1751,7 @@ export {
   type ReportHeadDelta, type PublishHeadStream,
   reconcileInterruptedForks, forkInterruptedWake, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
-  HeadController, REAL_HEAD_CLOCK, type HeadClock, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
+  HeadController, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
   type SplitPhaseEvent,
   type HeadJournalPort,
   MergeOutputSchema, DecisionSchema, type MergeOutput,

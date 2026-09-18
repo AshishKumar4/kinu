@@ -46,7 +46,7 @@ function skillFile(name: string, body: string): string {
   return stringifySkillFile({
     name,
     description: 'Authored by the agent.',
-    allowed_tools: ['run'],
+    allowed_tools: ['shell'],
     keywords: [],
     auto_activate: false,
     disable_model_invocation: false,
@@ -82,7 +82,7 @@ describe('built-in skill names are reserved', () => {
     expect(found?.source).toBe('builtin');
     // Nothing from the file leaked into the corpus.
     expect(found?.description).not.toBe('Authored by the agent.');
-    expect(found?.allowed_tools).not.toEqual(['run']);
+    expect(found?.allowed_tools).not.toEqual(['shell']);
   });
 
   test('the refusal is reported, not silent — the author is told why', async () => {

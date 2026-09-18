@@ -13,8 +13,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 
 import {
   INSPECTOR_DEFAULT_PX, INSPECTOR_MIN_PX,
-  isInspectorInputKey, readDecision, readInspectorChoice,
-} from '../src/hooks/inspector-policy';
+  decideInspector, isInspectorInputKey, readStoredInspector,
+} from '@kinu.run/core/web/inspector-layout';
 
 /* `window` and `localStorage` arrive as REAL globals: another cf-backend unit
  * file installs a read-only `localStorage`, so a bare assignment would throw
@@ -56,8 +56,8 @@ describe('the persisted layout, through the decision', () => {
 
     // The decision is the only read an account can never hide behind: no
     // stored width, no stored choice — the policy's own answer, not a value.
-    expect(readInspectorChoice('a@b', 'ws-1')).toBeNull();
-    expect(readDecision('a@b', 'ws-1', false).widthPx).toBe(INSPECTOR_DEFAULT_PX);
+    expect(readStoredInspector('a@b', 'ws-1')?.choice).toBeNull();
+    expect(decideInspector(readStoredInspector('a@b', 'ws-1'), false).widthPx).toBe(INSPECTOR_DEFAULT_PX);
   });
 
   test('a stored value in no shape the reader accepts is absent, not a width', () => {
@@ -67,7 +67,7 @@ describe('the persisted layout, through the decision', () => {
     // The legacy `<width>:<collapsed>` form is one such value: under the
     // reset it is invalid, never migrated to its width half — the decision
     // falls back to the default rather than adopting 340.
-    expect(readDecision('a@b', 'ws-1', false).widthPx).toBe(INSPECTOR_DEFAULT_PX);
+    expect(decideInspector(readStoredInspector('a@b', 'ws-1'), false).widthPx).toBe(INSPECTOR_DEFAULT_PX);
   });
 
   test('a write reads back: the stored number parses and survives rounding', () => {
@@ -75,18 +75,18 @@ describe('the persisted layout, through the decision', () => {
     store['kinu.inspector.a@b'] = '340';
     store['kinu.inspector.open.a@b.ws-1'] = '0';
 
-    expect(readDecision('a@b', 'ws-1', false).widthPx).toBe(340);
-    expect(readInspectorChoice('a@b', 'ws-1')).toBe(false);
+    expect(decideInspector(readStoredInspector('a@b', 'ws-1'), false).widthPx).toBe(340);
+    expect(readStoredInspector('a@b', 'ws-1')?.choice).toBe(false);
 
     store['kinu.inspector.open.a@b.ws-1'] = '1';
-    expect(readInspectorChoice('a@b', 'ws-1')).toBe(true);
+    expect(readStoredInspector('a@b', 'ws-1')?.choice).toBe(true);
   });
 
   test('the pixel floor clamps what a stored width reads back as', () => {
     installStore();
     store['kinu.inspector.a@b'] = '120';
 
-    expect(readDecision('a@b', 'ws-1', false).widthPx).toBe(INSPECTOR_MIN_PX);
+    expect(decideInspector(readStoredInspector('a@b', 'ws-1'), false).widthPx).toBe(INSPECTOR_MIN_PX);
   });
 
   test('the design band the column opens inside', () => {
@@ -100,11 +100,11 @@ describe('the persisted layout, through the decision', () => {
     store['kinu.inspector.a@b'] = '340';
     store['kinu.inspector.open.a@b.ws-1'] = '0';
 
-    expect(readDecision('other@b', 'ws-1', false).widthPx).toBe(INSPECTOR_DEFAULT_PX);
-    expect(readInspectorChoice('other@b', 'ws-1')).toBeNull();
+    expect(decideInspector(readStoredInspector('other@b', 'ws-1'), false).widthPx).toBe(INSPECTOR_DEFAULT_PX);
+    expect(readStoredInspector('other@b', 'ws-1')?.choice).toBeNull();
     // And a choice is the WORKSPACE's: the same account's other workspace
     // sees no trace of it either.
-    expect(readInspectorChoice('a@b', 'ws-2')).toBeNull();
+    expect(readStoredInspector('a@b', 'ws-2')?.choice).toBeNull();
   });
 });
 
@@ -112,16 +112,16 @@ describe('the decided layout', () => {
   test('nothing stored collapses the column — and a stored width alone does not open it', () => {
     installStore();
 
-    expect(readDecision('a@b', 'ws-1', false)).toEqual({ collapsed: true, widthPx: INSPECTOR_DEFAULT_PX });
+    expect(decideInspector(readStoredInspector('a@b', 'ws-1'), false)).toEqual({ collapsed: true, widthPx: INSPECTOR_DEFAULT_PX });
 
     store['kinu.inspector.a@b'] = '400';
-    expect(readDecision('a@b', 'ws-1', false)).toEqual({ collapsed: true, widthPx: 400 });
+    expect(decideInspector(readStoredInspector('a@b', 'ws-1'), false)).toEqual({ collapsed: true, widthPx: 400 });
   });
 
   test('a workspace already holding something worth seeing opens', () => {
     installStore();
 
-    expect(readDecision('a@b', 'ws-1', true)).toEqual({ collapsed: false, widthPx: INSPECTOR_DEFAULT_PX });
+    expect(decideInspector(readStoredInspector('a@b', 'ws-1'), true)).toEqual({ collapsed: false, widthPx: INSPECTOR_DEFAULT_PX });
   });
 
   test('a stored collapse is the user\'s: a signal does not reopen it', () => {
@@ -129,7 +129,7 @@ describe('the decided layout', () => {
     store['kinu.inspector.a@b'] = '280';
     store['kinu.inspector.open.a@b.ws-1'] = '0';
 
-    expect(readDecision('a@b', 'ws-1', true)).toEqual({ collapsed: true, widthPx: 280 });
+    expect(decideInspector(readStoredInspector('a@b', 'ws-1'), true)).toEqual({ collapsed: true, widthPx: 280 });
   });
 
   test('a stored open wins over the signal, and over the other workspace\'s choice', () => {
@@ -138,8 +138,8 @@ describe('the decided layout', () => {
     store['kinu.inspector.open.a@b.ws-1'] = '1';
     store['kinu.inspector.open.a@b.ws-2'] = '0';
 
-    expect(readDecision('a@b', 'ws-1', false)).toEqual({ collapsed: false, widthPx: 340 });
-    expect(readDecision('a@b', 'ws-2', true)).toEqual({ collapsed: true, widthPx: 340 });
+    expect(decideInspector(readStoredInspector('a@b', 'ws-1'), false)).toEqual({ collapsed: false, widthPx: 340 });
+    expect(decideInspector(readStoredInspector('a@b', 'ws-2'), true)).toEqual({ collapsed: true, widthPx: 340 });
   });
 
   test('an anonymous session decides by signal alone: nothing is read, nothing keys', () => {
@@ -149,8 +149,8 @@ describe('the decided layout', () => {
     store['kinu.inspector.a@b'] = '300';
     store['kinu.inspector.open.a@b.ws-1'] = '0';
 
-    expect(readDecision(null, 'ws-1', true)).toEqual({ collapsed: false, widthPx: INSPECTOR_DEFAULT_PX });
-    expect(readDecision(null, 'ws-1', false)).toEqual({ collapsed: true, widthPx: INSPECTOR_DEFAULT_PX });
+    expect(decideInspector(readStoredInspector(null, 'ws-1'), true)).toEqual({ collapsed: false, widthPx: INSPECTOR_DEFAULT_PX });
+    expect(decideInspector(readStoredInspector(null, 'ws-1'), false)).toEqual({ collapsed: true, widthPx: INSPECTOR_DEFAULT_PX });
   });
 });
 

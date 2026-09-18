@@ -301,7 +301,7 @@ describe('the CLI session inventory', () => {
     const owner = await testOwner();
     await harness.userDO.ensureProfile(owner, 'ashish@example.com', 'Ashish');
     await provisionTestWorkspace(harness, 'workspace-a');
-    const laptop = await harness.userDO.mintCliToken(owner, USER_ID, 'a'.repeat(64), 'laptop');
+    const device = await harness.userDO.mintCliToken(owner, USER_ID, 'a'.repeat(64), 'device');
     const lost = await harness.userDO.mintCliToken(owner, USER_ID, 'b'.repeat(64), 'the machine that is gone');
 
     const env = testEnv({
@@ -310,7 +310,7 @@ describe('the CLI session inventory', () => {
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     });
 
-    return { harness, owner, env, laptop, lost };
+    return { harness, owner, env, device, lost };
   }
 
   function sessionsRequest(token: string, opts: { method?: string; hash?: string } = {}): Request {
@@ -323,23 +323,23 @@ describe('the CLI session inventory', () => {
   }
 
   test('another interactive session can name and end a bearer whose raw copy is gone', async () => {
-    const { harness, owner, env, laptop, lost } = await account();
+    const { harness, owner, env, device, lost } = await account();
 
     // The raw token of the lost machine's session is deliberately not used
     // again below: the recovery has to work from the INVENTORY, because the
     // raw copy is exactly what no longer exists.
     const inventory = v.parse(
       v.object({ sessions: v.array(v.object({ tokenHash: v.string(), label: v.string() })) }),
-      await handled(await handleCliRequest(sessionsRequest(laptop.token), env)).json(),
+      await handled(await handleCliRequest(sessionsRequest(device.token), env)).json(),
     );
 
     expect(inventory.sessions.map((row) => row.label).sort())
-      .toEqual(['laptop', 'the machine that is gone']);
+      .toEqual(['device', 'the machine that is gone']);
     const orphan = inventory.sessions.find((row) => row.label === 'the machine that is gone');
     expect(orphan?.tokenHash).toBe(lost.tokenHash);
 
     const revoked = await handleCliRequest(
-      sessionsRequest(laptop.token, { method: 'DELETE', hash: orphan?.tokenHash ?? '' }), env,
+      sessionsRequest(device.token, { method: 'DELETE', hash: orphan?.tokenHash ?? '' }), env,
     );
 
     expect(revoked?.status).toBe(200);
@@ -347,8 +347,8 @@ describe('the CLI session inventory', () => {
     expect(await harness.userDO.verifyCliToken(owner, lost.token))
       .toMatchObject({ ok: false, error: 'invalid token' });
     // The revoking session is untouched — this is a revocation, not a reset.
-    expect(await harness.userDO.verifyCliToken(owner, laptop.token)).toMatchObject({ ok: true });
-    expect((await harness.userDO.listCliTokens(owner)).map((row) => row.label)).toEqual(['laptop']);
+    expect(await harness.userDO.verifyCliToken(owner, device.token)).toMatchObject({ ok: true });
+    expect((await harness.userDO.listCliTokens(owner)).map((row) => row.label)).toEqual(['device']);
     // And the generation rose, so the sockets that bearer holds are closed
     // rather than left listening until it chooses to speak.
     expect(harness.revokedSocketPushes).toContain('workspace-a:1');
@@ -356,16 +356,16 @@ describe('the CLI session inventory', () => {
   });
 
   test('revoke-all is the answer when no hash can name the orphan', async () => {
-    const { harness, owner, env, laptop, lost } = await account();
+    const { harness, owner, env, device, lost } = await account();
 
-    const response = await handleCliRequest(sessionsRequest(laptop.token, { method: 'DELETE' }), env);
+    const response = await handleCliRequest(sessionsRequest(device.token, { method: 'DELETE' }), env);
 
     expect(v.parse(v.object({ ok: v.boolean(), revoked: v.number() }), await handled(response).json()))
       .toEqual({ ok: true, revoked: 2 });
     // Every bearer, including the caller's own: an account whose orphan cannot
     // be named is an account whose every remaining bearer needed to die. One
     // generation rise covers all of their sockets at once.
-    expect(await harness.userDO.verifyCliToken(owner, laptop.token)).toMatchObject({ ok: false });
+    expect(await harness.userDO.verifyCliToken(owner, device.token)).toMatchObject({ ok: false });
     expect(await harness.userDO.verifyCliToken(owner, lost.token)).toMatchObject({ ok: false });
     expect(await harness.userDO.listCliTokens(owner)).toEqual([]);
     expect(harness.revokedSocketPushes).toContain('workspace-a:1');
@@ -373,7 +373,7 @@ describe('the CLI session inventory', () => {
   });
 
   test('a scoped CI token cannot enumerate or end the account\'s sessions', async () => {
-    const { harness, owner, env, laptop } = await account();
+    const { harness, owner, env, device } = await account();
     const ci = await harness.userDO.mintAccessToken(owner, USER_ID, 'ci', ['workspace.read', 'workspace.exec']);
 
     if (!ci.ok || !ci.token) throw new Error('the access token was not minted');
@@ -381,7 +381,7 @@ describe('the CLI session inventory', () => {
     for (const request of [
       sessionsRequest(ci.token),
       sessionsRequest(ci.token, { method: 'DELETE' }),
-      sessionsRequest(ci.token, { method: 'DELETE', hash: laptop.tokenHash }),
+      sessionsRequest(ci.token, { method: 'DELETE', hash: device.tokenHash }),
     ]) {
       const refused = await handleCliRequest(request, env);
       expect(refused?.status).toBe(403);
@@ -390,15 +390,15 @@ describe('the CLI session inventory', () => {
     }
 
     // Nothing was revoked by the refusals.
-    expect(await harness.userDO.verifyCliToken(owner, laptop.token)).toMatchObject({ ok: true });
+    expect(await harness.userDO.verifyCliToken(owner, device.token)).toMatchObject({ ok: true });
     harness.close();
   });
 
   test('a hash that is not 64 hex is not a route at all', async () => {
-    const { harness, env, laptop } = await account();
+    const { harness, env, device } = await account();
 
     const refused = await handleCliRequest(
-      sessionsRequest(laptop.token, { method: 'DELETE', hash: 'not-a-hash' }), env,
+      sessionsRequest(device.token, { method: 'DELETE', hash: 'not-a-hash' }), env,
     );
 
     expect(refused?.status).toBe(404);

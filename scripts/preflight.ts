@@ -6,7 +6,7 @@
  * went red at HEAD 5183d69d, reproducibly, in a clean worktree. The message the
  * ladder printed was:
  *
- *     (fail) the laptop executor reads and writes the real host filesystem
+ *     (fail) the device executor reads and writes the real host filesystem
  *       ^ this test timed out after 5000ms.
  *
  * which names nothing, points at a filesystem test, and blames whatever change
@@ -14,7 +14,7 @@
  * sibling stream had left a `package.json` in `/tmp`; `workdirForPath` walks
  * ancestors looking for generic project markers and stops only at `/` and
  * `$HOME`, so it resolved the checkpoint working directory for every temp-dir
- * host write to `/tmp` itself; the first `laptop.writeFile` therefore
+ * host write to `/tmp` itself; the first `device.writeFile` therefore
  * shadow-git-added a 23 GB tmpfs, measured at 24,483 ms against a 5,000 ms
  * per-test limit. Meanwhile the same tmpfs was at 1,048,576 of 1,048,576
  * inodes, and 541,319 of those belonged to our own leaked test scratch.
@@ -185,7 +185,7 @@ const ENGINE = 'packages/cli-backend/src/checkpoints.ts';
  * walk breaks before it probes there, so a stray `pyproject.toml` in a shared
  * `/tmp` is harmless and refusing a push for it is a false blocker. Without
  * the bound, that marker owns every host write beneath it — measured at
- * 24,483 ms for one `laptop.writeFile`, which surfaces as a 5,000 ms timeout
+ * 24,483 ms for one `device.writeFile`, which surfaces as a 5,000 ms timeout
  * in whichever suite wrote first. So the marker is a FINDING only while the
  * bound is missing, and this is the half that decides which.
  */
@@ -318,7 +318,7 @@ export function judge(env: Environment): string[] {
           + `${PROJECT_MARKERS.filter((m) => existsSync(join(dir, m))).join(', ')}`,
         silently: `every host write under ${env.temp} resolves its checkpoint working `
           + `directory to ${dir} and shadow-git-adds the whole of it — measured at 24,483 ms `
-          + 'for one laptop.writeFile, which lands as a 5,000 ms test timeout elsewhere',
+          + 'for one device.writeFile, which lands as a 5,000 ms test timeout elsewhere',
         fix: `restore the temp bound in ${ENGINE} workdirForPath (a scratch directory is `
           + 'never a project root), which packages/cli-backend/tests/'
           + 'checkpoint-workdir-bound.test.ts proves in both directions',

@@ -17,6 +17,7 @@
  * off" or "the turn carried nothing to learn from"; it is that the headless
  * loop declines to enter the channel a full actor would.
  */
+import { REAL_CLOCK } from '../src/types/clock';
 import { describe, expect, test } from 'bun:test';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModel } from 'ai';
@@ -135,7 +136,7 @@ describe('a headless actor runs the step clock only', () => {
 
         const report = await runHeadInference(headInput(), {
           actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
-          model, tools: {}, capture: new HeadCapture(), isAborted: () => false,
+          model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
           workspaceLayout: 'shared-workspace',
         });
 
@@ -177,7 +178,7 @@ describe('a headless actor runs the step clock only', () => {
       actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
       model: probingHead(1),
       tools: { probe: tool({ inputSchema: PROBE_SCHEMA, execute: async (): Promise<{ ok: boolean }> => { throw new Error('probe exploded'); } }) },
-      capture, isAborted: () => false, workspaceLayout: 'shared-workspace',
+      capture, clock: REAL_CLOCK, isAborted: () => false, workspaceLayout: 'shared-workspace',
     });
 
     expect(report.status).toBe('completed');
@@ -233,7 +234,7 @@ describe('a headless actor runs the step clock only', () => {
 
         return { ok: true };
       } }) },
-      capture: new HeadCapture(), isAborted: () => false, workspaceLayout: 'shared-workspace',
+      capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false, workspaceLayout: 'shared-workspace',
     });
 
     expect(report.status).toBe('completed');

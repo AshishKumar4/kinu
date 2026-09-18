@@ -13,7 +13,7 @@ import type {
 import { watchDeviceConsents, type ConsentNoteKind } from '../src/consent-watch';
 
 function consent(id: string): PendingDeviceConsent {
-  return { consentId: id, deviceLabel: 'laptop', method: 'exec', command: 'ls' };
+  return { consentId: id, deviceLabel: 'device', method: 'exec', command: 'ls' };
 }
 
 /** A pending list the test controls, plus a way to await the Nth poll and

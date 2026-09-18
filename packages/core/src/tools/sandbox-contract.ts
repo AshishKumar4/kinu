@@ -1,17 +1,17 @@
 /**
  * The codemode sandbox contract: what a program the model writes can reach.
  *
- * `execute_tools` runs a JavaScript program in a fresh isolate. The program
+ * `eval` runs a JavaScript program in a fresh isolate. The program
  * sees:
  *
  *   tools.<name>(input)   EVERY tool the agent has on this turn — the native
- *                         builtins (`file`, `run`, `memory`, `tasks`, `web`,
+ *                         builtins (`file`, `shell`, `memory`, `tasks`, `web`,
  *                         `agents`, `report`, …) with the same input object
  *                         the native call takes, and every crafted tool the
  *                         agent saved with `workspace.createTool`, called with
  *                         whatever arguments its own source declares.
  *   <executor>.*          one namespace per live execution environment
- *                         (`workspace`, `sandbox`, `laptop`, `parent`).
+ *                         (`workspace`, `sandbox`, `device`, `parent`).
  *   state.*               a key/value store that survives between programs.
  *   <projection>.*        the codemode projections (`memory`, `tasks`, `web`,
  *                         `agents`, `agent`, `release`, `report`).
@@ -33,7 +33,7 @@ import { nanoid } from '../utils/nanoid';
 import { hasPlanPermission, workModeRefusal } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 import { branchableToolCall, bindProgramCall } from './outcome';
-import { TOOL_REACH, EXECUTE_TOOLS_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
+import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
 import { KinuError } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
 
@@ -41,10 +41,10 @@ export {
   CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type CodemodeResult,
 } from '../types/codemode';
 
-/** The sandbox's own entry. A program cannot call `execute_tools` from inside
+/** The sandbox's own entry. A program cannot call `eval` from inside
  *  itself, so the declaration and the bindings below both skip it: callers
  *  hand in the whole finished surface. */
-const SANDBOX_TOOL = 'execute_tools';
+const SANDBOX_TOOL = 'eval';
 
 /** What a crafted tool with no stored description is labelled. One spelling,
  *  so the advertised set reads the same however it was assembled. */
@@ -135,15 +135,15 @@ export function nativeToolInputSchema(tool: ToolSet[string]): JsonValue | undefi
   return parsed.success ? parsed.output.jsonSchema : undefined;
 }
 
-/** The `execute_tools` input schema, shared by both backends so the tool's one
- *  `code` field is described one way — by EXECUTE_TOOLS_CODE_DESCRIPTION in
+/** The `eval` input schema, shared by both backends so the tool's one
+ *  `code` field is described one way — by CODEMODE_CODE_DESCRIPTION in
  *  registry.ts, NOT by codemode's own "async arrow function" label. CF wraps
  *  `createCodeTool` and reassigns this schema over the built tool's own; the
  *  CLI builds the `tool()` with it directly. */
-export function executeToolsInputSchema(): Schema<{ code: string }> {
+export function codemodeInputSchema(): Schema<{ code: string }> {
   return jsonSchema<{ code: string }>({
     type: 'object',
-    properties: { code: { type: 'string', description: EXECUTE_TOOLS_CODE_DESCRIPTION } },
+    properties: { code: { type: 'string', description: CODEMODE_CODE_DESCRIPTION } },
     required: ['code'],
   });
 }
@@ -209,7 +209,7 @@ export function renderToolsDeclaration(
  * surface, called with the one input object the native call takes. Anything
  * else answers a refusal that names the call. The tool's answer crosses the
  * sandbox boundary as JSON, which `decodeJsonValue` establishes. Both sandboxes
- * bind this; a program's `tools.run(input)` reaches the same `run` the model
+ * bind this; a program's `tools.shell(input)` reaches the same `shell` the model
  * calls natively.
  */
 export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
@@ -246,7 +246,7 @@ export function codemodeFunction<Result>(namespace: string, member: string, invo
   const owner = Object.entries(TOOL_REACH).find(([name, reach]) => name === namespace && reach.codemode === namespace);
 
   const tool = namespace === CRAFTED_TOOL_NAMESPACE ? member
-    : owner?.[0] ?? (member === 'exec' ? 'run' : ['readFile', 'writeFile', 'editFile', 'readdir', 'exists', 'stat', 'mkdir', 'remove'].includes(member) ? 'file' : `${namespace}.${member}`);
+    : owner?.[0] ?? (member === 'exec' ? 'shell' : ['readFile', 'writeFile', 'editFile', 'readdir', 'exists', 'stat', 'mkdir', 'remove'].includes(member) ? 'file' : `${namespace}.${member}`);
 
   const call = bindProgramCall({ tool, action: owner === undefined ? null : member }, async (...args: unknown[]) => {
     const value = await invoke(...args);
@@ -283,7 +283,7 @@ export function slateToolReach(caller: ToolSurfaceNarrowing): ToolSurfaceNarrowi
   const allowsNamespace = (name: string) => name !== 'agent' && name !== 'agents' && caller.allowsNamespace(name);
 
   return {
-    allowsTool: (name) => name !== 'agents' && name !== 'agent' && name !== 'execute_tools' && caller.allowsTool(name),
+    allowsTool: (name) => name !== 'agents' && name !== 'agent' && name !== 'eval' && caller.allowsTool(name),
     allowsNamespace,
     narrowProviders: (providers) => providers.filter((provider) => allowsNamespace(provider.name)),
   };

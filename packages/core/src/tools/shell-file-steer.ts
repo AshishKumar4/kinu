@@ -1,11 +1,11 @@
 /**
- * The `run` interceptor for hand-rolled file edits.
+ * The `shell` interceptor for hand-rolled file edits.
  *
- * The `file` tool's spec says not to change files by pointing `run` at
+ * The `file` tool's spec says not to change files by pointing `shell` at
  * `sed -i`, a heredoc, or an inline python/perl script, because those write
  * whether or not the text they aimed at was there. It says so for a real
  * reason — a missed anchor in an in-place edit is a silent corruption nobody
- * reads until much later — and it is up against a habit: across 789 `run`
+ * reads until much later — and it is up against a habit: across 789 `shell`
  * calls in the preserved tb20/tb21 trajectories, 25% carried a heredoc, 36
  * used `sed -i`, and 104 ran an inline interpreter. Prose is the wrong
  * instrument for a habit that strong; Kinu's own telemetry puts written
@@ -22,7 +22,7 @@
  * cost one sentence, never a failed command. (Contrast safety/approval-gate.ts,
  * which does refuse: that one guards against destroying the machine.)
  *
- * `file` is built unconditionally beside `run` in the same factory, so the
+ * `file` is built unconditionally beside `shell` in the same factory, so the
  * note can never name a tool the caller does not have.
  */
 
@@ -58,7 +58,7 @@ const RULES: readonly Rule[] = [
     name: 'an inline interpreter script',
     // `python3 -c`, `perl -e`, `node -e`. Only when the code itself opens a
     // file for writing — an inline script that computes something is exactly
-    // what `run` is for.
+    // what `shell` is for.
     pattern: /\b(?:python3?|perl|ruby|node|deno)\s+(?:-\S+\s+)*-(?:c|e)\b/,
     writes: /open\s*\([^)]*['"][wax]|write_text\s*\(|writeFileSync\s*\(|\bprint\s*\([^)]*file\s*=|>>?\s*['"]?[\w./-]+\.\w/,
   },
@@ -97,7 +97,7 @@ export function fileToolSteer(command: string): string | null {
  * turn is annotated where it happens, not summarised at the end — but the text
  * is identical every time a writeMethod recurs, so repeats carry no information the
  * turn does not already hold. The tb20/tb21 corpus measures what that costs
- * unbounded: 151 firings over 789 `run` calls, of which 122 (81%) repeat a
+ * unbounded: 151 firings over 789 `shell` calls, of which 122 (81%) repeat a
  * writeMethod already noted in the same turn, one turn alone reaching 45 firings of
  * ~75 tokens each. A note the model has already declined 44 times is not
  * steering on the 45th; it is the spam half of "no spam, no silence".

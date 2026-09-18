@@ -2,7 +2,7 @@
  * The codemode sandbox's outbound egress: the third seam of the one
  * destination classifier.
  *
- * `execute_tools` programs are LLM-authored, and this repository treats them
+ * `eval` programs are LLM-authored, and this repository treats them
  * that way everywhere else: the approval gate DENIES `169.254.169.254` in a
  * shell command on every executor, and the agent's own `web.fetch` refuses the
  * same destinations. The identical request as `fetch()` inside a program rode a

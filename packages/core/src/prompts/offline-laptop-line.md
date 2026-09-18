@@ -1,1 +1,0 @@
-- **laptop** / `runtime: "laptop"`: {{deviceName}} (registered, currently offline). The machine is registered but not connected. Call it and the runtime asks the user to bring it back. Or tell the user to run `kinu connect` on it.

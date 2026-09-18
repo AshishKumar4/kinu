@@ -289,7 +289,7 @@ export const PROBES: readonly BehaviourProbe[] = [
   {
     id: 'probe-codemode-branch',
     prompt: [
-      'Run exactly this program with execute_tools, changing nothing:',
+      'Run exactly this program with eval, changing nothing:',
       '```',
       "const result = await workspace.editFile('src/codemode-blind.txt', [{ old_text: 'SEALED', new_text: 'OPEN' }]);",
       "if (result && typeof result === 'object' && 'reason' in result) {",
@@ -305,7 +305,7 @@ export const PROBES: readonly BehaviourProbe[] = [
     seed: { 'src/codemode-blind.txt': BLIND_SEED },
     async verify({ files, events }) {
       const diagnosis = await files.readText('diagnosis.txt');
-      const execSuccess = successfulCalls(events, 'execute_tools');
+      const execSuccess = successfulCalls(events, 'eval');
 
       return [
         {
@@ -316,12 +316,12 @@ export const PROBES: readonly BehaviourProbe[] = [
         {
           // THE handled/unhandled distinction, as a subgoal: the edit refusal
           // arrived as a branchable {reason, error} object INSIDE the program,
-          // so the execute_tools call itself succeeded. Had it thrown out of
+          // so the eval call itself succeeded. Had it thrown out of
           // the program instead, this call would have failed and the next probe
           // would be the one measuring that.
-          what: 'execute_tools-succeeded',
+          what: 'eval-succeeded',
           reached: execSuccess.length > 0,
-          detail: `${String(execSuccess.length)} successful execute_tools call(s) — the refusal never escaped the program`,
+          detail: `${String(execSuccess.length)} successful eval call(s) — the refusal never escaped the program`,
         },
       ];
     },
@@ -329,7 +329,7 @@ export const PROBES: readonly BehaviourProbe[] = [
   {
     id: 'probe-codemode-throw',
     prompt: [
-      'Run exactly this program with execute_tools, changing nothing:',
+      'Run exactly this program with eval, changing nothing:',
       '```',
       "const content = await workspace.readFile('src/never-seeded-ghost.txt');",
       'return content;',
@@ -343,7 +343,7 @@ export const PROBES: readonly BehaviourProbe[] = [
     seed: {},
     async verify({ files, events }) {
       const failed = toolEnds(events).filter((call) =>
-        call.name === 'execute_tools' && call.outcome?.success === false);
+        call.name === 'eval' && call.outcome?.success === false);
 
       const aftermath = await files.readText('aftermath.txt');
       const noted = aftermath !== null && aftermath.trim().length > 0;
@@ -353,7 +353,7 @@ export const PROBES: readonly BehaviourProbe[] = [
         {
           what: 'failure-surfaced',
           reached: failed.length > 0,
-          detail: `${String(failed.length)} failed execute_tools call(s) — the unhandled error arrived as a tool failure, not a silent value`,
+          detail: `${String(failed.length)} failed eval call(s) — the unhandled error arrived as a tool failure, not a silent value`,
         },
         {
           what: 'recovered-through-another-tool',
