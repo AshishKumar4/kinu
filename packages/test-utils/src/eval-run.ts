@@ -247,6 +247,27 @@ export interface EpisodeEvidence {
   readonly spend: WorkspaceSpend;
 }
 
+/**
+ * How long an evidence read may still run once the episode budget is spent.
+ *
+ * The budget tells the OPERATION to stop; reading the ledger afterwards is a
+ * different wait, and on the failure this bound exists for the product cannot
+ * answer it either: a Durable Object wedged inside a turn it never closed
+ * serves its run-event, history and spend routes from the same thread as that
+ * turn. Measured 2026-09-17 against the deployed build cba44dcb9: the
+ * `delegation` first-run row spent its 20-minute budget, then its collect()
+ * never returned, so the tier ended on its own test bound with no verdict
+ * printed and no ledger retained.
+ *
+ * So the read gets this much after the abort and no more — three orders above
+ * what a healthy read costs (measured 2026-09-17 on a local dev server: the
+ * spend and history channels of a settled episode answered together in tens of
+ * milliseconds), so a product that is answering at all is never cut short.
+ * Whatever lands inside the grace is retained; a channel that has not answered
+ * is recorded as unanswered, a fact about the product rather than a timeout.
+ */
+export const EVIDENCE_GRACE_MS = 60_000;
+
 /** The evidence boundary starts before session opening. Missing sessions leave
  * unavailable channels, never fabricated empty ledgers or zero spend. */
 export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, T>(
@@ -260,9 +281,11 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
     /** The most wall time the operation may take once the session is open.
      *  When it is spent the operation is told (its `budget` signal aborts),
      *  the episode is recorded as spent under `failure.json` with
-     *  `phase: 'budget'`, the evidence is COLLECTED as it stands, and the
-     *  spend is thrown — so a product that never settles leaves a ledger to
-     *  read, not an empty directory a runner's own timeout left behind. */
+     *  `phase: 'budget'`, the evidence is COLLECTED as it stands — bounded in
+     *  its turn by {@link EVIDENCE_GRACE_MS}, because a product that never
+     *  settled a turn may never answer its ledger routes either — and the
+     *  spend is thrown, so such a product leaves a ledger to read rather than
+     *  an empty directory a runner's own timeout left behind. */
     readonly budgetMs?: number;
   },
   operation: (reader: Reader, collect: () => Promise<EpisodeEvidence>, budget: AbortSignal) => Promise<T>,
@@ -291,12 +314,36 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
     throw failure;
   }
 
+  const budget = new AbortController();
+  /** Where the EVIDENCE read ends: {@link EVIDENCE_GRACE_MS} past the spent
+   *  budget, armed with it below. Separate from `budget`, which ends the
+   *  operation: the read is what turns a spent budget into a verdict. */
+  const reading = new AbortController();
+
+  /** One channel of the collection, abandoned when the read's own end
+   *  arrives. `Promise.race` keeps reading the read: a late answer is
+   *  dropped, never an unhandled rejection. */
+  const readChannel = <Value>(name: string, read: Promise<Value>): Promise<Value> => Promise.race([
+    read,
+    new Promise<never>((_resolve, reject) => {
+      const abandon = (): void => {
+        reject(new Error(`${options.taskId}: the ${name} channel had not answered `
+          + `${String(EVIDENCE_GRACE_MS)} ms after the episode budget was spent`));
+      };
+
+      if (reading.signal.aborted) abandon();
+      else reading.signal.addEventListener('abort', abandon, { once: true });
+    }),
+  ]);
+
   let collection: Promise<EpisodeEvidence> | null = null;
 
   const collect = (): Promise<EpisodeEvidence> => {
     collection ??= (async () => {
       const [events, history, spend] = await Promise.allSettled([
-        reader.runEvents(), reader.history(), reader.spend(),
+        readChannel('events', reader.runEvents()),
+        readChannel('history', reader.history()),
+        readChannel('spend', reader.spend()),
       ]);
 
       const errors: Error[] = [];
@@ -352,7 +399,6 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
   };
 
   let result: { ok: true; value: T } | { ok: false; error: Error };
-  const budget = new AbortController();
   /** Settles with the spend when the budget runs out — a value, so the race
    *  below has no losing rejection to leave unread. */
   const spent = Promise.withResolvers<{ readonly spent: Error }>();
@@ -362,6 +408,12 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
     budget.abort(reason);
     spent.resolve({ spent: reason });
   });
+
+  /** The read's end, armed WITH the budget rather than at the abort: one
+   *  timeline on one clock, which is also how a test reaches it in one step. */
+  const disarmReading = options.budgetMs === undefined
+    ? null
+    : options.clock.after(options.budgetMs + EVIDENCE_GRACE_MS, () => { reading.abort(); });
 
   try {
     const raced = await Promise.race([
@@ -386,6 +438,8 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
   } catch (error) {
     if (!result.ok) throw new AggregateError([result.error, error], result.error.message, { cause: error });
     throw error;
+  } finally {
+    if (disarmReading !== null) disarmReading();
   }
 
   if (!result.ok) throw result.error;

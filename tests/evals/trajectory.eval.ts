@@ -1316,7 +1316,17 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
           opened = await plan.open({ subject: entry.id, purpose: entry.purpose, genesis: false });
 
           return opened;
-        }, { transcripts: TRANSCRIPTS, taskId: entry.id, modelCalls: 'expected', clock: REAL_CLOCK }, async (session, collect) => {
+        }, {
+          transcripts: TRANSCRIPTS, taskId: entry.id, modelCalls: 'expected', clock: REAL_CLOCK,
+          // THE CASE'S OWN DECLARED WALL, not a second number: `budgetRow`
+          // scores the episode against `budget.wallMs`, so the harness ends
+          // the episode at the same ceiling the record judges it by. Without
+          // it a product that never settles a turn holds this arm open until
+          // the runner's own bound, which prints no verdict and retains
+          // nothing (measured 2026-09-17 on cba44dcb9: the delegation episode
+          // sat 33 minutes on an unanswered `agents` hire).
+          budgetMs: entry.budget.wallMs,
+        }, async (session, collect) => {
         console.warn(`    [trajectory] ${entry.id} on ${session.describe}`);
 
         // Seeded through the PUBLIC files route — the plane the web file manager
