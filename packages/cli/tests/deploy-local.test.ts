@@ -42,9 +42,16 @@ const VERSION = '0.4.0+local01';
  * config binds the disk service with `kvNamespace`. Under a plain `service`
  * binding the Worker gets a Fetcher and `put` is not a function, so this route
  * answers 500.
+ *
+ * `/api/health` is what the supervisor reads to decide the instance is up: a
+ * release that answers it is a Kinu, and whatever else may be holding the port
+ * is not.
  */
 const WORKER = `export default { async fetch(request, env) {
   const path = new URL(request.url).pathname;
+  if (path === '/api/health') {
+    return Response.json({ version: '${VERSION}', sha: 'local01', builtAt: '2026-09-18T00:00:00.000Z' });
+  }
   if (path === '/kv') {
     await env.AUTH_KV.put('session:probe', 'kv round trip');
     return new Response(await env.AUTH_KV.get('session:probe'));
@@ -60,12 +67,18 @@ const started: { home: string; port: number }[] = [];
 
 const servers: Server[] = [];
 
+/** Processes a row put in a pidfile on purpose. Killed here so a refusal row
+ *  cannot leave one behind, whichever way the row went. */
+const strangers: Bun.Subprocess[] = [];
+
 afterEach(async () => {
   for (const instance of started.splice(0)) {
     const pid = readPid(instance.home);
 
     if (pid !== null) tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
   }
+
+  for (const stranger of strangers.splice(0)) stranger.kill('SIGKILL');
 
   for (const server of servers.splice(0)) await new Promise<void>((done) => server.close(() => done()));
 });
@@ -293,5 +306,66 @@ describe('kinu deploy local', () => {
     expect(stopped.stdout).toContain(`pid ${String(pid ?? 0)}`);
     expect(tolerate(() => process.kill(pid ?? 0, 0), 'esrch')).toBeUndefined();
     expect((await runDeploy(home, ['stop'])).stdout).toContain('No local Kinu is running');
+  });
+
+  /**
+   * A pidfile outlives the process it names, and a pid is reused: after a
+   * reboot `workerd.pid` can name any live process on the machine. `stop` must
+   * refuse that pid rather than SIGTERM then SIGKILL a stranger's work.
+   */
+  test('refuses a pidfile that names a live process which is not its workerd', async () => {
+    const home = scratchDir(`local-home-${randomUUID().slice(0, 8)}`);
+    const origin = await channel();
+    const port = await freePort();
+
+    started.push({ home, port });
+    expect((await runDeploy(home, [`--origin=${origin}`, `--port=${String(port)}`])).exitCode).toBe(0);
+    expect((await runDeploy(home, ['stop'])).exitCode).toBe(0);
+
+    const stranger = Bun.spawn({ cmd: ['sleep', '120'], stdout: 'ignore', stderr: 'ignore' });
+
+    strangers.push(stranger);
+    writeFileSync(join(home, 'local/workerd.pid'), `${String(stranger.pid)}\n`);
+
+    const refused = await runDeploy(home, ['stop']);
+
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain(`Not stopping pid ${String(stranger.pid)}`);
+
+    // Untouched, and the pidfile that named it is gone, so the next command
+    // starts an instance instead of reporting one.
+    expect(stranger.exitCode).toBeNull();
+    expect(stranger.signalCode).toBeNull();
+    expect(existsSync(join(home, 'local/workerd.pid'))).toBe(false);
+    expect((await runDeploy(home, ['stop'])).stdout).toContain('No local Kinu is running');
+  });
+
+  /**
+   * The port accepting is not the instance serving. With something else on the
+   * port, workerd dies on EADDRINUSE while a connect to that port still
+   * succeeds — so a supervisor that reads readiness off the socket prints a
+   * stranger's address and a pid that is already gone.
+   */
+  test('reports the failure when workerd exits and another process holds the port', async () => {
+    const home = scratchDir(`local-home-${randomUUID().slice(0, 8)}`);
+    const origin = await channel();
+
+    const squatter = createServer((_request, response) => {
+      response.writeHead(404).end('not kinu');
+    });
+
+    servers.push(squatter);
+    await listening(squatter);
+    const port = boundPort(squatter);
+
+    started.push({ home, port });
+
+    const attempt = await runDeploy(home, [`--origin=${origin}`, `--port=${String(port)}`]);
+
+    expect(attempt.exitCode).not.toBe(0);
+    expect(attempt.stderr).toContain('exited while starting');
+    expect(attempt.stderr).toContain('answered by another process');
+    expect(attempt.stdout).not.toContain('Local Kinu on');
+    expect(readPid(home)).toBeNull();
   });
 });
