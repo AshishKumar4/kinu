@@ -30,6 +30,7 @@ export default defineConfig({
       "@": resolve(galleryRoot, "src"),
       "node:crypto": resolve(galleryRoot, "client-node-stubs.ts"),
       "node:async_hooks": resolve(galleryRoot, "client-node-stubs.ts"),
+      "node:util": resolve(galleryRoot, "client-node-stubs.ts"),
       // The agent transport. A frame that mounts a PAGE rather than a surface
       // gets no `Rpc` prop — the page opens its own connection — so without
       // these two the page opened a WebSocket to a vite server that is not a

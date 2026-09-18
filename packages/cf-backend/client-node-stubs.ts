@@ -38,3 +38,11 @@ export class AsyncLocalStorage {
     return undefined;
   }
 }
+
+/**
+ * node:util, for @kinu.run/core's prompting/volatile-context.ts, which imports
+ * isDeepStrictEqual at module scope; no client path calls it — calling is a bug.
+ */
+export function isDeepStrictEqual(): never {
+  throw new Error("node:util is not available in browser code");
+}
