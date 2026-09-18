@@ -44,6 +44,35 @@ export class DeployRunProbeDO extends DeployRunDO {
     return [...held.keys()];
   }
 
+  /** Everything this object holds, dropped. The self-update ledger lives under
+   *  a FIXED id, so rows that install a release each need it empty — and a row
+   *  that inherited a finished ledger would pass by skipping every step, which
+   *  is the very defect the rows are here for. */
+  async forget(): Promise<void> {
+    await this.ctx.storage.deleteAll();
+    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS deploy_step (
+      id TEXT PRIMARY KEY, seq INTEGER NOT NULL, title TEXT NOT NULL, state TEXT NOT NULL,
+      attempt INTEGER NOT NULL DEFAULT 0, detail TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT '[]', failure TEXT, facts TEXT NOT NULL DEFAULT '{}'
+    )`);
+  }
+
+  /** When this object's timer is due, in epoch ms, or 0 when nothing is armed.
+   *  The vault's bound is an alarm, so "is it bounded at all" is this. */
+  async alarmAt(): Promise<number> {
+    return await this.ctx.storage.getAlarm() ?? 0;
+  }
+
+  /** Bring the armed expiry forward so a row can watch the RUNTIME deliver it.
+   *  Only ever moves an expiry: a plan waiting on its own alarm is left alone,
+   *  because moving that one would start the run rather than expire it. */
+  async expireSoon(): Promise<boolean> {
+    if (await this.ctx.storage.get<string>('run.intent') !== undefined) return false;
+    await this.ctx.storage.setAlarm(Date.now() + 50);
+
+    return true;
+  }
+
   /** Every durable row, as text. The assertion is a substring search, so the
    *  shape does not matter and a new column cannot escape it. */
   rowText(): string {
@@ -70,6 +99,11 @@ export class DeployFakeControl extends WorkerEntrypoint {
   /** What this deployment serves as its own build stamp from here on. */
   async serve(build: DeployFakeServedBuild): Promise<void> {
     await this.hit('/serve', build);
+  }
+
+  /** What the channel publishes from here on: the next release. */
+  async publish(build: DeployFakeServedBuild): Promise<void> {
+    await this.hit('/publish', build);
   }
 
   private async hit(path: string, body?: DeployFakeRefusal | DeployFakeServedBuild): Promise<DeployFakeState> {

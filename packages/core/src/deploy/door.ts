@@ -54,6 +54,9 @@ export interface DeployRunAddress {
 export interface DeployTokenPair {
   readonly accessToken: string;
   readonly refreshToken: string;
+  /** The access token's life, as the token endpoint stated it. The run needs
+   *  it to know when to spend the refresh token instead. */
+  readonly expiresInSeconds: number;
 }
 
 export interface DeployDoor {

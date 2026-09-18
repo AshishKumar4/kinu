@@ -335,11 +335,14 @@ export default function DeployPage({ fixture, fixtureOptions }: {
 
   const signIn = async (): Promise<void> => {
     try {
-      const minted = await openDeployRun();
+      // An expired run is signed into again rather than replaced: its ledger
+      // holds every step that already ran, and a fresh run would create a
+      // second set of everything.
+      const run = runId !== "" && heldRunKey(runId) !== "" ? runId : await openDeployRun();
 
       // The door mints the leg and answers where to go; the key authorized
       // that POST in a header and is in nothing the browser navigates to.
-      location.assign(await doorFor(minted).authorize());
+      location.assign(await doorFor(run).authorize());
     } catch (cause) {
       setErr(renderThrownChain({ cause }));
     }
@@ -353,6 +356,13 @@ export default function DeployPage({ fixture, fixtureOptions }: {
 
   const ownerEmail = snapshot?.steps.flatMap((row) => Object.entries(row.facts))
     .find(([key]) => key === FACT_OWNER_EMAIL)?.[1] ?? "";
+
+  // The form is shown while the run is still collecting answers. A started run
+  // has none: `start` answers before its first step exists, so "no rows yet"
+  // is a run whose first frame has not arrived, not a run to re-answer.
+  const collecting = snapshot !== null
+    && (snapshot.state === "collecting" || snapshot.state === "authorizing")
+    && snapshot.steps.length === 0;
 
   return (
     <div className="min-h-screen p-bg p-text">
@@ -371,14 +381,17 @@ export default function DeployPage({ fixture, fixtureOptions }: {
         {err !== null && <div className="p-notice-danger rounded-md px-3 py-2 text-xs" role="alert">{err}</div>}
         {options === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
         {options !== null && !options.cloudflare && <NotConfigured reason={options.reason} />}
-        {options !== null && options.cloudflare && snapshot === null && (
+        {options !== null && options.cloudflare && (snapshot === null || snapshot.state === "expired") && (
           <section className="space-y-3" aria-label="Sign in with Cloudflare">
             <div className="p-card px-5 py-4">
               <h2 className="p-title p-text">Sign in with Cloudflare</h2>
               <p className="mt-1 text-sm p-text-2">
-                Kinu asks for the permissions it needs to create your Worker, its storage, and its
-                sign-in. The token stays on this run and is wiped when the run ends; your
-                deployment keeps its own from then on.
+                {snapshot?.state === "expired"
+                  ? "This run stopped holding your Cloudflare authorization, which it does an hour"
+                    + " after it last moved. Sign in again and it carries on from the step it reached."
+                  : "Kinu asks for the permissions it needs to create your Worker, its storage, and"
+                    + " its sign-in. The token stays on this run and is wiped when the run ends;"
+                    + " your deployment keeps its own from then on."}
               </p>
               <FilledButton onClick={() => void signIn()} className="mt-4 !h-9 !px-4 !text-sm">
                 Sign in with Cloudflare
@@ -387,10 +400,10 @@ export default function DeployPage({ fixture, fixtureOptions }: {
             <p className="p-meta p-text-3">Kinu {options.version} is the version a run installs.</p>
           </section>
         )}
-        {options !== null && snapshot !== null && snapshot.steps.length === 0 && (
+        {options !== null && collecting && (
           <Answered options={options} runId={runId === "" ? snapshot.runId : runId} onStarted={setSnapshot} />
         )}
-        {snapshot !== null && snapshot.steps.length > 0 && (
+        {snapshot !== null && !collecting && (
           <>
             {snapshot.state === "done" && <Done snapshot={snapshot} email={ownerEmail} />}
             <section className="space-y-2" aria-label="Deployment steps">

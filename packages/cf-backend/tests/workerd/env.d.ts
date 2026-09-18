@@ -178,6 +178,9 @@ interface DeployRunProbeRpc extends Rpc.DurableObjectBranded {
   start(inputs: DeployInputs): Promise<DeploySnapshot>;
   retry(stepId: string): Promise<DeploySnapshot>;
   heldSecretNames(): Promise<readonly string[]>;
+  forget(): Promise<void>;
+  alarmAt(): Promise<number>;
+  expireSoon(): Promise<boolean>;
   rowText(): Promise<string>;
 }
 
@@ -186,6 +189,7 @@ interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
   state(): Promise<DeployFakeState>;
   refuseOnce(refusal: DeployFakeRefusal): Promise<void>;
   serve(build: DeployFakeServedBuild): Promise<void>;
+  publish(build: DeployFakeServedBuild): Promise<void>;
 }
 
 /** A session as the Updates gate reads one: an email, and the two fields that
