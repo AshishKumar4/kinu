@@ -150,11 +150,16 @@ async function artifact(): Promise<Uint8Array> {
   return new Uint8Array(readFileSync(out));
 }
 
-/** The channel, on a port of its own: `release.json`, the tarball, and the
- *  digest the installer verifies before it unpacks anything. */
-async function channel(): Promise<string> {
+/**
+ * The channel, on a port of its own: `release.json`, the tarball, and the
+ * digest the installer verifies before it unpacks anything.
+ *
+ * The parameter is the manifest this channel serves. A row that expects the
+ * install to refuse that manifest never reaches the tarball, which stays the
+ * good one.
+ */
+async function channel(manifest: string = manifestOf()): Promise<string> {
   const archive = await artifact();
-  const manifest = manifestOf();
 
   const server = createServer((request, response) => {
     const path = new URL(request.url ?? '/', 'http://localhost').pathname;
@@ -367,5 +372,32 @@ describe('kinu deploy local', () => {
     expect(attempt.stderr).toContain('answered by another process');
     expect(attempt.stdout).not.toContain('Local Kinu on');
     expect(readPid(home)).toBeNull();
+  });
+
+  /**
+   * A manifest is data from whatever channel `--origin` names, and the install
+   * joins every `files[].path` onto the release directory. A path that leaves
+   * that directory is a host file write, so the manifest is refused before the
+   * install creates anything at all.
+   */
+  test('refuses a release whose manifest names a path outside its release', async () => {
+    const home = scratchDir(`local-home-${randomUUID().slice(0, 8)}`);
+    const escaping = manifestOf().replace('"worker/index.js"', '"worker/../../../../escape.js"');
+
+    // `<home>/local/releases/<version>/worker/../../../../escape.js` is
+    // `<home>/escape.js`: four levels up, out of the release and out of the
+    // door's own tree.
+    expect(escaping).toContain('worker/../../../../escape.js');
+
+    const origin = await channel(escaping);
+    const refused = await runDeploy(home, [`--origin=${origin}`, `--port=${String(await freePort())}`]);
+
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain('a release file path must stay inside its release');
+
+    // Nothing was laid down: no release tree, no rendered config, no escaped
+    // file. The refusal is before the first write, not after it.
+    expect(existsSync(join(home, 'local'))).toBe(false);
+    expect(existsSync(join(home, 'escape.js'))).toBe(false);
   });
 });
