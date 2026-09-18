@@ -9,8 +9,9 @@
  * One hook because there is one contract and two panes. Both columns need the
  * walk. Workspace and subordinate panes share one paginated transcript
  * contract: each actor has its own conversation over the shared workspace
- * database, and a helper that worked for an hour has more of one than the
- * window holds. Without the walk everything past the window is not slow to
+ * database — so a request says WHOSE, and an actor pane says its own — and a
+ * helper that worked for an hour has more of one than the window holds.
+ * Without the walk everything past the window is not slow to
  * reach, it is unreachable, and the pane has no affordance saying so.
  * Copying the workspace column's four hooks across would make that one
  * contract into two.
@@ -83,21 +84,33 @@ const NO_STEER_RUNS: readonly InlineSteer[] = [];
  * @param steerRuns the server's account of this session's mid-turn steers
  *   (`useKinu().steerRuns`); ones whose durable row has arrived are dropped
  *   here, so the thread shows each steer once — never both copies.
+ * @param actor whose chat to page. Three answers for three states, the same
+ *   shape `startFrom` has: OMITTED is the workspace pane, which reads the
+ *   root's own conversation; a STRING is an actor pane naming the actor its
+ *   snapshot resolved (`useKinu().paneActorId`); NULL is an actor pane that
+ *   does not know its actor yet, and asking anyway would page the workspace's
+ *   rows into a helper's chat — so the walk waits instead.
  */
 export function useChatThread(
   rpc: Rpc, live: readonly UIMessage[], seeded: boolean,
   steerRuns: readonly InlineSteer[] = NO_STEER_RUNS,
+  actor?: string | null,
 ): ChatThread {
   const oldest = live[0]?.id;
 
   const history = usePagedScroll<ChatHistoryEntry>({
     grows: "up",
     fetchPage: useCallback(
-      (cursor) => rpc<unknown>("getChatHistoryPage", [{ cursor, limit: CHAT_PAGE_SIZE }])
-        .then((page) => v.parse(ChatHistoryPageSchema, page)),
-      [rpc],
+      (cursor) => rpc<unknown>("getChatHistoryPage", [
+        actor === undefined || actor === null
+          ? { cursor, limit: CHAT_PAGE_SIZE }
+          : { cursor, limit: CHAT_PAGE_SIZE, actor },
+      ]).then((page) => v.parse(ChatHistoryPageSchema, page)),
+      [rpc, actor],
     ),
-    startFrom: useCallback(() => walkStart(oldest, seeded), [oldest, seeded]),
+    startFrom: useCallback(
+      () => actor === null ? null : walkStart(oldest, seeded),
+      [actor, oldest, seeded]),
   });
 
   // Row identities are minted when a page lands and never again — a restored

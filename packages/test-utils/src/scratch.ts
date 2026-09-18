@@ -106,6 +106,42 @@ export const SCRATCH_ROOT_PREFIX = 'kinu-scratch-';
 /** Directories this process minted and still owns. */
 const minted = new Set<string>();
 
+/** One thing this process backgrounded, and the call that lets it go. */
+interface Hold {
+  readonly label: string;
+  readonly release: () => void;
+}
+
+/** What this process backgrounded and still owns. Records rather than labels:
+ *  two calls of one harness hold two browsers, and a second registration must
+ *  not displace the first. */
+const holds = new Set<Hold>();
+
+/**
+ * Own something this run BACKGROUNDED until the run ends: a browser holding a
+ * profile inside a scratch root, a dev server holding a socket. Returns the
+ * drop, for a caller that tore its own down.
+ *
+ * This is the seam the `survived rmSync` error below asks for. "Stop what the
+ * suite backgrounded before the run ends" was a sentence with nothing behind
+ * it, and on a KILLED run there was no way to act on it at all: the preload's
+ * signal listener releases and then ends the process inside its own re-raise,
+ * so a listener registered after it — every suite's and every harness's — is
+ * never reached (measured 2026-09-17 on bun 1.4.0: a second SIGTERM listener
+ * did not run, and eleven chrome processes outlived the row). A hold runs on
+ * every path that release does, which is the one path there is.
+ *
+ * The label is what a failure is attributable by, for the same reason a
+ * scratch root carries one.
+ */
+export function holdForRelease(label: string, release: () => void): () => void {
+  const hold: Hold = { label, release };
+
+  holds.add(hold);
+
+  return () => { holds.delete(hold); };
+}
+
 /**
  * Remove everything this run minted, and SAY SO when a removal did not happen.
  *
@@ -124,10 +160,25 @@ const minted = new Set<string>();
  * `AggregateError` under `scratch not released`, each carrying its original
  * cause, and only a root that is provably gone leaves ownership: the failed
  * ones stay minted for an explicit later release.
+ *
+ * What the run BACKGROUNDED goes first ({@link holdForRelease}). A process
+ * still writing into a scratch root is what makes `rmSync` report success over
+ * a surviving directory, and once the directory is gone there is nothing left
+ * to tell it to stop.
  */
 export function releaseScratch(): number {
   let removed = 0;
   const held: Error[] = [];
+
+  for (const hold of [...holds].reverse()) {
+    holds.delete(hold);
+
+    try {
+      hold.release();
+    } catch (cause) {
+      held.push(new Error(`${hold.label}: the hold refused to release`, { cause }));
+    }
+  }
 
   // Every owned root is ATTEMPTED even when one fails, children before their
   // parents (reverse mint order): a nested root minted inside another root is
