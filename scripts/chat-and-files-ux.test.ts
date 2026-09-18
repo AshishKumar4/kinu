@@ -28,7 +28,7 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
 import { diagnosticsSettled, recordDiagnostics, withGallery, type Gallery } from './gallery-harness';
-import { parseJsonValue, redactPayload } from '@kinu.run/core';
+import { parseJsonArray, parseJsonValue, redactPayload, type JsonValue } from '@kinu.run/core';
 
 /** One live-tail message, as the browser laid it out. */
 interface TailFrame {
@@ -1301,33 +1301,58 @@ describe('an additional agent, as an ordinary conversation', () => {
       const rig = await openRig(newPage, origin, { width: 1280, height: 900 });
       const { page } = rig;
 
+      // What each flow did to the THREAD, read off the rig's record of the
+      // call the strip made. The dialog's sentence is not the assertion: what
+      // it promises about the conversation is, and only the call says that.
+      const dismissals = async (): Promise<JsonValue[]> => parseJsonArray(await page.$eval(
+        '[data-dismiss-log]',
+        (el) => el.getAttribute('data-dismiss-log') ?? '[]',
+      ));
+
       // The agent-created seed keeps a labelled dismiss control that opens the
       // confirmation: the two flows are different controls, not one modal with
       // two words in it.
       expect(await page.$('[aria-label="Dismiss Auto scout"]')).not.toBeNull();
       await page.click('[aria-label="Dismiss Auto scout"]');
       await page.waitForSelector('[role="dialog"]');
-      // The confirmation states exactly what is kept and what is removed.
-      const dialog = await page.$eval('[role="dialog"]', (node) => node.textContent ?? '');
-      expect(dialog.includes('keeps the conversation')).toBe(true);
-      expect(dialog.includes('removes the tab')).toBe(true);
-      await page.evaluate(() => {
-        const dialog = document.querySelector('[role="dialog"]');
 
-        const cancel = dialog === null ? null : [...dialog.querySelectorAll('button')]
+      // Cancel is a real way out and decides nothing.
+      await page.evaluate(() => {
+        const cancel = [...document.querySelectorAll('[role="dialog"] button')]
           .find((button) => (button.textContent ?? '').includes('Cancel'));
 
         if (!(cancel instanceof HTMLButtonElement)) throw new Error('Cancel absent in the dismiss dialog');
+        cancel.click();
       });
       await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null);
+      expect(await dismissals()).toEqual([]);
+      expect(await page.$('[aria-label="Dismiss Auto scout"]')).not.toBeNull();
 
-      // The user-created seed deletes on click: no modal, the tab is gone.
+      // Confirmed, it dismisses: the tab closes and the conversation is KEPT,
+      // which is the one thing that dialog tells the reader.
+      await page.click('[aria-label="Dismiss Auto scout"]');
+      await page.waitForSelector('[role="dialog"]');
+      await page.evaluate(() => {
+        const confirm = [...document.querySelectorAll('[role="dialog"] button')]
+          .find((button) => (button.textContent ?? '').trim() === 'Dismiss');
+
+        if (!(confirm instanceof HTMLButtonElement)) throw new Error('Dismiss absent in the dismiss dialog');
+        confirm.click();
+      });
+      await page.waitForFunction(() => document.querySelector('[aria-label="Dismiss Auto scout"]') === null);
+      expect(await dismissals()).toEqual([{ agent: 'auto-scout', historyKept: true }]);
+
+      // The user-created seed deletes on click: no modal at all, the tab gone,
+      // and the conversation deleted with it.
       expect(await page.$('[aria-label="Delete Checkout scout"]')).not.toBeNull();
       await page.click('[aria-label="Delete Checkout scout"]');
       await page.waitForFunction(() => document.querySelector('[aria-label="Delete Checkout scout"]') === null);
       expect(await page.evaluate(() => document.body.innerText)).not.toContain('Checkout scout');
-      // The agent-created row survived the other flow's click.
-      expect(await page.$('[aria-label="Dismiss Auto scout"]')).not.toBeNull();
+      expect(await page.$('[role="dialog"]')).toBeNull();
+      expect(await dismissals()).toEqual([
+        { agent: 'auto-scout', historyKept: true },
+        { agent: 'scout', historyKept: false },
+      ]);
       await page.close();
     });
   });
@@ -1373,7 +1398,7 @@ describe('the shell rails collapse and reopen, and the choice survives a reload'
       await page.setViewport({ width: 1440, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=app&path=/`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-rail-collapse]');
+      await page.waitForSelector('button[aria-label="Hide sidebar"]');
 
       const railVisible = () => page.evaluate(() => {
         const rail = document.querySelector('aside [aria-label="Primary"]');
@@ -1382,28 +1407,111 @@ describe('the shell rails collapse and reopen, and the choice survives a reload'
       });
 
       expect(await railVisible()).toBe(true);
-      await page.click('[data-rail-collapse]');
-      await page.waitForSelector('[data-rail-expand]');
+      await page.click('button[aria-label="Hide sidebar"]');
+      await page.waitForSelector('button[aria-label="Show sidebar"]');
       expect(await railVisible()).toBe(false);
       expect(await page.evaluate(() => localStorage.getItem('kinu:rail-open'))).toBe('0');
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-rail-expand]');
+      await page.waitForSelector('button[aria-label="Show sidebar"]');
       expect(await railVisible()).toBe(false);
 
-      await page.click('[data-rail-expand]');
-      await page.waitForSelector('[data-rail-collapse]');
+      await page.click('button[aria-label="Show sidebar"]');
+      await page.waitForSelector('button[aria-label="Hide sidebar"]');
       expect(await railVisible()).toBe(true);
       expect(await page.evaluate(() => localStorage.getItem('kinu:rail-open'))).toBe('1');
 
+      // B8's other half, on the panel that carries the defect: a collapsed
+      // right panel has to be reopenable, and the control is addressed the way
+      // a reader reaches it — a button with that name — over the panel's own
+      // measured width, never a test hook.
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('nav[aria-label="Workspace agents"]');
-      await page.waitForSelector('[data-inspector-collapse]');
-      await page.click('[data-inspector-collapse]');
-      await page.waitForSelector('[data-inspector-expand]');
+      await page.waitForSelector('button[aria-label="Hide inspector"]');
+
+      const opened = await page.evaluate(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ));
+
+      expect(opened).toBeGreaterThan(200);
+
+      await page.click('button[aria-label="Hide inspector"]');
+      await page.waitForFunction(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ) === 0);
+      // The rail's choice is the rail's: collapsing this panel is not a shell
+      // preference, and the two controls are not one.
       expect(await page.evaluate(() => localStorage.getItem('kinu:rail-open'))).toBe('1');
-      await page.click('[data-inspector-expand]');
-      await page.waitForSelector('[data-inspector-collapse]');
+      expect(await page.$('button[aria-label="Hide inspector"]')).toBeNull();
+
+      await page.click('button[aria-label="Show inspector"]');
+      await page.waitForSelector('button[aria-label="Hide inspector"]');
+      // Reopened at the width it was collapsed from, and the reopen handle is
+      // gone because there is nothing left to reopen.
+      expect(await page.evaluate(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ))).toBe(opened);
+      expect(await page.$('button[aria-label="Show inspector"]')).toBeNull();
+
+      await page.close();
+    });
+  });
+});
+
+/**
+ * One workspace, one Durable Object, one socket per pane — and `broadcast`
+ * reaches every one of them. The frames a hosted actor's host emits are
+ * stamped with that actor; the root's own are not. A client that ignored the
+ * stamp rendered a subordinate's cards in the workspace's own chat, which is
+ * how the refiner's self-review brief arrived in the owner's thread.
+ *
+ * A browser row because the stamp only matters where the frames land: this
+ * drives the real page over the gallery's transport, makes the SERVER send
+ * both a stamped and an unstamped card, and reads the thread the owner would.
+ * No fixture READ can produce a stamped frame, so the gate dispatches
+ * `gallery:push-frame` and the stub delivers it on the open connection.
+ */
+describe('a hosted actor’s cards stay out of the workspace’s own chat', () => {
+  test('an unstamped card joins the workspace thread and a stamped one never does', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('nav[aria-label="Workspace agents"]');
+      await page.waitForSelector('.p-thread-column');
+
+      // The refiner's own card first, stamped with its actor, then the
+      // workspace's own drain with no stamp. The order is the failure's: the
+      // stamped frame arrives before anything a reader could confuse it with,
+      // so the unstamped card rendering is this row's end condition and the
+      // absence below is read after the socket has certainly been heard.
+      await page.evaluate(() => {
+        window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail: {
+          type: 'signal_card', id: 'sig-refiner', state: 'pending', actorId: 'actor-refiner',
+          metadata: { kinuEvent: 'event_drain' },
+          text: '- [refinement] from refiner (self-review): reviewed 3 graded turns and changed nothing',
+        } }));
+        window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail: {
+          type: 'signal_card', id: 'sig-workspace', state: 'pending',
+          metadata: { kinuEvent: 'event_drain' },
+          text: '- [webhook] from stripe: a payout of 240.00 settled',
+        } }));
+      });
+
+      await page.waitForFunction(() => (
+        document.querySelector('.p-thread-column')?.textContent?.includes('a payout of 240.00 settled') === true
+      ));
+
+      const thread = await page.$eval('.p-thread-column', (el) => el.textContent ?? '');
+
+      expect(thread).not.toContain('reviewed 3 graded turns and changed nothing');
+      expect(thread).not.toContain('refiner');
+      // One card, not two: the count is the assertion, because a dropped frame
+      // and a rendered-but-scrolled-away one read the same in a text search.
+      expect(await page.$$eval(
+        '.p-thread-column button',
+        (buttons) => buttons.filter((button) => button.innerText.includes('settled') || button.innerText.includes('graded turns')).length,
+      )).toBe(1);
 
       await page.close();
     });
