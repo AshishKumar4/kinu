@@ -217,6 +217,38 @@ Kept: `feat/devbox-durability-next` at `f3a0fcf7f`, the home the decisive report
 
 Seven worktrees went. Three held residue, saved as `~/kinu-wip/<worktree>-2026-09-12.patch` with untracked and ignored files beside it.
 
+### The 2026-09-18 prune wave
+
+`main` at `9ad3b7a76`. Sixty-nine local branches went; fifty-four were `main` ancestors (zero commits ahead) and needed no tag. The fifteen that carried commits `main` lacks each got a tag first, and the blob test below ran on every one before its branch was deleted. Counts are novel blobs (absent from `main`'s history) and sole copies (no other ref, measured after the deletions). The script and its log sit at `~/kinu-wip/prune-2026-09-18.sh` and `~/kinu-wip/prune-2026-09-18/`.
+
+| Removed branch | Retained tag | Commit | Novel | Sole |
+|---|---|---|---|---|
+| `feat/devbox-durability-next` | `archive/devbox-durability-next` | `f3a0fcf7f` | 430 | 0 |
+| `feat/durable-slates` | `archive/durable-slates` | `a593148ac` | 9 | 0 |
+| `snapshot/Kinu-wt-devbox-next-20260914` | `archive/Kinu-wt-devbox-next-20260914` | `51ed06b12` | 430 | 0 |
+| `snapshot/Kinu-wt-durable-slates-20260914` | `archive/Kinu-wt-durable-slates-20260914` | `aad1d09db` | 24 | 15 |
+| `snapshot/Kinu-wt-slate-sharing-20260914` | `archive/Kinu-wt-slate-sharing-20260914` | `69de31dd6` | 2 | 0 |
+| `snapshot/Kinu-wt-compact-declarations-20260914` | `archive/Kinu-wt-compact-declarations-20260914` | `3b32459e1` | 3 | 3 |
+| `snapshot/Kinu-wt-delivery-seam-20260914` | `archive/Kinu-wt-delivery-seam-20260914` | `90e2cfedd` | 4 | 4 |
+| `snapshot/Kinu-wt-devbox-c3-20260914` | `archive/Kinu-wt-devbox-c3-20260914` | `6f9acddad` | 7 | 7 |
+| `snapshot/Kinu-wt-devbox-decisive-20260914` | `archive/Kinu-wt-devbox-decisive-20260914` | `2d7954806` | 2 | 2 |
+| `snapshot/wt-chunked-pub-v2-20260914` | `archive/wt-chunked-pub-v2-20260914` | `87554c11c` | 1 | 1 |
+| `snapshot/chat-session-switch-wip` | `archive/chat-session-switch-wip` | `5738ce134` | 11 | 9 |
+| `snapshot/chat-switch-before-test-restoration` | `archive/chat-switch-before-test-restoration` | `bc4ab1e50` | 10 | 2 |
+| `snapshot/chat-switch-wip-0448` | `archive/chat-switch-wip-0448` | `2ed9c95ca` | 9 | 1 |
+| `snapshot/chat-transport-step3` | `archive/chat-transport-step3` | `b8fa6df73` | 4 | 3 |
+| `snapshot/ladder-cache-wip-0447` | `archive/ladder-cache-wip-0447` | `aa1421be8` | 5 | 5 |
+
+The 2026-09-12 entry above kept `feat/devbox-durability-next` as the home of the 2026-09-08 native lineage. That home is now the tag `archive/devbox-durability-next`, at the same commit; the one citation of the branch name outside this file (`packages/devbox/bench/measure-first/DECISIVE-2026-09-05.md`) names the tag now. The branch itself was superseded on 2026-09-17 by content: `main` holds bounded zero-payload attach by another route (`f69af22cf`, `7598a68a6`, `a3c6712de`, `ac6ae8f39`; settlement `20260915065241` admitted under D18), 88% of the branch's additions are files `main` deleted in `337eaf6f9`, and its own three test reds came from wall-clock start budgets, the shape D19 replaced with the box's own clock. The assessment's evidence is at `~/kinu-logs/devbox-next-0917/`. Its snapshot tag is a superset (the branch tip is an ancestor), so the 430 novel blobs are held twice and the sole-copy count is 0 for both.
+
+`feat/durable-slates` was superseded the same way: its two commits patched `@nimbus-sh/worker@0.4.0` and `@nimbus-sh/fabric@0.2.0`, and `main` adopted worker 0.7 and fabric 0.5 without local patches (`8d917e527`, `75c7750c4`) with a slate as a durable Nimbus application (`a9633d132`), proved across eviction by `packages/cf-backend/tests/workerd/slate-durability.test.ts`. Its worktree's uncommitted `slate_apps` table and host changes (498 insertions) are in the snapshot tag and in `~/kinu-wip/prune-2026-09-18/Kinu-wt-durable-slates-2026-09-18.patch`.
+
+Six worktrees went (`Kinu-wt-delivery-seam`, `Kinu-wt-devbox-c3`, `Kinu-wt-devbox-decisive`, `Kinu-wt-devbox-next`, `Kinu-wt-durable-slates`, `wt-chunked-pub-v2`). Every one held residue; each is saved as `~/kinu-wip/prune-2026-09-18/<worktree>-2026-09-18.patch`, untracked files beside it as a tarball, and the 2026-09-14 snapshot tags above hold the same residue as commits.
+
+Eleven stash entries were tagged `archive/stash-<n>-<slug>-20260918` on their stash commits (the untracked third parent included) and the stash list was cleared. The list as it was is at `~/kinu-wip/prune-2026-09-18/stash-list.txt`.
+
+Remote: `origin/fix/devbox-decision` is a `main` ancestor and `origin/feat/devbox-durability-next` is archived above; both are deleted on the next push of `main`, which carries the new tags. `origin/takeover/stabilize` (2026-09-03, eleven commits `main` lacks) was not assessed and stays.
+
 ## Reproduce the test
 
 `git filter-repo --mailmap` rewrote 2,242 commits. Measured 2026-08-21, none of the nine tags is a `main` ancestor. Tree and blob SHAs remain comparable.
