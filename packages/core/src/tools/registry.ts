@@ -881,7 +881,7 @@ export const BUILTIN_TOOL_SPECS = {
     whenToUse:
       'Use whenever the work ahead is more than a step or two, and at the moment you learn a step has parts: '
       + 'add writes several titles in one call, so one call records the whole plan; pass parent to file them under a task you already wrote. '
-      + 'update moves one item to active as you start it and done as you finish it, or to dropped when it turns out not to be needed. '
+      + 'update moves one item to active as you start it and done as you finish it, or to dropped when it turns out not to be needed; it also accepts `note`, a one-line annotation beside the item (null clears it). '
       + 'list reads the whole list back, closed items included. '
       + `mode switches your durable role — pass \`role\` to switch (it applies from your NEXT turn; the current one keeps its resolved profile), or call with no argument to read the active role id.`,
     // A standing fact about where the list is READ, which is what makes

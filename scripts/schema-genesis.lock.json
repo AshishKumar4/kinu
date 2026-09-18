@@ -1330,5 +1330,10 @@
     "owner_user_id",
     "mission",
     "created_at"
+  ],
+  "agent_task_notes@packages/core/src/tasks/store.ts": [
+    "actor_id",
+    "task_id",
+    "note"
   ]
 }

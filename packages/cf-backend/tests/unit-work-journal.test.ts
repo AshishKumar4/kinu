@@ -36,7 +36,7 @@ function job(over: Partial<BackgroundJob> & { id: string }): BackgroundJob {
 }
 
 function task(id: string, updatedAt: number): AgentTaskTree {
-  return { id, parentId: null, title: id, status: 'done', createdAt: 0, updatedAt, subtasks: [] };
+  return { id, parentId: null, title: id, status: 'done', createdAt: 0, updatedAt, note: null, subtasks: [] };
 }
 
 function entry(id: string, at: number): ChangelogEntry {
