@@ -5,10 +5,13 @@
  * died on a deadline because of it (see scripts/gate-cost.ts). These are the
  * figures that replaced the declaration, and how they are taken:
  *
- *   - peak resident set: the SUM of the session's resident pages at one
- *     instant. `/usr/bin/time -v`'s "maximum resident set size" is the largest
- *     SINGLE child, which reads four 1 GiB workers as 1 GiB — the figure that
- *     would have hidden the 137.
+ *   - peak resident set: the SUM of the session's PROPORTIONAL set (Pss)
+ *     pages at one instant. `/usr/bin/time -v`'s "maximum resident set size"
+ *     is the largest SINGLE child, which reads four 1 GiB workers as 1 GiB —
+ *     the figure that would have hidden the 137 — and summed RSS counts one
+ *     shared page once per process that maps it, which reads ~110 Chrome
+ *     helpers as 5 GiB of unique memory. Pss splits shared pages across their
+ *     holders, so the sum over a tree is the footprint the box actually pays.
  *   - peak runnable tasks: tasks in state R at one instant, thread level. A
  *     task denied a CPU stays runnable, so this is the row's parallel demand
  *     whatever else the box is doing.
@@ -97,17 +100,20 @@ const COST_METHOD = 'each row alone under `setsid timeout --signal=TERM --kill-a
   + '/usr/bin/time -v bash -c <run>`; the row\'s whole process tree — its session plus every '
   + 'descendant by ppid, so a setsid\'d dev server or browser counts — sampled every '
   + `${String(BURST_SAMPLE_SECONDS)}s for its first ${String(BURST_SECONDS)}s and every `
-  + `${String(SAMPLE_SECONDS)}s after — summed rss for memory, tasks in state R for parallel `
-  + `demand, Δ(utime+stime+cutime+cstime) over at least ${String(CPU_WINDOW_SECONDS)}s for `
-  + 'parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)';
+  + `${String(SAMPLE_SECONDS)}s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for `
+  + `memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least `
+  + `${String(CPU_WINDOW_SECONDS)}s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)`;
 
 /** One instant of a row's tree: what it has burned, what it holds, and how
  *  many of its tasks want a CPU right now. */
 interface Reading {
   readonly cpuTicks: number;
-  readonly rssPages: number;
+  readonly pssKb: number;
   readonly runnable: number;
   readonly processes: number;
+  /** Per-member breakdown, populated only under `--dump-peak`: the memory
+   *  report shows exactly which processes the peak was made of. */
+  readonly members: readonly { readonly pid: number; readonly pssKb: number; readonly comm: string }[];
 }
 
 /** One process as `/proc/<pid>/stat` reports it, before membership is decided.
@@ -118,10 +124,10 @@ interface ProcessStat {
   readonly ppid: number;
   readonly session: number;
   readonly cpuTicks: number;
-  readonly rssPages: number;
   readonly tasks: number;
   readonly state: string;
 }
+
 
 /**
  * Every process in the row's TREE, summed: its own session plus every
@@ -137,7 +143,8 @@ interface ProcessStat {
  * drops out of the walk. That is an orphan — a teardown defect the harnesses
  * own — and the session arm still carries every child that never setsid'd.
  */
-function readTree(session: number): Reading {
+
+function readTree(session: number, dumpMembers = false): Reading {
   const stats = new Map<number, ProcessStat>();
 
   for (const entry of readdirSync('/proc')) {
@@ -155,7 +162,6 @@ function readTree(session: number): Reading {
       ppid: Number(fields[1]),
       session: Number(fields[3]),
       cpuTicks: Number(fields[11]) + Number(fields[12]) + Number(fields[13]) + Number(fields[14]),
-      rssPages: Number(fields[21]),
       tasks: Number(fields[17]),
       state: fields[0] ?? '',
     });
@@ -186,15 +192,35 @@ function readTree(session: number): Reading {
   };
 
   let cpuTicks = 0;
-  let rssPages = 0;
+  let pssKb = 0;
   let runnable = 0;
   let processes = 0;
+  const members: { readonly pid: number; readonly pssKb: number; readonly comm: string }[] = [];
 
   for (const [pid, stat] of stats) {
     if (!belongs(pid)) continue;
     cpuTicks += stat.cpuTicks;
-    rssPages += stat.rssPages;
     processes += 1;
+
+    // PROPORTIONAL set, not resident: RSS counts one shared page once per
+    // process that maps it — ~110 Chrome helpers over the same mapped binary
+    // read as ~110 times the memory — while Pss splits every shared page
+    // across its holders, so the sum over the tree is the footprint the box
+    // actually pays. Read off the member, not the listing: smaps is priced
+    // per map and the box holds ~700 processes, most of them somebody else's.
+    // The listing is a snapshot and the process may already be gone — ENOENT
+    // or ESRCH (which is what the fs layer reports for a vanished /proc entry),
+    // both the expected absence, so the member contributes nothing.
+    const rollup = tolerate(() => tolerate(() => readFileSync(`/proc/${String(pid)}/smaps_rollup`, 'utf8'), 'esrch'), 'enoent');
+    const pss = Number(/^Pss:\s*(\d+) kB$/mu.exec(rollup ?? '')?.[1] ?? 0);
+
+    pssKb += pss;
+
+    if (dumpMembers) {
+      const comm = tolerate(() => tolerate(() => readFileSync(`/proc/${String(pid)}/comm`, 'utf8'), 'esrch'), 'enoent') ?? '?';
+
+      members.push({ pid, pssKb: pss, comm: comm.trim() });
+    }
 
     // THREAD level, not process level: a `bun test` worker is one process
     // running a thread pool, and counting the process would read four busy pool
@@ -214,7 +240,7 @@ function readTree(session: number): Reading {
     }
   }
 
-  return { cpuTicks, rssPages, runnable, processes };
+  return { cpuTicks, pssKb, runnable, processes, members };
 }
 
 /** MiB of memory the kernel says can be handed out without swapping. The runner
@@ -305,7 +331,8 @@ interface MeasureRequest {
   readonly logPath: string;
   readonly rusagePath: string;
   readonly ticksPerSecond: number;
-  readonly pageSizeBytes: number;
+  /** `--dump-peak`: record which processes the memory peak was made of. */
+  readonly dumpMembers: boolean;
 }
 
 function round(value: number): number {
@@ -332,8 +359,9 @@ async function measureRow(request: MeasureRequest): Promise<RowCost> {
     stderr: Bun.file(request.logPath),
   });
 
-  let peakRssPages = 0;
+  let peakPssKb = 0;
   let peakRunnable = 0;
+  let peakMembers: Reading['members'] = [];
   let peakCpuThreads = 0;
   let anchorAt = 0;
   let anchorTicks = 0;
@@ -346,11 +374,16 @@ async function measureRow(request: MeasureRequest): Promise<RowCost> {
       const elapsed = (performance.now() - started) / 1000;
       await Bun.sleep((elapsed < BURST_SECONDS ? BURST_SAMPLE_SECONDS : SAMPLE_SECONDS) * 1000);
       const at = performance.now();
-      const reading = readTree(child.pid);
+      const reading = readTree(child.pid, request.dumpMembers);
 
       if (reading.processes === 0) continue;
       samples += 1;
-      peakRssPages = Math.max(peakRssPages, reading.rssPages);
+
+      // The peak SNAPSHOT is kept, not just the peak number: `--dump-peak`
+      // answers "what is this row's memory made of", which the total alone
+      // cannot.
+      if (reading.pssKb > peakPssKb) peakMembers = reading.members;
+      peakPssKb = Math.max(peakPssKb, reading.pssKb);
       peakRunnable = Math.max(peakRunnable, reading.runnable);
       sampledTicks = Math.max(sampledTicks, reading.cpuTicks);
 
@@ -384,12 +417,19 @@ async function measureRow(request: MeasureRequest): Promise<RowCost> {
   // sampler's own running total covers exactly that case.
   const report = tolerate(() => readFileSync(request.rusagePath, 'utf8'), 'enoent') ?? '';
   const cpuSeconds = Math.max(rusageCpuSeconds(report), sampledTicks / request.ticksPerSecond);
-  const peakRssMb = (peakRssPages * request.pageSizeBytes) / (1024 * 1024);
+
+  if (request.dumpMembers) {
+    console.log(`      peak ${String((peakPssKb / 1024).toFixed(0))} MiB across ${String(peakMembers.length)} process(es):`);
+
+    for (const member of [...peakMembers].sort((a, b) => b.pssKb - a.pssKb)) {
+      console.log(`        ${String(member.pid).padStart(8)}  ${String((member.pssKb / 1024).toFixed(1)).padStart(8)} MiB  ${member.comm}`);
+    }
+  }
 
   return {
     wallSeconds: round(wallSeconds),
     cpuSeconds: round(cpuSeconds),
-    peakRssMb: round(peakRssMb),
+    peakRssMb: round(peakPssKb / 1024),
     peakRunnable,
     peakCpuThreads: round(peakCpuThreads),
     meanThreads: round(wallSeconds > 0 ? cpuSeconds / wallSeconds : 0),
@@ -400,8 +440,8 @@ async function measureRow(request: MeasureRequest): Promise<RowCost> {
 }
 
 /** `getconf` rather than a constant: a figure this file divides by is read from
- *  the box it was taken on. `CLK_TCK` for the tick rate the `utime` fields count
- *  in, `PAGESIZE` for the unit the `rss` field counts in. */
+ *  the box it was taken on — `CLK_TCK` for the tick rate the `utime` fields
+ *  count in. */
 function configured(name: string): number {
   return Number(Bun.spawnSync(['getconf', name], { stdout: 'pipe' }).stdout.toString().trim());
 }
@@ -426,7 +466,7 @@ if (import.meta.main) {
 
   const measured = { ...existing };
   const ticksPerSecond = configured('CLK_TCK');
-  const pageSizeBytes = configured('PAGESIZE');
+  const dumpMembers = process.argv.includes('--dump-peak');
   const scratch = mkdtempSync(join(tmpdir(), 'kinu-cost-'));
   const machine = machineName();
   const today = new Date().toISOString().slice(0, 10);
@@ -487,9 +527,9 @@ if (import.meta.main) {
       run: gate.run,
       deadline,
       logPath: join(scratch, `${String(index)}.log`),
-      rusagePath: join(scratch, `${String(index)}.rusage`),
       ticksPerSecond,
-      pageSizeBytes,
+      rusagePath: join(scratch, `${String(index)}.rusage`),
+      dumpMembers,
     });
 
     measured[gate.run] = cost;
