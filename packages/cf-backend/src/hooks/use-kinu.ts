@@ -144,6 +144,11 @@ export interface AgentStatus {
  *  stub omits reads `undefined`, and the composer dies on the first `.some`. */
 export interface SubordinateSnapshot {
   name: string;
+  /** The actor behind this name, as the directory resolved it. The pane's own
+   *  identity: {@link admitsActorFrame} compares a stamped frame against it,
+   *  and it is answered here because this read is the one round trip the tab
+   *  already makes and the resolver is the same one the stamp comes from. */
+  actorId: string;
   displayName: string;
   role: RoleId;
   mission: string;
@@ -361,8 +366,14 @@ const SocketMessageSchema = v.variant("type", [
     /** Present on `landed`: the step of the running turn the model read it in,
      *  which is where the thread draws it. */
     atStep: v.optional(v.number()),
+    /** The hosted actor whose steer this is — see {@link admitsActorFrame}.
+     *  Declared so the parse KEEPS it: `v.object` drops what it does not name,
+     *  and a stripped stamp is a frame nothing can attribute. */
+    actorId: v.optional(v.string()),
   }),
-  v.looseObject({ type: v.literal("signal_card") }),
+  /** Loose for the card payload, which {@link parseSignalCardEvent} owns, and
+   *  explicit about the one field this hook decides on: the actor stamp. */
+  v.looseObject({ type: v.literal("signal_card"), actorId: v.optional(v.string()) }),
   v.object({ type: v.literal("plan_updated"), plan: PlanReviewSchema }),
   WorkspacePlanUpdatedFrameSchema,
   v.object({ type: v.literal("subordinates_changed"), subordinates: v.array(SubordinateRosterEntrySchema) }),
@@ -387,6 +398,41 @@ function parseSocketMessage(data: MessageEvent["data"]) {
   );
 
   return decoded.success ? decoded.output : null;
+}
+
+/**
+ * Whether a socket frame is this pane's to apply.
+ *
+ * One Durable Object serves the whole workspace, so `broadcast` reaches every
+ * connected socket: a subordinate's chat and the workspace's chat are one
+ * stream on the wire. What separates them is the stamp the hosting seam puts
+ * on every hosted actor's broadcast (`orchestrator.ts`, the host seams'
+ * `broadcast(actorId, event)`). The two frames a hosted actor's `BackendHost`
+ * emits are its Inbox's own — the card lifecycle (`signal_card`) and the steer
+ * lifecycle (`steer_status`) — and nothing else on this wire is per-actor.
+ *
+ * A frame with NO stamp is the workspace's own broadcast: the root's Inbox
+ * reaches clients through the object's own `broadcast`, never the seam, so
+ * every pane keeps applying it. `provider_wait` carries an `actorId` and is
+ * still not per-actor — the object stamps its own actor on a notice it emits
+ * whichever actor's turn is sleeping, and reading that as ownership would hide
+ * a hosted turn's wait from the tab watching it.
+ *
+ * So the workspace pane admits no stamped frame at all (no stamp ever names
+ * the root), and an agent pane admits the frames stamped with the actor it is
+ * looking at. A pane whose actor is not resolved yet admits none: the failure
+ * this closes is another actor's card in someone else's chat, so the closed
+ * direction is the safe one.
+ */
+function admitsActorFrame(
+  msg: v.InferOutput<typeof SocketMessageSchema>,
+  pane: { readonly isSubordinate: boolean; readonly ownActorId: string | null },
+): boolean {
+  if (msg.type !== "signal_card" && msg.type !== "steer_status") return true;
+
+  if (msg.actorId === undefined) return true;
+
+  return pane.isSubordinate && pane.ownActorId === msg.actorId;
 }
 
 
@@ -897,6 +943,12 @@ export function useKinu(target?: string | KinuActorAddress) {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const exposedPortsRefreshGeneration = useRef(0);
   const subordinateRefreshGeneration = useRef(0);
+  /** This pane's own actor, read off its snapshot: the id {@link
+   *  admitsActorFrame} compares a stamped frame against. A ref, because the
+   *  socket handler reads it and nothing renders it. Null on the workspace
+   *  pane — no stamp ever names the root — and null until the load resolves
+   *  it, which admits no stamped frame in the meantime. */
+  const ownActorIdRef = useRef<string | null>(null);
   // Background jobs (auto-detached >30s tool calls) — single source for the
   // Work surface's Now half and its journal.
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
@@ -1511,6 +1563,10 @@ export function useKinu(target?: string | KinuActorAddress) {
 
       if (!msg) return;
 
+      // Before any state write: a frame stamped for another actor's pane
+      // belongs to that chat, and this socket carries every pane's.
+      if (!admitsActorFrame(msg, { isSubordinate, ownActorId: ownActorIdRef.current })) return;
+
         if (msg.type === "cf_agent_chat_messages") {
           setTranscriptSeeded(true);
         } else if (msg.type === "mcts-progress") {
@@ -1893,6 +1949,9 @@ export function useKinu(target?: string | KinuActorAddress) {
     const snapshot = await rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate]);
 
     if (!isCurrent()) return;
+    // This pane's own actor, before anything it can admit: the frames the
+    // hosting seam stamps are only this chat's while the id matches.
+    ownActorIdRef.current = snapshot.actorId;
     setAgentStatus({
       name: snapshot.name,
       displayName: snapshot.displayName,
@@ -2001,6 +2060,9 @@ export function useKinu(target?: string | KinuActorAddress) {
     setSubordinates([]);
     setSubordinateEvents([]);
     setSignalCards([]);
+    // A different conversation is a different actor, and the last one's id
+    // would admit its frames here. The load resolves this pane's own.
+    ownActorIdRef.current = null;
   }, [workspace, subordinate]);
 
   /** Spend one arrived reference. True exactly once per reference for the
@@ -2398,8 +2460,10 @@ export function useKinu(target?: string | KinuActorAddress) {
 
       return entry;
     },
-    dismissSubordinate: async (name: string) => {
-      const result = await rpc<{ ok: true; name: string; historyKept: boolean }>("dismissSubordinate", [name]);
+    dismissSubordinate: async (name: string, keepHistory?: boolean) => {
+      const args = keepHistory === undefined ? [name] : [name, keepHistory];
+      const result = await rpc<{ ok: true; name: string; historyKept: boolean }>("dismissSubordinate", args);
+
       ++subordinateRefreshGeneration.current;
       setSubordinates((current) => current.filter((entry) => entry.name !== result.name));
       setSourceError("roster", null);

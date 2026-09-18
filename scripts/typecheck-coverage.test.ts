@@ -126,7 +126,6 @@ describe('this tree', () => {
       kind: 'declared compiler debt', runner: 'bun test scripts/eval.test.ts',
     });
     expect(Object.keys(SCRIPT_TYPECHECK_DEBT).sort()).toEqual([
-      'scripts/cli-test-runner.ts',
       'scripts/eval.test.ts',
       'scripts/eval.ts',
       'scripts/layergate.ts',
