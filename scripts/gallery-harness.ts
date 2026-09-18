@@ -27,7 +27,8 @@ import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppetee
 import { build } from 'vite';
 import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
-import { releaseScratch, scratchDir, SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
+import { holdForRelease, releaseScratch, scratchDir, SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
+import { signalGroup } from './process-group';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -236,6 +237,11 @@ function builtAssetContentType(file: string): string {
   }
 }
 
+/** The exit code a run ended by SIGTERM reports: 128 + SIGTERM, the shell's
+ *  own convention. `runUnderDeadline` overrides it with 124 in the ladder's
+ *  transcript; this is what an unwrapped hand run sees. */
+const SIGTERM_EXIT_CODE = 143;
+
 /** Run `body` against a live gallery, then tear the server and browser down
  *  entirely. Every route answers one immutable, pre-rendered build of
  *  `gallery-dist` — a frozen artifact, never the dev server — so a page's
@@ -312,6 +318,40 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, bro
 
     if (executablePath) launchOptions.executablePath = executablePath;
     const browser = await puppeteer.launch(launchOptions);
+    const group = browser.process()?.pid;
+
+    /**
+     * The browser's group, abandoned. Nothing awaits: this runs while the
+     * process is being ended, and a group already holding the pair cannot
+     * outlive it — which is exactly what puppeteer's own SIGTERM handler gets
+     * wrong, awaiting its exit hooks and never reaching its kill.
+     */
+    const abandonBrowser = (): void => {
+      signalGroup(group, 'SIGTERM');
+      signalGroup(group, 'SIGKILL');
+    };
+
+    /**
+     * Two ways in, because two runners end this process.
+     *
+     * A deadline kills the RUNNER (`scripts/deadline.ts`: SIGTERM, then
+     * SIGKILL five seconds on) and the browser is not in the runner's group,
+     * so a killed row left eleven chrome processes reparented and running on
+     * 2026-09-17. Under `bun test` the listener below is never reached — the
+     * preload's own listener releases and then ends the process inside its
+     * re-raise (`scripts/test-scratch-home.ts`) — so the browser is handed to
+     * that release, which is the one path a killed row runs. Under a bare
+     * `bun scripts/…` run (computed-style, plan-demo-film, review-package)
+     * there is no preload and the listener is the whole answer.
+     */
+    const dropHold = holdForRelease('the gallery browser', abandonBrowser);
+
+    const endOnSignal = (): void => {
+      abandonBrowser();
+      process.exit(SIGTERM_EXIT_CODE);
+    };
+
+    process.on('SIGTERM', endOnSignal);
 
     const newPage = async (): Promise<Page> => {
       const page = await browser.newPage();
@@ -325,7 +365,14 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, bro
     try {
       return await body({ browser, newPage, origin });
     } finally {
+      process.off('SIGTERM', endOnSignal);
+      dropHold();
+      // The group, not the browser alone: puppeteer's own close reaches the
+      // process it spawned, and the SIGKILL collects whatever of the group
+      // that close left — a wedged renderer, a zygote holding a pipe.
+      signalGroup(group, 'SIGTERM');
       await browser.close();
+      signalGroup(group, 'SIGKILL');
     }
   } finally {
     const closed = Promise.withResolvers<void>();

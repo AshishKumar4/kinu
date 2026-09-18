@@ -18,12 +18,12 @@
 import { describe, expect, test } from 'bun:test';
 import { getChatHistoryPage, type ChatHistoryEntry, type Page, type SqlExecutor } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
-import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
+import { hostedExplorationHarness, hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
 /** A transcript reader: the root's public RPC, or the production read model
  * over a hosted child's directory-issued handle. */
 interface Root {
-  page(request?: { limit?: number; cursor?: { after: string } }): Promise<Page<ChatHistoryEntry>> | Page<ChatHistoryEntry>;
+  page(request?: { limit?: number; cursor?: { after: string }; actor?: string }): Promise<Page<ChatHistoryEntry>> | Page<ChatHistoryEntry>;
 }
 
 /**
@@ -41,16 +41,16 @@ interface Root {
  * from where it exists (`usesPaneStore`). No actor column — the root IS the
  * pane — and `created_at` repeats for the same reason.
  */
-function seedPane(sql: SqlExecutor, n: number): string[] {
+function seedPane(sql: SqlExecutor, n: number, prefix = 'm'): string[] {
   const ids: string[] = [];
 
   for (let i = 1; i <= n; i++) {
-    const id = `m${i}`;
+    const id = `${prefix}${i}`;
     const role = i % 2 === 0 ? 'assistant' : 'user';
 
     ids.push(id);
     void sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${id}, '', ${i === 1 ? null : `m${i - 1}`}, ${role},
+      VALUES (${id}, '', ${i === 1 ? null : `${prefix}${i - 1}`}, ${role},
         ${JSON.stringify({ id, role, parts: [{ type: 'text', text: `message ${i}` }] })}, ${`2026-01-01 00:00:0${i % 10}`})`;
   }
 
@@ -185,5 +185,63 @@ describe('a transcript longer than one window is reachable page by page', () => 
       limit: 2,
       cursor: { after: 'not-in-this-store' },
     })).toThrow(/no longer in it/);
+  });
+
+  /**
+   * A PANE's walk, over the one surface a pane has: the RPC.
+   *
+   * An actor pane holds its own actor id — the directory issued it on the
+   * snapshot the tab already fetches — and names it on every page request. The
+   * root's pane names none. Read through the RPC rather than the read model
+   * because the read model was never the defect: the RPC answered every caller
+   * from the root's handle, so an actor pane's scroll-up walked the
+   * WORKSPACE's conversation. The id spaces are disjoint here, so the leak is
+   * the assertion's own message rather than a count.
+   */
+  test("an actor pane's walk reads its own actor, addressed by the id its snapshot carries", async () => {
+    const workspace = orchestratorHarness();
+
+    const child = await hostedSubordinateHarness(workspace, {
+      name: 'paged-child',
+      displayName: 'Paged Child',
+      nameOrigin: 'user',
+      mission: 'hold the conversation its own pane pages',
+    });
+
+    const sql = sqlOver(workspace.db);
+    await workspace.agent.activateActor();
+    seedPane(sql, 4, 'root');
+    const seeded = seed(sql, child.actor.handle.actorId, 25);
+
+    const walked = await walk({
+      page: (request) => workspace.agent.getChatHistoryPage({ ...request, actor: child.actor.handle.actorId }),
+    }, 10);
+
+    expect(walked.ids).toEqual(seeded);
+    expect(walked.pages).toBe(3);
+  });
+
+  /** An id this workspace does not host is refused. Answering the root's page
+   * for it is the defect above with a stranger's id instead of a child's. */
+  test('an actor id this workspace does not host is refused', async () => {
+    const workspace = orchestratorHarness();
+    await workspace.agent.activateActor();
+    seedPane(sqlOver(workspace.db), 4, 'root');
+
+    await expect(workspace.agent.getChatHistoryPage({ limit: 10, actor: 'actor-of-another-workspace' }))
+      .rejects.toThrow(/not registered in this workspace/);
+  });
+
+  /** An exploration head is hosted by this workspace and is not a chat. Its
+   * run transcript lives in the head journal, so a pane request naming one is
+   * a request for a conversation that does not exist — refused, not answered
+   * with whatever rows share its actor id. */
+  test('a hosted actor with no chat pane is refused', async () => {
+    const workspace = orchestratorHarness();
+    await workspace.agent.activateActor();
+    const head = await hostedExplorationHarness(workspace, 'head', 'head-without-a-pane');
+
+    await expect(workspace.agent.getChatHistoryPage({ limit: 10, actor: head.actor.handle.actorId }))
+      .rejects.toThrow(/does not name a chat/);
   });
 });
