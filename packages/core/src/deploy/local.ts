@@ -10,14 +10,16 @@
  * added.
  *
  * WHAT WORKERD GIVES AND WHAT IT DOES NOT. Durable Object storage is a local
- * directory (`durableObjectStorage = (localDisk = …)`), and so is every
- * account-level store this Worker binds: there is no KV, R2 or Vectorize
- * implementation in workerd, so a `kv` or `r2` binding is rendered as a
- * writable disk service under `state/`, which is what `docs/SELF-DEPLOY.md`
- * means by "KV and R2 on local disk". A binding workerd cannot host at all —
- * Vectorize, AI, the container, the Worker loader, Analytics Engine, email —
- * is left out of the config with its name recorded, so a local instance loses
- * exactly those capabilities instead of refusing to start.
+ * directory (`durableObjectStorage = (localDisk = …)`), and a KV namespace is
+ * one too: `kvNamespace` turns `get`/`put`/`delete` into GET/PUT/DELETE
+ * against a named service, and a writable `disk` service answers exactly
+ * those, so a `kv` binding is a directory under `state/`. R2 binds the same
+ * way and does not work the same way — `r2Bucket` speaks R2's own protocol,
+ * which a disk directory does not implement — so an `r2` binding is not
+ * hosted at all. Nor are Vectorize, AI, the container, the Worker loader,
+ * Analytics Engine or email. Each of those is left out of the config with its
+ * name recorded, so a local instance loses exactly those capabilities instead
+ * of refusing to start.
  *
  * PATHS ARE RELATIVE TO THE CONFIG FILE. `embed` is resolved that way by capnp
  * itself, and a tree that can be moved or copied is the point: the supervisor
@@ -111,17 +113,24 @@ export function renderLocalConfig(input: { version: string; port: number; at: Da
   return `${JSON.stringify(config, null, 2)}\n`;
 }
 
-/** The store kinds workerd hosts as a directory: it has no KV or R2 of its
- *  own, so a local instance's session store and backup bucket are directories
- *  under `state/`. */
-const DISK_KINDS: readonly string[] = ['kv', 'r2'];
+/**
+ * The one account-level store workerd hosts on disk.
+ *
+ * A `kvNamespace` binding over a writable `disk` service round-trips:
+ * `put('session:abc', …)` then `get` returned the value and `delete` removed
+ * the file (workerd 2026-09-03, measured 2026-09-18). A key holding a `/` is
+ * the shape it does not serve — the same measurement never answered
+ * `put('a/b')`, with or without the parent directory — and Kinu's own keys are
+ * `session:`, `oauth-state:` and `ingress:`, none of which carry one.
+ */
+const KV_KIND = 'kv';
 
-/** The bindings a local instance does not get — Vectorize, AI, the container,
- *  the Worker loader, Analytics Engine, email. The caller prints these: a
- *  capability that is silently absent is a defect report later. */
+/** The bindings a local instance does not get — R2, Vectorize, AI, the
+ *  container, the Worker loader, Analytics Engine, email. The caller prints
+ *  these: a capability that is silently absent is a defect report later. */
 export function unhostedBindings(manifest: ReleaseManifest): readonly string[] {
   return manifest.bindings
-    .filter((binding) => !(binding.kind === 'assets' || binding.kind === 'durable-object' || DISK_KINDS.includes(binding.kind)))
+    .filter((binding) => !(binding.kind === 'assets' || binding.kind === 'durable-object' || binding.kind === KV_KIND))
     .map((binding) => binding.binding);
 }
 
@@ -132,7 +141,7 @@ function quoted(text: string): string {
   return `"${text.replace(/\\/gu, '\\\\').replace(/"/gu, '\\"')}"`;
 }
 
-/** One name for a store's disk service and nothing else's: the binding is
+/** One name for a namespace's disk service and nothing else's: the binding is
  *  unique in a release where a resource name is not. */
 function serviceName(binding: ReleaseBinding): string {
   return `${binding.kind}-${binding.binding}`;
@@ -148,7 +157,7 @@ function serviceName(binding: ReleaseBinding): string {
  * same manifest the config is rendered from, so the two cannot disagree.
  */
 export function workerdDirectories(manifest: ReleaseManifest): readonly string[] {
-  return ['state/do', ...manifest.bindings.filter((binding) => DISK_KINDS.includes(binding.kind)).map(storePath)];
+  return ['state/do', ...manifest.bindings.filter((binding) => binding.kind === KV_KIND).map(storePath)];
 }
 
 function storePath(binding: ReleaseBinding): string {
@@ -169,7 +178,7 @@ export function renderWorkerdConfig(input: {
 }): string {
   const { manifest, version, port } = input;
   const release = `releases/${version}`;
-  const stores = manifest.bindings.filter((binding) => DISK_KINDS.includes(binding.kind));
+  const stores = manifest.bindings.filter((binding) => binding.kind === KV_KIND);
   const classes = [...new Set(manifest.migrations.flatMap((migration) => migration.newSqliteClasses))];
   const assets = manifest.bindings.find((binding) => binding.kind === 'assets');
 
@@ -188,7 +197,8 @@ export function renderWorkerdConfig(input: {
 
   const bindings = [
     ...(assets === undefined ? [] : [`    (name = ${quoted(assets.binding)}, service = "assets"),`]),
-    ...stores.map((binding) => `    (name = ${quoted(binding.binding)}, service = ${quoted(serviceName(binding))}),`),
+    ...stores.map((binding) =>
+      `    (name = ${quoted(binding.binding)}, kvNamespace = ${quoted(serviceName(binding))}),`),
     ...manifest.bindings
       .filter((binding) => binding.kind === 'durable-object')
       .map((binding) =>

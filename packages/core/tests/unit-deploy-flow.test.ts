@@ -667,10 +667,10 @@ describe('the door client', () => {
 /**
  * The local door's rendered configuration. What a reader of the capnp must be
  * able to trust: every module is embedded from the release that `current`
- * names, the stores workerd has no implementation of are directories under
- * `state/`, the Durable Object classes are SQL-backed with a key that does not
- * move between renders, and a binding workerd cannot host is named rather than
- * rendered as something else.
+ * names, a KV namespace is a directory under `state/` and is bound as a KV
+ * namespace rather than as a Fetcher, the Durable Object classes are
+ * SQL-backed with a key that does not move between renders, and a binding
+ * workerd cannot host is named rather than rendered as something else.
  */
 describe('the workerd configuration for a local instance', () => {
   test('renders the release, its stores and its objects, and names what a local instance loses', () => {
@@ -682,12 +682,17 @@ describe('the workerd configuration for a local instance', () => {
     expect(config).toContain('compatibilityDate = "2025-12-01",');
     expect(config).toContain('compatibilityFlags = ["nodejs_compat"],');
 
-    // KV and R2 are directories: workerd has neither, and the doc's "KV and R2
-    // on local disk" is this.
+    // A KV namespace is a directory, bound with `kvNamespace` so the Worker
+    // gets a KvNamespace and not a Fetcher: `env.AUTH_KV.get` is a function
+    // only under this spelling (workerd 2026-09-03, measured 2026-09-18).
     expect(config).toContain('(name = "kv-AUTH_KV", disk = (path = "state/kv/kinu-auth-kv", writable = true)),');
-    expect(config).toContain('(name = "r2-BACKUP_BUCKET", disk = (path = "state/r2/kinu-backups", writable = true)),');
-    expect(config).toContain('(name = "AUTH_KV", service = "kv-AUTH_KV"),');
-    expect(config).toContain('(name = "BACKUP_BUCKET", service = "r2-BACKUP_BUCKET"),');
+    expect(config).toContain('(name = "AUTH_KV", kvNamespace = "kv-AUTH_KV"),');
+
+    // R2 is not hosted: `r2Bucket` speaks R2's own protocol over the service,
+    // which a disk directory does not implement, so the bucket is named as
+    // absent rather than rendered as a directory a Worker cannot read.
+    expect(config).not.toContain('BACKUP_BUCKET');
+    expect(config).not.toContain('state/r2');
 
     // The assets directory is the release's own and is never written to.
     expect(config).toContain('(name = "assets", disk = (path = "releases/0.4.0+abc1234/client", writable = false)),');
@@ -712,13 +717,13 @@ describe('the workerd configuration for a local instance', () => {
     // reported by name.
     expect(config).not.toContain('MEMORY_VECTORS');
     expect(config).not.toContain('LOADER');
-    expect(unhostedBindings(MANIFEST)).toEqual(['MEMORY_VECTORS', 'AGENT_METRICS', 'AI', 'LOADER']);
+    expect(unhostedBindings(MANIFEST)).toEqual(['BACKUP_BUCKET', 'MEMORY_VECTORS', 'AGENT_METRICS', 'AI', 'LOADER']);
 
     // Every writable directory the config names, because workerd refuses to
     // start on a disk service whose directory is absent: it answered
     // `Directory named "do-state" not found: state/do` (workerd 2026-09-03,
     // measured 2026-09-18) until the installer created them.
-    expect(workerdDirectories(MANIFEST)).toEqual(['state/do', 'state/kv/kinu-auth-kv', 'state/r2/kinu-backups']);
+    expect(workerdDirectories(MANIFEST)).toEqual(['state/do', 'state/kv/kinu-auth-kv']);
   });
 
   test('the layout is one tree, and the config records the address it settled on', () => {
