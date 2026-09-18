@@ -1380,7 +1380,6 @@ export default function WorkspacePage() {
             planFocus={state.planFocus}
             planOwner="main"
             workspacePlanArrival={state.workspacePlanArrival}
-            activePlanActors={state.subordinates.filter(actor => actor.status !== "dismissed").map(actor => actor.name)}
             onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${encodeURIComponent(name)}`); }}
             onSurface={setSurface}
             onCollapse={inspector.collapseControl}

@@ -557,7 +557,7 @@ describe('the parked action stays visible until it is decided', () => {
     await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
 
     const rows = buildPendingActions({
-      approvals: [], changes: [], scaffoldVersions: [], curriculum: [],
+      approvals: [], changes: [], scaffoldVersions: [], curriculum: [], pendingPlans: [],
       unseenChanges: { count: 0, revertable: 0, latestAt: 0 },
       deferredActions: queue.list(),
     });

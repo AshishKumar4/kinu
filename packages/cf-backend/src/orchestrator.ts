@@ -201,7 +201,7 @@ import {
   type RecordObjectiveSummary, type RecordCellSummary,
   type RecordObjectiveHandle, type RecordCellHandle, type ExplorationRecord,
   type HeadStep,
-  buildPendingActions, type PendingAction,
+  buildPendingActions, listPendingPlanReviews, type PendingAction,
   type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
@@ -4075,6 +4075,7 @@ export class OrchestratorAgent extends ActorAgent {
         latestAt: unseen[0]?.at ?? Date.now(),
       },
       curriculum: listProposedTasks(this.rt, 'pending'),
+      pendingPlans: listPendingPlanReviews(this.boundSql, this.rt.actor.workspaceId),
     });
   }
 

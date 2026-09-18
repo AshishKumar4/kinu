@@ -1488,6 +1488,11 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   // through to the VFS baseline.
   if (method === "getExecutorDiff") return rpcResult({ files: [], mode: "vfs-baseline" }).json<T>();
 
+  // One more of the class: `listWorkspaceWork` is read as `result.plans` /
+  // `result.tasks` by both halves of the Work tab, so the blanket `[]` below
+  // threw on the dereference and emptied every frame that mounts it.
+  if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
+
   if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
 
   return rpcResult({}).json<T>();
@@ -4508,26 +4513,62 @@ function ReleasesFrame({ executors = RELEASE_EXECUTORS }: { executors?: Executor
 const AGENT_TASKS = [
   {
     id: "t1", parentId: null, title: "Reproduce the SAVE20 coupon 500", status: "done",
-    createdAt: NOW - 52e5, updatedAt: NOW - 44e5, subtasks: [],
+    createdAt: NOW - 52e5, updatedAt: NOW - 44e5, note: null, subtasks: [],
   },
   {
     id: "t2", parentId: null, title: "Patch the gateway timeout that swallows the coupon lookup",
-    status: "active", createdAt: NOW - 52e5, updatedAt: NOW - 8e5,
+    status: "active", createdAt: NOW - 52e5, updatedAt: NOW - 8e5, note: null,
     subtasks: [
-      { id: "t5", parentId: "t2", title: "Raise the upstream deadline to 60s", status: "done", createdAt: NOW - 30e5, updatedAt: NOW - 21e5 },
-      { id: "t6", parentId: "t2", title: "Stop retrying a request the client already abandoned", status: "active", createdAt: NOW - 30e5, updatedAt: NOW - 6e5 },
-      { id: "t7", parentId: "t2", title: "Check the same path in the checkout worker", status: "open", createdAt: NOW - 30e5, updatedAt: NOW - 30e5 },
+      { id: "t5", parentId: "t2", title: "Raise the upstream deadline to 60s", status: "done", createdAt: NOW - 30e5, updatedAt: NOW - 21e5, note: null },
+      { id: "t6", parentId: "t2", title: "Stop retrying a request the client already abandoned", status: "active", createdAt: NOW - 30e5, updatedAt: NOW - 6e5, note: "Client already bails at 8s — retrying past that is burn, not robustness." },
+      { id: "t7", parentId: "t2", title: "Check the same path in the checkout worker", status: "open", createdAt: NOW - 30e5, updatedAt: NOW - 30e5, note: null },
     ],
   },
   {
     id: "t3", parentId: null, title: "Add a regression test for the expired-coupon branch",
-    status: "open", createdAt: NOW - 52e5, updatedAt: NOW - 52e5, subtasks: [],
+    status: "open", createdAt: NOW - 52e5, updatedAt: NOW - 52e5, note: null, subtasks: [],
   },
   {
     id: "t4", parentId: null, title: "Rewrite the coupon docs page", status: "dropped",
-    createdAt: NOW - 52e5, updatedAt: NOW - 40e5, subtasks: [],
+    createdAt: NOW - 52e5, updatedAt: NOW - 40e5, note: null, subtasks: [],
   },
 ];
+
+/** The workspace-wide work read the Work tab's plan list and task ledger
+ *  share: the root's plan and tasks plus one subordinate's plan carrying its
+ *  own linked task, so the list draws both owners' rows. */
+const WORKSPACE_WORK = {
+  plans: [
+    {
+      owner: { actorId: "actor-main", name: "main", retired: false },
+      plan: {
+        id: "plan-gateway", sessionId: "default", revision: 3,
+        content: "# Gateway timeout repair\n\nPatch the gateway timeout, then prove the expired-coupon branch.",
+        status: "pending", annotations: [], feedback: null, handoffAccepted: false,
+        createdAt: NOW - 53e5, updatedAt: NOW - 9e5, decidedAt: null,
+      },
+      tasks: AGENT_TASKS.filter((task) => task.id === "t2"),
+    },
+    {
+      owner: { actorId: "actor-courier", name: "courier", retired: false },
+      plan: {
+        id: "plan-courier", sessionId: "default", revision: 1,
+        content: "# Courier rollout\n\nStage the rollout and verify the receipt.",
+        status: "approved", annotations: [], feedback: null, handoffAccepted: true,
+        createdAt: NOW - 60e5, updatedAt: NOW - 50e5, decidedAt: NOW - 50e5,
+      },
+      tasks: [
+        { id: "t8", parentId: null, title: "Stage the rollout", status: "done", createdAt: NOW - 60e5, updatedAt: NOW - 55e5, note: null, subtasks: [] },
+      ],
+    },
+  ],
+  tasks: [
+    {
+      owner: { actorId: "actor-main", name: "main", retired: false }, plan: null,
+      tasks: AGENT_TASKS.filter((task) => task.id !== "t2"),
+    },
+  ],
+};
 
 /** Both lifecycle halves in frame: one job still running (Now, cancel), two
  *  settled (journal, retry / dismiss). */
@@ -4597,6 +4638,12 @@ const PENDING_ACTIONS: PendingAction[] = [
     id: "apr_1", kind: "release_approval", at: NOW - 12e5,
     title: "Approve: deploy to production",
     detail: "Warm up the empty-state copy",
+  },
+  {
+    id: "plan:main:plan-gateway:3", kind: "plan_review", at: NOW - 9e5,
+    title: "Approve the plan · Gateway timeout repair",
+    detail: null,
+    planRef: { owner: "main", id: "plan-gateway", revision: 3 },
   },
   {
     id: "scaffold-v8", kind: "scaffold_version", at: NOW - 10e5,
@@ -4749,7 +4796,7 @@ function BlueprintFrame() {
 }
 
 const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listAgentTasks") return rpcResult(AGENT_TASKS).json<T>();
+  if (method === "listWorkspaceWork") return rpcResult(WORKSPACE_WORK).json<T>();
 
   if (method === "getEvolutionChangelog") return rpcResult(CHANGELOG).json<T>();
 
@@ -4780,16 +4827,22 @@ function PlanReviewFrame() {
  *  nothing to show while the journal beneath it still does — and with no job
  *  ever run, the Jobs chip is the empty one. */
 const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listAgentTasks") return rpcResult(AGENT_TASKS.filter((task) => task.id === "t1")).json<T>();
+  if (method === "listWorkspaceWork") return rpcResult({
+    plans: [],
+    tasks: [{
+      owner: { actorId: "actor-main", name: "main", retired: false }, plan: null,
+      tasks: AGENT_TASKS.filter((task) => task.id === "t1"),
+    }],
+  }).json<T>();
 
   return workRpc<T>(method, args);
 };
 
-/** `?frame=work&lane=failed`: both ledger reads refuse over an empty feed, so
- *  each section owes its own retry — and the running job, which is a prop and
- *  not a read, is still Now's to show. */
+/** `?frame=work&lane=failed`: the work read and the journal read both refuse
+ *  over an empty feed, so Now and the journal each owe their own retry — and
+ *  the running job, which is a prop and not a read, is still Now's to show. */
 const failedReadsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listAgentTasks") throw new Error("plan fixture failed");
+  if (method === "listWorkspaceWork") throw new Error("plan fixture failed");
 
   if (method === "getEvolutionChangelog") throw new Error("journal fixture failed");
 
@@ -4886,7 +4939,7 @@ const PARKED_ONLY: PendingAction[] = PENDING_ACTIONS.filter((a) => a.kind === "d
 /** A settled-empty lane: no tasks, no journal entries. Both Work frames that
  *  photograph absence share it, so the second is not a copy of the first. */
 const settledEmptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listAgentTasks") return rpcResult([]).json<T>();
+  if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
   if (method === "getEvolutionChangelog") return rpcResult({ entries: [], unseenCount: 0, seenAt: 0 }).json<T>();
 
