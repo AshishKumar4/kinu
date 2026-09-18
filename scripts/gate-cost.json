@@ -598,14 +598,14 @@
       "exit": 1
     },
     "bun test --timeout=0 scripts/*-ux.test.ts scripts/computed-style.test.ts": {
-      "wallSeconds": 480.26,
-      "cpuSeconds": 0,
-      "peakRssMb": 2176.65,
-      "peakRunnable": 22,
-      "peakCpuThreads": 21.29,
-      "meanThreads": 0,
-      "samples": 1903,
-      "loadAtStart": 5.89,
+      "wallSeconds": 480.14,
+      "cpuSeconds": 141.97,
+      "peakRssMb": 2149.82,
+      "peakRunnable": 29,
+      "peakCpuThreads": 33.66,
+      "meanThreads": 0.3,
+      "samples": 1809,
+      "loadAtStart": 19.04,
       "exit": 124
     },
     "bun test --timeout=0 scripts/public-pages.test.ts scripts/plan-demo-film.test.ts": {
@@ -749,6 +749,39 @@
       "meanThreads": 0.87,
       "samples": 43,
       "loadAtStart": 12.9,
+      "exit": 0
+    },
+    "bun run verify:lean": {
+      "wallSeconds": 29.13,
+      "cpuSeconds": 46.33,
+      "peakRssMb": 3925,
+      "peakRunnable": 16,
+      "peakCpuThreads": 8.1,
+      "meanThreads": 1.59,
+      "samples": 140,
+      "loadAtStart": 35.63,
+      "exit": 0
+    },
+    "bun run test:workerd:devbox": {
+      "wallSeconds": 6.64,
+      "cpuSeconds": 6.71,
+      "peakRssMb": 990.43,
+      "peakRunnable": 6,
+      "peakCpuThreads": 1.31,
+      "meanThreads": 1.01,
+      "samples": 55,
+      "loadAtStart": 40.14,
+      "exit": 0
+    },
+    "bun run test:workerd:cf-long": {
+      "wallSeconds": 276.59,
+      "cpuSeconds": 232.82,
+      "peakRssMb": 6576.08,
+      "peakRunnable": 24,
+      "peakCpuThreads": 7.85,
+      "meanThreads": 0.84,
+      "samples": 1077,
+      "loadAtStart": 37.5,
       "exit": 0
     }
   }
