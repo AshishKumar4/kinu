@@ -149,6 +149,25 @@ export const PendingSteerFileSchema = v.object({
 
 export type PendingSteerFile = v.InferOutput<typeof PendingSteerFileSchema>;
 
+/** What one RAW chat frame, put on a socket while a turn's provider call is
+ *  held, leaves behind: how the request itself was answered while the turn
+ *  still ran, the reservation the admission wrote, whether the words reached
+ *  the transcript instead, the `steer_status` landings the socket was told
+ *  about, the provider calls, and how many assistant rows the drive ended
+ *  with — one turn's worth, or a second turn's. */
+export interface RawChatProbeResult {
+  /** The done frame's `landed` while the provider was held: `'mid-turn'` for
+   *  a splice, `'closed'` for a done frame carrying no landing. A request the
+   *  running turn does not answer never produces this record: the probe waits
+   *  on the frame, and the row fails on the runner's clock. */
+  readonly landing: string;
+  readonly pendingIds: readonly string[];
+  readonly persistedWhileHeld: boolean;
+  readonly landed: readonly { id: string; text: string; atStep: number }[];
+  readonly calls: readonly HttpCall[];
+  readonly answerCount: number;
+}
+
 export const PreparedConversationSchema = v.object({
   workspace: v.string(),
   owner: v.string(),
