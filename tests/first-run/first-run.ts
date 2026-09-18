@@ -50,6 +50,7 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { REAL_CLOCK } from '../../packages/core/src/index';
 import {
   createObservedModelAccumulator, EVAL_MODELS, ledgerTotalsFromEvents, outcomeRow,
   projectRunEventProvenance, publishRunRecord,
@@ -529,7 +530,7 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
       opened = await plan.open({ subject: spec.id, purpose: spec.purpose, genesis: spec.genesis });
 
       return opened;
-    }, { transcripts: TRANSCRIPTS, taskId: episode, modelCalls: spec.modelCalls, ...(spec.budgetMs !== undefined && { budgetMs: spec.budgetMs }) }, async (session, collect, budget) => {
+    }, { transcripts: TRANSCRIPTS, taskId: episode, modelCalls: spec.modelCalls, clock: REAL_CLOCK, ...(spec.budgetMs !== undefined && { budgetMs: spec.budgetMs }) }, async (session, collect, budget) => {
     console.warn(`    [first-run] ${spec.id} on ${session.describe}`);
     const subgoals = await spec.run({ session, plan, budget });
 

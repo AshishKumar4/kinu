@@ -237,6 +237,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
             </button>
           ))}
         </div>
+        {/* Icons inside the strip's own rule: the row is one flex line with
+            one bottom rule, so the gauge and the collapse chevron sit on the
+            same edge the tabs underline — never a ruled strip beside an
+            unruled icon column with a visible break between them. */}
+        <div className={`flex shrink-0 items-center -mb-px ${tabStripH}`}>
         <ShareSlateControl workspace={props.workspace} slate={openSlateSummary} rpc={props.rpc} />
         {chip !== null && (
           <button
@@ -270,12 +275,16 @@ export function WorkSurface(props: WorkSurfaceProps) {
             <CaretRightIcon size={14} />
           </button>
         )}
+        </div>
       </div>
 
       <div className={`flex-1 min-h-0 ${surface === "Diffs" ? "hidden" : previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6"}`}>
         <div className={surface === "Work" ? "" : "hidden"}>
           <ErrorBoundary label="Work">
-            <WorkTab key={props.planOwner ?? "main"}
+            {/* Keyed by workspace, never by agent: Work is the workspace's own
+                plan, journal and jobs, and a chat-tab switch must not remount
+                or refetch it — only Agent and Activity are per agent. */}
+            <WorkTab key="workspace"
               plan={props.plan}
               planOwner={props.planOwner}
               workspacePlanArrival={props.workspacePlanArrival}

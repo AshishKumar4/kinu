@@ -46,13 +46,16 @@ import { WorkPlans } from "./WorkPlans";
 
 /** The chips over the journal. `All` is not the absence of a filter — it is
  *  every row that reports something happening, which is all of them bar a
- *  self-review that changed nothing; {@link buildJournal} decides that. */
-type JournalFilter = "all" | "jobs" | "plan" | "self";
+ *  self-review that changed nothing; {@link buildJournal} decides that. Plan
+ *  history is not a chip: `WorkPlans` above owns the plan read model
+ *  (`inspectSubordinate` over `plan_reviews`), so a second Plan here would be
+ *  the duplicate B12 removed — closed tasks are the settled tail, not the
+ *  home. */
+type JournalFilter = "all" | "jobs" | "self";
 
 const FILTERS: Array<{ id: JournalFilter; label: string }> = [
   { id: "all", label: "All" },
   { id: "jobs", label: "Jobs" },
-  { id: "plan", label: "Plan" },
   { id: "self", label: "Self-changes" },
 ];
 
@@ -521,7 +524,9 @@ type JournalRow =
  *
  * Exported for its test: the ordering IS the feature — three separate ledgers
  * have to read as one stream, or the merge has bought nothing but a longer
- * page. The chips each row answers to are here for the same reason.
+ * page. The chips each row answers to are here for the same reason. Closed
+ * tasks ride the `self` filter: they are settled history, and the live plan
+ * already has its home in `WorkPlans` above.
  *
  * A SELF-REVIEW THAT CHANGED NOTHING IS NOT IN `All`. The journal reads as what
  * happened, and "I reviewed my own recent failures and changed nothing"
@@ -540,7 +545,7 @@ export function buildJournal(
       key: `job:${job.id}`, at: job.settledAt ?? job.createdAt, chips: ["all", "jobs"], kind: "job", job,
     })),
     ...tasks.map((task): JournalRow => ({
-      key: `task:${task.id}`, at: task.updatedAt, chips: ["all", "plan"], kind: "task", task,
+      key: `task:${task.id}`, at: task.updatedAt, chips: ["all", "self"], kind: "task", task,
     })),
     ...entries.map((entry): JournalRow => ({
       key: `self:${entry.id}`, at: entry.at,

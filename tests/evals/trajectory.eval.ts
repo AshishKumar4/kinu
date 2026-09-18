@@ -83,7 +83,7 @@ import { afterAll, describe, expect, test } from 'vitest';
 import * as v from 'valibot';
 
 import {
-  type EvalBudget, isBackgroundHandle, type LLMProviderConfig, type RunEvent,
+  type EvalBudget, isBackgroundHandle, type LLMProviderConfig, REAL_CLOCK, type RunEvent,
 } from '../../packages/core/src/index';
 import {
   budgetRow, createObservedModelAccumulator, EVAL_MODELS, FULL_TOOL_SURFACE, ledgerTotalsFromEvents,
@@ -1281,7 +1281,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
           opened = await plan.open({ subject: entry.id, purpose: entry.purpose, genesis: false });
 
           return opened;
-        }, { transcripts: TRANSCRIPTS, taskId: entry.id, modelCalls: 'expected' }, async (session, collect) => {
+        }, { transcripts: TRANSCRIPTS, taskId: entry.id, modelCalls: 'expected', clock: REAL_CLOCK }, async (session, collect) => {
         console.warn(`    [trajectory] ${entry.id} on ${session.describe}`);
 
         // Seeded through the PUBLIC files route — the plane the web file manager

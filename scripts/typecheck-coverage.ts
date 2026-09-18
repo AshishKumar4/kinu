@@ -43,7 +43,6 @@ export const SCRIPT_TYPECHECK_DEBT = {
   'scripts/eval.test.ts': EVAL_TEST_DEBT,
   'scripts/layergate.ts':
     'The compaction-ladder substitution has a Fault<PipelineSubjects> variance error (TS2322).',
-  'scripts/cli-test-runner.ts': 'One call supplies two arguments to a one-argument function (TS2554).',
   'scripts/schema-drift.ts': 'A string index has an implicit-any error (TS7053).',
 } as const satisfies Readonly<Record<string, string>>;
 

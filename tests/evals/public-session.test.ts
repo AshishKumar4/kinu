@@ -33,10 +33,10 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 
 import {
-  BEHAVIOUR_SCORERS, EPISODE_TRANSCRIPT_FILES, ledgerTotalsFromEvents, projectRunEventProvenance,
+  BEHAVIOUR_SCORERS, EPISODE_TRANSCRIPT_FILES, handClock, ledgerTotalsFromEvents, projectRunEventProvenance,
   retainEpisodeTranscript, scratchDir, TASK_OUTCOME, withEpisodeEvidence, liveModelSpend, resetLiveModelSpend,
 } from '@kinu.run/test-utils';
-import { renderSoulMarkdown, RunEventSchema, type RunEvent, type WorkspaceSpend, type JsonValue } from '../../packages/core/src/index';
+import { REAL_CLOCK, renderSoulMarkdown, RunEventSchema, type RunEvent, type WorkspaceSpend, type JsonValue } from '../../packages/core/src/index';
 import {
   PUBLIC_IDENTITY_ENV, decodeFrame, encodeChatRequest, encodeRpcRequest,
   recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity, scorePublicLedger,
@@ -505,7 +505,7 @@ describe('route-shaped run events score through the production instruments', () 
     };
 
     try {
-      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'failure', modelCalls: 'expected' }, async () => {
+      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'failure', modelCalls: 'expected', clock: REAL_CLOCK }, async () => {
         throw new Error('failed after model work');
       })).rejects.toThrow('failed after model work');
       expect(liveModelSpend().calls).toBe(8);
@@ -515,7 +515,7 @@ describe('route-shaped run events score through the production instruments', () 
       expect(readFileSync(join(root, 'failure/failure.json'), 'utf8')).toContain('failed after model work');
 
       resetLiveModelSpend();
-      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'assertion', modelCalls: 'expected' }, async (_reader, collect) => {
+      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'assertion', modelCalls: 'expected', clock: REAL_CLOCK }, async (_reader, collect) => {
         await collect();
         throw new Error('subgoal missed');
       })).rejects.toThrow('subgoal missed');
@@ -523,7 +523,7 @@ describe('route-shaped run events score through the production instruments', () 
 
       resetLiveModelSpend();
       await expect(withEpisodeEvidence(async () => ({ ...reader, async spend() { throw new Error('spend endpoint unavailable'); } }),
-        { transcripts: root, taskId: 'outage', modelCalls: 'expected' }, async () => 'finished')).rejects.toThrow('spend endpoint unavailable');
+        { transcripts: root, taskId: 'outage', modelCalls: 'expected', clock: REAL_CLOCK }, async () => 'finished')).rejects.toThrow('spend endpoint unavailable');
       expect(liveModelSpend().episodesUnmeasured).toBe(1);
       expect(readFileSync(join(root, 'outage/history.json'), 'utf8')).toContain('partial answer');
       expect(JSON.parse(readFileSync(join(root, 'outage/collection.json'), 'utf8'))).toContainEqual({
@@ -553,15 +553,22 @@ describe('route-shaped run events score through the production instruments', () 
     try {
       // The operation is a wait the product never ends; the budget is the
       // subject's own configuration, and the operation stops on its signal.
+      // The budget runs on a clock the test hands it, so "the budget was
+      // spent" is the advance below, never a sleep racing a real timer.
       let told = false;
+      const clock = handClock();
 
-      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'budget', modelCalls: 'expected', budgetMs: 20 },
+      const episode = withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'budget', modelCalls: 'expected', clock, budgetMs: 20 },
         async (_reader, _collect, budget) => {
           await new Promise<void>((resolve) => { budget.addEventListener('abort', () => resolve(), { once: true }); });
           told = true;
 
           return 'never';
-        })).rejects.toThrow('the episode budget of 20 ms was spent');
+        });
+
+      await clock.whenArmed(1);
+      clock.advance(20);
+      await expect(episode).rejects.toThrow('the episode budget of 20 ms was spent');
       expect(told).toBe(true);
       expect(JSON.parse(readFileSync(join(root, 'budget/failure.json'), 'utf8'))).toMatchObject({ phase: 'budget' });
       expect(readFileSync(join(root, 'budget/history.json'), 'utf8')).toContain('still waiting');
@@ -579,7 +586,7 @@ describe('route-shaped run events score through the production instruments', () 
 
     try {
       await expect(withEpisodeEvidence(async () => { throw failure; },
-        { transcripts: root, taskId: 'opening', modelCalls: 'expected' },
+        { transcripts: root, taskId: 'opening', modelCalls: 'expected', clock: REAL_CLOCK },
         async () => { throw new Error('unreachable operation'); })).rejects.toBe(failure);
       expect(JSON.parse(readFileSync(join(root, 'opening/failure.json'), 'utf8'))).toMatchObject({ phase: 'open', message: failure.message });
       expect(JSON.parse(readFileSync(join(root, 'opening/collection.json'), 'utf8'))).toEqual([

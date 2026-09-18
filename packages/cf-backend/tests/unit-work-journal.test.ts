@@ -1,11 +1,15 @@
 /**
- * The Work surface's journal is ONE stream out of three ledgers.
+ * The Work surface's journal is ONE stream out of three ledgers, and plans
+ * appear on it exactly once.
  *
  * Tasks, Jobs and the Evolution Changelog share it, because a tab each puts
  * "what happened while I was away" four clicks away and lands the reader in two
  * rooms that are mostly air. The merge only buys anything if the three actually
  * interleave by time — three blocks stacked under one heading would be the
- * same four rooms with the walls painted over.
+ * same four rooms with the walls painted over. The live plan already has its
+ * home in `WorkPlans` above (B12), so the journal carries no second Plan chip:
+ * closed tasks ride `self` as settled history, and exactly one plan-bearing
+ * tab renders.
  */
 import { describe, test, expect } from 'bun:test';
 import type { AgentTaskTree, ChangelogEntry } from '@kinu.run/core';
@@ -44,14 +48,14 @@ describe('the work journal', () => {
 
   test('every row carries the chips it answers to, so the chips are views over one list', () => {
     const rows = buildJournal([job({ id: 'j' })], [task('t', 1)], [entry('c', 2)]);
-    expect(new Set(rows.flatMap((r) => r.chips))).toEqual(new Set(['all', 'jobs', 'plan', 'self']));
+    expect(new Set(rows.flatMap((r) => r.chips))).toEqual(new Set(['all', 'jobs', 'self']));
 
     // …and each chip selects exactly its own rows out of that one list, while
-    // All holds every one of them.
-    for (const chip of ['jobs', 'plan', 'self'] as const) {
-      expect(rows.filter((r) => r.chips.includes(chip))).toHaveLength(1);
-    }
-
+    // All holds every one of them. The closed task rides `self` beside the
+    // changelog entry, never a second Plan.
+    expect(rows.filter((r) => r.chips.includes('jobs'))).toHaveLength(1);
+    expect(rows.filter((r) => r.chips.includes('self'))).toHaveLength(2);
+    expect(rows.flatMap((r) => r.chips)).not.toContain('plan');
     expect(rows.filter((r) => r.chips.includes('all'))).toHaveLength(3);
   });
 
@@ -67,7 +71,7 @@ describe('the work journal', () => {
     expect(rows.filter((r) => r.chips.includes('all')).map((r) => r.key))
       .toEqual(['self:c-applied', 'task:t', 'job:j']);
     expect(rows.filter((r) => r.chips.includes('self')).map((r) => r.key))
-      .toEqual(['self:c-applied', 'self:c-refused']);
+      .toEqual(['self:c-applied', 'self:c-refused', 'task:t']);
   });
 
   test('a job that never settled is placed by when it started, not dropped', () => {
