@@ -24,12 +24,14 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hostedActorSocketPath } from '@kinu.run/core';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
+import { SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 
-import { withLiveApp, createWorkspace, type LiveApp } from './live-app-harness';
+import { withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
   FALLBACK_ANSWER, SCRIPTED_MODEL_SPEC, SLATE_TITLE,
   planWalkthrough, registerScriptedModel, startScriptedModel,
@@ -48,11 +50,12 @@ async function shoot(page: Page, name: string): Promise<string> {
   return path;
 }
 
-/** This run's own workspace suffix. The local dev server keeps its Durable
- *  Objects between runs, so a fixed workspace name would have each row reading
- *  the previous run's transcript, cards and journal as if they were the
- *  product's first state (measured 2026-09-17: two runs put both runs' sent
- *  messages in one root transcript). */
+/** This run's own workspace suffix, and the mark the state row reads a roster
+ *  by. A deployment keeps its Durable Objects between runs, so a fixed name
+ *  would have each comprehensive row reading the previous run's transcript,
+ *  cards and journal as if they were the product's first state (measured
+ *  2026-09-17 on the local server, back when it inherited the checkout's
+ *  state too: two runs put both runs' sent messages in one root transcript). */
 const RUN_ID = crypto.randomUUID().slice(0, 8);
 
 /** A desktop viewport for every row: the inspector column, its separator and
@@ -236,6 +239,23 @@ interface GeometryVerdict {
   readonly light: StripGeometry;
 }
 
+/** Where this run's dev server kept its Durable Objects, and what stood there.
+ *  The harness mints a scratch directory per boot; before that the Cloudflare
+ *  plugin persisted into the checkout's `packages/cf-backend/.wrangler/state`,
+ *  one directory per checkout shared by every run on the box. That is how the
+ *  deploy wave at 18fbea162 met a `user_workspaces` table written before
+ *  `delete_pending` existed and answered 500 to the first credential this
+ *  suite wrote, while the same file was green from a fresh worktree. */
+interface StateVerdict {
+  /** The directory the dev server persisted into. */
+  readonly root: string;
+  /** The Durable Object namespaces under it, from the plugin's `v3/do` tree. */
+  readonly namespaces: readonly string[];
+  /** Workspaces on the LOCAL server's roster that this run did not create. A
+   *  state directory that held anything before the boot names it here. */
+  readonly foreign: readonly string[];
+}
+
 interface TierVerdicts {
   bootFailure: string | null;
   panel: PanelVerdict | null;
@@ -244,6 +264,7 @@ interface TierVerdicts {
   controls: ControlsVerdict | null;
   stamped: StampedCardVerdict | null;
   walkthrough: WalkthroughVerdict | null;
+  state: StateVerdict | null;
 }
 
 const StripGeometrySchema = v.object({
@@ -254,7 +275,7 @@ const StripGeometrySchema = v.object({
 
 const observed: TierVerdicts = {
   bootFailure: null, panel: null, planTabs: null, geometry: null,
-  controls: null, stamped: null, walkthrough: null,
+  controls: null, stamped: null, walkthrough: null, state: null,
 };
 
 /** The inspector column, `#inspector` — the id `use-inspector-layout` hands the
@@ -852,6 +873,21 @@ async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): 
   return verdict;
 }
 
+/** Row 7: the run's own state directory, measured on the LOCAL server in both
+ *  modes — the question is what the harness booted on, not what a deployment
+ *  holds. The roster read goes through UserDO, so its namespace directory is
+ *  written by the time the plugin's tree below is listed. */
+async function measureState(app: LiveApp): Promise<StateVerdict> {
+  const foreign = (await listWorkspaces(app.origin)).filter((name) => !name.includes(RUN_ID));
+  const tree = join(app.statePath, 'v3', 'do');
+
+  return {
+    root: app.statePath,
+    namespaces: existsSync(tree) ? readdirSync(tree).sort() : [],
+    foreign,
+  };
+}
+
 /** The staging origin, when the comprehensive run is asked for by name. */
 const stagingOrigin = process.env.KINU_E2E_ORIGIN;
 
@@ -881,9 +917,11 @@ async function run(): Promise<void> {
     // per request.
     const model = await startScriptedModel(planWalkthrough);
 
-    await withLiveApp(async ({ newPage, origin }) => {
-      await registerScriptedModel(origin, model.port);
-      await rows(newPage, origin);
+    await withLiveApp(async (app) => {
+      await registerScriptedModel(app.origin, model.port);
+      await rows(app.newPage, app.origin);
+      observed.state = await measureState(app);
+      progress('state done');
     });
 
     await model.stop();
@@ -893,13 +931,14 @@ async function run(): Promise<void> {
 
   // Comprehensive: same rows against the named deployment. The dev identity
   // there is the deployment's; the rows are the same code.
-  await withLiveApp(async ({ newPage, browser }) => {
-    const page = await newPage();
+  await withLiveApp(async (app) => {
+    const page = await app.newPage();
 
     await page.goto(stagingOrigin, { waitUntil: 'load' });
-    await rows(newPage, stagingOrigin);
+    await rows(app.newPage, stagingOrigin);
+    observed.state = await measureState(app);
     await page.close();
-    await browser.close();
+    await app.browser.close();
   });
 }
 
@@ -1034,5 +1073,20 @@ describe('the plan review flow end to end', () => {
 
   test("the slate that turn wrote stands in the strip under its own title", () => {
     expect(verdictOf(observed.walkthrough, 'walkthrough').stripLabels).toContain(SLATE_TITLE);
+  });
+});
+
+describe('the live app boots on its own Durable Object state', () => {
+  test("the dev server persisted under this run's scratch, never the checkout", () => {
+    const state = verdictOf(observed.state, 'state');
+
+    expect(state.root).toStartWith(join(tmpdir(), SCRATCH_ROOT_PREFIX));
+    // The plugin's own tree there, not just a directory the harness named:
+    // UserDO is the namespace every row's roster and credential goes through.
+    expect(state.namespaces).toContain('kinu-UserDO');
+  });
+
+  test('nothing but this run stood in that state', () => {
+    expect(verdictOf(observed.state, 'state').foreign).toEqual([]);
   });
 });
