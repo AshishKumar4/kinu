@@ -73,19 +73,26 @@ artifact is 27.35 MiB compressed and 107.99 MiB unpacked, 118 modules and 427
 assets, biggest single member 21.5 MiB
 (`client/_assets/opencode/1.16.2/chunks.json`).
 
-It does not fit in the Durable Object that installs it. The flow buffers the
-compressed bytes to check the published digest, then holds the unpacked
-archive for the length of the plan — 135.34 MiB together, before one asset is
-base64'd for the upload. `do.isolate.transient_alloc_reset` in
+It is installed one member at a time, and it has to be. The flow buffers the
+compressed bytes to check the published digest, then walks the archive as a
+stream: each asset is encoded into the body it is sent as and let go of when
+its batch lands, and only the module set is held to the end, because a version
+upload is one multipart request. The artifact is written assets-first for that
+reason, so the compressed bytes are released before the module set is held.
+
+What that costs, measured 2026-09-18 in
+`packages/cf-backend/tests/workerd/deploy-ledger.test.ts` against a synthetic
+release of the same shape (108.46 MiB unpacked, largest member 21.50 MiB):
+**88.18 MiB at the peak** — the compressed artifact plus the largest member's
+base64 twice, since the transport copies a part into the multipart body. It
+does not grow with the release. Before this change the same release cost
+243.39 MiB (the whole unpacked archive held for the length of the plan, plus
+one 104.08 MiB asset body), and `do.isolate.transient_alloc_reset` in
 `packages/core/src/platform-catalog.ts` measured a Durable Object reset about
 1.7 s after a transient allocate-and-free of 128 MiB, with the request already
-answered 200. So the Cloudflare door cannot install this release from inside
-`DeployRunDO` today. The footprint's shape is measured in
-`packages/cf-backend/tests/workerd/deploy-ledger.test.ts`: an 8 MiB release
-peaks at 2.87x its unpacked size. Which way out we take is undecided — a
-smaller artifact, member-at-a-time streaming out of R2, or the upload run
-somewhere with more memory. `kinu deploy local` is unaffected: it unpacks to
-disk.
+answered 200. So the Cloudflare door could not install this release until
+2026-09-18, and now it can, with 40 MiB to spare. `kinu deploy local` reads
+the same stream and writes each member straight to disk.
 
 ## The Cloudflare door
 
