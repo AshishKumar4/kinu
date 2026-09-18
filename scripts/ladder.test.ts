@@ -268,6 +268,22 @@ describe('the ladder measures something', () => {
     expect(rows.every((files) => files.length > 0)).toBe(true);
     expect(rows.flat().sort()).toEqual(claims('bun run test:workerd', tracked).sort());
     expect(new Set(rows.flat()).size).toBe(rows.flat().length);
+
+    // The two UI self-test rows partition the same family: the heavy suite is
+    // a row of its own and the family row carves it out with bun's
+    // `--path-ignore-patterns`, so no file runs twice and none is dropped.
+    // Split on 2026-09-18, when the one row measured 480.42s against a 480s
+    // deadline.
+    const uiRows = LADDER
+      .filter((gate) => gate.label.startsWith('UI gate self-tests'))
+      .map((gate) => claims(gate.run, tracked));
+
+    expect(uiRows.length).toBe(2);
+    expect(uiRows.every((files) => files.length > 0)).toBe(true);
+    expect(new Set(uiRows.flat()).size).toBe(uiRows.flat().length);
+    expect(uiRows.flat().sort()).toEqual(
+      [...claims('bun test scripts/*-ux.test.ts', tracked), 'scripts/computed-style.test.ts'].sort(),
+    );
     // `--cwd` silently loads a different bunfig, so it claims nothing on
     // purpose — a gate spelled that way fails as an orphan instead of passing.
     expect(claims('bun test --cwd packages/core', tracked)).toEqual([]);
@@ -301,6 +317,17 @@ describe('claims() resolves a glob against whatever tree it is given', () => {
     const grown = [...tree, 'scripts/bench-new.test.ts', 'scripts/w-ux.test.ts'];
     expect(claims('bun test scripts/bench*.test.ts', grown)).toContain('scripts/bench-new.test.ts');
     expect(claims('bun test scripts/*-ux.test.ts', grown)).toContain('scripts/w-ux.test.ts');
+  });
+
+  test('a suite carved out of a family glob is claimed by the row that names it, once', () => {
+    const family = 'bun test scripts/*-ux.test.ts';
+    const carved = 'bun test --path-ignore-patterns=scripts/y-ux.test.ts scripts/*-ux.test.ts';
+
+    expect(claims(carved, tree)).toEqual(['scripts/x-ux.test.ts']);
+    // The pair partitions what the one row claimed: nothing runs twice, and
+    // the suite the flag removed is still claimed where it is named.
+    expect([...claims(carved, tree), ...claims('bun test scripts/y-ux.test.ts', tree)].sort())
+      .toEqual(claims(family, tree).sort());
   });
 
   test('a glob beside named files claims the union once, in resolution order', () => {
