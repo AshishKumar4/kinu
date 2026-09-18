@@ -27,7 +27,7 @@ import {
   isDeployPath, mintDeployRun, parseReleaseManifest, promptedSecrets, runKeyDigest,
   type DeployOptions,
 } from '@kinu.run/core/deploy';
-import { err, json, safeJson, sha256Hex, timingSafeEqual } from '@kinu.run/core';
+import { err, fetchDeployedAsset, json, safeJson, sha256Hex, timingSafeEqual } from '@kinu.run/core';
 import * as v from 'valibot';
 import { DEPLOY_STATE_COOKIE_NAME, readCookie, setCookie } from '../auth/session';
 import type { DeployRunDO } from './deploy-do';
@@ -86,7 +86,7 @@ export async function handleDeployRequest(request: Request, env: Env): Promise<R
 
   if (!isDeployPath(path)) return null;
 
-  if (path === `${DEPLOY_API}/options`) return options(env);
+  if (path === `${DEPLOY_API}/options`) return options(request, env);
 
   if (path === `${DEPLOY_API}/runs` && request.method === 'POST') return create(env);
 
@@ -167,13 +167,19 @@ export async function handleDeployRequest(request: Request, env: Env): Promise<R
 
 /** What the door can offer before anything is created: whether the Cloudflare
  *  half is configured at all, what version a run would install, and which
- *  secrets this release asks a person for. */
-async function options(env: Env): Promise<Response> {
-  const origin = env.CLI_PUBLIC_ORIGIN ?? 'https://kinu.run';
-  const response = await fetch(new URL(RELEASE_MANIFEST_PATH, origin));
+ *  secrets this release asks a person for.
+ *
+ *  The manifest is read out of this deployment's own asset bundle rather than
+ *  fetched from its own origin: a subrequest per page load for a file the
+ *  binding already serves, and — because the bundle answers a missing file
+ *  with the SPA shell — a read that had to be told apart from an HTML page.
+ *  `fetchDeployedAsset` is the one place that knows both
+ *  (`core/src/http/deployed-assets.ts`). */
+async function options(request: Request, env: Env): Promise<Response> {
+  const response = await fetchDeployedAsset(env, request.url, RELEASE_MANIFEST_PATH);
   const configured = deployClientId(env) !== '';
 
-  if (!response.ok) {
+  if (response === null) {
     const offline: DeployOptions = {
       cloudflare: false,
       clientId: '',

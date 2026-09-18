@@ -106,29 +106,44 @@ async function authorize(door: DeployDoor, clientId: string): Promise<void> {
 }
 
 /**
- * The redirect, caught once.
+ * The redirect, caught.
  *
- * The listener closes on the first answer — a second callback has nothing to
- * authorize — and a callback whose `state` is not this run's is refused in the
- * browser rather than exchanged, which is the whole job of `state`.
+ * ANYTHING MAY KNOCK ON A LOOPBACK PORT. Any page open in the browser can
+ * `fetch('http://localhost:8899/…')`, and a listener that closed on the first
+ * request of any kind would reject an authorization the person is in the
+ * middle of giving. So a request that does not carry this run's own `state`
+ * gets a 404 and the listener stays up; the leg ends on the callback that
+ * carries it, which is the whole job of `state`.
+ *
+ * `127.0.0.1` rather than every interface: the redirect is the browser on
+ * this machine, and a browser resolving `localhost` to `::1` first falls back
+ * to it. Binding `::` to save that fallback would put the leg on the LAN.
  */
 function awaitCode(state: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const server = createServer((request: IncomingMessage, response: ServerResponse) => {
       const url = new URL(request.url ?? '/', CLI_DEPLOY_REDIRECT_URI);
-      const code = url.searchParams.get('code') ?? '';
       const carried = url.searchParams.get('state') ?? '';
+      const code = url.searchParams.get('code') ?? '';
       const problem = url.searchParams.get('error');
-      const good = problem === null && code !== '' && carried === state;
+
+      if (carried !== state) {
+        response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end('This is not the authorization this terminal started.');
+
+        return;
+      }
+
+      const good = problem === null && code !== '';
 
       response.writeHead(good ? 200 : 400, { 'content-type': 'text/plain; charset=utf-8' });
       response.end(good
         ? 'Authorized. Go back to your terminal.'
-        : `This authorization is not the one this terminal started${problem === null ? '' : `: ${problem}`}.`);
+        : `That authorization did not complete${problem === null ? '' : `: ${problem}`}.`);
       server.close();
 
       if (good) resolve(code);
-      else reject(new Error(problem ?? 'the authorization that came back is not this run\'s'));
+      else reject(new Error(problem ?? 'that callback carried no authorization code'));
     });
 
     server.on('error', reject);
@@ -154,7 +169,9 @@ async function answers(door: DeployDoor, prompts: readonly string[]): Promise<De
   const ownerEmail = await ask('Your email (the sign-in address)');
   const zones = await door.zones();
   const hostname = zones.length === 0 ? '' : await ask('Hostname (blank for a workers.dev address)', '');
-  const zone = zones.find((held) => hostname.endsWith(held.name));
+  // A label boundary, not a suffix: `kinu.notexample.com` ends with
+  // `example.com` and belongs to a different account's zone.
+  const zone = zones.find((held) => hostname === held.name || hostname.endsWith(`.${held.name}`));
   const keyNames: string[] = [];
 
   for (const name of prompts) {

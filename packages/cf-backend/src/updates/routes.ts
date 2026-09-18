@@ -83,7 +83,13 @@ function deploymentRecord(env: Env): DeploymentRecord | null {
 function ownedBy(record: DeploymentRecord | null, identity: AuthIdentity): boolean {
   if (record === null) return false;
 
-  if (identity.provider === 'dev' || identity.cliScopes !== undefined) return false;
+  // Both spellings of a CLI identity: the provider it carries, and the scopes
+  // it carries only when the ticket had any. Keying on the scopes alone left
+  // an unscoped `cli` ticket admitted by this check and refused only by which
+  // paths tickets reach — a gate held up by routing rather than by itself.
+  if (identity.provider === 'dev' || identity.provider === 'cli') return false;
+
+  if (identity.cliScopes !== undefined) return false;
   const owner = record.inputs.ownerEmail.trim().toLowerCase();
 
   return owner !== '' && identity.email.trim().toLowerCase() === owner;

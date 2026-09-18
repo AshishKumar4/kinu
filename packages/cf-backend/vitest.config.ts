@@ -614,6 +614,12 @@ export default defineConfig({
       // throws after `transactionSync` already committed, so that promise has
       // no owner left (worker.ts:258, :289).
       if (error.message.includes('unknown subordinate "relay"')) return false;
+
+      // `deploy-ledger.test.ts` aborts a DeployRunDO in the middle of its
+      // plan — the eviction a run cannot control, delivered on purpose — and
+      // the call the object had in flight at that moment rejects with the
+      // abort reason, owned by nobody.
+      if (error.message.includes('probe: the object died mid-plan')) return false;
     },
   },
 });

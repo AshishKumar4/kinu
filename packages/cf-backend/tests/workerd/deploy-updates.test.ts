@@ -63,6 +63,12 @@ const STRANGER = { ...OWNER, userId: 'probe-other', email: 'someone@example.com'
  *  at a browser deciding to re-upload their Worker. */
 const OWNERS_CLI_TOKEN = { ...OWNER, cliScopes: ['workspace:read'] };
 
+/** The same token with no scopes on it at all. A CLI ticket carries `scopes`
+ *  only when the credential had any, so this is the shape that reached the
+ *  gate as an ordinary browser session and was admitted by everything except
+ *  which paths tickets happen to travel. */
+const UNSCOPED_CLI_TOKEN = { ...OWNER, provider: 'cli' };
+
 beforeEach(async () => {
   await env.DEPLOY_FAKE.reset();
   // The update ledger is one object under a fixed id, shared by every row in
@@ -170,6 +176,17 @@ describe('a deployment updating itself', () => {
     // itself a fact about its owner.
     expect(stranger.status).toBe(404);
     expect(token.status).toBe(404);
+    expect((await env.DEPLOY_FAKE.state()).uploads).toBe(0);
+  });
+
+  it('answers nothing to a CLI ticket that carries no scopes', async () => {
+    await env.DEPLOY_FAKE.serve(DEPLOY_FAKE_OLDER_BUILD);
+
+    const offered = await env.UPDATES_PROBE.hit('GET', '/api/updates', UNSCOPED_CLI_TOKEN);
+    const applied = await env.UPDATES_PROBE.hit('POST', '/api/updates/apply', UNSCOPED_CLI_TOKEN);
+
+    expect(offered.status).toBe(404);
+    expect(applied.status).toBe(404);
     expect((await env.DEPLOY_FAKE.state()).uploads).toBe(0);
   });
 });

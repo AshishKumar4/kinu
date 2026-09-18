@@ -36,8 +36,8 @@ import {
   FACT_ADDRESS, REFRESH_TOKEN_KEY, SELF_UPDATE_RUN_ID,
   bearerTransport, cloudflareResult, deployPlan, exchangeDeployCode, factsFrom,
   fetchReleaseArtifact, fetchReleaseManifest, refreshDeployToken, runDeployPlan, runKeyAdmits,
-  type DeployChoice, type DeployInputs, type DeployLedger,
-  type DeployProgress, type DeploySecretVault, type DeploySnapshot, type DeployStepFailure,
+  type DeployChoice, type DeployFrame, type DeployInputs, type DeployLedger,
+  type DeploySecretVault, type DeploySnapshot, type DeployStepFailure,
   type DeployStepRow, type DeployStepSeed, type DeploymentRecord,
 } from '@kinu.run/core/deploy';
 import { randomToken } from '@kinu.run/core';
@@ -515,6 +515,7 @@ export class DeployRunDO extends DurableObject<Env> {
 
   private async drive(inputs: DeployInputs, channelOrigin: string, update: boolean): Promise<void> {
     const token = await this.accessToken();
+    const run = await this.runId();
 
     // The release this deployment gets, read through the one channel reader
     // every door uses: the manifest, and the artifact it names verified
@@ -549,7 +550,7 @@ export class DeployRunDO extends DurableObject<Env> {
         note: () => undefined,
       },
       this.ledger(),
-      (progress) => this.publish(progress),
+      (progress) => this.deliver(run, { type: 'deploy.progress', progress }),
     );
 
     await this.ctx.storage.put(RUN_STATE_KEY, outcome.state);
@@ -685,27 +686,40 @@ export class DeployRunDO extends DurableObject<Env> {
     // an unauthenticated write surface on a public socket.
   }
 
-  private publish(progress: DeployProgress): void {
-    for (const socket of this.ctx.getWebSockets()) socket.send(JSON.stringify({ type: 'deploy.progress', progress }));
+  /**
+   * One frame to every socket this run has: the only place a send happens.
+   *
+   * A hibernated socket whose browser went away throws on `send`, and that is
+   * a page navigating rather than anything about the deployment. Unguarded on
+   * the progress path it took the plan with it: the throw left the runner
+   * mid-step, so the row stayed `running`, the run state stayed `running`, and
+   * the vault kept the person's tokens until somebody pressed start again.
+   */
+  private deliver(run: string, frame: DeployFrame, only: WebSocket | null = null): void {
+    const body = JSON.stringify(frame);
+
+    for (const socket of only === null ? this.ctx.getWebSockets() : [only]) {
+      try {
+        socket.send(body);
+      } catch (cause) {
+        diagnostics.event('deploy.frame_undelivered', {
+          run, frame: frame.type, error: renderThrownChain({ cause }),
+        });
+      }
+    }
   }
 
   private async broadcast(): Promise<void> {
     const snapshot = await this.snapshot();
 
-    for (const socket of this.ctx.getWebSockets()) {
-      socket.send(JSON.stringify({ type: 'deploy.snapshot', snapshot }));
-    }
+    this.deliver(snapshot.runId, { type: 'deploy.snapshot', snapshot });
   }
 
+  /** The first frame a socket gets: this run's whole state, so a page that
+   *  connected mid-run renders the ledger it missed. */
   private async sendSnapshot(socket: WebSocket): Promise<void> {
-    try {
-      socket.send(JSON.stringify({ type: 'deploy.snapshot', snapshot: await this.snapshot() }));
-    } catch (cause) {
-      // A socket that closed between the upgrade and the first frame is a
-      // browser navigating away, which is ordinary and costs this run nothing.
-      diagnostics.event('deploy.snapshot_undelivered', {
-        run: await this.runId(), error: renderThrownChain({ cause }),
-      });
-    }
+    const snapshot = await this.snapshot();
+
+    this.deliver(snapshot.runId, { type: 'deploy.snapshot', snapshot }, socket);
   }
 }

@@ -30,7 +30,8 @@ import { handleDeployRequest } from '../../src/deploy/routes';
 import { handleUpdatesRequest } from '../../src/updates/routes';
 import type { AuthIdentity } from '../../src/auth/session';
 import {
-  DeployFakeStateSchema, type DeployFakeRefusal, type DeployFakeServedBuild, type DeployFakeState,
+  DeployFakeStateSchema,
+  type DeployFakeRefusal, type DeployFakeServedBuild, type DeployFakeStall, type DeployFakeState,
 } from './deploy-fake';
 import * as v from 'valibot';
 
@@ -73,6 +74,19 @@ export class DeployRunProbeDO extends DeployRunDO {
     return true;
   }
 
+  /**
+   * The object, killed where it stands.
+   *
+   * `ctx.abort()` is the eviction a run cannot control, delivered on purpose:
+   * the activation driving the plan is destroyed mid-step, so the intent is
+   * still stored, the rows are whatever the last write left, and the alarm was
+   * never cleared — which is the state the runtime redelivers into. The stub
+   * call itself fails with the abort, so a caller ignores its rejection.
+   */
+  abort(reason: string): void {
+    this.ctx.abort(reason);
+  }
+
   /** Every durable row, as text. The assertion is a substring search, so the
    *  shape does not matter and a new column cannot escape it. */
   rowText(): string {
@@ -101,12 +115,32 @@ export class DeployFakeControl extends WorkerEntrypoint {
     await this.hit('/serve', build);
   }
 
+  /** One call this plane answers late, after it has already done its work. */
+  async stallOnce(stall: DeployFakeStall): Promise<void> {
+    await this.hit('/stall', stall);
+  }
+
+  /** How many bytes of asset the channel's release carries from here on. */
+  async weigh(bytes: number): Promise<void> {
+    await this.hit('/weigh', { bytes });
+  }
+
+  /** The lifetime the next authorization-code grant answers with. From that
+   *  grant on, the first access token is dead here: every call bearing it is
+   *  answered 401 until the run refreshes. */
+  async expireGrant(expiresIn: number): Promise<void> {
+    await this.hit('/expire', { expiresIn });
+  }
+
   /** What the channel publishes from here on: the next release. */
   async publish(build: DeployFakeServedBuild): Promise<void> {
     await this.hit('/publish', build);
   }
 
-  private async hit(path: string, body?: DeployFakeRefusal | DeployFakeServedBuild): Promise<DeployFakeState> {
+  private async hit(
+    path: string,
+    body?: DeployFakeRefusal | DeployFakeServedBuild | DeployFakeStall | { bytes: number } | { expiresIn: number },
+  ): Promise<DeployFakeState> {
     const sent = body === undefined
       ? { method: 'POST' }
       : { method: 'POST', body: JSON.stringify(body) };
