@@ -256,9 +256,24 @@ durable sweep ran the raw brief beside it; after, 1 row whose body is the
 brief. Re-measured 2026-09-17 on 4e7da0360, one hire alone: exactly 1 row, body
 253 characters, `consumed_at` still set because the child retires itself inside
 the turn that answers and the runner's lease close is then refused by its dead
-handle. The cloud wake arms for a pending assignment from `nextWakeAt`, which
-folds `hasAdmittedDelegations()` at `now`; the local host arms nothing and
-re-drives on every pass and on open.
+handle. Amended 2026-09-17: the cloud arm named the wrong chain. This actor
+carries TWO wake chains and only one of them reaches the sweep —
+`drainAdmittedDelegations` runs from `maintenanceWork`, whose only caller is
+`_kinuTerminalRetryTick`, while `nextWakeAt` feeds `armTimer`, whose
+`_kinuTimerTick` fires due triggers, the peer outbox and the email reconcile
+and reads no `subordinate_task` row. So `admitHostedTask`'s arm woke a frame
+that could not take the row and re-armed itself from the same fold, and the
+assignment waited for whatever unrelated obligation next put a row on the retry
+chain. `armWake` now arms that chain (`armDelegationWake`) and the fold is out
+of `nextWakeAt`; the predicate was already in the right place, since
+`owedUntimedWork` counts an admitted delegation. Measured the same day, the
+hire file's own rows with only the arm changed: under the fold, cases 1-4 took
+60,722 / 67,002 / 61,003 / 60,988 ms — one per unrelated 60-second recovery row
+— and case 6's two `subordinate_task` rows stood `turn_id NULL, consumed_at
+NULL` for the 45 s a probe sampled with the child opening no run; under the arm
+the same four take 640 / 6,995 / 1,006 / 983 ms, the child opens both runs, and
+all six rows pass in 31 s. The local host arms nothing and re-drives on every
+pass and on open.
 
 D4. A delegated turn brackets its run in the durable ledger, like every other
 turn. The local host already did, because an assignment is admitted there as
