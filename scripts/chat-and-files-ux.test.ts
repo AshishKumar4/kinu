@@ -1296,6 +1296,47 @@ describe('an additional agent, as an ordinary conversation', () => {
     });
   });
 
+  test('an agent pane\'s model picker is read-only and shows the actor\'s effective model', async () => {
+    // The pane's picker wrote to the ROOT's `setModel` while reading a config
+    // row nothing sets: choosing a model there silently repinned the whole
+    // workspace. It now shows the snapshot's effective model — what the turn
+    // resolves — disabled, with the one line that says where the write lives.
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('nav[aria-label="Workspace agents"]');
+
+      await page.click('[aria-label="New agent"]');
+      await page.waitForFunction(() => (
+        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
+      ));
+
+      // The stub answers the snapshot with the workspace pin's model, so the
+      // picker renders it — disabled, so it can never write anywhere.
+      await page.waitForFunction(() => {
+        const input = document.querySelector('input[aria-label="Model"]');
+
+        return input instanceof HTMLInputElement && input.disabled;
+      });
+
+      const picker = await page.evaluate(() => {
+        const input = document.querySelector('input[aria-label="Model"]');
+
+        return input instanceof HTMLInputElement
+          ? { value: input.value, disabled: input.disabled }
+          : { value: null, disabled: null };
+      });
+
+      expect(picker).toEqual({ value: 'Claude Opus 4', disabled: true });
+
+      const body = await page.evaluate(() => document.body.innerText);
+      expect(body).toContain('Set for the workspace on the Main tab');
+      await page.close();
+    });
+  });
+
   test('a user-created chat deletes on click with no modal; an agent-created one keeps its confirmation', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const rig = await openRig(newPage, origin, { width: 1280, height: 900 });

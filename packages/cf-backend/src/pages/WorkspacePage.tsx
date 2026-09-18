@@ -380,15 +380,11 @@ function SubordinateChatColumn({
 }) {
   const state = useKinu({ workspace, subordinate: subName });
 
-  // The picker awaits its own write. `setModel` records the failure on
-  // `state.error` and rolls the picker back to the stored spec before it
-  // resolves the reason, so this handler owns the settlement and has nothing
-  // to add to what the banner already shows.
-  const setModel = state.setModel;
-
-  const onPickModel = useCallback(async (spec: string): Promise<void> => {
-    await setModel(spec);
-  }, [setModel]);
+  // No model write from an agent pane: the workspace's pin is the only write
+  // the precedence order honours (workspace > explicit > role), and a facet
+  // socket's `setModel` went to the ROOT anyway — a pick here repinned the
+  // whole workspace under the actor's name. The snapshot carries the actor's
+  // effective model instead; the picker renders it read-only.
 
   const ui = useConversationUiState(`${workspace}/agents/${subName}`);
   const input = ui.draft;
@@ -544,8 +540,9 @@ function SubordinateChatColumn({
           streaming={state.isStreaming}
           onStop={stop}
           mode={{ value: effectiveMode, onChange: ui.setMode, locked: planGate.locked }}
-          modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" />}
+          modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={() => {}} size="xs" disabled />}
           notices={[
+            { id: "model-readonly", tone: "info" as const, text: "Set for the workspace on the Main tab" },
             ...(loadNotices(state.error, state.retryLoad)),
             ...(state.newerDeployedBuild ? [{
               id: "version", tone: "info" as const,

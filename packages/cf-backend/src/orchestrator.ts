@@ -5134,6 +5134,16 @@ export class OrchestratorAgent extends ActorAgent {
 
     const child = this.actorHost().bindStores(reference);
 
+    // The model a pane shows is the actor's EFFECTIVE one — the resolution
+    // the turn makes (workspace pin, then the actor's tier, then the role's)
+    // — with the tier source that chose it. `config.getModel()` reads the
+    // actor's own pin, which no write path sets: it answered "" for every
+    // pane, and the picker's write went to the workspace's pin, so choosing
+    // a model in an agent pane silently repinned the whole workspace.
+    const { profile } = await this.hostedActorProfile({
+      actor: child.handle, availableTools: [], workMode: 'build',
+    });
+
     return {
       name: entry.name,
       // The actor this name resolves to, which is the id every frame the
@@ -5143,7 +5153,7 @@ export class OrchestratorAgent extends ActorAgent {
       displayName: child.stores.config.getDisplayName() ?? entry.name,
       role: child.stores.config.getRoleSelection(),
       mission: entry.birth?.seed.mission ?? '',
-      model: child.stores.config.getModel(),
+      model: { model: profile.tier.model, source: profile.tier.source },
       activePlan: child.stores.planReviews.getActive('default'),
       // The child's OWN acknowledged-but-not-landed steers, read with the
       // child's actor id rather than this root's — the same rows, the same
