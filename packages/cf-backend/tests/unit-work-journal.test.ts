@@ -10,11 +10,21 @@
  * home in `WorkPlans` above (B12), so the journal carries no second Plan chip:
  * closed tasks ride `self` as settled history, and exactly one plan-bearing
  * tab renders.
+ *
+ * `All` is the whole feed: the needs-you row above counts an unseen
+ * self-change off the same unfiltered read this feed renders and tells the
+ * reader to read it below, so a chip that dropped one of those entries pointed
+ * at a feed without it. `changesOnly` is the read named for curation. Now owes
+ * the work in hand for the same reason — a running job is a prop, not a read,
+ * so it renders whatever the plan read is doing.
  */
+import './helpers/ui-module-globals';
 import { describe, test, expect } from 'bun:test';
-import type { AgentTaskTree, ChangelogEntry } from '@kinu.run/core';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { AgentTaskTree, ChangelogEntry, PendingAction, Rpc } from '@kinu.run/core';
 import type { BackgroundJob } from '@kinu.run/core/protocol';
-import { buildJournal } from '../src/components/surfaces/WorkTab';
+import { buildJournal, WorkTab } from '../src/components/surfaces/WorkTab';
 import { CHANGELOG_REVALIDATE_MS } from '../src/components/surfaces/changelog-entries';
 import { LIVE_DATA_REFRESH_MS } from '../src/hooks/use-kinu';
 
@@ -59,17 +69,16 @@ describe('the work journal', () => {
     expect(rows.filter((r) => r.chips.includes('all'))).toHaveLength(3);
   });
 
-  test('a self-change that changed nothing answers to Self-changes and never to All', () => {
-    // OWNER, 2026-09-16: a refused self-review ("I reviewed my own recent
-    // failures and changed nothing") sat in All between the things that did
-    // happen. It is kept where it answers a question — Self-changes — and the
-    // run that moved behaviour stays in both.
+  test('a self-change that changed nothing rides All beside the runs that moved something', () => {
+    // OWNER, 2026-09-17: "how is that 'All' then?" — the queue above counts an
+    // unseen no-op off the same unfiltered digest read and sends the reader
+    // here, so the chip named for everything holds every row. `changesOnly`
+    // (core buildChangelog) is where a feed that drops them is named for it.
     const noop: ChangelogEntry = { ...entry('c-refused', 2), kind: 'refinement', noChange: true };
     const changed: ChangelogEntry = { ...entry('c-applied', 3), kind: 'refinement' };
     const rows = buildJournal([job({ id: 'j' })], [task('t', 1)], [noop, changed]);
 
-    expect(rows.filter((r) => r.chips.includes('all')).map((r) => r.key))
-      .toEqual(['self:c-applied', 'task:t', 'job:j']);
+    expect(rows.filter((r) => r.chips.includes('all'))).toEqual(rows);
     expect(rows.filter((r) => r.chips.includes('self')).map((r) => r.key))
       .toEqual(['self:c-applied', 'self:c-refused', 'task:t']);
   });
@@ -106,5 +115,50 @@ describe('the journal reads on the same clock as the queue above it', () => {
   test('the digest revalidates, and no slower than the queue that announces it', () => {
     expect(CHANGELOG_REVALIDATE_MS).toBeGreaterThan(0);
     expect(CHANGELOG_REVALIDATE_MS).toBeLessThanOrEqual(LIVE_DATA_REFRESH_MS);
+  });
+});
+
+/** Never answers, so nothing a read would deliver reaches the markup below. */
+const UNREAD: Rpc = () => Promise.withResolvers<never>().promise;
+
+/** The tab as the static renderer sees it: `useAsyncResource` fetches inside an
+ *  effect, which `renderToStaticMarkup` discards, so both ledger reads are
+ *  still out — the state the tab opens in. The queue and the jobs are props and
+ *  wait for no read at all. */
+function workTabMarkup(jobs: BackgroundJob[], queue: PendingAction[] = []): string {
+  return renderToStaticMarkup(createElement(WorkTab, {
+    plan: null, planRpc: UNREAD, rpc: UNREAD, pendingActions: queue, backgroundJobs: jobs,
+    onRefreshJobs: () => {}, onOpenSurface: () => {}, isStreaming: false,
+  }));
+}
+
+/** Every section heading the markup mounted, in order. */
+function sectionTitles(markup: string): string[] {
+  return [...markup.matchAll(/class="p-label">([^<]*)</g)].map(([, title]) => title ?? '');
+}
+
+/**
+ * Now is two ledgers — the plan's open half and the jobs still running — and it
+ * owed the second to a read of the first: a running job sat behind the plan's
+ * spinner and disappeared with its failure, which is the one piece of work on
+ * this tab that needs no read to render.
+ */
+describe('Now owes the work in hand whatever the plan read is doing', () => {
+  test('a running job renders while the plan read is still out', () => {
+    const markup = workTabMarkup([job({ id: 'bgjob-7c1e4a92', kind: 'fork', status: 'running', settledAt: null })]);
+
+    // The job's own ledger id, as the card prints it.
+    expect(markup).toContain('7c1e4a92');
+    // …and nothing else drew a frame: no queue, and a journal nobody has read.
+    expect(sectionTitles(markup)).toEqual(['Now']);
+  });
+
+  test('one decision and no work in flight renders Needs you and no journal frame', () => {
+    const decision: PendingAction = {
+      id: 'apr_1', kind: 'release_approval', title: 'Approve: deploy to production',
+      detail: null, at: 0,
+    };
+
+    expect(sectionTitles(workTabMarkup([], [decision]))).toEqual(['Needs you', 'Now']);
   });
 });

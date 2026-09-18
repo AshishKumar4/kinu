@@ -50,7 +50,12 @@
  *                                  through the production SlateFrame API
  *   /gallery.html?frame=releases → the Releases board with a pending approval
  *   /gallery.html?frame=work     → the Work surface: needs-you, the plan and
- *                                  running jobs, and the settled journal
+ *                                  running jobs, and the settled journal.
+ *                                  `&lane=settled` takes the in-flight work
+ *                                  away, so Now has nothing to show;
+ *                                  `&lane=failed` refuses both ledger reads
+ *                                  over an empty feed, so each section owes a
+ *                                  retry and the running job still renders
  *   /gallery.html?frame=planreview → the active plan document, with the real
  *                                  Plannotator viewer and annotation rail
  *   /gallery.html?frame=workempty → the same column before anything has happened
@@ -4549,6 +4554,12 @@ const CHANGELOG = {
       summary: "Remembered: percentage coupons carry kind:null after Tuesday's migration",
       evidence: null,
     },
+    {
+      id: "cl_4", kind: "refinement", at: NOW - 6e5, scaffoldVersion: null,
+      summary: "Reviewed my own recent failures and changed nothing",
+      evidence: "refused · workspace scope · reviewed 3 turns",
+      noChange: true,
+    },
   ],
 };
 
@@ -4751,7 +4762,49 @@ function PlanReviewFrame() {
 }
 
 
+/** `?frame=work&lane=settled`: one decision waiting and no work of any kind in
+ *  the background. The plan read answers with a closed task only, so Now has
+ *  nothing to show while the journal beneath it still does — and with no job
+ *  ever run, the Jobs chip is the empty one. */
+const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "listAgentTasks") return rpcResult(AGENT_TASKS.filter((task) => task.id === "t1")).json<T>();
+
+  return workRpc<T>(method, args);
+};
+
+/** `?frame=work&lane=failed`: both ledger reads refuse over an empty feed, so
+ *  each section owes its own retry — and the running job, which is a prop and
+ *  not a read, is still Now's to show. */
+const failedReadsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "listAgentTasks") throw new Error("plan fixture failed");
+
+  if (method === "getEvolutionChangelog") throw new Error("journal fixture failed");
+
+  return workRpc<T>(method, args);
+};
+
+/** The lanes that photograph an absence: the failed-reads one is about the two
+ *  reads and not the queue, and the settled one has never run a job. */
+const NO_QUEUE: PendingAction[] = [];
+
+const NO_JOBS: BackgroundJob[] = [];
+
+/** Which Work lane `?frame=work&lane=…` selects. */
+function workLane(lane: string | null) {
+  if (lane === "settled") {
+    return { jobs: NO_JOBS, queue: PENDING_ACTIONS, rpc: settledOnlyRpc };
+  }
+
+  if (lane === "failed") {
+    return { jobs: BACKGROUND_JOBS.filter((job) => job.status === "running"), queue: NO_QUEUE, rpc: failedReadsRpc };
+  }
+
+  return { jobs: BACKGROUND_JOBS, queue: PENDING_ACTIONS, rpc: workRpc };
+}
+
 function WorkFrame() {
+  const lane = workLane(new URLSearchParams(location.search).get("lane"));
+
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[430px] min-h-screen border-x p-border">
@@ -4760,9 +4813,9 @@ function WorkFrame() {
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-          backgroundJobs={BACKGROUND_JOBS} onRefreshJobs={() => {}} pendingActions={PENDING_ACTIONS}
+          backgroundJobs={lane.jobs} onRefreshJobs={() => {}} pendingActions={lane.queue}
           tabPresence={{ releases: true, explorations: true }}
-          rpc={workRpc}
+          rpc={lane.rpc}
         />
       </div>
     </div>
