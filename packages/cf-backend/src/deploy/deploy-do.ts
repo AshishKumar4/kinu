@@ -23,12 +23,11 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   ACCESS_TOKEN_KEY, DEPLOY_CLIENT_ID_KEY, DeployInputsSchema, DeployRunPhaseSchema,
   DeployStepRowSchema, FACT_ADDRESS, MINTED_SECRETS, REFRESH_TOKEN_KEY, SELF_UPDATE_RUN_ID,
-  TarArtifact, bearerTransport, cloudflareResult, deployPlan, exchangeDeployCode, factsFrom,
-  parseReleaseManifest, refreshDeployToken, runDeployPlan, runKeyAdmits, sha256Hex,
-  workerArtifactPath,
-  type ArtifactSource, type DeployChoice, type DeployInputs, type DeployLedger,
+  bearerTransport, cloudflareResult, deployPlan, exchangeDeployCode, factsFrom,
+  fetchReleaseArtifact, fetchReleaseManifest, refreshDeployToken, runDeployPlan, runKeyAdmits,
+  type DeployChoice, type DeployInputs, type DeployLedger,
   type DeployProgress, type DeploySecretVault, type DeploySnapshot, type DeployStepFailure,
-  type DeployStepRow, type DeployStepSeed, type DeploymentRecord, type ReleaseManifest,
+  type DeployStepRow, type DeployStepSeed, type DeploymentRecord,
 } from '@kinu.run/core/deploy';
 import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -290,8 +289,11 @@ export class DeployRunDO extends DurableObject<Env> {
 
     if (token === undefined) throw new Error('this run holds no Cloudflare authorization');
 
-    const manifest = await this.release(channelOrigin);
-    const artifact = await this.artifact(manifest, channelOrigin);
+    // The release this deployment gets, read through the one channel reader
+    // every door uses: the manifest, and the artifact it names verified
+    // against the digest the channel publishes.
+    const manifest = await fetchReleaseManifest(channelOrigin);
+    const artifact = await fetchReleaseArtifact(manifest, channelOrigin);
 
     await this.ctx.storage.put(VERSION_KEY, manifest.version);
     await this.ctx.storage.put(RUN_STATE_KEY, 'running');
@@ -321,35 +323,6 @@ export class DeployRunDO extends DurableObject<Env> {
    *  deployment's own origin publishes no channel. */
   private channelOrigin(): string {
     return this.env.CLI_PUBLIC_ORIGIN ?? 'https://kinu.run';
-  }
-
-  /** The release this deployment gets: the manifest kinu.run publishes, and the
-   *  artifact it names, verified against the digest the manifest carries before
-   *  a byte of it is uploaded anywhere. */
-  private async release(origin: string): Promise<ReleaseManifest> {
-    const response = await fetch(new URL('/downloads/release.json', origin));
-
-    if (!response.ok) throw new Error(`the release channel answered HTTP ${response.status}`);
-
-    return parseReleaseManifest(await response.text());
-  }
-
-  private async artifact(manifest: ReleaseManifest, origin: string): Promise<ArtifactSource> {
-    const url = new URL(workerArtifactPath(manifest.version), origin);
-    const response = await fetch(url);
-
-    if (!response.ok) throw new Error(`${url.href} answered HTTP ${response.status}`);
-
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    const published = await fetch(new URL(`${workerArtifactPath(manifest.version)}.sha256`, origin));
-    const expected = (await published.text()).trim().split(/\s+/u)[0] ?? '';
-    const actual = await sha256Hex(bytes);
-
-    if (expected !== actual) {
-      throw new Error(`the release artifact's checksum is ${actual}, and the channel publishes ${expected || '<none>'}`);
-    }
-
-    return TarArtifact.open(bytes);
   }
 
   /**

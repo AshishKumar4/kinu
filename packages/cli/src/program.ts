@@ -477,10 +477,12 @@ export function buildProgram(): Command {
     .action(wrapAction(daemonCommand));
 
   program
-    .command('deploy [door]')
+    .command('deploy [door] [action]')
     .helpGroup(THIS_COMPUTER)
-    .description('Deploy your own Kinu: `deploy cloudflare` into your Cloudflare account')
+    .description('Deploy your own Kinu: `deploy cloudflare` into your Cloudflare account, '
+      + '`deploy local [start|stop|status]` onto this machine')
     .option('--origin <url>', 'Kinu app origin')
+    .option('--port <n>', 'Port for the local instance (default 8787)')
     .action(wrapAction(deployCommand));
 
   program
