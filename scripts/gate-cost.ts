@@ -50,9 +50,10 @@ const RowCostSchema = v.object({
   /** User+system seconds over the whole process tree: work done, not time
    *  taken, so a busy box does not change it. */
   cpuSeconds: v.number(),
-  /** The tree's summed resident pages at their highest sampled instant, MiB.
-   *  A SUM, because `/usr/bin/time -v`'s maximum resident set is the largest
-   *  single child and reads four 1 GiB workers as one. */
+  /** The tree's summed PROPORTIONAL set (Pss) at its highest sampled instant,
+   *  MiB. Proportional, not resident: RSS counts one shared page once per
+   *  process that maps it, so ~110 Chrome helpers over one mapped binary read
+   *  as ~110 times the memory; Pss splits each shared page across its holders. */
   peakRssMb: v.number(),
   /** Tasks in state R at their highest sampled instant — the row's parallel
    *  demand. Runnable-but-waiting counts, so this figure survives contention. */
@@ -121,7 +122,8 @@ export function costThreads(cost: RowCost, declaredSeconds: number): number {
   return Math.max(1, Math.min(sustained, Math.max(1, cost.peakRunnable)));
 }
 
-/** The resident set a row holds at peak, MiB, as the wave admits it. */
+/** The memory a row holds at peak, MiB — summed proportional set across its
+ *  tree, as the wave admits it (see the `peakRssMb` field doc). */
 export function costRssMb(cost: RowCost): number {
   return Math.max(1, Math.ceil(cost.peakRssMb));
 }

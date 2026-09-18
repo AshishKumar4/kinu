@@ -571,6 +571,31 @@ MemAvailable read on this box, 2026-09-17 — where the same sum read 129 GiB
 while every browser row was 2 GiB short. The wave already serialises on that
 cap and now serialises on the true figures. The cap is untouched.
 
+L8. The memory figure a tree sums is each member's PROPORTIONAL SET (Pss,
+`/proc/<pid>/smaps_rollup`), not its resident set. Decided 2026-09-17. This
+reverses the summation half of L7 only — the tree basis stands: membership is
+still the row's session plus every descendant by ppid.
+
+What L7's basis missed. RSS counts one shared page once per process that
+maps it, and a browser row is ~110 processes over the same mapped binary,
+page cache and copy-on-write heap — the table's 157.3 GiB total against a
+64 GB box, and the 25 GiB gate self-tests row, were mostly the same pages
+counted a hundredfold. Pss splits each shared page across its holders, so the
+sum over a tree is the footprint the box actually pays. Measured here: a
+Chrome helper reads 700 MB RSS over 108 MB Pss; a warmed bun process reads
+628 MB RSS over 605 MB Pss — mostly private either way, which is the control
+that says only the double counting moved (`bun scripts/preflight.ts`, a lone
+row: 95-96 MiB summed RSS vs 74-75 MiB summed Pss, the shared loader/libc
+tail split out).
+
+The read is `/proc/<pid>/smaps_rollup`'s `Pss:` field, kernel-verified on this
+host, and it stays per-member for the same reason the task listing does: the
+box holds ~700 processes and most of them are somebody else's — a pid that
+died between the listing and the read contributes zero, exactly as a dead pid
+contributes nothing to `stat`.
+
+
+
 
 ## Open
 
