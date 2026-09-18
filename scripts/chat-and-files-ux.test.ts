@@ -776,6 +776,59 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
   });
 });
 
+describe('feedback on a settled turn', () => {
+  test('the buttons sit in the timestamp row at rest, and a click records one vote', async () => {
+    // The 2026-09 regression this pins: the footer row moved outside every
+    // `.group` when messages split into segments, and the buttons' reveal was
+    // `group-hover` — nothing hovered, so they were permanently invisible.
+    // The contract is presence at rest plus a recorded write, not a hover.
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1400 });
+      await page.goto(`${origin}/gallery.html?frame=chat`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-chat-row="a1"]');
+
+      const buttons = '[data-chat-row="a1"] button[title^="Mark this response"]';
+      await page.waitForFunction(
+        (selector: string) => document.querySelectorAll(selector).length === 2,
+        {}, buttons,
+      );
+
+      // At REST — no hover, no focus — the buttons are drawn, not stacked
+      // behind an invisible wrapper. The old `opacity-0 group-hover` pair on
+      // the row read '0' through the ancestor chain.
+      const atRest = await page.$$eval(buttons, (nodes) => nodes.map((node) => {
+        let visible = 1;
+
+        for (let el: Element | null = node; el; el = el.parentElement) {
+          visible *= Number(getComputedStyle(el).opacity);
+        }
+
+        return visible;
+      }));
+
+      expect(atRest).toEqual([1, 1]);
+
+      const up = '[data-chat-row="a1"] button[title^="Mark this response helpful"]';
+
+      await page.click(up);
+      expect(await page.$eval(up, (node) => node.classList.contains('p-text'))).toBe(true);
+
+      // A second click on the same glyph clears it — the RPC writes null.
+      await page.click(up);
+      await page.waitForFunction(
+        () => (document.documentElement.dataset.galleryFeedbackCalls ?? '').split('[').length - 1 >= 2,
+      );
+
+      const calls = await page.evaluate(() => JSON.parse(document.documentElement.dataset.galleryFeedbackCalls ?? '[]'));
+      expect(calls).toEqual([{ method: 'setTurnFeedback', args: ['a1', 'positive'] }, { method: 'setTurnFeedback', args: ['a1', null] }]);
+      expect(await page.$eval(up, (node) => node.classList.contains('p-text'))).toBe(false);
+      await page.close();
+    });
+  });
+});
+
 describe('the drive, browsing the one composite plane', () => {
   test('the root is the workspace tree beside the mounts, badges on the mounted folders', () => {
     expect(observed.filesRoot.crumbs).toBe('/');
