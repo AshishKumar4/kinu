@@ -56,6 +56,7 @@ export const SPEND_SOURCES = [
   'platform',
   'advisor',
   'slate',
+  'warming',
 ] as const;
 
 export type SpendSource = (typeof SPEND_SOURCES)[number];
@@ -75,6 +76,7 @@ export const SPEND_SOURCE_LABEL = {
   platform: 'Platform AI',
   advisor: 'Advisor',
   slate: 'Slates',
+  warming: 'Cache warming',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 /** One sentence per producer saying what actually fires it — the difference
@@ -96,6 +98,8 @@ export const SPEND_SOURCE_DETAIL = {
     + 'and never measured — which is what the coverage fraction below is made of',
   advisor: 'the turn reviewer: one call after a turn ends, when it is switched on',
   slate: 'an authored slate\'s `ai` binding: one call per `shell`, at the tier the binding or the call named',
+  warming: 'keeping an idle prompt-cache prefix alive: one zero-output replay of the last request, '
+    + 'at most three per idle stretch (providers/cache-warming.ts)',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 

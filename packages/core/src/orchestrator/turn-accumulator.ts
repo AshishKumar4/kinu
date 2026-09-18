@@ -46,6 +46,12 @@ export interface StepLike {
    *  hands the whole thing to every step. The per-step delta is taken here so
    *  there is one implementation of it for both backends. */
   response?: { modelId?: string; messages?: readonly ModelMessage[] };
+  /** What this step SENT, as the provider adapter reported it, with the instant
+   *  the request left. Kept on the accumulator (not just fired at a sink) for
+   *  the reason `lastPromptTokens` is: the turn's last request is a fact the
+   *  backend acts on at turn end, and a prompt-cache warm replays exactly
+   *  those bytes from exactly that instant. */
+  request?: { body?: unknown; sentAt?: number };
 }
 
 /** ai-SDK v6 tool-result hook shape (Think 0.4 renamed args→input, result→output
@@ -107,6 +113,21 @@ export class TurnAccumulator {
    *  Four of four capped production runs sealed as `'completed'` because
    *  nothing carried this fact out of the loop. */
   lastFinishReason: string | undefined = undefined;
+  /**
+   * The turn's LAST request: the provider body it sent, when it was sent, and
+   * what its answer reported.
+   *
+   * The three together, because none of them is useful alone — a prompt-cache
+   * warm re-sends those bytes, counts its TTL from that instant ("Count from
+   * the request's start, not its response's end"), and only runs at all if
+   * THAT answer read the cache and wrote nothing
+   * (providers/cache-warming.ts). `undefined` until a step arrives carrying a
+   * body, which is every step on every provider whose adapter reports one.
+   *
+   * Held by reference and never copied: this is the turn's whole prompt, and a
+   * forty-step turn must not clone it forty times.
+   */
+  lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage } | undefined = undefined;
   hadError = false;
   firstChunkSeen = false;
   startedAt = 0;
@@ -160,6 +181,7 @@ export class TurnAccumulator {
     this.stepCount = 0;
     this.usage = {};
     this.lastPromptTokens = undefined;
+    this.lastRequest = undefined;
     this.lastFinishReason = undefined;
     this.hadError = false;
     this.firstChunkSeen = false;
@@ -275,10 +297,22 @@ export class TurnAccumulator {
     // reported no prompt size leaves the last real measurement standing; a step
     // that reported 0 overwrites it, because that is a measurement too.
     if (usage.input !== undefined) this.lastPromptTokens = usage.input;
+
+    // The bytes this step sent, beside when it left and what the answer cost: a
+    // warm replays the TURN'S LAST request, so the newest step with a body and
+    // a send instant wins, and a step whose adapter reported neither leaves the
+    // previous one standing rather than clearing the only replayable request
+    // the turn has.
+    const sent = ctx.request;
+
+    if (sent?.body !== undefined && sent.sentAt !== undefined) {
+      this.lastRequest = { body: sent.body, sentAt: sent.sentAt, usage };
+    }
     // Every field the provider actually mentioned, zeros included: a reported
     // `cacheRead=0` is a cold prefix on a working cache plan, and hiding it
     // makes that indistinguishable from a provider that never mentions caching.
     // Driven off USAGE_FIELDS so a field added to the report cannot go unlogged.
+
     const extras: string[] = [];
 
     for (const field of USAGE_FIELDS) {
