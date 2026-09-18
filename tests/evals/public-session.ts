@@ -165,7 +165,7 @@ type BunWebSocketConstructor = new (
 // ambient signature — it contains `string | string[]` verbatim and adds that
 // object, which is why the compiler accepts a single assertion here rather than
 // demanding a chained one. The value is the global constructor itself.
-const HEADER_WEBSOCKET = WebSocket as BunWebSocketConstructor;
+export const HEADER_WEBSOCKET = WebSocket as BunWebSocketConstructor;
 
 /** How this session proves it may act as the deployment's web identity. */
 export type PublicWebIdentity =

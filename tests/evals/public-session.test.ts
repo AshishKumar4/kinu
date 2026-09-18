@@ -33,8 +33,9 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 
 import {
-  BEHAVIOUR_SCORERS, EPISODE_TRANSCRIPT_FILES, handClock, ledgerTotalsFromEvents, projectRunEventProvenance,
-  retainEpisodeTranscript, scratchDir, TASK_OUTCOME, withEpisodeEvidence, liveModelSpend, resetLiveModelSpend,
+  BEHAVIOUR_SCORERS, EPISODE_TRANSCRIPT_FILES, EVIDENCE_GRACE_MS, handClock, ledgerTotalsFromEvents,
+  projectRunEventProvenance, retainEpisodeTranscript, scratchDir, TASK_OUTCOME, withEpisodeEvidence,
+  liveModelSpend, resetLiveModelSpend,
 } from '@kinu.run/test-utils';
 import { REAL_CLOCK, renderSoulMarkdown, RunEventSchema, type RunEvent, type WorkspaceSpend, type JsonValue } from '../../packages/core/src/index';
 import {
@@ -365,6 +366,12 @@ describe('the browser plane names its own credential', () => {
   });
 });
 
+/** `collection.json` as a reader must be able to read it back: one row per
+ *  channel, the status, and the reason a channel that did not land carries. */
+const CollectionSchema = v.array(v.object({
+  channel: v.string(), status: v.string(), reason: v.optional(v.string()),
+}));
+
 describe('route-shaped run events score through the production instruments', () => {
   test('the ledger reduction reads the deployment\'s own events', () => {
     const totals = ledgerTotalsFromEvents(LEDGER_EVENTS);
@@ -474,7 +481,7 @@ describe('route-shaped run events score through the production instruments', () 
     const events = lines.map((line) => v.parse(RunEventSchema, JSON.parse(line)));
     expect(ledgerTotalsFromEvents(events)).toEqual({
       turns: 2, toolCalls: 4, toolNames: ['file', 'shell', 'file', 'shell'],
-      tokensIn: 2700, tokensOut: 520, reasoningOut: 0, steps: 2, failures: ['run: exit_1'],
+      tokensIn: 2700, tokensOut: 520, reasoningOut: 0, steps: 2, failures: ['shell: exit_1'],
     });
     expect(JSON.parse(readFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.history), 'utf8'))).toEqual(history);
     expect(JSON.parse(readFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.subgoals), 'utf8'))).toEqual(subgoals);
@@ -574,6 +581,56 @@ describe('route-shaped run events score through the production instruments', () 
       expect(readFileSync(join(root, 'budget/history.json'), 'utf8')).toContain('still waiting');
       expect(readFileSync(join(root, 'budget/events.jsonl'), 'utf8').split('\n')).toHaveLength(LEDGER_EVENTS.length);
       expect(JSON.parse(readFileSync(join(root, 'budget/spend.json'), 'utf8'))).toEqual(spend);
+    } finally {
+      resetLiveModelSpend();
+    }
+  });
+
+  test('a ledger the wedged product never answers ends at the grace, keeping what did answer', async () => {
+    resetLiveModelSpend();
+    const root = scratchDir('wedged-episode-evidence');
+
+    const spend: WorkspaceSpend = {
+      total: { calls: 3, callsWithoutUsage: 0, unpricedCalls: 3, floorPricedCalls: 0, usage: { input: 10, output: 5 } },
+      producers: [], missions: [], offTurnShare: null,
+      coverage: { calls: 3, measured: 3, reported: 1, silent: [], partial: [] },
+    };
+
+    // THE WEDGED SHAPE, as the deployed build answered it: the Durable Object
+    // holds the turn it never closed, so the run-event route never answers
+    // while the two routes served elsewhere still do. Before the read had an
+    // end of its own this episode never settled at all — the budget fired,
+    // the operation stopped, and the collection it was waiting on stayed
+    // pending until the runner killed the process with no verdict.
+    const reader = {
+      runEvents(): Promise<readonly RunEvent[]> { return new Promise<readonly RunEvent[]>(() => undefined); },
+      async history() { return [{ role: 'assistant', text: 'still waiting' }]; },
+      async spend() { return spend; },
+    };
+
+    try {
+      const clock = handClock();
+
+      const episode = withEpisodeEvidence(async () => reader,
+        { transcripts: root, taskId: 'wedged', modelCalls: 'expected', clock, budgetMs: 20 },
+        async (_reader, collect) => collect());
+
+      await clock.whenArmed(2);
+      clock.advance(20 + EVIDENCE_GRACE_MS);
+
+      await expect(episode).rejects.toThrow('the episode budget of 20 ms was spent');
+      expect(JSON.parse(readFileSync(join(root, 'wedged/failure.json'), 'utf8'))).toMatchObject({ phase: 'budget' });
+
+      const collection = v.parse(CollectionSchema, JSON.parse(readFileSync(join(root, 'wedged/collection.json'), 'utf8')));
+
+      expect(collection.find((row) => row.channel === 'events')?.status).toBe('failed');
+      expect(collection.find((row) => row.channel === 'events')?.reason).toContain(String(EVIDENCE_GRACE_MS));
+      expect(existsSync(join(root, 'wedged/events.jsonl'))).toBe(false);
+
+      // What DID answer is still the episode's evidence.
+      expect(collection.filter((row) => row.status === 'retained').map((row) => row.channel)).toEqual(['history', 'spend']);
+      expect(readFileSync(join(root, 'wedged/history.json'), 'utf8')).toContain('still waiting');
+      expect(JSON.parse(readFileSync(join(root, 'wedged/spend.json'), 'utf8'))).toEqual(spend);
     } finally {
       resetLiveModelSpend();
     }
