@@ -2854,7 +2854,7 @@ describe('WorkTab draws a section only when it has something to show', () => {
     });
   });
 
-  test('a workspace where nothing has happened draws no section and one empty line', async () => {
+  test('a workspace where nothing has happened draws no section, two empty lines and no failure', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 720, height: 900 });
@@ -2864,9 +2864,19 @@ describe('WorkTab draws a section only when it has something to show', () => {
       const column = await page.evaluate(() => ({
         sections: document.querySelectorAll('section').length,
         lines: document.querySelectorAll('p').length,
+        retries: [...document.querySelectorAll('button')].filter((node) => node.textContent?.trim() === 'Retry').length,
+        // The change-set tab is GATED on there being changes, and the card
+        // reports presence for a FAILED read as well — so a tab here is a read
+        // that broke, in the one column with nothing to read.
+        diffs: document.querySelector('[aria-label="Diffs"]') !== null,
       }));
 
-      expect(column).toEqual({ sections: 0, lines: 1 });
+      // Two lines, because two cards are empty: the column's own and the
+      // change-set's, which this column always draws. Nothing failed, so
+      // nothing owes a retry and the gated tab stays away. Each of the last
+      // three was the other answer while the change-set fixture handed a
+      // record reader an array and the card rendered the TypeError instead.
+      expect(column).toEqual({ sections: 0, lines: 2, retries: 0, diffs: false });
       await page.close();
     });
   });
@@ -2876,8 +2886,8 @@ describe('WorkTab draws a section only when it has something to show', () => {
       const page = await newPage();
       await page.setViewport({ width: 430, height: 1400 });
       await page.goto(`${origin}/gallery.html?frame=work&lane=failed`, { waitUntil: 'networkidle0' });
-      // Each section owes ITS read's retry — the page carries another for the
-      // change-set card this column always draws, which is not one of them.
+      // Each section owes ITS read's retry, and the two failed reads here are
+      // the only failures on the page.
       await page.waitForFunction(() => [...document.querySelectorAll('section')]
         .filter((node) => [...node.querySelectorAll('button')]
           .some((button) => button.textContent?.trim() === 'Retry')).length === 2);
@@ -2896,6 +2906,9 @@ describe('WorkTab draws a section only when it has something to show', () => {
       expect(journal?.retries).toBe(1);
       expect(journal?.chips).toEqual([]);
       expect(await journalRows(page)).toBe(0);
+      // And nothing outside a section owes one: the change-set card this
+      // column always draws reads an EMPTY change-set here, not a broken one.
+      expect(await page.$$eval('button', (nodes) => nodes.filter((node) => node.textContent?.trim() === 'Retry').length)).toBe(2);
       await page.close();
     });
   });
