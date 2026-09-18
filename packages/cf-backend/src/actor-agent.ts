@@ -22,13 +22,19 @@ import {
   type FiberRecoveryContext, type FiberRecoveryResult,
   type WSMessage,
 } from "agents";
-import { TierIdSchema, usesPaneStore, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, type SubordinateInspectionAuthority } from '@kinu.run/core';
+import {
+  TierIdSchema, usesPaneStore, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
+  actorConnectionTag, actorFromConnectionTags, hostedActorRoute,
+  type SubordinateInspectionAuthority,
+} from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage } from "agents/chat";
 import { AssistantMessagesTranscript } from './chat-transcript';
-import { ChatWireTransport } from './chat-transport';
+import {
+  ActorChatRooms, ChatWireTransport, type ChatRoom, type HostedChatWire,
+} from './chat-transport';
 import {
   CLI_BEARER_HEADER,
   CLI_SCOPES_HEADER,
@@ -1509,9 +1515,22 @@ export abstract class ActorAgent extends Think<Env> {
         return;
       }
 
-      // The chat protocol is the transport's — core's loop over the SDK's own
-      // primitives; every other frame (RPC, state sync) is the Agent base's.
-      if (v.is(v.string(), message) && await this.chatTransport.onMessage(connection, message)) return;
+      // The chat protocol is the room's — core's loop over the SDK's own
+      // primitives for the root, this actor's own queue for a hosted one;
+      // every other frame (RPC, state sync) is the Agent base's. A frame on a
+      // socket whose actor this workspace no longer hosts has no room to
+      // reach and is refused here.
+      if (v.is(v.string(), message)) {
+        const room = this.chatRoomFor(connection);
+
+        if (room === null) {
+          connection.send(JSON.stringify({ type: 'error', error: 'The actor this connection addressed is no longer hosted here.' }));
+
+          return;
+        }
+
+        if (await room.onMessage(connection, message)) return;
+      }
 
       return await dispatchMessage.call(this, connection, message);
     };
@@ -1531,11 +1550,11 @@ export abstract class ActorAgent extends Think<Env> {
       if (this._cf_requestTargetsSubAgent(ctx.request)) return await baseOnConnect?.call(this, connection, ctx);
 
       await baseOnConnect?.call(this, connection, ctx);
-      this.chatTransport.onConnect(connection);
+      this.chatRoomFor(connection)?.onConnect(connection);
     };
 
     this.onClose = async (connection, code, reason, wasClean) => {
-      this.chatTransport.onClose(connection);
+      this.chatRoomFor(connection)?.onClose(connection);
       await baseOnClose?.call(this, connection, code, reason, wasClean);
     };
 
@@ -1549,7 +1568,15 @@ export abstract class ActorAgent extends Think<Env> {
       const url = new URL(request.url);
 
       if (url.pathname === '/get-messages' || url.pathname.endsWith('/get-messages')) {
-        return Response.json(this.chatTranscript.history());
+        // Whose transcript: the seed is fetched on the SAME path the pane's
+        // socket opens, so a hosted actor's pane is seeded from that actor's
+        // own rows and the workspace's from the root's.
+        const hosted = hostedActorRoute(url.pathname);
+        const history = hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted.name)?.history();
+
+        if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
+
+        return Response.json(history);
       }
 
       return await dispatchRequest.call(this, request);
@@ -2294,21 +2321,26 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** Persist the verified connect-ticket scopes, the CLI bearer behind them,
-   *  AND the browser session behind a cookie-authenticated connection (edge-set
-   *  headers, see appendIdentityHeaders) as connection tags — tags ride the
-   *  WebSocket attachment, so the rpc gate and both identities survive DO
-   *  hibernation. */
+   *  the browser session behind a cookie-authenticated connection (edge-set
+   *  headers, see appendIdentityHeaders) AND the actor this socket addressed
+   *  as connection tags — tags ride the WebSocket attachment, so the rpc gate,
+   *  both identities and the pane's own chat room survive DO hibernation. */
   override async getConnectionTags(connection: Connection, ctx: ConnectionContext): Promise<string[]> {
     const tags = await super.getConnectionTags(connection, ctx);
     const scopeTag = cliScopesConnectionTag(ctx.request.headers.get(CLI_SCOPES_HEADER));
     const bearerTag = cliBearerConnectionTag(ctx.request.headers.get(CLI_BEARER_HEADER));
     const sessionTag = sessionBearerConnectionTag(ctx.request.headers.get(SESSION_BEARER_HEADER));
+    // The path reaches this object UNCHANGED (server.ts routes a hosted
+    // actor's chat without rewriting it), so the addressed actor is readable
+    // right here and nowhere later.
+    const actorTag = actorConnectionTag(new URL(ctx.request.url).pathname);
 
     return [
       ...tags,
       ...(scopeTag === null ? [] : [scopeTag]),
       ...(bearerTag === null ? [] : [bearerTag]),
       ...(sessionTag === null ? [] : [sessionTag]),
+      ...(actorTag === null ? [] : [actorTag]),
     ];
   }
 
@@ -2604,7 +2636,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (!this._chatTransport) {
       this._chatTransport = new ChatWireTransport({
         sql: this.boundSql,
-        broadcast: (message, exclude) => { this.broadcast(message, exclude); },
+        broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
         getConnection: (id) => this.getConnection(id),
         history: () => this.chatTranscript.history(),
         // Held by the loop: as a row once it landed, as a reservation from
@@ -2618,6 +2650,49 @@ export abstract class ActorAgent extends Think<Env> {
 
     return this._chatTransport;
   }
+
+  /**
+   * Send to the sockets that addressed ONE actor, and to no others.
+   *
+   * The object's own `broadcast` reaches every connection, which is exactly
+   * what a shared room is: the root's chat frames landed in a hired agent's
+   * pane and the agent's in the workspace's. The addressed actor is a
+   * connection TAG, so the recipient set is "every connection whose actor tag
+   * is this one" — and for the root that is every connection carrying NO
+   * actor tag, which `getConnections(tag)` cannot express and this can.
+   *
+   * Still emitted through `broadcast`, deliberately: it is the object's one
+   * fan-out and the only thing that knows how to write to a hibernated
+   * socket, so the scoping is expressed as the EXCLUSION of every connection
+   * outside the set rather than as a second send path beside it.
+   */
+  protected broadcastToActor(actor: string | null, message: string, exclude?: readonly string[]): void {
+    const elsewhere: string[] = [];
+
+    for (const connection of this.getConnections()) {
+      if (actorFromConnectionTags(connection.tags) !== actor) elsewhere.push(connection.id);
+    }
+
+    this.broadcast(message, [...new Set([...(exclude ?? []), ...elsewhere])]);
+  }
+
+  /** The chat rooms of this object: the root's transport, and one per hosted
+   *  actor a socket has addressed by name. */
+  private _chatRooms: ActorChatRooms | null = null;
+  protected get chatRooms(): ActorChatRooms {
+    return this._chatRooms ??= new ActorChatRooms(() => this.chatTransport, (name) => this.hostedChatWire(name));
+  }
+
+  /** The room one socket's chat frames belong to, resolved from the actor it
+   *  addressed; null when that actor is no longer hosted here. */
+  protected chatRoomFor(connection: Connection): ChatRoom | null {
+    return this.chatRooms.for(actorFromConnectionTags(connection.tags));
+  }
+
+  /** One hosted actor's chat wire — its transcript, its queue and its own
+   *  connections — or null when this workspace hosts no such actor. Only the
+   *  workspace root knows its directory, so the wire is built there. */
+  protected abstract hostedChatWire(name: string): HostedChatWire | null;
 
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
 

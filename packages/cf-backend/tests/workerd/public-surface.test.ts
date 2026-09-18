@@ -43,7 +43,7 @@
  */
 import { env } from 'cloudflare:test';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
-import { ORCHESTRATOR_AGENT_SLUG } from '@kinu.run/core';
+import { ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath } from '@kinu.run/core';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 
@@ -115,6 +115,107 @@ function chatRequest(id: string, text: string): string {
       }),
     },
   });
+}
+
+const CreatedActorSchema = v.object({ name: v.string() });
+
+/** One marker per side, used as BOTH the request id and the prompt: a frame
+ *  that names either is traceable to the pane that sent it, whichever field
+ *  carried it. */
+const ROOT_MARKER = 'root-pane-marker';
+
+const ACTOR_MARKER = 'actor-pane-marker';
+
+/** One pane's socket, with everything read off it. `frames` is every raw
+ *  frame in arrival order, which is what makes an absence assertable: the
+ *  question is not "did the right frame come" but "did the wrong one". */
+interface Pane {
+  send(frame: string): void;
+  /** Settle when a `use_chat_response` for this request id says `done`; the
+   *  reject path carries the runtime's own words. */
+  settled(requestId: string): Promise<void>;
+  /** The request id of every chat response this socket received. */
+  responseIds(): string[];
+  /** How many transcript frames this socket received carrying this text. */
+  transcriptsCarrying(text: string): number;
+  /** One RPC reply, admitted by the caller's own schema at this boundary. */
+  rpc<T>(id: string, schema: v.GenericSchema<T>): Promise<T>;
+  close(): void;
+}
+
+async function openPane(path: string): Promise<Pane> {
+  const upgrade = await env.PUBLIC_SURFACE.fetch(new Request(`${ORIGIN}${path}`, {
+    headers: { Upgrade: 'websocket' },
+  }));
+
+  expect(upgrade.status).toBe(101);
+  const socket = upgrade.webSocket;
+
+  if (socket === null) throw new Error(`${path} answered 101 without a WebSocket`);
+  socket.accept();
+
+  const frames: string[] = [];
+  const rpcs = new Map<string, PromiseWithResolvers<unknown>>();
+  const turns = new Map<string, PromiseWithResolvers<void>>();
+
+  const waiter = <T>(held: Map<string, PromiseWithResolvers<T>>, id: string): PromiseWithResolvers<T> => {
+    const found = held.get(id);
+
+    if (found !== undefined) return found;
+    const fresh = Promise.withResolvers<T>();
+    held.set(id, fresh);
+
+    return fresh;
+  };
+
+  socket.addEventListener('message', (event) => {
+    const raw = v.is(v.string(), event.data) ? event.data : '';
+    frames.push(raw);
+    const frame = v.safeParse(FrameSchema, raw.startsWith('{') ? JSON.parse(raw) : {});
+
+    if (!frame.success || frame.output.id === undefined) return;
+
+    if (frame.output.type === 'rpc' && frame.output.success !== undefined) {
+      if (frame.output.success) waiter(rpcs, frame.output.id).resolve(frame.output.result);
+      else waiter(rpcs, frame.output.id).reject(new Error(`${frame.output.id} was refused: ${JSON.stringify(frame.output.error)}`));
+
+      return;
+    }
+
+    if (frame.output.type !== CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE || frame.output.done !== true) return;
+
+    if (frame.output.error === true) {
+      waiter(turns, frame.output.id).reject(new Error(`the turn failed: ${frame.output.body ?? 'no body'}`));
+
+      return;
+    }
+
+    waiter(turns, frame.output.id).resolve();
+  });
+
+  socket.addEventListener('close', () => {
+    for (const pending of rpcs.values()) pending.reject(new Error(`${path} closed before its rpc answered`));
+
+    for (const pending of turns.values()) pending.reject(new Error(`${path} closed before its turn finished`));
+  });
+
+  const parsed = (): v.InferOutput<typeof FrameSchema>[] => frames.flatMap((raw) => {
+    const frame = v.safeParse(FrameSchema, raw.startsWith('{') ? JSON.parse(raw) : {});
+
+    return frame.success ? [frame.output] : [];
+  });
+
+  return {
+    send: (frame) => { socket.send(frame); },
+    settled: async (requestId) => { await waiter(turns, requestId).promise; },
+    rpc: async (id, schema) => v.parse(schema, await waiter(rpcs, id).promise),
+    responseIds: () => parsed()
+      .filter((frame) => frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE)
+      .flatMap((frame) => frame.id === undefined ? [] : [frame.id]),
+    transcriptsCarrying: (text) => frames
+      .filter((raw) => raw.includes(`"${CHAT_MESSAGE_TYPES.CHAT_MESSAGES}"`) && raw.includes(text)).length,
+    close: () => { socket.close(); },
+  };
 }
 
 describe('the public surface, driven inside the pool', () => {
@@ -212,6 +313,80 @@ describe('the public surface, driven inside the pool', () => {
     // The model fake's captured log is one Node-side module for every worker
     // bound to it, and `two-turn.test.ts:281` reads it unfiltered: this file
     // borrows the log and hands it back empty.
+    await env.SURFACE_CONTROL.resetModelLog();
+  });
+});
+
+describe('two panes on one workspace object are two chat rooms', () => {
+  /**
+   * THE DEFECT THIS PINS, measured on main 9c801574b through the browser:
+   * one workspace is one Durable Object, so `broadcast` reached every socket
+   * and the chat rail had no idea which actor a socket had addressed. The
+   * root's transcript rendered in a just-created agent's pane and the agent's
+   * words rendered in the root's.
+   *
+   * Driven the way the product is: one socket on the workspace, one on
+   * `/actor/<name>` after the `+` tab's own RPC created the actor, one message
+   * on each. What is asserted is the RECIPIENT SET — a socket sees its own
+   * actor's `cf_agent_use_chat_response` and `cf_agent_chat_messages` frames
+   * and none of the other's — with both positive directions asserted too, so
+   * a room that answers nothing at all cannot read as scoped.
+   *
+   * NO CLOCK. Each side's wait ends on the `done` frame its own request gets.
+   * The hosted turn itself runs on the actor's durable wake and is not waited
+   * for: admission closes the request, which is the contract the pane's hook
+   * is written against.
+   */
+  it('keeps the root chat and a hosted actor chat on separate sockets', async () => {
+    await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(FIXTURE_CREDENTIAL),
+    });
+
+    const created = await publicJson('/api/user/workspaces', WorkspaceEntrySchema, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'pool-panes', displayName: 'Pool Two Panes' }),
+    });
+
+    const rootPath = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(created.name)}`;
+    const root = await openPane(rootPath);
+
+    root.send(rpcRequest('pin', 'setModel', [PINNED_MODEL]));
+    expect((await root.rpc('pin', SetModelSchema)).spec).toContain(PINNED_MODEL);
+
+    // The `+` tab's own call, so the actor exists exactly as the product makes
+    // it — no fixture registration beside the shipped path.
+    root.send(rpcRequest('hire', 'createSubordinateAgent', []));
+    const actorName = (await root.rpc('hire', CreatedActorSchema)).name;
+
+    root.send(chatRequest(ROOT_MARKER, ROOT_MARKER));
+    await root.settled(ROOT_MARKER);
+
+    // Opened AFTER the root's turn landed: a pane that connects onto a
+    // workspace with words already in it is the direction the browser caught,
+    // because the seed frame is the first thing it receives.
+    const actor = await openPane(`${rootPath}/${hostedActorSocketPath(actorName)}`);
+
+    actor.send(chatRequest(ACTOR_MARKER, ACTOR_MARKER));
+    await actor.settled(ACTOR_MARKER);
+
+    // Each room answered its OWN request, and each pane was handed a
+    // transcript carrying its own words.
+    expect(root.responseIds()).toContain(ROOT_MARKER);
+    expect(actor.responseIds()).toContain(ACTOR_MARKER);
+    expect(root.transcriptsCarrying(ROOT_MARKER)).toBeGreaterThan(0);
+    expect(actor.transcriptsCarrying(ACTOR_MARKER)).toBeGreaterThan(0);
+
+    // And neither room reached the other's socket.
+    expect(actor.responseIds()).not.toContain(ROOT_MARKER);
+    expect(root.responseIds()).not.toContain(ACTOR_MARKER);
+    expect(actor.transcriptsCarrying(ROOT_MARKER)).toBe(0);
+    expect(root.transcriptsCarrying(ACTOR_MARKER)).toBe(0);
+
+    root.close();
+    actor.close();
     await env.SURFACE_CONTROL.resetModelLog();
   });
 });

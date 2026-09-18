@@ -1,6 +1,8 @@
 /**
- * The hosted root's transcript: core's {@link TranscriptStore} over the Agents
- * SDK's own session tree.
+ * Two transcripts, one per kind of actor this object hosts.
+ *
+ * The root's is {@link AssistantMessagesTranscript}: core's
+ * {@link TranscriptStore} over the Agents SDK's own session tree.
  *
  * `assistant_messages` is the SDK's table — its DDL, its FTS index and the
  * active-leaf cache the tree walks from all belong to `AgentSessionProvider`,
@@ -14,11 +16,18 @@
  * that streamed the answer hands it the accumulated parts under the same id,
  * so the persisted row carries the tool calls and step markers the client
  * rendered — {@link AssistantMessagesTranscript.answersFrom}.
+ *
+ * A HOSTED actor's default chat is the plain `actor_messages` store instead —
+ * core's `ActorMessagesTranscript` writes it, and the two reads a pane's
+ * socket needs of it are {@link actorChatHistory} and
+ * {@link actorChatNewestId} below. They live here because the projection is
+ * the same one this file already owns in the other direction: a stored row
+ * becomes the UIMessage the SDK's clients render.
  */
 import { AgentSessionProvider, type SessionMessage, type SqlProvider } from 'agents/experimental/memory/session';
 import * as v from 'valibot';
 import {
-  JsonObjectSchema, operatorMessageAdmitted, uiMessageText,
+  CHAT_SESSION_ID, JsonObjectSchema, operatorMessageAdmitted, uiMessageText,
   type ActorReference, type JsonObject, type PromptFile, type SqlExecutor,
   type TranscriptRow, type TranscriptStore,
 } from '@kinu.run/core';
@@ -171,4 +180,48 @@ export class AssistantMessagesTranscript implements TranscriptStore {
   operatorSpoke(): boolean {
     return operatorMessageAdmitted(this.sql, this.actor);
   }
+}
+
+/** The role words the pane's own rows carry. A row with any other role — the
+ *  MCTS trees, a peer lane — is not this conversation's. */
+const CHAT_ROLES = ['user', 'assistant'] as const;
+
+/**
+ * One hosted actor's conversation as the client renders it: its plain rows,
+ * oldest first, in the SDK's session shape.
+ *
+ * The plain store keeps text, so a row projects to ONE text part. `uiMessageText`
+ * is still the reader, because a row written from a UIMessage elsewhere in this
+ * workspace's history (an import, a fork transfer) is serialized rather than
+ * plain and would otherwise reach the pane as JSON.
+ */
+export function actorChatHistory(sql: SqlExecutor, actor: ActorReference): SessionMessage[] {
+  return sql<{ id: string; role: string; content: string }>`
+    SELECT id, role, content FROM actor_messages
+    WHERE actor_id = ${actor.actorId} AND session_id = ${CHAT_SESSION_ID}
+      AND role IN (${CHAT_ROLES[0]}, ${CHAT_ROLES[1]})
+    ORDER BY created_at ASC, rowid ASC`
+    .map((row) => ({
+      id: row.id,
+      role: row.role === 'assistant' ? 'assistant' as const : 'user' as const,
+      parts: [{ type: 'text' as const, text: uiMessageText(row.content) }],
+    }));
+}
+
+/** The row a new answer chains under: the newest row of this actor's chat.
+ *  Null on an empty conversation, which is a turn whose opening row never
+ *  landed and therefore an answer with nothing to parent to. */
+export function actorChatNewestId(sql: SqlExecutor, actor: ActorReference): string | null {
+  return sql<{ id: string }>`
+    SELECT id FROM actor_messages
+    WHERE actor_id = ${actor.actorId} AND session_id = ${CHAT_SESSION_ID}
+    ORDER BY created_at DESC, rowid DESC LIMIT 1`[0]?.id ?? null;
+}
+
+/** Drop this actor's chat, the clear its own pane asked for. Scoped to the
+ *  default session: an actor's MCTS and peer trees live in the same table
+ *  under their own session ids and are not this conversation. */
+export function actorChatClear(sql: SqlExecutor, actor: ActorReference): void {
+  void sql`DELETE FROM actor_messages
+    WHERE actor_id = ${actor.actorId} AND session_id = ${CHAT_SESSION_ID}`;
 }

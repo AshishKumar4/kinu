@@ -1,5 +1,7 @@
 /**
- * The hosted root's chat transport: core's {@link ChatTransport} over the
+ * The chat rooms of one workspace object.
+ *
+ * The root's is {@link ChatWireTransport}: core's {@link ChatTransport} over the
  * Agents SDK's chat protocol, composed from the SDK's own exports.
  *
  * Inbound, it is the `cf_agent_*` protocol the React hook speaks
@@ -27,6 +29,26 @@
  * Kinu client tool exists), the session token-estimate frame (no client reads
  * it), and chat-fiber recovery — an interrupted turn continues from the loop's
  * own step ledger, not from a fiber snapshot.
+ *
+ * ── ONE ROOM PER ADDRESSED ACTOR ─────────────────────────────────────────
+ *
+ * A workspace is ONE Durable Object, so every pane's socket lands on this
+ * object and `broadcast` reaches all of them. Which actor a socket addressed
+ * is its `/actor/<name>` path, recorded as a connection tag
+ * (`actorConnectionTag`). {@link ActorChatRooms} is the one place that turns a
+ * connection into the room that serves it, and each room is given a wire whose
+ * recipient set, transcript and driver are that actor's — so no frame builder
+ * here ever asks whose actor it is.
+ *
+ * A hosted actor's room is {@link HostedActorRoom} and not a second
+ * {@link ChatWireTransport}, because the two differ in one measured fact
+ * rather than in a branch: the SDK's {@link ResumableStream} keeps ONE active
+ * stream per table (`cf_ai_chat_stream_chunks`, restored in its constructor),
+ * so a second instance over this object's database reads the root's live turn
+ * as its own. A hosted turn is `runHeadInference` over the actor's event log
+ * and produces no resumable stream at all, so its room has no resume
+ * machinery to share — it serves the actor's own transcript, admits a message
+ * onto that actor's queue, and closes the request.
  */
 import type { Connection } from 'agents';
 import {
@@ -63,6 +85,20 @@ export interface ChatWire {
   send(input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<SendLanding>;
   interrupt(): void;
   clear(): Promise<void>;
+}
+
+/** What a hosted actor's room asks of the actor: {@link ChatWire} without the
+ *  chunk store or the per-connection lookup, because a hosted turn produces no
+ *  resumable stream and so the room holds no resume handshake. */
+export type HostedChatWire = Omit<ChatWire, 'sql' | 'getConnection'>;
+
+/** Where one socket's chat frames go. Both rooms answer it, and
+ *  {@link ActorChatRooms} is what picks between them. */
+export interface ChatRoom {
+  onConnect(connection: Connection): void;
+  onClose(connection: Connection): void;
+  /** Handle one socket frame if it is chat protocol; false when it is not. */
+  onMessage(connection: Connection, raw: string): Promise<boolean>;
 }
 
 /** A message as the hook sends it: the SDK's UIMessage, admitted by its
@@ -109,7 +145,22 @@ function flushSignal(chunk: UIMessageChunk): PartialFlushSignal {
   return chunk.type === 'text-delta' || chunk.type === 'reasoning-delta' || chunk.type === 'tool-input-available' ? 'content' : 'none';
 }
 
-export class ChatWireTransport implements ChatTransport {
+/**
+ * The frame that CLOSES one chat request, as both rooms send it: the hook's
+ * send resolves on it and stops waiting for a stream.
+ *
+ * `error` and `landed` are present only when they are facts — an absent key
+ * and a key holding `undefined` read differently to the client, which treats
+ * the first as "the request finished" and would paint the second as a failure.
+ */
+function doneFrame(requestId: string, extra: { landed?: SendLanding; error?: string }): string {
+  return JSON.stringify({
+    type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: requestId, body: extra.error ?? '', done: true,
+    ...(extra.error !== undefined && { error: true }), ...(extra.landed !== undefined && { landed: extra.landed }),
+  });
+}
+
+export class ChatWireTransport implements ChatTransport, ChatRoom {
   /** The SDK's chunk store and the resume handshake over it, built on FIRST
    *  USE rather than in the constructor: the store declares its table as it
    *  is built, and this transport is reached through a getter on the actor
@@ -313,10 +364,7 @@ export class ChatWireTransport implements ChatTransport {
   }
 
   private done(requestId: string, extra: { landed?: SendLanding; error?: string } = {}): void {
-    this.wire.broadcast(JSON.stringify({
-      type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: requestId, body: extra.error ?? '', done: true,
-      ...(extra.error !== undefined && { error: true }), ...(extra.landed !== undefined && { landed: extra.landed }),
-    }));
+    this.wire.broadcast(doneFrame(requestId, extra));
   }
 
   // ── The loop's events ───────────────────────────────────────────────
@@ -461,4 +509,191 @@ function chatInput(message: UIMessage) {
   const chosen: WorkMode = mode !== undefined && isWorkMode(mode) ? mode : 'build';
 
   return { text, files, mode: chosen };
+}
+
+/**
+ * ONE HOSTED ACTOR'S CHAT ROOM.
+ *
+ * The same inbound protocol as the root's, over that actor's own three facts:
+ * its transcript (the plain `actor_messages` store core declares as every
+ * non-root actor's default chat), its queue (`admitHostedTask`, the one
+ * admission path a delegated turn also takes), and its connections.
+ *
+ * A hosted turn is not streamed: `runHeadInference` publishes no UIMessage
+ * chunks, so there is no resumable stream to offer and a resume probe is
+ * answered `idle` rather than left unanswered. What the pane paints is the
+ * transcript — broadcast when a message is admitted and again when the turn
+ * records its answer ({@link HostedActorRoom.announce}).
+ */
+class HostedActorRoom implements ChatRoom {
+  constructor(private readonly wire: HostedChatWire) {}
+
+  onConnect(connection: Connection): void {
+    sendIfOpen(connection, this.transcriptFrame());
+  }
+
+  onClose(): void {
+    // Nothing is held per connection here: no resume handshake, no
+    // continuation owner, no live accumulator.
+  }
+
+  async onMessage(connection: Connection, raw: string): Promise<boolean> {
+    const event = parseProtocolMessage(raw);
+
+    if (event === null) return false;
+    await this.handle(connection, event);
+
+    return true;
+  }
+
+  /** This actor's transcript to every socket that addressed it — the frame a
+   *  landed message and a recorded answer both reach the pane through. */
+  announce(): void {
+    this.wire.broadcast(this.transcriptFrame());
+  }
+
+  private transcriptFrame(): string {
+    return JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() });
+  }
+
+  private async handle(connection: Connection, event: ChatProtocolEvent): Promise<void> {
+    switch (event.type) {
+      case 'stream-resume-request':
+        // `idle` is the truth and it is load-bearing: the hook keeps waiting
+        // on a probe answered with anything weaker.
+        sendIfOpen(connection, JSON.stringify({
+          type: MessageType.CF_AGENT_STREAM_RESUME_NONE, reason: 'idle', probeId: event.probeId,
+        }));
+
+        return;
+
+      case 'chat-request': {
+        if (event.init.method === 'POST') await this.admitChatRequest(event.id, event.init.body);
+
+        return;
+      }
+
+      case 'cancel':
+        this.wire.interrupt();
+
+        return;
+
+      case 'clear':
+        await this.wire.clear();
+        this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_CLEAR }), [connection.id]);
+
+        return;
+
+      case 'stream-resume-ack':
+      case 'tool-result':
+      case 'tool-approval':
+      case 'messages':
+        // No stream was offered, no Kinu client tool exists, and this actor's
+        // transcript is the server's.
+        diagnostics.event('chat.protocol_frame_ignored', { frame: event.type });
+    }
+  }
+
+  /**
+   * The chat request, admitted onto this actor's queue.
+   *
+   * The hook sends its whole message list every time, so the new messages are
+   * the SDK's own reconciliation of it against what is stored, minus anything
+   * this actor already holds a row for — which is why the admission writes the
+   * user row under the id the client renders it by.
+   *
+   * The request is answered `done` as soon as the queue holds the message: a
+   * hosted turn runs on the actor's durable wake, not inside this frame, and a
+   * request left open would wait for a `turn-end` this rail never emits.
+   */
+  private async admitChatRequest(requestId: string, body: string | undefined): Promise<void> {
+    const parsed = body === undefined ? null : v.safeParse(v.pipe(v.string(), v.parseJson(), ChatRequestBodySchema), body);
+
+    if (parsed === null || !parsed.success || parsed.output.trigger === 'regenerate-message') {
+      this.done(requestId);
+
+      return;
+    }
+
+    // SAFETY: every element here is CONSTRUCTED by `actorChatHistory` as
+    // `{ id, role: 'user' | 'assistant', parts: [{ type: 'text', text }] }`,
+    // which is a UIMessage in all three load-bearing fields; `SessionMessage`
+    // is the vendor's narrower alias over the same shape, and the SDK's own
+    // agent hands `reconcileMessages` its stored rows the same way.
+    const stored = this.wire.history() as UIMessage[];
+
+    const fresh = reconcileMessages(parsed.output.messages, stored, sanitizeMessage)
+      .filter((message) => message.role === 'user' && !this.wire.admitted(message.id));
+
+    if (fresh.length === 0) {
+      this.done(requestId);
+
+      return;
+    }
+
+    let landed: SendLanding = 'turn';
+
+    for (const message of fresh) {
+      try {
+        landed = await this.wire.send({ ...chatInput(message), id: message.id });
+      } catch (cause) {
+        // A refusal is the actor's own classified error — a dismissed actor, a
+        // name this workspace does not host. Anything else is a fault in the
+        // admission itself and is not the client's to read as a refusal.
+        if (!(cause instanceof KinuError)) throw new Error('a hosted actor failed to take a client message', { cause });
+        this.done(requestId, { error: refusalOf(cause).error });
+
+        return;
+      }
+    }
+
+    this.announce();
+    this.done(requestId, { landed });
+  }
+
+  private done(requestId: string, extra: { landed?: SendLanding; error?: string } = {}): void {
+    this.wire.broadcast(doneFrame(requestId, extra));
+  }
+}
+
+/**
+ * WHICH ROOM SERVES THIS SOCKET — the one decision that keeps a workspace's
+ * panes apart on a shared object.
+ *
+ * Keyed by the connection's actor tag, so a socket restored from hibernation
+ * resolves the same room it opened on. A tag naming an actor this workspace no
+ * longer hosts resolves to NO room, and the caller refuses the frame rather
+ * than falling back to the root's — a dismissed actor's pane must not become a
+ * second window onto the workspace's own chat.
+ */
+export class ActorChatRooms {
+  private readonly hosted = new Map<string, HostedActorRoom>();
+
+  constructor(
+    private readonly root: () => ChatWireTransport,
+    private readonly wireFor: (name: string) => HostedChatWire | null,
+  ) {}
+
+  /** The room a connection addressed, or null when it named an actor this
+   *  workspace does not host. */
+  for(actor: string | null): ChatRoom | null {
+    if (actor === null) return this.root();
+
+    return this.hostedRoom(actor);
+  }
+
+  /** That actor's room if one is already open, or one built now — what a
+   *  broadcast site holds when it has an answer to announce. */
+  hostedRoom(actor: string): ChatRoom & { announce(): void } | null {
+    const held = this.hosted.get(actor);
+
+    if (held !== undefined) return held;
+    const wire = this.wireFor(actor);
+
+    if (wire === null) return null;
+    const room = new HostedActorRoom(wire);
+    this.hosted.set(actor, room);
+
+    return room;
+  }
 }
