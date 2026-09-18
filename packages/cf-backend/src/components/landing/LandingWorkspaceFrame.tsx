@@ -26,10 +26,11 @@ import { Composer, type ChatMode } from '@/components/Composer';
 import { MessageView } from '@/components/MessageView';
 import { ModelPicker } from '@/components/ModelPicker';
 import { PreviewChrome } from '@/components/PreviewFrame';
-import Sidebar from '@/components/Sidebar';
+import { SidebarRail } from '@/components/SidebarRail';
 import { SubordinateTabs } from '@/components/SubordinateTabs';
 import { WorkspaceBar, type Altitude } from '@/components/WorkspaceBar';
 import { WorkSurface, type SurfaceKind } from '@/components/surfaces/WorkSurface';
+import { WorkbenchPanels } from '@/components/WorkbenchPanels';
 import { SLATE_PREFIX } from '@/components/surfaces/presence';
 import { SupervisePage } from '@/pages/SupervisePage';
 import { AccountProvider } from '@/hooks/use-account';
@@ -37,7 +38,7 @@ import { WorkspaceRosterProvider } from '@/hooks/use-workspace-roster';
 import type { ForkNode } from '@kinu.run/core';
 
 import {
-  CHECKOUT_MESSAGES, LANDING_MODEL, LANDING_MODELS, LANDING_SUBORDINATES, LANDING_WORKSPACE,
+  CHECKOUT_MESSAGES, LANDING_MODEL, LANDING_MODELS, LANDING_SUBORDINATES, LANDING_TAB_PRESENCE, LANDING_WORKSPACE,
   SLATE_MESSAGES, SLATE_PREVIEW_URL, SLATE_SUMMARY,
   checkoutWorkFixture, planRpc, superviseRpc,
 } from './landing-fixtures';
@@ -490,12 +491,12 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
         aria-label={kind === 'checkout' ? 'Kinu workspace interface preview' : `Kinu ${kind} interface preview`}
         className="p-workbench relative flex flex-col overflow-hidden rounded-b-2xl border p-border p-bg p-text text-left shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)] md:flex-row"
       >
-        {/* The app's own rail, as the harness rule requires: gallery.tsx:2370
-            photographs this same surface for the same reason, and layout.tsx
-            :51-54 renders it in the app. Below md the app shows a drawer
-            summoned from its header (layout.tsx:57-63), not a rail — the frame
-            has no app header, so it shows no rail there either. */}
-        <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
+        {/* The app's own rail, the app's own component: `SidebarRail` owns the
+            lane, its veil and the hide/show choice, so the frame cannot drift
+            from what layout.tsx shows. Below md the app summons a drawer from
+            its header instead — the frame has no header, so it shows no rail
+            there either. */}
+        <SidebarRail />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <WorkspaceBar
           title={frame.title}
@@ -511,48 +512,67 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
             <SupervisePage rpc={superviseRpc} />
           </div>
         ) : (
-          <div data-workspace-panel="run" className="grid md:h-[760px] md:grid-cols-[minmax(0,1fr)_430px] md:grid-rows-[minmax(0,1fr)]">
-            <div className="@container flex h-[520px] min-w-0 flex-col border-b p-border md:h-full md:border-b-0 md:border-r">
-              <SubordinateTabs
-                workspace={LANDING_WORKSPACE}
-                subordinates={LANDING_SUBORDINATES}
-                activeName={undefined}
-                onCreate={async () => {}}
-                creating={false}
-                onDismiss={async () => {}}
-              />
-              <div ref={transcript} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-7 lg:px-8 [&>*]:mx-auto [&>*]:max-w-[780px]">
-                <Transcript messages={messages} streaming={streaming} />
-              </div>
-              <div data-movie-target="composer" className="border-t p-border p-sidebar">
-                <Composer
-                  value={draft}
-                  onValueChange={setDraft}
-                  onSend={() => setDraft('')}
-                  onStop={() => {}}
-                  placeholder="Send a message..."
-                  disabled={false}
-                  streaming={false}
-                  mode={{ value: mode, onChange: setMode, locked: planLocked }}
-                  attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
-                  modelPicker={<ModelPicker models={LANDING_MODELS} value={model} onChange={setModel} size="xs" />}
+          <div data-workspace-panel="run" className="flex h-[620px] min-h-0 flex-col md:h-[760px]">
+            {/* The product's workbench: the two columns, the separator, and the
+                inspector's own policy. The column is shut on a frame that holds
+                nothing to inspect and opens itself when the plan arrives —
+                `decideInspector`, not a height this file picked. */}
+            <WorkbenchPanels
+              scope={kind}
+              workspace={undefined}
+              contents={{
+                pendingActions: isMovie ? [] : work.pending(),
+                pendingConsents: [],
+                slates,
+                previewFocus: null,
+                pinnedPorts: [],
+                activePlan: plan,
+              }}
+              chat={<>
+                <SubordinateTabs
+                  workspace={LANDING_WORKSPACE}
+                  subordinates={LANDING_SUBORDINATES}
+                  activeName={undefined}
+                  onCreate={async () => {}}
+                  creating={false}
+                  onDismiss={async () => {}}
                 />
-              </div>
-            </div>
-            <div className="h-[620px] min-w-0 md:h-full">
-              <WorkSurface
-                surface={surface} onSurface={onSurface}
-                pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}}
-                plan={plan} planRpc={rpc}
-                snapshot={{ status: 'loading' }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent="" onSearchMemory={() => {}}
-                mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={isMovie ? streaming : kind === 'checkout'}
-                executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-                backgroundJobs={isMovie ? [] : work.jobs()} onRefreshJobs={() => setWorkVersion((version) => version + 1)}
-                pendingActions={isMovie ? [] : work.pending()}
-                slates={slates} slateBody={slateBody}
-                rpc={rpc}
-              />
-            </div>
+                <div className="@container flex min-h-0 flex-1 flex-col">
+                  <div ref={transcript} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-7 lg:px-8 [&>*]:mx-auto [&>*]:max-w-[780px]">
+                    <Transcript messages={messages} streaming={streaming} />
+                  </div>
+                  <div data-movie-target="composer" className="border-t p-border p-sidebar">
+                    <Composer
+                      value={draft}
+                      onValueChange={setDraft}
+                      onSend={() => setDraft('')}
+                      onStop={() => {}}
+                      placeholder="Send a message..."
+                      disabled={false}
+                      streaming={false}
+                      mode={{ value: mode, onChange: setMode, locked: planLocked }}
+                      attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
+                      modelPicker={<ModelPicker models={LANDING_MODELS} value={model} onChange={setModel} size="xs" />}
+                    />
+                  </div>
+                </div>
+              </>}
+              inspector={(onCollapse) => (
+                <WorkSurface
+                  surface={surface} onSurface={onSurface} onCollapse={onCollapse}
+                  pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}}
+                  plan={plan} planRpc={rpc}
+                  snapshot={{ status: 'loading' }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent="" onSearchMemory={() => {}}
+                  mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={isMovie ? streaming : kind === 'checkout'}
+                  executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
+                  backgroundJobs={isMovie ? [] : work.jobs()} onRefreshJobs={() => setWorkVersion((version) => version + 1)}
+                  pendingActions={isMovie ? [] : work.pending()}
+                  slates={slates} slateBody={slateBody}
+                  tabPresence={LANDING_TAB_PRESENCE}
+                  rpc={rpc}
+                />
+              )}
+            />
           </div>
         )}
         </div>

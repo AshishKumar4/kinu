@@ -9,6 +9,9 @@ import { THEMES, type Theme } from './computed-style';
 // component-land imports, and the drive cannot drift from the product's own
 // declaration.
 import type { LandingMovieHandle } from '@kinu.run/core';
+// The inspector's own default width, read from the policy the frames now
+// inherit rather than restated as a number this gate believes in.
+import { INSPECTOR_DEFAULT_PX } from '@kinu.run/core/web/inspector-layout';
 
 // The hero's own `declare global` lives under packages/cf-backend and is out
 // of this gate's program, so the handle is named here instead.
@@ -21,6 +24,9 @@ interface SearchTreeHandle {
 const PHONE = { width: 390, height: 844 } as const;
 
 const DESKTOP = { width: 1280, height: 900 } as const;
+
+/** The app's open rail lane (`w-60`), which every frame's rail lane is. */
+const RAIL_LANE_PX = 240;
 
 const LANDING_WIDTHS = [
   ['390', PHONE],
@@ -64,9 +70,26 @@ interface WidthIntegrity {
 
 interface RailFact {
   readonly frames: number;
-  readonly classes: readonly string[];
+  /** Each frame's rail lane, in px: the app's open lane is `w-60`. */
+  readonly lanes: readonly number[];
   readonly visible: boolean;
   readonly roster: string;
+}
+
+/**
+ * The plan frame's inspector column, measured through the product's own rules
+ * rather than through a height the frame picked: which tabs `surfaceHasContent`
+ * leaves on the strip for the sample's `tabPresence`, and what `decideInspector`
+ * does with a column that has nothing to show yet.
+ */
+interface ShellFact {
+  readonly labels: readonly string[];
+  readonly widthAtStart: number;
+  readonly widthOnPlan: number;
+  /** The reopen handle a collapsed column leaves behind. */
+  readonly expandAtStart: boolean;
+  /** Every mounted workbench's panel element ids, in document order. */
+  readonly panelIds: readonly string[];
 }
 
 interface HeroBackdropFact {
@@ -121,6 +144,7 @@ interface Facts {
   /** Which backdrop the hero mounted at a width, beside how many columns the copy's grid has there. */
   heroBackdrop: Record<string, HeroBackdropFact>;
   movie?: MovieFact;
+  shell?: ShellFact;
   movieReduced?: MovieReducedFact;
   heroA11y?: { label: string; phrases: string[] };
   persists?: { text: string; caption: string };
@@ -364,15 +388,17 @@ beforeAll(async () => {
       }, at);
 
       // The rail rides every workspace frame, populated through the real
-      // roster transport, marked on the frame's own workspace.
+      // roster transport, marked on the frame's own workspace. `SidebarRail`
+      // is the app's own lane, so the measurement is the lane, not a class
+      // string that says nothing about what the reader sees.
       facts.rail = await page.evaluate(() => {
         const frames = [...document.querySelectorAll('[data-landing-frame]')];
-        const asides = frames.map((frame) => frame.querySelector(':scope > aside'));
+        const asides = frames.map((frame) => frame.querySelector(':scope > aside[data-rail]'));
         const first = asides[0];
 
         return {
           frames: asides.filter((aside) => aside !== null).length,
-          classes: asides.map((aside) => aside?.getAttribute('class') ?? ''),
+          lanes: asides.map((aside) => Math.round(aside?.getBoundingClientRect().width ?? 0)),
           visible: first !== null
             && first !== undefined
             && getComputedStyle(first).display !== 'none'
@@ -380,6 +406,27 @@ beforeAll(async () => {
           roster: first?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
         };
       });
+
+      // The plan frame at its first beat: the strip carries exactly the tabs
+      // the sample has content for, and the column the product would shut on a
+      // workspace with nothing to inspect is shut — a measured zero, before any
+      // seek moves the story on.
+      const readShell = () => page.evaluate(() => {
+        const frame = document.querySelector('[data-landing-frame="plan"]');
+        const column = frame?.querySelector('[data-panel][id^="inspector"]');
+        const strip = column?.querySelector('.p-tabstrip');
+
+        return {
+          labels: [...(strip?.querySelectorAll('button') ?? [])]
+            .map((button) => (button.textContent ?? '').trim())
+            .filter((label) => label.length > 0),
+          width: Math.round(column?.getBoundingClientRect().width ?? -1),
+          expand: frame?.querySelector('[data-inspector-expand]') !== null,
+          panelIds: [...document.querySelectorAll('[data-panel]')].map((panel) => panel.id),
+        };
+      });
+
+      const shellAtStart = await readShell();
       // The request types into the real composer before anything else exists.
       await seek((cues.typeStart + cues.sent) / 2);
       await page.waitForFunction(() => {
@@ -420,6 +467,25 @@ beforeAll(async () => {
       const decisions = await page.$$eval('[data-landing-frame="plan"] [data-plan-decisions] button', (buttons) => (
         buttons.map((button) => ({ label: button.textContent?.trim() ?? '', disabled: button.disabled }))
       ));
+
+      // The plan's arrival is what opens the column — the same signal the
+      // product opens it on. Awaited, not sampled: the decision lands on a
+      // committed layout.
+      await page.waitForFunction(() => {
+        const column = document.querySelector('[data-landing-frame="plan"] [data-panel][id^="inspector"]');
+
+        return column !== null && column.getBoundingClientRect().width > 0;
+      });
+
+      const shellOnPlan = await readShell();
+
+      facts.shell = {
+        labels: shellAtStart.labels,
+        widthAtStart: shellAtStart.width,
+        widthOnPlan: shellOnPlan.width,
+        expandAtStart: shellAtStart.expand,
+        panelIds: shellAtStart.panelIds,
+      };
 
       // The cursor's click approves through the product's own decision path.
       await seek(cues.approve + 200);
@@ -1047,8 +1113,8 @@ describe('the landing frames reuse the app rail', () => {
     const rail = required(facts.rail, 'frame rail');
     expect(rail.frames).toBe(3);
 
-    for (const classes of rail.classes) {
-      expect(classes).toBe('hidden w-60 shrink-0 p-sidebar border-r p-border md:block');
+    for (const lane of rail.lanes) {
+      expect(lane).toBe(RAIL_LANE_PX);
     }
 
     expect(rail.visible).toBeTrue();
@@ -1058,6 +1124,25 @@ describe('the landing frames reuse the app rail', () => {
 
   test('the rail hides below md the way the app hides it', () => {
     expect(facts.railPhoneHidden).toBeTrue();
+  });
+});
+
+describe('the landing frames mount the product shell', () => {
+  test("the strip carries only the tabs the sample's tabPresence has content for", () => {
+    expect(required(facts.shell, 'plan frame shell').labels).toEqual(['Work', 'Files', 'Agent', 'Env']);
+  });
+
+  test('the inspector column is shut until the plan arrives, then opens at the policy width', () => {
+    const shell = required(facts.shell, 'plan frame shell');
+    expect(shell.widthAtStart).toBe(0);
+    expect(shell.expandAtStart).toBeTrue();
+    expect(shell.widthOnPlan).toBe(INSPECTOR_DEFAULT_PX);
+  });
+
+  test("each frame's workbench owns its own panel elements", () => {
+    const ids = required(facts.shell, 'plan frame shell').panelIds;
+    expect(ids).toHaveLength(6);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });
 

@@ -4245,6 +4245,11 @@ export class LocalAgentSession implements BackendHost {
       // A fork carries no pinned skill set of its own: it explores under the
       // program its parent promoted, and the skills that program names.
       activeSkills: [],
+      // The session's pinned model, for the same reason `prepareTurn` passes
+      // it for a chat turn: the pin belongs to the workspace, and a hosted
+      // actor's turn is one of that workspace's turns. Omitting it ran every
+      // hosted turn of a pinned workspace on the catalog's tier model.
+      workspaceModel: this.config.getModel(),
     });
 
     return { profile, inputs };

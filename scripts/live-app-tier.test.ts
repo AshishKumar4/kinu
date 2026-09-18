@@ -24,14 +24,17 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { createServer as createHttpServer, type Server } from 'node:http';
-import { hostedActorSocketPath, parseJsonValue, type JsonValue } from '@kinu.run/core';
+import { hostedActorSocketPath } from '@kinu.run/core';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
-import { git } from '@kinu.run/test-utils';
 
-import { withLiveApp, type LiveApp } from './live-app-harness';
+import { withLiveApp, createWorkspace, type LiveApp } from './live-app-harness';
+import {
+  FALLBACK_ANSWER, SCRIPTED_MODEL_SPEC, SLATE_TITLE,
+  planWalkthrough, registerScriptedModel, startScriptedModel,
+} from './scripted-model';
+import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
 
 /** Screenshots land beside the other lanes' evidence, outside the worktree. */
 const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'wave2-0917', 'browser');
@@ -43,166 +46,6 @@ async function shoot(page: Page, name: string): Promise<string> {
   await page.screenshot({ path, fullPage: true });
 
   return path;
-}
-
-const OutboundMessageSchema = v.object({ role: v.optional(v.string()) });
-
-const OutboundBodySchema = v.object({ messages: v.optional(v.array(OutboundMessageSchema)) });
-
-/** What the fake model answers with. One string, so the row that waits for the
- *  answer waits for the words this server actually sends. */
-const FAKE_ANSWER = 'Live answer from the fake model.';
-
-/** The fake model behind the local origin: live SSE so the panes render real content. */
-interface FakeModel {
-  server: Server | null;
-  port: number;
-}
-
-async function startFakeModel(): Promise<FakeModel> {
-  const state: FakeModel = { server: null, port: 0 };
-
-  const http = createHttpServer((request, response) => {
-    let body = '';
-
-    request.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-    request.on('end', () => {
-      const url = new URL(request.url ?? '/', 'http://fake.invalid');
-
-      if (url.pathname === '/models' && request.method === 'GET') {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ object: 'list', data: [{ id: 'fake-live', name: 'Fake Live' }] }));
-
-        return;
-      }
-
-      if (url.pathname === '/chat/completions' && request.method === 'POST') {
-        v.parse(OutboundBodySchema, parseJsonValue(body));
-        const base = { index: 0, delta: { content: FAKE_ANSWER } };
-
-        const chunk = {
-          id: 'chatcmpl-live-tier', object: 'chat.completion.chunk', created: 1, model: 'fake-live',
-          choices: [base, { ...base, delta: { role: 'assistant' }, finish_reason: 'stop' }],
-        };
-
-        response.setHeader('content-type', 'text/event-stream');
-        response.end(`data: ${JSON.stringify(chunk)}\n\n data: [DONE]\n\n`);
-
-        return;
-      }
-
-      response.statusCode = 404;
-      response.end('nope');
-    });
-  });
-
-  const listening = Promise.withResolvers<void>();
-
-  http.once('error', listening.reject);
-  http.listen(0, '127.0.0.1', listening.resolve);
-  await listening.promise;
-
-  const parsed = v.parse(v.object({ port: v.number() }), http.address());
-
-  state.server = http;
-  state.port = parsed.port;
-
-  return state;
-}
-
-async function stopFakeModel(fake: { server: Server | null }): Promise<void> {
-  const server = fake.server;
-
-  if (server === null) throw new Error('fake model never bound its server');
-
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-}
-
-const WorkspaceEntrySchema = v.object({ name: v.string() });
-
-/** The route's JSON answer, parsed as a value rather than passed as unknown. */
-async function apiJson(origin: string, path: string, init?: RequestInit): Promise<JsonValue> {
-  const response = await fetch(`${origin}${path}`, {
-    ...init,
-    headers: { 'content-type': 'application/json', ...init?.headers },
-  });
-
-  const text = await response.text();
-
-  if (!response.ok) throw new Error(`${init?.method ?? 'GET'} ${path} -> ${String(response.status)}: ${text.slice(0, 200)}`);
-
-  return text ? parseJsonValue(text) : null;
-}
-
-async function createWorkspace(origin: string, name: string, purpose: string): Promise<string> {
-  const created = v.parse(
-    WorkspaceEntrySchema,
-    await apiJson(origin, '/api/user/workspaces', {
-      method: 'POST', body: JSON.stringify({ name, purpose, model: 'openai-compat/fake-live' }),
-    }),
-  );
-
-  return created.name;
-}
-
-/** The key=value lines of a .dev.vars file, merged left to right. Only
- *  process-env ABSENT keys are supplied: an explicit export always wins, and
- *  nothing the shell already provides is shadowed by a file. */
-function loadDevVars(paths: readonly string[]) {
-  const env: Record<string, string> = {};
-
-  for (const path of paths) {
-    if (!existsSync(path)) continue;
-
-    const text = readFileSync(path, 'utf8');
-
-    for (const line of text.split('\n')) {
-      const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(line.trim());
-
-      if (match === null) continue;
-
-      const [, key, value] = match;
-
-      if (key === undefined || value === undefined) continue;
-
-      if (process.env[key] !== undefined) continue;
-
-      env[key] = value;
-    }
-  }
-
-  return env;
-}
-
-/** The worktree's own `.dev.vars` files first (checkout-local wins), then the
- *  primary checkout's root and cf-backend `.dev.vars` — where the
- *  containers-registry token and CREDENTIAL_ENCRYPTION_KEY live — resolved
- *  through `git worktree list` row one, never a literal path. vite dev needs
- *  these in PROCESS env for the container registry; wrangler's own secret
- *  injection does not cover that check (measured 2026-09-17: dev exits "error
- *  when starting dev server" without CLOUDFLARE_API_TOKEN), and the boot's
- *  credential path 503s without the cf-backend file plus CLOUDFLARE_INCLUDE_
- *  PROCESS_ENV below. */
-function liveAppEnv() {
-  const repo = join(import.meta.dir, '..');
-  const primary = /^worktree (.+)$/mu.exec(git(repo, 'worktree', 'list', '--porcelain'))?.[1];
-
-  const env = loadDevVars([
-    join(repo, '.dev.vars'),
-    join(repo, 'packages', 'cf-backend', '.dev.vars'),
-    ...(primary !== undefined
-      ? [join(primary, '.dev.vars'), join(primary, 'packages', 'cf-backend', '.dev.vars')]
-      : []),
-  ]);
-
-  // Secrets reach workerd from .dev.vars on disk — this worktree has none —
-  // or from process.env when the flag is on (wrangler: CLOUDFLARE_INCLUDE_
-  // PROCESS_ENV defaults false, and then a secret only ever binds from a
-  // file). The flag is how the loaded vars become bindings without copying
-  // .dev.vars into the worktree.
-  env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'true';
-
-  return env;
 }
 
 /** This run's own workspace suffix. The local dev server keeps its Durable
@@ -400,6 +243,7 @@ interface TierVerdicts {
   geometry: GeometryVerdict | null;
   controls: ControlsVerdict | null;
   stamped: StampedCardVerdict | null;
+  walkthrough: WalkthroughVerdict | null;
 }
 
 const StripGeometrySchema = v.object({
@@ -410,7 +254,7 @@ const StripGeometrySchema = v.object({
 
 const observed: TierVerdicts = {
   bootFailure: null, panel: null, planTabs: null, geometry: null,
-  controls: null, stamped: null,
+  controls: null, stamped: null, walkthrough: null,
 };
 
 /** The inspector column, `#inspector` — the id `use-inspector-layout` hands the
@@ -618,7 +462,7 @@ async function openInspector(page: Page): Promise<void> {
  *  chat-tab switch — the same DOM node, the same scroll offset, and no
  *  workspace-scoped read re-sent in either direction. */
 async function measurePanel(newPage: LiveApp['newPage'], origin: string): Promise<PanelVerdict> {
-  const workspace = await createWorkspace(origin, `live-row-panel-${RUN_ID}`, 'panel state probe');
+  const workspace = await createWorkspace(origin, `live-row-panel-${RUN_ID}`, 'panel state probe', SCRIPTED_MODEL_SPEC);
   const page = await openWorkspace(newPage, origin, workspace);
 
   await openInspector(page);
@@ -706,7 +550,7 @@ async function measurePanel(newPage: LiveApp['newPage'], origin: string): Promis
  *  filter below it, so the count spans the whole column — its tab strip and
  *  its filter chips — and the strip's labels are reported beside it. */
 async function measurePlanTabs(newPage: LiveApp['newPage'], origin: string): Promise<PlanTabsVerdict> {
-  const workspace = await createWorkspace(origin, `live-row-plan-${RUN_ID}`, 'plan probe');
+  const workspace = await createWorkspace(origin, `live-row-plan-${RUN_ID}`, 'plan probe', SCRIPTED_MODEL_SPEC);
   const page = await openWorkspace(newPage, origin, workspace);
 
   await openInspector(page);
@@ -766,7 +610,7 @@ const readStripGeometry = `(() => {
 /** Row 3 (B5): the tab strip's rule is continuous, reaches the column's own
  *  right edge, and the active underline sits on it — dark and light. */
 async function measureGeometry(newPage: LiveApp['newPage'], origin: string): Promise<GeometryVerdict> {
-  const workspace = await createWorkspace(origin, `live-row-geometry-${RUN_ID}`, 'geometry probe');
+  const workspace = await createWorkspace(origin, `live-row-geometry-${RUN_ID}`, 'geometry probe', SCRIPTED_MODEL_SPEC);
   const page = await openWorkspace(newPage, origin, workspace);
 
   await openInspector(page);
@@ -839,7 +683,7 @@ const LayoutProbeSchema = v.object({
 const probeLayoutScript = `({ inspectorWidth: ${INSPECTOR_WIDTH}, railLane: ${RAIL_LANE} })`;
 
 async function measureControls(newPage: LiveApp['newPage'], origin: string): Promise<ControlsVerdict> {
-  const workspace = await createWorkspace(origin, `live-row-controls-${RUN_ID}`, 'collapse controls probe');
+  const workspace = await createWorkspace(origin, `live-row-controls-${RUN_ID}`, 'collapse controls probe', SCRIPTED_MODEL_SPEC);
   const page = await openWorkspace(newPage, origin, workspace);
 
   const before = v.parse(LayoutProbeSchema, await page.evaluate(probeLayoutScript));
@@ -917,7 +761,7 @@ async function paneHolds(page: Page, phrase: string): Promise<{ carriers: number
  *  through the real flow — a turn on Main, the '+' tab, a turn on the actor —
  *  and measured in both directions with one marker per side. */
 async function measureStampedCard(newPage: LiveApp['newPage'], origin: string): Promise<StampedCardVerdict> {
-  const workspace = await createWorkspace(origin, `live-row-stamp-${RUN_ID}`, 'stamped card probe');
+  const workspace = await createWorkspace(origin, `live-row-stamp-${RUN_ID}`, 'stamped card probe', SCRIPTED_MODEL_SPEC);
   const page = await openWorkspace(newPage, origin, workspace);
   const counter = await countRpc(page);
 
@@ -930,7 +774,7 @@ async function measureStampedCard(newPage: LiveApp['newPage'], origin: string): 
 
   await sendInChat(page, rootMarker);
   await page.waitForFunction(
-    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FAKE_ANSWER)})`,
+    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)})`,
     { polling: 100 },
   );
   await shoot(page, 'stamp-root-before');
@@ -960,7 +804,7 @@ async function measureStampedCard(newPage: LiveApp['newPage'], origin: string): 
   await page.waitForFunction(
     `[...document.querySelectorAll('#chat [data-system-event] *, #chat .divide-dashed *')]`
     + `.some(el => (el.textContent ?? '').includes(${JSON.stringify(actorMarker)}))`
-    + ` || (document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FAKE_ANSWER)})`,
+    + ` || (document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)})`,
     { polling: 100 },
   );
 
@@ -991,6 +835,23 @@ async function measureStampedCard(newPage: LiveApp['newPage'], origin: string): 
   };
 }
 
+/** Row 6: the plan review flow end to end, on the product, over the same
+ *  script the README's film is cut from. The drive lives in the recorder
+ *  (`drivePlanReview`) so the film and this row cannot tell different stories:
+ *  the recorder is that drive plus a camera. */
+async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): Promise<WalkthroughVerdict> {
+  const workspace = await createWorkspace(
+    origin, `live-row-plan-flow-${RUN_ID}`, 'plan review walkthrough', SCRIPTED_MODEL_SPEC);
+
+  const page = await newPage();
+
+  const verdict = await drivePlanReview(page, origin, workspace, async () => {});
+  await shoot(page, 'walkthrough-settled');
+  await page.close();
+
+  return verdict;
+}
+
 /** The staging origin, when the comprehensive run is asked for by name. */
 const stagingOrigin = process.env.KINU_E2E_ORIGIN;
 
@@ -1009,22 +870,23 @@ async function run(): Promise<void> {
     progress('controls done');
     observed.stamped = await measureStampedCard(newPage, origin);
     progress('stamped done');
+    observed.walkthrough = await measureWalkthrough(newPage, origin);
+    progress('walkthrough done');
   };
 
   if (stagingOrigin === undefined) {
-    // Pre-publish: boot the product locally, configure the fake model, run.
-    const fake = await startFakeModel();
+    // Pre-publish: boot the product locally, point it at the scripted model,
+    // run. The script answers every row's throwaway turn with prose and the
+    // walkthrough's turns with the plan and the slate — one server, decided
+    // per request.
+    const model = await startScriptedModel(planWalkthrough);
 
     await withLiveApp(async ({ newPage, origin }) => {
-      await apiJson(origin, '/api/user/credentials/openai-compat.default', {
-        method: 'POST',
-        body: JSON.stringify({ kind: 'openai-compat', baseURL: `http://127.0.0.1:${String(fake.port)}`, apiKey: 'fake-key' }),
-      });
-
+      await registerScriptedModel(origin, model.port);
       await rows(newPage, origin);
-    }, { env: liveAppEnv() });
+    });
 
-    await stopFakeModel(fake);
+    await model.stop();
 
     return;
   }
@@ -1038,7 +900,7 @@ async function run(): Promise<void> {
     await rows(newPage, stagingOrigin);
     await page.close();
     await browser.close();
-  }, { env: liveAppEnv() });
+  });
 }
 
 beforeAll(async () => {
@@ -1145,5 +1007,32 @@ describe("a pane renders its own transcript and no other actor's", () => {
 
   test("words sent on the actor's tab stay out of the root transcript", () => {
     expect(verdictOf(observed.stamped, 'stamped').actorMarkerInRootPane).toBe(0);
+  });
+});
+
+describe('the plan review flow end to end', () => {
+  test('a plan comes back for review, with its decision reachable by role', () => {
+    const flow = verdictOf(observed.walkthrough, 'walkthrough');
+
+    expect(flow.planReviewShown).toBeTrue();
+    expect(flow.approveControl).toMatch(/approve/iu);
+  });
+
+  test('the inspector opens on the plan and not before it', () => {
+    const flow = verdictOf(observed.walkthrough, 'walkthrough');
+
+    expect(flow.inspectorBeforePlan).toBeLessThanOrEqual(INSPECTOR_SHUT_PX);
+    expect(flow.inspectorOnPlan).toBeGreaterThan(INSPECTOR_SHUT_PX);
+  });
+
+  test('approving records the decision and enqueues the turn that implements it', () => {
+    const flow = verdictOf(observed.walkthrough, 'walkthrough');
+
+    expect(flow.planStatus).toBe('Approved');
+    expect(flow.toolCardsAfterImplement).toBeGreaterThan(flow.toolCardsBeforeApproval);
+  });
+
+  test("the slate that turn wrote stands in the strip under its own title", () => {
+    expect(verdictOf(observed.walkthrough, 'walkthrough').stripLabels).toContain(SLATE_TITLE);
   });
 });
