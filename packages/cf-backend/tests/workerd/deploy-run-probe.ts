@@ -19,6 +19,14 @@
  * `rowText` returns every SQL row as text, which is how the test asserts that
  * a digest, a token or a minted secret is not in one.
  *
+ * AND THE END OF AN ALARM DELIVERY, AS A SIGNAL. The plan runs on the object's
+ * alarm, so every row here is waiting for a frame it cannot see from outside.
+ * `settledAfter` and `reportAfterAlarm` park the caller's RPC on a deferred
+ * this object resolves when a delivery ends, the shape `CacheWarmProbeDO`
+ * (`worker.ts`) uses, and `armedAt` reports the instant this object recorded
+ * at that end — so a TTL row subtracts two instants the OBJECT took and never
+ * compares one to the test process's clock.
+ *
  * `UpdatesProbe` is the second subject here: the production `/api/updates`
  * handlers, called with a session this worker synthesizes. A session is all
  * this probe fakes — the record, the channel, the refresh grant, the plan and
@@ -30,6 +38,7 @@ import { DeployRunDO } from '../../src/deploy/deploy-do';
 import { handleDeployRequest } from '../../src/deploy/routes';
 import { handleUpdatesRequest } from '../../src/updates/routes';
 import type { AuthIdentity } from '../../src/auth/session';
+import type { DeployRunPhase, DeploySnapshot } from '@kinu.run/core/deploy';
 import {
   DeployFakeStateSchema,
   type DeployFakeRefusal, type DeployFakeServedBuild, type DeployFakeStall, type DeployFakeState,
@@ -38,6 +47,14 @@ import {
 import * as v from 'valibot';
 
 export class DeployRunProbeDO extends DeployRunDO {
+  /** Callers parked on the end of an alarm delivery, resolved by the one the
+   *  platform delivers. */
+  private readonly woken: (() => void)[] = [];
+  /** How many alarm deliveries this object has ENDED. */
+  private fires = 0;
+  /** The instant the last of those ended, by this object's own clock. */
+  private armedAtMs = 0;
+
   /** The vault's keys, read through the production port that owns them
    *  (`vault().names()`), so the prefix the run stores under is stated once, in
    *  the class that stores it. A run that is over must answer with none. */
@@ -87,6 +104,57 @@ export class DeployRunProbeDO extends DeployRunDO {
     this.ctx.abort(reason);
   }
 
+  /**
+   * The ledger once it holds one of `states`, awaited rather than polled.
+   *
+   * The plan runs inside an alarm delivery and every delivery ends by waking
+   * whoever is waiting, so this is the condition itself: a caller wakes, reads
+   * the state the frame left, and waits again if the run is still going. A run
+   * that never reaches one of the states never answers, and the gate that runs
+   * this file is where that surfaces — a duration here would instead report the
+   * race as a defect in whatever ran beside it.
+   */
+  async settledAfter(states: readonly DeployRunPhase[]): Promise<DeploySnapshot> {
+    for (;;) {
+      const held = await this.snapshot();
+
+      if (states.includes(held.state)) return held;
+      await new Promise<void>((resolve) => { this.woken.push(resolve); });
+    }
+  }
+
+  /** What this object holds once an alarm delivery has ended — for a row whose
+   *  subject is the DELIVERY rather than a run state, the vault's expiry being
+   *  the one that leaves no state behind to wait for. A delivery already taken
+   *  answers at once, so the wait is on the state a delivery left. */
+  async reportAfterAlarm(): Promise<DeploySnapshot> {
+    if (this.fires === 0) await new Promise<void>((resolve) => { this.woken.push(resolve); });
+
+    return await this.snapshot();
+  }
+
+  /** The instant this object ended its last alarm delivery, by ITS clock. The
+   *  expiry is armed at the end of that delivery (`armExpiry`), so the vault's
+   *  TTL is `alarmAt() - armedAt()`: two instants this object took. */
+  async armedAt(): Promise<number> {
+    return this.armedAtMs;
+  }
+
+  /** The production timer, with the end of every delivery published. `finally`
+   *  rather than a catch: an alarm that threw is redelivered by the runtime and
+   *  this must not absorb that, but a row waiting on the frame is waiting on
+   *  the state it left either way. */
+  override async alarm(): Promise<void> {
+    try {
+      await super.alarm();
+    } finally {
+      this.fires += 1;
+      this.armedAtMs = Date.now();
+
+      for (const resolve of this.woken.splice(0)) resolve();
+    }
+  }
+
   /** Every durable row, as text. The assertion is a substring search, so the
    *  shape does not matter and a new column cannot escape it. */
   rowText(): string {
@@ -115,9 +183,21 @@ export class DeployFakeControl extends WorkerEntrypoint {
     await this.hit('/serve', build);
   }
 
-  /** One call this plane answers late, after it has already done its work. */
+  /** One call this plane holds open after it has already done its work. */
   async stallOnce(stall: DeployFakeStall): Promise<void> {
     await this.hit('/stall', stall);
+  }
+
+  /** Answers when that call has written and is being held — the window in which
+   *  the object can be killed having changed the account without knowing it. */
+  async stallReached(): Promise<void> {
+    await this.hit('/stall/reached');
+  }
+
+  /** The held call, let go. Called by the row once it has seen what the window
+   *  is for, so nothing here ends on a duration. */
+  async releaseStall(): Promise<void> {
+    await this.hit('/stall/release');
   }
 
   /** The shape of the release the channel serves from here on: how many

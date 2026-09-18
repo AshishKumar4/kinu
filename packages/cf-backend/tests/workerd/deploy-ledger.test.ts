@@ -20,7 +20,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { DEPLOY_SOCKET_PROTOCOL, FACT_UPLOAD_PEAK, runKeyDigest } from '@kinu.run/core/deploy';
 import { sha256Hex } from '@kinu.run/core';
 import * as v from 'valibot';
-import type { DeployInputs, DeploySnapshot } from '@kinu.run/core/deploy';
+import type { DeployInputs, DeployRunPhase, DeploySnapshot } from '@kinu.run/core/deploy';
 import {
   DEPLOY_FAKE_ACCESS_TOKEN, DEPLOY_FAKE_ACCOUNT, DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_REFRESH_TOKEN,
   DEPLOY_FAKE_ROTATED_REFRESH, DEPLOY_FAKE_SUBDOMAIN, DEPLOY_FAKE_VERSION,
@@ -79,29 +79,21 @@ async function authorized() {
   return stub;
 }
 
-/** Generous, and never spent on a passing run: the wait stops at the outcome. */
-const DEADLINE_MS = 20_000;
-
-const POLL_MS = 25;
-
 /**
  * The run, driven to its outcome.
  *
  * `start` answers before the first step exists — the plan runs on the object's
- * alarm — so a row that wants the finished ledger waits for the state the alarm
- * wrote. Waiting for the CONDITION rather than sleeping: a broken runner spends
- * the deadline and the assertion then reports whatever state it reached.
+ * alarm — so a row that wants the finished ledger waits for the frame that
+ * wrote it. The object parks this call on the end of an alarm delivery and
+ * answers with the state that delivery left (`settledAfter`), so nothing here
+ * polls and no row carries a duration: a runner that never reaches an outcome
+ * hangs the gate, which is where the ladder already kills one, rather than
+ * reporting the race as a red on whichever test lost it.
  */
-async function settled(stub: { snapshot(): Promise<DeploySnapshot> }): Promise<DeploySnapshot> {
-  const deadline = Date.now() + DEADLINE_MS;
-  let held = await stub.snapshot();
-
-  while (held.state !== 'done' && held.state !== 'failed' && Date.now() < deadline) {
-    await scheduler.wait(POLL_MS);
-    held = await stub.snapshot();
-  }
-
-  return held;
+async function settled(stub: {
+  settledAfter(states: readonly DeployRunPhase[]): Promise<DeploySnapshot>;
+}): Promise<DeploySnapshot> {
+  return await stub.settledAfter(['done', 'failed']);
 }
 
 /** A run minted the way the page mints one, and the key it answered with. */
@@ -360,24 +352,27 @@ describe('a run nobody finished', () => {
     expect(await stub.heldSecretNames()).not.toEqual([]);
 
     const due = await stub.alarmAt();
+    const armed = await stub.armedAt();
 
-    // An hour, give or take the time the plan took.
-    expect(due - Date.now()).toBeGreaterThan(3_000_000);
-    expect(due - Date.now()).toBeLessThanOrEqual(3_600_000);
+    // An hour, measured between two instants the OBJECT took: the end of the
+    // plan's alarm delivery, which is where the expiry is armed, and the slot
+    // that delivery left armed. The test process's own clock is not one of the
+    // two, so nothing here moves when the machine is busy.
+    expect(due - armed).toBeGreaterThan(3_000_000);
+    expect(due - armed).toBeLessThanOrEqual(3_600_000);
 
     expect(await stub.expireSoon()).toBe(true);
 
-    const deadline = Date.now() + DEADLINE_MS;
-
-    while ((await stub.heldSecretNames()).length > 0 && Date.now() < deadline) {
-      await scheduler.wait(POLL_MS);
-    }
+    // The wipe happens inside the expiry delivery, and the run says `expired`
+    // when it is over: the row waits for that state rather than re-reading the
+    // vault until it empties.
+    const expired = await stub.settledAfter(['expired']);
 
     expect(await stub.heldSecretNames()).toEqual([]);
     // The ledger survives and says what happened, so the page can offer signing
     // in again into the same run rather than a second set of everything.
-    expect((await stub.snapshot()).state).toBe('expired');
-    expect((await stub.snapshot()).steps.length).toBeGreaterThan(0);
+    expect(expired.state).toBe('expired');
+    expect(expired.steps.length).toBeGreaterThan(0);
   });
 
   it('deletes an object that never got past minting', async () => {
@@ -389,11 +384,13 @@ describe('a run nobody finished', () => {
     expect(await stub.alarmAt()).toBeGreaterThan(Date.now());
     expect(await stub.expireSoon()).toBe(true);
 
-    const deadline = Date.now() + DEADLINE_MS;
+    // The expiry delivery is the subject here: an object with no rows deletes
+    // itself outright, so there is no run state left to wait for and the row
+    // waits on the END of the delivery the runtime made.
+    const left = await stub.reportAfterAlarm();
 
-    while (await stub.alarmAt() !== 0 && Date.now() < deadline) await scheduler.wait(POLL_MS);
-
-    expect(await stub.snapshot()).toEqual({ runId: '', state: 'collecting', address: '', version: '', steps: [] });
+    expect(await stub.alarmAt()).toBe(0);
+    expect(left).toEqual({ runId: '', state: 'collecting', address: '', version: '', steps: [] });
     expect(await stub.admits(run.runKey)).toBe(false);
   });
 });
@@ -414,18 +411,17 @@ describe('a run the runtime could not finish', () => {
   it('carries on from the redelivered alarm and creates nothing twice', async () => {
     const stub = await authorized();
 
-    // The R2 creation is answered late: while this call hangs the bucket
-    // exists in the account and the run does not know it.
+    // The R2 creation is held open: the bucket exists in the account and the
+    // run does not know it until this row lets the call answer.
     await env.DEPLOY_FAKE.stallOnce({
-      method: 'POST', path: `/accounts/${DEPLOY_FAKE_ACCOUNT}/r2/buckets`, ms: 2_000,
+      method: 'POST', path: `/accounts/${DEPLOY_FAKE_ACCOUNT}/r2/buckets`,
     });
     await stub.start(INPUTS);
 
-    const deadline = Date.now() + DEADLINE_MS;
-
-    while (stateOf(await stub.snapshot(), 'r2') !== 'running' && Date.now() < deadline) {
-      await scheduler.wait(POLL_MS);
-    }
+    // The window itself, awaited: the plane says when the create has written
+    // and is being held, so the abort below lands inside it by construction
+    // rather than by being faster than a timer.
+    await env.DEPLOY_FAKE.stallReached();
 
     expect(stateOf(await stub.snapshot(), 'r2')).toBe('running');
     expect((await env.DEPLOY_FAKE.state()).buckets).not.toEqual([]);
@@ -433,6 +429,10 @@ describe('a run the runtime could not finish', () => {
     // The abort takes the caller's own RPC with it, and poisons the stub: from
     // here the object is reached the way the next request reaches it.
     await expect(stub.abort('probe: the object died mid-plan')).rejects.toThrow();
+
+    // The held call is let go now that the object driving it is gone — the
+    // signal the fake waits on is this row's to give.
+    await env.DEPLOY_FAKE.releaseStall();
 
     const again = reopenRun();
     const resumed = await settled(again);
