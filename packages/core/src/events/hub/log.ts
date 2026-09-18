@@ -271,6 +271,7 @@ const SubordinateTaskPayloadSchema = v.object({
   inherited_context: v.optional(SubordinateInheritedContextSchema),
   kinu_mode: WorkModeSchema,
   creation_id: v.optional(v.string()),
+  message_id: v.optional(v.string()),
 });
 
 /**

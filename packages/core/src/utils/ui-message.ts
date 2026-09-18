@@ -172,6 +172,51 @@ export function uiMessageRow(content: string): StoredRowProjection {
   return metadata === undefined ? { text } : { text, metadata };
 }
 
+/**
+ * The assistant row as it is persisted: what the client was streamed — its
+ * tool calls, step markers and reasoning — carrying the turn's ANSWER as its
+ * last text part, else the text alone. A row that kept both the streamed
+ * narration and the answer read as the two concatenated to every text
+ * projection; the narration is on each step's own ledger row.
+ */
+export function recordedAnswer<Part extends { readonly type: string }, Message extends { readonly parts: readonly Part[] }>(
+  streamed: Message | null, id: string, text: string,
+): (Omit<Message, 'parts'> & { parts: Array<Part | { type: 'text'; text: string }> }) | { id: string; role: 'assistant'; parts: [{ type: 'text'; text: string }] } {
+  const answer = { type: 'text' as const, text };
+
+  if (streamed === null) return { id, role: 'assistant', parts: [answer] };
+  let last = -1;
+
+  for (const [index, part] of streamed.parts.entries()) if (part.type === 'text') last = index;
+  const parts: Array<Part | { type: 'text'; text: string }> = [];
+
+  for (const [index, part] of streamed.parts.entries()) {
+    if (part.type !== 'text') parts.push(part);
+    else if (index === last) parts.push({ ...part, text });
+  }
+
+  if (last === -1) parts.push(answer);
+
+  return { ...streamed, parts };
+}
+
+/** A stored row's parts as the client renders them: the serialized UIMessage's
+ *  own, else one text part over the plain text the row holds. */
+export function storedUiMessageParts(content: string): UIMessage['parts'] {
+  const decoded = tolerate(() => parseJsonValue(content), 'malformed-input');
+  const parsed = decoded === undefined ? null : v.safeParse(StoredUiMessagePartsSchema, decoded);
+
+  if (parsed === null || !parsed.success) return [{ type: 'text', text: content }];
+
+  // SAFETY: the row was written from a UIMessage's own parts (`recordedAnswer`);
+  // the schema admits the discriminant and the client renders the rest.
+  return parsed.output.parts as UIMessage['parts'];
+}
+
+const StoredUiMessagePartsSchema = v.object({
+  parts: v.array(v.looseObject({ type: v.string() })),
+});
+
 /** {@link uiMessageRow}'s text half, for the callers that need nothing else. */
 export function uiMessageText(content: string): string {
   return uiMessageRow(content).text;

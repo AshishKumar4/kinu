@@ -7,8 +7,8 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Combobox } from "@cloudflare/kumo";
-import { ArrowsClockwiseIcon, WarningCircleIcon } from "@phosphor-icons/react";
-import { formatContextWindow } from "@kinu.run/core";
+import { ArrowsClockwiseIcon, BrainIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { formatContextWindow, isReasoningEffort, offeredReasoningEfforts, type ReasoningEffort } from "@kinu.run/core";
 import {
   cloudflareReconnectPath, listAvailableModels,
   type ModelMenu, type ModelMenuEntry, type ProviderFailure,
@@ -128,12 +128,41 @@ export function ModelPicker({
  * earns the empty-state CTA — flashing it during load or on a flaky request
  * sent connected users through a full OAuth prompt=login.
  */
+/** The thinking level beside the model: the levels this model declares, or
+ *  nothing when it declares none. Tucked to an icon and a word. */
+function EffortPicker({ options, value, onChange, disabled }: {
+  options: readonly ReasoningEffort[];
+  value: ReasoningEffort | null;
+  onChange: (effort: ReasoningEffort | null) => void;
+  disabled?: boolean;
+}) {
+  if (options.length === 0) return null;
+
+  return (
+    <label className="inline-flex shrink-0 items-center gap-1 rounded-md px-1 py-0.5 p-t-status p-text-3 hover:p-text-2 focus-within:p-text-2" title="Thinking level">
+      <BrainIcon size={12} aria-hidden="true" />
+      <select
+        aria-label="Thinking level"
+        className="max-w-20 cursor-pointer appearance-none bg-transparent p-t-status outline-none"
+        value={value ?? ""}
+        disabled={disabled}
+        onChange={(event) => { const effort = event.target.value; onChange(isReasoningEffort(effort) ? effort : null); }}
+      >
+        <option value="">default</option>
+        {options.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+      </select>
+    </label>
+  );
+}
+
 export function ConnectedModelPicker({
-  value, onChange, size, className, clearable, placeholder, renderEmpty, disabled,
+  value, onChange, size, className, clearable, placeholder, renderEmpty, disabled, effort,
 }: Omit<ModelPickerProps, "models"> & {
   /** Rendered when no provider is connected. Defaults to the Workers AI
    *  reconnect CTA. */
   renderEmpty?: () => React.ReactNode;
+  /** The thinking level, offered from the selected model's declared levels. */
+  effort?: { value: ReasoningEffort | null; onChange: (effort: ReasoningEffort | null) => void };
 }) {
   const [menu, setMenu] = useState<ModelMenu | null | "error">(null);
 
@@ -204,7 +233,7 @@ export function ConnectedModelPicker({
     );
   }
 
-  return (
+  const picker = (
     <ModelPicker
       models={menu.models}
       failures={menu.failures}
@@ -216,6 +245,20 @@ export function ConnectedModelPicker({
       placeholder={placeholder}
       disabled={disabled}
     />
+  );
+
+  if (effort === undefined) return picker;
+
+  return (
+    <>
+      {picker}
+      <EffortPicker
+        options={offeredReasoningEfforts(menu.models.find((model) => model.spec === value)?.reasoningEfforts, effort.value)}
+        value={effort.value}
+        onChange={effort.onChange}
+        disabled={disabled}
+      />
+    </>
   );
 }
 

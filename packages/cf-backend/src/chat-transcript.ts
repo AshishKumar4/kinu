@@ -27,7 +27,7 @@
 import { AgentSessionProvider, type SessionMessage, type SqlProvider } from 'agents/experimental/memory/session';
 import * as v from 'valibot';
 import {
-  CHAT_SESSION_ID, JsonObjectSchema, operatorMessageAdmitted, uiMessageText,
+  CHAT_SESSION_ID, JsonObjectSchema, operatorMessageAdmitted, recordedAnswer, storedUiMessageParts, uiMessageText,
   type ActorReference, type JsonObject, type PromptFile, type SqlExecutor,
   type TranscriptRow, type TranscriptStore,
 } from '@kinu.run/core';
@@ -69,49 +69,10 @@ export class AssistantMessagesTranscript implements TranscriptStore {
     this.streamed = source.streamed;
   }
 
-  /**
-   * The assistant row as it WILL be persisted under this id: what the client
-   * was streamed — its tool calls, its step markers, its reasoning — carrying
-   * the turn's ANSWER as its one text part, else the text alone. The roster
-   * records this very shape as the turn-end announcement's input, so a replay
-   * reads what the row holds.
-   *
-   * The streamed message's own text parts are the turn's narration, one per
-   * step; the loop hands this the answer the turn stopped on. A row that kept
-   * both read as the narration and the answer concatenated to every reader
-   * that projects a row to text (`uiMessageText`: the history page, search,
-   * inherited context), which is how the deployed build's stored reply for a
-   * ten-step turn began with "I'll take a quick look…". The narration is not
-   * lost: it is on each step's own `step_finish` row in the run ledger, and it
-   * reached whoever was watching live.
-   */
+  /** The assistant row as it WILL be persisted under this id — the roster
+   *  records this shape as the turn-end announcement's input. */
   recordedAssistant(id: string, text: string): SessionMessage {
-    const streamed = this.streamed?.(id);
-
-    if (streamed === undefined || streamed === null) return { id, role: 'assistant', parts: [{ type: 'text', text }] };
-
-    // The answer rides the streamed message's OWN last text part, text
-    // replaced, left where that part streamed: that part carries what the
-    // client rendered it as (`state`, and whatever the SDK adds next), and a
-    // hand-built part would drop it. A turn whose answer came after its calls
-    // already holds it last; one that stopped on its calls holds its streamed
-    // narration first, and moving that sentence after the calls is what put
-    // the tool card ahead of it on reload.
-    let lastText: { readonly index: number; readonly part: SessionMessage['parts'][number] } | null = null;
-
-    for (const [index, part] of streamed.parts.entries()) {
-      if (part.type === 'text') lastText = { index, part };
-    }
-
-    if (lastText === null) return { ...streamed, parts: [...streamed.parts, { type: 'text', text }] };
-
-    const found = lastText;
-
-    return {
-      ...streamed,
-      parts: streamed.parts.flatMap((part, index) =>
-        part.type !== 'text' || index === found.index ? [index === found.index ? { ...found.part, text } : part] : []),
-    };
+    return recordedAnswer(this.streamed?.(id) ?? null, id, text);
   }
 
   has(id: string): boolean {
@@ -186,15 +147,8 @@ export class AssistantMessagesTranscript implements TranscriptStore {
  *  MCTS trees, a peer lane — is not this conversation's. */
 const CHAT_ROLES = ['user', 'assistant'] as const;
 
-/**
- * One hosted actor's conversation as the client renders it: its plain rows,
- * oldest first, in the SDK's session shape.
- *
- * The plain store keeps text, so a row projects to ONE text part. `uiMessageText`
- * is still the reader, because a row written from a UIMessage elsewhere in this
- * workspace's history (an import, a fork transfer) is serialized rather than
- * plain and would otherwise reach the pane as JSON.
- */
+/** One hosted actor's conversation as the client renders it, oldest first:
+ *  a user row is plain text, an answer row holds the parts it streamed. */
 export function actorChatHistory(sql: SqlExecutor, actor: ActorReference): SessionMessage[] {
   return sql<{ id: string; role: string; content: string }>`
     SELECT id, role, content FROM actor_messages
@@ -204,7 +158,7 @@ export function actorChatHistory(sql: SqlExecutor, actor: ActorReference): Sessi
     .map((row) => ({
       id: row.id,
       role: row.role === 'assistant' ? 'assistant' as const : 'user' as const,
-      parts: [{ type: 'text' as const, text: uiMessageText(row.content) }],
+      parts: storedUiMessageParts(row.content),
     }));
 }
 

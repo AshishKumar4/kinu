@@ -138,7 +138,8 @@ export interface AgentConfigStore {
   getModel(): string | null;
   setModel(spec: string): void;
   getReasoningEffort(): ReasoningEffort | null;
-  setReasoningEffort(effort: ReasoningEffort): void;
+  /** Null clears the setting: the tier's level applies again. */
+  setReasoningEffort(effort: ReasoningEffort | null): void;
   /** Prompt-cache retention for this agent's turns. Always answers — an unset
    *  or malformed row reads as the `short` default, so the caching seam never
    *  has to decide what a missing value means. */
@@ -377,6 +378,12 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return isReasoningEffort(effort) ? effort : null;
     },
     setReasoningEffort(effort) {
+      if (effort === null) {
+        remove(AGENT_CONFIG_KEYS.reasoningEffort);
+
+        return;
+      }
+
       if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
       set(AGENT_CONFIG_KEYS.reasoningEffort, effort);
     },

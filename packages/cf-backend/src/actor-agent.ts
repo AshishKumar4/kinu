@@ -33,7 +33,7 @@ import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/p
 import { MessageType, parseProtocolMessage } from "agents/chat";
 import { AssistantMessagesTranscript } from './chat-transcript';
 import {
-  ActorChatRooms, ChatWireTransport, type ChatRoom, type HostedChatWire,
+  ActorChatRooms, ChatWireTransport, type ChatWire,
 } from './chat-transport';
 import {
   CLI_BEARER_HEADER,
@@ -2696,14 +2696,14 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** The room one socket's chat frames belong to, resolved from the actor it
    *  addressed; null when that actor is no longer hosted here. */
-  protected chatRoomFor(connection: Connection): ChatRoom | null {
+  protected chatRoomFor(connection: Connection): ChatWireTransport | null {
     return this.chatRooms.for(actorFromConnectionTags(connection.tags));
   }
 
   /** One hosted actor's chat wire — its transcript, its queue and its own
    *  connections — or null when this workspace hosts no such actor. Only the
    *  workspace root knows its directory, so the wire is built there. */
-  protected abstract hostedChatWire(name: string): HostedChatWire | null;
+  protected abstract hostedChatWire(name: string): ChatWire | null;
 
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
 
@@ -6310,6 +6310,7 @@ export abstract class ActorAgent extends Think<Env> {
       // The workspace's pinned model overrides the role's tier model inside
       // the resolver. Without it a setModel pin is accepted and never run on.
       workspaceModel: this.config.getModel(),
+      explicitEffort: this.config.getReasoningEffort(),
     });
 
     const operation = captureOperationProfile({
@@ -6764,6 +6765,9 @@ export abstract class ActorAgent extends Think<Env> {
         activeSkills: [],
         explicitTier: input.explicitTier ?? config.getAssignedTier() ?? undefined,
         workspaceModel: this.config.getModel(),
+        // The actor's own pin and effort, written by its pane; else the workspace's.
+        actorModel: config.getModel(),
+        explicitEffort: config.getReasoningEffort() ?? this.config.getReasoningEffort(),
       }),
       inputs,
     };

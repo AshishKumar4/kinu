@@ -35,9 +35,10 @@ import {
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
-import { ActorMessagesTranscript, CHAT_SESSION_ID } from '@kinu.run/core';
+import { ActorMessagesTranscript, CHAT_SESSION_ID, recordedAnswer } from '@kinu.run/core';
+import type { UIMessage } from 'ai';
 import { actorChatClear, actorChatHistory, actorChatNewestId } from './chat-transcript';
-import type { HostedChatWire } from './chat-transport';
+import type { ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
@@ -220,7 +221,7 @@ import {
   getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   setAlwaysActiveSkills, setEvolutionConfig,
-  setMctsConfig, setReasoningEffort, setShellApprovalMode,
+  setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView, type MctsConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   planReviewAwaitingDecision,
@@ -1366,8 +1367,23 @@ export class OrchestratorAgent extends ActorAgent {
         const swept = await drainAssignments(log, {
           now, budget, staleMs: STALE_EVENT_DELIVERY_MS,
           run: async (task) => {
-            const { text } = await runHostedTask(seams, reference, task);
-            this.recordHostedChatAnswer(reference, text, record.name);
+            // The actor's own pane rides the root's wire: the turn opens under
+            // the message that admitted it, streams, and closes over its row.
+            const room = this.chatRooms.hostedRoom(record.name);
+            const answerId = crypto.randomUUID();
+
+            room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined });
+
+            try {
+              const { text } = await runHostedTask(seams, reference, task, room === null ? undefined : (chunks) => room.observe(chunks));
+
+              this.recordHostedChatAnswer(reference, answerId, text, room?.answer(answerId) ?? null);
+            } catch (cause) {
+              room?.deliver({ type: 'error', message: renderThrownChain({ cause }) });
+              throw cause;
+            } finally {
+              room?.closeTurn();
+            }
           },
           onFailure: ({ cause }) => {
             diagnostics.failure('subordinate.delegated_turn_failed', toKinuError({
@@ -2274,7 +2290,7 @@ export class OrchestratorAgent extends ActorAgent {
    * list on every request, so `admitted` has to recognise it — and the answer
    * is recorded when the turn ends ({@link recordHostedChatAnswer}).
    */
-  protected override hostedChatWire(name: string): HostedChatWire | null {
+  protected override hostedChatWire(name: string): ChatWire | null {
     const row = this.subordinateRoster.get(name);
 
     if (!row || row.status === 'dismissed' || !row.actorReference) return null;
@@ -2282,6 +2298,8 @@ export class OrchestratorAgent extends ActorAgent {
     const rows = new ActorMessagesTranscript(this.boundSql, reference, CHAT_SESSION_ID);
 
     return {
+      sql: null,
+      getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(name, message, exclude); },
       history: () => actorChatHistory(this.boundSql, reference),
       admitted: (id) => rows.has(id),
@@ -2292,7 +2310,7 @@ export class OrchestratorAgent extends ActorAgent {
         rows.appendUser({ id: input.id, text: input.text });
 
         const handoff = await admitHostedTask(this.subordinateSeams(), reference, {
-          kind: 'message', body: input.text, mode: input.mode,
+          kind: 'message', body: input.text, mode: input.mode, messageId: input.id,
         });
 
         // NOTHING IS ARMED HERE, and that is a decision rather than an
@@ -2327,13 +2345,12 @@ export class OrchestratorAgent extends ActorAgent {
    * root's leaked into it. The row lands here, at the one place a hosted turn
    * ends, and the pane is told in the same breath.
    */
-  private recordHostedChatAnswer(reference: ActorReference, text: string, name: string): void {
+  private recordHostedChatAnswer(reference: ActorReference, id: string, text: string, streamed: UIMessage | null): void {
     const parentId = actorChatNewestId(this.boundSql, reference);
 
-    if (parentId === null || text.trim().length === 0) return;
+    if (parentId === null || (text.trim().length === 0 && streamed === null)) return;
     new ActorMessagesTranscript(this.boundSql, reference, CHAT_SESSION_ID)
-      .appendAssistant({ id: crypto.randomUUID(), parentId, text });
-    this.chatRooms.hostedRoom(name)?.announce();
+      .appendAssistant({ id, parentId, text, message: recordedAnswer(streamed, id, text) });
   }
   /** The agents tool's peer deps over the cross-workspace transport. Owner
    *  resolution is lazy inside each action (the toolset is cached across
@@ -5123,8 +5140,9 @@ export class OrchestratorAgent extends ActorAgent {
    * root. A browser-reachable read that answered for any actor id handed to it
    * would be the first cross-actor read reachable from outside this object.
    */
-  @callable()
-  async getActorSnapshot(name: string) {
+  /** One child of this root, resolved THROUGH THE DIRECTORY under this root's
+   *  handle: a name can only reach an actor of this workspace. */
+  private hostedChild(name: string) {
     if (!this.getOwnerUserId()) throw new KinuError('denied', 'The workspace has no owner.');
     const entry = this.subordinateRoster.requireExisting(name);
 
@@ -5132,14 +5150,15 @@ export class OrchestratorAgent extends ActorAgent {
       actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name },
     ).reference;
 
-    const child = this.actorHost().bindStores(reference);
+    return { entry, child: this.actorHost().bindStores(reference) };
+  }
 
-    // The model a pane shows is the actor's EFFECTIVE one — the resolution
-    // the turn makes (workspace pin, then the actor's tier, then the role's)
-    // — with the tier source that chose it. `config.getModel()` reads the
-    // actor's own pin, which no write path sets: it answered "" for every
-    // pane, and the picker's write went to the workspace's pin, so choosing
-    // a model in an agent pane silently repinned the whole workspace.
+  @callable()
+  async getActorSnapshot(name: string) {
+    const { entry, child } = this.hostedChild(name);
+
+    // The model a pane shows is the actor's EFFECTIVE one — its own pin, else
+    // the workspace's, else its tier's — with the source that chose it.
     const { profile } = await this.hostedActorProfile({
       actor: child.handle, availableTools: [], workMode: 'build',
     });
@@ -5154,6 +5173,7 @@ export class OrchestratorAgent extends ActorAgent {
       role: child.stores.config.getRoleSelection(),
       mission: entry.birth?.seed.mission ?? '',
       model: { model: profile.tier.model, source: profile.tier.source },
+      reasoningEffort: profile.tier.reasoningEffort,
       activePlan: child.stores.planReviews.getActive('default'),
       // The child's OWN acknowledged-but-not-landed steers, read with the
       // child's actor id rather than this root's — the same rows, the same
@@ -6188,12 +6208,22 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
-  @callable() async getReasoningEffort(): Promise<{ effort: ReasoningEffort | null }> {
-    return getReasoningEffort(this.config);
+  /** `actor` names a child of this workspace: the read is its own config. */
+  @callable() async getReasoningEffort(actor?: string): Promise<{ effort: ReasoningEffort | null }> {
+    return getReasoningEffort(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config);
   }
 
-  @callable() async setReasoningEffort<Effort>(effort: Effort) {
-    return setReasoningEffort(this.config, effort);
+  @callable() async setReasoningEffort<Effort>(effort: Effort, actor?: string) {
+    return setReasoningEffort(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config, effort);
+  }
+
+  /** A hosted actor's own model pin, over the workspace's for its turns. */
+  @callable() async setActorModel(actor: string, spec: string) {
+    return setModel({
+      config: this.hostedChild(actor).child.stores.config,
+      normalize: (s) => this.providerRegistry().normalizeSpecSync(s),
+      onChanged: () => {},
+    }, spec);
   }
 
   // ── Voyager curriculum: propose / list / accept next tasks ─────────

@@ -2285,6 +2285,7 @@ export class LocalAgentSession implements BackendHost {
       // The workspace's pinned model overrides the role's tier model inside
       // the resolver. Without it a setModel pin is accepted and never run on.
       workspaceModel: this.config.getModel(),
+      explicitEffort: this.config.getReasoningEffort(),
     });
 
     this.actorSession.bindProfile(lease, profile, profileInputs);

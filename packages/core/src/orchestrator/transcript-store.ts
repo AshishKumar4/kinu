@@ -14,12 +14,13 @@
  * writes the parent it is handed.
  */
 
-import type { ModelMessage } from 'ai';
+import type { ModelMessage, UIMessage } from 'ai';
 import type { ActorReference } from '../identity/actor-handle';
 import { operatorMessageAdmitted } from '../identity/conversation-store';
 import type { PromptFile } from '../types/backend-host';
 import type { SqlExecutor } from '../types/primitives';
 import type { JsonObject } from '../utils/json';
+import { uiMessageText } from '../utils/ui-message';
 
 /** A stored row as the restore reads it. */
 export interface TranscriptRow {
@@ -98,9 +99,14 @@ export class ActorMessagesTranscript implements TranscriptStore {
       VALUES (${this.actor.actorId}, ${row.id}, ${this.sessionId}, ${row.parentId ?? null}, ${'user'}, ${row.text}, ${stamp})`;
   }
 
-  appendAssistant(row: { readonly id: string; readonly parentId: string; readonly text: string }): void {
+  /** `message` is the streamed UIMessage the answer rides in; the row then
+   *  holds its parts as JSON, which every reader projects through
+   *  `uiMessageRow` / `storedUiMessageParts`. */
+  appendAssistant(row: { readonly id: string; readonly parentId: string; readonly text: string; readonly message?: UIMessage }): void {
+    const content = row.message === undefined ? row.text : JSON.stringify(row.message);
+
     void this.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
-      VALUES (${this.actor.actorId}, ${row.id}, ${this.sessionId}, ${row.parentId}, ${'assistant'}, ${row.text})`;
+      VALUES (${this.actor.actorId}, ${row.id}, ${this.sessionId}, ${row.parentId}, ${'assistant'}, ${content})`;
   }
 
   newestFirst(): readonly TranscriptRow[] {
@@ -109,7 +115,8 @@ export class ActorMessagesTranscript implements TranscriptStore {
       FROM actor_messages
       WHERE actor_id = ${this.actor.actorId}
         AND session_id = ${this.sessionId} AND role IN ('user', 'assistant')
-      ORDER BY created_at DESC, rowid DESC`;
+      ORDER BY created_at DESC, rowid DESC`
+      .map((row) => ({ role: row.role, content: uiMessageText(row.content) }));
   }
 
   operatorSpoke(): boolean {
