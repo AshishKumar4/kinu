@@ -32,6 +32,7 @@ import type { AuthIdentity } from '../../src/auth/session';
 import {
   DeployFakeStateSchema,
   type DeployFakeRefusal, type DeployFakeServedBuild, type DeployFakeStall, type DeployFakeState,
+  type DeployFakeWeight,
 } from './deploy-fake';
 import * as v from 'valibot';
 
@@ -120,9 +121,10 @@ export class DeployFakeControl extends WorkerEntrypoint {
     await this.hit('/stall', stall);
   }
 
-  /** How many bytes of asset the channel's release carries from here on. */
-  async weigh(bytes: number): Promise<void> {
-    await this.hit('/weigh', { bytes });
+  /** The shape of the release the channel serves from here on: how many
+   *  modules and assets it carries, what they weigh, and its largest file. */
+  async weigh(weight: DeployFakeWeight): Promise<void> {
+    await this.hit('/weigh', weight);
   }
 
   /** The lifetime the next authorization-code grant answers with. From that
@@ -139,7 +141,7 @@ export class DeployFakeControl extends WorkerEntrypoint {
 
   private async hit(
     path: string,
-    body?: DeployFakeRefusal | DeployFakeServedBuild | DeployFakeStall | { bytes: number } | { expiresIn: number },
+    body?: DeployFakeRefusal | DeployFakeServedBuild | DeployFakeStall | DeployFakeWeight | { expiresIn: number },
   ): Promise<DeployFakeState> {
     const sent = body === undefined
       ? { method: 'POST' }

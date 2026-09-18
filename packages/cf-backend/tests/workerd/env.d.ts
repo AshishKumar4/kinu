@@ -19,7 +19,7 @@ import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type {
-  DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState,
+  DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
 } from './deploy-fake';
 import type { DeployInputs, DeploySnapshot } from '@kinu.run/core/deploy';
 import type { FilesEioProbeDO } from './files-eio-probe';
@@ -194,7 +194,7 @@ interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
   serve(build: DeployFakeServedBuild): Promise<void>;
   publish(build: DeployFakeServedBuild): Promise<void>;
   stallOnce(stall: DeployFakeStall): Promise<void>;
-  weigh(bytes: number): Promise<void>;
+  weigh(weight: DeployFakeWeight): Promise<void>;
   expireGrant(expiresIn: number): Promise<void>;
 }
 

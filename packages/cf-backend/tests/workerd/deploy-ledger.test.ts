@@ -17,7 +17,7 @@
  */
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DEPLOY_SOCKET_PROTOCOL, runKeyDigest } from '@kinu.run/core/deploy';
+import { DEPLOY_SOCKET_PROTOCOL, FACT_UPLOAD_PEAK, runKeyDigest } from '@kinu.run/core/deploy';
 import { sha256Hex } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { DeployInputs, DeploySnapshot } from '@kinu.run/core/deploy';
@@ -481,55 +481,82 @@ describe('a run whose access token expired', () => {
 });
 
 /**
- * What one release costs the object that installs it.
+ * WHAT ONE RELEASE COSTS THE OBJECT THAT INSTALLS IT.
  *
- * MEASURED, NOT ASSERTED, and measured by the plane rather than by the code:
- * the isolate offers no memory reading at all (2026-09-18, workerd through
+ * `do.isolate.transient_alloc_reset` in `packages/core/src/platform-catalog.ts`
+ * is the entry that governs this: a transient allocate-and-free of 128 MiB in
+ * a Durable Object context resets the object about 1.7 s later, after the
+ * request already answered 200. Nothing inside the isolate can read its own
+ * memory (measured 2026-09-18 on `@cloudflare/workerd-linux-64` through
  * `vitest-pool-workers`: `performance.measureUserAgentSpecificMemory` is
  * undefined and `process.memoryUsage()` answers zeroes; the pool enforces no
  * memory ceiling either — 400 MiB allocated there without complaint — so a row
- * cannot reach `do.isolate.transient_alloc_reset` by trying). The four figures
- * below are bytes this channel really served and bodies the object really
- * built and sent.
+ * cannot reach the reset by trying). So this row measures from two sides: the
+ * bytes the channel really served and the bodies the object really sent, which
+ * the fake counts, and what the run held, which the upload step counts for
+ * itself and records on its ledger row (`FACT_UPLOAD_PEAK`).
  *
- * THE MULTIPLE, 2026-09-18 on this tree, for an 8 MiB release: served
- * 4.34 MiB compressed, 8.01 MiB unpacked and held for the length of the plan,
- * one 10.67 MiB asset body, 1.6 KiB version body — 23.01 MiB at the peak,
- * 2.87x the unpacked release.
+ * THE RELEASE IS THE SIZE OF A PUBLISHED ONE. 120 modules of 29.19 MiB and
+ * 421 assets of 78.01 MiB with a 21.55 MiB member, measured 2026-09-18 from
+ * `packages/cf-backend/dist` (built 2026-09-16 in the primary checkout, maps
+ * and `wrangler.json` excluded); the artifact that makes unpacks to
+ * 108.46 MiB, half a MiB over the 107.99 MiB `scripts/build-worker-release.ts`
+ * reported at f75d4745b.
  *
- * AND THE RELEASE THIS TREE PUBLISHES DOES NOT FIT. Measured the same day from
- * `scripts/build-worker-release.ts` at f75d4745b: the artifact is 27.35 MiB
- * compressed and 107.99 MiB unpacked, so the digest check (which holds the
- * compressed bytes) and the unpacked archive come to 135.34 MiB together,
- * before one asset is base64'd. `do.isolate.transient_alloc_reset` is the
- * entry that governs it — a transient allocate-and-free of that size in a
- * Durable Object context resets the object about 1.7 s later, after the
- * request returned 200 — so the guided door cannot install today's release
- * from inside `DeployRunDO`. docs/SELF-DEPLOY.md carries the finding.
+ * MEASURED ON THIS TREE, 2026-09-18, one walk of the archive: served
+ * 30.85 MiB, unpacked 108.46 MiB, largest member 21.50 MiB, HELD AT THE PEAK
+ * 88.18 MiB, largest asset body 28.67 MiB over 12 batches, version body
+ * 30.02 MiB. The peak is exactly the compressed artifact plus the largest
+ * member's base64 twice — the copy the transport makes of a part is the
+ * second (`cloudflare.ts`) — and it does not move when the release grows.
  *
- * WHAT THE BOUND DEFENDS: the multiple, not the size. An upload that base64'd
- * every asset before sending any grows with the release instead of with its
- * largest batch, and the artifact is the one thing here that only gets bigger.
+ * THE SAME FIXTURE AGAINST THE READER THIS REPLACED, measured the same day:
+ * the object held all 108.46 MiB of the unpacked archive for the length of
+ * the plan and base64'd every asset into ONE 104.08 MiB body — 243.39 MiB
+ * with the compressed bytes, against a 128 MiB ceiling. That is why the
+ * Cloudflare door could not install this release.
+ *
+ * WHAT THE BOUND DEFENDS: the shape, not the size. The peak has to be set by
+ * the largest member and the batch bound, never by the release, because the
+ * artifact is the one thing here that only gets bigger.
  */
 describe('the artifact in a Durable Object', () => {
   const MIB = 1024 * 1024;
 
-  it('holds one unpacked release and one batch of assets', async () => {
-    await env.DEPLOY_FAKE.weigh(8 * MIB);
+  it('installs a release it never holds, a member at a time', async () => {
+    await env.DEPLOY_FAKE.weigh({
+      modules: 120, moduleBytes: 30 * MIB, assets: 421, assetBytes: 78 * MIB, largestAsset: 21.5 * MIB,
+    });
 
     const stub = await authorized();
 
     await stub.start(INPUTS);
 
-    expect((await settled(stub)).state).toBe('done');
+    const snapshot = await settled(stub);
+
+    expect(snapshot.state).toBe('done');
 
     const { footprint } = await env.DEPLOY_FAKE.state();
-    const peak = footprint.served + footprint.unpacked + footprint.assetBody;
+    const upload = snapshot.steps.find((row) => row.id === 'upload');
+    const peak = Number(upload?.facts[FACT_UPLOAD_PEAK] ?? Number.NaN);
 
-    expect(footprint.unpacked).toBeGreaterThan(8 * MIB);
-    // base64 of the batch plus its multipart envelope, and nothing else: a
-    // body that carried a second copy of the release fails here.
-    expect(footprint.assetBody).toBeLessThan(footprint.unpacked * 1.5);
-    expect(peak).toBeLessThan(footprint.unpacked * 4);
+    // The release really is the size of a published one, and the object
+    // really did install it.
+    expect(footprint.unpacked).toBeGreaterThan(100 * MIB);
+    expect(footprint.largestMember).toBeGreaterThan(21 * MIB);
+
+    // The run counted what it held, and it fits the object that installs it.
+    expect(peak).toBeGreaterThan(0);
+    expect(peak).toBeLessThan(128 * MIB);
+
+    // Set by the largest member, not by the release: the compressed artifact,
+    // one member's base64, and the copy the transport makes of the body.
+    expect(peak).toBeLessThan(footprint.served + 3 * footprint.largestMember);
+
+    // One body per batch, and a batch is bounded: a body that carried the
+    // whole bundle fails here, and so does one that carried the release twice.
+    expect(footprint.assetBatches).toBeGreaterThan(1);
+    expect(footprint.assetBody).toBeLessThan(2 * footprint.largestMember);
+    expect(footprint.versionBody).toBeLessThan(footprint.unpacked / 2);
   });
 });
