@@ -11,6 +11,7 @@ import type { KinuSandbox } from "./src/kinu-sandbox";
 import type { UserDO } from "./src/user/user-do";
 import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
+import type { DeployRunDO } from "./src/deploy/deploy-do";
 import type { CodemodeEgress } from "./src/codemode-egress";
 import type { SlateBinding } from "./src/slates/bindings";
 import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
@@ -56,6 +57,10 @@ declare global {
      *  Binding name is fixed to "Sandbox" because the SDK's proxyToSandbox
      *  looks up `env.Sandbox` directly. */
     Sandbox: DurableObjectNamespace<KinuSandbox>;
+    /** One guided self-deployment per run (docs/SELF-DEPLOY.md § The Cloudflare
+     *  door): the step ledger, the run key's digest, and the Cloudflare tokens
+     *  the run holds until the last step hands them to the new Worker. */
+    DeployRunDO: DurableObjectNamespace<DeployRunDO>;
     /** Browser sessions, one-time OAuth state, and CLI browser-approval state.
      *  Everything in it expires on its own; nothing in it is a source of truth. */
     AUTH_KV: KVNamespace;
@@ -140,6 +145,22 @@ declare global {
     CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD?: string;
     /** AI Gateway id used with the user's Cloudflare OAuth token for Workers AI. */
     CLOUDFLARE_AI_GATEWAY_ID?: string;
+    /** The self-managed PUBLIC OAuth client the owner registered for the
+     *  self-deploy door. A var, not a secret: a PKCE client has no secret.
+     *  Absent ⇒ /deploy renders the Cloudflare half as not configured and
+     *  refuses to start a run; `kinu deploy local` is unaffected. */
+    CLOUDFLARE_DEPLOY_CLIENT_ID?: string;
+    /** What this deployment knows about itself, as JSON — the answers its first
+     *  run was given, the address it took, the build it installed and the
+     *  channel it pulls from. Written onto the Worker by the self-deploy flow's
+     *  handover step, so kinu.run itself has none: absent ⇒ `/updates` says
+     *  this Kinu was not installed by the flow and offers nothing. */
+    KINU_DEPLOYMENT_RECORD?: string;
+    /** This deployment's own Cloudflare refresh token, written by the same
+     *  handover step. It is what makes an update a PULL: the deployment spends
+     *  its own key on itself and kinu.run holds nothing. Absent ⇒ `/updates`
+     *  reads the channel and can install nothing. */
+    KINU_SELF_DEPLOY_REFRESH_TOKEN?: string;
     /** Names the ONE identity a caller may act as without an OAuth browser
      *  session. Says WHICH identity, never that anyone may have it: off a
      *  developer's own machine, `DEV_IDENTITY_SECRET` is what grants it.

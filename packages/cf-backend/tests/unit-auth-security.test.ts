@@ -515,7 +515,13 @@ async function cloudflareSignIn(env: Env, tokenJson: JsonValue, userResult: Json
     expect(routes).toContain('OAUTH_STATE_COOKIE_NAME');
     expect(routes).not.toContain('__Host-kinu_session');
     expect(routes).not.toContain('__Host-kinu_oauth_state');
-    expect(routes).toContain('HttpOnly; Secure; SameSite=Lax');
+    // The recipe lives beside the names and `routes.ts` imports it: the deploy
+    // door needed the same one, so `setCookie` moved into `auth/session.ts`,
+    // and two copies of a cookie's attributes is how one of them loses
+    // `Secure`.
+    expect(session).toContain('HttpOnly; Secure; SameSite=Lax');
+    expect(routes).toContain('setCookie');
+    expect(routes).not.toContain('HttpOnly');
     // The browser holds two handles and neither is the state: the state token
     // is hashed into the key, the binding that says a callback belongs to THIS
     // browser is stored only as a hash too, and the record is burned on the

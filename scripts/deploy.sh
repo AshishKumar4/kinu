@@ -592,8 +592,10 @@ fi
 # The worker release artifact, BEFORE the CLI distribution: `build-cli-dist.sh`
 # signs every artifact it finds in the downloads directory, so writing this one
 # first is what puts its checksum in `kinu-version.json` beside the CLI's. The
-# self-deploy flow reads `release.json` and verifies the tarball against that
-# signed checksum exactly the way the CLI launcher does (docs/SELF-DEPLOY.md).
+# self-deploy flow reads `release.json` and verifies the tarball against the
+# `.sha256` published beside it, which is integrity and not a signature; the
+# smoke check below is where that sidecar is held against the signed manifest,
+# so a drift between them fails this deploy (docs/SELF-DEPLOY.md).
 KINU_RELEASE_VERSION="$(bun -e '
   const manifest = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
   process.stdout.write(manifest.version.split("+")[0]);

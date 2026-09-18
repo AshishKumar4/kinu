@@ -1,7 +1,7 @@
 import * as oauth from 'oauth4webapi';
 import {
   AuthError, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, authenticateRequest, readCookie,
-  readSessionToken,
+  readSessionToken, setCookie,
 } from './session';
 import {
   consumeOAuthState, createOAuthState, createSession, revokeSession, sanitizeReturnTo,
@@ -175,7 +175,7 @@ async function startOAuth(request: Request, env: Env, providerId: string): Promi
   // record in KV holds only its hash, so this cookie is what the callback
   // proves the sign-in with.
   const headers = new Headers({ 'cache-control': 'no-store' });
-  headers.append('set-cookie', cookie(OAUTH_STATE_COOKIE_NAME, binding, handoffExpiresAt));
+  headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, binding, handoffExpiresAt));
 
   return redirect(authorizationUrl.toString(), { headers });
 }
@@ -189,7 +189,7 @@ async function startOAuth(request: Request, env: Env, providerId: string): Promi
  */
 async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | undefined, providerId: string): Promise<Response> {
   const response = await completeOAuth(request, env, ctx, providerId);
-  response.headers.append('set-cookie', cookie(OAUTH_STATE_COOKIE_NAME, '', 0));
+  response.headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, '', 0));
 
   return response;
 }
@@ -242,7 +242,7 @@ async function completeOAuth(request: Request, env: Env, ctx: ExecutionContext |
 
     const destination = new URL(savedState.returnTo, url.origin).toString();
     const headers = new Headers({ 'cache-control': 'no-store' });
-    headers.append('set-cookie', cookie(SESSION_COOKIE_NAME, session.token, session.expiresAt));
+    headers.append('set-cookie', setCookie(SESSION_COOKIE_NAME, session.token, session.expiresAt));
 
     return redirect(destination, {
       headers,
@@ -351,7 +351,7 @@ async function logout(request: Request, env: Env): Promise<Response> {
   }
 
   const headers = new Headers({ 'cache-control': 'no-store' });
-  headers.append('set-cookie', cookie(SESSION_COOKIE_NAME, '', 0));
+  headers.append('set-cookie', setCookie(SESSION_COOKIE_NAME, '', 0));
 
   return redirect(new URL(returnTo, url.origin).toString(), {
     headers,
@@ -566,18 +566,6 @@ function addProviderPrompt(url: URL, provider: OAuthProviderConfig): void {
   if (provider.id === 'cloudflare') {
     url.searchParams.set('prompt', 'login');
   }
-}
-
-/** Every cookie this app sets, and the one recipe it sets them with. `__Host-`
- *  requires `Secure` and `Path=/` and forbids a `Domain`, so the cookie is
- *  this exact origin's and no subdomain can write it. `Lax` rather than
- *  `Strict`: an OAuth callback IS a cross-site top-level navigation, and
- *  `Strict` would withhold the handoff cookie from the one request that has to
- *  present it. An `expiresAt` already past clears the cookie. */
-function cookie(name: string, value: string, expiresAt: number): string {
-  const maxAge = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
-
-  return `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
 }
 
 function stringClaim<Value>(value: Value): string | null {

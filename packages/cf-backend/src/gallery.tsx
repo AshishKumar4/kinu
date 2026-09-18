@@ -192,6 +192,7 @@ import { buildTree, type MctsRow } from "@kinu.run/core";
 import { formatWorkspaceError, type AgentStatus, type ExecutorOutput, type WorkspaceErrors } from "@/hooks/use-kinu";
 import { lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import type { ExecutorInfo } from "@kinu.run/core";
+import type { DeploySnapshot } from "@kinu.run/core/deploy";
 import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun, ForkRunParams,
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
@@ -6718,6 +6719,78 @@ function scheduleDeviceNotice(devices: string | null): void {
   }, 300);
 }
 
+/** A self-update in flight, as the deployment's own ledger holds it: the steps
+ *  that re-created nothing are done, the upload is going, and the rows after it
+ *  have not started. */
+const GALLERY_UPDATE_RUN: DeploySnapshot = {
+  runId: "self-update-0000",
+  state: "running",
+  address: "kinu.example.com",
+  version: "0.4.0+cc33dd4",
+  steps: [
+    { id: "account", seq: 0, title: "Read the account", state: "done", attempt: 1, detail: "Acme Corp.", notes: [], failure: null, facts: {} },
+    { id: "kv", seq: 1, title: "Create the KV namespaces", state: "done", attempt: 1, detail: "3 namespace(s) already there.", notes: [], failure: null, facts: {} },
+    { id: "seed", seq: 2, title: "Seed the runtime cache", state: "done", attempt: 1, detail: "0 of 14 toolchain object(s) uploaded; the rest were already there.", notes: [], failure: null, facts: {} },
+    { id: "upload", seq: 3, title: "Upload the Worker", state: "running", attempt: 1, detail: "", notes: ["41 of 212 assets uploaded"], failure: null, facts: {} },
+    { id: "address", seq: 4, title: "Bind the address", state: "pending", attempt: 0, detail: "", notes: [], failure: null, facts: {} },
+    { id: "smoke", seq: 5, title: "Check it answers", state: "pending", attempt: 0, detail: "", notes: [], failure: null, facts: {} },
+  ],
+};
+
+/** The self-deploy door as a visitor gets it before the owner has registered
+ *  the OAuth client; `?state=configured` photographs the sign-in state. Same
+ *  dynamic import every frame here uses, because the frame name is the
+ *  runtime selector. */
+async function deployFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
+  const { default: DeployPage } = await import("@/pages/DeployPage");
+  const configured = new URLSearchParams(location.search).get("state") === "configured";
+
+  return {
+    entries: ["/deploy"],
+    node: (
+      <div className="h-screen overflow-auto">
+        <DeployPage
+          fixtureOptions={{
+            cloudflare: configured,
+            clientId: configured ? "gallery-client" : "",
+            version: "0.4.0+gallery",
+            prompts: [],
+            reason: configured
+              ? ""
+              : "The Cloudflare door needs an OAuth client, and this deployment has none configured yet.",
+          }}
+        />
+      </div>
+    ),
+  };
+}
+
+/** The deployment's own Updates page. `?state=running` photographs a run in
+ *  flight; without it, a deployment one build behind its channel. */
+async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
+  const { default: UpdatesPage } = await import("@/pages/UpdatesPage");
+  const running = new URLSearchParams(location.search).get("state") === "running";
+
+  return {
+    entries: ["/updates"],
+    node: (
+      <div className="h-screen overflow-auto p-bg p-text">
+        <UpdatesPage
+          fixture={{
+            current: { version: "0.3.9+aa11bb2", sha: "aa11bb2", builtAt: "2026-09-10T08:00:00.000Z" },
+            available: { version: "0.4.0+cc33dd4", sha: "cc33dd4", builtAt: "2026-09-17T10:00:00.000Z" },
+            channelOrigin: "https://kinu.run",
+            upToDate: false,
+            installable: true,
+            reason: "",
+          }}
+          {...(running ? { fixtureRun: GALLERY_UPDATE_RUN } : {})}
+        />
+      </div>
+    ),
+  };
+}
+
 async function mount() {
   // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
@@ -6791,6 +6864,16 @@ async function mount() {
   ]);
 
   const fixture = fixtureFrames.get(frame);
+
+  // Same dispatch for the frames whose module or fixture is runtime-loaded:
+  // the name selects an async loader instead of a branch.
+  const dynamicFrames = new Map<string, () => Promise<{ node: React.ReactNode; entries: string[] }>>([
+    ["deploy", deployFrame],
+    ["updates", updatesFrame],
+    ["app", appShellFrame],
+  ]);
+
+  const dynamicFixture = dynamicFrames.get(frame);
 
   if (frame === "shell") node = <Shell />;
   else if (frame === "forks") node = <Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={forkRpc} />;
@@ -7010,6 +7093,7 @@ async function mount() {
       </Routes>
     );
   }
+  else if (dynamicFixture !== undefined) ({ node, entries } = await dynamicFixture());
   else if (frame === "home") {
     const { default: HomePage } = await import("@/pages/HomePage");
     // The real chrome, not the page alone: the sidebar's own route logic
@@ -7023,10 +7107,6 @@ async function mount() {
       </div>
     );
   }
-  // The shipped shell as App.tsx composes it — `Layout` owns the rail, the
-  // overview store and the living background — routed to one of the surfaces
-  // the background shows under.
-  else if (frame === "app") ({ node, entries } = await appShellFrame());
   else node = <All />;
 
   ({ node, entries } = explore(node, entries, frame));

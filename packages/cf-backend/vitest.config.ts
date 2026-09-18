@@ -50,6 +50,10 @@ import { buildSlateVendor, slateVendor } from './slate-vendor';
 import { defineConfig, type Plugin } from 'vitest/config';
 import { probeOutbound } from './tests/workerd/http-model-fake';
 import { hireOutbound } from './tests/workerd/hire-model-fake';
+import {
+  DEPLOY_FAKE_CHANNEL, DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_RECORD, DEPLOY_FAKE_REFRESH_TOKEN,
+  assetsOutbound, deployOutbound,
+} from './tests/workerd/deploy-fake';
 import { kCurrentWorker } from 'miniflare';
 import { builtinModules } from 'node:module';
 import { promptText } from './vite-prompt-text';
@@ -203,6 +207,14 @@ const publicSurfaceProbe = buildSync({
   bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
   conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
   alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
+const deployRunProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/deploy-run-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/deploy-run-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
@@ -450,6 +462,48 @@ export default defineConfig({
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
+        }, {
+          // The guided self-deployment, end to end against real Durable Object
+          // SQLite. Everything it talks to is the Node-side plane installed as
+          // this worker's `outboundService`: the Cloudflare API, the
+          // authorization server the PKCE exchange posts to, the release
+          // channel it downloads the artifact from, and the new deployment's
+          // own `/api/health`. An unmatched host throws there, so a run that
+          // reached a real network is a failure rather than a slow pass.
+          name: 'deploy-probe', ...workerCompatibility,
+          modules: deployRunProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          // The channel the run reads its release from, which is the one var
+          // `DeployRunDO` uses to find it, and the state a DEPLOYED Kinu holds
+          // about itself: the record its first run wrote and the refresh token
+          // it owns. The two minted root secrets are bound because a
+          // self-update's vault reads through to them — a version uploaded
+          // without them would bind a new encryption key over the credentials
+          // this deployment has already stored.
+          bindings: {
+            CLI_PUBLIC_ORIGIN: DEPLOY_FAKE_CHANNEL,
+            KINU_DEPLOYMENT_RECORD: DEPLOY_FAKE_RECORD,
+            KINU_SELF_DEPLOY_REFRESH_TOKEN: DEPLOY_FAKE_REFRESH_TOKEN,
+            CREDENTIAL_ENCRYPTION_KEY: 'ZGVwbG95LXByb2JlLWNyZWRlbnRpYWwta2V5LTMyYg==',
+            WEBHOOK_ROUTE_SECRET: 'ZGVwbG95LXByb2JlLXdlYmhvb2stcm91dGUtc2VjcmV0',
+            // The OAuth client the door's own routes authorize through. Without
+            // it the door answers 503 to every leg, which is the unconfigured
+            // deployment rather than the door under test.
+            CLOUDFLARE_DEPLOY_CLIENT_ID: DEPLOY_FAKE_CLIENT_ID,
+          },
+          outboundService: deployOutbound,
+          // The deployment's own asset bundle, which holds exactly the build
+          // stamp `/api/updates` reads to say what version it is running.
+          serviceBindings: { ASSETS: assetsOutbound },
+          durableObjects: {
+            DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', useSQLite: true },
+            // The same class under the name production reaches it by, because
+            // `/api/updates/apply` addresses the self-update run through
+            // `env.DeployRunDO`.
+            DeployRunDO: { className: 'DeployRunProbeDO', useSQLite: true },
+          },
         }],
         // The runner's door to the production route table. A miniflare service
         // binding carries a WebSocket upgrade — measured 2026-09-16: 101 with a
@@ -461,6 +515,16 @@ export default defineConfig({
           // The model fake's captured log is one Node-side module shared by
           // every worker bound to it; this is how the test hands it back empty.
           SURFACE_CONTROL: { name: 'public-surface-probe', entrypoint: 'SurfaceControl' },
+          // The deploy fake's created-resource state is Node-side module state
+          // too; this is how the test resets it and reads what a run made.
+          DEPLOY_FAKE: { name: 'deploy-probe', entrypoint: 'DeployFakeControl' },
+          // The deployment's own Updates surface, called as a session: the
+          // production handlers over the production Durable Object, on the
+          // worker that is bound like a deployed Kinu.
+          UPDATES_PROBE: { name: 'deploy-probe', entrypoint: 'UpdatesProbe' },
+          // The door's own routes on that worker: the callback's binding to the
+          // browser that started a leg, and where the run key may travel.
+          DEPLOY_DOOR_PROBE: { name: 'deploy-probe', entrypoint: 'DeployDoorProbe' },
         },
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
@@ -496,6 +560,7 @@ export default defineConfig({
           DEVBOX_NOT_READY_PROBE: { className: 'DevboxNotReadyProbeDO', useSQLite: true },
           SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', scriptName: 'slate-durability-probe', useSQLite: true },
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', scriptName: 'account-reset-probe', useSQLite: true },
+          DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', scriptName: 'deploy-probe', useSQLite: true },
         },
       },
     }),
@@ -549,6 +614,12 @@ export default defineConfig({
       // throws after `transactionSync` already committed, so that promise has
       // no owner left (worker.ts:258, :289).
       if (error.message.includes('unknown subordinate "relay"')) return false;
+
+      // `deploy-ledger.test.ts` aborts a DeployRunDO in the middle of its
+      // plan — the eviction a run cannot control, delivered on purpose — and
+      // the call the object had in flight at that moment rejects with the
+      // abort reason, owned by nobody.
+      if (error.message.includes('probe: the object died mid-plan')) return false;
     },
   },
 });

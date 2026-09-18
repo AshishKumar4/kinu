@@ -11,6 +11,7 @@ import { DEVICE_CONNECT_PATH, timingSafeEqual } from '@kinu.run/core';
 import {
   SessionAuthorityUnavailableError, deriveUserId, verifySession, type AuthStoreEnv,
 } from './store';
+import { isDeployPath } from '@kinu.run/core/deploy';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserDO } from '../user/user-do';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
@@ -26,6 +27,15 @@ export const SESSION_COOKIE_NAME = '__Host-kinu_session';
  *  browser, hands the resulting `?code=&state=` link to a victim, and the
  *  victim's browser is signed in as the attacker. */
 export const OAUTH_STATE_COOKIE_NAME = '__Host-kinu_oauth_state';
+
+/** The same binding on the Cloudflare deploy door's leg (`deploy/routes.ts`),
+ *  which has no session to pair a KV record with: the value is the digest of
+ *  the OAuth `state` that leg minted, so `/deploy/callback` can prove the
+ *  browser in front of it is the one that started the authorization. Without
+ *  it, `state` alone decides which run a stranger's Cloudflare tokens land in
+ *  — an attacker mints a run, forwards the authorize URL, and collects the
+ *  victim's account. */
+export const DEPLOY_STATE_COOKIE_NAME = '__Host-kinu_deploy_state';
 
 /** The cookie the CLI approval page sets so its POST can only come from the
  *  page a signed-in browser was shown (`cli/routes.ts`). Path-scoped to that
@@ -51,6 +61,7 @@ export const KINU_COOKIE_NAMES: readonly string[] = [
   SESSION_COOKIE_NAME,
   OAUTH_STATE_COOKIE_NAME,
   CLI_APPROVAL_CSRF_COOKIE_NAME,
+  DEPLOY_STATE_COOKIE_NAME,
   VIEWER_COOKIE_NAME,
 ];
 
@@ -139,6 +150,18 @@ export function readCookie(request: Request, name: string): string | null {
   }
 
   return null;
+}
+
+/** Every cookie this app sets, and the one recipe it sets them with. `__Host-`
+ *  requires `Secure` and `Path=/` and forbids a `Domain`, so the cookie is
+ *  this exact origin's and no subdomain can write it. `Lax` rather than
+ *  `Strict`: an OAuth callback IS a cross-site top-level navigation, and
+ *  `Strict` would withhold the handoff cookie from the one request that has to
+ *  present it. An `expiresAt` already past clears the cookie. */
+export function setCookie(name: string, value: string, expiresAt: number): string {
+  const maxAge = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+
+  return `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
 }
 
 export interface AuthEnv extends OwnerCapabilityEnv {
@@ -298,6 +321,11 @@ export function isPublicPath(pathname: string): boolean {
   // it (`/api/shared/blueprint/:id`) is answered before the auth gate by the
   // shared-library route with the id's signature checked first.
   if (pathname.startsWith('/shared/blueprint/')) return true;
+
+  // The self-deploy door. Public because a person deploying their own Kinu has
+  // no account here to sign in to; what authorizes its calls is the run key
+  // (deploy/routes.ts), and the page itself must render before any of them.
+  if (isDeployPath(pathname)) return true;
 
   return false;
 }
