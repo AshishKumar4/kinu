@@ -1864,9 +1864,11 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run test:workerd:cf-long',
     label: 'Durable Object semantics under workerd, the long suites',
     tier: 'ci',
-    // The `tests/workerd/long/` half of the row above: seven suites, 17 tests.
-    // Measured as split 2026-09-16 under the same load: 169 s (load 1.3 to
-    // 2.2). Same runner, same config, same `include`; the split is by path
+    // The `tests/workerd/long/` half of the row above: seven suites, 17 tests,
+    // measured as split 2026-09-16 under the same load: 169 s (load 1.3 to
+    // 2.2); an eighth (busy-chat, one test, 24.9 s alone on 2026-09-18) sits
+    // here because the row above ran into the 480 s deadline under the deploy
+    // wave that day. Same runner, same config, same `include`; the split is by path
     // filter so no file can be in both halves or in neither — `bun run
     // test:workerd` still runs all three workerd rows in sequence for a hand
     // run, and ladder.test.ts holds the three rows to a partition of it.
