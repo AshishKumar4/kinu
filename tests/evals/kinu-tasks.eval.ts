@@ -490,334 +490,348 @@ const SLATE_LEDGER: KinuTaskCase = {
         method: 'POST', json: json === undefined ? undefined : json,
       });
 
+    /** Turn 1: the slate built, served and durable across a reconnect. */
+    async function afterTurnOne(io: KinuTaskIo): Promise<readonly EvalSubgoal[]> {
+      const listing = await io.session.listSlates();
+      const row = listing.slates.find((slate) => slate.id === QUEUE_SLATE_ID);
+      const ports = await io.session.exposedPorts('workspace');
+      const exposure = ports.find((port) => port.port === QUEUE_PORT);
+      preview = exposure?.url ?? '';
+      const answer = reply(io.history);
+
+      const previewed = row !== undefined && row.port === QUEUE_PORT && exposure !== undefined
+        && lines(answer).includes(exposure.url);
+
+      const subgoals: EvalSubgoal[] = [{
+        what: 'previewed',
+        reached: previewed,
+        detail: `slate row ${JSON.stringify(row)}; exposed ${JSON.stringify(exposure)}; `
+          + `reply ${excerpt(answer)}`,
+      }];
+
+      // Nothing below can be asked of a preview that never started, and a
+      // cascade of five identical misses hides the one that matters.
+      if (!previewed) {
+        for (const what of ['seeded', 'errors', 'order-and-filters', 'metrics', 'survives-reconnect']) {
+          subgoals.push({
+            what, reached: false,
+            detail: 'no live preview on port 8790 to exercise the contract against',
+          });
+        }
+
+        return subgoals;
+      }
+
+      // 2. SEEDED IN NON-SORTED ORDER, and every echo checked: a server
+      //    that stores but answers `{}` has not met the contract.
+      const echoes: string[] = [];
+      let seeded = true;
+
+      for (const ticket of tickets) {
+        const answered = await post(io, '/tickets', {
+          id: ticket.id, title: ticket.title, priority: ticket.priority, agent: ticket.filedBy,
+        });
+
+        const echo = v.safeParse(QueueEchoSchema, asJson(answered));
+
+        const good = answered.status === 201 && echo.success
+          && echo.output.ticket.id === ticket.id && echo.output.ticket.status === 'open'
+          && echo.output.ticket.owner === null && echo.output.ticket.priority === ticket.priority;
+
+        if (!good) {
+          seeded = false;
+          echoes.push(`${ticket.id}: HTTP ${String(answered.status)} ${excerpt(answered.text, 120)}`);
+        }
+      }
+
+      subgoals.push({
+        what: 'seeded',
+        reached: seeded,
+        detail: seeded
+          ? `${String(tickets.length)} tickets accepted 201 in non-sorted order, each echoed open/owner null`
+          : `rejected or mis-echoed: ${echoes.slice(0, 4).join('; ')}`,
+      });
+
+      // THE FIVE CLAIMS AND TWO RESOLUTIONS, decided BEFORE the refusals
+      // are probed: the claim-twice refusal needs a ticket that is already
+      // claimed by a known owner, and the resolve-unclaimed refusal needs
+      // one that must still be OPEN at the end. Choosing them out of the
+      // plan is what keeps subgoal 5's metrics the spec's
+      // `{open:7, claimed:3, resolved:2, …}` instead of one claim more.
+      const plan = queueSorted(tickets).slice(0, 5);
+      const owners = ['ana', 'ana', 'ana', 'bo', 'bo'];
+      const claimTarget = plan[0];
+      const stayOpen = queueSorted(tickets).at(-1);
+
+      if (claimTarget === undefined || stayOpen === undefined) throw new Error('the queue seed is empty');
+
+      // 3. ALL FIVE REFUSALS. A contract is what it refuses.
+      const duplicate = await post(io, '/tickets', {
+        id: claimTarget.id, title: claimTarget.title,
+        priority: claimTarget.priority, agent: claimTarget.filedBy,
+      });
+
+      const badPriority = await post(io, '/tickets', {
+        id: `q-${nonce}-99`, title: 'Bad priority', priority: 4, agent: 'ana',
+      });
+
+      const unknownClaim = await post(io, `/tickets/q-${nonce}-missing/claim`, { agent: 'ana' });
+      const firstClaim = await post(io, `/tickets/${claimTarget.id}/claim`, { agent: 'ana' });
+      const secondClaim = await post(io, `/tickets/${claimTarget.id}/claim`, { agent: 'bo' });
+      const unclaimedResolve = await post(io, `/tickets/${stayOpen.id}/resolve`);
+
+      const errorOf = (body: { status: number; text: string }): string => {
+        const parsed = v.safeParse(QueueErrorSchema, asJson(body));
+
+        return parsed.success ? parsed.output.error : '';
+      };
+
+      const alreadyClaimed = v.safeParse(
+        v.looseObject({ error: v.literal('ALREADY_CLAIMED'), owner: v.literal('ana') }),
+        asJson(secondClaim),
+      );
+
+      const refusals = {
+        'duplicate→409 DUPLICATE_ID': duplicate.status === 409 && errorOf(duplicate) === 'DUPLICATE_ID',
+        'priority 4→400 INVALID_PRIORITY': badPriority.status === 400 && errorOf(badPriority) === 'INVALID_PRIORITY',
+        'claim unknown→404': unknownClaim.status === 404 && errorOf(unknownClaim) === 'NOT_FOUND',
+        'claim twice→409 ALREADY_CLAIMED owner ana': secondClaim.status === 409 && alreadyClaimed.success,
+        'resolve unclaimed→409 NOT_CLAIMED': unclaimedResolve.status === 409 && errorOf(unclaimedResolve) === 'NOT_CLAIMED',
+      };
+
+      // The successful claim above IS the plan's first claim, recorded here
+      // rather than re-issued below.
+      if (firstClaim.status === 200) {
+        claimTarget.status = 'claimed';
+        claimTarget.owner = 'ana';
+      }
+
+      subgoals.push({
+        what: 'errors',
+        reached: Object.values(refusals).every(Boolean),
+        detail: Object.entries(refusals)
+          .map(([what, held]) => `${what}: ${held ? 'ok' : 'MISSED'}`).join('; '),
+      });
+
+      // 4. The remaining four claims, then the two resolutions, then the
+      //    order and every filter against the verifier's own model.
+      for (const [index, ticket] of plan.entries()) {
+        const owner = owners[index] ?? 'ana';
+
+        if (ticket.status === 'claimed' && ticket.owner === owner) continue;
+        const claimed = await post(io, `/tickets/${ticket.id}/claim`, { agent: owner });
+
+        if (claimed.status === 200) {
+          ticket.status = 'claimed';
+          ticket.owner = owner;
+        }
+      }
+
+      for (const ticket of plan.filter((candidate) => candidate.owner === 'ana').slice(0, 2)) {
+        const resolved = await post(io, `/tickets/${ticket.id}/resolve`);
+
+        if (resolved.status === 200) ticket.status = 'resolved';
+      }
+
+      const listOf = async (query: string): Promise<v.InferOutput<typeof QueueRowSchema>[] | null> => {
+        const body = await get(io, `/tickets${query}`);
+        const parsed = v.safeParse(QueueListSchema, asJson(body));
+
+        if (!parsed.success) return null;
+
+        return parsed.output.tickets.map((row) => v.parse(QueueRowSchema, row));
+      };
+
+      const all = await listOf('');
+      const claimedOnly = await listOf('?status=claimed');
+      const anaOnly = await listOf('?agent=ana');
+      const anaResolved = await listOf('?status=resolved&agent=ana');
+
+      const expectedAll = queueSorted(tickets).map(queueRow);
+      const expectedClaimed = queueSorted(tickets.filter((t) => t.status === 'claimed')).map(queueRow);
+      const expectedAna = queueSorted(tickets.filter((t) => t.owner === 'ana')).map(queueRow);
+
+      const expectedAnaResolved = queueSorted(
+        tickets.filter((t) => t.owner === 'ana' && t.status === 'resolved'),
+      ).map(queueRow);
+
+      const same = <T>(left: T, right: T): boolean =>
+        JSON.stringify(left) === JSON.stringify(right);
+
+      const filters = {
+        'GET /tickets in priority,id order': same(all, expectedAll),
+        '?status=claimed': same(claimedOnly, expectedClaimed),
+        '?agent=ana': same(anaOnly, expectedAna),
+        '?status=resolved&agent=ana': same(anaResolved, expectedAnaResolved),
+      };
+
+      subgoals.push({
+        what: 'order-and-filters',
+        reached: Object.values(filters).every(Boolean),
+        detail: `${Object.entries(filters).map(([what, held]) => `${what}: ${held ? 'ok' : 'MISSED'}`).join('; ')}`
+          + `; served ${excerpt(JSON.stringify(all), 240)}`,
+      });
+
+      // 5. METRICS, derived from what the verifier did.
+      const metricsBody = await get(io, '/metrics');
+      const metrics = v.safeParse(QueueMetricsSchema, asJson(metricsBody));
+      const expectedMetrics = queueMetrics(tickets);
+
+      subgoals.push({
+        what: 'metrics',
+        reached: metrics.success && same(metrics.output, expectedMetrics),
+        detail: `expected ${JSON.stringify(expectedMetrics)}; served ${excerpt(metricsBody.text, 240)}`,
+      });
+
+      // 6. THE DURABILITY THE PRODUCT PROMISES, across the boundary a user
+      //    meets: this client's socket goes away and comes back. See the
+      //    header for why an eviction is NOT the boundary this contract
+      //    carries.
+      const before = await get(io, '/tickets');
+      const beforeMetrics = await get(io, '/metrics');
+      io.session.disconnect();
+      await io.session.connect();
+      const afterList = await get(io, '/tickets');
+      const afterMetrics = await get(io, '/metrics');
+
+      subgoals.push({
+        what: 'survives-reconnect',
+        reached: afterList.status === 200 && afterList.text === before.text
+          && afterMetrics.status === 200 && afterMetrics.text === beforeMetrics.text,
+        detail: 'over a socket reconnect — the product promises durable slate storage and a '
+          + 'stable address, not durable process memory (see the header): tickets '
+          + `${String(before.text === afterList.text)}, metrics `
+          + `${String(beforeMetrics.text === afterMetrics.text)}; after `
+          + excerpt(afterList.text, 200),
+      });
+
+      return subgoals;
+    }
+
+    /** Turn 2: the document derived from the live queue, read rather than recalled. */
+    async function afterTurnTwo(io: KinuTaskIo): Promise<readonly EvalSubgoal[]> {
+      const document = await io.session.readFile('docs/queue-week.md', { allowMissing: true });
+      const rows = document.split('\n').map((line) => line.trimEnd());
+      const headings = rows.filter((line) => line.startsWith('#'));
+      const open = tickets.filter((ticket) => ticket.status === 'open');
+      const problems: string[] = [];
+
+      if (JSON.stringify(headings) !== JSON.stringify(['# Queue this week', '## P1', '## P2', '## P3'])) {
+        problems.push(`headings ${JSON.stringify(headings)}`);
+      }
+
+      for (const priority of [1, 2, 3]) {
+        const start = rows.indexOf(`## P${String(priority)}`);
+        const rest = rows.slice(start + 1);
+        const end = rest.findIndex((line) => line.startsWith('#'));
+        const section = (end < 0 ? rest : rest.slice(0, end)).filter((line) => line !== '');
+
+        const expected = open.filter((ticket) => ticket.priority === priority)
+          .sort((left, right) => left.id.localeCompare(right.id))
+          .map((ticket) => `- ${ticket.id} · ${ticket.title} · ${ticket.filedBy}`);
+
+        if (JSON.stringify(section) !== JSON.stringify(expected)) {
+          problems.push(`P${String(priority)} listed ${JSON.stringify(section)} for ${JSON.stringify(expected)}`);
+        }
+
+        for (const line of section) {
+          if (!DOC_BULLET.test(line)) problems.push(`bullet shape ${excerpt(line, 120)}`);
+        }
+      }
+
+      const reads = promptToolCalls(io.events, turns[1], io.absorbedBy).filter((call) => {
+        if (!ok(call)) return false;
+        const text = `${textOf(call.args)}`;
+
+        return (call.name === 'shell' || call.name === 'web') && text.includes('/tickets');
+      });
+
+      requireMeasuredToolOutcomes(promptToolCalls(io.events, turns[1], io.absorbedBy));
+      preChange = (await get(io, '/tickets')).text;
+
+      return [
+        {
+          what: 'document',
+          reached: problems.length === 0,
+          detail: problems.length === 0
+            ? `${String(open.length)} open ticket(s) listed under the three priority sections in id order`
+            : problems.slice(0, 4).join('; '),
+        },
+        {
+          what: 'read-not-recalled',
+          reached: reads.length > 0,
+          detail: `${String(reads.length)} shell/web call(s) naming /tickets in turn 2's run`,
+        },
+      ];
+    }
+
+    /** Turn 3: the rules change, over the rows turn 3 already stored. */
+    async function afterTurnThree(io: KinuTaskIo): Promise<readonly EvalSubgoal[]> {
+      // BEFORE the new rules are exercised: `preserved` is about what was
+      // already stored, and the probes below add rows.
+      const after = await get(io, '/tickets');
+
+      const fresh = { id: `q-${nonce}-p5`, title: 'Priority five', priority: 5, agent: 'ana' };
+      const accepted = await post(io, '/tickets', fresh);
+      const refused = await post(io, '/tickets', { ...fresh, id: `q-${nonce}-p6`, priority: 6 });
+      const systemResolve = await post(io, `/tickets/${fresh.id}/resolve`);
+      const echo = v.safeParse(QueueEchoSchema, asJson(systemResolve));
+      const refusedError = v.safeParse(QueueErrorSchema, asJson(refused));
+
+      const ports = await io.session.exposedPorts('workspace');
+      const exposure = ports.find((port) => port.port === QUEUE_PORT);
+
+      const rules = {
+        'priority 5→201': accepted.status === 201,
+        'priority 6→400 INVALID_PRIORITY': refused.status === 400
+          && refusedError.success && refusedError.output.error === 'INVALID_PRIORITY',
+        'resolve open→200 resolved/system': systemResolve.status === 200 && echo.success
+          && echo.output.ticket.status === 'resolved' && echo.output.ticket.owner === 'system',
+      };
+
+      return [
+        {
+          what: 'preserved',
+          reached: after.status === 200 && after.text === preChange,
+          detail: after.text === preChange
+            ? 'every stored row byte-identical across the rule change'
+            : `before ${excerpt(preChange, 300)} after ${excerpt(after.text, 300)}`,
+        },
+        {
+          what: 'new-rules',
+          reached: Object.values(rules).every(Boolean),
+          detail: Object.entries(rules).map(([what, held]) => `${what}: ${held ? 'ok' : 'MISSED'}`).join('; '),
+        },
+        {
+          what: 'still-serving',
+          reached: exposure !== undefined && exposure.url === preview,
+          detail: `port ${String(QUEUE_PORT)} ${exposure === undefined ? 'is no longer exposed' : `is exposed at ${exposure.url}`}`
+            + ` against the turn-1 URL ${preview}`,
+        },
+      ];
+    }
+
+    /** Turn 4: the count, answered as a bare number. */
+    function afterTurnFour(io: KinuTaskIo): readonly EvalSubgoal[] {
+      const answer = reply(io.history);
+      const expected = tickets.filter((t) => t.owner === 'ana' && t.status === 'claimed').length;
+
+      return [{
+        what: 'bare-number',
+        reached: /^\d+$/u.test(answer.trim()) && answer.trim() === String(expected),
+        detail: `reply ${excerpt(answer)} against the verifier's own count ${String(expected)}`,
+      }];
+    }
+
     return {
       async after(turn, io) {
-        if (turn === 0) {
-          const listing = await io.session.listSlates();
-          const row = listing.slates.find((slate) => slate.id === QUEUE_SLATE_ID);
-          const ports = await io.session.exposedPorts('workspace');
-          const exposure = ports.find((port) => port.port === QUEUE_PORT);
-          preview = exposure?.url ?? '';
-          const answer = reply(io.history);
+        if (turn === 0) return afterTurnOne(io);
 
-          const previewed = row !== undefined && row.port === QUEUE_PORT && exposure !== undefined
-            && lines(answer).includes(exposure.url);
+        if (turn === 1) return afterTurnTwo(io);
 
-          const subgoals: EvalSubgoal[] = [{
-            what: 'previewed',
-            reached: previewed,
-            detail: `slate row ${JSON.stringify(row)}; exposed ${JSON.stringify(exposure)}; `
-              + `reply ${excerpt(answer)}`,
-          }];
+        if (turn === 2) return afterTurnThree(io);
 
-          // Nothing below can be asked of a preview that never started, and a
-          // cascade of five identical misses hides the one that matters.
-          if (!previewed) {
-            for (const what of ['seeded', 'errors', 'order-and-filters', 'metrics', 'survives-reconnect']) {
-              subgoals.push({
-                what, reached: false,
-                detail: 'no live preview on port 8790 to exercise the contract against',
-              });
-            }
-
-            return subgoals;
-          }
-
-          // 2. SEEDED IN NON-SORTED ORDER, and every echo checked: a server
-          //    that stores but answers `{}` has not met the contract.
-          const echoes: string[] = [];
-          let seeded = true;
-
-          for (const ticket of tickets) {
-            const answered = await post(io, '/tickets', {
-              id: ticket.id, title: ticket.title, priority: ticket.priority, agent: ticket.filedBy,
-            });
-
-            const echo = v.safeParse(QueueEchoSchema, asJson(answered));
-
-            const good = answered.status === 201 && echo.success
-              && echo.output.ticket.id === ticket.id && echo.output.ticket.status === 'open'
-              && echo.output.ticket.owner === null && echo.output.ticket.priority === ticket.priority;
-
-            if (!good) {
-              seeded = false;
-              echoes.push(`${ticket.id}: HTTP ${String(answered.status)} ${excerpt(answered.text, 120)}`);
-            }
-          }
-
-          subgoals.push({
-            what: 'seeded',
-            reached: seeded,
-            detail: seeded
-              ? `${String(tickets.length)} tickets accepted 201 in non-sorted order, each echoed open/owner null`
-              : `rejected or mis-echoed: ${echoes.slice(0, 4).join('; ')}`,
-          });
-
-          // THE FIVE CLAIMS AND TWO RESOLUTIONS, decided BEFORE the refusals
-          // are probed: the claim-twice refusal needs a ticket that is already
-          // claimed by a known owner, and the resolve-unclaimed refusal needs
-          // one that must still be OPEN at the end. Choosing them out of the
-          // plan is what keeps subgoal 5's metrics the spec's
-          // `{open:7, claimed:3, resolved:2, …}` instead of one claim more.
-          const plan = queueSorted(tickets).slice(0, 5);
-          const owners = ['ana', 'ana', 'ana', 'bo', 'bo'];
-          const claimTarget = plan[0];
-          const stayOpen = queueSorted(tickets).at(-1);
-
-          if (claimTarget === undefined || stayOpen === undefined) throw new Error('the queue seed is empty');
-
-          // 3. ALL FIVE REFUSALS. A contract is what it refuses.
-          const duplicate = await post(io, '/tickets', {
-            id: claimTarget.id, title: claimTarget.title,
-            priority: claimTarget.priority, agent: claimTarget.filedBy,
-          });
-
-          const badPriority = await post(io, '/tickets', {
-            id: `q-${nonce}-99`, title: 'Bad priority', priority: 4, agent: 'ana',
-          });
-
-          const unknownClaim = await post(io, `/tickets/q-${nonce}-missing/claim`, { agent: 'ana' });
-          const firstClaim = await post(io, `/tickets/${claimTarget.id}/claim`, { agent: 'ana' });
-          const secondClaim = await post(io, `/tickets/${claimTarget.id}/claim`, { agent: 'bo' });
-          const unclaimedResolve = await post(io, `/tickets/${stayOpen.id}/resolve`);
-
-          const errorOf = (body: { status: number; text: string }): string => {
-            const parsed = v.safeParse(QueueErrorSchema, asJson(body));
-
-            return parsed.success ? parsed.output.error : '';
-          };
-
-          const alreadyClaimed = v.safeParse(
-            v.looseObject({ error: v.literal('ALREADY_CLAIMED'), owner: v.literal('ana') }),
-            asJson(secondClaim),
-          );
-
-          const refusals = {
-            'duplicate→409 DUPLICATE_ID': duplicate.status === 409 && errorOf(duplicate) === 'DUPLICATE_ID',
-            'priority 4→400 INVALID_PRIORITY': badPriority.status === 400 && errorOf(badPriority) === 'INVALID_PRIORITY',
-            'claim unknown→404': unknownClaim.status === 404 && errorOf(unknownClaim) === 'NOT_FOUND',
-            'claim twice→409 ALREADY_CLAIMED owner ana': secondClaim.status === 409 && alreadyClaimed.success,
-            'resolve unclaimed→409 NOT_CLAIMED': unclaimedResolve.status === 409 && errorOf(unclaimedResolve) === 'NOT_CLAIMED',
-          };
-
-          // The successful claim above IS the plan's first claim, recorded here
-          // rather than re-issued below.
-          if (firstClaim.status === 200) {
-            claimTarget.status = 'claimed';
-            claimTarget.owner = 'ana';
-          }
-
-          subgoals.push({
-            what: 'errors',
-            reached: Object.values(refusals).every(Boolean),
-            detail: Object.entries(refusals)
-              .map(([what, held]) => `${what}: ${held ? 'ok' : 'MISSED'}`).join('; '),
-          });
-
-          // 4. The remaining four claims, then the two resolutions, then the
-          //    order and every filter against the verifier's own model.
-          for (const [index, ticket] of plan.entries()) {
-            const owner = owners[index] ?? 'ana';
-
-            if (ticket.status === 'claimed' && ticket.owner === owner) continue;
-            const claimed = await post(io, `/tickets/${ticket.id}/claim`, { agent: owner });
-
-            if (claimed.status === 200) {
-              ticket.status = 'claimed';
-              ticket.owner = owner;
-            }
-          }
-
-          for (const ticket of plan.filter((candidate) => candidate.owner === 'ana').slice(0, 2)) {
-            const resolved = await post(io, `/tickets/${ticket.id}/resolve`);
-
-            if (resolved.status === 200) ticket.status = 'resolved';
-          }
-
-          const listOf = async (query: string): Promise<v.InferOutput<typeof QueueRowSchema>[] | null> => {
-            const body = await get(io, `/tickets${query}`);
-            const parsed = v.safeParse(QueueListSchema, asJson(body));
-
-            if (!parsed.success) return null;
-
-            return parsed.output.tickets.map((row) => v.parse(QueueRowSchema, row));
-          };
-
-          const all = await listOf('');
-          const claimedOnly = await listOf('?status=claimed');
-          const anaOnly = await listOf('?agent=ana');
-          const anaResolved = await listOf('?status=resolved&agent=ana');
-
-          const expectedAll = queueSorted(tickets).map(queueRow);
-          const expectedClaimed = queueSorted(tickets.filter((t) => t.status === 'claimed')).map(queueRow);
-          const expectedAna = queueSorted(tickets.filter((t) => t.owner === 'ana')).map(queueRow);
-
-          const expectedAnaResolved = queueSorted(
-            tickets.filter((t) => t.owner === 'ana' && t.status === 'resolved'),
-          ).map(queueRow);
-
-          const same = <T>(left: T, right: T): boolean =>
-            JSON.stringify(left) === JSON.stringify(right);
-
-          const filters = {
-            'GET /tickets in priority,id order': same(all, expectedAll),
-            '?status=claimed': same(claimedOnly, expectedClaimed),
-            '?agent=ana': same(anaOnly, expectedAna),
-            '?status=resolved&agent=ana': same(anaResolved, expectedAnaResolved),
-          };
-
-          subgoals.push({
-            what: 'order-and-filters',
-            reached: Object.values(filters).every(Boolean),
-            detail: `${Object.entries(filters).map(([what, held]) => `${what}: ${held ? 'ok' : 'MISSED'}`).join('; ')}`
-              + `; served ${excerpt(JSON.stringify(all), 240)}`,
-          });
-
-          // 5. METRICS, derived from what the verifier did.
-          const metricsBody = await get(io, '/metrics');
-          const metrics = v.safeParse(QueueMetricsSchema, asJson(metricsBody));
-          const expectedMetrics = queueMetrics(tickets);
-
-          subgoals.push({
-            what: 'metrics',
-            reached: metrics.success && same(metrics.output, expectedMetrics),
-            detail: `expected ${JSON.stringify(expectedMetrics)}; served ${excerpt(metricsBody.text, 240)}`,
-          });
-
-          // 6. THE DURABILITY THE PRODUCT PROMISES, across the boundary a user
-          //    meets: this client's socket goes away and comes back. See the
-          //    header for why an eviction is NOT the boundary this contract
-          //    carries.
-          const before = await get(io, '/tickets');
-          const beforeMetrics = await get(io, '/metrics');
-          io.session.disconnect();
-          await io.session.connect();
-          const afterList = await get(io, '/tickets');
-          const afterMetrics = await get(io, '/metrics');
-
-          subgoals.push({
-            what: 'survives-reconnect',
-            reached: afterList.status === 200 && afterList.text === before.text
-              && afterMetrics.status === 200 && afterMetrics.text === beforeMetrics.text,
-            detail: 'over a socket reconnect — the product promises durable slate storage and a '
-              + 'stable address, not durable process memory (see the header): tickets '
-              + `${String(before.text === afterList.text)}, metrics `
-              + `${String(beforeMetrics.text === afterMetrics.text)}; after `
-              + excerpt(afterList.text, 200),
-          });
-
-          return subgoals;
-        }
-
-        if (turn === 1) {
-          const document = await io.session.readFile('docs/queue-week.md', { allowMissing: true });
-          const rows = document.split('\n').map((line) => line.trimEnd());
-          const headings = rows.filter((line) => line.startsWith('#'));
-          const open = tickets.filter((ticket) => ticket.status === 'open');
-          const problems: string[] = [];
-
-          if (JSON.stringify(headings) !== JSON.stringify(['# Queue this week', '## P1', '## P2', '## P3'])) {
-            problems.push(`headings ${JSON.stringify(headings)}`);
-          }
-
-          for (const priority of [1, 2, 3]) {
-            const start = rows.indexOf(`## P${String(priority)}`);
-            const rest = rows.slice(start + 1);
-            const end = rest.findIndex((line) => line.startsWith('#'));
-            const section = (end < 0 ? rest : rest.slice(0, end)).filter((line) => line !== '');
-
-            const expected = open.filter((ticket) => ticket.priority === priority)
-              .sort((left, right) => left.id.localeCompare(right.id))
-              .map((ticket) => `- ${ticket.id} · ${ticket.title} · ${ticket.filedBy}`);
-
-            if (JSON.stringify(section) !== JSON.stringify(expected)) {
-              problems.push(`P${String(priority)} listed ${JSON.stringify(section)} for ${JSON.stringify(expected)}`);
-            }
-
-            for (const line of section) {
-              if (!DOC_BULLET.test(line)) problems.push(`bullet shape ${excerpt(line, 120)}`);
-            }
-          }
-
-          const reads = promptToolCalls(io.events, turns[1], io.absorbedBy).filter((call) => {
-            if (!ok(call)) return false;
-            const text = `${textOf(call.args)}`;
-
-            return (call.name === 'shell' || call.name === 'web') && text.includes('/tickets');
-          });
-
-          requireMeasuredToolOutcomes(promptToolCalls(io.events, turns[1], io.absorbedBy));
-          preChange = (await get(io, '/tickets')).text;
-
-          return [
-            {
-              what: 'document',
-              reached: problems.length === 0,
-              detail: problems.length === 0
-                ? `${String(open.length)} open ticket(s) listed under the three priority sections in id order`
-                : problems.slice(0, 4).join('; '),
-            },
-            {
-              what: 'read-not-recalled',
-              reached: reads.length > 0,
-              detail: `${String(reads.length)} shell/web call(s) naming /tickets in turn 2's run`,
-            },
-          ];
-        }
-
-        if (turn === 2) {
-          // BEFORE the new rules are exercised: `preserved` is about what was
-          // already stored, and the probes below add rows.
-          const after = await get(io, '/tickets');
-
-          const fresh = { id: `q-${nonce}-p5`, title: 'Priority five', priority: 5, agent: 'ana' };
-          const accepted = await post(io, '/tickets', fresh);
-          const refused = await post(io, '/tickets', { ...fresh, id: `q-${nonce}-p6`, priority: 6 });
-          const systemResolve = await post(io, `/tickets/${fresh.id}/resolve`);
-          const echo = v.safeParse(QueueEchoSchema, asJson(systemResolve));
-          const refusedError = v.safeParse(QueueErrorSchema, asJson(refused));
-
-          const ports = await io.session.exposedPorts('workspace');
-          const exposure = ports.find((port) => port.port === QUEUE_PORT);
-
-          const rules = {
-            'priority 5→201': accepted.status === 201,
-            'priority 6→400 INVALID_PRIORITY': refused.status === 400
-              && refusedError.success && refusedError.output.error === 'INVALID_PRIORITY',
-            'resolve open→200 resolved/system': systemResolve.status === 200 && echo.success
-              && echo.output.ticket.status === 'resolved' && echo.output.ticket.owner === 'system',
-          };
-
-          return [
-            {
-              what: 'preserved',
-              reached: after.status === 200 && after.text === preChange,
-              detail: after.text === preChange
-                ? 'every stored row byte-identical across the rule change'
-                : `before ${excerpt(preChange, 300)} after ${excerpt(after.text, 300)}`,
-            },
-            {
-              what: 'new-rules',
-              reached: Object.values(rules).every(Boolean),
-              detail: Object.entries(rules).map(([what, held]) => `${what}: ${held ? 'ok' : 'MISSED'}`).join('; '),
-            },
-            {
-              what: 'still-serving',
-              reached: exposure !== undefined && exposure.url === preview,
-              detail: `port ${String(QUEUE_PORT)} ${exposure === undefined ? 'is no longer exposed' : `is exposed at ${exposure.url}`}`
-                + ` against the turn-1 URL ${preview}`,
-            },
-          ];
-        }
-
-        const answer = reply(io.history);
-        const expected = tickets.filter((t) => t.owner === 'ana' && t.status === 'claimed').length;
-
-        return [{
-          what: 'bare-number',
-          reached: /^\d+$/u.test(answer.trim()) && answer.trim() === String(expected),
-          detail: `reply ${excerpt(answer)} against the verifier's own count ${String(expected)}`,
-        }];
+        return afterTurnFour(io);
       },
     };
   },
@@ -1257,140 +1271,151 @@ const CLONE_AND_SERVE: KinuTaskCase = {
       return body.status === 200 && parsed.success;
     };
 
+    /** Turn 1: app A cloned into the workspace and served from it. */
+    async function afterTurnOne(io: KinuTaskIo): Promise<readonly EvalSubgoal[]> {
+      const ledger = promptToolCalls(io.events, turns[0], io.absorbedBy);
+      requireMeasuredToolOutcomes(ledger);
+
+      const cloned = ledger.filter((call) => {
+        const shell = shellCall(call);
+
+        return shell !== null && shell.runtime === 'workspace'
+          && shell.command.includes('git clone') && ok(call);
+      });
+
+      const server = await io.session.readFile('apps/a/server.js', { allowMissing: true });
+      const ports = await io.session.exposedPorts('workspace');
+      const exposure = ports.find((port) => port.port === APP_A_PORT);
+      workspaceUrl = exposure?.url ?? '';
+      const health = exposure === undefined ? { status: 0, text: '' } : await io.session.fetchPreview(exposure.url, '/health');
+      const answered = lines(reply(io.history));
+
+      return [
+        {
+          what: 'git',
+          reached: cloned.length > 0 && server.includes(token),
+          detail: `${String(cloned.length)} settled workspace \`git clone\` call(s); `
+            + `apps/a/server.js ${server === '' ? 'is absent' : 'is present'} and `
+            + `${server.includes(token) ? 'carries' : 'lacks'} the seeded token`,
+        },
+        {
+          what: 'served-workspace',
+          reached: exposure !== undefined && healthy(health),
+          detail: `port ${String(APP_A_PORT)} ${exposure === undefined ? 'not exposed' : `exposed at ${exposure.url}`}; `
+            + `/health HTTP ${String(health.status)} ${excerpt(health.text, 160)}`,
+        },
+        {
+          what: 'reply',
+          reached: answered.length === 2 && exposure !== undefined
+            && answered[0] === exposure.url
+            && JSON.stringify(asJson({ status: 200, text: answered[1] ?? '' }))
+              === JSON.stringify({ ok: true, token }),
+          detail: `reply lines ${JSON.stringify(answered.slice(0, 3))} against ${exposure?.url ?? 'no URL'} `
+            + `and {"ok":true,"token":"${token}"}`,
+        },
+      ];
+    }
+
+    /** Turn 2: the same app served from the sandbox, with the workspace copy still up. */
+    async function afterTurnTwo(io: KinuTaskIo): Promise<readonly EvalSubgoal[]> {
+      const sandboxPorts = await io.session.exposedPorts('sandbox');
+      const sandbox = sandboxPorts.find((port) => port.port === APP_A_SANDBOX_PORT);
+      const sandboxHealth = sandbox === undefined ? { status: 0, text: '' } : await io.session.fetchPreview(sandbox.url, '/health');
+      const workspacePorts = await io.session.exposedPorts('workspace');
+      const workspace = workspacePorts.find((port) => port.port === APP_A_PORT);
+      const workspaceHealth = workspace === undefined ? { status: 0, text: '' } : await io.session.fetchPreview(workspace.url, '/health');
+      const answered = lines(reply(io.history));
+
+      return [
+        {
+          what: 'served-sandbox',
+          reached: sandbox !== undefined && healthy(sandboxHealth),
+          detail: `sandbox port ${String(APP_A_SANDBOX_PORT)} ${sandbox === undefined ? 'not exposed' : `exposed at ${sandbox.url}`}; `
+            + `/health HTTP ${String(sandboxHealth.status)} ${excerpt(sandboxHealth.text, 160)} against token ${token}`,
+        },
+        {
+          what: 'both-urls',
+          reached: answered.length === 2 && sandbox !== undefined
+            && answered[0] === workspaceUrl && answered[1] === sandbox.url
+            && answered[0] !== answered[1],
+          detail: `reply lines ${JSON.stringify(answered.slice(0, 3))} against workspace `
+            + `${workspaceUrl} then sandbox ${sandbox?.url ?? 'none'}`,
+        },
+        {
+          what: 'workspace-still-up',
+          reached: workspace !== undefined && healthy(workspaceHealth),
+          detail: `the workspace copy answers /health with HTTP ${String(workspaceHealth.status)} `
+            + excerpt(workspaceHealth.text, 160),
+        },
+      ];
+    }
+
+    /** Turn 3: app B routed to the sandbox, and the boundary discovered in order. */
+    async function afterTurnThree(io: KinuTaskIo): Promise<readonly EvalSubgoal[]> {
+      const ledger = promptToolCalls(io.events, turns[2], io.absorbedBy);
+      requireMeasuredToolOutcomes(ledger);
+      const sandboxPorts = await io.session.exposedPorts('sandbox');
+      const workspacePorts = await io.session.exposedPorts('workspace');
+      const routed = sandboxPorts.find((port) => port.port === APP_B_PORT);
+      const onWorkspace = workspacePorts.some((port) => port.port === APP_B_PORT);
+      const page = routed === undefined ? { status: 0, text: '' } : await io.session.fetchPreview(routed.url, '/');
+
+      const appBCall = (runtime: string): ToolCallEnd | undefined => ledger.find((call) => {
+        const shell = shellCall(call);
+
+        if (shell === null || shell.runtime !== runtime) return false;
+
+        return /\bvite\b/u.test(shell.command) || /\bnpm\b/u.test(shell.command);
+      });
+
+      const attempt = appBCall('workspace');
+      const fallback = appBCall('sandbox');
+
+      // The attempt must have HIT the boundary: a workspace call that
+      // succeeded is not a discovery, and a refusal recorded after the
+      // sandbox call is a guess that was rationalised afterwards.
+      const refused = attempt !== undefined && !ok(attempt);
+
+      const ordered = refused && fallback !== undefined
+        && ledger.indexOf(attempt) < ledger.indexOf(fallback);
+
+      const answer = reply(io.history);
+      const answered = lines(answer);
+
+      return [
+        {
+          what: 'routed',
+          reached: routed !== undefined && page.status === 200
+            && page.text.includes(`<title>APP-B-${nonce}</title>`) && !onWorkspace,
+          detail: `sandbox ${String(APP_B_PORT)} ${routed === undefined ? 'not exposed' : `exposed at ${routed.url}`}; `
+            + `HTTP ${String(page.status)}; workspace ${onWorkspace ? 'ALSO lists 8793' : 'does not list 8793'}; `
+            + `body ${excerpt(page.text, 160)}`,
+        },
+        {
+          what: 'boundary-discovered',
+          reached: ordered,
+          detail: `MEASURED 2026-09-18 on the deployment: the hosted workspace runtime installs `
+            + `(\`npm i\` exit 0) and cannot run Vite (\`npx vite\` exit 127, codegen refusal), `
+            + `so the attempt must be recorded and must precede the sandbox call. workspace `
+            + `attempt ${attempt === undefined ? 'absent' : `${attempt.toolCallId} ${ok(attempt) ? 'SUCCEEDED (no boundary met)' : 'refused/failed'}`}; `
+            + `sandbox call ${fallback?.toolCallId ?? 'absent'}`,
+        },
+        {
+          what: 'reason-stated',
+          reached: answered.length === 1 && /sandbox/iu.test(answer) && REFUSAL_NOUN.test(answer),
+          detail: `reply ${excerpt(answer)} — one line naming \`sandbox\` and the refusal's own `
+            + 'noun (`compil`, from the hosted node guard)',
+        },
+      ];
+    }
+
     return {
       async after(turn, io) {
-        if (turn === 0) {
-          const ledger = promptToolCalls(io.events, turns[0], io.absorbedBy);
-          requireMeasuredToolOutcomes(ledger);
+        if (turn === 0) return afterTurnOne(io);
 
-          const cloned = ledger.filter((call) => {
-            const shell = shellCall(call);
+        if (turn === 1) return afterTurnTwo(io);
 
-            return shell !== null && shell.runtime === 'workspace'
-              && shell.command.includes('git clone') && ok(call);
-          });
-
-          const server = await io.session.readFile('apps/a/server.js', { allowMissing: true });
-          const ports = await io.session.exposedPorts('workspace');
-          const exposure = ports.find((port) => port.port === APP_A_PORT);
-          workspaceUrl = exposure?.url ?? '';
-          const health = exposure === undefined ? { status: 0, text: '' } : await io.session.fetchPreview(exposure.url, '/health');
-          const answered = lines(reply(io.history));
-
-          return [
-            {
-              what: 'git',
-              reached: cloned.length > 0 && server.includes(token),
-              detail: `${String(cloned.length)} settled workspace \`git clone\` call(s); `
-                + `apps/a/server.js ${server === '' ? 'is absent' : 'is present'} and `
-                + `${server.includes(token) ? 'carries' : 'lacks'} the seeded token`,
-            },
-            {
-              what: 'served-workspace',
-              reached: exposure !== undefined && healthy(health),
-              detail: `port ${String(APP_A_PORT)} ${exposure === undefined ? 'not exposed' : `exposed at ${exposure.url}`}; `
-                + `/health HTTP ${String(health.status)} ${excerpt(health.text, 160)}`,
-            },
-            {
-              what: 'reply',
-              reached: answered.length === 2 && exposure !== undefined
-                && answered[0] === exposure.url
-                && JSON.stringify(asJson({ status: 200, text: answered[1] ?? '' }))
-                  === JSON.stringify({ ok: true, token }),
-              detail: `reply lines ${JSON.stringify(answered.slice(0, 3))} against ${exposure?.url ?? 'no URL'} `
-                + `and {"ok":true,"token":"${token}"}`,
-            },
-          ];
-        }
-
-        if (turn === 1) {
-          const sandboxPorts = await io.session.exposedPorts('sandbox');
-          const sandbox = sandboxPorts.find((port) => port.port === APP_A_SANDBOX_PORT);
-          const sandboxHealth = sandbox === undefined ? { status: 0, text: '' } : await io.session.fetchPreview(sandbox.url, '/health');
-          const workspacePorts = await io.session.exposedPorts('workspace');
-          const workspace = workspacePorts.find((port) => port.port === APP_A_PORT);
-          const workspaceHealth = workspace === undefined ? { status: 0, text: '' } : await io.session.fetchPreview(workspace.url, '/health');
-          const answered = lines(reply(io.history));
-
-          return [
-            {
-              what: 'served-sandbox',
-              reached: sandbox !== undefined && healthy(sandboxHealth),
-              detail: `sandbox port ${String(APP_A_SANDBOX_PORT)} ${sandbox === undefined ? 'not exposed' : `exposed at ${sandbox.url}`}; `
-                + `/health HTTP ${String(sandboxHealth.status)} ${excerpt(sandboxHealth.text, 160)} against token ${token}`,
-            },
-            {
-              what: 'both-urls',
-              reached: answered.length === 2 && sandbox !== undefined
-                && answered[0] === workspaceUrl && answered[1] === sandbox.url
-                && answered[0] !== answered[1],
-              detail: `reply lines ${JSON.stringify(answered.slice(0, 3))} against workspace `
-                + `${workspaceUrl} then sandbox ${sandbox?.url ?? 'none'}`,
-            },
-            {
-              what: 'workspace-still-up',
-              reached: workspace !== undefined && healthy(workspaceHealth),
-              detail: `the workspace copy answers /health with HTTP ${String(workspaceHealth.status)} `
-                + excerpt(workspaceHealth.text, 160),
-            },
-          ];
-        }
-
-        const ledger = promptToolCalls(io.events, turns[2], io.absorbedBy);
-        requireMeasuredToolOutcomes(ledger);
-        const sandboxPorts = await io.session.exposedPorts('sandbox');
-        const workspacePorts = await io.session.exposedPorts('workspace');
-        const routed = sandboxPorts.find((port) => port.port === APP_B_PORT);
-        const onWorkspace = workspacePorts.some((port) => port.port === APP_B_PORT);
-        const page = routed === undefined ? { status: 0, text: '' } : await io.session.fetchPreview(routed.url, '/');
-
-        const appBCall = (runtime: string): ToolCallEnd | undefined => ledger.find((call) => {
-          const shell = shellCall(call);
-
-          if (shell === null || shell.runtime !== runtime) return false;
-
-          return /\bvite\b/u.test(shell.command) || /\bnpm\b/u.test(shell.command);
-        });
-
-        const attempt = appBCall('workspace');
-        const fallback = appBCall('sandbox');
-
-        // The attempt must have HIT the boundary: a workspace call that
-        // succeeded is not a discovery, and a refusal recorded after the
-        // sandbox call is a guess that was rationalised afterwards.
-        const refused = attempt !== undefined && !ok(attempt);
-
-        const ordered = refused && fallback !== undefined
-          && ledger.indexOf(attempt) < ledger.indexOf(fallback);
-
-        const answer = reply(io.history);
-        const answered = lines(answer);
-
-        return [
-          {
-            what: 'routed',
-            reached: routed !== undefined && page.status === 200
-              && page.text.includes(`<title>APP-B-${nonce}</title>`) && !onWorkspace,
-            detail: `sandbox ${String(APP_B_PORT)} ${routed === undefined ? 'not exposed' : `exposed at ${routed.url}`}; `
-              + `HTTP ${String(page.status)}; workspace ${onWorkspace ? 'ALSO lists 8793' : 'does not list 8793'}; `
-              + `body ${excerpt(page.text, 160)}`,
-          },
-          {
-            what: 'boundary-discovered',
-            reached: ordered,
-            detail: `MEASURED 2026-09-18 on the deployment: the hosted workspace runtime installs `
-              + `(\`npm i\` exit 0) and cannot run Vite (\`npx vite\` exit 127, codegen refusal), `
-              + `so the attempt must be recorded and must precede the sandbox call. workspace `
-              + `attempt ${attempt === undefined ? 'absent' : `${attempt.toolCallId} ${ok(attempt) ? 'SUCCEEDED (no boundary met)' : 'refused/failed'}`}; `
-              + `sandbox call ${fallback?.toolCallId ?? 'absent'}`,
-          },
-          {
-            what: 'reason-stated',
-            reached: answered.length === 1 && /sandbox/iu.test(answer) && REFUSAL_NOUN.test(answer),
-            detail: `reply ${excerpt(answer)} — one line naming \`sandbox\` and the refusal's own `
-              + 'noun (`compil`, from the hosted node guard)',
-          },
-        ];
+        return afterTurnThree(io);
       },
     };
   },
