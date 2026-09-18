@@ -61,9 +61,40 @@ function stripCommentsAndStrings(body: string): string {
 
 const sources = tsSources(SRC).map((path) => ({ path, text: readFileSync(path, 'utf8') }));
 
+/**
+ * The closure this rule is about: classes the Agents SDK owns the alarm slot
+ * of. There `_scheduleNextAlarm()` deletes any alarm it does not recognise, so
+ * a shadowed `alarm()` or a direct slot write silently destroys every
+ * scheduled callback.
+ *
+ * A plain `DurableObject` owns its whole slot: no SDK scheduler to collide
+ * with, and no `super.alarm()` to chain — `DurableObject` declares none, so
+ * chaining would not compile. `DeployRunDO` is the first such object here and
+ * its alarm IS its runner (`deploy/deploy-do.ts`). The exemption is pinned by
+ * equality below rather than left implicit: an unpinned filter is how this
+ * guard would quietly stop governing an Agent.
+ */
+const SDK_HOSTED = /\bextends\s+(?:Agent|AIChatAgent|Think|ActorAgent|OrchestratorAgent)\b/u;
+
+const hosted = sources.filter(({ text }) => SDK_HOSTED.test(text));
+
+const OWN_SLOT_FILES: readonly string[] = ['deploy/deploy-do.ts'];
+
+const under = (path: string): string => path.slice(SRC.length + 1);
+
 describe('DO alarm chain', () => {
+  test('the governed set is every Agents-SDK subclass, and the exemptions are named', () => {
+    const writers = sources
+      .filter(({ text }) => /\.\s*(?:setAlarm|deleteAlarm)\s*\(/u.test(text))
+      .map(({ path }) => under(path));
+
+    expect(hosted.length).toBeGreaterThan(0);
+    expect(writers.filter((path) => !OWN_SLOT_FILES.includes(path))).toEqual([]);
+    expect(writers).toEqual([...OWN_SLOT_FILES]);
+  });
+
   test('no Agent subclass defines alarm() without calling super.alarm()', () => {
-    const broken = sources.flatMap(({ path, text }) =>
+    const broken = hosted.flatMap(({ path, text }) =>
       alarmMethods(text)
         .filter((body) => !/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(body)))
         .map(() => path),
@@ -86,13 +117,13 @@ describe('DO alarm chain', () => {
     expect(alarmMethods(`this.ctx.storage.setAlarm(ts);\nthis.alarm.scheduleAt(ts);`)).toEqual([]);
   });
 
-  test('nothing writes the DO alarm slot behind the SDK', () => {
+  test('nothing writes the alarm slot of an object the SDK schedules', () => {
     // A DO has one alarm slot and _scheduleNextAlarm() deletes any alarm it
     // does not recognise, so a direct write and the SDK scheduler silently
     // destroy each other. All Kinu wakes go through cf_agents_schedules.
-    const direct = sources
-      .filter(({ text }) => /\.\s*(?:setAlarm|deleteAlarm)\s*\(/.test(text))
-      .map(({ path }) => path);
+    const direct = hosted
+      .filter(({ text }) => /\.\s*(?:setAlarm|deleteAlarm)\s*\(/u.test(text))
+      .map(({ path }) => under(path));
 
     expect(direct).toEqual([]);
   });
