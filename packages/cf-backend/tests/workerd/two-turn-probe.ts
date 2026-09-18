@@ -80,6 +80,7 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import type {
   AgentLogEvent,
+  ArmedWake,
   CallRecord,
   DriveOnceInput,
   DriveOnceResult,
@@ -95,6 +96,7 @@ import type {
   QueueProbeMode,
 } from './two-turn-shapes';
 import {
+  ArmedWakeSchema,
   DriveOnceInputSchema,
   DriveOnceResultSchema,
   ExerciseResultSchema,
@@ -143,7 +145,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'runEventWake');
     Reflect.deleteProperty(this, 'parityRows');
     Reflect.deleteProperty(this, 'wakeRows');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows']);
+    Reflect.deleteProperty(this, 'armedWakeRows');
+    Reflect.deleteProperty(this, 'driveArmedWakes');
+    Reflect.deleteProperty(this, 'runStartCauses');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'armedWakeRows', 'driveArmedWakes', 'runStartCauses']);
   }
 
   /** The wake proof's hold on the SETTLE WINDOW: a turn-end extension is run
@@ -342,6 +347,75 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     await this.orch.drainPendingEvents({ rethrow: true });
     await fetch(`http://probe-control.invalid/log/until?marker=${encodeURIComponent(marker)}`);
   }
+
+  /** The durable wake registry as the platform holds it: which callback each
+   *  armed row names, and when. The discriminating read for a two-chain
+   *  actor — a fold arms ONE chain's callback, and only that chain's frame
+   *  runs. Future rows only, the same rule `armWakeRow`'s collapse applies:
+   *  while a tick executes, the SDK keeps its own overdue row listed until the
+   *  callback returns, and counting it would report a wake nothing owes. */
+  async armedWakeRows(): Promise<ArmedWake[]> {
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    return (await this.listSchedules())
+      .filter((row) => row.time > nowSec)
+      .map((row) => v.parse(ArmedWakeSchema, { callback: row.callback, at: row.time }))
+      .sort((left, right) => left.at - right.at || left.callback.localeCompare(right.callback));
+  }
+
+  /**
+   * Deliver the wakes this object has armed — ONE lap, in wake order — and
+   * answer which callbacks ran.
+   *
+   * THE FRAME, NEVER THE WORK. The probe reads the registry and invokes the
+   * callback each row names; it does not pick the chain and it does not call
+   * `drainPendingEvents`, `maintenanceWork` or any other pass by hand. That is
+   * the whole measurement for an actor with two wake chains: a fold arms a
+   * callback, the platform delivers exactly that callback, and whether the
+   * frame behind it can take the work is the product's answer — not the
+   * probe's. A probe that drove a hand-picked pass would report a product that
+   * was never asked (`hire-probe.ts:225-232` records that failure).
+   *
+   * In-request because the pool cannot deliver a real alarm to an object while
+   * a request holds its input gate. ONE lap because one delivery is what the
+   * platform owes for one armed row; a property that needs a second lap is a
+   * finding the caller states, not one this method hides by looping.
+   */
+  async driveArmedWakes(): Promise<string[]> {
+    // The two Kinu wake callbacks, paired with the frame each one names. A
+    // `const` tuple list rather than a dictionary: the registry answers a
+    // string, and this is the one place that string becomes a call.
+    const frames = [
+      ['_kinuTimerTick', () => this._kinuTimerTick()],
+      ['_kinuTerminalRetryTick', () => this._kinuTerminalRetryTick()],
+    ] as const;
+
+    const armed = await this.armedWakeRows();
+    const driven: string[] = [];
+
+    for (const row of armed) {
+      const frame = frames.find(([callback]) => callback === row.callback);
+
+      if (frame === undefined) continue;
+      await frame[1]();
+      driven.push(row.callback);
+    }
+
+    return driven;
+  }
+
+  /** Every run the ledger opened, by what caused it. A drain turn is
+   *  `caused_by: 'event_drain'`, which is how a reader tells the reactor's own
+   *  turn from a chat turn that happened to absorb the batch. */
+  async runStartCauses(): Promise<string[]> {
+    return this.actorState.storage.sql
+      .exec("SELECT payload FROM run_events WHERE type = 'run_start' ORDER BY rowid")
+      .toArray()
+      .map((row) => v.parse(
+        v.fallback(v.looseObject({ caused_by: v.fallback(v.string(), '') }), { caused_by: '' }),
+        JSON.parse(String(row.payload)),
+      ).caused_by);
+  }
 }
 
 export { ObservedOrchestrator as OrchestratorAgent };
@@ -489,7 +563,8 @@ type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
   | 'createSubordinateAgent'>
-  & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'>;
+  & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  | 'armedWakeRows' | 'driveArmedWakes' | 'runStartCauses'>;
 
 /** How long the wake proof's command sleeps: past the interactive detach
  *  window (30 s), so the call detaches and the job settles out of turn. */
@@ -719,7 +794,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
   /** Real socket intake and Think queue; only the remote model response is
    * held. Peer ingress queues a durable event-drain submission while both
    * socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'twin'>): Promise<HttpCall[]> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin'>): Promise<HttpCall[]> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1439,6 +1514,73 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
     await target.runEventWake(marker);
+  }
+
+  /**
+   * The reactor-wake drive's workspace, claimed and left IDLE: no genesis
+   * turn, no due trigger, nothing owed. The state an external event actually
+   * arrives in for a workspace nobody is talking to.
+   */
+  async claimReactorWakeWorkspace(): Promise<{ workspace: string; owner: string }> {
+    const { workspace, owner } = await this.claimQueueWorkspace('rwake');
+
+    return { workspace, owner };
+  }
+
+  /**
+   * One real external event through a real ingress, and the wake it armed.
+   *
+   * `receivePeerMessage` is the shipped cross-DO receiver: it gates the sender,
+   * publishes through `EventLog.publish`, and calls the `onAdmitted` the
+   * production orchestrator wires to `scheduleDrain` — so both halves of the
+   * ingress contract run, the in-memory debounce and the durable arm. Nothing
+   * is hand-inserted into `agent_log`.
+   *
+   * The armed rows are read back in the SAME call, before the caller can evict:
+   * they are what the fold decided, and the verdict on a two-chain actor is
+   * which callback carries it.
+   */
+  async publishPeerEvent(workspace: string, owner: string, body: string): Promise<ArmedWake[]> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    const admitted = await target.receivePeerMessage({
+      sender_event_id: `rwake-${body}`, sender_agent_name: 'rwake-peer', sender_user_id: owner,
+      topic: 'reactor-wake', body, mode: 'build', reply_expected: false,
+    });
+
+    if (!admitted.admitted) throw new Error(`reactor-wake probe peer input refused: ${admitted.reason}`);
+
+    return await target.armedWakeRows();
+  }
+
+  /** The wake registry of one workspace, after an eviction: the rows that
+   *  survived, which is what the platform would deliver next. */
+  async armedWakesFor(workspace: string): Promise<ArmedWake[]> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    return await target.armedWakeRows();
+  }
+
+  /** Deliver one lap of whatever this workspace armed, and answer which
+   *  callbacks ran — the product's own frames, chosen by its own registry. */
+  async driveArmedWakesFor(workspace: string): Promise<string[]> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    return await target.driveArmedWakes();
+  }
+
+  /** What opened every run this workspace recorded. */
+  async runStartCausesFor(workspace: string): Promise<string[]> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    return await target.runStartCauses();
+  }
+
+  /** Park until the model wire has carried `marker`. Called only after the
+   *  durable row already proved the drain bound the event, so the join has a
+   *  reached condition behind it rather than a hope. */
+  async awaitWireMarker(marker: string): Promise<void> {
+    await fetch(`http://probe-control.invalid/log/until?marker=${encodeURIComponent(marker)}`);
   }
 
   /** A fresh workspace's first chat: the claim, the socket's real

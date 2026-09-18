@@ -292,6 +292,71 @@ describe('two real turns over the HTTP model seam', () => {
     expect(rebound?.turnId).not.toBe('evt-seeded-dead');
   });
 
+  it('drains an external event that reached an idle object, on the wake its arrival armed', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('reactor-wake-driver'));
+
+    // An IDLE object: claimed and pinned to the fake wire, no genesis turn and
+    // no trigger, so nothing here is due. Then ONE real external event through
+    // the shipped cross-DO receiver, which publishes through `EventLog.publish`
+    // and calls the production `onAdmitted` — so both halves of the ingress
+    // contract run, the in-memory debounce and the durable arm.
+    const { workspace, owner } = await root.claimReactorWakeWorkspace();
+    const armed = await root.publishPeerEvent(workspace, owner, 'REACTOR-WAKE');
+
+    // WHICH CHAIN the arrival armed. This actor carries two and only the frame
+    // behind the armed callback runs: `_kinuTimerTick` is the timer chain that
+    // `nextWakeAt` (with the event log folded in) feeds, `_kinuTerminalRetryTick`
+    // the terminal-retry chain. Asserted because it is the premise of the drive
+    // below — a row that drove a callback nothing armed would measure a frame
+    // the platform was never going to deliver.
+    expect(armed.map((row) => row.callback)).toContain('_kinuTimerTick');
+
+    // The eviction takes the 250 ms drain debounce `scheduleDrain` armed beside
+    // the durable row. What is left is the durable half alone, which is the
+    // half a pending reaction is supposed to have.
+    await abortAllDurableObjects();
+
+    const coldRoot = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('reactor-wake-driver'));
+
+    // The guard on that eviction: the row is still PENDING. A debounce that
+    // beat the abort would drain here and green this row on the wrong
+    // evidence, so the state the measurement needs is asserted, never assumed.
+    const pending = (await coldRoot.agentLogEventsFor(workspace)).filter((row) => row.variant === 'peer_agent');
+
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.turnId).toBeNull();
+
+    // One lap of the wake, delivered: the product's own frames, chosen from the
+    // product's own registry. The armed callback is re-read after the reset, so
+    // a chain that only the live isolate held would show up as an empty drive.
+    const driven = await coldRoot.driveArmedWakesFor(workspace);
+
+    expect(driven).toContain('_kinuTimerTick');
+
+    // THE PROPERTY: the frame that wake reaches DRAINS. The bind is written by
+    // `markConsumed` and nothing else writes an `evt-` turn id, so the row
+    // itself says whether the drain happened — no poll and no deadline. A
+    // CLOSED lease beside it (`consumed_at` back to null, `markTurnCompleted`)
+    // is the drain turn having finished, which is why the two fields are read
+    // together: pending is (null, null), leased is (evt-, number), answered is
+    // (evt-, null).
+    const consumed = (await coldRoot.agentLogEventsFor(workspace)).filter((row) => row.variant === 'peer_agent');
+
+    // Asserted as the whole row, so a failure prints the state the wake left
+    // rather than a type error about a null.
+    expect(consumed).toHaveLength(1);
+    expect(consumed[0]).toEqual(expect.objectContaining({
+      turnId: expect.stringMatching(/^evt-/),
+      consumedAt: null,
+    }));
+
+    // And the turn that drain queued RAN: the reactor's own run in the ledger,
+    // with the event's text on the model wire. The join is bounded by the row
+    // above — it is entered only once the bind proved a drain happened.
+    await coldRoot.awaitWireMarker('REACTOR-WAKE');
+    expect(await coldRoot.runStartCausesFor(workspace)).toContain('event_drain');
+  });
+
   it('two clients delivering the same message at once are one turn, one provider request, one row', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('twin-driver'));
     const out = await root.twinSends();

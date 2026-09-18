@@ -300,6 +300,46 @@ mission and no parent message in its conversation. Measured the same day:
 splicing the digest as a birth message turned both non-inherit rows of that
 test red; deleting the kind left 3316 of 3316 cf tests green.
 
+D6. A source folded into a wake's fold owes a PHASE in that wake's frame. This
+actor carries two wake chains (D3) and the reactor's pending-drain fold sat in
+the wrong half of that rule: `nextPendingDrainAt` was folded into `nextWakeAt`,
+which arms `KINU_TIMER_CALLBACK`, while `_kinuTimerTick` fired due triggers,
+pushed the peer and email outboxes and re-armed — and called
+`scheduleDrain()` only when a trigger had fired. So an external event that
+reached an IDLE object (webhook, inbound email, peer message) armed a wake that
+could not take it, and the row's only remaining hope was the 250 ms in-memory
+debounce the same ingress started, which dies with the isolate. Decided
+2026-09-17: the tick drains when the fold says a drain is due, one call under
+the fold's own reader with the tick's own clock, and the `fired > 0` branch is
+gone — a trigger firing is one way a row becomes drainable and every other
+ingress is another. The delegation queue is NOT folded here, for the mirror
+reason D3 gives, and no third chain exists.
+
+Measured the same day in the workerd pool, `cf-backend/tests/workerd/two-turn.test.ts`,
+"drains an external event that reached an idle object, on the wake its arrival
+armed": one real `peer_agent` event through the shipped `receivePeerMessage`
+into an idle claimed workspace, `abortAllDurableObjects()` to take the debounce,
+then one lap of whatever the registry holds armed, dispatched by callback name
+so the probe never picks the chain.
+
+| shape | armed | after the wake's frame ran |
+| --- | --- | --- |
+| the fold alone (6f000def4) | `_kinuTimerTick` | row `turn_id NULL, consumed_at NULL`; `_kinuTimerTick` re-armed for the same row |
+| with the drain phase | `_kinuTimerTick` | row `turn_id evt-…`, lease closed, `run_start caused_by event_drain`, event text on the model wire |
+
+The re-arm is the second half of the cost: `armWakeRow` clamps a due target to
+`nowSec + 1`, so under the fold alone the object woke every second, drained
+nothing and re-armed from the same fold — not a lost wake, a one-second loop
+that never converges. The row's own wall time reads 91 ms under the fold alone
+and 166 ms with the drain turn in it, which is the test's time and not the
+frame's; the frame is not separately instrumented.
+
+The CLI host needs nothing: it folds only trigger times into its process timer
+(`local-session.ts:nextScheduledTriggerAt`) and offers no
+`reconcileDurableWake`, so its next wake is its own next start and the drain
+debounce lives as long as the process that owns the workspace. Two mechanisms,
+one rule each; nothing to reconcile.
+
 
 ## Deploy ladder
 
