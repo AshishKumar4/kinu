@@ -36,11 +36,12 @@
  *   bun scripts/ws-reconnect-drill.ts            (manages its own dev server)
  */
 
-import type { Socket } from "bun";
+import type { Socket, Subprocess } from "bun";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
 import { parseJsonValue, type JsonValue } from "@kinu.run/core";
+import { tolerate } from "@kinu.run/core/obs";
 import puppeteer, { type Browser, type HTTPRequest, type Page } from "puppeteer";
 
 /* ── configuration ─────────────────────────────────────────────────────────── */
@@ -437,7 +438,11 @@ async function waitForPortFree(port: number): Promise<void> {
   fail("dev-server", `port ${port} never became free`);
 }
 
-async function spawnDevServerOnce(): Promise<ReturnType<typeof Bun["spawn"]>> {
+/** The dev server's own subprocess: stdin and stdout discarded, stderr on this
+ *  drill's terminal, and its own process group (`detached`). */
+type DevServerProcess = Subprocess<"ignore", "ignore", "inherit">;
+
+async function spawnDevServerOnce(): Promise<DevServerProcess> {
   // A previous crashed run leaves an orphaned `vite` child holding the port;
   // clear it so this bind succeeds.
   Bun.spawnSync(["pkill", "-f", `port ${UPSTREAM_PORT}`]);
@@ -445,13 +450,20 @@ async function spawnDevServerOnce(): Promise<ReturnType<typeof Bun["spawn"]>> {
 
   return Bun.spawn(
     ["bun", "x", "vite", "dev", "--host", "127.0.0.1", "--port", String(UPSTREAM_PORT), "--strictPort"],
-    { cwd: CF_BACKEND, stdin: "ignore", stdout: "ignore", stderr: "inherit" },
+    {
+      cwd: CF_BACKEND, stdin: "ignore", stdout: "ignore", stderr: "inherit",
+      // setsid, so vite leads its own process group and every teardown below
+      // signals the workerd children with it. `bun x` parents the real vite
+      // process, which parents workerd: killing the lone parent orphans both
+      // to init, and they keep the port this drill re-binds three times.
+      detached: true,
+    },
   );
 }
 
 async function startDevServer(label: string): Promise<DevServer> {
   log(`starting dev server (${label}) on :${UPSTREAM_PORT}`);
-  let proc: ReturnType<typeof Bun["spawn"]> | null = null;
+  let proc: DevServerProcess | null = null;
   const started = Date.now();
 
   for (;;) {
@@ -459,9 +471,9 @@ async function startDevServer(label: string): Promise<DevServer> {
 
     if (proc === null || proc.exitCode !== null) {
       if (proc !== null) {
-        log(`dev server (${label}) exited with code ${proc.exitCode} before answering — sweeping and retrying`);
-        Bun.spawnSync(["pkill", "-9", "-f", `port ${UPSTREAM_PORT}`]);
-        await Bun.sleep(3_000);
+        const gone = proc;
+        log(`dev server (${label}) exited with code ${proc.exitCode} before answering — reaping its group and retrying`);
+        tolerate(() => process.kill(-gone.pid, "SIGKILL"), 'esrch');
       }
 
       proc = await spawnDevServerOnce();
@@ -482,12 +494,14 @@ async function startDevServer(label: string): Promise<DevServer> {
 
   return {
     async kill() {
-      proc.kill(9);
+      // The GROUP, not the `bun x` parent. SIGTERM first so the Cloudflare
+      // plugin's own shutdown runs, then SIGKILL for a group that never took
+      // it; an already-exited group raises ESRCH, an expected absence. The
+      // port is free by the kernel's account once the group is gone, which is
+      // what the next boot's `waitForPortFree` reads.
+      tolerate(() => process.kill(-proc.pid, "SIGTERM"), 'esrch');
       await proc.exited;
-      // bunx parents the real vite process; SIGKILLing the parent orphans the
-      // child, so sweep by port too before the next bind.
-      Bun.spawnSync(["pkill", "-f", `port ${UPSTREAM_PORT}`]);
-      await Bun.sleep(500);
+      tolerate(() => process.kill(-proc.pid, "SIGKILL"), 'esrch');
       log(`dev server killed (${label})`);
     },
   };
