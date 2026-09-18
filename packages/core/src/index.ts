@@ -1807,6 +1807,12 @@ export {
   type StepLike, type ToolResultLike, type TurnSinks,
 } from './orchestrator/turn-accumulator';
 
+// The workspace's work across every actor — the read model behind
+// `listWorkspaceWork` on both backends.
+export { readWorkspaceWork } from './read-models/workspace-work';
+
+export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
+
 export {
   AgentOrchestrator, type AgentOrchestratorDeps,
   type TurnContinuity,
