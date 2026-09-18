@@ -27,7 +27,7 @@ import {
  *  real registry derives it, and the fixture's tool builder iterates that. */
 const REGISTRY = [
   "export const TOOL_REACH = {",
-  "  run: { native: true, codemode: 'workspace' },",
+  "  shell: { native: true, codemode: 'workspace' },",
   "  release: { native: false, codemode: 'release' },",
   "} as const;",
   "export const BUILTIN_TOOLS = Object.keys(TOOL_REACH)",
@@ -648,7 +648,7 @@ describe('entrypoint discovery', () => {
     });
   });
 
-  test('a `run` property that is not a built tool is not a tool handler', () => {
+  test('a `shell` property that is not a built tool is not a tool handler', () => {
     // `run` and `file` are ordinary property names. Keying on the name alone
     // found 164 builtin-tool entrypoints on this tree over a surface of 8, and
     // every spurious one ROOTS a file, which hides findings rather than
@@ -657,7 +657,7 @@ describe('entrypoint discovery', () => {
       [`${BASE}tools/registry.ts`, REGISTRY],
       [`${BASE}opts.ts`, `
         import { BUILTIN_TOOLS } from './tools/registry';
-        export const options = { run: BUILTIN_TOOLS[0], file: 'x' };`],
+        export const options = { shell: BUILTIN_TOOLS[0], file: 'x' };`],
     ]));
 
     expect(kinds.has('builtin-tool')).toBe(false);
@@ -707,7 +707,7 @@ describe('the analysis refuses to shrink in silence', () => {
         import { BUILTIN_TOOLS, TOOL_REACH } from './registry';
         import Page from '../page';
         export function buildTools(): Record<string, unknown> {
-          const tools: Record<string, unknown> = { run: tool({ execute: async () => Page() }) };
+          const tools: Record<string, unknown> = { shell: tool({ execute: async () => Page() }) };
           for (const name of BUILTIN_TOOLS) void TOOL_REACH[name as keyof typeof TOOL_REACH];
           return tools;
         }`],
