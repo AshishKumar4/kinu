@@ -64,6 +64,7 @@
     "test:eval": "bun scripts/ladder.ts --run bash scripts/eval-tier.sh",
     "gate:first-run": "bash scripts/first-run-tier.sh",
     "gate:trajectory": "bash scripts/trajectory-tier.sh",
+    "gate:kinu-tasks": "bun scripts/eval-matrix.ts",
     "ladder": "bun scripts/ladder.ts",
     "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",
     "verify:lean": "bash scripts/verify-lean.sh",
