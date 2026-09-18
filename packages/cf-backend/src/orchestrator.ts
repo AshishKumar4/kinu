@@ -2206,6 +2206,13 @@ export class OrchestratorAgent extends ActorAgent {
           kind: 'message', body: input.text, mode: input.mode,
         });
 
+        // NOTHING IS ARMED HERE, and that is a decision rather than an
+        // omission. `admitHostedTask` arms the WORKSPACE wake itself
+        // (`seams.armWake`, subordinate-hosting.ts), and `nextWakeAt` folds
+        // `hasAdmittedDelegations()` at `now`, so the runner
+        // (`drainAdmittedDelegations`) is due in the next alarm frame. A
+        // second arm from this seam would be one more row for the same fact.
+
         // A message the actor takes now opened its turn; one that joined work
         // already running landed mid-turn, which is what the composer reports.
         return handoff.delivery === 'starts_now' ? 'turn' : 'mid-turn';
