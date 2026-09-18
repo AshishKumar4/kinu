@@ -18,6 +18,10 @@
  *   5. /install, /install.sh, /downloads/kinu, /api/cli/* — CLI install/auth/API.
  *   5b. /downloads/kinu-worker-<version>.tar.gz — the worker release artifact,
  *       streamed from R2 because it exceeds the 25 MiB static-asset limit.
+ *   5c. /deploy, /deploy/authorize, /deploy/callback, /api/deploy/* — the
+ *       self-deploy door. Public, and gated by the run key rather than by a
+ *       session: a person deploying their own Kinu has no account here yet
+ *       (deploy/routes.ts).
  *   6. /api/health, /api/shared/blueprint/<id> — public endpoints (no auth;
  *      the blueprint id carries its own signature).
  *   6b. /mcp/v1/* — MCP server; CLI-bearer-token or session auth + ownership
@@ -58,6 +62,7 @@ import { handleUserRequest } from "./user/routes";
 import { handleAccountRequest } from "./user/account-routes";
 import { handleCliRequest } from "./cli/routes";
 import { handleReleaseArtifactRequest } from "@kinu.run/core";
+import { handleDeployRequest } from "./deploy/routes";
 import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
 import { handleSharedPublicRequest, handleSharedRequest } from "./shared/routes";
@@ -125,6 +130,10 @@ export { MonitorDO } from "./monitor/monitor-do";
 
 // The admin control plane's index and audit log. One instance ("site").
 export { ControlPlaneDO } from "./control-plane/control-plane-do";
+
+// One guided self-deployment per run: its step ledger, and the Cloudflare
+// tokens it holds until the last step hands them to the new Worker.
+export { DeployRunDO } from "./deploy/deploy-do";
 
 // This module's exports are the names workerd hangs on `ctx.exports`
 // (`enable_ctx_exports`; compatibility date 2025-12-01 clears the >= 2025-11-17
@@ -578,6 +587,13 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   const releaseResp = await handleReleaseArtifactRequest(request, env.RELEASES_BUCKET);
 
   if (releaseResp) return releaseResp;
+
+  // 5c. The self-deploy door, before the auth gate because it belongs to a
+  //     person with no Kinu account. What authorizes every call is the key the
+  //     run was minted with, compared inside DeployRunDO against a digest.
+  const deployResp = await handleDeployRequest(request, env);
+
+  if (deployResp) return deployResp;
 
   // 6. Public JSON — health's build stamp, and a blueprint's page data by
   //    link. The blueprint id carries a signature checked inside its handler

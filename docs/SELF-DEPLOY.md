@@ -2,7 +2,8 @@
 
 Design, decided with the owner on 2026-09-15 and 2026-09-16: the deployment
 owns its own key, the local account model, no monitor locally; the owner
-creates the OAuth client. Step 1 of the order of work is built.
+creates the OAuth client. Steps 1 to 3 of the order of work are built
+(2026-09-18).
 Research and measurements: `~/kinu-logs/self-deploy/RESEARCH.md` and
 `oauth-scopes.json` (the 387-scope catalog, read 2026-09-15 with a wrangler
 session). The research file's "Option A" is a different thing — Workers Builds
@@ -139,10 +140,31 @@ Cloudflare door. No user repository and no Workers Builds.
 
 ## Order of work
 
-1. Release artifact and `release.json` in the deploy pipeline, with a gate
-   that the manifest's bindings equal `wrangler.jsonc`'s.
-2. The core flow: plan, steps, inputs, progress; provable against a fake API.
-3. The Cloudflare door page and the deploy Durable Object, then the CLI
-   command over the same flow.
-4. The deployment's Updates page and self-update.
-5. The local door: installer, workerd config renderer, supervisor.
+1. **Built 2026-09-18.** Release artifact and `release.json` in the deploy
+   pipeline, with a gate that the manifest's bindings equal `wrangler.jsonc`'s.
+   The artifact is an R2 object (`RELEASES_BUCKET`, route in
+   `packages/core/src/http/release-artifact.ts`); `release.json` and its
+   `.sha256` stay static assets.
+2. **Built 2026-09-18.** The core flow: `packages/core/src/deploy/` — the plan
+   of idempotent steps, typed inputs, the tar reader, PKCE, the run key, and
+   the runner over a ledger port. Proved against a fake Cloudflare in
+   `packages/core/tests/unit-deploy-flow.test.ts` (12 rows).
+3. **Built 2026-09-18.** The door: `DeployRunDO` (one object per run, the step
+   ledger in its SQLite, the tokens in its KV side under `secret.`), the public
+   `/api/deploy/*` routes gated by a 192-bit run key compared against a stored
+   digest, the `/deploy` page, and `kinu deploy cloudflare`. The ledger is
+   proved in workerd against real Durable Object SQLite, a fake Cloudflare API
+   and a fake authorization server:
+   `packages/cf-backend/tests/workerd/deploy-ledger.test.ts` (4 rows).
+
+   What the owner still has to do once, by hand: register the self-managed
+   PUBLIC OAuth client (PKCE, no secret) and put its id in
+   `CLOUDFLARE_DEPLOY_CLIENT_ID`. Redirects to register: the page's
+   `https://kinu.run/deploy/callback` and the CLI's
+   `http://localhost:8899/oauth/callback` (`CLI_DEPLOY_REDIRECT_URI`, one
+   spelling, in `packages/core/src/deploy/pkce.ts`). Until it is set, `/deploy`
+   renders the Cloudflare half as not configured and refuses to start a run;
+   `scripts/infra-manifest.ts` carries the row that says so.
+4. The deployment's Updates page and self-update. **Not built.**
+5. The local door: installer, workerd config renderer, supervisor. **Not
+   built.**

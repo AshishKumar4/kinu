@@ -664,6 +664,16 @@ export const SUPPLY = new Map<string, Supply>([
     absent: 'nothing — CLOUDFLARE_WORKERS_AI_SCOPES in core/src/providers/cloudflare-oauth.ts is the one source '
       + 'of truth and this only overrides it.',
   }],
+  ['CLOUDFLARE_DEPLOY_CLIENT_ID', {
+    handling: 'config-var',
+    required: false,
+    absent: 'the Cloudflare half of /deploy renders as not configured and refuses to start a '
+      + 'run; `kinu deploy local` is unaffected. Belongs in `vars`: a PKCE client is public and '
+      + 'has no secret to pair it with.',
+    source: 'https://dash.cloudflare.com/?to=/:account/api-tokens — a self-managed PUBLIC OAuth '
+      + 'client with PKCE, redirect https://kinu.run/deploy/callback plus a localhost redirect '
+      + 'for the CLI door, and the scopes in docs/SELF-DEPLOY.md § The Cloudflare door.',
+  }],
   ['MCP_GITHUB_CLIENT_ID', {
     handling: 'out-of-band',
     required: false,

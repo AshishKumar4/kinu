@@ -15,6 +15,7 @@ import { authCommand, logoutCommand, sessionsCommand, whoamiCommand } from './co
 import { aliasCommand, aliasesCommand, unaliasCommand } from './commands/alias';
 import { desktopCommand } from './commands/desktop';
 import { daemonCommand } from './commands/daemon';
+import { deployCommand } from './commands/deploy';
 import { setupCommand } from './commands/setup';
 import { providersCommand } from './commands/providers';
 import { transcriptsCommand } from './commands/transcripts';
@@ -474,6 +475,13 @@ export function buildProgram(): Command {
     .helpGroup(THIS_COMPUTER)
     .description('Manage the local scheduler daemon: start, stop, restart, status, logs, run, tick')
     .action(wrapAction(daemonCommand));
+
+  program
+    .command('deploy [door]')
+    .helpGroup(THIS_COMPUTER)
+    .description('Deploy your own Kinu: `deploy cloudflare` into your Cloudflare account')
+    .option('--origin <url>', 'Kinu app origin')
+    .action(wrapAction(deployCommand));
 
   program
     .command('doctor')
