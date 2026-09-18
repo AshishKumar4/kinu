@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { statSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
+import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { childEnv, scratchDir } from "@kinu.run/test-utils";
 import {
@@ -401,15 +401,29 @@ describe("deploy gate", () => {
   // what each row was measured to take, and the runner admits against both
   // figures under a cap read from the box.
   test("the wave admits on measured threads AND resident set, both under a machine cap", () => {
-    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    expect(source).toContain('threads="${GATE_THREADS[index]}"');
-    expect(source).toContain('rss="${GATE_RSS[index]}"');
-    expect(source).toContain('if [ $((load + threads)) -gt "$thread_cap" ] || [ $((held + rss)) -gt "$rss_cap" ]; then continue; fi');
-    // Both caps come from the box, and the memory one from the field the
-    // kernel means by it: MemTotal includes memory nothing can have.
-    expect(source).toContain("nproc");
-    expect(source).toContain("MemAvailable");
-    expect(source).not.toContain("MemTotal");
+    // BOTH CAPS, AS THE RUNNER ANNOUNCES THEM, given both figures. This was a
+    // grep over deploy.sh for `nproc` and `MemAvailable` and NOT `MemTotal`,
+    // which the script's own comment — "MemAvailable, not MemTotal: MemTotal
+    // includes memory nothing can have" — defeated the day it was written. A
+    // source-text assertion over a file that explains itself is the class of
+    // check that goes stale; the two dimensions being load-bearing is proved
+    // by the two rows below, which serialise the wave on each cap in turn.
+    const named = runDeploy({ threads: 7, rssMb: 1234 });
+    expect(named.stdout).toContain("within 7 threads and 1234 MiB of measured cost");
+
+    // DERIVED FROM THE BOX when neither is given: the thread cap is `nproc`
+    // exactly, and the memory cap is a reserve fraction of what the kernel
+    // says can be handed out right now — never of MemTotal, which includes
+    // memory nothing can have and would cap the wave above the available
+    // figure. Bounds rather than an equality, because MemAvailable moves
+    // while other lanes work on the same box.
+    const derived = runDeploy();
+    const announced = /within (\d+) threads and (\d+) MiB of measured cost/u.exec(derived.stdout);
+    const availableMb = Number(/^MemAvailable:\s+(\d+) kB$/mu.exec(readFileSync("/proc/meminfo", "utf8"))?.[1] ?? 0) / 1024;
+    expect(availableMb).toBeGreaterThan(0);
+    expect(announced?.[1]).toBe(String(cpus().length));
+    expect(Number(announced?.[2])).toBeGreaterThan(availableMb * 0.5);
+    expect(Number(announced?.[2])).toBeLessThan(availableMb);
 
     const costs = readCosts();
 
@@ -430,9 +444,16 @@ describe("deploy gate", () => {
       expect(row.rssMb).toBe(costRssMb(cost));
     }
 
-    // Every browser suite and every multi-worker suite measures more than one
-    // thread: a row that opens Chrome or four workers and costs one is the
-    // 2026-09-16 defect written back down. Derived from the tree, not a list.
+    // A row that opens Chrome or four workers may NOT be admitted as free in
+    // both dimensions at once. It read "more than one thread" until the cost
+    // sampler was fixed to walk the row's process tree (L7): measured
+    // 2026-09-17, a browser row's Chrome burns little CPU beside its wall —
+    // chat-scroll is 12.6 CPU seconds over a 21.2 s wall, one sustained thread
+    // with 25 tasks runnable at its peak — and what makes these rows heavy is
+    // memory, 3.1 GiB there and 3.2 to 5.1 GiB across the family. So the claim
+    // is per dimension, and the 2026-09-16 shape it was written for still
+    // fails it: the three workerd rows read one thread AND no memory at all.
+    // Derived from the tree, not a list.
     const browserSuites = tracked.filter((file) => file.startsWith("scripts/") && file.endsWith(".test.ts")
       && /from ['"](?:\.\/gallery-harness|puppeteer)['"]/.test(readRepositoryFile(REPO_ROOT, file)));
 
@@ -441,7 +462,11 @@ describe("deploy gate", () => {
       const opensChrome = browserSuites.some((file) => expanded.split(" ").includes(file));
       const multiWorker = row.run.includes("--parallel=") || row.run === "bun run test:core" || row.run === "bun run test:cli";
 
-      if (opensChrome || multiWorker) expect(row.threads, `${row.run} opens Chrome or workers and costs one thread`).toBeGreaterThan(1);
+      if (!opensChrome && !multiWorker) continue;
+      expect(
+        row.threads > 1 || row.rssMb > 1_024,
+        `${row.run} opens Chrome or workers and is admitted as one thread and ${String(row.rssMb)} MiB`,
+      ).toBeTrue();
     }
   });
 
@@ -466,7 +491,7 @@ describe("deploy gate", () => {
     // event log IS the declared order. A count-based width would need six
     // gates in flight to be observable at all.
     expect(gates).toEqual([...REQUIRED_GATES]);
-    expect(run.stdout).toContain("within a budget of 1 threads");
+    expect(run.stdout).toContain("within 1 threads and");
   });
 
   test("the serial gates are the ends of the real run", () => {
