@@ -2773,6 +2773,170 @@ test('workspace tabs keep scrolling horizontal and suppress the scrollbar', asyn
   });
 });
 
+/** One Work section, as the browser drew it. */
+interface WorkSection {
+  readonly title: string;
+  /** The count beside the heading — the feed's own length, for the journal. */
+  readonly badge: string;
+  /** Chips the section offers, by their labels. */
+  readonly chips: readonly string[];
+  /** Retry affordances inside it: one per read that failed. */
+  readonly retries: number;
+  readonly text: string;
+}
+
+/** Every Work section on the page, in the order it was drawn. Only WorkTab
+ *  mounts a `<section>` in this column, so the shape of this list IS the
+ *  progressive-disclosure rule. */
+function workSections(page: Page): Promise<WorkSection[]> {
+  return page.$$eval('section', (nodes) => nodes.map((node) => {
+    const heading = node.querySelector('.p-label');
+
+    return {
+      title: heading?.textContent ?? '',
+      badge: heading?.nextElementSibling?.textContent ?? '',
+      chips: [...node.querySelectorAll('button[aria-pressed]')].map((chip) => chip.textContent?.trim() ?? ''),
+      retries: [...node.querySelectorAll('button')].filter((button) => button.textContent?.trim() === 'Retry').length,
+      text: node.textContent ?? '',
+    };
+  }));
+}
+
+/** Rows the journal is rendering right now: the feed is one group of row
+ *  children, so its length is the chip's answer. */
+function journalRows(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const journal = [...document.querySelectorAll('section')]
+      .find((node) => node.querySelector('.p-label')?.textContent === 'Journal');
+
+    return journal?.querySelector('div.p-group')?.children.length ?? 0;
+  });
+}
+
+/**
+ * Work is three facets of one question — Needs you, Now, Journal — and a facet
+ * with nothing to show is not drawn at all. Only a browser can hold that: every
+ * guard reads state that arrives after the effects run, so a static render sees
+ * each section in its loading shape and never in the settled one.
+ *
+ * Three states over the shipped fixtures: nothing in flight, nothing at all,
+ * and both ledger reads refusing. The fourth row is the journal's chips, where
+ * the chip named for everything has to hold the feed the badge counts — the
+ * needs-you row above it counts an unseen self-change off the same read and
+ * sends the reader down here to find it.
+ */
+describe('WorkTab draws a section only when it has something to show', () => {
+  test('nothing in flight draws no Now, and the journal under it still draws', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 430, height: 1400 });
+      await page.goto(`${origin}/gallery.html?frame=work&lane=settled`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => [...document.querySelectorAll('section')]
+        .some((node) => node.querySelector('.p-label')?.textContent === 'Journal'));
+
+      const sections = await workSections(page);
+
+      expect(sections.map((section) => section.title)).toEqual(['Needs you', 'Journal']);
+      expect(await journalRows(page)).toBeGreaterThan(0);
+
+      // No job has ever run in this lane, so the Jobs chip is the empty one —
+      // and a chip with nothing under it says so instead of framing a void.
+      for (const chip of await page.$$('section button[aria-pressed]')) {
+        if (await chip.evaluate((node) => node.textContent?.trim()) === 'Jobs') await chip.click();
+      }
+
+      await page.waitForFunction(() => [...document.querySelectorAll('button[aria-pressed="true"]')]
+        .some((node) => node.textContent?.trim() === 'Jobs'));
+
+      expect(await journalRows(page)).toBe(0);
+      expect(await page.$$eval('section p', (nodes) => nodes.length)).toBe(1);
+      await page.close();
+    });
+  });
+
+  test('a workspace where nothing has happened draws no section and one empty line', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 720, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workempty`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => document.body.textContent?.includes('Nothing yet') === true);
+
+      const column = await page.evaluate(() => ({
+        sections: document.querySelectorAll('section').length,
+        lines: document.querySelectorAll('p').length,
+      }));
+
+      expect(column).toEqual({ sections: 0, lines: 1 });
+      await page.close();
+    });
+  });
+
+  test('a refused read draws its own section with a retry, and Now keeps the job in hand', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 430, height: 1400 });
+      await page.goto(`${origin}/gallery.html?frame=work&lane=failed`, { waitUntil: 'networkidle0' });
+      // Each section owes ITS read's retry — the page carries another for the
+      // change-set card this column always draws, which is not one of them.
+      await page.waitForFunction(() => [...document.querySelectorAll('section')]
+        .filter((node) => [...node.querySelectorAll('button')]
+          .some((button) => button.textContent?.trim() === 'Retry')).length === 2);
+
+      const sections = await workSections(page);
+      const now = sections[0];
+      const journal = sections[1];
+
+      expect(sections.map((section) => section.title)).toEqual(['Now', 'Journal']);
+      // The plan read failed; the running job is a prop and is still Now's to
+      // show, beside the one retry that read owes.
+      expect(now?.text).toContain('7c1e4a92');
+      expect(now?.retries).toBe(1);
+      // The journal has no rows at all — its failure is the whole reason it is
+      // on screen, so there are no chips over nothing.
+      expect(journal?.retries).toBe(1);
+      expect(journal?.chips).toEqual([]);
+      expect(await journalRows(page)).toBe(0);
+      await page.close();
+    });
+  });
+
+  test('the chip named for everything holds every row the badge counts', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 430, height: 2400 });
+      await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => [...document.querySelectorAll('section')]
+        .some((node) => node.querySelector('.p-label')?.textContent === 'Journal'));
+
+      const journal = (await workSections(page)).find((section) => section.title === 'Journal');
+      const chips = await page.$$('section button[aria-pressed]');
+      const counted: Record<string, number> = {};
+
+      for (const chip of chips) {
+        const label = await chip.evaluate((node) => node.textContent?.trim() ?? '');
+        await chip.click();
+        await page.waitForFunction((pressed) => [...document.querySelectorAll('button[aria-pressed="true"]')]
+          .some((node) => node.textContent?.trim() === pressed), {}, label);
+        counted[label] = await journalRows(page);
+      }
+
+      // A chip that never answered leaves -1 behind, which no badge and no sum
+      // can match, so a missing chip fails here rather than reading as zero.
+      const all = counted.All ?? -1;
+      const jobs = counted.Jobs ?? -1;
+      const self = counted['Self-changes'] ?? -1;
+
+      expect(journal?.chips).toEqual(['All', 'Jobs', 'Self-changes']);
+      // The badge counts the feed and All renders it: a row the badge counts
+      // but no chip lists is a row nobody can reach.
+      expect(journal?.badge).toBe(String(all));
+      // Jobs and Self-changes partition that same feed, so they add back up.
+      expect(jobs + self).toBe(all);
+      await page.close();
+    });
+  });
+});
+
 /**
  * Model tiers are an open vocabulary (#7, #9, #11). The owner adds a tier by
  * name, it renders beside the builtins with the reasoning levels ITS model
