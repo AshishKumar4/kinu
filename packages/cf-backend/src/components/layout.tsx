@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { CaretLeftIcon, CaretRightIcon, GithubLogoIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
+import { GithubLogoIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
+import { SidebarRail } from "./SidebarRail";
 import { FeedbackButton } from "./FeedbackButton";
 import { KinuLogo } from "./ui/KinuLogo";
 import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
@@ -9,25 +10,17 @@ import { WorkspaceOverviewsProvider } from "@/hooks/use-workspace-overviews";
 import { AppBackground } from "./AppBackground";
 
 /**
- * Top-level shell — left rail (Sidebar with user info + agent list) +
- * right pane (route outlet). Below md the rail becomes a drawer summoned
- * from the mobile header, so phones get the same roster, New-agent flow,
- * theme toggle and sign-out as desktop.
+ * Top-level shell — the rail lane (`SidebarRail`) + the route outlet. Below md
+ * the rail becomes a drawer summoned from the mobile header, so phones get the
+ * same roster, New-agent flow, theme toggle and sign-out as desktop.
  *
  * The living background sits behind both, fixed, under the root's own
  * ground: the root isolates its stacking so the negative-z canvas paints
- * above that ground and under every in-flow child. The desktop rail wears
- * the veil rather than the solid sidebar tone so the tissue shows through
- * it faintly; the page's own surfaces stay as they are.
+ * above that ground and under every in-flow child.
  */
-/** The rail's own open/close choice, beside the theme and section folds in
- *  localStorage — the same shelf the inspector's choice sits on, read once at
- *  mount and written only on toggle. */
-const RAIL_KEY = "kinu:rail-open";
 
 export default function Layout() {
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [railOpen, setRailOpen] = useState(() => localStorage.getItem(RAIL_KEY) !== "0");
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -64,36 +57,7 @@ export default function Layout() {
         </div>
       </header>
 
-      {/* Desktop rail — collapsible, with the reopen handle riding the main
-          edge the way the inspector's does, in the rail's own veil. */}
-      {railOpen ? (
-      <aside className="hidden w-60 shrink-0 p-sidebar-veil border-r p-border md:block relative">
-        <Sidebar />
-        <button
-          type="button"
-          onClick={() => { localStorage.setItem(RAIL_KEY, "0"); setRailOpen(false); }}
-          aria-label="Hide sidebar"
-          title="Hide sidebar"
-          data-rail-collapse
-          className="absolute right-1 top-1/2 z-[3] hidden h-16 w-5 -translate-y-1/2 items-center justify-center rounded-l-md border border-r-0 p-border p-elevated p-text-3 shadow-sm transition-colors hover:p-text md:flex"
-        >
-          <CaretLeftIcon size={12} weight="bold" />
-        </button>
-      </aside>
-      ) : (
-      <div className="relative hidden shrink-0 md:block" data-rail-collapsed>
-        <button
-          type="button"
-          onClick={() => { localStorage.setItem(RAIL_KEY, "1"); setRailOpen(true); }}
-          aria-label="Show sidebar"
-          title="Show sidebar"
-          data-rail-expand
-          className="absolute left-0 top-1/2 z-[3] flex h-16 w-5 -translate-y-1/2 items-center justify-center rounded-r-md border border-l-0 p-border p-sidebar-veil p-text-3 shadow-sm transition-colors hover:p-text"
-        >
-          <CaretRightIcon size={12} weight="bold" />
-        </button>
-      </div>
-      )}
+      <SidebarRail />
 
       {/* Mobile drawer */}
       {drawerOpen && (
