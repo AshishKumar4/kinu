@@ -43,6 +43,24 @@ const WebhookRequestSchema = v.object({
   rate_limit_per_min: v.optional(v.number()),
 });
 
+/** The content-type a published download is served with, or null for a path
+ *  that is not one. The CLI tarballs, their checksums and the build stamp,
+ *  plus the small half of a worker release: the manifest and the artifact's
+ *  checksum are published as assets beside the build stamp (the artifact
+ *  itself is streamed from R2 by `handleReleaseArtifactRequest`). Public for
+ *  one reason: a fresh install, and a deployment updating itself, have no
+ *  session here. */
+function publishedDownloadType(pathname: string): string | null {
+  if (CLI_DIST_PATHS.includes(pathname)) return 'application/gzip';
+
+  if (pathname === CLI_VERSION_PATH || pathname === RELEASE_MANIFEST_PATH) return 'application/json; charset=utf-8';
+
+  if (!pathname.endsWith('.sha256')) return null;
+  const artifact = pathname.slice(0, -'.sha256'.length);
+
+  return CLI_DIST_PATHS.includes(artifact) || RELEASE_ARTIFACT_ROUTE.test(artifact) ? 'text/plain; charset=utf-8' : null;
+}
+
 export async function handleCliRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
   const method = request.method;
@@ -59,30 +77,10 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     return cliShimResponse(url.origin, method === 'HEAD');
   }
 
-  if (CLI_DIST_PATHS.includes(url.pathname) && (method === 'GET' || method === 'HEAD')) {
-    return cliDownloadAssetResponse(request, env, url.pathname, 'application/gzip', method === 'HEAD');
-  }
+  if (method === 'GET' || method === 'HEAD') {
+    const contentType = publishedDownloadType(url.pathname);
 
-  if (CLI_DIST_PATHS.some((path) => `${path}.sha256` === url.pathname) && (method === 'GET' || method === 'HEAD')) {
-    return cliDownloadAssetResponse(request, env, url.pathname, 'text/plain; charset=utf-8', method === 'HEAD');
-  }
-
-  if (url.pathname === CLI_VERSION_PATH && (method === 'GET' || method === 'HEAD')) {
-    return cliDownloadAssetResponse(request, env, CLI_VERSION_PATH, 'application/json; charset=utf-8', method === 'HEAD');
-  }
-
-  // The small half of a worker release: the manifest and the artifact's
-  // checksum are published as assets beside the build stamp (the artifact
-  // itself is streamed from R2 by `handleReleaseArtifactRequest`). Public
-  // for the same reason the CLI downloads are: a deployment updating itself
-  // has no session here.
-  if (url.pathname === RELEASE_MANIFEST_PATH && (method === 'GET' || method === 'HEAD')) {
-    return cliDownloadAssetResponse(request, env, RELEASE_MANIFEST_PATH, 'application/json; charset=utf-8', method === 'HEAD');
-  }
-
-  if (url.pathname.endsWith('.sha256') && RELEASE_ARTIFACT_ROUTE.test(url.pathname.slice(0, -'.sha256'.length))
-    && (method === 'GET' || method === 'HEAD')) {
-    return cliDownloadAssetResponse(request, env, url.pathname, 'text/plain; charset=utf-8', method === 'HEAD');
+    if (contentType !== null) return cliDownloadAssetResponse(request, env, url.pathname, contentType, method === 'HEAD');
   }
 
   if (url.pathname === '/cli/auth' && method === 'GET') {
