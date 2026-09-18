@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-16",
-  "files": 2407,
-  "functions": 58967,
+  "measuredAt": "2026-09-18",
+  "files": 2451,
+  "functions": 60326,
   "ceiling": 125,
   "line": 36,
   "inventory": [
@@ -36,10 +36,6 @@
     {
       "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
       "complexity": 67
-    },
-    {
-      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
-      "complexity": 64
     },
     {
       "key": "packages/core/src/mcts/engine.ts#runMCTS>fiber",
@@ -103,6 +99,10 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
+      "complexity": 45
+    },
+    {
+      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
       "complexity": 45
     },
     {
