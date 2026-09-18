@@ -1779,7 +1779,17 @@ export class OrchestratorAgent extends ActorAgent {
    *  before an eviction — or re-pended by a compensating signal — was durable,
    *  unreachable, and invisible to the activation reconcile that exists to
    *  notice a lost wake. `nextPendingDrainAt` is derived from the same rows the
-   *  drain selects, so the two cannot disagree about what counts as work. */
+   *  drain selects, so the two cannot disagree about what counts as work.
+   *
+   *  A SOURCE FOLDED HERE OWES A PHASE IN {@link _kinuTimerTick}, and the event
+   *  log arrived without one: the wake landed on a frame that fired triggers,
+   *  pushed both outboxes and re-armed from this same fold, which still
+   *  answered due. Arming a chain whose frame cannot take the work is not a
+   *  wake — it is a one-second loop that never drains, which is what an idle
+   *  workspace did with every webhook, email and peer message that outlived its
+   *  debounce. Measured 2026-09-17, D6. The drain phase is that rule's other
+   *  half; the delegation queue is NOT folded here for the mirror reason, and
+   *  {@link armDelegationWake} says why. */
   private nextWakeAt(now: number): number | null {
     return nextAlarmTime(
       now,
@@ -3702,7 +3712,12 @@ export class OrchestratorAgent extends ActorAgent {
   //
   // The TriggerRegistry arms this timer; the tick fires every due trigger
   // (cron + one-shot), publishes Timer events via the hub, re-arms cron,
-  // revokes one-shot, and re-arms itself for the next-soonest wake.
+  // revokes one-shot, DRAINS the reactions the log holds pending, and re-arms
+  // itself for the next-soonest wake.
+  //
+  // ONE RULE FOR THIS CHAIN: every source `nextWakeAt` folds has a phase here.
+  // Triggers, the peer outbox, the email outbox — and the event log, which was
+  // folded in without one. See {@link nextWakeAt} and the drain phase below.
   //
   // Crash-safe: dedupe via `(trigger_id, scheduled_fire_at)` means a
   // re-fire after DO eviction is a no-op publish.
@@ -3714,20 +3729,15 @@ export class OrchestratorAgent extends ActorAgent {
   // measuring an interval nothing observed. `tracing.invocation` makes that
   // unreachable rather than discouraged — it revokes the handle when this method's
   // promise settles, so a span opened from anything that escaped this tick throws.
-  // The four phases are four sibling spans under one root, which is what turns
-  // "the alarm was slow" into "the email reconcile was slow".
+  // The phases are sibling spans under one root, which is what turns "the alarm
+  // was slow" into "the email reconcile was slow".
   async _kinuTimerTick(): Promise<void> {
     const now = Date.now();
     await this.tracing.invocation('alarm', 'tick', async (tick) => {
       await tick.span('alarm.due_triggers', async (span) => {
         try {
-          // Wake the agent to act on the freshly-published timer events (and any
-          // other pending events) — an autonomous turn, debounced so events
-          // arriving alongside the alarm coalesce into it.
           const { fired } = await fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
           span.setAttribute('kinu.triggers_fired', fired);
-
-          if (fired > 0) this.orch.scheduleDrain();
         } catch (err) {
           const failure = toKinuError({
             doing: 'firing the triggers due on this wake',
@@ -3739,6 +3749,46 @@ export class OrchestratorAgent extends ActorAgent {
           // next phase, so the span closes SUCCESSFULLY unless it says otherwise.
           span.fail(failure);
           diagnostics.failure('schedule.due_triggers_failed', failure);
+        }
+      });
+
+      // THE REACTION THIS WAKE WAS ARMED FOR. `nextWakeAt` folds
+      // `nextPendingDrainAt`, so a pending external event is one of the four
+      // things that put this row in the registry — and until this phase existed
+      // it was the one with nothing behind it. The tick fired triggers, pushed
+      // two outboxes and re-armed from the same fold, which still answered
+      // "due": an event that arrived at an idle object and lost its in-memory
+      // debounce to an eviction woke the object every second and was never
+      // taken. Measured 2026-09-17, D6.
+      //
+      // The CONDITION is the fold's own reader, asked with the tick's own
+      // clock — the same call the re-arm below makes, so the two cannot
+      // disagree about whether this wake was owed. Not `fired > 0`, which is
+      // what stood here: a trigger firing is one way a row becomes drainable
+      // and every other ingress is another, and `scheduleDrain`'s 250 ms
+      // debounce is an in-memory timer this frame does not outlive anyway.
+      await tick.span('alarm.event_drain', async (span) => {
+        const dueAt = this.eventLog.nextPendingDrainAt(now);
+        span.setAttribute('kinu.drain_due', dueAt !== null && dueAt <= now);
+
+        if (dueAt === null || dueAt > now) return;
+
+        try {
+          // RETHROWING into this phase's own catch: the drain absorbs its
+          // failures for ambient callers, and this caller is not one — a
+          // swallowed selection failure would close the span green over a row
+          // still pending. The re-arm below is what retries it, because the
+          // fold it reads still answers due.
+          await this.orch.drainPendingEvents({ rethrow: true });
+        } catch (err) {
+          const failure = toKinuError({
+            doing: 'draining the reactions this wake was armed for',
+            cause: err,
+            otherwise: 'io',
+          });
+
+          span.fail(failure);
+          diagnostics.failure('event.wake_drain_failed', failure);
         }
       });
 

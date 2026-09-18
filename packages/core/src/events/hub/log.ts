@@ -574,7 +574,8 @@ export class EventLog {
 
   /**
    * The earliest moment a drain would have work to do, or null when it would
-   * have none. The DURABLE half of the reactor's wake.
+   * have none. THE INSTANT ONLY, not the wake: this answers when, and a host
+   * makes it a wake by arming a chain whose frame calls `drainPendingEvents`.
    *
    * A pending row is a promise the workspace made to itself, and until this
    * existed the only thing that kept that promise was an in-memory debounce
@@ -584,6 +585,17 @@ export class EventLog {
    * wake fold it reads (`nextWakeAt`) knew only about triggers and the two
    * outboxes. So the row waited for the next unrelated ingress — hours, or
    * never.
+   *
+   * THE WAKE IS THE HOST'S HALF AND IT IS NOT AUTOMATIC. This read first said
+   * it WAS the durable half of the reactor's wake; on the cf host it was not,
+   * because the actor carries two wake chains and the fold armed the one whose
+   * frame never drains. The row woke the object every second and stayed
+   * pending. Measured 2026-09-17 in the workerd pool (`two-turn.test.ts`,
+   * "drains an external event that reached an idle object"): under the fold
+   * alone the peer row stood `turn_id NULL, consumed_at NULL` after the wake it
+   * armed was delivered, and the tick re-armed the same callback; with the
+   * frame's drain phase the same row comes back bound to an `evt-` turn and the
+   * chain goes quiet. A host that folds this in owes the phase.
    *
    * Derived, never stored. `now` for anything drainable this instant; otherwise
    * the soonest deferred `at`, which is the only revisit condition that names a
