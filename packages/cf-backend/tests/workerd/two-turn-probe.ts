@@ -94,6 +94,7 @@ import type {
   PendingSteerFile,
   PreparedConversation,
   QueueProbeMode,
+  RawChatProbeResult,
 } from './two-turn-shapes';
 import {
   ArmedWakeSchema,
@@ -573,6 +574,20 @@ const WAKE_RUN_SLEEP_MS = 40_000;
 const SocketHistorySchema = v.array(v.object({ id: v.string(), role: v.string() }));
 
 type SocketHistory = v.InferOutput<typeof SocketHistorySchema>;
+
+/** Every frame the raw-chat drive reads off its socket, loosely: the chat
+ *  request's own done frame (`id`, `done`, `landed`) and the steer lifecycle
+ *  the object broadcasts beside it (`status`, `steerId`, `text`, `atStep`). */
+const RawChatFrameSchema = v.looseObject({
+  type: v.string(),
+  id: v.optional(v.string()),
+  done: v.optional(v.boolean()),
+  landed: v.optional(v.string()),
+  status: v.optional(v.string()),
+  steerId: v.optional(v.string()),
+  text: v.optional(v.string()),
+  atStep: v.optional(v.number()),
+});
 
 /** The drive result shapes live in `./two-turn-shapes` — same schemas, same
  *  InferOutput types, but importable from the workerd typecheck project,
@@ -1836,6 +1851,111 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         .filter((e) => e.code !== null)
         .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
     };
+  }
+
+  /**
+   * ONE RAW CHAT FRAME PUT ON A BUSY CONVERSATION.
+   *
+   * The pinned model answers its first call with a real tool call, so the
+   * held turn HAS a second step — the boundary a mid-turn send lands at —
+   * and the provider is parked on that turn's first call while the frame
+   * goes out under the CLIENT's own message id.
+   *
+   * Everything returned is what the surface itself could see: how the
+   * request was answered while the turn still ran, the reservation the
+   * admission wrote, whether the words reached the transcript instead, the
+   * `steer_status` landings broadcast to the socket, the provider calls, and
+   * the assistant rows the drive ended with.
+   */
+  async rawChat(): Promise<RawChatProbeResult> {
+    const workspace = 'raw-steer-workspace';
+    const owner = 'raw-steer-owner';
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    const caller = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await userDO.registerWorkspace(caller, workspace, 'Raw Chat Probe');
+    const claim = await target.claimOwner(owner);
+    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    await userDO.setCredential(caller, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
+    });
+    await target.setModel('openai-compat/probe-steer');
+    await target.setSoul('# Raw Chat Probe\n\n## Mission\n\nFollow the owner\'s exact request.');
+    await this.httpReset();
+    await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ from: 1 }) });
+
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+    const frames: v.InferOutput<typeof RawChatFrameSchema>[] = [];
+    const answered = Promise.withResolvers<string>();
+    let socket: WebSocket | null = null;
+
+    try {
+      const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}`, {
+        headers: { Upgrade: 'websocket' },
+      }));
+
+      socket = response.webSocket;
+
+      if (response.status !== 101 || socket === null) throw new Error('raw chat probe did not receive a real WebSocket');
+      socket.accept();
+      socket.addEventListener('message', (event) => {
+        const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), RawChatFrameSchema), event.data);
+
+        if (!parsed.success) return;
+        frames.push(parsed.output);
+
+        if (parsed.output.type === 'cf_agent_use_chat_response' && parsed.output.id === 'raw-request'
+          && parsed.output.done === true) {
+          answered.resolve(parsed.output.landed ?? 'closed');
+        }
+      });
+
+      const genesis = await target.beginGenesisTurn();
+
+      if (!genesis.started) throw new Error('raw chat probe genesis did not start');
+      // The turn's first provider call is parked in the fake: everything
+      // below happens while the conversation is genuinely busy.
+      await fetch('http://probe-control.invalid/queue/arrived');
+      socket.send(JSON.stringify({
+        type: 'cf_agent_use_chat_request', id: 'raw-request',
+        init: { method: 'POST', body: JSON.stringify({
+          trigger: 'submit-message',
+          messages: [{ id: 'raw-client-id', role: 'user', parts: [{ type: 'text', text: 'RAW-STEER' }] }],
+        }) },
+      }));
+
+      // The request's own done frame is the signal: a splice answers it while
+      // the provider call is still parked, and only then are the durable
+      // traces read — the reservation under the client's id, and whether the
+      // words reached the transcript as a turn of their own instead. The hold
+      // stays armed until this frame arrives, so a request that could only be
+      // answered after the turn hangs here and the row fails on its clock.
+      const landing = await answered.promise;
+      const persistedWhileHeld = (await this.socketHistory(target, workspace)).some((row) => row.id === 'raw-client-id');
+      const pendingIds = (await target.pendingSteers()).map((row) => row.id);
+
+      await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+      // ONE turn when the words landed inside it; a second turn when they
+      // could only run after it — each turn compresses its own facts.
+      await awaitFactsCompressed(recording, persistedWhileHeld ? 2 : 1);
+      await awaitQuiet(recording);
+
+      return {
+        landing, pendingIds, persistedWhileHeld,
+        landed: frames.flatMap((frame) => frame.type === 'steer_status' && frame.status === 'landed'
+          && frame.steerId !== undefined && frame.text !== undefined && frame.atStep !== undefined
+          ? [{ id: frame.steerId, text: frame.text, atStep: frame.atStep }]
+          : []),
+        calls: (await this.httpCalls()).filter((call) => call.model === 'probe-steer'),
+        answerCount: (await this.socketHistory(target, workspace)).filter((row) => row.role === 'assistant').length,
+      };
+    } finally {
+      await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+      socket?.close(1000, 'raw chat probe complete');
+      restore();
+    }
   }
 
 

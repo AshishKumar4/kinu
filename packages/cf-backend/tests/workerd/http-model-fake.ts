@@ -122,6 +122,18 @@ async function holdWakeWindow(where: WakeHoldPlacement): Promise<void> {
   await wakeHold.gate.release.promise;
 }
 
+/** Park a scripted call on the queue-lane hold when the arm names it: the
+ *  call numbered `from` onward — counted per model, so each lane numbers its
+ *  own calls — waits here until `/queue/release`. Shared by every scripted
+ *  model that a drive holds at the provider. */
+async function holdQueuedCall(model: string): Promise<void> {
+  const hold = heldRequest;
+
+  if (hold === null || log.filter((call) => call.model === model).length < hold.from) return;
+  hold.gate.arrived.resolve();
+  await hold.gate.release.promise;
+}
+
 const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
 
 const MessageContentSchema = v.union([v.string(), v.array(v.unknown())]);
@@ -523,6 +535,7 @@ async function modelsBody(): Promise<Response> {
       { id: 'probe-queue' },
       { id: 'probe-parity' },
       { id: 'probe-wake' },
+      { id: 'probe-steer' },
     ],
   });
 }
@@ -680,15 +693,17 @@ export async function probeOutbound(request: Request): Promise<Response> {
 
       switch (body.model) {
         case 'probe-queue': {
-          const ordinal = log.filter((call) => call.model === 'probe-queue').length;
-
-          if (ordinal >= (heldRequest?.from ?? Number.POSITIVE_INFINITY)) {
-            if (heldRequest === null) throw new Error('queue model hold was not armed');
-            heldRequest.gate.arrived.resolve();
-            await heldRequest.gate.release.promise;
-          }
+          await holdQueuedCall('probe-queue');
 
           return echoBody(body);
+        }
+
+        // The same hold, answered with a real tool call: the held turn then
+        // HAS a second step, which is the boundary a mid-turn steer lands at.
+        case 'probe-steer': {
+          await holdQueuedCall('probe-steer');
+
+          return toolBody(body, 'call_steer_probe');
         }
 
         case 'probe': return echoBody(body);
