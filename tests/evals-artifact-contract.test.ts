@@ -143,7 +143,7 @@ beforeAll(() => {
 
   try {
     childOutput = execFileSync('bun', ['--bun', join(REPO_ROOT, 'node_modules/.bin/vitest'),
-      'shell', '--root', dir, '--reporter=json', '--outputFile=report.json'], {
+      'run', '--root', dir, '--reporter=json', '--outputFile=report.json'], {
       cwd: REPO_ROOT, encoding: 'utf8', stdio: 'pipe',
     });
   } catch (error) {
