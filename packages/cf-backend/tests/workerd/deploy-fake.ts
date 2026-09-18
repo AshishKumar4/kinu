@@ -45,6 +45,52 @@ export const DEPLOY_FAKE_ACCESS_TOKEN = 'probe-access-token';
 
 export const DEPLOY_FAKE_REFRESH_TOKEN = 'probe-refresh-token';
 
+/** What the authorization server hands back for a REFRESH grant, which is the
+ *  grant a self-update spends. Distinct from the first pair on purpose: the
+ *  token the update writes back into the deployment must be the rotated one. */
+export const DEPLOY_FAKE_ROTATED_REFRESH = 'probe-refresh-token-2';
+
+/** The address the probe deployment was created for, and therefore the only
+ *  session its Updates surface answers. */
+export const DEPLOY_FAKE_OWNER = 'owner@example.com';
+
+/** A build behind the channel's: what the probe deployment serves as its own
+ *  stamp until a row says otherwise, and the version its record names. */
+export const DEPLOY_FAKE_OLDER_BUILD = {
+  version: '0.3.9+probe00',
+  sha: 'probe00',
+  builtAt: '2026-09-01T00:00:00.000Z',
+};
+
+/** The build the channel publishes, as `release.json` states it and as the new
+ *  Worker's `/api/health` answers it. */
+export const DEPLOY_FAKE_CHANNEL_BUILD = {
+  version: VERSION,
+  sha: 'probe01',
+  builtAt: '2026-09-18T00:00:00.000Z',
+};
+
+/** The deployment record the probe Worker is bound with: what a first run left
+ *  behind, as `handoverStep` writes it. Held here rather than in the test,
+ *  because it is a BINDING of the probe worker (`vitest.config.ts`) and the
+ *  test reads the same constant it is bound with. */
+export const DEPLOY_FAKE_RECORD = JSON.stringify({
+  inputs: {
+    accountId: ACCOUNT_ID,
+    instanceName: 'kinu',
+    address: { kind: 'workers-dev', hostname: '', zoneId: '' },
+    ownerEmail: DEPLOY_FAKE_OWNER,
+    accessEmails: [DEPLOY_FAKE_OWNER],
+    providerKeyNames: [],
+    sandbox: false,
+  },
+  address: `kinu.${SUBDOMAIN}.workers.dev`,
+  version: DEPLOY_FAKE_OLDER_BUILD.version,
+  channelOrigin: DEPLOY_FAKE_CHANNEL,
+  clientId: DEPLOY_FAKE_CLIENT_ID,
+  deployedAt: DEPLOY_FAKE_OLDER_BUILD.builtAt,
+});
+
 const FILES = {
   'worker/index.js': 'export default { fetch: () => new Response("probe") };\n',
   'worker/chunk.js': 'export const chunk = 1;\n',
@@ -86,9 +132,9 @@ function tarMember(path: string, body: string): Buffer {
 
 function manifestText(): string {
   return JSON.stringify({
-    version: VERSION,
-    sha: 'probe01',
-    builtAt: '2026-09-18T00:00:00.000Z',
+    version: DEPLOY_FAKE_CHANNEL_BUILD.version,
+    sha: DEPLOY_FAKE_CHANNEL_BUILD.sha,
+    builtAt: DEPLOY_FAKE_CHANNEL_BUILD.builtAt,
     channelOrigin: DEPLOY_FAKE_CHANNEL,
     worker: {
       name: 'kinu',
@@ -155,7 +201,7 @@ export const DeployFakeStateSchema = v.object({
   indexes: v.array(v.string()),
   gateways: v.array(v.string()),
   apps: v.array(v.string()),
-  secretNames: v.array(v.string()),
+  secrets: v.record(v.string(), v.string()),
   uploads: v.number(),
   creates: v.array(v.string()),
 });
@@ -166,10 +212,28 @@ export interface DeployFakeState {
   readonly indexes: readonly string[];
   readonly gateways: readonly string[];
   readonly apps: readonly string[];
-  readonly secretNames: readonly string[];
+  /** The secrets PUT on the new Worker's script, by name and text. Values are
+   *  this plane's own fakes, and they are what proves the handover wrote the
+   *  token and the record it was supposed to write. */
+  readonly secrets: Readonly<Record<string, string>>;
   readonly uploads: number;
   readonly creates: readonly string[];
 }
+
+/** The build this plane serves as the deployment's own `kinu-version.json`,
+ *  which is what `readBuildStamp` reads and therefore what the Updates surface
+ *  compares the channel against. */
+export interface DeployFakeServedBuild {
+  readonly version: string;
+  readonly sha: string;
+  readonly builtAt: string;
+}
+
+const ServedBuildSchema = v.object({
+  version: v.string(),
+  sha: v.string(),
+  builtAt: v.string(),
+});
 
 interface Held {
   namespaces: string[];
@@ -182,6 +246,7 @@ interface Held {
   creates: string[];
   scriptExists: boolean;
   refuseOnce: DeployFakeRefusal | null;
+  served: DeployFakeServedBuild | null;
 }
 
 const held: Held = fresh();
@@ -198,6 +263,7 @@ function fresh(): Held {
     creates: [],
     scriptExists: false,
     refuseOnce: null,
+    served: null,
   };
 }
 
@@ -214,6 +280,7 @@ function reset(): void {
   held.creates = empty.creates;
   held.scriptExists = false;
   held.refuseOnce = null;
+  held.served = null;
 }
 
 function snapshot(): DeployFakeState {
@@ -223,7 +290,7 @@ function snapshot(): DeployFakeState {
     indexes: [...held.indexes],
     gateways: [...held.gateways],
     apps: [...held.apps],
-    secretNames: [...held.secrets.keys()],
+    secrets: Object.fromEntries(held.secrets),
     uploads: held.uploads,
     creates: [...held.creates],
   };
@@ -235,6 +302,10 @@ const RefusalSchema = v.object({
   code: v.number(),
   message: v.string(),
 });
+
+/** The control surface, named once: anything else is a caller's typo and this
+ *  plane refuses it rather than answering a state nobody asked to change. */
+const CONTROL_PATHS: readonly string[] = ['/reset', '/refuse', '/serve', '/state'];
 
 function envelope(result: JsonValue, status = 200): Response {
   return Response.json({ success: true, errors: [], result }, { status });
@@ -381,15 +452,37 @@ async function multipart(url: URL, request: Request): Promise<Response> {
   return envelope({ id: `version-${String(held.uploads)}` });
 }
 
+/**
+ * The authorization server's token endpoint, for both grants.
+ *
+ * The refresh grant is what a self-update spends: it presents no verifier
+ * (there is no person at a browser) and it must present the pair's own refresh
+ * token. The pair it answers with is ROTATED, so a deployment that re-bound the
+ * token it already had rather than the new one is a failure here.
+ */
 async function token(request: Request): Promise<Response> {
   const form = new URLSearchParams(await request.text());
+  const grant = form.get('grant_type');
 
-  if (form.get('grant_type') !== 'authorization_code') {
+  if (grant !== 'authorization_code' && grant !== 'refresh_token') {
     return Response.json({ error: 'unsupported_grant_type' }, { status: 400 });
   }
 
   if (form.get('client_id') !== DEPLOY_FAKE_CLIENT_ID) {
     return Response.json({ error: 'invalid_client' }, { status: 401 });
+  }
+
+  if (grant === 'refresh_token') {
+    if (form.get('refresh_token') !== DEPLOY_FAKE_REFRESH_TOKEN) {
+      return Response.json({ error: 'invalid_grant', error_description: 'that refresh token is not one this server issued' }, { status: 400 });
+    }
+
+    return Response.json({
+      access_token: DEPLOY_FAKE_ACCESS_TOKEN,
+      refresh_token: DEPLOY_FAKE_ROTATED_REFRESH,
+      expires_in: 3600,
+      token_type: 'bearer',
+    });
   }
 
   // PKCE, checked rather than assumed: a public client with no verifier is the
@@ -415,7 +508,9 @@ async function control(url: URL, request: Request): Promise<Response> {
 
   if (url.pathname === '/refuse') held.refuseOnce = v.parse(RefusalSchema, await request.json());
 
-  if (url.pathname !== '/reset' && url.pathname !== '/refuse' && url.pathname !== '/state') {
+  if (url.pathname === '/serve') held.served = v.parse(ServedBuildSchema, await request.json());
+
+  if (!CONTROL_PATHS.includes(url.pathname)) {
     throw new Error(`the deploy fake has no control surface at ${url.pathname}`);
   }
 
@@ -423,6 +518,33 @@ async function control(url: URL, request: Request): Promise<Response> {
   // far — so the caller parses one schema and a reset is observable in its own
   // answer.
   return Response.json(snapshot());
+}
+
+/**
+ * The deployment's own static assets, as `env.ASSETS` on the probe Worker.
+ *
+ * One file is served: the build stamp `readBuildStamp` reads, which is how a
+ * deployment says what version it is running. A stamp nothing set is absent,
+ * which is the state of a Worker whose asset bundle is incomplete.
+ *
+ * The path is spelled here rather than imported from `CLI_VERSION_PATH`
+ * (`packages/core/src/http/deployed-assets.ts`), because this module is loaded
+ * by `vitest.config.ts` under raw Node, where core's extensionless imports do
+ * not resolve. A rename there is not silent: any other path throws below, so
+ * the rows read "the deploy probe's assets hold no …" instead of passing.
+ */
+const STAMP_PATH = '/downloads/kinu-version.json';
+
+export function assetsOutbound(request: Request): Response {
+  const url = new URL(request.url);
+
+  if (url.pathname !== STAMP_PATH) {
+    throw new Error(`the deploy probe's assets hold no ${url.pathname}`);
+  }
+
+  if (held.served === null) return new Response('no build stamp', { status: 404 });
+
+  return Response.json(held.served);
 }
 
 export async function deployOutbound(request: Request): Promise<Response> {
@@ -454,7 +576,7 @@ export async function deployOutbound(request: Request): Promise<Response> {
 
   // The deployment's own smoke check, answered as the new Worker would.
   if (url.pathname === '/api/health' && url.host.endsWith('.workers.dev')) {
-    return Response.json({ version: VERSION, sha: 'probe01', builtAt: '2026-09-18T00:00:00.000Z' });
+    return Response.json(DEPLOY_FAKE_CHANNEL_BUILD);
   }
 
   throw new Error(`the deploy probe reached an unnamed network: ${request.method} ${request.url}`);

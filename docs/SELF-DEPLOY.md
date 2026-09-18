@@ -2,7 +2,7 @@
 
 Design, decided with the owner on 2026-09-15 and 2026-09-16: the deployment
 owns its own key, the local account model, no monitor locally; the owner
-creates the OAuth client. Steps 1 to 3 of the order of work are built
+creates the OAuth client. Steps 1 to 4 of the order of work are built
 (2026-09-18).
 Research and measurements: `~/kinu-logs/self-deploy/RESEARCH.md` and
 `oauth-scopes.json` (the 387-scope catalog, read 2026-09-15 with a wrangler
@@ -165,6 +165,14 @@ Cloudflare door. No user repository and no Workers Builds.
    spelling, in `packages/core/src/deploy/pkce.ts`). Until it is set, `/deploy`
    renders the Cloudflare half as not configured and refuses to start a run;
    `scripts/infra-manifest.ts` carries the row that says so.
-4. The deployment's Updates page and self-update. **Not built.**
+4. **Built 2026-09-18.** The deployment's Updates page and self-update:
+   `packages/core/src/deploy/update.ts` (the offer, with no version ordering —
+   `isSameBuild` is the one comparison), `DeployRunDO.selfUpdate` (the same
+   plan, run from inside the deployment with a token minted from its own
+   refresh token and a vault that reads through to its live secrets),
+   `/api/updates`, `/api/updates/run` and `/api/updates/apply` gated on the
+   deployment's own record, and the Updates page that polls the run. Proved in
+   workerd against the same fake plane:
+   `packages/cf-backend/tests/workerd/deploy-updates.test.ts` (4 rows).
 5. The local door: installer, workerd config renderer, supervisor. **Not
    built.**

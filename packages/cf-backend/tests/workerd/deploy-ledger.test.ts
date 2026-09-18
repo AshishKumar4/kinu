@@ -87,7 +87,7 @@ describe('a guided run in a Durable Object', () => {
     expect(made.uploads).toBe(1);
     // The deployment owns its key from here: the refresh token is a secret on
     // the new Worker, and the run's vault is empty.
-    expect(made.secretNames).toContain('KINU_SELF_DEPLOY_REFRESH_TOKEN');
+    expect(made.secrets.KINU_SELF_DEPLOY_REFRESH_TOKEN).toBe(DEPLOY_FAKE_REFRESH_TOKEN);
     expect(await stub.heldSecretNames()).toEqual([]);
   });
 
