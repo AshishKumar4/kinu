@@ -161,6 +161,13 @@ export function usePagedScroll<Item>({
     })();
   }, [grows, exhausted]);
 
+  // The walk begins as soon as it knows where to start. A scroller only asks
+  // again on a content change, and an actor pane that resolves its actor after
+  // mount has none: its empty conversation stayed a skeleton for good.
+  useEffect(() => {
+    if (cursor.current === null && startFrom() !== null) loadMore();
+  }, [startFrom, loadMore]);
+
   const reset = useCallback(() => {
     walk.current += 1;
     // The abandoned walk's `finally` can no longer clear these, which is why

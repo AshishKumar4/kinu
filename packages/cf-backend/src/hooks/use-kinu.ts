@@ -7,7 +7,7 @@ import { useAgent } from "agents/react";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
   branchHeadId, ORCHESTRATOR_AGENT_SLUG, SLATES_CHANGED_EVENT, hostedActorSocketPath,
-  type PendingAction, type PlanReview, type RoleId, type SlateProblem, type SlateSummary, type TierSource,
+  type PendingAction, type PlanReview, type ReasoningEffort, type RoleId, type SlateProblem, type SlateSummary, type TierSource,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
@@ -132,6 +132,9 @@ export interface AgentStatus {
    *  the workspace pin, an explicit tier, the role's tier, or the default
    *  alias. Set on agent panes, where the picker is read-only. */
   modelSource?: TierSource;
+  /** The effort its turns run at — its own setting, else the workspace's,
+   *  else the tier's; null when the server has no resolution yet. */
+  reasoningEffort: ReasoningEffort | null;
   forkLineage: ForkLineage | null;
 }
 
@@ -159,6 +162,8 @@ export interface SubordinateSnapshot {
   /** The actor's effective model and the tier source that chose it — the same
    *  resolution the turn makes, not the actor's own (unset) pin. */
   model: { model: string; source: TierSource };
+  /** The effort its turns run at: its own setting, else the workspace's, else the tier's. */
+  reasoningEffort: ReasoningEffort;
   activePlan: unknown;
   /** The facet's own acknowledged-and-not-landed steers, from its durable
    *  rows. Read here for the same reason the root reads them off its
@@ -1986,6 +1991,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       scaffoldVersion: 0,
       model: snapshot.model.model,
       modelSource: snapshot.model.source,
+      reasoningEffort: snapshot.reasoningEffort,
       searchNodeCount: 0,
       craftedToolCount: 0,
       messageCount: messages.length,
@@ -2256,7 +2262,10 @@ export function useKinu(target?: string | KinuActorAddress) {
     setAgentStatus(prev => prev ? { ...prev, model: modelId } : prev);
 
     try {
-      const r = await rpc<{ ok?: boolean; spec?: string }>("setModel", [modelId]);
+      const r = subordinate === undefined
+        ? await rpc<{ ok?: boolean; spec?: string }>("setModel", [modelId])
+        : await rpc<{ ok?: boolean; spec?: string }>("setActorModel", [subordinate, modelId]);
+
       // Server may have normalized the spec — sync the UI to authoritative value.
       const spec = r?.spec;
 
@@ -2270,7 +2279,10 @@ export function useKinu(target?: string | KinuActorAddress) {
       let reason = `Couldn't switch model: ${errorMessage(err)}`;
 
       try {
-        const stored = await rpc<{ spec?: string | null }>("getStoredModelSpec", []);
+        const stored = subordinate === undefined
+          ? await rpc<{ spec?: string | null }>("getStoredModelSpec", [])
+          : { spec: (await rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate])).model.model };
+
         setAgentStatus(prev => prev ? { ...prev, model: stored.spec ?? '' } : prev);
       } catch (rollbackErr) {
         // The rollback read failed too, so the picker is still showing a model
@@ -2282,7 +2294,22 @@ export function useKinu(target?: string | KinuActorAddress) {
 
       return reason;
     }
-  }, [rpc, setSourceError]);
+  }, [rpc, setSourceError, subordinate]);
+
+  /** The thinking level for this pane's actor; null clears it back to the
+   *  tier's. Optimistic, rolled back on refusal. */
+  const setReasoningEffort = useCallback(async (effort: ReasoningEffort | null): Promise<void> => {
+    const before = agentStatus?.reasoningEffort ?? null;
+    setAgentStatus((prev) => prev ? { ...prev, reasoningEffort: effort } : prev);
+
+    try {
+      await rpc("setReasoningEffort", subordinate === undefined ? [effort] : [effort, subordinate]);
+      setSourceError("model", null);
+    } catch (err) {
+      setAgentStatus((prev) => prev ? { ...prev, reasoningEffort: before } : prev);
+      setSourceError("model", `Couldn't set the thinking level: ${errorMessage(err)}`);
+    }
+  }, [rpc, setSourceError, subordinate, agentStatus?.reasoningEffort]);
 
   const setDisplayName = useCallback(async (displayName: string): Promise<string> => {
     const result = await rpc<{ displayName: string }>("setDisplayName", [displayName]);
@@ -2387,6 +2414,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     searchMemory,
     clearHistory,
     setModel,
+    setReasoningEffort,
     setDisplayName,
     executors,
     executorOutputs,

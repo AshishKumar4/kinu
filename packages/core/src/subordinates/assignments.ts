@@ -47,6 +47,8 @@ export interface AdmittedAssignment {
    *  a runner that mints its own id gets a child born from nothing. */
   readonly turnId: string;
   readonly inheritedContext?: SubordinateInheritedContext;
+  /** A pane message's own id: the streamed answer closes the request it opened. */
+  readonly messageId?: string;
 }
 
 export interface DrainAssignmentsOptions {
@@ -98,6 +100,7 @@ export async function drainAssignments(
         sequenceId: event.id,
         turnId,
         inheritedContext: event.payload.inherited_context,
+        messageId: event.payload.message_id,
       });
       log.markTurnCompleted(turnId);
     } catch (cause) {

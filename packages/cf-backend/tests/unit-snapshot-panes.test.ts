@@ -49,6 +49,7 @@ const STATUS: AgentStatus = {
   craftedToolCount: 0,
   messageCount: 4,
   model: 'anthropic/claude-opus-4',
+  reasoningEffort: null,
   forkLineage: null,
 };
 

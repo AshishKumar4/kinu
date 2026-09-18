@@ -15,7 +15,7 @@
 import * as v from 'valibot';
 import { DEFAULT_CONFIG } from '../config';
 import type { AgentConfigStore, ShellApprovalMode } from '../config/store';
-import { REASONING_EFFORTS } from '../strategy/effort';
+import { REASONING_EFFORTS, type ReasoningEffort } from '../strategy/effort';
 import { ADVISOR_SEVERITIES, type AdvisorSeverity } from '../advisor/review';
 
 const SHELL_APPROVAL_MODES: readonly ShellApprovalMode[] = ['strict', 'allow_all', 'deny_all'];
@@ -89,7 +89,18 @@ export function getReasoningEffort(config: AgentConfigStore) {
   return { effort: config.getReasoningEffort() };
 }
 
-export function setReasoningEffort<Effort>(config: AgentConfigStore, effort: Effort) {
+export interface ReasoningEffortWrite<Effort extends ReasoningEffort | null> { ok: true; effort: Effort }
+
+/** Null clears the setting: the tier's level applies again. */
+export function setReasoningEffort(config: AgentConfigStore, effort: null): ReasoningEffortWrite<null>;
+export function setReasoningEffort<Effort>(config: AgentConfigStore, effort: Effort): ReasoningEffortWrite<ReasoningEffort>;
+export function setReasoningEffort<Effort>(config: AgentConfigStore, effort: Effort | null): ReasoningEffortWrite<ReasoningEffort | null> {
+  if (effort === null) {
+    config.setReasoningEffort(null);
+
+    return { ok: true, effort: null };
+  }
+
   const parsed = v.safeParse(ReasoningEffortSchema, effort);
 
   if (!parsed.success) throw new Error(`Invalid reasoning effort: ${String(effort)}`);

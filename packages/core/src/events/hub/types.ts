@@ -221,6 +221,8 @@ export interface SubordinateTaskPayload {
   inherited_context?: SubordinateInheritedContext;
   kinu_mode: WorkMode;
   creation_id?: string;
+  /** The pane's own id for a `message`, so the turn answers under it. */
+  message_id?: string;
 }
 
 /** The three things a subordinate can report. One declaration: the event

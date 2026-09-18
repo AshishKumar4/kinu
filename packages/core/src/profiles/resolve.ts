@@ -75,7 +75,7 @@ const ProviderCatalogSnapshotSchema = v.looseObject({
  *  form, where the default has already filled it in. */
 export type ProviderCatalogSnapshot = v.InferInput<typeof ProviderCatalogSnapshotSchema>;
 
-export type TierSource = 'explicit' | 'role' | 'default' | 'workspace';
+export type TierSource = 'explicit' | 'role' | 'default' | 'workspace' | 'actor';
 
 export interface ProfileAuthorityInputs {
   envelope: ProfileCatalogEnvelope;
@@ -152,6 +152,10 @@ export interface ResolveTurnProfileInput {
   /** The workspace's stored model spec (normalized) or null. When non-null it
    *  overrides the role's tier model and the tier source reports `workspace`. */
   workspaceModel?: string | null | undefined;
+  /** A hosted actor's own pin: over the workspace's, source `actor`. */
+  actorModel?: string | null | undefined;
+  /** A stored effort for this actor or workspace: over the tier's. */
+  explicitEffort?: ReasoningEffort | null | undefined;
   workMode: string;
   availableTools: readonly string[];
   activeSkills: readonly string[];
@@ -351,6 +355,12 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     source = 'workspace';
   }
 
+  if (input.actorModel !== undefined && input.actorModel !== null) {
+    requireAvailable(input.actorModel, tierId);
+    model = input.actorModel;
+    source = 'actor';
+  }
+
   const availableTools = role.allowedTools === undefined
     ? uniqueTools(input.availableTools)
     : intersectTools(input.availableTools, role.allowedTools);
@@ -395,7 +405,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
       id: tierId,
       source,
       model,
-      reasoningEffort: assignment.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT,
+      reasoningEffort: input.explicitEffort ?? assignment.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT,
     }),
     workMode,
     skills: Object.freeze(skills),

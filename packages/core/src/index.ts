@@ -2185,7 +2185,7 @@ export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } fro
 export type { Page, PageRequest, SeekCursor } from './read-models/page';
 
 export {
-  mergeTranscript, restoredRows, uiMessageRow, uiMessageText, transcriptRole,
+  mergeTranscript, restoredRows, uiMessageRow, uiMessageText, transcriptRole, recordedAnswer, storedUiMessageParts,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 

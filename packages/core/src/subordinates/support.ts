@@ -358,6 +358,7 @@ export function admitSubordinateTask(log: EventLog, input: {
   deliverable?: string;
   inheritedContext?: SubordinateInheritedContext;
   creationId?: string;
+  messageId?: string;
   mode: WorkMode;
   now: number;
 }): PublishResult {
@@ -378,6 +379,8 @@ export function admitSubordinateTask(log: EventLog, input: {
   if (inheritedContext) Object.assign(payload, { inherited_context: inheritedContext });
 
   if (input.creationId !== undefined) Object.assign(payload, { creation_id: requiredText(input.creationId, 'creationId') });
+
+  if (input.messageId !== undefined) Object.assign(payload, { message_id: requiredText(input.messageId, 'messageId') });
 
   return log.publish({
     descriptor: {

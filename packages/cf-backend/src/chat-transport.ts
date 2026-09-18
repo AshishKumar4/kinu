@@ -40,15 +40,12 @@
  * recipient set, transcript and driver are that actor's — so no frame builder
  * here ever asks whose actor it is.
  *
- * A hosted actor's room is {@link HostedActorRoom} and not a second
- * {@link ChatWireTransport}, because the two differ in one measured fact
- * rather than in a branch: the SDK's {@link ResumableStream} keeps ONE active
- * stream per table (`cf_ai_chat_stream_chunks`, restored in its constructor),
- * so a second instance over this object's database reads the root's live turn
- * as its own. A hosted turn is `runHeadInference` over the actor's event log
- * and produces no resumable stream at all, so its room has no resume
- * machinery to share — it serves the actor's own transcript, admits a message
- * onto that actor's queue, and closes the request.
+ * A hosted actor's room is the same transport over that actor's own wire, with
+ * one measured difference: no resume store. The SDK's {@link ResumableStream}
+ * keeps ONE active stream per database (`cf_ai_chat_stream_chunks`, restored in
+ * its constructor), so a second store over this object's tables would read the
+ * root's live turn as the actor's. A hosted turn therefore streams live and,
+ * across a reconnect, lands as its transcript row at turn end.
  */
 import type { Connection } from 'agents';
 import {
@@ -68,7 +65,9 @@ import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError } fro
 /** What the transport asks of the actor: the connection set, and the loop.
  *  A connection is the SDK's: its resume handshake takes the full type. */
 export interface ChatWire {
-  readonly sql: SqlExecutor;
+  /** The resume store's database; null for a wire whose turns stream live
+   *  only (the header says why a hosted actor's is). */
+  readonly sql: SqlExecutor | null;
   broadcast(message: string, exclude?: string[]): void;
   getConnection(id: string): Connection | undefined;
   /** The transcript as the client should see it, oldest first — the SDK
@@ -86,11 +85,6 @@ export interface ChatWire {
   interrupt(): void;
   clear(): Promise<void>;
 }
-
-/** What a hosted actor's room asks of the actor: {@link ChatWire} without the
- *  chunk store or the per-connection lookup, because a hosted turn produces no
- *  resumable stream and so the room holds no resume handshake. */
-export type HostedChatWire = Omit<ChatWire, 'sql' | 'getConnection'>;
 
 /** Where one socket's chat frames go. Both rooms answer it, and
  *  {@link ActorChatRooms} is what picks between them. */
@@ -168,8 +162,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
    *  against a bare prototype with no storage behind it. A transport that
    *  touched storage to exist would turn that enumeration into an SQL error
    *  and take the whole RPC surface with it. */
-  private _resumable: ResumableStream | null = null;
-  private _handshake: ResumeHandshake | null = null;
+  private _resume: { readonly resumable: ResumableStream; readonly handshake: ResumeHandshake } | null = null;
   private readonly pendingResume = new Set<string>();
   private readonly continuation = new ContinuationState<Connection>();
   /** The request each admitted user turn answers under, by its opening row's id. */
@@ -182,22 +175,27 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   constructor(private readonly wire: ChatWire) {}
 
-  private get resumable(): ResumableStream {
-    return this._resumable ??= new ResumableStream(this.wire.sql);
-  }
+  private get resume(): { readonly resumable: ResumableStream; readonly handshake: ResumeHandshake } | null {
+    if (this._resume !== null) return this._resume;
+    const sql = this.wire.sql;
 
-  private get handshake(): ResumeHandshake {
-    return this._handshake ??= new ResumeHandshake({
-      responseMessageType: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
-      resumableStream: this.resumable,
-      continuation: this.continuation,
-      pendingResumeConnections: this.pendingResume,
-      pendingChatTerminal: () => Promise.resolve(null),
-      // An orphaned stream is the loop's to continue from its ledger, never a
-      // row this transport reconstructs from chunks.
-      persistOrphanedStream: () => Promise.resolve(),
-      isConnectionPresent: (id) => this.wire.getConnection(id) !== undefined,
-    });
+    if (sql === null) return null;
+    const resumable = new ResumableStream(sql);
+
+    return this._resume = {
+      resumable,
+      handshake: new ResumeHandshake({
+        responseMessageType: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
+        resumableStream: resumable,
+        continuation: this.continuation,
+        pendingResumeConnections: this.pendingResume,
+        pendingChatTerminal: () => Promise.resolve(null),
+        // An orphaned stream is the loop's to continue from its ledger, never a
+        // row this transport reconstructs from chunks.
+        persistOrphanedStream: () => Promise.resolve(),
+        isConnectionPresent: (id) => this.wire.getConnection(id) !== undefined,
+      }),
+    };
   }
 
   /** The answer the transcript persists under this id, once. */
@@ -231,13 +229,9 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
    *  are separate fetches, and a turn that started between them would
    *  otherwise leave the tab without the opening row until the turn ends. */
   onConnect(connection: Connection): void {
-    if (this.resumable.hasActiveStream()) {
-      this.handshake.notifyStreamResuming(connection);
-      sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() }));
+    const resume = this.resume;
 
-      return;
-    }
-
+    if (resume !== null && resume.resumable.hasActiveStream()) resume.handshake.notifyStreamResuming(connection);
     sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() }));
   }
 
@@ -258,13 +252,24 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   private async handle(connection: Connection, event: ChatProtocolEvent): Promise<void> {
     switch (event.type) {
-      case 'stream-resume-request':
-        await this.handshake.handleResumeRequest(connection, event.probeId);
+      case 'stream-resume-request': {
+        const resume = this.resume;
+
+        // `idle` is load-bearing: the hook keeps waiting on a probe answered
+        // with anything weaker.
+        if (resume === null) {
+          sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_RESUME_NONE, reason: 'idle', probeId: event.probeId }));
+
+          return;
+        }
+
+        await resume.handshake.handleResumeRequest(connection, event.probeId);
 
         return;
+      }
 
       case 'stream-resume-ack':
-        await this.handshake.handleResumeAck(connection, event.id);
+        await this.resume?.handshake.handleResumeAck(connection, event.id);
 
         return;
 
@@ -280,7 +285,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         return;
 
       case 'clear': {
-        this.resumable.clearAll();
+        this.resume?.resumable.clearAll();
         this.pendingResume.clear();
         await this.wire.clear();
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_CLEAR }), [connection.id]);
@@ -369,49 +374,51 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   // ── The loop's events ───────────────────────────────────────────────
 
+  /**
+   * One turn opens: its stream answers under the request that admitted the
+   * message (`turnId` is the opening row's id), else under a minted id — a
+   * wake, a rerun, a delegated turn. The entry is deleted either way: a
+   * steer's own id is the turn id of its rerun. A user turn's opening row is
+   * durable before this, so every tab reads the transcript with it.
+   */
+  openTurn(turn: { readonly turnId: string; readonly messageId: string; readonly userTurn: boolean }): void {
+    const requestId = this.requests.get(turn.turnId) ?? crypto.randomUUID();
+    this.requests.delete(turn.turnId);
+
+    const streamId = this.resume?.resumable.start(requestId, { messageId: turn.messageId }) ?? requestId;
+
+    this.live = { requestId, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), cadence: partialFlushCadence(), taken: false, broken: false };
+
+    if (turn.userTurn) this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() }));
+  }
+
+  /** The turn's answer row is durable before this: the done frame and the
+   *  transcript broadcast read the finished turn's rows. */
+  closeTurn(): void {
+    const live = this.live;
+
+    if (live === null) return;
+    this.live = null;
+
+    if (!live.taken && !live.broken && live.accumulator.parts.length > 0) this.answers.set(live.accumulator.messageId, live.accumulator.toMessage());
+
+    this.resume?.resumable.complete(live.streamId);
+    this.pendingResume.clear();
+    this.done(live.requestId);
+    this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() }));
+  }
+
   deliver(event: SessionEvent): void {
     switch (event.type) {
-      case 'turn-start': {
-        // A user turn answers under the request that admitted it; a harness
-        // turn (a wake, a rerun) under an id of its own, as Think minted one.
-        // The entry is DELETED either way: a steer's own id is the turn id
-        // of its rerun, so a turn whose admission names a different id fails
-        // through to a minted id — and that entry is the leak finding 10
-        // names.
-        const requestId = this.requests.get(event.turnId) ?? crypto.randomUUID();
-        this.requests.delete(event.turnId);
-
-        const streamId = this.resumable.start(requestId, { messageId: event.messageId });
-
-        this.live = { requestId, streamId, accumulator: new StreamAccumulator({ messageId: event.messageId }), cadence: partialFlushCadence(), taken: false, broken: false };
-
-        // The turn's opening row is on disk before this event: every tab
-        // reads the transcript with the operator's message in it, under the id
-        // the sender's own hook already renders it by.
-        if (event.kind === 'user') this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() }));
+      case 'turn-start':
+        this.openTurn({ turnId: event.turnId, messageId: event.messageId, userTurn: event.kind === 'user' });
 
         return;
-      }
 
-      case 'turn-end': {
-        // The turn's answer row is durable BEFORE this event — the commit
-        // lands inside `runTurn`, and the roster settle only follows it — so
-        // the client's done frame and transcript broadcast read the finished
-        // turn's rows, whatever the detached terminal tail still owes.
-        const live = this.live;
-
-        if (live === null) return;
-        this.live = null;
-
-        if (!live.taken && !live.broken && live.accumulator.parts.length > 0) this.answers.set(live.accumulator.messageId, live.accumulator.toMessage());
-
-        this.resumable.complete(live.streamId);
-        this.pendingResume.clear();
-        this.done(live.requestId);
-        this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() }));
+      case 'turn-end':
+        this.closeTurn();
 
         return;
-      }
 
       case 'error': {
         const live = this.live;
@@ -424,7 +431,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         // hook painted an error card on every Stop after the switch).
         if (event.message === INTERRUPTED_TURN) return;
 
-        this.resumable.markError(live.streamId);
+        this.resume?.resumable.markError(live.streamId);
         this.wire.broadcast(JSON.stringify({
           type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body: event.message, done: false, error: true,
         }));
@@ -471,9 +478,13 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         if (chunk.type === 'start' && action?.type === 'start' && action.messageId === undefined) chunk.messageId = live.accumulator.messageId;
 
         const body = JSON.stringify(chunk);
-        this.resumable.storeChunk(live.streamId, body);
+        const resume = this.resume;
 
-        if (live.cadence.flushes(flushSignal(chunk))) this.resumable.flushBuffer();
+        if (resume !== null) {
+          resume.resumable.storeChunk(live.streamId, body);
+
+          if (live.cadence.flushes(flushSignal(chunk))) resume.resumable.flushBuffer();
+        }
 
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }));
       }
@@ -487,7 +498,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         doing: 'relaying the answer stream to the connected clients', cause, otherwise: 'io',
       }));
       live.broken = true;
-      this.resumable.markError(live.streamId);
+      this.resume?.resumable.markError(live.streamId);
       this.wire.broadcast(JSON.stringify({
         type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body: renderThrownChain({ cause }), done: false, error: true,
       }));
@@ -512,151 +523,6 @@ function chatInput(message: UIMessage) {
 }
 
 /**
- * ONE HOSTED ACTOR'S CHAT ROOM.
- *
- * The same inbound protocol as the root's, over that actor's own three facts:
- * its transcript (the plain `actor_messages` store core declares as every
- * non-root actor's default chat), its queue (`admitHostedTask`, the one
- * admission path a delegated turn also takes), and its connections.
- *
- * A hosted turn is not streamed: `runHeadInference` publishes no UIMessage
- * chunks, so there is no resumable stream to offer and a resume probe is
- * answered `idle` rather than left unanswered. What the pane paints is the
- * transcript — broadcast when a message is admitted and again when the turn
- * records its answer ({@link HostedActorRoom.announce}).
- */
-class HostedActorRoom implements ChatRoom {
-  constructor(private readonly wire: HostedChatWire) {}
-
-  onConnect(connection: Connection): void {
-    sendIfOpen(connection, this.transcriptFrame());
-  }
-
-  onClose(): void {
-    // Nothing is held per connection here: no resume handshake, no
-    // continuation owner, no live accumulator.
-  }
-
-  async onMessage(connection: Connection, raw: string): Promise<boolean> {
-    const event = parseProtocolMessage(raw);
-
-    if (event === null) return false;
-    await this.handle(connection, event);
-
-    return true;
-  }
-
-  /** This actor's transcript to every socket that addressed it — the frame a
-   *  landed message and a recorded answer both reach the pane through. */
-  announce(): void {
-    this.wire.broadcast(this.transcriptFrame());
-  }
-
-  private transcriptFrame(): string {
-    return JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() });
-  }
-
-  private async handle(connection: Connection, event: ChatProtocolEvent): Promise<void> {
-    switch (event.type) {
-      case 'stream-resume-request':
-        // `idle` is the truth and it is load-bearing: the hook keeps waiting
-        // on a probe answered with anything weaker.
-        sendIfOpen(connection, JSON.stringify({
-          type: MessageType.CF_AGENT_STREAM_RESUME_NONE, reason: 'idle', probeId: event.probeId,
-        }));
-
-        return;
-
-      case 'chat-request': {
-        if (event.init.method === 'POST') await this.admitChatRequest(event.id, event.init.body);
-
-        return;
-      }
-
-      case 'cancel':
-        this.wire.interrupt();
-
-        return;
-
-      case 'clear':
-        await this.wire.clear();
-        this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_CLEAR }), [connection.id]);
-
-        return;
-
-      case 'stream-resume-ack':
-      case 'tool-result':
-      case 'tool-approval':
-      case 'messages':
-        // No stream was offered, no Kinu client tool exists, and this actor's
-        // transcript is the server's.
-        diagnostics.event('chat.protocol_frame_ignored', { frame: event.type });
-    }
-  }
-
-  /**
-   * The chat request, admitted onto this actor's queue.
-   *
-   * The hook sends its whole message list every time, so the new messages are
-   * the SDK's own reconciliation of it against what is stored, minus anything
-   * this actor already holds a row for — which is why the admission writes the
-   * user row under the id the client renders it by.
-   *
-   * The request is answered `done` as soon as the queue holds the message: a
-   * hosted turn runs on the actor's durable wake, not inside this frame, and a
-   * request left open would wait for a `turn-end` this rail never emits.
-   */
-  private async admitChatRequest(requestId: string, body: string | undefined): Promise<void> {
-    const parsed = body === undefined ? null : v.safeParse(v.pipe(v.string(), v.parseJson(), ChatRequestBodySchema), body);
-
-    if (parsed === null || !parsed.success || parsed.output.trigger === 'regenerate-message') {
-      this.done(requestId);
-
-      return;
-    }
-
-    // SAFETY: every element here is CONSTRUCTED by `actorChatHistory` as
-    // `{ id, role: 'user' | 'assistant', parts: [{ type: 'text', text }] }`,
-    // which is a UIMessage in all three load-bearing fields; `SessionMessage`
-    // is the vendor's narrower alias over the same shape, and the SDK's own
-    // agent hands `reconcileMessages` its stored rows the same way.
-    const stored = this.wire.history() as UIMessage[];
-
-    const fresh = reconcileMessages(parsed.output.messages, stored, sanitizeMessage)
-      .filter((message) => message.role === 'user' && !this.wire.admitted(message.id));
-
-    if (fresh.length === 0) {
-      this.done(requestId);
-
-      return;
-    }
-
-    let landed: SendLanding = 'turn';
-
-    for (const message of fresh) {
-      try {
-        landed = await this.wire.send({ ...chatInput(message), id: message.id });
-      } catch (cause) {
-        // A refusal is the actor's own classified error — a dismissed actor, a
-        // name this workspace does not host. Anything else is a fault in the
-        // admission itself and is not the client's to read as a refusal.
-        if (!(cause instanceof KinuError)) throw new Error('a hosted actor failed to take a client message', { cause });
-        this.done(requestId, { error: refusalOf(cause).error });
-
-        return;
-      }
-    }
-
-    this.announce();
-    this.done(requestId, { landed });
-  }
-
-  private done(requestId: string, extra: { landed?: SendLanding; error?: string } = {}): void {
-    this.wire.broadcast(doneFrame(requestId, extra));
-  }
-}
-
-/**
  * WHICH ROOM SERVES THIS SOCKET — the one decision that keeps a workspace's
  * panes apart on a shared object.
  *
@@ -667,31 +533,31 @@ class HostedActorRoom implements ChatRoom {
  * second window onto the workspace's own chat.
  */
 export class ActorChatRooms {
-  private readonly hosted = new Map<string, HostedActorRoom>();
+  private readonly hosted = new Map<string, ChatWireTransport>();
 
   constructor(
     private readonly root: () => ChatWireTransport,
-    private readonly wireFor: (name: string) => HostedChatWire | null,
+    private readonly wireFor: (name: string) => ChatWire | null,
   ) {}
 
   /** The room a connection addressed, or null when it named an actor this
    *  workspace does not host. */
-  for(actor: string | null): ChatRoom | null {
+  for(actor: string | null): ChatWireTransport | null {
     if (actor === null) return this.root();
 
     return this.hostedRoom(actor);
   }
 
-  /** That actor's room if one is already open, or one built now — what a
-   *  broadcast site holds when it has an answer to announce. */
-  hostedRoom(actor: string): ChatRoom & { announce(): void } | null {
+  /** That actor's transport if one is already open, or one built now — the
+   *  same wire the root's chat rides, over that actor's own transcript. */
+  hostedRoom(actor: string): ChatWireTransport | null {
     const held = this.hosted.get(actor);
 
     if (held !== undefined) return held;
     const wire = this.wireFor(actor);
 
     if (wire === null) return null;
-    const room = new HostedActorRoom(wire);
+    const room = new ChatWireTransport(wire);
     this.hosted.set(actor, room);
 
     return room;

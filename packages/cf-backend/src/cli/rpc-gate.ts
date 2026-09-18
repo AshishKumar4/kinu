@@ -346,6 +346,7 @@ export const AGENT_RPC_ACCESS = {
   setEvolutionConfig: 'interactive',
   setMctsConfig: 'interactive',
   setModel: 'interactive',
+  setActorModel: 'interactive',
   setRole: 'interactive',
   setReasoningEffort: 'interactive',
   setShellApprovalMode: 'interactive',

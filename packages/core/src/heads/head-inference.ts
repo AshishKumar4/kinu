@@ -28,7 +28,7 @@
 
 import {
   tool, jsonSchema,
-  type ToolSet, type LanguageModel, type ModelMessage, type StepResult, type ToolExecutionOptions,
+  type ToolSet, type LanguageModel, type ModelMessage, type StepResult, type ToolExecutionOptions, type UIMessageChunk,
 } from 'ai';
 import type { HostedActor } from '../state/actor-host';
 import type { WorkMode } from '../types/turn';
@@ -589,6 +589,9 @@ export interface HeadInferenceDeps {
    * steps land.
    */
   reportDelta?: ReportHeadDelta;
+  /** The turn's UIMessage chunks, for a pane watching this actor's own chat —
+   *  the same relay the root's transport reads (`chat.observeStream`). */
+  observeStream?: (chunks: ReadableStream<UIMessageChunk>) => Promise<void>;
   /**
    * The prompt this loop runs, when the caller is not a head.
    *
@@ -938,6 +941,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
             },
             stopWhen,
             onStep,
+            ...(deps.observeStream !== undefined && { observeStream: deps.observeStream }),
           },
           extensions: [{ name: 'kinu.head-lifetime', prepareStep: prepareModelStep }],
           dynamic: deps.dynamic,

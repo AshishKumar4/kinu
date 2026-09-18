@@ -41,7 +41,7 @@
  */
 
 import { REAL_CLOCK } from '@kinu.run/core';
-import type { LanguageModel, ToolSet } from 'ai';
+import type { LanguageModel, ToolSet, UIMessageChunk } from 'ai';
 import {
   EventLog, HeadCapture, runHeadInference,
   admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus,
@@ -274,6 +274,7 @@ export async function admitHostedTask(
     readonly deliverable?: string;
     readonly inheritedContext?: SubordinateInheritedContext;
     readonly creationId?: string;
+    readonly messageId?: string;
   },
 ): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> {
   return await seams.host.run(reference, async (actor) => {
@@ -296,6 +297,8 @@ export async function admitHostedTask(
     if (input.inheritedContext) admission.inheritedContext = input.inheritedContext;
 
     if (input.creationId !== undefined) admission.creationId = input.creationId;
+
+    if (input.messageId !== undefined) admission.messageId = input.messageId;
     const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);
 
     // THE WAKE, not the child's reactor. This used to call `scheduleDrain` on
@@ -388,6 +391,7 @@ export async function runHostedTask(
     readonly sequenceId: string;
     readonly inheritedContext?: SubordinateInheritedContext;
   },
+  observeStream?: (chunks: ReadableStream<UIMessageChunk>) => Promise<void>,
 ): Promise<{ readonly text: string; readonly relayed: SubordinateEventResult | null }> {
   return await seams.host.run(reference, async (actor) => {
     // SAFETY: this runtime is the one `ActorHostDeps.runtimeFor` built, which on
@@ -463,6 +467,8 @@ export async function runHostedTask(
     };
 
     if (mission !== null) inference.mission = mission;
+
+    if (observeStream !== undefined) inference.observeStream = observeStream;
 
     // THE RUN'S DURABLE BRACKET, and it is the LOCAL host's rule adopted here
     // rather than a cf invention: on the CLI an assignment is admitted as the

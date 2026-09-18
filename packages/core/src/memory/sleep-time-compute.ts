@@ -48,6 +48,13 @@ export interface SleepTimeUpdate {
 const PROMPT = (i: SleepTimeInput) => `You are a background memory-compression agent. Between user turns, you
 update the agent's persistent state so the next turn starts smarter.
 
+You distill reusable, durable knowledge only: what the user told the agent
+about themselves, their project, their constraints and preferences; decisions
+made; workflows, pitfalls and resolved failures the agent found. You NEVER
+record transient chatter, greetings, restatements of the conversation, what
+is unknown or not yet said, or the state of a new or empty workspace. Most
+turns carry no durable signal; then you return empty upserts.
+
 Recent turn:
 - Task: ${evidenceWindow(i.task, EVIDENCE_BUDGETS.outcomeUserMessage)}
 - Output: ${evidenceWindow(i.output, EVIDENCE_BUDGETS.outcomeAssistantResponse)}
@@ -64,9 +71,9 @@ Existing fact keys (reuse these exact keys when updating the same subject; do no
 ${i.currentFacts.map(f => `  ${f.key}`).join('\n') || '  (none)'}
 
 Decide:
-1. What new facts should be remembered from this turn? (user preferences,
-   project state, dates, URLs, current configuration). Upsert with high
-   confidence (0.8–1.0). DON'T duplicate existing facts.
+1. What durable facts did this turn establish? (user preferences, project
+   state, dates, URLs, current configuration). Upsert with high confidence
+   (0.8–1.0). DON'T duplicate existing facts.
 2. Which existing facts should DECAY (lower confidence) because they weren't
    re-observed in this turn and may be stale? List their keys.
 
