@@ -112,7 +112,19 @@ export const HttpCallSchema = v.object({
 
 export type HttpCall = v.InferOutput<typeof HttpCallSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'twin';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin';
+
+/** One armed row of the SDK's schedule registry — the durable wake itself, as
+ *  `armWakeRow` wrote it. `callback` names WHICH of the two Kinu wake chains a
+ *  fold armed, which is the whole question when a chain's frame is asked
+ *  whether it can take the work the other chain's fold requested. `at` is the
+ *  SDK's unit, whole seconds. */
+export const ArmedWakeSchema = v.object({
+  callback: v.string(),
+  at: v.number(),
+});
+
+export type ArmedWake = v.InferOutput<typeof ArmedWakeSchema>;
 
 /** A durable `pending_steers` row — the reservation a mid-turn send writes:
  *  the client's own message id bound to the turn it will land in. */
