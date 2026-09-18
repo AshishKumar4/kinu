@@ -63,11 +63,12 @@ export async function readMemoryTail(memory: Memory, maxChars = MEMORY_TAIL_MAX_
 export async function appendMemoryNote(
   memory: Memory,
   content: string,
-  options?: { heading?: string; date?: string },
+  options?: { heading?: string; date?: string; by?: string },
 ): Promise<string> {
   const date = options?.date ?? new Date().toISOString().split('T')[0];
   const heading = options?.heading ?? 'Note';
-  await memory.append(MEMORY_PATH, `\n### ${heading} (${date})\n${content}\n`);
+  const stamp = options?.by === undefined ? date : `${date} · ${options.by}`;
+  await memory.append(MEMORY_PATH, `\n### ${heading} (${stamp})\n${content}\n`);
   await memory.index(MEMORY_PATH);
 
   return 'Note saved to memory.';

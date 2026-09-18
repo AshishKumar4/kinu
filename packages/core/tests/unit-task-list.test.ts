@@ -30,7 +30,7 @@ describe('TaskListStore', () => {
   test('ids stay unique after the newest item is dropped', () => {
     const s = newStore();
     s.add(['one', 'two'], null, 1);
-    s.setStatus('t2', 'dropped', 2);
+    s.update('t2', { status: 'dropped' }, 2);
     // Minting from MAX(seq), not COUNT(*): a reused id would silently re-label
     // an item the model already referred to in prose.
     expect(s.add(['three'], null, 3).added[0]!.id).toBe('t3');
@@ -70,9 +70,9 @@ describe('TaskListStore', () => {
   test('setStatus moves an item and reports an unknown id as null', () => {
     const s = newStore();
     s.add(['step'], null, 1);
-    expect(s.setStatus('t1', 'active', 2)?.status).toBe('active');
-    expect(s.setStatus('t1', 'done', 3)?.updatedAt).toBe(3);
-    expect(s.setStatus('t7', 'done', 4)).toBeNull();
+    expect(s.update('t1', { status: 'active' }, 2)?.status).toBe('active');
+    expect(s.update('t1', { status: 'done' }, 3)?.updatedAt).toBe(3);
+    expect(s.update('t7', { status: 'done' }, 4)).toBeNull();
   });
 
   test('countOpenSubtasks answers what closing a parent would leave behind', () => {
@@ -80,9 +80,9 @@ describe('TaskListStore', () => {
     s.add(['parent'], null, 1);
     s.add(['a', 'b'], 't1', 2);
     expect(s.countOpenSubtasks('t1')).toBe(2);
-    s.setStatus('t2', 'done', 3);
+    s.update('t2', { status: 'done' }, 3);
     expect(s.countOpenSubtasks('t1')).toBe(1);
-    s.setStatus('t3', 'dropped', 4);
+    s.update('t3', { status: 'dropped' }, 4);
     expect(s.countOpenSubtasks('t1')).toBe(0);
   });
 
@@ -91,8 +91,8 @@ describe('TaskListStore', () => {
     s.add(['done parent', 'live parent'], null, 1);
     s.add(['still to do'], 't1', 2);
     s.add(['finished'], 't2', 3);
-    s.setStatus('t1', 'done', 4);
-    s.setStatus('t4', 'done', 5);
+    s.update('t1', { status: 'done' }, 4);
+    s.update('t4', { status: 'done' }, 5);
 
     const open = s.listOpen();
     expect(open.items.map((t) => t.id)).toEqual(['t1', 't2']);
@@ -102,7 +102,7 @@ describe('TaskListStore', () => {
     expect(open.items[0]!.subtasks.map((t) => t.id)).toEqual(['t3']);
     expect(open.items[1]!.subtasks).toEqual([]);
 
-    s.setStatus('t3', 'done', 6);
+    s.update('t3', { status: 'done' }, 6);
     expect(s.listOpen().items.map((t) => t.id)).toEqual(['t2']);
   });
 
@@ -114,7 +114,7 @@ describe('TaskListStore', () => {
     const s = newStore();
     s.add(Array.from({ length: 200 }, (_, i) => `closed ${i + 1}`), null, 1);
 
-    for (let i = 1; i <= 200; i++) s.setStatus(`t${i}`, 'done', 2);
+    for (let i = 1; i <= 200; i++) s.update(`t${i}`, { status: 'done' }, 2);
     s.add(['the one open task'], null, 3);
 
     const page = s.listOpen();
@@ -128,7 +128,7 @@ describe('TaskListStore', () => {
     for (let batch = 0; batch < 5; batch++) {
       const { added } = s.add(Array.from({ length: 5 }, (_, i) => `task ${batch}-${i}`), null, batch + 1);
 
-      if (batch % 2 === 0) for (const t of added) s.setStatus(t.id, 'done', 100);
+      if (batch % 2 === 0) for (const t of added) s.update(t.id, { status: 'done' }, 100);
     }
 
     // 2 open batches of 5 = 10 open rows; the default bound is far larger,
@@ -166,6 +166,10 @@ describe('TaskListStore', () => {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (actor_id, id)
+    )`);
+    db.exec(`CREATE TABLE agent_task_notes (
+      actor_id TEXT NOT NULL, task_id TEXT NOT NULL, note TEXT NOT NULL,
+      PRIMARY KEY (actor_id, task_id)
     )`);
     void sql`INSERT INTO agent_tasks (actor_id, id, seq, parent_id, title, status, created_at, updated_at)
       VALUES (${actor.actorId}, 't9', 999, NULL, 'x', 'bogus', 1, 1)`;

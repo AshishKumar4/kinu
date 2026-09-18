@@ -23,6 +23,7 @@
  */
 
 import type { DeferredApproval } from '../safety/deferred-approval';
+import { planTitle } from '../plans/review';
 
 export type PendingActionKind =
   | 'release_approval'
@@ -33,7 +34,11 @@ export type PendingActionKind =
   | 'deferred_action'
   | 'scaffold_version'
   | 'unseen_changes'
-  | 'curriculum_task';
+  | 'curriculum_task'
+  /** A plan revision any actor in the workspace submitted and nobody has
+   *  decided. Its home is the review itself: the row deep-links to the
+   *  full-tab review rather than to another surface. */
+  | 'plan_review';
 
 export interface PendingAction {
   /** Stable across polls — the underlying row's id, so a re-read does not
@@ -46,6 +51,10 @@ export interface PendingAction {
   readonly detail: string | null;
   /** When the thing started waiting. */
   readonly at: number;
+  /** The plan a `plan_review` row opens — owner name, id and revision, so the
+   *  click can find the row in the workspace work read without reparsing an
+   *  id the builder formatted. */
+  readonly planRef?: { readonly owner: string; readonly id: string; readonly revision: number };
 }
 
 export interface PendingActionInputs {
@@ -72,6 +81,12 @@ export interface PendingActionInputs {
   readonly unseenChanges: { count: number; revertable: number; latestAt: number };
   readonly curriculum: ReadonlyArray<{
     id: string; task: string; status: string; proposedAt: number;
+  }>;
+  /** Plan revisions awaiting a decision, workspace-wide: a subordinate's
+   *  pending plan asks the same owner the root's does, and the roster stays
+   *  retired-inclusive for the same reason the work read's does. */
+  readonly pendingPlans: ReadonlyArray<{
+    owner: string; id: string; revision: number; content: string; updatedAt: number;
   }>;
 }
 
@@ -148,6 +163,17 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
       title: 'The agent proposed a task for itself',
       detail: task.task,
       at: task.proposedAt,
+    });
+  }
+
+  for (const plan of input.pendingPlans) {
+    actions.push({
+      id: `plan:${plan.owner}:${plan.id}:${plan.revision}`,
+      kind: 'plan_review',
+      title: `Approve the plan · ${planTitle(plan.content)}`,
+      detail: plan.owner === 'main' ? null : `Submitted by ${plan.owner}`,
+      at: plan.updatedAt,
+      planRef: { owner: plan.owner, id: plan.id, revision: plan.revision },
     });
   }
 

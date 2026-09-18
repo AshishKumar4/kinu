@@ -17,7 +17,7 @@ import type { DeferredApproval } from '../src/safety/deferred-approval';
 
 const EMPTY: PendingActionInputs = {
   approvals: [], changes: [], scaffoldVersions: [], deferredActions: [],
-  unseenChanges: { count: 0, revertable: 0, latestAt: 0 }, curriculum: [],
+  unseenChanges: { count: 0, revertable: 0, latestAt: 0 }, curriculum: [], pendingPlans: [],
 };
 
 function parked(over: Partial<DeferredApproval> = {}): DeferredApproval {
@@ -165,12 +165,47 @@ describe('buildPendingActions', () => {
       deferredActions: [parked({ requestedAt: 6000 })],
       unseenChanges: { count: 2, revertable: 2, latestAt: 4000 },
       curriculum: [{ id: 'cur', task: 't', status: 'pending', proposedAt: 2000 }],
+      pendingPlans: [],
     });
 
     expect(actions.map((a) => a.kind)).toEqual([
       'deferred_action', 'scaffold_version', 'unseen_changes', 'release_approval',
       'curriculum_task',
     ]);
+  });
+});
+
+describe('a plan awaiting a decision', () => {
+  test('the row names the plan and carries the ref the tab opens', () => {
+    const [action] = buildPendingActions({
+      ...EMPTY,
+      pendingPlans: [{
+        owner: 'courier', id: 'plan-9', revision: 2, updatedAt: 7000,
+        content: '# Courier rollout\n\nStage the rollout and verify the receipt.',
+      }],
+    });
+
+    expect(action).toEqual({
+      id: 'plan:courier:plan-9:2',
+      kind: 'plan_review',
+      title: 'Approve the plan · Courier rollout',
+      detail: 'Submitted by courier',
+      at: 7000,
+      planRef: { owner: 'courier', id: 'plan-9', revision: 2 },
+    });
+  });
+
+  test('the root own pending plan is asked without attribution', () => {
+    const [action] = buildPendingActions({
+      ...EMPTY,
+      pendingPlans: [{
+        owner: 'main', id: 'plan-1', revision: 1, updatedAt: 1000,
+        content: '\n\n  \n## Ship the fix\nBody.',
+      }],
+    });
+
+    expect(action?.title).toBe('Approve the plan · Ship the fix');
+    expect(action?.detail).toBeNull();
   });
 });
 

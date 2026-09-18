@@ -129,6 +129,10 @@ export interface MemoryEntry {
 	content: string;
 	matchScore: number;
 	updatedAt: string;
+	/** The actor whose turn saved the note, parsed out of the heading's
+	 *  `(<date> · <actor>)` stamp — null on notes written before the stamp
+	 *  carried one. */
+	savedBy: string | null;
 }
 
 export interface ExecutorCommandResult {

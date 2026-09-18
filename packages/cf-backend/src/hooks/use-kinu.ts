@@ -2225,6 +2225,7 @@ export function useKinu(target?: string | KinuActorAddress) {
           content: r.snippet,
           matchScore: r.rrfScore,
           updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
+          savedBy: null,
         })));
       } catch (err) {
         thrown = { cause: err };
@@ -2582,11 +2583,18 @@ function parseMemoryContent(content: string): MemoryEntry[] {
     const body = lines.slice(1).join("\n").trim();
 
     if (!body || !header) continue;
+    // The heading is `### Note (<date>[ · <actor>])`: the date is the row's
+    // "when" and the stamp's second half is who saved it, which notes written
+    // before the stamp carried one simply lack.
+    const stamp = /\((?<stamp>[^()]*)\)\s*$/.exec(header.replace(/^#+\s*/, ""))?.groups?.stamp;
+    const [when, savedBy] = stamp?.split("·").map((part) => part.trim()) ?? [];
+
     entries.push({
       path: "memory/MEMORY.md",
       content: body,
       matchScore: 1,
-      updatedAt: header.replace(/^#+\s*/, ""),
+      updatedAt: when ?? header.replace(/^#+\s*/, ""),
+      savedBy: savedBy ?? null,
     });
   }
 

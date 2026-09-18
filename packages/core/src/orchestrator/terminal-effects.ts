@@ -79,6 +79,7 @@ import {
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';
 import type { AgentInbox } from '../types/signals';
+import { TASK_REMINDER_EVENT, taskReminderIdempotencyKey } from '../tasks/reminder';
 
 /**
  * The driver's verdict on how a turn ended, as a recorded effect input reads it
@@ -177,7 +178,7 @@ const TERMINAL_EFFECT_NAMES = [
   // settled turn can owe, and they are mutually exclusive by construction: the
   // first answers a turn that FAILED on a context-length refusal, the second a
   // turn that COMPLETED at the provider's output limit with more to say.
-  'turn_end_extensions', 'overflow_retry', 'output_continuation',
+  'turn_end_extensions', 'overflow_retry', 'output_continuation', 'task_reminder',
   'turn_record', 'event_drain', 'improvement_lanes',
   // Its own row rather than a part of the improvement lanes: a queue that is
   // full is a legitimate refusal, and the lanes' own model calls must not be
@@ -321,6 +322,37 @@ export function outputLimitContinuationTerminalEffect(inbox: AgentInbox): Termin
     text: OUTPUT_CONTINUATION_TEXT,
     keyPrefix: 'output-continuation',
     undelivered: 'the output-limit continuation signal was undelivered',
+  });
+}
+
+/**
+ * The durable body for the reminder a turn owes when it settled while its task
+ * list still held open items. The text is a RECORDED input — the roster froze
+ * it when the list was read at commit, so a replay announces what the turn was
+ * owed, not what the list happens to show when the row re-runs.
+ *
+ * Owed until the turn's own durable row exists: `inbox.send`'s `queued` answer
+ * only means the item was accepted by a live pump, and a process cut between
+ * the claim and the write is exactly the window this ledger closes.
+ */
+export function taskReminderTerminalEffect(inbox: AgentInbox): TerminalEffect {
+  return terminalEffect({
+    input: v.object({ text: v.string() }),
+    run: async ({ text }, scope) => {
+      const effectScope = keyedScope(scope);
+
+      const outcome = await inbox.send(effectScope === undefined
+        ? { kind: TASK_REMINDER_EVENT, text }
+        : {
+          kind: TASK_REMINDER_EVENT,
+          text,
+          idempotencyKey: taskReminderIdempotencyKey(effectScope),
+        });
+
+      return outcome === 'undelivered'
+        ? { status: 'owed', detail: 'the task reminder signal was undelivered' }
+        : { status: 'completed' };
+    },
   });
 }
 
@@ -870,6 +902,18 @@ export class TerminalEffectLedger {
       .map((row) => row.sequence_id);
   }
 
+
+  /** Whether this actor still owes the named effect, across every sequence —
+   *  the pre-flight read a stale signal gets: admitted only while a row still
+   *  says the turn that owed it never delivered. */
+  hasOwed(name: TerminalEffectName): boolean {
+    this.deps.actor.assertCurrent();
+
+    return this.deps.sql<{ present: number }>`
+      SELECT 1 AS present FROM terminal_effects
+      WHERE actor_id = ${this.actorId} AND effect_name = ${name} AND status != 'completed'
+      LIMIT 1`.length > 0;
+  }
   /** The earliest instant any owed row is next attemptable, or null when nothing
    *  is owed. An instant already past means a row is due now. */
   nextRetryAt(

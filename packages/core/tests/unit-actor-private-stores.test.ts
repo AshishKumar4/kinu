@@ -121,7 +121,7 @@ describe('two actors, one database: agent_tasks', () => {
     expect(a.get('t1')?.title).toBe('ship it');
     expect(b.get('t1')?.title).toBe('audit it');
 
-    expect(a.setStatus('t1', 'done', now + 1)?.status).toBe('done');
+    expect(a.update('t1', { status: 'done' }, now + 1)?.status).toBe('done');
     expect(b.get('t1')?.status).toBe('open');
     w.close();
   });
