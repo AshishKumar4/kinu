@@ -381,7 +381,7 @@ describe('a run nobody finished', () => {
 
     // `POST /api/deploy/runs` is public, so every probe of the door leaves an
     // object behind. One that never ran a step leaves nothing at all.
-    expect(await stub.alarmAt()).toBeGreaterThan(Date.now());
+    expect(await stub.alarmAt()).toBeGreaterThan(await stub.armedAt());
     expect(await stub.expireSoon()).toBe(true);
 
     // The expiry delivery is the subject here: an object with no rows deletes
