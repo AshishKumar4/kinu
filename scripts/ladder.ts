@@ -1924,6 +1924,54 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'runs the elan/lake toolchain over the Lean tree, a compiler the key does not version and a shell entry the resolver does not read.' },
   },
   {
+    run: 'bun test --timeout=0 scripts/live-app-tier.test.ts',
+    label: 'Live app in a browser',
+    tier: 'deploy',
+    // Measured 2026-09-17 alone on the 24-thread workstation. Its solo wall is
+    // 53.0s (twice, at load 1.4 and 1.9; 54.7s at load 2.15) for 12 rows driven
+    // end to end — two of them red on the pane transcript leak they exist to
+    // measure, which costs the wall nothing. No deadline of its own: 53s is an
+    // eighth of the shared 480s wall.
+    //
+    // The figures in gate-cost.json are the pid-tree ones: 5112 MiB and 114.8
+    // CPU seconds over a 59.1s wall, three threads. The session-basis sampler
+    // read 203 MiB and 75.4s for the same row, because both of this row's heavy
+    // children leave its session — live-app-harness spawns `vite dev` detached
+    // (setsid, so the teardown signals workerd through the group) and puppeteer
+    // spawns Chrome detached by default. The 6s of extra wall is the sampler's
+    // own cost: it now walks Chrome's ~110 processes for their runnable tasks.
+    // The tree basis is L7 in docs/ARCHITECTURE-DECISIONS.md.
+    seconds: 53,
+    catches: 'a defect in the SHIPPED workspace surfaces that every source-reading gate and '
+      + 'every gallery gate here is structurally unable to see. The gallery serves a FROZEN '
+      + 'pre-built bundle with fixtures answering `/api/*`, so a fault in the real Worker\'s '
+      + 'data or socket path cannot appear in it; this row boots the product itself — `vite '
+      + 'dev` in cf-backend, which is workerd with real Durable Objects behind the real client '
+      + '— and drives it in Chrome at 1440x900, where the inspector column, its separator and '
+      + 'the rail lane exist. Twelve rows, each a geometry, node-identity or count assertion '
+      + 'off a real interaction: the Work surface keeps its DOM node AND its scroll offset '
+      + 'across a chat-tab switch with zero workspace-scoped reads re-sent in either direction '
+      + 'and the new tab\'s own actor socket answering its pane; at most one plan-bearing tab '
+      + 'or filter in the column, so plans have one owner; the tab strip\'s rule continuous to '
+      + 'the column\'s right edge with the active underline on it and the chat rule on the '
+      + 'same line, in dark and in light; a column the reader collapsed reopening through the '
+      + 'product\'s own control, found by role and accessible name, and the rail collapsing; '
+      + 'and a marker sent in each pane staying out of the other, which is the transcript leak '
+      + 'a shared store shows as green. Five of those were found by hand on a running build '
+      + 'while the whole ladder was green.',
+    blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
+      + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
+      + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
+      + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
+      + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
+      + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
+      + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
+      + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
+      + 'the right one. With `KINU_E2E_ORIGIN` set the same rows drive a named deployment '
+      + 'instead; that arm runs in no tier.',
+    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+  },
+  {
     run: 'bun run gate:infra',
     label: 'Declared infrastructure exists and is bound',
     phase: 'infra',
@@ -2330,6 +2378,14 @@ export const CI_EXEMPT = {
     + 'neither of which belongs on a pull request. Its subject is production as it stands, '
     + 'which a pull request has not changed; it runs at deploy, alone, as the last gate '
     + 'before the build.',
+  'bun test --timeout=0 scripts/live-app-tier.test.ts':
+    'needs the account\'s own dev credentials in PROCESS env for the product\'s dev server to '
+    + 'boot at all — measured 2026-09-17, `vite dev` exits "error when starting dev server" '
+    + 'with no CLOUDFLARE_API_TOKEN, and the credential path 503s without the cf-backend '
+    + 'secrets. They live in `.dev.vars` on this box, and a write-scoped account token on '
+    + 'every pull request is the objection `gate:infra` already carries. It also holds '
+    + 'workerd, Chrome and a scripted model server at once, so it runs at deploy on a machine '
+    + 'whose load is known.',
 } satisfies Record<string, string>;
 
 /** Every gate at or below `tier`. */
