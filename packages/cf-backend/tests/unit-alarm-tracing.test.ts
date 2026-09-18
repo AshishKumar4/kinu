@@ -43,6 +43,7 @@ const PHASES = [
   'alarm.peer_dispatch',
   'alarm.email_reconcile',
   'alarm.cache_warm',
+  'alarm.sleep_time',
   'alarm.timer_rearm',
 ] as const;
 
@@ -143,6 +144,7 @@ describe('alarm tick tracing', () => {
         '  alarm.peer_dispatch  [isolate_gen=1 invocation=1]',
         '  alarm.email_reconcile  [isolate_gen=1 invocation=1]',
         '  alarm.cache_warm  [isolate_gen=1 invocation=1 cache_warmed=false]',
+        '  alarm.sleep_time  [isolate_gen=1 invocation=1 sleep_time_ran=false]',
         '  alarm.timer_rearm  [isolate_gen=1 invocation=1 rearmed=false]',
       ].join('\n'),
     );

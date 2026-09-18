@@ -27,9 +27,9 @@
 import { AgentSessionProvider, type SessionMessage, type SqlProvider } from 'agents/experimental/memory/session';
 import * as v from 'valibot';
 import {
-  CHAT_SESSION_ID, JsonObjectSchema, operatorMessageAdmitted, recordedAnswer, storedUiMessageParts, uiMessageText,
+  CHAT_SESSION_ID, JsonObjectSchema, operatorMessageAdmitted, recordedAnswer, storedUiMessageParts, transcriptRow,
   type ActorReference, type JsonObject, type PromptFile, type SqlExecutor,
-  type TranscriptRow, type TranscriptStore,
+  type TranscriptSourceRow, type TranscriptRow, type TranscriptStore,
 } from '@kinu.run/core';
 
 /** The session the SDK keys the root's chat under: the empty id its own
@@ -130,12 +130,13 @@ export class AssistantMessagesTranscript implements TranscriptStore {
     return parsed.success ? parsed.output.metadata : undefined;
   }
 
-  newestFirst(): readonly TranscriptRow[] {
-    return this.sql<{ role: string; content: string }>`
-      SELECT role, content FROM assistant_messages
+  newestFirst(limit?: number): readonly TranscriptRow[] {
+    return this.sql<TranscriptSourceRow>`
+      SELECT id, role, content FROM assistant_messages
       WHERE session_id = ${ROOT_SESSION_ID} AND role IN ('user', 'assistant')
-      ORDER BY created_at DESC, rowid DESC`
-      .map((row) => ({ role: row.role, content: uiMessageText(row.content) }));
+      ORDER BY created_at DESC, rowid DESC
+      LIMIT ${limit ?? -1}`
+      .map(transcriptRow);
   }
 
   operatorSpoke(): boolean {

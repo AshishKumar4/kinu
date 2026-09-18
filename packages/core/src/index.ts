@@ -1382,11 +1382,13 @@ export {
 } from './utils/json';
 
 // Sleep-time compute — between-turn background memory compression
-// (Letta-style; ~50% test-time token reduction reported).
+// (Letta-style; ~50% test-time token reduction reported), on a cadence.
 export {
   runSleepTimeCompute, applySleepTimeUpdate,
   SleepTimeUpdateSchema,
-  type SleepTimeInput, type SleepTimeUpdate,
+  SLEEP_TIME_CADENCE,
+  sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
+  type SleepTimeInput, type SleepTimeUpdate, type SleepTimeTrigger, type SleepTimeTurn, type SleepTimeWindow,
 } from './memory/sleep-time-compute';
 
 // durable run-event log (Flue-style, SSE-resumable) — its own `run_events`
@@ -1824,7 +1826,7 @@ export {
   type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from './orchestrator/chat-session';
 
-export { ActorMessagesTranscript, type TranscriptStore, type TranscriptRow } from './orchestrator/transcript-store';
+export { ActorMessagesTranscript, type TranscriptStore } from './orchestrator/transcript-store';
 
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
 
@@ -2186,6 +2188,7 @@ export type { Page, PageRequest, SeekCursor } from './read-models/page';
 
 export {
   mergeTranscript, restoredRows, uiMessageRow, uiMessageText, transcriptRole, recordedAnswer, storedUiMessageParts,
+  transcriptRow, type TranscriptRow, type TranscriptSourceRow,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 
