@@ -5,7 +5,7 @@ import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { childEnv, scratchDir } from "@kinu.run/test-utils";
 import {
-  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, claims, deployPlan, printPlan,
+  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, PATH_IGNORE_FLAG, claims, deployPlan, printPlan,
 } from "./ladder";
 import { costRssMb, costThreads, readCosts } from "./gate-cost";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
@@ -33,7 +33,7 @@ function expandGlobs(run: string): string {
   const words = run.split(" ");
   const files = claims(run, tracked);
 
-  return [...words.filter((word) => !word.includes("/")), ...files].join(" ");
+  return [...words.filter((word) => !word.includes("/") || word.startsWith(PATH_IGNORE_FLAG)), ...files].join(" ");
 }
 
 const GLOB_EXPANDED_FILES = [...new Set(PLAN.filter((row) => row.run.includes("*")).flatMap((row) => claims(row.run, tracked)))];
