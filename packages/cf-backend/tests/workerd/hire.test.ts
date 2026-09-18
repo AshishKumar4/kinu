@@ -80,12 +80,26 @@ describe('hire', () => {
     const workspace = 'hire-interrupt';
 
     await probe(workspace).setup(workspace, 'hire-root', 'park');
-    await probe(workspace).openHire(workspace, 'Hire one auditor; it will be interrupted.');
+    // HELD rather than awaited, and this case cannot be written any other way:
+    // `openHire` is `runTaskFromMcp`, whose `inbox.send` resolves when the
+    // QUEUED TURN ENDS, and the caller's turn ends when the hire settles. This
+    // case stages an interruption BEFORE that settlement, so awaiting the
+    // caller here is waiting for the very thing the interruption has not
+    // happened yet to cause — the run stops with the child still parked in its
+    // model call and `childSpoke` never reached. Case 6 holds its hire for the
+    // same reason.
+    const hiring = probe(workspace).openHire(workspace, 'Hire one auditor; it will be interrupted.');
 
     // The interruption lands while the child is inside its model call: its
     // claim is left unsettled, which is what a mid-turn interruption IS.
     await probe(workspace).childSpoke();
     await abortAllDurableObjects();
+
+    // The caller's RPC frame died with the activation — that IS the eviction —
+    // so this promise carries the platform's abort and nothing this case
+    // asserts. Settled, not caught: the settlement under test is the DURABLE
+    // one read below.
+    await Promise.allSettled([hiring]);
 
     // A request is how a caller comes back; `onStart` runs the recovery scan.
     await probe(workspace).reenter(workspace);
@@ -144,6 +158,15 @@ describe('hire', () => {
 
     expect(observed.rootActorId).not.toBe('');
     expect(observed.roster.filter((row) => row.lifetime === 'task')).toHaveLength(1);
+
+    // A task hire's lifetime IS the task on the IDENTITY plane too, and the
+    // read below depends on that: the child retires itself inside the turn that
+    // answers, before its caller is told anything, so every count of its work
+    // is a read of rows a retired actor left behind.
+    const child = observed.actors.filter((row) => row.kind === 'subordinate');
+
+    expect(child).toHaveLength(1);
+    expect(child[0]?.retiringAt).not.toBeNull();
     // One brief, one admission: the child's log carries the birth task and
     // nothing else. An exact number, so a re-admission loop cannot hide in a
     // "small enough" bound. The message carries the row count and the newest

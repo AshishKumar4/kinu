@@ -664,12 +664,12 @@ export class OrchestratorAgent extends ActorAgent {
         this.broadcastToActor(name, JSON.stringify({ ...event, actorId }));
       },
       enqueueTurn: (actor, input) => this.enqueueHostedTurn(actor, input),
-      turnInFlight: (actorId) => {
-        const live = this.actorHost().hosted({
-          actorId,
-          workspaceId: this.actorHandle().workspaceId,
-          parentActorId: this.actorHandle().actorId,
-        });
+      // The reference the host ISSUED, off the bound actor, never rebuilt from
+      // an id: the root's own parent is null, so synthesizing `parentActorId:
+      // root` here made `hosted()` refuse the root's liveness read and the
+      // root's event drain died on it.
+      turnInFlight: (actor) => {
+        const live = this.actorHost().hosted(actor.reference);
 
         return live !== null && live.session.inFlight;
       },
@@ -797,6 +797,7 @@ export class OrchestratorAgent extends ActorAgent {
       mission: () => null,
       announce: () => { this.broadcastSubordinatesChanged(); },
       scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
+      armWake: () => { this.durableWakeOwner()(); },
       temporary: () => this.temporaryAgentPort(),
     };
   }
@@ -1389,6 +1390,65 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
+   * ARM 1½: give the assignments an interrupted turn still owes back to the
+   * sweep below.
+   *
+   * `recoverActorTurns` establishes WHICH claims a dead activation left owed —
+   * it verifies the claimed program, settles what it cannot verify
+   * `indeterminate`, and leaves a live actor alone — and then does nothing
+   * more, deliberately: "verified claims remain owed: retained program bytes
+   * alone do not provide a resumable execution". Nothing re-executed them. A
+   * hosted subordinate's interrupted turn therefore sat with its claim
+   * unsettled and its assignment row bound to the runner's `evt-*` lease, and
+   * the ONLY thing that would ever free it was `unbindStale` once the row had
+   * been leased for the full `STALE_EVENT_DELIVERY_MS` — ten minutes during
+   * which the caller's `agents.ask` is blocked on an answer nothing is
+   * producing.
+   *
+   * The lease grace is right for what it guards (an activation racing its own
+   * predecessor) and wrong as the recovery path, because recovery has just
+   * ANSWERED that question for these actors. So the rows it names are re-pended
+   * here, and the sweep that runs immediately below re-runs each through
+   * `runHostedTask`.
+   *
+   * NO NEW STATE, and the identity that makes the re-run safe already exists: a
+   * delegated turn is claimed under `turnId = assignmentId` (the ROW's id), so
+   * a recovered claim names its own row, the re-run carries the same
+   * `sequenceId`, and the parent's report ingress dedupes a replayed report
+   * rather than counting a second answer. `beginTurn` re-admits the same turn
+   * under the next epoch, which is what the epoch fence is for.
+   *
+   * A claim id that names no row — every head and swarm node, whose turn id is
+   * the head's own name — matches nothing and unbinds nothing.
+   */
+  private rependRecoveredAssignments(owedClaims: readonly string[]): void {
+    if (owedClaims.length === 0) return;
+    const owed = new Set(owedClaims);
+    const exec = this.boundExec();
+
+    for (const turn of this.actorHost().resumable()) {
+      if (turn.record.kind !== 'subordinate' || !owed.has(turn.claim.turnId)) continue;
+
+      try {
+        const bound = this.actorHost().bindStores({
+          actorId: turn.record.actorId,
+          workspaceId: turn.record.workspaceId,
+          parentActorId: turn.record.parentActorId,
+        });
+
+        new EventLog(exec, bound.handle).unbind(turn.claim.turnId);
+        diagnostics.event('subordinate.assignment_repended', {
+          workspace: this.name, actor: turn.record.name, assignment: turn.claim.turnId,
+        });
+      } catch (cause) {
+        diagnostics.failure('subordinate.assignment_repend_failed', toKinuError({
+          doing: 'returning an interrupted delegated turn to the admitted queue', cause, otherwise: 'io',
+        }), { workspace: this.name, actor: turn.record.name });
+      }
+    }
+  }
+
+  /**
    * Finish what one interrupted terminal transition still owes: the reply an
    * answered event batch never dispatched.
    *
@@ -1727,6 +1787,13 @@ export class OrchestratorAgent extends ActorAgent {
       this.peerHub.nextRetryAt(),
       this.emailOutbox.nextRetryAt(),
       this.eventLog.nextPendingDrainAt(now),
+      // An ADMITTED DELEGATION is due at once. It is not in
+      // `nextPendingDrainAt` and must not be: that read is the reactor's
+      // backlog and `wakesADrain` excludes an assignment, whose runner is
+      // `drainAdmittedDelegations` under this same wake. Without this line the
+      // arm `admitHostedTask` asks for computed null and the hire waited for an
+      // unrelated wake — the turn-open recovery row, one minute out.
+      this.hasAdmittedDelegations() ? now : null,
     );
   }
 
@@ -3429,6 +3496,8 @@ export class OrchestratorAgent extends ActorAgent {
 
     // The alarm owns recovery authority. Core retains verified claims as owed,
     // settles unverified ones indeterminate, and leaves live actors untouched.
+    let owedClaims: readonly string[] = [];
+
     try {
       const host = this.actorHost();
       const rootActorId = this.actorHandle().actorId;
@@ -3436,7 +3505,7 @@ export class OrchestratorAgent extends ActorAgent {
 
       // Think owns the foreground root, not the host's logical ActorSession.
       // Core reads liveness through the actual driver, including after awaits.
-      await recoverActorTurns({
+      const recovered = await recoverActorTurns({
         resumable: (limit) => host.resumable(limit),
         acquire: async (reference) => {
           const actor = await host.acquire(reference);
@@ -3452,12 +3521,15 @@ export class OrchestratorAgent extends ActorAgent {
           };
         },
       });
+
+      owedClaims = recovered.verified;
     } catch (cause) {
       diagnostics.failure('actor.turn_recovery_failed', toKinuError({
         doing: 'rebuilding the hosted turns an eviction interrupted', cause, otherwise: 'io',
       }), { workspace: this.name });
     }
 
+    this.rependRecoveredAssignments(owedClaims);
     // Retained claims still fence new work; verification alone is not execution.
     const delegationsTruncated = await this.drainAdmittedDelegations();
 

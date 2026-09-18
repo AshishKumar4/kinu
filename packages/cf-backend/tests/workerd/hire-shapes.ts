@@ -54,6 +54,16 @@ export interface RosterRow {
   readonly taskEventId: string | null;
 }
 
+/** One `workspace_actors` row: the identity plane behind a roster row, with
+ *  the two lifecycle stamps a settled task hire moves. */
+export interface ActorRow {
+  readonly actorId: string;
+  readonly name: string;
+  readonly kind: string;
+  readonly retiringAt: number | null;
+  readonly deletedAt: number | null;
+}
+
 /** How many turns each actor actually opened. */
 export interface TurnCount {
   readonly actorId: string;
@@ -65,6 +75,10 @@ export interface HireObservation {
   readonly rootActorId: string;
   readonly roster: readonly RosterRow[];
   readonly log: readonly LogRow[];
+  /** Every identity row, retired ones included: what a roster row's actor IS
+   *  at observe time, so a count that reads zero can be told apart from a
+   *  count whose subject was retired before the read. */
+  readonly actors: readonly ActorRow[];
   readonly turns: readonly TurnCount[];
   readonly toolResults: readonly string[];
   readonly transcript: readonly string[];

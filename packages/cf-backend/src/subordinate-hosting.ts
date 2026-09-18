@@ -48,6 +48,7 @@ import {
   receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles,
   subordinateForkContext, type SubordinateInheritedContext,
   inheritedAsModelMessage,
+  classifyRunEnd, closeTurnRun, openTurnRun,
   terminalTaskReport, defaultLoopOrigin, delegationBudgetOf, delegationExhausted,
   type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
   type DelegationBudget,
@@ -163,8 +164,16 @@ export interface SubordinateHostSeams {
   mission(actor: HostedActor): MissionScope | null;
   /** Announce a roster change to whoever is watching this actor's pane. */
   announce(actor: BoundActor): void;
-  /** Ask this actor's own orchestration to drain its event log. */
+  /** Ask this actor's own orchestration to drain its event log — a REACTION
+   *  arrived (a report from one of its own children). Never for an assignment:
+   *  `wakesADrain` excludes that variant, so the reactor would select nothing
+   *  and the row's real runner is the durable wake below. */
   scheduleDrain(actor: HostedActor): void;
+  /** Re-derive the workspace's ONE durable wake, because work that needs one
+   *  was just admitted. The arm an assignment needs: the row is run by
+   *  `drainAdmittedDelegations` in the alarm frame, and nothing else in the
+   *  admitting request may run it. */
+  armWake(): void;
   /** The temporary rung's waiter register, which lives on the PARENT: `ask`
    *  parks a waiter and the report ingress resolves it, and those are two
    *  different calls on one isolate. */
@@ -288,7 +297,19 @@ export async function admitHostedTask(
     if (input.creationId !== undefined) admission.creationId = input.creationId;
     const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);
 
-    if (result.admitted) seams.scheduleDrain(actor);
+    // THE WAKE, not the child's reactor. This used to call `scheduleDrain` on
+    // the actor it had just written to, and both halves of that were wrong once
+    // the assignment stopped being a reaction: the debounced drain selects
+    // `wakesADrain` rows and an assignment is not one, so it fired a drain that
+    // could only find nothing — and it was the ROOT's drain, reached the same
+    // way from the report ingress, that carried the refused liveness read this
+    // commit fixes. What admission genuinely owes is the arm: the runner is
+    // `drainAdmittedDelegations` in the alarm frame, and `nextWakeAt` now folds
+    // `hasAdmittedDelegations()` at `now`, so this row's wake is due
+    // immediately instead of riding whatever unrelated wake happened to be
+    // armed — measured before this commit: every hire in the workerd pool
+    // waited for the unrelated turn-open recovery row to come due.
+    if (result.admitted) seams.armWake();
 
     return {
       ...result,
@@ -419,9 +440,11 @@ export async function runHostedTask(
     // key at all rather than a spread of nothing. Absent and present are
     // different instructions to the runner — a mission it cannot see is a turn
     // that charges nothing — and a conditional spread hides which one this is.
+    const runId = crypto.randomUUID();
+
     const inference: HeadInferenceDeps = {
       actor,
-      runId: crypto.randomUUID(),
+      runId,
       clock: REAL_CLOCK,
       delegation: {
         assignmentId: task.sequenceId,
@@ -444,7 +467,44 @@ export async function runHostedTask(
     };
 
     if (mission !== null) inference.mission = mission;
+
+    // THE RUN'S DURABLE BRACKET, and it is the LOCAL host's rule adopted here
+    // rather than a cf invention: on the CLI an assignment is admitted as the
+    // child's own turn, so `ChatSession.processTurn` opens and closes its run
+    // (`openTurnRun`, caused by `subordinate_task`) and the child's `runs` view
+    // names what it was asked and how it ended. This runner drives
+    // `runHeadInference` directly, which never enters that queue, so the same
+    // delegated turn wrote `model_call` and `step_finish` rows under a run id
+    // with NO `run_start` and no `run_end` — measured 2026-09-17 in the workerd
+    // pool: one hire produced a child ledger of `step_finish` alone. Every
+    // reader of that plane then reads the run as causeless: `getRunSummaries`
+    // folds `run_start` for the cause and the input and `run_end` for the
+    // status, and `subordinateInspection`'s `runs` view is exactly that read on
+    // a hired child. Same `caused_by` and same `userMessage` as the local host
+    // writes, so one delegated turn is one shape of row on both backends.
+    //
+    // A run left open by a THROWN runner stays open on purpose: that is what an
+    // unterminated run means, the assignment's own lease stays open beside it,
+    // and the retry opens a new run rather than re-closing this one.
+    openTurnRun(actor.stores.eventRecorder, runId, {
+      agentId: actor.record.actorId,
+      causedBy: 'subordinate_task',
+      userMessage: task.body,
+      turnIndex: actor.session.orchestrator.sessionTurnIndex,
+    });
+
     const report = await runHeadInference(input, inference);
+
+    closeTurnRun(actor.stores.eventRecorder, runId, {
+      turnIndex: actor.session.orchestrator.sessionTurnIndex,
+      usage: report.usage,
+      workMode: task.mode,
+      ...classifyRunEnd({
+        completed: report.status === 'completed',
+        interrupted: report.status === 'aborted',
+        errorText: report.errorMessage,
+      }),
+    });
 
     const ending: TaskTurnEnding = report.status === 'completed'
       ? 'answered'

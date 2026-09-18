@@ -32,7 +32,7 @@ import { ownerCaller } from '@kinu.run/core';
 import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { UserDO } from '../../src/user/user-do';
-import { HIRE_CHILD_MODEL, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
+import { HIRE_CHILD_MODEL, type ActorRow, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 
 // The production user object, re-exported so the fixture worker binds the
 // shipped class rather than a stand-in.
@@ -53,13 +53,13 @@ export class HireOrchestrator extends ProductionOrchestrator {
     // could not have known about. Deleting the shadow restores the prototype
     // method so the wider seal below actually exposes it. Same three lines the
     // two-turn probe carries, for the same reason.
-    for (const name of ['rosterRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript']) {
+    for (const name of ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript']) {
       Reflect.deleteProperty(this, name);
     }
 
     sealRpcSurface(this, [
       ...ORCHESTRATOR_RPC_SURFACE,
-      'rosterRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript',
+      'rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript',
     ]);
   }
 
@@ -83,6 +83,22 @@ export class HireOrchestrator extends ProductionOrchestrator {
     return rows.map((row) => ({
       actorId: row.actor_id, name: row.name, lifetime: row.lifetime,
       status: row.status, taskEventId: row.task_event_id,
+    }));
+  }
+
+  /** Every identity row in this workspace, retired ones included. The roster
+   *  and the directory are two different tables and a settled task hire moves
+   *  only the second, so an assertion that reads a child's rows states which
+   *  plane it is reading. */
+  actorRows(): ActorRow[] {
+    const rows = this.probeState.storage.sql.exec<{
+      actor_id: string; name: string; kind: string; retiring_at: number | null; deleted_at: number | null;
+    }>(`SELECT actor_id, name, kind, retiring_at, deleted_at
+        FROM workspace_actors ORDER BY created_at`).toArray();
+
+    return rows.map((row) => ({
+      actorId: row.actor_id, name: row.name, kind: row.kind,
+      retiringAt: row.retiring_at, deletedAt: row.deleted_at,
     }));
   }
 
@@ -204,11 +220,22 @@ export class HireOrchestrator extends ProductionOrchestrator {
    *
    * This is the re-entry a suite needs after an eviction: an in-flight request
    * holds the input gate, so a probe cannot sit and wait for the platform's
-   * alarm to be delivered. It drives the SAME members the wake frame drives —
-   * nothing is simulated and no schedule is faked.
+   * alarm to be delivered.
+   *
+   * THE WAKE ITSELF, `_kinuTerminalRetryTick`, and not a hand-picked subset of
+   * it. The subset this used to drive — `owedDeliveryWork` alone — left out
+   * both maintenance passes, so the re-entry ran neither the chat-loop resume,
+   * nor the interrupted-claim recovery, nor the delegation sweep, and a case
+   * that needed any of them measured a product that had never been asked. A
+   * probe that narrows the frame it claims to drive reports a hang the product
+   * does not have.
+   *
+   * The reactor drain after it is the one thing the frame genuinely cannot do
+   * in-request: `owedDeliveryWork` re-pends stale leases and asks for a
+   * DEBOUNCED drain, whose 250 ms timer no request can wait for.
    */
   async driveOwedWork(): Promise<void> {
-    await this.owedDeliveryWork();
+    await this._kinuTerminalRetryTick();
     await this.orch.drainPendingEvents({ rethrow: true });
   }
 }
@@ -264,7 +291,7 @@ interface HireRunOptions {
  *  instantiates too deeply to compile. */
 type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp'>
   & Pick<HireOrchestrator,
-    'rosterRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript'>;
+    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript'>;
 
 type OwnerTarget = Pick<UserDO,
   'registerWorkspace' | 'ensureWorkspaceCapability' | 'setCredential' | 'getProfileCatalog' | 'putProfileCatalog'>;
@@ -360,6 +387,7 @@ export class HireProbeRoot extends Agent<ProbeEnv> {
     const target = await this.target(workspace);
     const rootActorId = await target.rootActorId();
     const roster = await target.rosterRows();
+    const actors = await target.actorRows();
     const log = await target.logRows();
     const turns = await target.turnCounts();
     const response = await fetch('http://hire-control.invalid/hire/log');
@@ -378,11 +406,10 @@ export class HireProbeRoot extends Agent<ProbeEnv> {
     }
 
 
-
     const transcript: string[] = [];
 
     for (const row of roster) transcript.push(...await target.childTranscript(row.name));
 
-    return { rootActorId, roster, log, turns, toolResults, transcript };
+    return { rootActorId, roster, actors, log, turns, toolResults, transcript };
   }
 }

@@ -29,7 +29,6 @@ import {
   SUBORDINATE_REPORT_HANDOFF_FIELDS,
   type PayloadPolicy, type KinuEvent, type SubordinateReportHandoff,
 } from './types';
-import type { SubordinateInheritedContext } from '../../types/subordinates';
 import {
   isJsonObject, JsonObjectSchema, parseJsonValue,
   type JsonObject, type JsonValue,
@@ -391,10 +390,18 @@ function briefForVariant(event: KinuEvent): string {
     case 'subordinate_task': {
       // Assignments are the subordinate's whole turn input — chat-scale
       // budget, same as peer messages.
+      //
+      // NO `inherited_context` PREFIX. This rendering used to lead with the
+      // digest, and that prefix was the digest's only reader while the reactor
+      // still digested assignments. It does not any more (`wakesADrain`
+      // excludes the variant), and the birth context has ONE owner now —
+      // `subordinateBirthMessages`, which hands both kinds to the turn — so
+      // repeating it here would hand the model the same prose twice the day a
+      // reader for this brief comes back.
       const p = event.payload;
       const deliverable = p.deliverable ? ` [deliverable: ${p.deliverable.slice(0, 100)}]` : '';
 
-      return `${inheritedContextBrief(p.inherited_context)}${p.kind}: ${briefWindow(p.body)}${deliverable}`;
+      return `${p.kind}: ${briefWindow(p.body)}${deliverable}`;
     }
 
     case 'subordinate_report': {
@@ -429,12 +436,4 @@ function briefForVariant(event: KinuEvent): string {
       return `${event.payload.method}(...)`;
     }
   }
-}
-
-
-/** The birth digest rides the assignment's head: a fork's inherited context
- *  is a value the model can read, everything else (no context, a streamed
- *  fork) carries no text. */
-function inheritedContextBrief(context: SubordinateInheritedContext | undefined): string {
-  return context?.kind === 'digest' ? `${context.text}\n\n` : '';
 }
