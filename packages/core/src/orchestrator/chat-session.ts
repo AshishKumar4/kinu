@@ -1591,13 +1591,20 @@ export class ChatSession {
       // it IS the firing — so it runs exactly where the roster is frozen.
       // The tracker is RAM anyway: a process cut loses the count wholesale,
       // and the ledger row is what makes the delivery once-only.
-      const taskReminder = this.taskReminders.decide({
-        open: this.ports.taskList().listOpen(),
-        assistantText: input.assistantText,
-        workMode: this.actorSession.workMode,
-        completed: runError === null,
-        asyncWakePending: this.ports.hasPendingAsyncWake(),
-      });
+      //
+      // A turn that IS the reminder never owes another: its settle would read
+      // the same open list, and any tool call it made clears the progress
+      // latch — answering a reminder with a reminder is the loop, cut at the
+      // source rather than bounded by the cap.
+      const taskReminder = input.event === TASK_REMINDER_EVENT
+        ? null
+        : this.taskReminders.decide({
+          open: this.ports.taskList().listOpen(),
+          assistantText: input.assistantText,
+          workMode: this.actorSession.workMode,
+          completed: runError === null,
+          asyncWakePending: this.ports.hasPendingAsyncWake(),
+        });
 
       const owed = this.ports.owedTerminalEffects({
         turn,
