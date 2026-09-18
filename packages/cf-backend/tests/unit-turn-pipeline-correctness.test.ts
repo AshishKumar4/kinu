@@ -11,8 +11,8 @@ import {
   type CompletedTurn, type ReasoningEffort, type ResolvedTurnProfile,
 } from '@kinu.run/core';
 import {
-  declareShadowCandidate, hostedExplorationHarness, hostedMainActor, orchestratorHarness,
-  reactivateOrchestratorHarness, chatSessionTurns,
+  declareShadowCandidate, hostedExplorationHarness, hostedMainActor, hostedSubordinateHarness,
+  orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { createHeadRuntime } from '../src/head-runtime';
@@ -351,6 +351,32 @@ describe('turn-pipeline correctness wiring', () => {
     // instance the backend resolves the pinned spec to, not the default's.
     const request = v.safeParse(v.object({ model: v.unknown() }), config ?? {});
     expect(request.success && request.output.model).toBe(agent.getModel());
+  });
+
+  test("a hosted actor's turn runs on the workspace's pinned model too", async () => {
+    // A hosted actor — an agent the owner added in the strip, a hire, a head, a
+    // node — resolves through one authority, and that authority was passing the
+    // role's tier model while the workspace was pinned. Measured 2026-09-18 on
+    // a local dev build: a workspace pinned to `openai-compat/fake-live`
+    // answered the added agent's pane on `workers-ai/@cf/zai-org/glm-5.3`, so
+    // the pane's words never reached the provider the owner chose.
+    const workspace = orchestratorHarness();
+    workspace.agent.harnessInstallCatalog({
+      tiers: { default: { model: 'workers-ai/account-default' } },
+      availableModels: ['workers-ai/account-default', 'workers-ai/pinned-model'],
+    });
+    await workspace.agent.setModel('workers-ai/pinned-model');
+
+    const hire = await hostedSubordinateHarness(workspace, {
+      name: 'task-pinned', displayName: '', nameOrigin: 'auto', mission: 'work the brief',
+    });
+
+    expect(await workspace.agent.observeHostedActorProfile(hire.actor)).toMatchObject({
+      tier: {
+        id: 'default', source: 'workspace', model: 'workers-ai/pinned-model',
+        reasoningEffort: 'medium',
+      },
+    });
   });
 
   test('hosted heads run on the registered workspace identity, never a self-named filesystem', async () => {
