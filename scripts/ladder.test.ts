@@ -19,17 +19,17 @@
 
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import { git } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   BUDGET_TOLERANCE, CI_EXEMPT, EVAL_TIER_SCRIPT, HOOKS_DIR, LADDER, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
-  DEPLOY_PHASES, declaredTierCost, deployPlan, evalTierArms, gatesFor, judgeBudgets, packageScripts, printPlan, readBudget,
-  runnableArgv, trackedTestFiles, type LadderBudget,
+  DEPLOY_PHASES, browserModules, declaredTierCost, deployPlan, evalTierArms, gatesFor, judgeBudgets, packageScripts,
+  printPlan, readBudget, runnableArgv, sharedBrowserModules, sharedOf, trackedTestFiles, type LadderBudget,
 } from './ladder';
 import {
-  ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isPythonSuite,
-  isRunnableSuite, isVitestEvalSuite,
+  ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
+  isRunnableSuite, isVitestEvalSuite, readMatching,
 } from './sources';
 import { SKIP_RATCHET_VITEST_TARGETS } from './skip-ratchet';
 import { QUIET_LOAD, readCosts } from './gate-cost';
@@ -134,7 +134,8 @@ describe('the ladder measures something', () => {
     expect([...phaseIndex].sort((a, b) => a - b)).toEqual(phaseIndex);
     // The printed form round-trips: what the runner reads is what was planned.
     const printed = printPlan(plan).split('\n').map((line) => line.split('\t'));
-    expect(printed.map((fields) => fields[5])).toEqual(plan.map((row) => row.run));
+    expect(printed.map((fields) => fields[6])).toEqual(plan.map((row) => row.run));
+    expect(printed.map((fields) => fields[5])).toEqual(plan.map((row) => row.shared));
     expect(printed.map((fields) => fields[0])).toEqual(plan.map((row) => row.phase));
   });
 
@@ -166,6 +167,126 @@ describe('the ladder measures something', () => {
     if (contended.length > 0) {
       console.log(`cost table: ${String(contended.length)} row(s) measured above load ${String(QUIET_LOAD)}; re-run with gate-cost-measure.ts --contended on a quiet box`);
     }
+  });
+
+  /* ── The browser-lane census ──────────────────────────────────────────
+   *
+   * A row that boots a headless browser holds ONE machine resource, and the
+   * wave admits one holder at a time (deploy.sh). Which rows those are is
+   * derived from the module closure, so nobody edits a list — and the census
+   * below is the SECOND, independent detector, because a derivation nobody
+   * can see failing is the shape this repository has shipped three times.
+   *
+   * The two disagree on purpose. The closure follows imports and knows that
+   * `computed-style.test.ts` reaches Chrome three hops out; the census reads
+   * each file for a browser LAUNCHER by name and knows nothing about imports.
+   * A file that names a launcher and sits outside the closure is a row whose
+   * browser use the wave cannot see, and that is the finding.
+   *
+   * Blind spot, written down: a suite that launches a browser while naming
+   * neither a launcher nor an import of one — a binary reached through a
+   * computed path, a helper in another language. Nothing in the tree does
+   * that today, and both detectors would miss it.
+   */
+
+  /** A browser launcher, as the tree spells one. Independent of the import
+   *  closure by construction: text in the file that claims it. */
+  const BROWSER_LAUNCHER = /puppeteer\.launch|from ['"]puppeteer['"]|['"]playwright['"]|--headless|chrome-headless-shell|CHROME_PATH|google-chrome/u;
+
+  /** This file, as the corpus names it. The census names the tokens it looks
+   *  for, so it matches ITSELF — measured on this test's first run, which
+   *  reported `scripts/ladder.test.ts` as an undeclared browser launcher off
+   *  the `--headless` inside the pattern above. It is left out of the text
+   *  half only: the closure still covers it, and did catch it the run before
+   *  that, when the fixture below spelled a puppeteer import as a literal. */
+  const censusFile = relative(root, import.meta.path);
+
+  test('every file that names a browser launcher is inside the derivation', () => {
+    const corpus = readMatching(isParseable);
+    const reaching = browserModules(corpus);
+
+    // The derivation measures something: it reaches further than the text
+    // census, and the files below are the proof — each one drives Chrome
+    // through a harness while naming no launcher itself.
+    expect(reaching.size).toBeGreaterThan(30);
+    expect(corpus.has(censusFile)).toBeTrue();
+
+    for (const file of ['scripts/computed-style.test.ts', 'scripts/provider-wait-ux.test.ts', 'tests/live-smoke.test.ts']) {
+      expect(reaching.has(file), `${file} drives a browser and the closure does not reach it`).toBeTrue();
+    }
+
+    const unseen = [...corpus]
+      .filter(([file, text]) => file !== censusFile && BROWSER_LAUNCHER.test(text) && !reaching.has(file))
+      .map(([file]) => file);
+
+    expect(unseen, 'files that launch a browser by name and reach puppeteer through no import edge').toEqual([]);
+  });
+
+  test('every deploy row that claims a browser module holds the browser lane', () => {
+    const plan = deployPlan();
+    const reaching = sharedBrowserModules();
+    const undeclared: string[] = [];
+
+    for (const gate of gatesFor('deploy')) {
+      const row = plan.find((candidate) => candidate.run === gate.run);
+      const reached = claims(gate.run, tracked).filter((file) => reaching.has(file));
+
+      if (reached.length === 0) continue;
+
+      if (row?.shared !== 'browser') {
+        undeclared.push(`${gate.label} claims ${reached.join(', ')} and the plan admits it beside another browser row`);
+      }
+    }
+
+    expect(undeclared).toEqual([]);
+    // The whole family, named once so a row LEAVING it is as visible as one
+    // joining: this is the set the wave runs one at a time.
+    expect(plan.filter((row) => row.shared === 'browser').map((row) => row.label).sort()).toEqual([
+      'Chat infinite scroll',
+      'Gate self-tests: secrets, corpus, preflight',
+      'Live app in a browser',
+      'Public pages render',
+      'React runtime identity',
+      'Root end-to-end lifecycle suites',
+      'Swarm-tree geometry',
+      'UI gate self-tests',
+      'UI gate self-tests: chat and files',
+    ]);
+  });
+
+  // THE RED DIRECTION, over a fixture rather than the tree: a suite that joins
+  // the tree tomorrow, reaching a browser two hops out through harnesses of
+  // its own, is derived without an edit anywhere. The last row is the control
+  // — a suite that imports neither is not in the closure, so the assertion
+  // above is not passing over a set that holds everything.
+  test('a new suite that reaches a browser two hops out is derived, and one that does not is not', () => {
+    // The import lines are COMPOSED from the module name rather than written
+    // out: a fixture that spells `puppeteer` as a literal makes this very file
+    // a browser module, and the row that runs it joins the browser lane —
+    // measured here on the first run of this test, which marked `Gate ladder
+    // wiring and cache soundness` as a browser row.
+    const importing = (specifier: string, symbol = 'value'): string => `import ${symbol} from '${specifier}';\n`;
+
+    const fixture = new Map([
+      ['scripts/new-harness.ts', `${importing('puppeteer', 'driver')}export const launch = driver.launch;\n`],
+      ['scripts/new-middle.ts', `${importing('./new-harness', '{ launch }')}export const open = launch;\n`],
+      ['scripts/new-thing.test.ts', `${importing('./new-middle', '{ open }')}test('x', () => open());\n`],
+      ['scripts/new-quiet.test.ts', `${importing('node:fs', '{ readFileSync }')}test('y', () => readFileSync('x'));\n`],
+    ]);
+
+    const reaching = browserModules(fixture);
+    expect([...reaching].sort()).toEqual([
+      'scripts/new-harness.ts', 'scripts/new-middle.ts', 'scripts/new-thing.test.ts',
+    ]);
+
+    const row = {
+      run: 'bun test --timeout=0 scripts/new-thing.test.ts', label: 'new', tier: 'ci' as const,
+      seconds: 1, catches: '', blind: '', inputs: { kind: 'live' as const, why: 'fixture' },
+    };
+
+    expect(sharedOf(row, ['scripts/new-thing.test.ts'], reaching)).toBe('browser');
+    expect(sharedOf({ ...row, run: 'bun test --timeout=0 scripts/new-quiet.test.ts' }, ['scripts/new-quiet.test.ts'], reaching))
+      .toBeUndefined();
   });
 
   test('git reports a non-empty set of test files', () => {

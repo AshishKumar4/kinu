@@ -59,9 +59,8 @@ import {
   COST_TABLE, QUIET_LOAD, type RowCost, costRssMb, costThreads, machineName, readCosts, writeCosts,
 } from './gate-cost';
 import {
-  GATE_DEADLINE_SECONDS, SHARED_BROWSER, SHARED_POOL, claims, gatesFor, packageScripts, trackedTestFiles,
+  GATE_DEADLINE_SECONDS, SHARED_POOL, gatesFor, packageScripts, sharedOf, trackedTestFiles,
 } from './ladder';
-import { readRepositoryFile } from './sources';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -498,8 +497,10 @@ if (import.meta.main) {
     // by every worktree, so a row that reaches for one waits out another
     // checkout's however long that takes, up to `--shared-wait`, and is NAMED
     // rather than measured beside a second pool. Which rows those are is
-    // DERIVED — the command, the package script it resolves to, and the imports
-    // of every file it claims — never a list here.
+    // DERIVED — the command, the package script it resolves to, and the browser
+    // modules every file it claims reaches — never a list here. The browser
+    // half is the plan's own `shared` column ({@link sharedOf}), so the row the
+    // wave admits alone is the row measured alone.
     //
     // For every other row that same suite is only LOAD, and load is only load:
     // the resident-set and runnable-task figures survive it, so after
@@ -507,8 +508,7 @@ if (import.meta.main) {
     // is recorded with it.
     const script = gate.run.startsWith('bun run ') ? scripts[gate.run.slice('bun run '.length)] ?? '' : '';
 
-    const needsPool = SHARED_POOL.test(`${gate.run} ${script}`)
-      || claims(gate.run, tracked).some((file) => SHARED_BROWSER.test(readRepositoryFile(root, file)));
+    const needsPool = SHARED_POOL.test(`${gate.run} ${script}`) || sharedOf(gate, tracked) !== undefined;
 
     const startedWaiting = performance.now();
     let blocked = contention(own);

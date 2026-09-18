@@ -204,6 +204,7 @@ PLAN_LABEL=()
 PLAN_THREADS=()
 PLAN_RSS=()
 PLAN_DEADLINE=()
+PLAN_SHARED=()
 PLAN_CMD=()
 
 load_plan() {
@@ -212,14 +213,15 @@ load_plan() {
     echo -e "${RED}❌ the ladder printed no plan; nothing is scheduled without one.${NC}"
     exit 1
   }
-  local phase label threads rss deadline cmd
-  while IFS=$'\t' read -r phase label threads rss deadline cmd; do
+  local phase label threads rss deadline shared cmd
+  while IFS=$'\t' read -r phase label threads rss deadline shared cmd; do
     [ -n "$cmd" ] || continue
     PLAN_PHASE+=("$phase")
     PLAN_LABEL+=("$label")
     PLAN_THREADS+=("$threads")
     PLAN_RSS+=("$rss")
     PLAN_DEADLINE+=("$deadline")
+    PLAN_SHARED+=("$shared")
     PLAN_CMD+=("$cmd")
   done <<< "$plan"
   if [ "${#PLAN_CMD[@]}" -eq 0 ]; then
@@ -234,10 +236,11 @@ GATE_CMDS=()
 GATE_THREADS=()
 GATE_RSS=()
 GATE_DEADLINE=()
+GATE_SHARED=()
 
 run_phase() {
   local wanted="$1" index
-  GATE_LABELS=(); GATE_CMDS=(); GATE_THREADS=(); GATE_RSS=(); GATE_DEADLINE=()
+  GATE_LABELS=(); GATE_CMDS=(); GATE_THREADS=(); GATE_RSS=(); GATE_DEADLINE=(); GATE_SHARED=()
   for ((index = 0; index < ${#PLAN_CMD[@]}; index++)); do
     if [ "${PLAN_PHASE[index]}" != "$wanted" ]; then continue; fi
     GATE_LABELS+=("${PLAN_LABEL[index]}")
@@ -245,6 +248,7 @@ run_phase() {
     GATE_THREADS+=("${PLAN_THREADS[index]}")
     GATE_RSS+=("${PLAN_RSS[index]}")
     GATE_DEADLINE+=("${PLAN_DEADLINE[index]}")
+    GATE_SHARED+=("${PLAN_SHARED[index]}")
   done
   if [ "${#GATE_CMDS[@]}" -eq 0 ]; then
     echo -e "${RED}❌ phase '$wanted' holds no gate in the plan.${NC}"
@@ -282,6 +286,23 @@ run_phase() {
 # Measured 2026-09-17: the source wave's summed admitted peaks ran 5.9 GiB
 # under the machine's own MemAvailable floor at a 75% reserve line, and no row
 # was killed under either loaded run.
+#
+# AND ONE ROW AT A TIME PER SHARED RESOURCE, WHICH NO COST FIGURE CAN EXPRESS.
+# A row that boots a headless browser takes the box's browser lane whole — the
+# Chrome tree, the dev server behind it, and the workerd the Cloudflare vite
+# plugin runs the product in. The plan carries the resource per row (`shared`,
+# derived in scripts/ladder.ts from the modules each row claims) and the wave
+# holds at most one row of it in flight; every row's declared seconds were
+# measured alone, so serial admission is what those declarations assumed.
+#
+# A HYPOTHESIS, AND THE MEASUREMENT THAT SAYS SO. Measured 2026-09-18 on this
+# box, quiet (load 1.04 concurrent, 0.45 serial, 41,197 MiB available), the
+# three browser rows of that day's red wave: concurrently 480.1s/124,
+# 480.1s/124 and 152.8s/1; serially 480.2s/124, 480.2s/124 and 149.7s/1. The
+# overlap is NOT what reddened them — all three are red alone on one product
+# defect (L9). What IS measured is that no cap can refuse the overlap: those
+# rows are admitted at 1, 1 and 3 threads and 2,534, 2,458 and 6,446 MiB
+# against 24 threads and 30.7 GiB. L9 in docs/ARCHITECTURE-DECISIONS.md.
 GATE_RESERVE_PERCENT=75
 
 gate_thread_cap() {
@@ -373,7 +394,8 @@ flush_gates() {
 
   local -a launched=() statuses=()
   local -A gate_of_pid=()
-  local pick finished status threads rss
+  local -A resource_held=()
+  local pick finished status threads rss resource
   local running=0 load=0 held=0 settled=0 failures=0
   for ((index = 0; index < total; index++)); do launched[index]=0; statuses[index]=-1; done
 
@@ -382,18 +404,32 @@ flush_gates() {
   else
     echo "Running $total gate(s) within $thread_cap threads and $rss_cap MiB of measured cost, stopping new launches at the first failure"
   fi
+  local lanes=0
+  for ((index = 0; index < total; index++)); do
+    if [ "${GATE_SHARED[index]}" != "none" ]; then lanes=$((lanes + 1)); fi
+  done
+  if [ "$lanes" -gt 0 ]; then
+    echo "  $lanes of them hold a shared resource (a browser and the dev server behind it) and run one at a time"
+  fi
   while [ "$settled" -lt "$total" ]; do
-    # Take the FIRST gate that is not launched and whose MEASURED cost fits
-    # what is left of both caps — or, when nothing is running, the first gate
-    # regardless, so a gate heavier than the whole cap still runs and the cap
-    # can never wedge. A plain queue pointer would stall the whole wave behind
-    # a gallery gate waiting for its turn.
+    # Take the FIRST gate that is not launched, whose shared resource is free,
+    # and whose MEASURED cost fits what is left of both caps — or, when nothing
+    # is running, the first gate regardless of the caps, so a gate heavier than
+    # the whole cap still runs and the cap can never wedge. A plain queue
+    # pointer would stall the whole wave behind a gallery gate waiting for its
+    # turn.
+    #
+    # The RESOURCE check is not part of that bypass: it is the one admission a
+    # row cannot be let past, and with nothing running no resource is held, so
+    # it cannot wedge either.
     while [ "$failures" -eq 0 ] || [ "$KINU_GATES_ALL" = "1" ]; do
       pick=-1
       for ((index = 0; index < total; index++)); do
         if [ "${launched[index]}" -eq 1 ]; then continue; fi
         threads="${GATE_THREADS[index]}"
         rss="${GATE_RSS[index]}"
+        resource="${GATE_SHARED[index]}"
+        if [ "$resource" != "none" ] && [ -n "${resource_held[$resource]:-}" ]; then continue; fi
         if [ "$running" -gt 0 ]; then
           if [ $((load + threads)) -gt "$thread_cap" ] || [ $((held + rss)) -gt "$rss_cap" ]; then continue; fi
         fi
@@ -404,6 +440,7 @@ flush_gates() {
       launched[pick]=1
       load=$((load + GATE_THREADS[pick]))
       held=$((held + GATE_RSS[pick]))
+      if [ "${GATE_SHARED[pick]}" != "none" ]; then resource_held["${GATE_SHARED[pick]}"]="$pick"; fi
       # `timeout` signals the gate's process group and escalates after five
       # seconds. That kills the gate command tree, and no more: a child that
       # calls setsid (a detached dev server, a daemonized browser helper)
@@ -448,6 +485,7 @@ flush_gates() {
     running=$((running - 1))
     load=$((load - GATE_THREADS[index]))
     held=$((held - GATE_RSS[index]))
+    if [ "${GATE_SHARED[index]}" != "none" ]; then unset "resource_held[${GATE_SHARED[index]}]"; fi
     settled=$((settled + 1))
     statuses[index]=$status
     if [ "$status" -eq 0 ]; then
