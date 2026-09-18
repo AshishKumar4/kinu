@@ -9,6 +9,7 @@ import type { StepTelemetry } from './events/step-stats';
 import type { Usage } from './usage';
 import type { WorkspaceSpend } from './read-models/workspace-spend';
 import type { CommandResult } from './execution/exec-result';
+import type { MemoryNote } from './memory/note';
 
 /**
  * A journalled branch's lifecycle, in the JOURNAL's own closed vocabulary —
@@ -124,15 +125,17 @@ export interface ToolInfo {
 	usageCount: number;
 }
 
-export interface MemoryEntry {
-	path: string;
-	content: string;
+/**
+ * One row of the UI's memory pane: a note the file records, or a hybrid-search
+ * hit, scored.
+ *
+ * The note half is {@link MemoryNote} rather than four fields repeated here,
+ * because `memory/note.ts` owns the `### Note (<date>[ · <actor>])` heading
+ * those fields are read out of. `matchScore` is this surface's own — a note
+ * carries no score, and the pane shows every note at 1.
+ */
+export interface MemoryEntry extends MemoryNote {
 	matchScore: number;
-	updatedAt: string;
-	/** The actor whose turn saved the note, parsed out of the heading's
-	 *  `(<date> · <actor>)` stamp — null on notes written before the stamp
-	 *  carried one. */
-	savedBy: string | null;
 }
 
 export interface ExecutorCommandResult {
