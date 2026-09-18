@@ -234,6 +234,17 @@ export function WorkTab({
     setReview({ owner: own.owner.name, id: own.plan.id, revision: own.plan.revision });
   }, [activeKey, plan, planOwner, work]);
 
+  // The shared read has no push of its own: `plan_updated` arrives on the
+  // connection while the last `listWorkspaceWork` answer sits unrefetched, so
+  // a plan written — or DECIDED — since that read is a row neither the latch,
+  // the list, nor the open review's status can see until SOMETHING re-reads.
+  // The arrival's own frames are the cue: `plan` is a fresh object on every
+  // push (a decision re-uses the revision, so a key would miss it), and an
+  // arrived reference names another actor's plan.
+  useEffect(() => {
+    if (plan !== null || workspacePlanArrival) reloadTasks();
+  }, [plan, workspacePlanArrival, reloadTasks]);
+
   // A review takes the whole tab — the plan is the thing being decided, and
   // the rest of the column is everything else. Checked BEFORE the empty tab:
   // an arrival that opens a review on a workspace with nothing else must land
