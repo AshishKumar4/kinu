@@ -41,7 +41,7 @@
  * most one reload even if the skew check is somehow satisfied twice.
  */
 
-import { lazy, useState, type ComponentType } from 'react';
+import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
 import { fetchDeployedBuildSha, isNewerDeployedBuild, pageDeployedBuildSha } from '@kinu.run/core';
 
 /**
@@ -179,25 +179,27 @@ export async function loadRouteChunk<Module>(
 /**
  * One lazily-loaded route.
  *
- * ## The generation, and where it may NOT live
+ * ## The lazy, and where it may NOT live
  *
  * `lazy()` caches its loader's outcome for the life of the component, rejection
- * included, so the ErrorBoundary's "Try again" was decorative on these two
- * routes: it reset the boundary, the same `lazy()` rethrew the cached failure
- * without touching the network, and the fallback came straight back. Clearing
- * that memo is the generation, and the only safe place to advance it is a MOUNT.
+ * included, so the ErrorBoundary's "Try again" was decorative on these routes:
+ * it reset the boundary, the same `lazy()` rethrew the cached failure without
+ * touching the network, and the fallback came straight back. The lazy is
+ * therefore REPLACED after a rejection: the loader clears the shared slot on
+ * its way out, and the next mount — the boundary's retry — mints a fresh one and
+ * re-attempts the import. A failure costs the small fixed number of renders
+ * React performs while surfacing it, each minting at most once.
  *
- * It is emphatically not the loader's own catch. Measured on the gallery fixture
- * before this shape settled: minting a replacement `lazy()` when the loader
- * rejects feeds React's retry of a rejected lazy back into the loader, and one
- * failing chunk produced 4,313 import attempts and 47 `/api/health` reads in five
- * seconds with the Suspense fallback never resolving at all. A mount-scoped
- * generation is bounded by construction — one attempt per mount, and a failure
- * costs only the small fixed number of mounts React performs while surfacing it.
- *
- * `useState`'s initialiser rather than `useMemo`, because `useMemo` is a hint that
- * React may recompute and recomputing here would swap a loaded page for a fresh
- * one mid-mount. The value has to be stable for exactly as long as the mount is.
+ * It is emphatically not held in the component's own state. A component that
+ * suspends on its first render is thrown away with its hooks: React commits the
+ * fallback while the chunk crosses the network and retries the mount from
+ * scratch once the promise settles, so a `useState(() => lazy(...))` handed
+ * every retry a NEW pending lazy and the route never rendered at all. Measured
+ * on the deployed build 2f4f3b27d (2026-09-18): `/deploy` stayed on its
+ * fallback for good with the chunk loaded, while the gallery fixture — whose
+ * loader resolved before the fallback committed — kept rendering. The slot
+ * below is module-scoped for that reason: every mount of this route shares the
+ * one lazy until it is known to have failed.
  *
  * ## The examination, which is a different bound
  *
@@ -207,8 +209,8 @@ export async function loadRouteChunk<Module>(
  * build comparison, which would be a request to our own origin per attempt.
  *
  * Both pieces of state are per `lazyRoute` CALL, and that is what "clear only the
- * rejected loader" means here: a sibling split route has its own generation and
- * its own examination, and is never re-imported because this one failed.
+ * rejected loader" means here: a sibling split route has its own slot and its
+ * own examination, and is never re-imported because this one failed.
  */
 export function lazyRoute<Props extends object>(
   load: () => Promise<{ default: ComponentType<Props> }>,
@@ -227,8 +229,19 @@ export function lazyRoute<Props extends object>(
     });
   };
 
+  let current: LazyExoticComponent<ComponentType<Props>> | null = null;
+
+  const mint = (): LazyExoticComponent<ComponentType<Props>> => lazy(async () => {
+    try {
+      return await attempt();
+    } catch (cause) {
+      current = null;
+      throw cause;
+    }
+  });
+
   return function LazyRoute(props: Props) {
-    const [Loaded] = useState(() => lazy(attempt));
+    const Loaded = current ??= mint();
 
     return <Loaded {...props} />;
   };
