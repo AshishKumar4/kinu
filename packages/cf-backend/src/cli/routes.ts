@@ -11,6 +11,7 @@ import { approvalDocument, installDocument } from '@kinu.run/core';
 import {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset,
 } from '@kinu.run/core';
+import { RELEASE_ARTIFACT_ROUTE, RELEASE_MANIFEST_PATH } from '@kinu.run/core/deploy';
 import { err, escapeHtml, json, safeJson } from '@kinu.run/core';
 import { randomToken } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
@@ -68,6 +69,20 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 
   if (url.pathname === CLI_VERSION_PATH && (method === 'GET' || method === 'HEAD')) {
     return cliDownloadAssetResponse(request, env, CLI_VERSION_PATH, 'application/json; charset=utf-8', method === 'HEAD');
+  }
+
+  // The small half of a worker release: the manifest and the artifact's
+  // checksum are published as assets beside the build stamp (the artifact
+  // itself is streamed from R2 by `handleReleaseArtifactRequest`). Public
+  // for the same reason the CLI downloads are: a deployment updating itself
+  // has no session here.
+  if (url.pathname === RELEASE_MANIFEST_PATH && (method === 'GET' || method === 'HEAD')) {
+    return cliDownloadAssetResponse(request, env, RELEASE_MANIFEST_PATH, 'application/json; charset=utf-8', method === 'HEAD');
+  }
+
+  if (url.pathname.endsWith('.sha256') && RELEASE_ARTIFACT_ROUTE.test(url.pathname.slice(0, -'.sha256'.length))
+    && (method === 'GET' || method === 'HEAD')) {
+    return cliDownloadAssetResponse(request, env, url.pathname, 'text/plain; charset=utf-8', method === 'HEAD');
   }
 
   if (url.pathname === '/cli/auth' && method === 'GET') {

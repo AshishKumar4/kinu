@@ -84,6 +84,10 @@ const PUBLISHED = new Map<string, PublishedAsset>([
     [`${path}.sha256`, { body: `deadbeef  ${path.split('/').pop() ?? ''}\n`, contentType: 'text/plain' }],
   ]),
   ['/downloads/kinu-version.json', { body: JSON.stringify(STAMP), contentType: 'application/json' }],
+  // The small half of a worker release rides the same band: a deployment
+  // updating itself reads them with no session (the tarball comes from R2).
+  ['/downloads/release.json', { body: '{"version":"0.2.0+abc"}', contentType: 'application/json' }],
+  ['/downloads/kinu-worker-0.2.0+abc.tar.gz.sha256', { body: 'cafebabe  kinu-worker-0.2.0+abc.tar.gz\n', contentType: 'text/plain' }],
 ]);
 
 const DOWNLOAD_PATHS = [...PUBLISHED.keys()];
