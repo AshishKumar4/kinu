@@ -264,6 +264,8 @@ L1. The deploy wave is scheduled by a thread budget, not a gate count. Each
 heavy gate declares the threads it occupies at peak (`GATE_WEIGHTS`, held
 equal to deploy.sh's table by `deploy.test.ts`) and a gate launches only while
 the running weight fits `nproc`. Decided 2026-09-15, commit 19f9c6666.
+REVERSED by L6 on 2026-09-17: the declaration is gone and the cost is
+measured, in two dimensions.
 Measured: under a six-gate width the eleven-suite UI row failed every deploy
 on a puppeteer wall beside two `--parallel=4` rows and passed alone in 361 s;
 process-tree sampling read one Chrome suite at 4.3 threads peak and a
@@ -335,9 +337,9 @@ reads 3.5 to 5.0 and 21.5 to 31 against floors of 1.5 and 12.5, so commit
 20 s budget.
 
 L5. The runner consumes the ladder; nothing is written twice. deploy.sh
-loads `bun scripts/ladder.ts --plan` (phase, label, weight, deadline,
-command per row) and schedules each phase as one wave; a row carries its
-own `label`, `weight`, `phase`/`alone` and `deadline`; the UI row claims the
+loads `bun scripts/ladder.ts --plan` (phase, label, threads, resident MiB,
+deadline, command per row — `weight` until L6) and schedules each phase as
+one wave; a row carries its own `label`, `phase`/`alone` and `deadline`; the UI row claims the
 `*-ux` family by glob; the resolver is proved over a fixture tree. Decided
 2026-09-15, commits 5aac4b263, 45f6c3786, 7482c90c1, f6ec56c8f. Removed:
 deploy.sh's run lines, GATE_WEIGHT, GATE_DEADLINES, GATE_GROUP tables;
@@ -362,6 +364,86 @@ solo, 36 files serial by design with 139 to 159 s of module import. So the
 network was a dependency, not the wall; the row now declares 420 s and the
 480 s deadline stands with 60 s of margin, which is thin and recorded as
 O2. Budget 24 on a quiet box stays unmeasured.
+
+L6. The wave admits rows on MEASURED cost in two dimensions — threads and
+resident set — under caps the box answers for. No row declares a cost.
+Decided 2026-09-17. This REVERSES L1's declared thread figure and keeps its
+premise: a count of gates is not a measure of load, and neither is a number a
+row wrote about itself. The deadline is unchanged and stays the hang detector.
+
+What L1 missed. Five rows died on their per-row deadline across the two
+deploys of 2026-09-16 — dead code (124), the gate self-tests (137), both
+workerd rows (124), the UI self-tests (124) — and each passes alone. Measured
+on this box 2026-09-17: coreutils `timeout --signal=TERM --kill-after=5s`
+reports 124 when the child respects the TERM, 137 when anything SIGKILLs it,
+143 when a TERM it did not send does. So the 137 was a KILL, which no thread
+budget can predict, and the cause is the dimension L1 did not have. The three
+workerd rows declared one thread each; `gate:dead-code` declared one and holds
+17.0 GiB; the gate self-tests row declared one and holds 24.7 GiB.
+
+The figures (`scripts/gate-cost.json`, written by
+`bun scripts/gate-cost-measure.ts`; each row alone under the wave's own
+`timeout` wrapper, its whole session sampled — summed `rss` for memory, tasks
+in state R for parallel demand, getrusage for CPU seconds). Heaviest first,
+24-thread workstation, 2026-09-17:
+
+| row | thr | peak RSS | cpu s | declared thr |
+| --- | --- | --- | --- | --- |
+| Gate self-tests | 5 | 24.7 GiB | 108.8 | 1 |
+| Dead code | 4 | 16.6 GiB | 59.8 | 1 |
+| Cloudflare backend, `--parallel=4` | 10 | 10.4 GiB | 119.5 | 11 |
+| Devbox durability decisions | 1 | 10.1 GiB | 27.0 | 1 |
+| Core suite | 3 | 9.4 GiB | 97.7 | 11 |
+| Anti-slop lint | 5 | 5.0 GiB | 106.0 | 1 |
+| CLI backend, `--parallel=4` | 4 | 4.8 GiB | 56.8 | 11 |
+| Built but unwired | 2 | 3.2 GiB | 7.8 | 1 |
+| React runtime identity | 2 | 3.0 GiB | 26.3 | 5 |
+| Full production CLI suite | 5 | 2.7 GiB | 182.1 | 11 |
+| Swarm-tree geometry | 1 | 2.1 GiB | 14.8 | 5 |
+| Chat infinite scroll | 1 | 2.1 GiB | 9.6 | 5 |
+| TypeScript projects | 6 | 1.5 GiB | 69.3 | 1 |
+
+Summed over the 67 source rows measured so far: 158 threads and 129 GiB if
+every row ran at once, against 24 threads and 64 GiB of RAM. The old rule
+admitted against declared threads alone, so nothing in it could see the
+second figure at all.
+
+A row's cost. Threads are CPU WORK OVER ELAPSED TIME, capped by the tasks the
+row was observed to have runnable at once — not the pool width. `bun run lint`
+peaks at 25 runnable tasks and burns 106.0 CPU seconds over a 21.4 s wall:
+five threads of work, not twenty-five. Charging the width would run that row
+alone on a 24-thread box for nothing. The division takes the SMALLER of the
+measured and declared walls, because a wall inflated by contention and a
+declared wall gone stale-high (`bun run layergate` declares 25 s and ran in
+0.6 s) both divide the work down and admit the row too cheaply, which is the
+error that brings the kills back. Both inputs are load-independent: CPU
+seconds are work done rather than time taken, and a task denied a CPU stays
+in state R and is still counted — validated against synthetic load on a box
+at load 25, where four and eight busy 250 MiB workers read exactly 4 and 8
+runnable tasks and 1,110 and 2,211 MiB.
+
+The cap formula, in `scripts/deploy.sh`, re-read at the start of every phase:
+
+    thread_cap = KINU_DEPLOY_THREADS or nproc
+    rss_cap    = KINU_DEPLOY_RSS_MB or MemAvailable_MiB * 75 / 100
+
+A row launches while `load + threads <= thread_cap` AND
+`held + rss <= rss_cap`; with nothing running the first row launches
+regardless, so a row heavier than the whole cap runs alone rather than never.
+MemAvailable and not MemTotal: MemTotal counts memory nothing can have, and a
+cap taken from it admits rows onto swap. It is read at run time rather than
+recorded, so another lane's suite — or the two orphan `workerd serve`
+processes found reparented to systemd on 2026-09-17, 28 minutes old and
+holding memory — shows up as less headroom rather than being charged to a row.
+
+Reported, not fixed. The UI self-tests row reached its 480 s deadline with
+nothing else of the wave beside it (exit 124) while its row declares 420 s;
+O2 already records the thin margin on the workerd row and this is the same
+shape on a second row. Raising either deadline is refused here. Rows whose
+figures come from a run that exited non-zero (the gate self-tests row among
+them, red on main through `test-clocks`) are floors, not costs, and the table
+records each exit status so a reader can see which.
+
 
 ## Open
 
