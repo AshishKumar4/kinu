@@ -27,7 +27,8 @@ import {
   FACT_VERSION_ID, FACT_WORKERS_SUBDOMAIN, kvFact, type DeployContext,
 } from './context';
 import {
-  DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, MINTED_SECRETS, REFRESH_TOKEN_KEY,
+  DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, MINTED_SECRETS,
+  REFRESH_TOKEN_KEY,
   type DeployInputs, type DeploymentRecord,
 } from './inputs';
 import type { JsonObject, JsonValue } from '../utils/json';
@@ -353,24 +354,32 @@ function seedStep(manifest: ReleaseManifest): DeployStep {
       );
 
       const bucket = resourceName(context.inputs, seed.bucket);
+      let uploaded = 0;
 
       for (const object of objects.objects) {
+        const path = `/accounts/${context.inputs.accountId}/r2/buckets/${bucket}/objects/${object.key}`;
+
+        // Looks before it uploads, like every other step: the toolchain is the
+        // largest thing the flow moves, and an update re-runs this plan over a
+        // bucket that already holds it.
+        if (await objectExists(context.transport, path)) continue;
         const body = await context.http(object.url);
 
         if (!body.ok) throw new Error(`${object.url} answered HTTP ${body.status}`);
 
         await context.transport.upload({
           method: 'PUT',
-          path: `/accounts/${context.inputs.accountId}/r2/buckets/${bucket}/objects/${object.key}`,
+          path,
           parts: [{
             name: 'file',
             contentType: 'application/octet-stream',
             body: new Uint8Array(await body.arrayBuffer()),
           }],
         });
+        uploaded += 1;
       }
 
-      return `${objects.objects.length} toolchain object(s) seeded.`;
+      return `${String(uploaded)} of ${String(objects.objects.length)} toolchain object(s) uploaded; the rest were already there.`;
     },
   };
 }
@@ -535,18 +544,22 @@ function handoverStep(manifest: ReleaseManifest): DeployStep {
       const accountId = context.inputs.accountId;
       const script = context.inputs.instanceName;
       const refresh = await context.vault.read(REFRESH_TOKEN_KEY);
+      const clientId = await context.vault.read(DEPLOY_CLIENT_ID_KEY);
 
       if (refresh === null) {
         throw new Error('the run holds no refresh token, so the deployment cannot own its own key');
       }
 
+      if (clientId === null) {
+        throw new Error('the run cannot name the OAuth client, so the deployment could never refresh');
+      }
+
       const record: DeploymentRecord = {
-        accountId,
-        scriptName: script,
+        inputs: context.inputs,
         address: context.facts.get(FACT_ADDRESS) ?? '',
         version: manifest.version,
         channelOrigin: manifest.channelOrigin,
-        ownerEmail: context.inputs.ownerEmail,
+        clientId,
         deployedAt: new Date().toISOString(),
       };
 
@@ -640,6 +653,15 @@ async function scriptExists(transport: CloudflareTransport, accountId: string, s
     method: 'GET',
     path: `/accounts/${accountId}/workers/scripts/${script}/settings`,
   });
+
+  return response.status >= 200 && response.status < 300;
+}
+
+/** Whether an R2 object is already in the bucket. `HEAD` rather than a listing:
+ *  the seed names its own keys, and a listing would page over a bucket whose
+ *  other contents are the deployment's own files. */
+async function objectExists(transport: CloudflareTransport, path: string): Promise<boolean> {
+  const response = await transport.request({ method: 'HEAD', path });
 
   return response.status >= 200 && response.status < 300;
 }

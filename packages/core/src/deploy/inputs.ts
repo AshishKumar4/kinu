@@ -71,22 +71,45 @@ export const ACCESS_TOKEN_KEY = 'cloudflare.access_token';
  *  moment; kinu.run holds nothing. */
 export const REFRESH_TOKEN_KEY = 'cloudflare.refresh_token';
 
+/** The public OAuth client the run authorized through, held for the last step.
+ *  A refresh names its client, and a deployment that could not name one could
+ *  never renew the token it was handed. */
+export const DEPLOY_CLIENT_ID_KEY = 'cloudflare.client_id';
+
 /** The secret the deployment reads to refresh its own Cloudflare token. */
 export const DEPLOYMENT_REFRESH_SECRET = 'KINU_SELF_DEPLOY_REFRESH_TOKEN';
 
-/** The deployment's own record of what it is: instance name, account, address,
- *  version, and the channel it pulls updates from. Read by the Updates page. */
+/** The deployment's own record of what it is. Read by its Updates page, which
+ *  re-runs the same plan from inside the deployment. */
 export const DEPLOYMENT_RECORD_SECRET = 'KINU_DEPLOYMENT_RECORD';
 
+/**
+ * What a deployment knows about itself.
+ *
+ * THE ANSWERS, NOT A SUMMARY OF THEM. An update re-runs the same plan, so it
+ * needs exactly what the first run was given — the account, the instance name,
+ * the zone behind a custom hostname, whether the sandbox is on — and a record
+ * that carried a flattened copy would be a second spelling of `DeployInputs`
+ * that drifts from it. The address, the version and the channel are the facts
+ * the first run established; the client id is what a refresh needs.
+ */
 export interface DeploymentRecord {
-  readonly accountId: string;
-  readonly scriptName: string;
+  readonly inputs: DeployInputs;
   readonly address: string;
   readonly version: string;
   readonly channelOrigin: string;
-  readonly ownerEmail: string;
+  readonly clientId: string;
   readonly deployedAt: string;
 }
+
+export const DeploymentRecordSchema: v.GenericSchema<DeploymentRecord> = v.object({
+  inputs: DeployInputsSchema,
+  address: v.string(),
+  version: v.string(),
+  channelOrigin: v.string(),
+  clientId: v.string(),
+  deployedAt: v.string(),
+});
 
 /** Every secret the deployment needs that nobody has to type: the two root
  *  secrets are minted here and never leave the run. A person who wants to keep

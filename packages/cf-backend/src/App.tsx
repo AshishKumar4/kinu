@@ -36,6 +36,10 @@ const ControlPage = lazyRoute(() => import("./pages/ControlPage"));
 // in this app that a signed-in user never opens.
 const DeployPage = lazyRoute(() => import("./pages/DeployPage"));
 
+// The deployment's own Updates page. Split for the same reason again: only a
+// self-deployed Kinu has anything to show here, and only its owner sees it.
+const UpdatesPage = lazyRoute(() => import("./pages/UpdatesPage"));
+
 function LazyFallback() {
   return (
     <div className="flex items-center justify-center h-full">
@@ -128,6 +132,13 @@ export default function App() {
               <ErrorBoundary label="control-plane">
                 <Suspense fallback={<LazyFallback />}>
                   <ControlPage />
+                </Suspense>
+              </ErrorBoundary>
+            } />
+            <Route path={APP_ROUTES.updates} element={
+              <ErrorBoundary label="updates">
+                <Suspense fallback={<LazyFallback />}>
+                  <UpdatesPage />
                 </Suspense>
               </ErrorBoundary>
             } />

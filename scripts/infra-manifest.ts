@@ -674,6 +674,23 @@ export const SUPPLY = new Map<string, Supply>([
       + 'client with PKCE, redirect https://kinu.run/deploy/callback plus a localhost redirect '
       + 'for the CLI door, and the scopes in docs/SELF-DEPLOY.md § The Cloudflare door.',
   }],
+  ['KINU_DEPLOYMENT_RECORD', {
+    handling: 'out-of-band',
+    required: false,
+    absent: '/updates reads the release channel and says this Kinu was not installed by the '
+      + 'self-deploy flow, so it holds nothing to update itself with. kinu.run itself is '
+      + 'exactly that deployment.',
+    source: 'written onto the new Worker by the flow\'s handover step (core/src/deploy/steps.ts); '
+      + 'never typed by a person.',
+  }],
+  ['KINU_SELF_DEPLOY_REFRESH_TOKEN', {
+    handling: 'out-of-band',
+    required: false,
+    absent: 'the same: /updates can compare builds but cannot install one, because an update is '
+      + 'the deployment spending its OWN Cloudflare key on itself.',
+    source: 'written by the same handover step from the refresh token the run was issued; the '
+      + 'run wipes its copy immediately after.',
+  }],
   ['MCP_GITHUB_CLIENT_ID', {
     handling: 'out-of-band',
     required: false,

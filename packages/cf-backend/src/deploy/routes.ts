@@ -132,7 +132,10 @@ export async function handleDeployRequest(request: Request, env: Env): Promise<R
     const parsed = await safeJson(request, TokenSchema);
 
     if (parsed === null) return err(400, 'That is not a Cloudflare token pair.');
-    await stub.landToken(parsed.accessToken, parsed.refreshToken);
+    const clientId = deployClientId(env);
+
+    if (clientId === '') return err(503, 'The Cloudflare door has no OAuth client configured.');
+    await stub.landToken(clientId, parsed.accessToken, parsed.refreshToken);
 
     return json({ authorized: true });
   }

@@ -63,6 +63,7 @@ import { handleAccountRequest } from "./user/account-routes";
 import { handleCliRequest } from "./cli/routes";
 import { handleReleaseArtifactRequest } from "@kinu.run/core";
 import { handleDeployRequest } from "./deploy/routes";
+import { handleUpdatesRequest } from "./updates/routes";
 import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
 import { handleSharedPublicRequest, handleSharedRequest } from "./shared/routes";
@@ -704,6 +705,14 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
     if (controlResp) return controlResp;
   }
+
+  // 8c. /api/updates/* — this deployment reading its own release channel and
+  //     installing from it. The owner check is the deployment's own record,
+  //     inside that module: everyone else is answered 404, including the fact
+  //     that the surface exists.
+  const updatesResp = await handleUpdatesRequest(authenticatedRequest, env, identity);
+
+  if (updatesResp) return updatesResp;
 
   // 9. The signed-in account APIs — /api/user/* profile and roster, and
   //    /api/shared/* publish, list, fork. Ownership of every workspace named

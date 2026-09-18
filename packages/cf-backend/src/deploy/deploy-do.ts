@@ -21,13 +21,14 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import {
-  ACCESS_TOKEN_KEY, DeployInputsSchema, DeployRunPhaseSchema, DeployStepRowSchema, FACT_ADDRESS,
-  REFRESH_TOKEN_KEY, TarArtifact, bearerTransport, cloudflareResult, deployPlan,
-  exchangeDeployCode, factsFrom, parseReleaseManifest, runDeployPlan, runKeyAdmits, sha256Hex,
+  ACCESS_TOKEN_KEY, DEPLOY_CLIENT_ID_KEY, DeployInputsSchema, DeployRunPhaseSchema,
+  DeployStepRowSchema, FACT_ADDRESS, MINTED_SECRETS, REFRESH_TOKEN_KEY, SELF_UPDATE_RUN_ID,
+  TarArtifact, bearerTransport, cloudflareResult, deployPlan, exchangeDeployCode, factsFrom,
+  parseReleaseManifest, refreshDeployToken, runDeployPlan, runKeyAdmits, sha256Hex,
   workerArtifactPath,
-  type ArtifactSource, type DeployInputs, type DeployLedger, type DeployProgress,
-  type DeploySecretVault, type DeploySnapshot, type DeployStepFailure, type DeployStepRow,
-  type DeployStepSeed, type ReleaseManifest,
+  type ArtifactSource, type DeployChoice, type DeployInputs, type DeployLedger,
+  type DeployProgress, type DeploySecretVault, type DeploySnapshot, type DeployStepFailure,
+  type DeployStepRow, type DeployStepSeed, type DeploymentRecord, type ReleaseManifest,
 } from '@kinu.run/core/deploy';
 import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -52,13 +53,8 @@ const NotesSchema = DeployStepRowSchema.entries.notes;
 
 const StateSchema = DeployStepRowSchema.entries.state;
 
-/** One thing a person may choose: an account to deploy into, or a zone to
- *  bind a hostname in. */
-export interface DeployChoice {
-  readonly id: string;
-  readonly name: string;
-}
-
+/** One thing a person may choose, as the Cloudflare API answers it: an account
+ *  to deploy into, or a zone to bind a hostname in. */
 const ChoicesSchema: v.GenericSchema<readonly DeployChoice[]> = v.array(v.object({
   id: v.string(),
   name: v.string(),
@@ -157,13 +153,18 @@ export class DeployRunDO extends DurableObject<Env> {
     const token = await exchangeDeployCode({ clientId, redirectUri, code, verifier });
 
     await this.ctx.storage.delete([VERIFIER_KEY, STATE_KEY]);
-    await this.landToken(token.accessToken, token.refreshToken);
+    await this.landToken(clientId, token.accessToken, token.refreshToken);
   }
 
   /** The token pair, however it was obtained: the page's callback exchanges the
    *  code here, and `kinu deploy cloudflare` exchanges it on its own localhost
-   *  redirect and hands the pair over. One run, one ledger, two doors. */
-  async landToken(accessToken: string, refreshToken: string): Promise<void> {
+   *  redirect and hands the pair over. One run, one ledger, two doors.
+   *
+   *  The client id rides with the pair because the last step writes it into the
+   *  deployment: a refresh names its client, and the two doors authorize
+   *  against the same one. */
+  async landToken(clientId: string, accessToken: string, refreshToken: string): Promise<void> {
+    await this.ctx.storage.put(`${SECRET_PREFIX}${DEPLOY_CLIENT_ID_KEY}`, clientId);
     await this.ctx.storage.put(`${SECRET_PREFIX}${ACCESS_TOKEN_KEY}`, accessToken);
     await this.ctx.storage.put(`${SECRET_PREFIX}${REFRESH_TOKEN_KEY}`, refreshToken);
     await this.ctx.storage.put(RUN_STATE_KEY, 'collecting');
@@ -229,7 +230,7 @@ export class DeployRunDO extends DurableObject<Env> {
     this.running = true;
 
     try {
-      await this.drive(v.parse(DeployInputsSchema, inputs));
+      await this.drive(v.parse(DeployInputsSchema, inputs), this.channelOrigin(), this.vault(null));
     } finally {
       this.running = false;
     }
@@ -249,13 +250,48 @@ export class DeployRunDO extends DurableObject<Env> {
     return this.start(v.parse(DeployInputsSchema, JSON.parse(inputs)));
   }
 
-  private async drive(inputs: DeployInputs): Promise<void> {
+  /**
+   * The deployment updating itself (docs/SELF-DEPLOY.md § Updates).
+   *
+   * THE SAME PLAN, not an update-shaped subset of it: every step looks before
+   * it creates, so a second run over an account that already holds everything
+   * uploads a new version and points the deployment at it. What differs is
+   * where the three things come from — the answers come from the deployment's
+   * own record instead of a person, the token is minted by spending the
+   * deployment's own refresh token, and the channel is the one the record
+   * names rather than this Worker's own origin.
+   *
+   * The secrets the upload must re-bind are the ones this Worker is already
+   * running with, which is why the vault reads through to `env`: a version
+   * uploaded without them would bind a new encryption key over the credentials
+   * this deployment has already stored.
+   */
+  async selfUpdate(record: DeploymentRecord, refreshToken: string): Promise<DeploySnapshot> {
+    await this.ctx.storage.put(RUN_ID_KEY, SELF_UPDATE_RUN_ID);
+
+    if (this.running) return this.snapshot();
+    this.running = true;
+
+    try {
+      const token = await refreshDeployToken({ clientId: record.clientId, refreshToken });
+
+      await this.landToken(record.clientId, token.accessToken, token.refreshToken);
+      await this.ctx.storage.put(INPUTS_KEY, JSON.stringify(record.inputs));
+      await this.drive(record.inputs, record.channelOrigin, this.vault(record));
+    } finally {
+      this.running = false;
+    }
+
+    return this.snapshot();
+  }
+
+  private async drive(inputs: DeployInputs, channelOrigin: string, vault: DeploySecretVault): Promise<void> {
     const token = await this.ctx.storage.get<string>(`${SECRET_PREFIX}${ACCESS_TOKEN_KEY}`);
 
     if (token === undefined) throw new Error('this run holds no Cloudflare authorization');
 
-    const manifest = await this.release();
-    const artifact = await this.artifact(manifest);
+    const manifest = await this.release(channelOrigin);
+    const artifact = await this.artifact(manifest, channelOrigin);
 
     await this.ctx.storage.put(VERSION_KEY, manifest.version);
     await this.ctx.storage.put(RUN_STATE_KEY, 'running');
@@ -267,7 +303,7 @@ export class DeployRunDO extends DurableObject<Env> {
         inputs,
         transport: bearerTransport(token),
         artifact,
-        vault: this.vault(),
+        vault,
         facts: factsFrom(this.rows()),
         http: (url: string) => fetch(url),
         note: () => undefined,
@@ -280,11 +316,17 @@ export class DeployRunDO extends DurableObject<Env> {
     await this.broadcast();
   }
 
+  /** Where a run pulls its release from. This Worker's own origin for a guided
+   *  run on kinu.run; the channel the record names for a self-update, because a
+   *  deployment's own origin publishes no channel. */
+  private channelOrigin(): string {
+    return this.env.CLI_PUBLIC_ORIGIN ?? 'https://kinu.run';
+  }
+
   /** The release this deployment gets: the manifest kinu.run publishes, and the
    *  artifact it names, verified against the digest the manifest carries before
    *  a byte of it is uploaded anywhere. */
-  private async release(): Promise<ReleaseManifest> {
-    const origin = this.env.CLI_PUBLIC_ORIGIN ?? 'https://kinu.run';
+  private async release(origin: string): Promise<ReleaseManifest> {
     const response = await fetch(new URL('/downloads/release.json', origin));
 
     if (!response.ok) throw new Error(`the release channel answered HTTP ${response.status}`);
@@ -292,8 +334,7 @@ export class DeployRunDO extends DurableObject<Env> {
     return parseReleaseManifest(await response.text());
   }
 
-  private async artifact(manifest: ReleaseManifest): Promise<ArtifactSource> {
-    const origin = this.env.CLI_PUBLIC_ORIGIN ?? 'https://kinu.run';
+  private async artifact(manifest: ReleaseManifest, origin: string): Promise<ArtifactSource> {
     const url = new URL(workerArtifactPath(manifest.version), origin);
     const response = await fetch(url);
 
@@ -311,14 +352,36 @@ export class DeployRunDO extends DurableObject<Env> {
     return TarArtifact.open(bytes);
   }
 
-  private vault(): DeploySecretVault {
+  /**
+   * The run's secret material.
+   *
+   * `record` non-null is a self-update, and then a name this object does not
+   * hold reads through to the Worker's own bindings: the minted root secrets
+   * and the provider keys the first run supplied are live in `env`, and they
+   * are exactly what the new version must be re-bound with. A guided run has
+   * no such fallback — there is no deployment yet — so it passes null and a
+   * missing name stays missing.
+   */
+  private vault(record: DeploymentRecord | null): DeploySecretVault {
+    const carried = record === null
+      ? new Map<string, string>()
+      : deploymentSecrets(this.env, record.inputs.providerKeyNames);
+
     return {
-      read: async (name: string) => await this.ctx.storage.get<string>(`${SECRET_PREFIX}${name}`) ?? null,
+      read: async (name: string) =>
+        await this.ctx.storage.get<string>(`${SECRET_PREFIX}${name}`) ?? carried.get(name) ?? null,
       write: async (name: string, value: string) => {
         await this.ctx.storage.put(`${SECRET_PREFIX}${name}`, value);
       },
-      names: async () => [...(await this.ctx.storage.list<string>({ prefix: SECRET_PREFIX })).keys()]
-        .map((key) => key.slice(SECRET_PREFIX.length)),
+      names: async () => {
+        const held = new Set(carried.keys());
+
+        for (const key of (await this.ctx.storage.list<string>({ prefix: SECRET_PREFIX })).keys()) {
+          held.add(key.slice(SECRET_PREFIX.length));
+        }
+
+        return [...held];
+      },
       wipe: async () => {
         const held = await this.ctx.storage.list<string>({ prefix: SECRET_PREFIX });
 
@@ -435,4 +498,30 @@ export class DeployRunDO extends DurableObject<Env> {
       });
     }
   }
+}
+
+/** A binding that carries a secret's text. A binding that is a namespace, a
+ *  bucket or a fetcher parses as none, which is what keeps this to secrets. */
+const SecretTextSchema = v.pipe(v.string(), v.minLength(1));
+
+/**
+ * The secrets this Worker is running with, by the names an update must re-bind.
+ *
+ * NARROWED BY NAME: what a self-update needs is the two minted root secrets
+ * plus the provider keys the first run supplied, and the record names those.
+ * Every other binding this Worker holds is dropped before it can reach an
+ * upload payload.
+ */
+function deploymentSecrets(env: Env, providerKeyNames: readonly string[]) {
+  const wanted = new Set<string>([...MINTED_SECRETS, ...providerKeyNames]);
+  const held = new Map<string, string>();
+
+  for (const [name, binding] of Object.entries(env)) {
+    if (!wanted.has(name)) continue;
+    const text = v.safeParse(SecretTextSchema, binding);
+
+    if (text.success) held.set(name, text.output);
+  }
+
+  return held;
 }

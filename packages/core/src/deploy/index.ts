@@ -15,7 +15,7 @@ export { TarArtifact, sha256Hex } from './artifact';
 
 export {
   CLI_DEPLOY_REDIRECT_PORT, CLI_DEPLOY_REDIRECT_URI, CLOUDFLARE_DEPLOY_SCOPES,
-  authorizeUrl, createPkcePair, exchangeDeployCode,
+  authorizeUrl, createPkcePair, exchangeDeployCode, refreshDeployToken,
   type AuthorizeRequest, type DeployToken, type PkcePair, type TokenExchange,
 } from './pkce';
 
@@ -31,7 +31,8 @@ export {
 
 export {
   ACCESS_TOKEN_KEY, DEFAULT_INSTANCE_NAME, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET,
-  DeployInputsSchema, MINTED_SECRETS, REFRESH_TOKEN_KEY, promptedSecrets,
+  DEPLOY_CLIENT_ID_KEY, DeployInputsSchema, DeploymentRecordSchema, MINTED_SECRETS,
+  REFRESH_TOKEN_KEY, promptedSecrets,
   type DeployAddress, type DeployAddressKind, type DeployInputs, type DeploymentRecord,
 } from './inputs';
 
@@ -61,3 +62,8 @@ export {
   DeployStepRowSchema, DeployTicketSchema,
   type DeployFrame, type DeployOptions, type DeployRunPhase, type DeploySnapshot,
 } from './frames';
+
+export {
+  SELF_UPDATE_RUN_ID, UpdateOfferSchema, buildOf, updateOffer,
+  type UpdateBuild, type UpdateOffer,
+} from './update';
