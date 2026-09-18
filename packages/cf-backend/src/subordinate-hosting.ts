@@ -169,10 +169,11 @@ export interface SubordinateHostSeams {
    *  `wakesADrain` excludes that variant, so the reactor would select nothing
    *  and the row's real runner is the durable wake below. */
   scheduleDrain(actor: HostedActor): void;
-  /** Re-derive the workspace's ONE durable wake, because work that needs one
-   *  was just admitted. The arm an assignment needs: the row is run by
-   *  `drainAdmittedDelegations` in the alarm frame, and nothing else in the
-   *  admitting request may run it. */
+  /** Arm the wake whose frame RUNS this assignment, because one was just
+   *  admitted. The row's runner is `drainAdmittedDelegations` and nothing in
+   *  the admitting request may run it, so the implementation has to arm the
+   *  chain that reaches that sweep — a backend with more than one wake chain
+   *  cannot answer this with "re-derive the soonest wake". */
   armWake(): void;
   /** The temporary rung's waiter register, which lives on the PARENT: `ask`
    *  parks a waiter and the report ingress resolves it, and those are two
@@ -301,14 +302,9 @@ export async function admitHostedTask(
     // the actor it had just written to, and both halves of that were wrong once
     // the assignment stopped being a reaction: the debounced drain selects
     // `wakesADrain` rows and an assignment is not one, so it fired a drain that
-    // could only find nothing — and it was the ROOT's drain, reached the same
-    // way from the report ingress, that carried the refused liveness read this
-    // commit fixes. What admission genuinely owes is the arm: the runner is
-    // `drainAdmittedDelegations` in the alarm frame, and `nextWakeAt` now folds
-    // `hasAdmittedDelegations()` at `now`, so this row's wake is due
-    // immediately instead of riding whatever unrelated wake happened to be
-    // armed — measured before this commit: every hire in the workerd pool
-    // waited for the unrelated turn-open recovery row to come due.
+    // could only find nothing. What admission genuinely owes is the arm on the
+    // chain that RUNS the row — `drainAdmittedDelegations`, in the frame
+    // `armWake` names — and nothing in this request may run it.
     if (result.admitted) seams.armWake();
 
     return {
