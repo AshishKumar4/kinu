@@ -42,6 +42,7 @@ const PHASES = [
   'alarm.event_drain',
   'alarm.peer_dispatch',
   'alarm.email_reconcile',
+  'alarm.cache_warm',
   'alarm.timer_rearm',
 ] as const;
 
@@ -141,6 +142,7 @@ describe('alarm tick tracing', () => {
         '  alarm.event_drain  [isolate_gen=1 invocation=1 drain_due=false]',
         '  alarm.peer_dispatch  [isolate_gen=1 invocation=1]',
         '  alarm.email_reconcile  [isolate_gen=1 invocation=1]',
+        '  alarm.cache_warm  [isolate_gen=1 invocation=1 cache_warmed=false]',
         '  alarm.timer_rearm  [isolate_gen=1 invocation=1 rearmed=false]',
       ].join('\n'),
     );

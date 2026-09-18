@@ -14,6 +14,9 @@ import type { ModelProvider, ModelInfo, ProviderDeps } from './types';
 import { createAuthedFetch } from './util';
 import { listModelsDevProviderModels } from './models-dev';
 import { countAnthropicInputTokens } from './anthropic-count';
+import { warmAnthropicCache } from './anthropic-warm';
+import type { JsonObject } from '../utils/json';
+import type { Usage } from '../usage';
 import type { ReasoningEffort } from './reasoning-effort';
 
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
@@ -95,6 +98,17 @@ export function createAnthropicProvider(): ModelProvider {
         modelId,
         deps,
         request,
+        providerId: 'anthropic',
+        baseURL: ANTHROPIC_BASE_URL,
+        credKey: ANTHROPIC_CRED_KEY,
+        missingCredentialError: 'Anthropic API key not configured',
+      });
+    },
+    warmCache(modelId, deps: ProviderDeps, body: JsonObject): Promise<Usage> {
+      return warmAnthropicCache({
+        modelId,
+        deps,
+        body,
         providerId: 'anthropic',
         baseURL: ANTHROPIC_BASE_URL,
         credKey: ANTHROPIC_CRED_KEY,

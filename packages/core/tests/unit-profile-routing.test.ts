@@ -1,6 +1,6 @@
 // Focused proofs for the profile integration slice:
 //   - resolveModelRoute covers every producer and resolves each through the
-//     immutable turn profile (platform excepted).
+//     immutable turn profile (platform and cache warming excepted).
 //   - The resolver carries the whole tier table so producers never re-resolve.
 //   - Durable role change: persistence, next-turn resolution, locked/approval
 //     policy, capability-widening classification.
@@ -11,6 +11,7 @@ import {
 } from '../src/profiles/catalog';
 import { resolveTurnProfile } from '../src/profiles/resolve';
 import { SPEND_SOURCES, resolveModelRoute } from '../src/profiles/model-route';
+import type { SpendSource } from '../src/events/model-call';
 import { AGENT_CONFIG_KEYS } from '../src/config/store';
 import { changeActiveRole, roleChangeOutcomeText } from '../src/profiles/role-change';
 import type { RoleChangeOutcome, RoleStateStore } from '../src/profiles/role-change';
@@ -67,14 +68,18 @@ const FIXED_LANES = [
  *  profile with them. */
 const INVOCATION_LANES = ['agent', 'head', 'mcts', 'swarm'] as const;
 
+/** The producers no turn profile routes: a binding-bound platform call, and a
+ *  cache warm, whose model is the spec frozen with the request it replays. */
+const UNROUTED: readonly SpendSource[] = ['platform', 'warming'];
+
 describe('exhaustive model routing', () => {
-  test('every producer resolves, and only platform refuses', () => {
+  test('every producer resolves, and only the unrouted pair refuses', () => {
     const profile = resolveTurnProfile(baseInput());
 
     for (const source of SPEND_SOURCES) {
       const route = resolveModelRoute(source, profile);
 
-      if (source === 'platform') expect(route).toBeNull();
+      if (UNROUTED.includes(source)) expect(route).toBeNull();
       else expect(route).toMatchObject({ source });
     }
   });

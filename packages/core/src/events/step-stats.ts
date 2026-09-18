@@ -54,6 +54,19 @@ export interface CacheHitStats {
   readonly p99: number | null;
   readonly ema: number | null;
   readonly emaAlpha: number;
+  /**
+   * Cache warms in the same window — refresh requests that re-sent an idle
+   * prefix with no completion (providers/cache-warming.ts).
+   *
+   * COUNTED HERE AND NOWHERE ELSE IN THIS TYPE, deliberately. A warm reads the
+   * whole prefix and writes nothing, so its own hit rate is ~100% by
+   * construction; folding those into the rates above would pull the EMA, the
+   * mean and both percentiles toward a number the CONVERSATION never achieved,
+   * and the panel would report a cache health the turns did not have. So the
+   * distribution stays the turns' own and this says how many refreshes kept it
+   * alive.
+   */
+  readonly warms: number;
 }
 
 /** Everything the sample says, and what it could not say. */
@@ -87,10 +100,17 @@ function percentile(sorted: readonly number[], q: number): number | null {
   return sorted[Math.min(Math.max(rank, 1), sorted.length) - 1] ?? null;
 }
 
-/** Aggregate a time-ordered (oldest first) sample of finished steps. */
+/**
+ * Aggregate a time-ordered (oldest first) sample of finished steps.
+ *
+ * `warms` is the same window's cache-refresh calls. They are taken as ROWS
+ * rather than as a count so the exclusion is a property of this function and
+ * not of whoever calls it: whatever a warm reported, the only number it can
+ * move here is `cacheHit.warms`.
+ */
 export function summarizeSteps(
   samples: readonly StepCost[],
-  opts: { windowLimit: number; emaAlpha?: number },
+  opts: { windowLimit: number; emaAlpha?: number; warms?: readonly StepCost[] },
 ): StepTelemetry {
   const alpha = opts.emaAlpha ?? CACHE_HIT_EMA_ALPHA;
   let tokens: Usage = {};
@@ -134,6 +154,7 @@ export function summarizeSteps(
       p99: percentile(sorted, 0.99),
       ema,
       emaAlpha: alpha,
+      warms: opts.warms?.length ?? 0,
     },
     usd,
     pricedSteps,
