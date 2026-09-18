@@ -178,11 +178,14 @@
       }
     }
   ],
-  // ONE migration: the genesis of a RESET deployment. Every SQLite-backed
-  // Durable Object class this Worker has is declared new here. Hosted logical
-  // actors need no class of their own — they live inside `OrchestratorAgent`,
-  // carry no binding and sit in no tag, because they are reached by name rather
-  // than through one — so this list does not grow with them.
+  // The genesis of a RESET deployment is the first tag: every SQLite-backed
+  // Durable Object class the Worker had at genesis is declared new there.
+  // A class added later gets its own tag after it — a tag the platform has
+  // already applied is never edited (measured 2026-09-18: appending a class
+  // to the applied `v1` answered 10061 "not currently configured to implement
+  // Durable Objects" at upload). Hosted logical actors need no class of their
+  // own — they live inside `OrchestratorAgent`, carry no binding and sit in
+  // no tag, because they are reached by name rather than through one.
   //
   // What an operator does before deploying this configuration: delete the
   // deployed Worker whose migration history ends at tag `v3` (its Durable
@@ -200,9 +203,10 @@
       "tag": "v1",
       "new_sqlite_classes": [
         "OrchestratorAgent", "KinuSandbox", "UserDO",
-        "MonitorDO", "ControlPlaneDO", "DeployRunDO"
+        "MonitorDO", "ControlPlaneDO"
       ]
-    }
+    },
+    { "tag": "v2", "new_sqlite_classes": ["DeployRunDO"] }
   ],
   // Synthetic monitoring. Every 15 minutes the worker probes its own public
   // surface and emails OPS_ALERT_EMAIL when something breaks — the checks
