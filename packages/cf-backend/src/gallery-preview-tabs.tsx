@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { missingSubordinateHistory, SubordinateInspectionRequestSchema, WorkspacePlanReferenceSchema, JsonValueSchema, type JsonValue, type PlanReview, type SlateSummary } from '@kinu.run/core';
+import { WorkspacePlanReferenceSchema, JsonValueSchema, type JsonValue, type PlanReview, type SlateSummary } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { Rpc } from '@kinu.run/core';
 import { useKinu, WorkspacePlanUpdatedFrameSchema } from '@/hooks/use-kinu';
@@ -75,7 +75,6 @@ export function PreviewTabsGallery() {
   const [reload, setReload] = useState(0);
   const [diff, setDiff] = useState(false);
   const [failHistory, setFailHistory] = useState(false);
-  const [actors, setActors] = useState(false);
   const [workerPlan, setWorkerPlan] = useState<PlanReview>({ ...ROOT_PLAN, revision: 1, content: "# Worker plan", status: "approved", handoffAccepted: true, createdAt: 10 });
   const [owner, setOwner] = useState("main");
   // The REAL root connection, for one value: the arrival hint. Everything the
@@ -83,51 +82,42 @@ export function PreviewTabsGallery() {
   // the hook's socket edge and nothing else.
   const { workspacePlanArrival } = useKinu('preview-tabs');
 
-  const rpc: Rpc = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  const rpc: Rpc = useCallback(async <T,>(method: string, _args?: unknown[]): Promise<T> => {
     const reply = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(value)).json<T>();
 
     if (method === 'previewSlate') return reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } });
     else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', files: diff ? [{ path: 'src/app.ts', status: 'changed', additions: 1, deletions: 0, diff: '+export const ready = true;' }] : [] });
-    else if (method === 'inspectSubordinate') {
-      const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
-      const path = request.path;
+    else if (method === 'listWorkspaceWork') {
+      // The workspace-wide read owns what the walk once assembled: every
+      // actor's newest plans with their tasks, retired-inclusive. `archive`
+      // still reads — the roster is not the fixture's frontier — and the
+      // courier plan is already on it, so the arrival hint is the auto-open
+      // trigger, never a discovery read.
+      if (failHistory) throw new Error('Plan history temporarily unavailable');
 
-      if (request.view === 'plans') {
-        if (failHistory) throw new Error('Plan history temporarily unavailable');
+      const owner = (name: string, retired = false) => ({ actorId: `actor-${name}`, name, retired });
 
-        const items = path.length === 0 ? (plan ? [plan, { ...ROOT_PLAN, revision: 1, status: 'superseded', content: '# Earlier dashboard plan' }] : [])
-          : path.length > 1 ? [{ ...ROOT_PLAN, revision: 1, content: '# Nested delivery', status: 'approved', handoffAccepted: true }]
-          : path[0] === 'worker' ? [workerPlan] : [{ ...ROOT_PLAN, revision: 1, content: '# Archived delivery', status: 'approved', handoffAccepted: true }];
+      const rootPlans = plan ? [
+        { owner: owner('main'), plan, tasks: [] },
+        { owner: owner('main'), plan: { ...ROOT_PLAN, revision: 1, status: 'superseded' as const, content: '# Earlier dashboard plan' }, tasks: [] },
+      ] : [];
 
-        return reply({ view: 'plans', path, page: { status: 'end', items } });
-      }
-
-      if (request.view === 'children') {
-        const names = !actors ? [] : path.length === 0 ? ['worker', 'archive'] : path.length === 1 && path[0] === 'worker' ? ['nested'] : [];
-
-        // Whole roster rows: the browser PARSES this reply against
-        // `SubordinateRosterEntrySchema`, so a row missing the actor columns is
-        // a reply the pane drops rather than a walk it continues. The reference
-        // is null because this gate answers by NAME and holds no directory to
-        // resolve one against — the walk reads `name` and `status` only.
-        return reply({ view: 'children', path, page: { status: 'end', items: names.map(name => ({ name, actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: name === 'archive' ? 'dismissed' : 'idle', currentTask: null, createdAt: 1, dismissedAt: name === 'archive' ? 2 : null, lifetime: 'durable', taskEventId: null })) } });
-      }
-
-      if (request.view === 'plan') {
-        // The exact reference read, which is the only thing that authorizes a
-        // focus. The request is compared to the reference this gate ANNOUNCED,
-        // in the canonical form the schema gives both, so a stale revision or
-        // an invented id resolves to nothing rather than to a neighbouring
-        // plan — and no second copy of the path decides it.
-        const requested = v.safeParse(WorkspacePlanReferenceSchema, { path, id: request.id, revision: request.revision });
-
-        return reply(requested.success && JSON.stringify(requested.output) === JSON.stringify(ARRIVAL_REFERENCE)
-          ? { view: 'plan', path, plan: ARRIVAL_PLAN }
-          : missingSubordinateHistory(path));
-      }
-
-      if (request.view === 'planTasks') return reply({ view: 'planTasks', path, tasks: request.revision === 2 || path.length > 0 ? [{ id: 't1', parentId: null, title: path.length > 0 ? 'Deliver ' + path.join(' / ') : 'Implement refresh action', status: 'active', createdAt: 1, updatedAt: 1, subtasks: [] }] : [] });
-      throw new Error('Unexpected inspection view in preview gallery');
+      return reply({
+        plans: [
+          ...rootPlans,
+          { owner: owner('courier'), plan: ARRIVAL_PLAN, tasks: [] },
+          {
+            owner: owner('worker'), plan: workerPlan,
+            tasks: [{ id: 't1', parentId: null, title: 'Deliver worker', status: 'active', createdAt: 1, updatedAt: 1, note: null, subtasks: [] }],
+          },
+          {
+            owner: owner('nested'), plan: { ...ROOT_PLAN, revision: 1, content: '# Nested delivery', status: 'approved' as const, handoffAccepted: true },
+            tasks: [{ id: 't2', parentId: null, title: 'Deliver nested', status: 'done', createdAt: 1, updatedAt: 1, note: null, subtasks: [] }],
+          },
+          { owner: owner('archive', true), plan: { ...ROOT_PLAN, revision: 1, content: '# Archived delivery', status: 'approved' as const, handoffAccepted: true }, tasks: [] },
+        ],
+        tasks: [{ owner: owner('main'), plan: null, tasks: [] }],
+      });
     }
     else if (method === 'decidePlanReview') {
       const next = { ...ROOT_PLAN, status: 'approved' as const, handoffAccepted: true, updatedAt: 3 };
@@ -140,7 +130,7 @@ export function PreviewTabsGallery() {
     else if (method === 'getEvolutionChangelog') return reply({ entries: [], unseenCount: 0, seenAt: 0 });
     else if (method === 'markChangelogSeen') return reply({ seenAt: 0 });
     else throw new Error('Unexpected preview gallery RPC: ' + method);
-  }, [plan, diff, failHistory, actors, workerPlan]);
+  }, [plan, diff, failHistory, workerPlan]);
 
   const workerRpc: Rpc = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === 'decidePlanReview') {
@@ -158,7 +148,6 @@ export function PreviewTabsGallery() {
   return <div className="h-screen p-bg flex flex-col">
     <div className="flex gap-2 p-2 text-xs shrink-0 flex-wrap" data-plan-owner={owner}>
       <button data-break-plans onClick={() => setFailHistory(value => !value)}>Toggle history failure</button>
-      <button data-show-actors onClick={() => setActors(true)}>Show workspace actors</button>
       <button data-worker-plan onClick={() => setWorkerPlan({ ...workerPlan, revision: 2, createdAt: 20, status: "pending", handoffAccepted: false, content: "# Worker revision two" })}>Submit worker plan</button>
       {/* The conversation switch, both ways. Production reads the actor out of
           the route, so walking back OUT to the workspace remounts the root pane
@@ -176,11 +165,6 @@ export function PreviewTabsGallery() {
     <div data-preview-surface className="flex-1 min-h-0">
       <WorkSurface planRpc={owner === "main" ? rpc : workerRpc} planOwner={owner} onReviewActor={setOwner} surface={surface} onSurface={setSurface} previewFocus={focus} planFocus={planFocus}
         workspacePlanArrival={workspacePlanArrival}
-        // The root's own roster, which is pushed and therefore runs ahead of the
-        // budgeted plan walk: `courier` is live here while no `children` page
-        // has ever named it. `archive` is dismissed, so it is absent and its
-        // history presents as retained.
-        activePlanActors={actors ? ['worker', 'courier'] : ['courier']}
         pinnedPorts={[{ executor: 'workspace', port: 8789, url: SLATE_GALLERY_URL, name: 'Duplicate dashboard port' }, { executor: 'sandbox', port: 8080, url: SANDBOX_URL, name: 'Sandbox app' }, { executor: 'device', port: 3000, url: DEVICE_URL, name: 'Device app' }]}
         slates={slates} slateReloads={new Map(slates.map(item => [item.id, reload]))}
         previewError={null} onRefreshPorts={NOTHING} plan={owner === "main" ? plan : workerPlan} snapshot={{ status: 'loading' }} onRetryLoad={NOTHING}

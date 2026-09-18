@@ -30,6 +30,9 @@ import type { SqlExecutor } from '../types/primitives';
 export interface WorkspaceWorkOwner {
   readonly actorId: string;
   readonly name: string;
+  /** Retiring or released — the row's history stays, but nothing acts as it
+   *  again, so its plans and tasks present as retained, not live. */
+  readonly retired: boolean;
 }
 
 export interface OwnedPlan {
@@ -90,7 +93,7 @@ export function readWorkspaceWork(
 
   for (const row of actors) {
     const actor = readHandle(sql, row);
-    const owner: WorkspaceWorkOwner = { actorId: row.actorId, name: row.name };
+    const owner: WorkspaceWorkOwner = { actorId: row.actorId, name: row.name, retired: row.retiringAt !== null || row.deletedAt !== null };
 
     if (tableExists(sql, 'plan_reviews')) {
       const reviews = new PlanReviewStore(sql, actor).listPage('default', { limit: 50 });
@@ -114,6 +117,11 @@ export function readWorkspaceWork(
       if (unlinked.length > 0) tasks.push({ owner, plan: null, tasks: unlinked });
     }
   }
+
+  // Newest plan anywhere first, revisions of one plan newest-first too: the
+  // list a reader opens is ordered the way the dropped `inspectSubordinate`
+  // read already presented it.
+  plans.sort((a, b) => b.plan.createdAt - a.plan.createdAt || b.plan.revision - a.plan.revision);
 
   return { plans, tasks };
 }

@@ -58,6 +58,27 @@ export function planReviewAwaitingDecision(
     || (review?.status === 'approved' && !review.handoffAccepted);
 }
 
+/** The plan's own name for itself: the first non-empty line of the content,
+ *  headings stripped, which is what every list row prints for it. */
+export function planTitle(content: string): string {
+  return content.split('\n').find((line) => line.trim())?.replace(/^#+\s*/, '').trim() ?? 'Plan';
+}
+
+/** A `plan_reviews` row awaiting an owner decision, read workspace-wide and
+ *  carrying its owner's name — the `plan_review` pending-action's input. The
+ *  roster stays retired-inclusive: a dismissed actor's undecided plan is
+ *  still undecided, and its row belongs to the owner, not the actor. */
+export function listPendingPlanReviews(
+  sql: SqlExecutor,
+  workspaceId: string,
+): ReadonlyArray<{ owner: string; id: string; revision: number; content: string; updatedAt: number }> {
+  return sql<{ owner: string; id: string; revision: number; content: string; updated_at: number }>`
+    SELECT a.name AS owner, r.id, r.revision, r.content, r.updated_at
+    FROM plan_reviews r JOIN workspace_actors a ON a.actor_id = r.actor_id
+    WHERE a.workspace_id = ${workspaceId} AND r.status = 'pending'
+    ORDER BY r.updated_at DESC`.map((row) => ({ ...row, updatedAt: row.updated_at }));
+}
+
 interface PlanReviewRow {
   id: string;
   session_id: string;

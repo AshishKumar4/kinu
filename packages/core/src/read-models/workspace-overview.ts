@@ -58,6 +58,8 @@ function pendingActionEffect(kind: PendingActionKind, scaffoldAutoApply: boolean
       return scaffoldAutoApply ? 'update' : 'decision';
     case 'curriculum_task':
       return 'ignore';
+    case 'plan_review':
+      return 'decision';
   }
 }
 

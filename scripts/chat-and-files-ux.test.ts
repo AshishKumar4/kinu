@@ -2925,6 +2925,10 @@ describe('WorkTab draws a section only when it has something to show', () => {
       const chips = await page.$$('section button[aria-pressed]');
       const counted: Record<string, number> = {};
 
+      const sections = await workSections(page);
+
+      expect(sections.map((section) => section.title)).toEqual(['Plans', 'Needs you', 'Now', 'Journal']);
+
       for (const chip of chips) {
         const label = await chip.evaluate((node) => node.textContent?.trim() ?? '');
         await chip.click();
@@ -2949,6 +2953,95 @@ describe('WorkTab draws a section only when it has something to show', () => {
     });
   });
 });
+
+/**
+ * The workspace's work is one thing: every actor's plans and tasks on one tab,
+ * owners named, and a pending plan's decision one row in Needs you that opens
+ * the review over the whole tab. `?frame=work`'s fixture carries a root plan
+ * beside a subordinate's and a task that holds the note its agent left.
+ */
+describe('the Work tab reads the workspace, not the actor', () => {
+  test('every actor\'s plans list with owner names, each with its own tasks', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 430, height: 1400 });
+      await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => [...document.querySelectorAll('section')]
+        .some((node) => node.querySelector('.p-label')?.textContent === 'Plans'));
+
+      const plans = (await workSections(page)).find((section) => section.title === 'Plans');
+
+      if (plans === undefined) throw new Error('the Plans section is missing');
+      expect(plans.badge).toBe('2');
+      expect(plans.text).toContain('Gateway timeout repair');
+      expect(plans.text).toContain('Courier rollout');
+      expect(plans.text).toContain('r3 · pending');
+      // The courier's task sits under ITS plan with its owner named, and the
+      // root's linked task sits under the root's — owners are per-card, not
+      // per-tab.
+      expect(plans.text).toContain('Stage the rollout');
+      expect(plans.text).toContain('courier');
+
+      const now = (await workSections(page)).find((section) => section.title === 'Now');
+
+      if (now === undefined) throw new Error('the Now section is missing');
+      expect(now.text).toContain('Patch the gateway timeout');
+      expect(now.text).toContain('main');
+      await page.close();
+    });
+  });
+
+  test('a pending plan asks in Needs you, the row opens the review full-tab, and Back returns', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 430, height: 1400 });
+      await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => [...document.querySelectorAll('section')]
+        .some((node) => node.querySelector('.p-label')?.textContent === 'Plans'));
+
+      const needs = (await workSections(page)).find((section) => section.title === 'Needs you');
+
+      if (needs === undefined) throw new Error('the Needs you section is missing');
+      expect(needs.text).toContain('Approve the plan · Gateway timeout repair');
+
+      await page.evaluate(() => {
+        const row = [...document.querySelectorAll('button')]
+          .find((button) => button.textContent?.includes('Approve the plan'));
+
+        if (row === undefined) throw new Error('the approve row is missing');
+        row.click();
+      });
+
+      // The review takes the whole tab — the plan list is gone, and what is
+      // on screen is the pending revision's own decisions, the way the list
+      // row promised.
+      await page.waitForSelector('[data-plan-review-root]');
+      expect(await page.$eval('[data-plan-title]', (element) => element.textContent)).toContain('Gateway');
+      expect(await page.$eval('[data-plan-status]', (element) => element.textContent)).toBe('Awaiting review');
+      expect(await page.$('[data-work-plans]')).toBeNull();
+
+      await page.click('[data-back-to-work]');
+      await page.waitForSelector('[data-work-plans]');
+      expect(await page.$('[data-plan-review-root]')).toBeNull();
+      await page.close();
+    });
+  });
+
+  test('a task carrying a note renders it under the title with its owner', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 430, height: 1400 });
+      await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => document.querySelector('[data-work-plans]') !== null);
+
+      const body = await page.evaluate(() => document.body.textContent ?? '');
+
+      expect(body).toContain('Client already bails at 8s');
+      await page.close();
+    });
+  });
+});
+
 
 /**
  * Model tiers are an open vocabulary (#7, #9, #11). The owner adds a tier by
