@@ -656,12 +656,12 @@ export class OrchestratorAgent extends ActorAgent {
         this.broadcast(JSON.stringify({ ...event, actorId }));
       },
       enqueueTurn: (actor, input) => this.enqueueHostedTurn(actor, input),
-      turnInFlight: (actorId) => {
-        const live = this.actorHost().hosted({
-          actorId,
-          workspaceId: this.actorHandle().workspaceId,
-          parentActorId: this.actorHandle().actorId,
-        });
+      // The reference the host ISSUED, off the bound actor, never rebuilt from
+      // an id: the root's own parent is null, so synthesizing `parentActorId:
+      // root` here made `hosted()` refuse the root's liveness read and the
+      // root's event drain died on it.
+      turnInFlight: (actor) => {
+        const live = this.actorHost().hosted(actor.reference);
 
         return live !== null && live.session.inFlight;
       },
@@ -789,6 +789,7 @@ export class OrchestratorAgent extends ActorAgent {
       mission: () => null,
       announce: () => { this.broadcastSubordinatesChanged(); },
       scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
+      armWake: () => { this.durableWakeOwner()(); },
       temporary: () => this.temporaryAgentPort(),
     };
   }
@@ -1378,7 +1379,6 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-  /**
    * ARM 1½: give the assignments an interrupted turn still owes back to the
    * sweep below.
    *
@@ -1437,6 +1437,7 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
+  /**
    * Finish what one interrupted terminal transition still owes: the reply an
    * answered event batch never dispatched.
    *
@@ -1775,6 +1776,13 @@ export class OrchestratorAgent extends ActorAgent {
       this.peerHub.nextRetryAt(),
       this.emailOutbox.nextRetryAt(),
       this.eventLog.nextPendingDrainAt(now),
+      // An ADMITTED DELEGATION is due at once. It is not in
+      // `nextPendingDrainAt` and must not be: that read is the reactor's
+      // backlog and `wakesADrain` excludes an assignment, whose runner is
+      // `drainAdmittedDelegations` under this same wake. Without this line the
+      // arm `admitHostedTask` asks for computed null and the hire waited for an
+      // unrelated wake — the turn-open recovery row, one minute out.
+      this.hasAdmittedDelegations() ? now : null,
     );
   }
 
@@ -3408,6 +3416,8 @@ export class OrchestratorAgent extends ActorAgent {
 
     // The alarm owns recovery authority. Core retains verified claims as owed,
     // settles unverified ones indeterminate, and leaves live actors untouched.
+    let owedClaims: readonly string[] = [];
+
     try {
       const host = this.actorHost();
       const rootActorId = this.actorHandle().actorId;
@@ -3416,8 +3426,6 @@ export class OrchestratorAgent extends ActorAgent {
       // Think owns the foreground root, not the host's logical ActorSession.
       // Core reads liveness through the actual driver, including after awaits.
       const recovered = await recoverActorTurns({
-    let owedClaims: readonly string[] = [];
-
         resumable: (limit) => host.resumable(limit),
         acquire: async (reference) => {
           const actor = await host.acquire(reference);
@@ -3433,23 +3441,23 @@ export class OrchestratorAgent extends ActorAgent {
           };
         },
       });
+
+      owedClaims = recovered.verified;
     } catch (cause) {
       diagnostics.failure('actor.turn_recovery_failed', toKinuError({
         doing: 'rebuilding the hosted turns an eviction interrupted', cause, otherwise: 'io',
       }), { workspace: this.name });
     }
 
+    this.rependRecoveredAssignments(owedClaims);
     // Retained claims still fence new work; verification alone is not execution.
     const delegationsTruncated = await this.drainAdmittedDelegations();
-
-      owedClaims = recovered.verified;
 
     if (!this.activationRecoveryPending) return delegationsTruncated || await super.maintenanceWork();
 
     // AFTER the branch seal has drained, and the seal's own remainder is what
     // says so: a branch head still `running` from before the cutoff is a row
     // the LIMIT-256 seal has not reached, and the fork reconcile — which reads
-    this.rependRecoveredAssignments(owedClaims);
     // every pre-cutoff running head as a stale FORK — would retire it as lost
     // fork work and announce a steer branch as a fork run. Asked at limit 1,
     // because presence is the whole question, and asked of the journal rather

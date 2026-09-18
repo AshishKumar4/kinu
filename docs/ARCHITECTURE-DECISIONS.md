@@ -256,7 +256,9 @@ durable sweep ran the raw brief beside it; after, 1 row whose body is the
 brief. Re-measured 2026-09-17 on 4e7da0360, one hire alone: exactly 1 row, body
 253 characters, `consumed_at` still set because the child retires itself inside
 the turn that answers and the runner's lease close is then refused by its dead
-handle.
+handle. The cloud wake arms for a pending assignment from `nextWakeAt`, which
+folds `hasAdmittedDelegations()` at `now`; the local host arms nothing and
+re-drives on every pass and on open.
 
 D4. A delegated turn brackets its run in the durable ledger, like every other
 turn. The local host already did, because an assignment is admitted there as
