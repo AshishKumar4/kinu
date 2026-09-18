@@ -6924,6 +6924,30 @@ async function mount() {
       </Routes>
     );
   }
+  // The self-deploy door as a visitor gets it before the owner has registered
+  // the OAuth client; `?state=configured` photographs the sign-in state. Same
+  // dynamic import every frame here uses, because the frame name is the
+  // runtime selector.
+  else if (frame === "deploy") {
+    const { default: DeployPage } = await import("@/pages/DeployPage");
+    const configured = new URLSearchParams(location.search).get("state") === "configured";
+    entries = ["/deploy"];
+    node = (
+      <div className="h-screen overflow-auto">
+        <DeployPage
+          fixtureOptions={{
+            cloudflare: configured,
+            clientId: configured ? "gallery-client" : "",
+            version: "0.4.0+gallery",
+            prompts: [],
+            reason: configured
+              ? ""
+              : "The Cloudflare door needs an OAuth client, and this deployment has none configured yet.",
+          }}
+        />
+      </div>
+    );
+  }
   else if (frame === "home") {
     const { default: HomePage } = await import("@/pages/HomePage");
     // The real chrome, not the page alone: the sidebar's own route logic

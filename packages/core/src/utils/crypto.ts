@@ -2,14 +2,22 @@
  *  core's webhook ingress, and the session, capability and preview edges on
  *  either backend. */
 
-/** URL-safe base64 token from `bytes` of CSPRNG output. */
-export function randomToken(bytes: number): string {
-  const data = crypto.getRandomValues(new Uint8Array(bytes));
+/** URL-safe base64 of arbitrary bytes, padding trimmed. The one spelling: the
+ *  run key, the run id and the PKCE verifier and challenge are all this
+ *  encoding, and RFC 7636 makes it load-bearing — the authorization server
+ *  compares the challenge as a STRING, so a second encoder that differed by a
+ *  character would fail only against the live Cloudflare. */
+export function base64Url(bytes: Uint8Array): string {
   let bin = '';
 
-  for (const b of data) bin += String.fromCharCode(b);
+  for (const byte of bytes) bin += String.fromCharCode(byte);
 
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+/** URL-safe base64 token from `bytes` of CSPRNG output. */
+export function randomToken(bytes: number): string {
+  return base64Url(crypto.getRandomValues(new Uint8Array(bytes)));
 }
 
 /** Lowercase-hex HMAC-SHA256 is below; SHA-256 digests live in

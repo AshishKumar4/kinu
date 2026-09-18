@@ -18,6 +18,8 @@ import type { DbCapabilityProbeDO } from './db-capability-probe';
 import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
+import type { DeployFakeRefusal, DeployFakeState } from './deploy-fake';
+import type { DeployInputs, DeploySnapshot } from '@kinu.run/core/deploy';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
@@ -159,6 +161,32 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   stopped(): Promise<boolean>;
 }
 
+
+/** The deploy run, as the runner reaches it. Declared here rather than
+ *  imported from the probe, because the probe compiles under the PRODUCTION
+ *  project (it subclasses `DeployRunDO`, whose `Env` is production's) and this
+ *  project must not pull that closure in. */
+interface DeployRunProbeRpc extends Rpc.DurableObjectBranded {
+  open(runId: string, keyDigest: string): Promise<void>;
+  admits(runKey: string): Promise<boolean>;
+  holdAuthorization(verifier: string): Promise<string>;
+  landAuthorization(clientId: string, redirectUri: string, code: string, state: string): Promise<void>;
+  landToken(accessToken: string, refreshToken: string): Promise<void>;
+  authorized(): Promise<boolean>;
+  accounts(): Promise<readonly { id: string; name: string }[]>;
+  snapshot(): Promise<DeploySnapshot>;
+  start(inputs: DeployInputs): Promise<DeploySnapshot>;
+  retry(stepId: string): Promise<DeploySnapshot>;
+  heldSecretNames(): Promise<readonly string[]>;
+  rowText(): Promise<string>;
+}
+
+interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
+  reset(): Promise<void>;
+  state(): Promise<DeployFakeState>;
+  refuseOnce(refusal: DeployFakeRefusal): Promise<void>;
+}
+
 declare global {
   namespace Cloudflare {
     interface Env {
@@ -207,6 +235,11 @@ declare global {
       PUBLIC_SURFACE: Fetcher;
       /** That worker's one test-only entrypoint, for the shared model log. */
       SURFACE_CONTROL: Service<SurfaceControlRpc>;
+      /** The production deploy run, hosted by `deploy-probe` as the probe
+       *  subclass that adds two read-only windows onto its storage. */
+      DEPLOY_RUN_PROBE: DurableObjectNamespace<DeployRunProbeRpc>;
+      /** That worker's control entrypoint, for the deploy fake's state. */
+      DEPLOY_FAKE: Service<DeployFakeControlRpc>;
     }
 
     /** The test worker re-exports the production egress entrypoint, so

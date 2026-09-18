@@ -1,0 +1,248 @@
+/**
+ * `kinu deploy cloudflare` — the same door as the page, from a terminal.
+ *
+ * ONE FLOW, ONE LEDGER. Nothing here re-implements a step. The command mints a
+ * run on kinu.run, authorizes on a loopback redirect the way wrangler does,
+ * hands the token pair to that run, answers the four questions at the
+ * terminal, and then watches the run's own progress socket and prints the rows
+ * the Durable Object writes. A run started here can be finished from the page
+ * and the other way round.
+ *
+ * THE VERIFIER STAYS LOCAL and the token pair is POSTed once over TLS to the
+ * run that will spend it. What kinu.run keeps afterwards is nothing: the last
+ * step writes the refresh token into the new Worker and wipes the run's vault.
+ */
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import {
+  CLI_DEPLOY_REDIRECT_PORT, CLI_DEPLOY_REDIRECT_URI, CLOUDFLARE_DEPLOY_SCOPES,
+  DeployFrameSchema,
+  authorizeUrl, createPkcePair, deployDoor, deployOptions, exchangeDeployCode, mintRun,
+  type DeployDoor, type DeployInputs, type DeploySnapshot, type DeployStepRow,
+} from '@kinu.run/core/deploy';
+import * as v from 'valibot';
+import { defaultOrigin } from '../cloud-api';
+import { ACCENT, DIM, OK, WARN } from '../display';
+import { ask, askSecret, requireInteractiveTerminal } from '../prompt';
+import { openBrowser } from './auth';
+
+export async function deployCommand(door: string | undefined, opts: { origin?: string } = {}): Promise<void> {
+  if (door !== 'cloudflare') {
+    console.log(`${WARN('!')} Name a door: ${ACCENT('kinu deploy cloudflare')}`);
+
+    return;
+  }
+
+  await cloudflareDoor(opts);
+}
+
+async function cloudflareDoor(opts: { origin?: string }): Promise<void> {
+  requireInteractiveTerminal();
+  const origin = defaultOrigin(opts);
+  const options = await deployOptions(origin);
+
+  if (!options.cloudflare) {
+    console.log(`${WARN('!')} ${options.reason}`);
+
+    return;
+  }
+
+  console.log('');
+  console.log(`${DIM('Installing Kinu')} ${ACCENT(options.version)} ${DIM('into your own Cloudflare account.')}`);
+
+  const ticket = await mintRun(origin);
+  const door = deployDoor({ origin, runId: ticket.runId, runKey: ticket.runKey });
+
+  await authorize(door, options.clientId);
+  console.log(`${OK('✓')} Authorized with Cloudflare`);
+
+  const inputs = await answers(door, options.prompts);
+
+  await follow(door, origin, await door.start(inputs));
+}
+
+/** The authorization leg: a loopback listener, the browser, and the exchange.
+ *  The code never leaves this process except as a token pair. */
+async function authorize(door: DeployDoor, clientId: string): Promise<void> {
+  const pkce = await createPkcePair();
+  const state = crypto.randomUUID();
+
+  const url = authorizeUrl({
+    clientId,
+    redirectUri: CLI_DEPLOY_REDIRECT_URI,
+    state,
+    challenge: pkce.challenge,
+    scopes: CLOUDFLARE_DEPLOY_SCOPES,
+  });
+
+  console.log(`${DIM('Open:')} ${ACCENT(url)}`);
+
+  const waiting = awaitCode(state);
+
+  openBrowser(url);
+
+  const code = await waiting;
+
+  const token = await exchangeDeployCode({
+    clientId, redirectUri: CLI_DEPLOY_REDIRECT_URI, code, verifier: pkce.verifier,
+  });
+
+  await door.holdToken({ accessToken: token.accessToken, refreshToken: token.refreshToken });
+}
+
+/**
+ * The redirect, caught once.
+ *
+ * The listener closes on the first answer — a second callback has nothing to
+ * authorize — and a callback whose `state` is not this run's is refused in the
+ * browser rather than exchanged, which is the whole job of `state`.
+ */
+function awaitCode(state: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+      const url = new URL(request.url ?? '/', CLI_DEPLOY_REDIRECT_URI);
+      const code = url.searchParams.get('code') ?? '';
+      const carried = url.searchParams.get('state') ?? '';
+      const problem = url.searchParams.get('error');
+      const good = problem === null && code !== '' && carried === state;
+
+      response.writeHead(good ? 200 : 400, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end(good
+        ? 'Authorized. Go back to your terminal.'
+        : `This authorization is not the one this terminal started${problem === null ? '' : `: ${problem}`}.`);
+      server.close();
+
+      if (good) resolve(code);
+      else reject(new Error(problem ?? 'the authorization that came back is not this run\'s'));
+    });
+
+    server.on('error', reject);
+    server.listen(CLI_DEPLOY_REDIRECT_PORT, '127.0.0.1');
+  });
+}
+
+async function answers(door: DeployDoor, prompts: readonly string[]): Promise<DeployInputs> {
+  const accounts = await door.accounts();
+  const first = accounts[0];
+
+  if (first === undefined) throw new Error('that Cloudflare authorization can reach no account');
+
+  for (const [at, account] of accounts.entries()) {
+    console.log(`  ${ACCENT(String(at + 1))}. ${account.name} ${DIM(account.id)}`);
+  }
+
+  const picked = accounts.length === 1
+    ? first
+    : accounts[Number.parseInt(await ask('Account number', '1'), 10) - 1] ?? first;
+
+  const instanceName = await ask('Instance name', 'kinu');
+  const ownerEmail = await ask('Your email (the sign-in address)');
+  const zones = await door.zones();
+  const hostname = zones.length === 0 ? '' : await ask('Hostname (blank for a workers.dev address)', '');
+  const zone = zones.find((held) => hostname.endsWith(held.name));
+  const keyNames: string[] = [];
+
+  for (const name of prompts) {
+    const value = await askSecret(`${name} (blank to skip)`);
+
+    if (value === '') continue;
+    await door.holdProviderKey(name, value);
+    keyNames.push(name);
+  }
+
+  return {
+    accountId: picked.id,
+    instanceName,
+    address: hostname !== '' && zone !== undefined
+      ? { kind: 'zone', hostname, zoneId: zone.id }
+      : { kind: 'workers-dev', hostname: '', zoneId: '' },
+    ownerEmail,
+    accessEmails: [ownerEmail],
+    providerKeyNames: keyNames,
+    sandbox: false,
+  };
+}
+
+/**
+ * The run, watched on its own socket.
+ *
+ * The rows are printed as they change rather than redrawn: a terminal that
+ * scrolled away is still a record of what happened, and the snapshot the
+ * socket carries is the same one the page renders.
+ */
+async function follow(door: DeployDoor, origin: string, first: DeploySnapshot): Promise<void> {
+  const shown = new Map<string, string>();
+
+  console.log('');
+  report(first, shown);
+
+  if (first.state === 'done' || first.state === 'failed') {
+    settle(first);
+
+    return;
+  }
+
+  const socket = new WebSocket(door.socketUrl());
+
+  await new Promise<void>((resolve) => {
+    let last = first;
+
+    socket.addEventListener('message', (event: MessageEvent) => {
+      const frame = v.safeParse(DeployFrameSchema, JSON.parse(String(event.data)));
+
+      if (!frame.success || frame.output.type !== 'deploy.snapshot') return;
+      last = frame.output.snapshot;
+      report(last, shown);
+
+      if (last.state === 'done' || last.state === 'failed') {
+        socket.close();
+        settle(last);
+        resolve();
+      }
+    });
+    socket.addEventListener('close', () => {
+      if (last.state !== 'done' && last.state !== 'failed') {
+        console.log(`${WARN('!')} The progress socket closed. ${DIM(`Re-attach: kinu deploy cloudflare --origin ${origin}`)}`);
+      }
+
+      resolve();
+    });
+  });
+}
+
+function report(snapshot: DeploySnapshot, shown: Map<string, string>): void {
+  for (const row of snapshot.steps) {
+    const mark = `${row.state}:${String(row.attempt)}`;
+
+    if (shown.get(row.id) === mark) continue;
+    shown.set(row.id, mark);
+
+    if (row.state === 'pending') continue;
+    console.log(line(row));
+  }
+}
+
+function line(row: DeployStepRow): string {
+  if (row.state === 'done') return `${OK('✓')} ${row.title}${row.detail === '' ? '' : ` ${DIM(row.detail)}`}`;
+
+  if (row.state === 'failed') {
+    return `${WARN('✗')} ${row.title}\n  ${row.failure?.detail ?? ''}`;
+  }
+
+  return `${DIM('·')} ${row.title}${row.attempt > 1 ? DIM(` (attempt ${String(row.attempt)})`) : ''}`;
+}
+
+function settle(snapshot: DeploySnapshot): void {
+  console.log('');
+
+  if (snapshot.state === 'done') {
+    console.log(`${OK('✓')} Your Kinu is live at ${ACCENT(`https://${snapshot.address}`)}`);
+    console.log(DIM('Sign in with the email you gave: Cloudflare Access sends a one-time PIN.'));
+
+    return;
+  }
+
+  const failed = snapshot.steps.find((row) => row.state === 'failed');
+
+  console.log(`${WARN('!')} The run stopped at ${ACCENT(failed?.title ?? 'a step')}.`);
+  console.log(DIM('Nothing after it ran. Fix what the message says and re-run the command to carry on.'));
+}

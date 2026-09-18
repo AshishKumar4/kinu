@@ -86,6 +86,7 @@ kinu <command> [options]
 | [`kinu connect`](#kinu-connect) | Link this computer as the desktop execution daemon |
 | [`kinu desktop [action]`](#kinu-desktop-action) | Connect or inspect the local desktop execution daemon |
 | [`kinu daemon [action] [workspace]`](#kinu-daemon-action-workspace) | Manage the local scheduler daemon: start, stop, restart, status, logs, run, tick |
+| [`kinu deploy [door]`](#kinu-deploy-door) | Deploy your own Kinu: `deploy cloudflare` into your Cloudflare account |
 | [`kinu doctor`](#kinu-doctor) | Inspect local Kinu CLI installation state |
 | [`kinu update [target]`](#kinu-update-target) | Update the installed Kinu command |
 | [`kinu uninstall`](#kinu-uninstall) | Remove the installed Kinu command |
@@ -525,6 +526,14 @@ Connect or inspect the local desktop execution daemon.
 ### kinu daemon [action] [workspace]
 
 Manage the local scheduler daemon: start, stop, restart, status, logs, run, tick.
+
+### kinu deploy [door]
+
+Deploy your own Kinu: `deploy cloudflare` into your Cloudflare account.
+
+| Option | What it does |
+| --- | --- |
+| `--origin <url>` | Kinu app origin |
 
 ### kinu doctor
 

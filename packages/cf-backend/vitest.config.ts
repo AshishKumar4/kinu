@@ -50,6 +50,7 @@ import { buildSlateVendor, slateVendor } from './slate-vendor';
 import { defineConfig, type Plugin } from 'vitest/config';
 import { probeOutbound } from './tests/workerd/http-model-fake';
 import { hireOutbound } from './tests/workerd/hire-model-fake';
+import { DEPLOY_FAKE_CHANNEL, deployOutbound } from './tests/workerd/deploy-fake';
 import { kCurrentWorker } from 'miniflare';
 import { builtinModules } from 'node:module';
 import { promptText } from './vite-prompt-text';
@@ -203,6 +204,14 @@ const publicSurfaceProbe = buildSync({
   bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
   conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
   alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
+const deployRunProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/deploy-run-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/deploy-run-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
@@ -450,6 +459,26 @@ export default defineConfig({
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
+        }, {
+          // The guided self-deployment, end to end against real Durable Object
+          // SQLite. Everything it talks to is the Node-side plane installed as
+          // this worker's `outboundService`: the Cloudflare API, the
+          // authorization server the PKCE exchange posts to, the release
+          // channel it downloads the artifact from, and the new deployment's
+          // own `/api/health`. An unmatched host throws there, so a run that
+          // reached a real network is a failure rather than a slow pass.
+          name: 'deploy-probe', ...workerCompatibility,
+          modules: deployRunProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          // The channel the run reads its release from, which is the one var
+          // `DeployRunDO` uses to find it.
+          bindings: { CLI_PUBLIC_ORIGIN: DEPLOY_FAKE_CHANNEL },
+          outboundService: deployOutbound,
+          durableObjects: {
+            DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', useSQLite: true },
+          },
         }],
         // The runner's door to the production route table. A miniflare service
         // binding carries a WebSocket upgrade — measured 2026-09-16: 101 with a
@@ -461,6 +490,9 @@ export default defineConfig({
           // The model fake's captured log is one Node-side module shared by
           // every worker bound to it; this is how the test hands it back empty.
           SURFACE_CONTROL: { name: 'public-surface-probe', entrypoint: 'SurfaceControl' },
+          // The deploy fake's created-resource state is Node-side module state
+          // too; this is how the test resets it and reads what a run made.
+          DEPLOY_FAKE: { name: 'deploy-probe', entrypoint: 'DeployFakeControl' },
         },
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
@@ -496,6 +528,7 @@ export default defineConfig({
           DEVBOX_NOT_READY_PROBE: { className: 'DevboxNotReadyProbeDO', useSQLite: true },
           SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', scriptName: 'slate-durability-probe', useSQLite: true },
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', scriptName: 'account-reset-probe', useSQLite: true },
+          DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', scriptName: 'deploy-probe', useSQLite: true },
         },
       },
     }),

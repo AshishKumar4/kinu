@@ -32,6 +32,10 @@ const MCTSExplorer = lazyRoute(() => import("./pages/MCTSExplorer"));
 // its code has no business in the bundle every signed-in user downloads.
 const ControlPage = lazyRoute(() => import("./pages/ControlPage"));
 
+// The guided self-deploy door. Split for the same reason: it is the one page
+// in this app that a signed-in user never opens.
+const DeployPage = lazyRoute(() => import("./pages/DeployPage"));
+
 function LazyFallback() {
   return (
     <div className="flex items-center justify-center h-full">
@@ -133,6 +137,15 @@ export default function App() {
         </Route>
         {/* Outside the shell: a viewer without a session sees this page and nothing else. */}
         <Route path={APP_ROUTES.sharedBlueprint} element={<ErrorBoundary label="blueprint"><BlueprintPage /></ErrorBoundary>} />
+        {/* The same, for a person who has no Kinu at all yet: the guided door
+            is code-split because nobody signed in ever loads it. */}
+        <Route path={APP_ROUTES.deploy} element={
+          <ErrorBoundary label="deploy">
+            <Suspense fallback={<LazyFallback />}>
+              <DeployPage />
+            </Suspense>
+          </ErrorBoundary>
+        } />
       </Routes>
     </BrowserRouter>
   );

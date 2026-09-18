@@ -11,6 +11,7 @@ import { DEVICE_CONNECT_PATH, timingSafeEqual } from '@kinu.run/core';
 import {
   SessionAuthorityUnavailableError, deriveUserId, verifySession, type AuthStoreEnv,
 } from './store';
+import { isDeployPath } from '../deploy/routes';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserDO } from '../user/user-do';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
@@ -298,6 +299,11 @@ export function isPublicPath(pathname: string): boolean {
   // it (`/api/shared/blueprint/:id`) is answered before the auth gate by the
   // shared-library route with the id's signature checked first.
   if (pathname.startsWith('/shared/blueprint/')) return true;
+
+  // The self-deploy door. Public because a person deploying their own Kinu has
+  // no account here to sign in to; what authorizes its calls is the run key
+  // (deploy/routes.ts), and the page itself must render before any of them.
+  if (isDeployPath(pathname)) return true;
 
   return false;
 }

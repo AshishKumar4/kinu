@@ -305,6 +305,17 @@
     "decided_at",
     "spend_seq"
   ],
+  "deploy_step@packages/cf-backend/src/deploy/deploy-do.ts": [
+    "id",
+    "seq",
+    "title",
+    "state",
+    "attempt",
+    "detail",
+    "notes",
+    "failure",
+    "facts"
+  ],
   "device_connect_tickets@packages/core/src/state/user-schema.ts": [
     "ticket_hash",
     "device_id",

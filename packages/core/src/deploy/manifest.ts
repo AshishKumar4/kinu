@@ -200,3 +200,18 @@ export const ReleaseManifestSchema: v.GenericSchema<ReleaseManifest> = v.object(
  * until somebody's install.
  */
 export const RELEASE_ARTIFACT_ROUTE = /^\/downloads\/(kinu-worker-[A-Za-z0-9._+-]+\.tar\.gz)$/u;
+
+/** The published manifest, parsed. A manifest that does not parse is not a
+ *  release the flow may act on: every later step reads a field of it, and a
+ *  half-read manifest deploys a Worker with a binding missing. */
+export function parseReleaseManifest(text: string): ReleaseManifest {
+  return v.parse(ReleaseManifestSchema, JSON.parse(text));
+}
+
+/** Where the small publishable half of a release sits: the manifest is a static
+ *  asset, the artifact it names is an R2 object. */
+export const RELEASE_MANIFEST_PATH = '/downloads/release.json';
+
+export function workerArtifactPath(version: string): string {
+  return `/downloads/kinu-worker-${version}.tar.gz`;
+}
