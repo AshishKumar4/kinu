@@ -944,11 +944,16 @@ export function useKinu(target?: string | KinuActorAddress) {
   const exposedPortsRefreshGeneration = useRef(0);
   const subordinateRefreshGeneration = useRef(0);
   /** This pane's own actor, read off its snapshot: the id {@link
-   *  admitsActorFrame} compares a stamped frame against. A ref, because the
-   *  socket handler reads it and nothing renders it. Null on the workspace
-   *  pane — no stamp ever names the root — and null until the load resolves
-   *  it, which admits no stamped frame in the meantime. */
+   *  admitsActorFrame} compares a stamped frame against, and the one a page
+   *  request names so an actor pane's older history is that actor's
+   *  ({@link useChatThread}). Held twice on purpose — the socket handler reads
+   *  it inside an effect that must not re-subscribe (its cleanup forgets the
+   *  live head paint), and the history walk reads it as a render dependency.
+   *  Null on the workspace pane — no stamp ever names the root — and null
+   *  until the load resolves it, which admits no stamped frame and starts no
+   *  walk in the meantime. */
   const ownActorIdRef = useRef<string | null>(null);
+  const [paneActorId, setPaneActorId] = useState<string | null>(null);
   // Background jobs (auto-detached >30s tool calls) — single source for the
   // Work surface's Now half and its journal.
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
@@ -1949,9 +1954,11 @@ export function useKinu(target?: string | KinuActorAddress) {
     const snapshot = await rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate]);
 
     if (!isCurrent()) return;
-    // This pane's own actor, before anything it can admit: the frames the
-    // hosting seam stamps are only this chat's while the id matches.
+    // This pane's own actor, before anything it can admit or ask for: the
+    // frames the hosting seam stamps are only this chat's while the id
+    // matches, and a page request without it reads the workspace's rows.
     ownActorIdRef.current = snapshot.actorId;
+    setPaneActorId(snapshot.actorId);
     setAgentStatus({
       name: snapshot.name,
       displayName: snapshot.displayName,
@@ -2061,8 +2068,10 @@ export function useKinu(target?: string | KinuActorAddress) {
     setSubordinateEvents([]);
     setSignalCards([]);
     // A different conversation is a different actor, and the last one's id
-    // would admit its frames here. The load resolves this pane's own.
+    // would admit its frames here and page its history. The load resolves
+    // this pane's own.
     ownActorIdRef.current = null;
+    setPaneActorId(null);
   }, [workspace, subordinate]);
 
   /** Spend one arrived reference. True exactly once per reference for the
@@ -2420,6 +2429,10 @@ export function useKinu(target?: string | KinuActorAddress) {
     rawAgent: agent,
     actorAddress,
     isSubordinate,
+    /** This pane's own actor id, or null on the workspace pane and until an
+     *  actor pane's snapshot has resolved it. What a cursored read of this
+     *  chat's older history is addressed by. */
+    paneActorId,
     subordinates,
     subordinateEvents,
     signalCards,
