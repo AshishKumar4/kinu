@@ -134,7 +134,7 @@ import {
   explorePrompt, reflectionPrompt,
   // Non-turn model calls: the row type, its sink, and where a call with no run
   // open is filed. The other 25 producers of workspace spend arrive this way.
-  WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
+  WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent, type CacheWarmingLane,
   recordModelOperations, type ProviderWaitInfo,
   // The one builder for a model_call row: its shape AND the price-only-when-the
   // -rate-is-this-call's-own guard, spelled once for all three call sites.
@@ -2593,6 +2593,10 @@ export abstract class ActorAgent extends Think<Env> {
           driverGate: () => this.driverGate(),
           // The workspace UI IS the review surface: a plan turn is admitted.
           planTurnRefusal: () => null,
+          // Prompt-cache warming is the ROOT actor's: it owns the workspace's
+          // one wake chain and the conversation whose prefix stays warm. A
+          // hosted actor's own loop wires none, so its turns arm nothing.
+          ...(this.cacheWarmingLane() && { cacheWarming: this.cacheWarmingLane() }),
           // The turn's own wake at its open: a kill mid-turn leaves the run
           // row AND the wake that re-drives what it owed. The loop names the
           // instant; the tick keeps a row while the turn is open.
@@ -3516,6 +3520,14 @@ export abstract class ActorAgent extends Think<Env> {
         usd: this.priceAt(this.acc.usage),
       });
     });
+  }
+
+  /** The workspace's prompt-cache warming lane, for the root actor that owns
+   *  one. Undefined here: a hosted actor (subordinate, exploration head, swarm
+   *  node) has neither the workspace's wake chain nor the conversation whose
+   *  prefix a refresh keeps alive. */
+  protected cacheWarmingLane(): CacheWarmingLane | undefined {
+    return undefined;
   }
 
   /** The actor's durable claim ledger — the identity a turn's effects are

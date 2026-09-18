@@ -763,7 +763,8 @@ export function CacheBlock({ cacheHit }: { cacheHit: CacheHitStats }) {
       <BlockHeader
         icon={LightningIcon}
         title="Prompt cache"
-        note={`${cacheHit.samples} sampled step${cacheHit.samples === 1 ? "" : "s"}`}
+        note={`${cacheHit.samples} sampled step${cacheHit.samples === 1 ? "" : "s"}`
+          + (cacheHit.warms > 0 ? ` · warmed ${cacheHit.warms}` : "")}
       />
       {cacheHit.samples === 0 ? (
         <Empty>
@@ -785,7 +786,10 @@ export function CacheBlock({ cacheHit }: { cacheHit: CacheHitStats }) {
           <p className="p-meta p-text-3 mt-2">
             Cached input over total input, per step. Cached tokens are a subset of the billed input.
             The EMA weights recent steps at α={cacheHit.emaAlpha}. The mean, p95 and p99 cover the
-            {" "}{cacheHit.samples} retained step{cacheHit.samples === 1 ? "" : "s"}.
+            {" "}{cacheHit.samples} retained step{cacheHit.samples === 1 ? "" : "s"}
+            {cacheHit.warms > 0
+              ? `, and exclude the ${cacheHit.warms} idle refresh${cacheHit.warms === 1 ? "" : "es"} that kept the prefix warm`
+              : ""}.
           </p>
         </>
       )}
