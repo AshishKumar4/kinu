@@ -95,12 +95,31 @@ function readInspectorChoice(account: string, workspace: string | undefined): bo
   return raw === "1" ? true : raw === "0" ? false : null;
 }
 
-/** What storage holds for this account and workspace; null for an anonymous
- *  session, which reads nothing and keys nothing. */
-export function readStoredInspector(account: string | null, workspace: string | undefined): StoredInspectorLayout | null {
+/** Who keys a persisted layout, or why nobody does: a signed-in profile with
+ *  an email is `known`; a session with no account — anonymous, or a profile
+ *  carrying no email — is `none`; a profile the page could not read is
+ *  `unreadable`. Only `known` reads or writes storage, and the failure is
+ *  classified rather than swallowed into "not yet". */
+export type InspectorAccount =
+  | { readonly kind: "known"; readonly email: string }
+  | { readonly kind: "none" }
+  | { readonly kind: "unreadable" };
+
+/** What a layout nobody keys reads as: no remembered width, no choice — so
+ *  the first-visit policy answers for it, every mount. */
+export const UNKEYED_INSPECTOR_LAYOUT: StoredInspectorLayout = { width: null, choice: null };
+
+/** What storage holds for this account and workspace. A session that keys
+ *  nothing reads nothing and gets the unkeyed layout, so the policy still
+ *  decides for it; null means only "the account has not resolved yet", which
+ *  parks the decision until it does. Collapsing those two is what left an
+ *  anonymous session's column shut for the page's life. */
+export function readStoredInspector(account: InspectorAccount | null, workspace: string | undefined): StoredInspectorLayout | null {
   if (account === null) return null;
 
-  return { width: readInspectorWidth(account), choice: readInspectorChoice(account, workspace) };
+  if (account.kind !== "known") return UNKEYED_INSPECTOR_LAYOUT;
+
+  return { width: readInspectorWidth(account.email), choice: readInspectorChoice(account.email, workspace) };
 }
 
 
@@ -121,8 +140,10 @@ export function decideInspector(stored: StoredInspectorLayout | null, showConten
  * already made wins outright. The signal open is a once-per-workspace latch;
  * a stored choice ends the policy's say entirely.
  *
- * `stored` is null when nothing keys a persisted layout (no account, or the
- * layout is not a wide-desktop one) — then nothing is decided at all.
+ * `stored` is null when the account that keys the layout has not resolved yet
+ * (or the layout is not a wide-desktop one) — then nothing is decided at all,
+ * and the decision arrives with the account. A session resolved to NO account
+ * is decided like any other; it just persists nothing.
  */
 export function applyInspectorDecision(state: InspectorState, input: {
   readonly workspace: string | undefined;

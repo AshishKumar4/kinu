@@ -355,17 +355,6 @@
       "loadAtStart": 2.44,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts": {
-      "wallSeconds": 68.09,
-      "cpuSeconds": 105.63,
-      "peakRssMb": 25406.94,
-      "peakRunnable": 8,
-      "peakCpuThreads": 8.05,
-      "meanThreads": 1.55,
-      "samples": 232,
-      "loadAtStart": 7,
-      "exit": 1
-    },
     "bun test --timeout=0 scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": {
       "wallSeconds": 0.33,
       "cpuSeconds": 0.32,
@@ -597,17 +586,6 @@
       "loadAtStart": 4.13,
       "exit": 1
     },
-    "bun test --timeout=0 scripts/*-ux.test.ts scripts/computed-style.test.ts": {
-      "wallSeconds": 480.42,
-      "cpuSeconds": 90.75,
-      "peakRssMb": 2641.86,
-      "peakRunnable": 25,
-      "peakCpuThreads": 9.48,
-      "meanThreads": 0.19,
-      "samples": 1823,
-      "loadAtStart": 3.52,
-      "exit": 124
-    },
     "bun test --timeout=0 scripts/public-pages.test.ts scripts/plan-demo-film.test.ts": {
       "wallSeconds": 42.06,
       "cpuSeconds": 38.24,
@@ -826,6 +804,39 @@
       "meanThreads": 0.8,
       "samples": 86,
       "loadAtStart": 6.32,
+      "exit": 1
+    },
+    "bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts scripts/*-ux.test.ts scripts/computed-style.test.ts": {
+      "wallSeconds": 270.88,
+      "cpuSeconds": 62.42,
+      "peakRssMb": 2533.15,
+      "peakRunnable": 23,
+      "peakCpuThreads": 8.26,
+      "meanThreads": 0.23,
+      "samples": 1043,
+      "loadAtStart": 1.95,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/chat-and-files-ux.test.ts": {
+      "wallSeconds": 155.64,
+      "cpuSeconds": 34.35,
+      "peakRssMb": 2355.5,
+      "peakRunnable": 32,
+      "peakCpuThreads": 9.33,
+      "meanThreads": 0.22,
+      "samples": 617,
+      "loadAtStart": 0.77,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts": {
+      "wallSeconds": 66.22,
+      "cpuSeconds": 101.48,
+      "peakRssMb": 25453.09,
+      "peakRunnable": 8,
+      "peakCpuThreads": 7.98,
+      "meanThreads": 1.53,
+      "samples": 248,
+      "loadAtStart": 1.71,
       "exit": 1
     }
   }

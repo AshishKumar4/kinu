@@ -1,11 +1,9 @@
 import { startTransition, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type DragEvent as ReactDragEvent } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
-import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
   ArrowsClockwiseIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
-  CaretLeftIcon,
   ClockIcon, WarningCircleIcon, DesktopTowerIcon, PaperclipIcon,
   ClockCounterClockwiseIcon, UserPlusIcon,
 } from "@phosphor-icons/react";
@@ -45,7 +43,7 @@ import { WorkspaceBar, InlineRenameTitle, type Altitude } from "@/components/Wor
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import { workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
-import { useInspectorLayout } from "@/hooks/use-inspector-layout";
+import { WorkbenchPanels } from "@/components/WorkbenchPanels";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
 
@@ -664,41 +662,6 @@ export default function WorkspacePage() {
     () => new URLSearchParams(location.search).get("altitude") === "supervise" ? "supervise" : "run",
   );
 
-  // A returning driver opens on status, not on the agent's own description.
-  const [mobilePane, setMobilePane] = useState<'chat' | 'workspace'>('chat');
-
-  const [desktopPanels, setDesktopPanels] = useState(
-    () => globalThis.window === undefined || globalThis.window.matchMedia("(min-width: 768px)").matches,
-  );
-
-  useEffect(() => {
-    const media = window.matchMedia("(min-width: 768px)");
-    const sync = () => setDesktopPanels(media.matches);
-    sync();
-    media.addEventListener("change", sync);
-
-    return () => media.removeEventListener("change", sync);
-  }, []);
-
-  // The collapsed-by-default inspector opens itself once the workspace holds
-  // something it exists to show: a decision or consent waiting on the owner,
-  // a slate or preview, a pinned port, an active plan. Produced outputs
-  // alone do not open it: every command run would otherwise open the pane
-  // on a fresh workspace.
-  const inspector = useInspectorLayout({
-    desktopPanels,
-    workspace: agentId,
-    mobileDefault: mobilePane === "workspace" ? "100%" : "0%",
-    worthShowing: [
-      state.pendingActions.length > 0,
-      state.pendingConsents.length > 0,
-      state.slates.length > 0,
-      state.previewFocus !== null,
-      state.pinnedPorts.length > 0,
-      Boolean(state.activePlan),
-    ].some(Boolean),
-  });
-
   // Work stays workspace-scoped: the panel is the same panel whichever chat
   // tab is open, so it shows the workspace's own plan — only Agent and
   // Activity are per agent.
@@ -1154,23 +1117,17 @@ export default function WorkspacePage() {
           </ErrorBoundary>
         </div>
       ) : (
-      <>
-      <div className="flex shrink-0 items-center gap-1 border-b p-border p-sidebar px-3 py-2 md:hidden">
-        <button type="button" onClick={() => setMobilePane('chat')} aria-pressed={mobilePane === 'chat'}
-          className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === 'chat' ? 'p-accent-subtle p-accent' : 'p-text-3'}`}>Chat</button>
-        <button type="button" onClick={() => setMobilePane('workspace')} aria-pressed={mobilePane === 'workspace'}
-          className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === 'workspace' ? 'p-accent-subtle p-accent' : 'p-text-3'}`}>Workspace{state.pendingActions.length > 0 ? ` · ${String(state.pendingActions.length)}` : ''}</button>
-      </div>
-      <PanelGroup key={desktopPanels ? "desktop" : mobilePane} className="relative flex-1" resizeTargetMinimumSize={{ coarse: 20, fine: 10 }} {...inspector.groupProps}>
-        {/* ── Column A — Chat / Steer ─────────────────────────── */}
-        <Panel
-          id="chat"
-          {...(desktopPanels
-            ? { minSize: "24%" }
-            : { minSize: "0%", defaultSize: mobilePane === 'chat' ? "100%" : "0%" })}
-          groupResizeBehavior="preserve-relative-size"
-        >
-          <div className="flex flex-col h-full border-r p-border">
+      <WorkbenchPanels
+        workspace={agentId}
+        contents={{
+          pendingActions: state.pendingActions,
+          pendingConsents: state.pendingConsents,
+          slates: state.slates,
+          previewFocus: state.previewFocus,
+          pinnedPorts: state.pinnedPorts,
+          activePlan: state.activePlan,
+        }}
+        chat={<>
             {/* Agent tabs — the workspace's orchestrator + durable subordinates.
                 Roster + live status ride the parent socket; the CHAT below
                 switches per tab while Columns B/C stay workspace-scoped. This
@@ -1353,27 +1310,8 @@ export default function WorkspacePage() {
             </div>
             </div>
             )}
-          </div>
-        </Panel>
-
-        {desktopPanels && (
-          <PanelResizeHandle
-            aria-label="Resize the inspector; press Enter to hide or show it"
-            title="Drag to resize the inspector · Enter hides or shows it"
-            {...inspector.separatorProps}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" || event.defaultPrevented) return;
-
-              inspector.toggleCollapsed();
-            }}
-            onDoubleClick={inspector.resetToDefault}
-            className="group z-[2] -ml-[5px] w-[13px] shrink-0 cursor-col-resize bg-transparent touch-none select-none focus:outline-none"
-          >
-            <span aria-hidden="true" className="mx-auto block h-full w-[3px] bg-transparent transition-colors group-hover:bg-[var(--c-accent)]/60 group-focus-visible:bg-[var(--c-accent)] group-data-[separator=hover]:bg-[var(--c-accent)]/60 group-data-[separator=active]:bg-[var(--c-accent)] group-data-[separator=focus]:bg-[var(--c-accent)]" />
-          </PanelResizeHandle>
-        )}
-
-        <Panel {...inspector.panelProps} groupResizeBehavior="preserve-pixel-size">
+        </>}
+        inspector={(onCollapse) => (
           <WorkSurface
             surface={surface}
             previewFocus={state.previewFocus}
@@ -1383,7 +1321,7 @@ export default function WorkspacePage() {
             activePlanActors={state.subordinates.filter(actor => actor.status !== "dismissed").map(actor => actor.name)}
             onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${encodeURIComponent(name)}`); }}
             onSurface={setSurface}
-            onCollapse={inspector.collapseControl}
+            onCollapse={onCollapse}
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}
             onRefreshPorts={state.refreshExposedPorts}
@@ -1415,22 +1353,8 @@ export default function WorkspacePage() {
             unmappedSlate={unmappedSlate}
             onUnmappedOpened={() => setUnmappedSlate(null)}
           />
-        </Panel>
-        {inspector.expandVisible && (
-          <button
-            type="button"
-            onClick={inspector.toggleCollapsed}
-            aria-label="Show inspector"
-            title="Show inspector"
-            data-inspector-expand
-            className="absolute right-0 top-1/2 z-[3] flex h-16 w-5 -translate-y-1/2 items-center justify-center rounded-l-md border border-r-0 p-border p-elevated p-text-3 shadow-sm transition-colors hover:p-text hover:p-accent-subtle focus-visible:outline-2"
-          >
-            <CaretLeftIcon size={12} weight="bold" />
-          </button>
         )}
-
-      </PanelGroup>
-      </>
+      />
       )}
 
       {forkFor && (

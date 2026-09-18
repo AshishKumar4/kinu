@@ -26,30 +26,31 @@ import { getProfile } from "@/lib/user-api";
 import { useMediaQuery } from "./use-media-query";
 
 import {
-  INSPECTOR_DEFAULT_PX, INSPECTOR_MIN_PX, INSPECTOR_WIDE_QUERY,
+  INSPECTOR_DEFAULT_PX, INSPECTOR_MIN_PX, INSPECTOR_WIDE_QUERY, UNKEYED_INSPECTOR_LAYOUT,
   applyInspectorDecision, claimInspectorTarget, commitInspectorLayout, initialInspectorState,
   decideInspector, isInspectorInputKey, newInspectorGroup, readStoredInspector,
-  type InspectorEffects, type InspectorState, type InspectorTarget,
+  type InspectorAccount, type InspectorEffects, type InspectorState, type InspectorTarget,
+  type StoredInspectorLayout,
 } from "@kinu.run/core/web/inspector-layout";
 
-const CHAT_PANEL_ID = "chat";
+/** The panel element ids, which the library writes onto the DOM: one document
+ *  may hold more than one workbench (the landing page mounts three sample
+ *  frames), so a group past the first names its panels under its own scope. */
+const panelId = (panel: "chat" | "inspector", scope: string | undefined): string => (
+  scope === undefined ? panel : `${panel}-${scope}`
+);
 
-const INSPECTOR_PANEL_ID = "inspector";
+/** The account that keys a persisted layout, resolved once per page: a
+ *  signed-in profile with an email keys one, a profile with no email keys
+ *  nothing, and a profile that could not be read is a session-only layout.
+ *  Each of the three is an ANSWER — the absence of one is the pending promise,
+ *  never a resolved value. */
+let readAccountKeyCache: Promise<InspectorAccount> | null = null;
 
-/** The account that keys a persisted layout, or why there is none: a signed-in
- *  profile with no email keys nothing, and a profile that could not be read is
- *  a session-only layout — the failure is classified, not swallowed. */
-type AccountKey =
-  | { kind: "known"; email: string }
-  | { kind: "none" }
-  | { kind: "unreadable" };
-
-let readAccountKeyCache: Promise<AccountKey> | null = null;
-
-function readAccountKey(): Promise<AccountKey> {
+function readAccountKey(): Promise<InspectorAccount> {
   return (readAccountKeyCache ??= getProfile().then(
-    (profile): AccountKey => (profile?.email ? { kind: "known", email: profile.email } : { kind: "none" }),
-    (): AccountKey => ({ kind: "unreadable" }),
+    (profile): InspectorAccount => (profile?.email ? { kind: "known", email: profile.email } : { kind: "none" }),
+    (): InspectorAccount => ({ kind: "unreadable" }),
   ));
 }
 
@@ -76,9 +77,9 @@ export interface InspectorGroupProps {
 /** A committed inspector width in pixels: flex share × measured group box.
  *  (`getSize()` inside a commit report reads the DOM a commit early.) */
 function committedWidthPx(
-  layout: Layout, group: HTMLDivElement | null, fallback: () => number,
+  layout: Layout, panel: string, group: HTMLDivElement | null, fallback: () => number,
 ): number {
-  const share = layout[INSPECTOR_PANEL_ID];
+  const share = layout[panel];
 
   if (share === undefined || share <= 0) return 0;
 
@@ -113,48 +114,85 @@ export interface InspectorLayout {
   readonly panelProps: InspectorPanelProps;
   readonly groupProps: InspectorGroupProps;
   readonly separatorProps: InspectorSeparatorProps;
+  /** The id the chat panel takes in this group. The layout the group reports
+   *  is keyed by panel id, so the two ids have one source. */
+  readonly chatPanelId: string;
 }
 
 export function useInspectorLayout(input: {
   readonly desktopPanels: boolean;
   readonly mobileDefault: string;
   readonly workspace: string | undefined;
+  /** Scopes this group's panel element ids; `undefined` for the app's one workbench. */
+  readonly scope: string | undefined;
   /** The workspace holds something the inspector exists to show. Only
    *  consulted while this workspace carries no stored open/close choice. */
   readonly worthShowing: boolean;
 }): InspectorLayout {
-  const { desktopPanels, mobileDefault, workspace, worthShowing } = input;
+  const { desktopPanels, mobileDefault, workspace, scope, worthShowing } = input;
+  const chatPanelId = panelId("chat", scope);
+  const inspectorPanelId = panelId("inspector", scope);
 
   const widePanels = useMediaQuery(INSPECTOR_WIDE_QUERY);
 
-  const [account, setAccount] = useState<string | null>(
-    () => localStorage.getItem("kinu.inspector.account"),
-  );
+  // A workbench with no workspace name is nobody's layout: the account shelf
+  // is neither read nor written for it, and the policy decides it on every
+  // mount. A sample frame must show what a first visit shows, and must not
+  // key the reader's own app layout to whatever it displays.
+  const keyed = workspace !== undefined;
+
+  // `null` is "the account has not resolved yet", and nothing else: a session
+  // resolved to NO account is a layout the policy decides and nothing
+  // persists. Read as one value, an anonymous session was never decided at
+  // all and its column stayed behind the expand handle for the page's life.
+  // The cached email is the last visit's answer, so the first paint can use
+  // this person's width before the profile read returns.
+  const [account, setAccount] = useState<InspectorAccount | null>(() => {
+    const cached = keyed ? localStorage.getItem("kinu.inspector.account") : null;
+
+    return cached === null ? null : { kind: "known", email: cached };
+  });
 
   useEffect(() => {
+    if (!keyed) return;
     let live = true;
 
     startTransition(async () => {
-      const key = await readAccountKey();
-      const email = key.kind === "known" ? key.email : null;
+      const resolved = await readAccountKey();
 
-      if (!live || email === null) return;
+      if (!live) return;
 
-      setAccount((prev) => {
-        if (prev === email) return prev;
+      if (resolved.kind === "known") localStorage.setItem("kinu.inspector.account", resolved.email);
 
-        localStorage.setItem("kinu.inspector.account", email);
-
-        return email;
-      });
+      // The cached account confirmed keeps its own object, so a resolve that
+      // changed nothing does not re-run the decision effect.
+      setAccount((prev) => (
+        prev?.kind === "known" && resolved.kind === "known" && prev.email === resolved.email ? prev : resolved
+      ));
     });
 
     return () => { live = false; };
-  }, []);
+  }, [keyed]);
 
-  const mountDecision = desktopPanels && widePanels
-    ? decideInspector(readStoredInspector(account, workspace), worthShowing)
-    : null;
+  // An unkeyed layout stores nothing and yet is decided: `null` here would
+  // mean "no policy at all", which leaves the column wherever it mounted for
+  // the rest of the page's life.
+  const readLayout = useCallback(
+    (): StoredInspectorLayout | null => (
+      workspace === undefined ? UNKEYED_INSPECTOR_LAYOUT : readStoredInspector(account, workspace)
+    ),
+    [account, workspace],
+  );
+
+  // The identity the machine latches on: a gesture made here, and the one
+  // automatic open already served here. A nameless workbench needs one of its
+  // own — the machine reads `undefined` as the same key an ungestured state
+  // carries, so the first decision would read as "the user already chose
+  // this" and nothing would ever open. Never a storage key: nothing keys
+  // storage without an account, and an unkeyed layout has none.
+  const identity = workspace ?? `sample:${scope ?? ""}`;
+
+  const mountDecision = desktopPanels && widePanels ? decideInspector(readLayout(), worthShowing) : null;
 
   // ── Owned state ────────────────────────────────────────────────────────
   // The machine (core `web/inspector-layout.ts`) decides; this hook applies.
@@ -182,10 +220,10 @@ export function useInspectorLayout(input: {
   const commitsRef = useRef(0);
 
   const persist = useCallback((target: InspectorTarget) => {
-    if (account === null || !widePanels) return;
-    localStorage.setItem(`kinu.inspector.${account}`, String(target.widthPx));
+    if (account?.kind !== "known" || !widePanels) return;
+    localStorage.setItem(`kinu.inspector.${account.email}`, String(target.widthPx));
 
-    if (workspace !== undefined) localStorage.setItem(`kinu.inspector.open.${account}.${workspace}`, target.collapsed ? "0" : "1");
+    if (workspace !== undefined) localStorage.setItem(`kinu.inspector.open.${account.email}.${workspace}`, target.collapsed ? "0" : "1");
   }, [account, workspace, widePanels]);
 
   // One step of the machine, applied: the state mirrored, the effects done.
@@ -214,13 +252,13 @@ export function useInspectorLayout(input: {
     if (!desktopPanels || !widePanels) return;
 
     apply(applyInspectorDecision(machineRef.current, {
-      workspace, stored: readStoredInspector(account, workspace), worthShowing, panelPresent: panelRef.current !== null,
+      workspace: identity, stored: readLayout(), worthShowing, panelPresent: panelRef.current !== null,
     }));
-  }, [account, workspace, worthShowing, desktopPanels, widePanels, panelRef, apply]);
+  }, [readLayout, identity, worthShowing, desktopPanels, widePanels, panelRef, apply]);
 
   const claim = useCallback((target: InspectorTarget) => {
-    apply(claimInspectorTarget(machineRef.current, target, workspace));
-  }, [apply, workspace]);
+    apply(claimInspectorTarget(machineRef.current, target, identity));
+  }, [apply, identity]);
 
   const collapse = useCallback(() => {
     const width = panelRef.current?.getSize().inPixels ?? 0;
@@ -252,7 +290,7 @@ export function useInspectorLayout(input: {
     commitsRef.current += 1;
     groupElementRef.current?.setAttribute("data-inspector-commits", String(commitsRef.current));
 
-    const share = layout[INSPECTOR_PANEL_ID];
+    const share = layout[inspectorPanelId];
     const collapsedNow = share !== undefined && share <= 0;
 
     const now: InspectorTarget = {
@@ -260,7 +298,7 @@ export function useInspectorLayout(input: {
       // expansion width is the last open one, never zero.
       collapsed: collapsedNow,
       widthPx: collapsedNow ? machineRef.current.widthPx : Math.max(INSPECTOR_MIN_PX, committedWidthPx(
-        layout, groupElementRef.current,
+        layout, inspectorPanelId, groupElementRef.current,
         () => Math.round(panelRef.current?.getSize().inPixels ?? 0),
       )),
     };
@@ -269,9 +307,9 @@ export function useInspectorLayout(input: {
     inputRef.current = null;
 
     apply(commitInspectorLayout(machineRef.current, {
-      now, marked: input !== null, workspace, panelPresent: panelRef.current !== null,
+      now, marked: input !== null, workspace: identity, panelPresent: panelRef.current !== null,
     }));
-  }, [desktopPanels, panelRef, workspace, apply]);
+  }, [desktopPanels, inspectorPanelId, panelRef, identity, apply]);
 
   // The separator's own listeners mark user input where it starts. Capture
   // phase on the element runs before the library's bubble-phase keydown and
@@ -349,7 +387,7 @@ export function useInspectorLayout(input: {
 
   const panelProps: InspectorPanelProps = desktopPanels
     ? {
-      id: INSPECTOR_PANEL_ID,
+      id: inspectorPanelId,
       minSize: `${String(INSPECTOR_MIN_PX)}px`,
       defaultSize: `${String(widthPx)}px`,
       collapsible: true,
@@ -357,7 +395,7 @@ export function useInspectorLayout(input: {
       panelRef,
       className: collapsed ? "overflow-hidden" : undefined,
     }
-    : { id: INSPECTOR_PANEL_ID, minSize: "0%", defaultSize: mobileDefault };
+    : { id: inspectorPanelId, minSize: "0%", defaultSize: mobileDefault };
 
   // The group element's own ref: when the element itself changes, the
   // previous tree's measurement and parked decision die with it, before the
@@ -379,7 +417,7 @@ export function useInspectorLayout(input: {
     // The group applies the decided mount layout in its own first pass — an
     // imperative collapse could be clobbered by that pass, this cannot.
     defaultLayout: mountDecision?.collapsed === true
-      ? { [CHAT_PANEL_ID]: 1, [INSPECTOR_PANEL_ID]: 0 }
+      ? { [chatPanelId]: 1, [inspectorPanelId]: 0 }
       : undefined,
     onLayoutChanged,
     elementRef: groupRef,
@@ -403,5 +441,6 @@ export function useInspectorLayout(input: {
     panelProps,
     groupProps,
     separatorProps,
+    chatPanelId,
   };
 }

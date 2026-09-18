@@ -197,6 +197,8 @@ fi
 # Every gate is a plain argv of words — the plan carries no quotes — and
 # `flush_gates` splits it on whitespace; bash expands a glob word against the
 # tree, which is how the UI row's `scripts/*-ux.test.ts` reaches its family.
+# Its `--path-ignore-patterns=<suite>` word holds no glob character, so bash
+# passes it through and bun subtracts the suite that is a row of its own.
 PLAN_PHASE=()
 PLAN_LABEL=()
 PLAN_THREADS=()
