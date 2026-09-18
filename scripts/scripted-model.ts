@@ -1,0 +1,316 @@
+/**
+ * The model behind a live-app run: an OpenAI-compatible endpoint whose answers
+ * are a script. Everything else in the run is the product — the real Worker in
+ * workerd, real Durable Objects, the real client — so the one thing a local run
+ * cannot have (a provider) is the one thing stood in for here.
+ *
+ * A script reads the request, not a counter: the same server answers a
+ * workspace's titling call, a row's throwaway turn and the plan walkthrough's
+ * four steps, and each is decided by what the request carries. Counters break
+ * the moment two rows share the server, which they do.
+ *
+ * The streamed shapes are the ones `@ai-sdk/openai-compatible` parses:
+ * a `delta.content` chunk finished with `stop`, or a `delta.tool_calls` chunk
+ * carrying the complete argument JSON, finished with `tool_calls` (the parser
+ * emits the tool call as soon as the arguments parse — see
+ * openai-compatible-chat-language-model.ts:605, `isParsableJson`).
+ */
+import { createServer as createHttpServer } from 'node:http';
+import * as v from 'valibot';
+import { parseJsonValue } from '@kinu.run/core';
+
+import { apiJson } from './live-app-harness';
+
+/** The model spec a scripted workspace runs on, and the credential that serves it. */
+export const SCRIPTED_MODEL_SPEC = 'openai-compat/fake-live';
+
+const SCRIPTED_MODEL_ID = 'fake-live';
+
+const SCRIPTED_CREDENTIAL = 'openai-compat.default';
+
+/** What an unscripted request gets. One string, so a row that waits for the
+ *  answer waits for the words this server actually sends. */
+export const FALLBACK_ANSWER = 'Live answer from the fake model.';
+
+/** One answer: prose, or a tool call with its complete arguments. */
+export interface ScriptedAnswer {
+  readonly text?: string;
+  readonly toolCall?: { readonly name: string; readonly arguments: unknown };
+}
+
+/** The request as a script reads it. `available` is what this turn may call —
+ *  a titling call carries no tools at all, and a script that ignored that
+ *  would answer it with a tool call the request never offered. */
+export interface ScriptedRequest {
+  /** Every user-role message's text, oldest first. */
+  readonly userTexts: readonly string[];
+  /** Tool names already called in this conversation, in order. */
+  readonly called: readonly string[];
+  readonly available: readonly string[];
+}
+
+export type ScriptedModel = (request: ScriptedRequest) => ScriptedAnswer;
+
+const TextPartSchema = v.object({ type: v.optional(v.string()), text: v.optional(v.string()) });
+
+/** A message's text, whatever shape the provider serialized it in: a plain
+ *  string, or the parts array the SDK sends for a multi-part message. */
+const ContentSchema = v.pipe(
+  v.union([v.string(), v.array(TextPartSchema), v.null()]),
+  v.transform((content) => (
+    Array.isArray(content) ? content.map((part) => part.text ?? '').join('') : content ?? ''
+  )),
+);
+
+const OutboundMessageSchema = v.object({
+  role: v.optional(v.string()),
+  content: v.optional(ContentSchema),
+  tool_calls: v.optional(v.array(v.object({
+    function: v.optional(v.object({ name: v.optional(v.string()) })),
+  }))),
+});
+
+const OutboundBodySchema = v.object({
+  messages: v.optional(v.array(OutboundMessageSchema)),
+  tools: v.optional(v.array(v.object({
+    function: v.optional(v.object({ name: v.optional(v.string()) })),
+  }))),
+});
+
+/** The request body as a script reads it. */
+export function readScriptedRequest(body: string): ScriptedRequest {
+  const parsed = v.parse(OutboundBodySchema, parseJsonValue(body));
+  const messages = parsed.messages ?? [];
+
+  return {
+    userTexts: messages.flatMap((message) => message.role === 'user' ? [message.content ?? ''] : []),
+    called: messages.flatMap((message) => (message.tool_calls ?? []).flatMap(
+      (call) => call.function?.name === undefined ? [] : [call.function.name],
+    )),
+    available: (parsed.tools ?? []).flatMap((tool) => tool.function?.name === undefined ? [] : [tool.function.name]),
+  };
+}
+
+const CHUNK = { id: 'chatcmpl-scripted', object: 'chat.completion.chunk', created: 1, model: SCRIPTED_MODEL_ID };
+
+function streamOf(answer: ScriptedAnswer): string {
+  const events: unknown[] = [];
+  const call = answer.toolCall;
+
+  if (answer.text !== undefined) {
+    events.push({ ...CHUNK, choices: [{ index: 0, delta: { role: 'assistant', content: answer.text }, finish_reason: null }] });
+  }
+
+  if (call !== undefined) {
+    events.push({
+      ...CHUNK,
+      choices: [{
+        index: 0,
+        delta: {
+          role: 'assistant',
+          tool_calls: [{
+            index: 0,
+            id: `call-${call.name}-${String(events.length)}`,
+            type: 'function',
+            function: { name: call.name, arguments: JSON.stringify(call.arguments) },
+          }],
+        },
+        finish_reason: null,
+      }],
+    });
+  }
+
+  events.push({ ...CHUNK, choices: [{ index: 0, delta: {}, finish_reason: call === undefined ? 'stop' : 'tool_calls' }] });
+
+  return `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n`;
+}
+
+export interface ScriptedModelServer {
+  readonly port: number;
+  /** Every answer this server gave, in order — what a failing row reads first. */
+  readonly answers: readonly ScriptedAnswer[];
+  stop(): Promise<void>;
+}
+
+/** Bind the scripted endpoint on an ephemeral port. */
+export async function startScriptedModel(script: ScriptedModel): Promise<ScriptedModelServer> {
+  const answers: ScriptedAnswer[] = [];
+
+  const http = createHttpServer((request, response) => {
+    let body = '';
+
+    request.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+    request.on('end', () => {
+      const url = new URL(request.url ?? '/', 'http://fake.invalid');
+
+      if (url.pathname === '/models' && request.method === 'GET') {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ object: 'list', data: [{ id: SCRIPTED_MODEL_ID, name: 'Fake Live' }] }));
+
+        return;
+      }
+
+      if (url.pathname === '/chat/completions' && request.method === 'POST') {
+        const asked = readScriptedRequest(body);
+        const answer = script(asked);
+        // Every request's surface, on the run's own log: a script that answered
+        // prose where a tool call was meant is read here first.
+        process.stderr.write(`scripted-model: tools=${asked.available.join(',')} called=${asked.called.join(',')}\n`);
+        answers.push(answer);
+        response.setHeader('content-type', 'text/event-stream');
+        response.end(streamOf(answer));
+
+        return;
+      }
+
+      response.statusCode = 404;
+      response.end('nope');
+    });
+  });
+
+  const listening = Promise.withResolvers<void>();
+
+  http.once('error', listening.reject);
+  http.listen(0, '127.0.0.1', listening.resolve);
+  await listening.promise;
+
+  const address = v.parse(v.object({ port: v.number() }), http.address());
+
+  return {
+    port: address.port,
+    answers,
+    stop: async () => {
+      const closed = Promise.withResolvers<void>();
+      http.close(() => closed.resolve());
+      await closed.promise;
+    },
+  };
+}
+
+/** Point the deployment's `openai-compat` credential at this server. */
+export async function registerScriptedModel(origin: string, port: number): Promise<void> {
+  await apiJson(origin, `/api/user/credentials/${SCRIPTED_CREDENTIAL}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      kind: 'openai-compat',
+      baseURL: `http://127.0.0.1:${String(port)}`,
+      apiKey: 'fake-key',
+    }),
+  });
+}
+
+/* ── The plan walkthrough ──────────────────────────────────────────────── */
+
+/** The mission the walkthrough is driven with, sent on a Plan turn. */
+export const PLAN_MISSION
+  = 'The SAVE20 coupon 500s at checkout. Plan the fix, then build me a dashboard of the support queue.';
+
+export const SLATE_ID = 'support-queue';
+
+/** The slate's title, which is where the inspector's tab gets its name. */
+export const SLATE_TITLE = 'Support queue';
+
+/** The plan the scripted agent submits — Markdown, as `submit_plan` takes it. */
+export const PLAN_MARKDOWN = [
+  '# Repair the `applyCoupon` eligibility guard',
+  '',
+  '## What is wrong',
+  '',
+  '`applyCoupon` reads `cart.customer.segment` before the guest cart has a',
+  'customer, so a guest applying SAVE20 throws and checkout answers 500.',
+  '',
+  '## Steps',
+  '',
+  '1. Guard the segment read in `applyCoupon`: a guest cart has no segment, and',
+  '   a coupon with no segment rule applies to every cart.',
+  '2. Refuse an ineligible coupon with the cart untouched, and return the',
+  '   refusal to the checkout route instead of throwing.',
+  '3. Add the guest-cart case to the coupon regression suite.',
+  '',
+  '## How it is verified',
+  '',
+  '- A guest applying SAVE20 gets the discount; the response is 200.',
+  '- A refused coupon leaves the cart total and the discount rows unchanged.',
+].join('\n');
+
+const SLATE_MANIFEST = JSON.stringify({
+  name: SLATE_ID,
+  main: 'server.ts',
+  slate: { title: SLATE_TITLE },
+}, null, 2);
+
+const SLATE_SERVER = [
+  'import { SlateObject } from "kinu:slate";',
+  '',
+  'const ROWS = [',
+  '  { queue: "Billing", open: 14, breached: 2 },',
+  '  { queue: "Checkout", open: 9, breached: 0 },',
+  '  { queue: "Accounts", open: 5, breached: 1 },',
+  '];',
+  '',
+  'export class Slate extends SlateObject {',
+  '  async fetch() {',
+  '    const rows = ROWS.map((row) => `<tr><td>${row.queue}</td><td>${row.open}</td><td>${row.breached}</td></tr>`);',
+  '',
+  '    return new Response(`<h1>Support queue</h1><table>${rows.join("")}</table>`, {',
+  '      headers: { "content-type": "text/html" },',
+  '    });',
+  '  }',
+  '}',
+].join('\n');
+
+const SLATE_ROOT = `/home/user/slates/${SLATE_ID}`;
+
+/** The implement turn's writes, in the order the script plays them. */
+const SLATE_WRITES: readonly ScriptedAnswer[] = [
+  {
+    text: 'Writing the slate.',
+    toolCall: { name: 'file', arguments: { action: 'write', path: `${SLATE_ROOT}/package.json`, content: SLATE_MANIFEST } },
+  },
+  {
+    toolCall: { name: 'file', arguments: { action: 'write', path: `${SLATE_ROOT}/server.ts`, content: SLATE_SERVER } },
+  },
+];
+
+const APPROVAL_TEXT = /approved plan/i;
+
+/**
+ * The walkthrough the README's film records and the live-app tier asserts:
+ * a Plan turn that submits a plan, then — after the owner approves and the
+ * product enqueues the handoff — a Build turn that writes the slate.
+ *
+ * Every branch is keyed on the request. The plan step needs `submit_plan` to
+ * be offered, which only a Plan turn does; the build step needs the approval
+ * handoff to be in the conversation, which only a decision puts there.
+ */
+export const planWalkthrough: ScriptedModel = (request) => {
+  const approved = request.userTexts.some((text) => APPROVAL_TEXT.test(text));
+  const asked = request.userTexts.some((text) => text.includes('SAVE20'));
+
+  if (!asked || request.available.length === 0) return { text: FALLBACK_ANSWER };
+
+  if (!approved) {
+    if (!request.available.includes('submit_plan')) return { text: FALLBACK_ANSWER };
+
+    if (request.called.includes('submit_plan')) {
+      return { text: 'The plan is ready for your review. Nothing is written yet.' };
+    }
+
+    return {
+      text: 'Reading the checkout code before I plan the fix.',
+      toolCall: { name: 'submit_plan', arguments: { edits: [{ start: 1, content: PLAN_MARKDOWN }] } },
+    };
+  }
+
+  const written = request.called.filter((name) => name === 'file').length;
+  const next = SLATE_WRITES[written];
+
+  if (next !== undefined && request.available.includes('file')) return next;
+
+  return {
+    text: [
+      'The guard is fixed and the guest-cart case is in the regression suite.',
+      `The support queue dashboard is a slate: ${SLATE_TITLE}, open in its own tab.`,
+    ].join(' '),
+  };
+};
