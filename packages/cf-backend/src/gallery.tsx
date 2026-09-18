@@ -101,6 +101,9 @@
  *                                  asserted about without asserting about a clock.
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
+ * A gate makes the server speak by dispatching `gallery:push-frame` with one
+ * card or steer frame: those are the two the hosting seam stamps with an
+ * actor, and a stamped frame is unreachable through any fixture read.
  * The dispatch in `mount()` is the full frame list.
  */
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1279,6 +1282,32 @@ window.WebSocket = new Proxy(RealWebSocket, {
   },
 });
 
+/** One frame the gate makes the SERVER send. Only the lifecycles a hosted
+ *  actor's host broadcasts are reachable this way — a card and a steer — since
+ *  those are the frames carrying an actor stamp, and no fixture READ can
+ *  produce one. */
+const GalleryPushFrameSchema = v.object({
+  type: v.picklist(["signal_card", "steer_status"]),
+  actorId: v.optional(v.string()),
+  id: v.optional(v.string()),
+  state: v.optional(v.string()),
+  text: v.optional(v.string()),
+  metadata: v.optional(JsonObjectSchema),
+  steerId: v.optional(v.string()),
+  status: v.optional(v.string()),
+  atStep: v.optional(v.number()),
+});
+
+window.addEventListener("gallery:push-frame", (event: Event) => {
+  // The gate's own CustomEvent; the detail is parsed at the boundary because
+  // nothing typechecks across a dispatch.
+  const detail = event instanceof CustomEvent ? v.safeParse(GalleryPushFrameSchema, event.detail) : null;
+
+  if (detail?.success !== true) return;
+
+  galleryServerPush(JSON.stringify(detail.output));
+});
+
 /* ── Mock chat data ─────────────────────────────────────────────── */
 
 interface GalleryMessage extends UIMessage { createdAt?: number }
@@ -1474,6 +1503,13 @@ const GALLERY_SUBS: {
 
 let gallerySubSeq = 0;
 
+/** The actor a rostered name resolves to here. Derived from the name so the
+ *  frames the gate stamps and the id the pane reads off its own snapshot are
+ *  the same string without a second fixture to keep in step. */
+function galleryActorId(name: string): string {
+  return `actor-${name}`;
+}
+
 const GALLERY_PLAN_MARKDOWN = `# Repair the \`applyCoupon\` eligibility guard
 
 The checkout accepts archived coupons because the eligibility guard reads the campaign state after the discount has already been applied. This plan moves the guard ahead of mutation and keeps the current response contract.
@@ -1648,12 +1684,12 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
   }
 
   if (method === "dismissSubordinate") {
-    const [name] = v.parse(v.tuple([v.string()]), args);
+    const [name, keepHistory] = v.parse(v.tuple([v.string(), v.optional(v.boolean())]), args);
     const index = GALLERY_SUBS.findIndex((sub) => sub.name === name);
 
     if (index >= 0) GALLERY_SUBS.splice(index, 1);
 
-    return rpcResult({ ok: true, name, historyKept: true }).json<T>();
+    return rpcResult({ ok: true, name, historyKept: keepHistory ?? true }).json<T>();
   }
 
   if (method === "getActorSnapshot") {
@@ -1665,6 +1701,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
 
     return rpcResult({
       name: latest?.name ?? "agent-0",
+      actorId: galleryActorId(latest?.name ?? "agent-0"),
       displayName: latest?.displayName ?? "",
       role: "task",
       mission: "",
@@ -3808,6 +3845,9 @@ const AGENTCHATS_SEED: readonly GalleryRosterEntry[] = [
   // The role string is deliberately distinctive: the gate asserts it never
   // renders — an agent's being subordinate shows as hierarchy, not as a badge.
   { name: "scout", displayName: "Checkout scout", role: "Fixture-role QA lead", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
+  // An agent-created subordinate: keeps the confirmation path, beside the
+  // user-created seed above that deletes on click.
+  { name: "auto-scout", displayName: "Auto scout", role: "Fixture-role QA lead", createdBy: "orchestrator", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
 ];
 
 const AGENTCHATS_ROWS = 40;
@@ -3880,6 +3920,7 @@ function AgentChatsScene() {
   });
 
   const [sent, setSent] = useState<readonly { agent: string; mode: ChatMode; text: string }[]>([]);
+  const [dismissals, setDismissals] = useState<readonly { agent: string; historyKept: boolean }[]>([]);
   const counter = useRef(0);
   // What the backend keeps to itself: the inherited mission, keyed off-DOM.
   const missions = useRef<Record<string, string>>({});
@@ -3919,8 +3960,20 @@ function AgentChatsScene() {
           activeName={subName}
           onCreate={create}
           creating={false}
-          onDismiss={async (name) => {
+          onDismiss={async (name, keepHistory) => {
             setRoster((current) => current.filter((entry) => entry.name !== name));
+            // What the backend does with the THREAD, mirrored: `keepHistory`
+            // defaults to keeping exactly as `dismiss` in core does, and a
+            // delete takes the conversation with it. The gate reads this
+            // instead of the dialog's sentence.
+            const historyKept = keepHistory ?? true;
+
+            if (!historyKept) {
+              setTranscripts((current) => Object.fromEntries(
+                Object.entries(current).filter(([agent]) => agent !== name)));
+            }
+
+            setDismissals((current) => [...current, { agent: name, historyKept }]);
           }}
         />
         {subName && active ? (
@@ -3949,6 +4002,7 @@ function AgentChatsScene() {
         )}
       </div>
       <div data-sent-log={JSON.stringify(sent)} />
+      <div data-dismiss-log={JSON.stringify(dismissals)} />
     </div>
   );
 }
