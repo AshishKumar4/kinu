@@ -111,10 +111,34 @@ const wgslClientOnly = {
   },
 };
 
+/**
+ * Where the dev server persists its Durable Objects, KV and R2.
+ *
+ * Default is the plugin's own `<root>/.wrangler/state`: ONE directory per
+ * checkout, shared by every run on the box and older than the schema changes
+ * made since it was written. Schema init is idempotent and there is no column
+ * reconcile, so a table created before a column existed keeps its old shape
+ * and the first route that names the column answers 500 — `no such column:
+ * delete_pending`, which is what the deploy wave's browser tier hit at
+ * 18fbea162 while the same file was green from a fresh worktree. A run that
+ * must not inherit the box's leftovers names its own directory here.
+ *
+ * Measured 2026-09-18 against the installed @cloudflare/vite-plugin 1.53.1
+ * (`getPersistenceRoot` in dist/index.mjs): the plugin resolves
+ * `persistState.path` against the vite root, so an absolute path wins, and
+ * appends `v3` itself. It never shells out to wrangler, so `--persist-to` is
+ * not a seam that exists here.
+ */
+const devStateDir = process.env.KINU_DEV_STATE_DIR;
+
 export default defineConfig({
   // `slateVendor` is the virtual-module half of the runner's vendored bytes —
   // registered for dev and build so `virtual:kinu-slate-vendor` resolves.
-  plugins: [promptText(), slateVendor(), stubClientNodeBuiltins, workerSourceMaps, wgslClientOnly, agents(), react(), cloudflare(), tailwindcss()],
+  plugins: [
+    promptText(), slateVendor(), stubClientNodeBuiltins, workerSourceMaps, wgslClientOnly, agents(), react(),
+    cloudflare(devStateDir === undefined ? {} : { persistState: { path: devStateDir } }),
+    tailwindcss(),
+  ],
   // The fabric outbox is the one pre-bundled dep that imports a stubbed
   // builtin; excluded, it serves as source and the resolveId hook reaches it.
   // @plannotator/web-highlighter is the inverse: UMD-only (its `module` field
