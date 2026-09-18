@@ -193,6 +193,16 @@ Cloudflare door. No user repository and no Workers Builds.
    instance answers on its own port and round-trips its own KV binding), the
    rendering in `packages/core/tests/unit-deploy-flow.test.ts`.
 
+   The pid rule: `workerd.pid` is a hint and never a licence to signal. Every
+   read of it confirms the process's own argv names `workerd` and that
+   instance's `workerd.capnp` — `/proc/<pid>/cmdline` on Linux, `ps -o args=`
+   elsewhere — and the start time is recorded beside the pid for `status`.
+   `stop` refuses a pid that fails the test and clears the stale file instead
+   of killing whatever inherited the number. Starting is proved the same way:
+   the child must still be alive and `/api/health` must answer on the port,
+   because a process that already holds the port kills workerd on EADDRINUSE
+   while a connect to it still succeeds.
+
    Still to come: the one-line installer (`curl kinu.run/install-local.sh |
    bash`) that puts a pinned workerd in `~/.kinu/local/bin/` — until then a
    local instance uses the `workerd` on PATH — the runtime cache seed, and the
