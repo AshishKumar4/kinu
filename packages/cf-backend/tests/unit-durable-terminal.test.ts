@@ -404,10 +404,15 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    * The injected failure is the exact instant the defect names: the fact writes
    * have landed and the tombstone write throws. Rolled back, the retry applies the
    * update once; committed separately, it would apply the decay twice.
+   *
+   * Two turns settle first with the lane off: the compute runs on a cadence,
+   * and the third completed turn is the first one it is due on.
    */
   test('a fact update whose tombstone fails leaves no half-applied prefix', async () => {
     const harness = orchestratorHarness();
     harness.agent.harnessFacts().upsert('deploy_target', 'staging', { confidence: 0.6 });
+    await turns(harness).settle({ turnId: 'u-one', messageId: 'a-one' });
+    await turns(harness).settle({ turnId: 'u-two', messageId: 'a-two' });
     const decayOne = { upserts: [], decay: ['deploy_target'] };
     harness.agent.harnessRecordSleepTimeAnswer('a-decay', decayOne);
     turns(harness).open('u-decay');

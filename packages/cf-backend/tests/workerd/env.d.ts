@@ -90,7 +90,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   driveArmedWakesFor(workspace: string): Promise<string[]>;
   runStartCausesFor(workspace: string): Promise<string[]>;
   awaitWireMarker(marker: string): Promise<void>;
-  firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: Array<{ id: string; role: string }>; factsCompressed: number }>;
+  firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: Array<{ id: string; role: string }>; sleepTimeSettled: number }>;
   twinSends(): Promise<{ http: HttpCall[]; transcript: Array<{ id: string; role: string }>; steers: PendingSteer[]; runEnds: Array<{ runId: string; reason: string }> }>;
   evalAbort(): Promise<{ receipt: string | null; alive: boolean }>;
   hostedActorTab(): Promise<{ name: string; snapshot: string; tasks: string; frames: number }>;

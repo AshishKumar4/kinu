@@ -125,8 +125,9 @@ export interface TerminalTurnParts {
      *  claimed sequence. */
     readonly trialContext: JsonValue;
   };
-  /** The turn's tool calls, for the memory-compression lane. */
-  readonly sleepTime?: { readonly toolCalls: JsonValue };
+  /** Whether this actor runs the memory-compression lane at all. The lane
+   *  reads its evidence from the transcript, so the row carries no input. */
+  readonly sleepTime?: boolean;
   /** What this actor should name itself from, when it is unnamed. */
   readonly autoTitle?: { readonly subject: string };
   /** Whether this actor runs the cadence optimisation lanes at all. */
@@ -322,18 +323,11 @@ export function declareTerminalRoster(
     });
   }
 
-  // The between-turn lanes. Each is durably gated at its own boundary — a config
-  // flag, a `name_origin` stamp, a turn-count cadence — which is what makes each
-  // replayable from its recorded input.
+  // The between-turn lanes. Each is durably gated at its own boundary — a
+  // transcript-derived cadence, a `name_origin` stamp, a turn-count cadence —
+  // which is what makes each replayable from its recorded input.
   if (parts.sleepTime) {
-    owed.push({
-      name: 'sleep_time', scope: messageId, lane: 'detached',
-      input: {
-        task: facts.userText,
-        output: assistantText,
-        toolCalls: parts.sleepTime.toolCalls,
-      },
-    });
+    owed.push({ name: 'sleep_time', scope: messageId, lane: 'detached', input: {} });
   }
 
   if (parts.autoTitle) {

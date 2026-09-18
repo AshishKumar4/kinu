@@ -450,7 +450,12 @@ codemode sandbox.
   (`packages/cf-backend/src/orchestrator.ts:5843-5847`).
 - Sleep-time compute, `packages/core/src/memory/sleep-time-compute.ts`: background
   facts compression only. `SleepTimeUpdate` is exactly `{ upserts, decay }`.
-  `applySleepTimeUpdate` touches only `agent_facts`. It fires fire-and-forget
-  from `onChatResponse`, defaults on through `agent_config.sleep_time_compute`,
-  disables on literal `'false'`, and makes fact upserts revertable in the
-  Evolution Changelog.
+  `applySleepTimeUpdate` touches only `agent_facts`. It runs on a cadence, not
+  after every turn: `sleepTimeDue` is due on the third completed turn since the
+  last run, on `SLEEP_TIME_CADENCE.idleMs` of no new input, or
+  `SLEEP_TIME_CADENCE.closeGraceMs` after the last tab closes — never on a workspace's first turn — and every run
+  reads the turns since the last run from the transcript (`sleepTimeWindow`).
+  The turn-count trigger is the `sleep_time` terminal effect; the two timed
+  triggers ride the workspace's one durable wake (`alarm.sleep_time`). Defaults
+  on through `agent_config.sleep_time_compute`, disables on literal `'false'`,
+  and makes fact upserts revertable in the Evolution Changelog.

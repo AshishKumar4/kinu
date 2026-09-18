@@ -24,7 +24,7 @@ import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import {
   PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY,
-  stampTurnAuthor, transcriptRole, turnAuthor, uiMessageRow, type StoredRowProjection,
+  stampTurnAuthor, transcriptRole, turnAuthor, uiMessageRow,
 } from '../src/utils/ui-message';
 import { Inbox } from '../src/orchestrator/inbox';
 import { FORK_INTERRUPTED_SIGNAL } from '../src/heads/reconcile';
@@ -37,7 +37,7 @@ import { JsonObjectSchema, type JsonObject } from '../src/utils/json';
  *  the live card broadcast beside it. The two must agree, because the chat
  *  renders a queued signal and a spliced one through the same classifier. */
 function recordingHost() {
-  const turns: StoredRowProjection[] = [];
+  const turns: Array<{ text: string; metadata?: JsonObject }> = [];
   const cards: JsonObject[] = [];
 
   const CardFrameSchema = v.looseObject({
@@ -184,10 +184,10 @@ describe('a row that carries no stamp is read from what it does carry', () => {
     });
 
     expect(uiMessageRow(content)).toEqual({
-      text: '23 head(s) across 6 fork run(s)…',
+      text: '23 head(s) across 6 fork run(s)…', toolCalls: [],
       metadata: { kinuEvent: 'fork_interrupted', [TURN_AUTHOR_METADATA_KEY]: 'harness' },
     });
     // The plain mirror holds text, not JSON, and must survive being asked.
-    expect(uiMessageRow('find me a domain')).toEqual({ text: 'find me a domain' });
+    expect(uiMessageRow('find me a domain')).toEqual({ text: 'find me a domain', toolCalls: [] });
   });
 });

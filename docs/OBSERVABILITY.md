@@ -86,7 +86,7 @@ ACTOR the span was opened under, which every hosted actor carries.
 
 | Root | Phases |
 | --- | --- |
-| `alarm.tick` | `alarm.due_triggers`, `alarm.peer_dispatch`, `alarm.email_reconcile`, `alarm.timer_rearm` |
+| `alarm.tick` | `alarm.due_triggers`, `alarm.peer_dispatch`, `alarm.email_reconcile`, `alarm.cache_warm`, `alarm.sleep_time`, `alarm.timer_rearm` |
 
 - `alarm.tick`. Its phases distinguish a slow alarm from slow email reconcile.
 - `rpc.swarm.arbitrate`. Waiting and never asking otherwise look alike.
