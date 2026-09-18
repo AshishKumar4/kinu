@@ -3121,11 +3121,31 @@ function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[]
 }
 
 function ChatMessages() {
+  // The workspace page's feedback path, stubbed at the seam the test reads:
+  // the dataset is the write's record, the map its visible result.
+  const [feedback, setFeedback] = useState<Record<string, 'positive' | 'negative' | null>>({});
+
+  const onFeedback = useCallback(async (messageId: string, value: 'positive' | 'negative' | null) => {
+    const root = document.documentElement;
+    const prior = root.dataset.galleryFeedbackCalls;
+
+    const calls: Array<{ method: string; args: unknown[] }> =
+      // SAFETY: this callback is the recorder's only writer — it stores exactly
+      // what it will parse on the next click, so the shape is its own.
+      prior === undefined ? [] : JSON.parse(prior);
+
+    calls.push({ method: 'setTurnFeedback', args: [messageId, value] });
+
+    root.dataset.galleryFeedbackCalls = JSON.stringify(calls);
+    setFeedback((prev) => ({ ...prev, [messageId]: value }));
+  }, []);
+
   return (
     <div className="flex-1 overflow-y-auto px-6 py-7 space-y-5 lg:px-8 [&>*]:max-w-[780px] [&>*]:mx-auto" data-gallery-chat>
       {MESSAGES.map((m, i) => (
         <div key={m.id} data-chat-row={m.id}>
-          <MessageView message={m} isLast={i === MESSAGES.length - 1} isStreaming={false} onFork={() => {}} />
+          <MessageView message={m} isLast={i === MESSAGES.length - 1} isStreaming={false} onFork={() => {}}
+            feedback={feedback[m.id]} onFeedback={onFeedback} />
         </div>
       ))}
       <DeviceConsentCard
