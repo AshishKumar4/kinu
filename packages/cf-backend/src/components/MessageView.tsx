@@ -954,13 +954,13 @@ function MessageFeedback({
   }, [busy, current, messageId, onFeedback]);
 
   return (
-    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+    <div className="flex items-center gap-1">
       <button
         type="button"
         onClick={() => toggle('positive')}
         disabled={busy}
         className={`p-t-control p-1 rounded-sm p-card-hover transition-colors ${
-          current === 'positive' ? 'p-text' : 'p-text-3'
+          current === 'positive' ? 'p-text' : 'p-text-3 hover:p-text focus-visible:p-text'
         }`}
         title="Mark this response helpful. Feeds evolution scoring."
       >👍</button>
@@ -969,7 +969,7 @@ function MessageFeedback({
         onClick={() => toggle('negative')}
         disabled={busy}
         className={`p-t-control p-1 rounded-sm p-card-hover transition-colors ${
-          current === 'negative' ? 'p-text' : 'p-text-3'
+          current === 'negative' ? 'p-text' : 'p-text-3 hover:p-text focus-visible:p-text'
         }`}
         title="Mark this response poor. Feeds evolution scoring."
       >👎</button>
