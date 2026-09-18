@@ -1,12 +1,12 @@
 /**
  * Codemode sandbox error enrichment.
  *
- * Both `execute_tools` sandboxes bind a fixed set of namespaces — `tools`,
+ * Both `eval` sandboxes bind a fixed set of namespaces — `tools`,
  * `state`, `workspace`, plus whatever ExecutionRouter/CodemodeProvider
  * namespaces the actor registers. Kinu's OWN top-level tool NAMES are not bare
  * identifiers in that scope: a native tool is `tools.<name>(input)` there. A
  * model reaching for a bare `run(...)` from inside a program is an easy,
- * recurring mistake — `run` in particular reads as a plausible global because
+ * recurring mistake — `shell` in particular reads as a plausible global because
  * it IS a tool the model can see in its own list.
  *
  * When that happens the sandbox throws a bare V8 ReferenceError
@@ -35,8 +35,8 @@ export function explainNativeToolReferenceError(error: string): string {
 
   if (!name || !isBuiltinToolName(name)) return error;
 
-  // execute_tools IS the sandbox; a program cannot call it from inside itself.
-  if (name === 'execute_tools') return error;
+  // eval IS the sandbox; a program cannot call it from inside itself.
+  if (name === 'eval') return error;
   const namespace = TOOL_REACH[name].codemode;
 
   const projection = namespace

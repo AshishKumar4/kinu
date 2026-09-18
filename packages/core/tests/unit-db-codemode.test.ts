@@ -754,10 +754,10 @@ describe('role and Plan authority', () => {
   test('db is a declared namespace a role can lose and can name', () => {
     expect(TOOL_REACH.db).toEqual({ native: false, codemode: 'db', replay: 'claimed' });
     expect(codemodeCapabilitiesFor([{ name: 'db' }])).toEqual(['db']);
-    expect(narrowToolSurface(['execute_tools']).allowsNamespace('db')).toBe(false);
-    expect(narrowToolSurface(['execute_tools', 'db']).allowsNamespace('db')).toBe(true);
+    expect(narrowToolSurface(['eval']).allowsNamespace('db')).toBe(false);
+    expect(narrowToolSurface(['eval', 'db']).allowsNamespace('db')).toBe(true);
     expect(narrowToolSurface(undefined).allowsNamespace('db')).toBe(true);
-    expect(narrowToolSurface(['execute_tools']).narrowProviders([{ name: 'db' }, { name: 'state' }]))
+    expect(narrowToolSurface(['eval']).narrowProviders([{ name: 'db' }, { name: 'state' }]))
       .toEqual([{ name: 'state' }]);
   });
 

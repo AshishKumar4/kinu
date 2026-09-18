@@ -32,7 +32,7 @@ import type { LLM } from '../src/types/primitives';
 const aTurn = (over: Partial<CompletedTurn> = {}): CompletedTurn => ({
   userMessage: 'rotate the staging keys',
   assistantResponse: 'rotated them',
-  toolCalls: [{ name: 'run', args: { command: 'kinu rotate' }, result: 'exit 1' }],
+  toolCalls: [{ name: 'shell', args: { command: 'kinu rotate' }, result: 'exit 1' }],
   steps: 3,
   durationMs: 900,
   feedback: null,
@@ -143,9 +143,9 @@ describe('workspace advisor guidance', () => {
     expect(reads).toEqual([]);
     expect(prompt).toBe(buildAdvisorPrompt(aTurn()));
     // Captured on main 078ec61d7, before adding workspace guidance.
-    expect(new TextEncoder().encode(prompt)).toHaveLength(3422);
+    expect(new TextEncoder().encode(prompt)).toHaveLength(3424);
     expect(createHash('sha256').update(prompt).digest('hex'))
-      .toBe('56338df469cf99eb2b46b4c4edb446c369b132652636f2e20946e758558711a4');
+      .toBe('e2ff4713972fd72cd5914694089a52b97a1fdaf379a4575d46a382e22ec3eb2e');
   });
 
   test('an admitted file has its own review section, including at the exact byte budget', async () => {
@@ -446,8 +446,8 @@ describe('the prompt', () => {
 
   test('the advisor receives producer outcomes even when returned data is identical', () => {
     const result = { error: 'business data' };
-    const succeeded = buildAdvisorPrompt(aTurn({ toolCalls: [{ name: 'run', args: {}, result, outcome: { success: true } }] }));
-    const failed = buildAdvisorPrompt(aTurn({ toolCalls: [{ name: 'run', args: {}, result, outcome: { success: false, reason: 'denied' } }] }));
+    const succeeded = buildAdvisorPrompt(aTurn({ toolCalls: [{ name: 'shell', args: {}, result, outcome: { success: true } }] }));
+    const failed = buildAdvisorPrompt(aTurn({ toolCalls: [{ name: 'shell', args: {}, result, outcome: { success: false, reason: 'denied' } }] }));
     expect(succeeded).toContain('"success":true');
     expect(failed).toContain('"success":false');
     expect(failed).toContain('"reason":"denied"');
@@ -458,12 +458,12 @@ describe('the prompt', () => {
 
 describe('the missed-capability class', () => {
   test('lists a reachable capability the turn did not call', () => {
-    const prompt = buildAdvisorPrompt(aTurn(), ['run', 'agents', 'file']);
+    const prompt = buildAdvisorPrompt(aTurn(), ['shell', 'agents', 'file']);
     expect(prompt).toContain('Reachable capabilities it did not use: agents, file');
   });
 
   test('never lists a capability the turn DID call', () => {
-    expect(buildAdvisorPrompt(aTurn(), ['run'])).toContain('did not use: (none recorded)');
+    expect(buildAdvisorPrompt(aTurn(), ['shell'])).toContain('did not use: (none recorded)');
   });
 
   test('says nothing was recorded when the caller could not say', () => {
@@ -494,14 +494,14 @@ describe('the missed-capability class', () => {
 });
 
 // R6, advisor half. THE MEASURED COUNTERFACTUAL. On the production turn, all 12
-// native calls were `execute_tools` and 5 of them ran `agents.swarm`. Reading
+// native calls were `eval` and 5 of them ran `agents.swarm`. Reading
 // native names alone, this prompt would have listed `agents` among 14 unused
 // capabilities — so the likeliest note told the agent to delegate, which it had
 // just done five times. A note naming a capability the agent used is worse than
 // no note, for the same reason one naming a capability it never had is.
 describe('a capability reached through codemode counts as used', () => {
   const swarmed = (code: string): CompletedTurn => aTurn({
-    toolCalls: [{ name: 'execute_tools', args: { code }, result: 'ok' }],
+    toolCalls: [{ name: 'eval', args: { code }, result: 'ok' }],
   });
 
   test('a codemode agents.swarm is never reported unused', () => {
@@ -530,10 +530,10 @@ describe('a capability reached through codemode counts as used', () => {
   });
 
   test('a shared namespace reports both its capabilities reached, never neither', () => {
-    // `run` and `file` both reach `workspace`, and over-reporting reach cannot
+    // `shell` and `file` both reach `workspace`, and over-reporting reach cannot
     // produce the note this exists to stop. Stated so the behaviour is a
     // decision rather than a surprise.
-    const prompt = buildAdvisorPrompt(swarmed('await workspace.exec("ls")'), ['run', 'file']);
+    const prompt = buildAdvisorPrompt(swarmed('await workspace.exec("ls")'), ['shell', 'file']);
     expect(prompt).toContain('did not use: (none recorded)');
   });
 });
@@ -587,7 +587,7 @@ describe('a turn with no durable id', () => {
 
 describe('reviewRecordedTurn', () => {
   const snapshot = (over: Partial<CompletedTurn> = {}) => ({
-    turn: aTurn(over), reachable: ['run'], minSeverity: DEFAULT_ADVISOR_MIN_SEVERITY, recent: [],
+    turn: aTurn(over), reachable: ['shell'], minSeverity: DEFAULT_ADVISOR_MIN_SEVERITY, recent: [],
   });
 
   test('a labelled turn is reviewed on the governed client; an unlabelled one on the bare client', async () => {
@@ -665,7 +665,7 @@ describe('reviewRecordedTurn', () => {
 
 describe('advisor review retries', () => {
   const snapshot = (over: Partial<CompletedTurn> = {}) => ({
-    turn: aTurn(over), reachable: ['run'], minSeverity: DEFAULT_ADVISOR_MIN_SEVERITY, recent: [],
+    turn: aTurn(over), reachable: ['shell'], minSeverity: DEFAULT_ADVISOR_MIN_SEVERITY, recent: [],
   });
 
   const attempts = (rec: RecordingLogger) => rec.emitted
@@ -835,7 +835,7 @@ describe('advisor prompt secret obfuscation', () => {
   test('tool args and results carrying credentials reach the prompt obfuscated, by shape class', () => {
     const prompt = buildAdvisorPrompt(aTurn({
       toolCalls: [{
-        name: 'run',
+        name: 'shell',
         args: { command: 'deploy', token: bearer, key: providerKey },
         result: `deployed with ${awsKey} as ${kinuToken}\n${privateKey}`,
       }],
@@ -857,7 +857,7 @@ describe('advisor prompt secret obfuscation', () => {
 
     const prompt = buildAdvisorPrompt(aTurn({
       toolCalls: [{
-        name: 'run',
+        name: 'shell',
         args: { command: 'kinu rotate', commit, hint: 'pass a Bearer token along' },
         result: 'exit 1',
       }],

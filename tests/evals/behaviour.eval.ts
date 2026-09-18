@@ -31,7 +31,7 @@
  *      reporter quirk. A body-level `expect()` therefore fixes the verdict and
  *      leaves the contaminated score in the artifact.
  *
- * The body-level precondition is written anyway, immediately after `run`, and is
+ * The body-level precondition is written anyway, immediately after `shell`, and is
  * not redundant: it carries the task-specific expectation a generic harness
  * cannot know — this task needed a file edit, that one needed a failure to
  * recover from — and names it in the failure message. C for the artifact, B for
@@ -470,7 +470,7 @@ function ledgerJudge(name: string) {
  *
  * A measurement, not a gate, and the distinction was learned from the first live
  * flash run: `ws-inventory` is tagged `edit`, and the agent solved it correctly
- * with four `run` calls and shell redirection, never touching the `file`
+ * with four `shell` calls and shell redirection, never touching the `file`
  * primitive. Asserting the tag would have painted a correct solution red; not
  * recording it at all would hide something important, because a turn that edits
  * through the shell produces NO gradable edit signal — `sed -i` exits 0 whether
@@ -824,7 +824,7 @@ describeEval('Agent behaviour over the run-event ledger', {
 
     // WHAT IS DELIBERATELY *NOT* ASSERTED HERE: that an `edit`-tagged task must
     // have attempted a file edit. On the first live flash run, given
-    // `ws-inventory` the agent solved the task correctly using four `run` calls
+    // `ws-inventory` the agent solved the task correctly using four `shell` calls
     // and shell redirection, never touching the `file` primitive, so
     // `edit_landing` had a zero denominator. That is a genuine BEHAVIOURAL
     // FINDING — the model prefers shell over the edit primitive, which also
@@ -984,12 +984,12 @@ describe('corpus quality — can this corpus rank anything at all', () => {
       },
       'probe-codemode-branch': {
         files: { 'diagnosis.txt': 'reason:unread' },
-        events: [toolEnd('execute_tools', 'run', undefined, true)],
+        events: [toolEnd('eval', 'shell', undefined, true)],
       },
       'probe-codemode-throw': {
         files: { 'aftermath.txt': 'readFile threw: the file does not exist' },
         events: [
-          toolEnd('execute_tools', 'run', undefined, false),
+          toolEnd('eval', 'shell', undefined, false),
           toolEnd('file', 'write', 'aftermath.txt', true),
         ],
       },
@@ -1066,11 +1066,11 @@ describe('corpus quality — can this corpus rank anything at all', () => {
 
     const escaped = await branch.verify({
       files: files({ 'diagnosis.txt': 'reason:unread' }),
-      events: [toolEnd('execute_tools', 'run', undefined, false)],
+      events: [toolEnd('eval', 'shell', undefined, false)],
     });
 
     expect(escaped.find((s) => s.what === 'refusal-diagnosed')?.reached).toBe(true);
-    expect(escaped.find((s) => s.what === 'execute_tools-succeeded')?.reached).toBe(false);
+    expect(escaped.find((s) => s.what === 'eval-succeeded')?.reached).toBe(false);
 
     // A fact transcribed but never forgotten: value holds, forget misses.
     const facts = probeFor({ id: 'probe-memory-facts', env: PROBE_ENV });

@@ -5,7 +5,7 @@
  * A local runtime has TWO file planes and the difference is the whole design.
  * The agent's own state — SOUL.md, its scaffold, memory, transcripts — lives in
  * the Nimbus filesystem over its own SQLite, always. The WORKSPACE plane, which
- * is what `file`, `run`, `execute_tools` and AGENTS.md address, binds to a
+ * is what `file`, `shell`, `eval` and AGENTS.md address, binds to a
  * physical directory when `config.cwd` names one, and every agent bound to that
  * directory is working on the same bytes. With no directory bound both planes
  * are the one in-SQLite tree, which is what an isolated fixture or an eval
@@ -20,10 +20,9 @@ import type {
 import type {
   Schedule, Memory, VFS, VfsNativeReads, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
 } from '@kinu.run/core';
-import type { ExecutorProvider, ResourceLimits } from '@kinu.run/core';
 import type { DeferredApprovalChannel, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
-import { promises as fs, mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join, resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, actorScaffoldPath, buildRuntime, agentHome, headAgentName, facetHomeProvisioner,
@@ -31,7 +30,7 @@ import {
   WORKSPACE_IDENTITY_DDL,
   createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
-  DefaultExecutionRouter, createInlineExecutor, commandResult, COMMAND_RESULT_TYPE,
+  DefaultExecutionRouter, createInlineExecutor,
   withMountTable, standardMounts, readTailWithVfsOps,
   withApprovalGatedShell, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
@@ -58,7 +57,7 @@ import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
-import { createCwdPlaneVFS, createHostMountVFS } from './host-mount';
+import { createCwdPlaneVFS } from './host-mount';
 import { createSqlFiber, detectOrphanedFibers } from '@kinu.run/core';
 import { createBranchSpawner } from './branch-process';
 import {
@@ -81,12 +80,14 @@ interface CLIRuntimeOptions {
    * The physical directory this workspace's file and shell plane binds to —
    * the canonical cwd stored on the agent's local ref, never `process.cwd()`.
    *
-   * A string binds `file`, `run`, `execute_tools`, AGENTS.md discovery and the
+   * A string binds `file`, `shell`, `eval`, AGENTS.md discovery and the
    * workspace shell to that directory, which is what makes every agent sharing
    * it a peer rather than a stranger holding a private copy. Absent keeps the
    * in-SQLite workspace filesystem, and absent deliberately does NOT mean
    * "default to the process's directory": an eval episode handed an implicit
-   * host plane writes into the developer's repo (see `hostRoot`).
+   * directory writes into the developer's repo (tests/evals/harness.ts,
+   * `requireSandboxedExecutors`). There is no other host plane: the machine
+   * is the workspace, and only a bound directory offers it.
    */
   cwd?: string | null;
   /** The workspace's default endpoint for bare ids — null when nothing
@@ -97,20 +98,6 @@ interface CLIRuntimeOptions {
   providerCredentials?: LocalProviderCredentials;
   codexAuthStore?: LocalCodexAuthStore;
   codexConfigPath?: string;
-  /**
-   * Where the HOST plane is rooted — the `laptop` executor and the checkpointed
-   * host shell behind it, i.e. the developer's own filesystem. Defaults to the
-   * bound `cwd`, or to `process.cwd()` when nothing is bound: `/pc` and the
-   * agent's own workspace then name one directory rather than two.
-   *
-   * `null` withholds the plane entirely, and that is the only isolation there
-   * is: `laptop.writeFile` resolves an ABSOLUTE path straight through and
-   * `laptop.exec` runs a real shell that can `cd` anywhere, so re-rooting the
-   * provider somewhere harmless contains nothing. A measurement harness passes
-   * `null` — an eval episode with a host plane writes into the developer's repo
-   * (tests/evals/harness.ts, `requireSandboxedExecutors`).
-   */
-  hostRoot?: string | null;
   /** Shadow-git checkpoints kept per working directory (the one retention knob). */
   checkpointKeep?: number;
 }
@@ -638,27 +625,16 @@ export function createCLIRuntime(
     shell,
     sql,
     ledger: () => turnFileLedgerProvider?.(),
-    toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
+    // Bound to a directory, the workspace shell IS this machine's shell, so
+    // the row declares what THIS machine's PATH proves and names what no PATH
+    // lookup settles. The in-SQLite shell declares the runtimes it ships.
+    toolchain: cwd === null ? workspaceToolchainCapabilities(WORKSPACE_RUNTIMES) : hostToolchainCapabilities(),
   };
+
+  if (cwd !== null) inlineOptions.unmeasured = HOST_UNMEASURED_CAPABILITIES;
 
   if (limits) inlineOptions.resourceLimits = limits;
   executionRouter.register(createInlineExecutor(inlineOptions));
-
-  const hostRoot = config.hostRoot === undefined ? cwd ?? process.cwd() : config.hostRoot;
-
-  // Held, because a node's router registers this SAME provider: the host
-  // filesystem is the host filesystem whoever asks, and a second construction
-  // would be a second set of checkpoints over one directory.
-  const laptop = hostRoot === null
-    ? null
-    : createLocalLaptopExecutor(
-      hostRoot,
-      withCheckpointedShell(createHostShell(hostRoot), checkpoints, hostRoot),
-      checkpoints,
-      limits,
-    );
-
-  if (laptop) executionRouter.register(laptop);
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
     transactionSync: write => db.transaction(write)(),
@@ -709,7 +685,7 @@ export function createCLIRuntime(
   }
 
   runtime.nodeRuntime = localNodeRuntime({
-    workspace, origin: runtime, approvalPolicy, inline: inlineOptions, laptop,
+    workspace, origin: runtime, approvalPolicy, inline: inlineOptions,
   });
 
   return runtime;
@@ -866,9 +842,9 @@ export async function buildLocalActorRuntime(
  * home in the one global view, credentialed as itself, exactly as a swarm node
  * gets one.
  *
- * The head also inherits the parent's `laptop` provider unchanged, so `run
- * laptop` and `laptop.*` reach the real machine at the parent's cwd — the fork's
- * real execution, and what the doctrine promises a fork.
+ * A fork bound to a directory runs its shell there, as its parent does: the
+ * machine is the workspace, and there is no separate device runtime in the
+ * CLI.
  */
 async function buildCLIHeadRuntime(
   opts: {
@@ -986,15 +962,9 @@ async function buildCLIHeadRuntime(
     workspaceName: actor.name,
   }));
 
-  // The parent's REAL host executor, shared unchanged: `run laptop` / `laptop.*`
-  // reach the machine at the parent's cwd. This is the fork's real execution.
-  const laptop = parent.executionRouter?.getProvider('laptop');
-
-  if (laptop) executionRouter.register(laptop);
-
-  // The head's plane carries the same mount table as its parent's — the
-  // inherited `laptop` provider is what /pc resolves to here, and `/context`
-  // is THIS head's own working history rather than the fork parent's.
+  // The head's plane carries the same mount table as its parent's, and
+  // `/context` is THIS head's own working history rather than the fork
+  // parent's.
   const agentVfs = withMountTable(vfs, [
     ...standardMounts((name) => executionRouter.getProvider(name)),
     contextMount({
@@ -1052,7 +1022,6 @@ const shellOptionsSchema = v.object({
   signal: v.optional(v.instance(AbortSignal)),
 });
 
-const abortContextSchema = v.object({ signal: v.optional(v.instance(AbortSignal)) });
 
 export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = process.env): Shell {
   return {
@@ -1144,91 +1113,4 @@ function withCheckpointedShell(shell: Shell, checkpoints: FileCheckpoints, cwd: 
       return shell.exec(command, stdinOrOptions);
     },
   };
-}
-
-function createLocalLaptopExecutor(
-  cwd: string, shell: Shell, checkpoints: FileCheckpoints, resourceLimits: ResourceLimits | null,
-): ExecutorProvider {
-  const toHostPath = (path: string) => resolvePath(cwd, path || '.');
-
-  const provider: ExecutorProvider = {
-    name: 'laptop',
-    kind: 'laptop',
-    // The machine's own files, in the machine's own absolute paths. Writes
-    // snapshot into the same shadow-git checkpoints the bound shell uses, so
-    // /undo covers file-plane mutations too.
-    files: createHostMountVFS(checkpoints),
-    // Where the CLI was invoked — the directory its shell starts in and the
-    // one its relative paths already resolve against (`toHostPath`).
-    homeDir: async () => cwd,
-    // Probed on this very machine rather than declared for a machine like it:
-    // the model reads this set as a routing instruction (host-toolchain.ts says
-    // why), so an unconditional claim of `git` and `npm` routes work onto tools
-    // that may not be here.
-    capabilities: new Set(hostToolchainCapabilities()),
-    // Declared, not dropped: nothing on PATH settles `docker` or `gpu`, and an
-    // omission reads to the model exactly like a measured absence.
-    unmeasuredCapabilities: new Set(HOST_UNMEASURED_CAPABILITIES),
-    positionalArgs: true,
-    isAvailable: () => true,
-    connect: async () => {},
-    disconnect: async () => {},
-    tools: {
-      exec: {
-        description: 'Run a shell command on the local machine in the directory where the CLI was invoked.',
-        execute: async (command, context) => {
-          const signal = readAbortSignal({ context });
-          const result = await shell.exec(coerceText({ value: command }), signal ? { signal } : undefined);
-
-          return commandResult(result);
-        },
-      },
-      readFile: {
-        description: 'Read a UTF-8 file from the local machine.',
-        execute: async (path) => fs.readFile(toHostPath(coercePath({ value: path })), 'utf-8'),
-      },
-      writeFile: {
-        description: 'Write a UTF-8 file on the local machine. Parent directories are created.',
-        execute: async (path, content) => {
-          const text = coerceText({ value: content });
-          const p = toHostPath(coercePath({ value: path }));
-          await checkpoints.ensureCheckpoint(checkpoints.workdirForPath(p), 'file write');
-          await fs.mkdir(resolvePath(p, '..'), { recursive: true });
-          await fs.writeFile(p, text, 'utf-8');
-
-          return `Written ${text.length} bytes to ${p}`;
-        },
-      },
-      listFiles: {
-        description: 'List local directory entries as {name,type}.',
-        execute: async (path = '.') => {
-          const entries = await fs.readdir(toHostPath(coercePath({ value: path })), { withFileTypes: true });
-
-          return entries.map((e) => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' }));
-        },
-      },
-    },
-    types: `declare const laptop: {
-  exec(command: string): Promise<${COMMAND_RESULT_TYPE}>;
-  readFile(path: string): Promise<string>;
-  writeFile(path: string, content: string): Promise<string>;
-  listFiles(path?: string): Promise<Array<{name: string; type: "dir" | "file"}>>;
-};`,
-  };
-
-  return resourceLimits ? { ...provider, resourceLimits } : provider;
-}
-
-function coerceText(input: { value: unknown }): string {
-  return String(input.value);
-}
-
-function coercePath(input: { value: unknown }): string {
-  return input.value ? String(input.value) : '.';
-}
-
-function readAbortSignal(input: { context: unknown }): AbortSignal | undefined {
-  const parsed = v.safeParse(abortContextSchema, input.context);
-
-  return parsed.success ? parsed.output.signal : undefined;
 }

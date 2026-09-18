@@ -50,7 +50,7 @@ function scored(
 
   return {
     taskId, repetition, outcome: 'scored', scores: withOutcome,
-    toolNames: ['run', 'file'],
+    toolNames: ['shell', 'file'],
     turns: cost.turns ?? 3, toolCalls: cost.toolCalls ?? 4,
     tokensIn: cost.tokensIn ?? 1000, tokensOut: cost.tokensOut ?? 200, ms: cost.ms ?? 5000,
   };

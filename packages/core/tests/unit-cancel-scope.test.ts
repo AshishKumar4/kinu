@@ -143,7 +143,7 @@ describe('Stop scopes to the displayed turn', () => {
   test('several detached jobs survive one Stop — one turn ending is not a fleet shutdown', async () => {
     const s = scene();
     const search = s.detachHeldJob('think');
-    const release = s.detachHeldJob('run');
+    const release = s.detachHeldJob('shell');
 
     await s.stop();
 

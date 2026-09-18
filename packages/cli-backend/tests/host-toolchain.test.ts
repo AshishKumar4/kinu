@@ -1,4 +1,5 @@
-// The `laptop` row for the machine the CLI is running on.
+// The `workspace` row for a session bound to a directory: the machine IS the
+// workspace, so its row declares what THIS machine's PATH proves.
 //
 // Asserted through the surface that makes the row matter — the agent's own
 // execution block (`, runs: …`), which is where the model decides to send work —
@@ -10,7 +11,7 @@ import { renderDynamicContextBlock } from '@kinu.run/core';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from '../src/host-toolchain';
 
 const STRUCTURAL_ONLY =
-  '- laptop: connected, files at /pc, runs: native_binary, shell, fs_shared, net_outbound, process_spawn';
+  '- workspace: active, runs: native_binary, shell, fs_shared, net_outbound, process_spawn';
 
 /** What no PATH lookup settles. Declared rather than omitted: an omission reads
  *  to the model exactly like a measured absence. */
@@ -21,16 +22,16 @@ const NOT_MEASURED = ', not measured here: docker, gpu';
 function runsLine(): string {
   const block = renderDynamicContextBlock({
     executors: [{
-      name: 'laptop', kind: 'laptop',
+      name: 'workspace', kind: 'workspace',
       capabilities: [...hostToolchainCapabilities()],
       unmeasuredCapabilities: [...HOST_UNMEASURED_CAPABILITIES],
       available: true, configured: true, active: true, status: 'active',
     }],
   });
 
-  const line = block?.split('\n').find((row) => row.startsWith('- laptop:'));
+  const line = block?.split('\n').find((row) => row.startsWith('- workspace:'));
 
-  if (line === undefined) throw new Error('no rendered laptop row');
+  if (line === undefined) throw new Error('no rendered workspace row');
 
   return line;
 }

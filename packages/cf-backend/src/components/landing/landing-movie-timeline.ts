@@ -262,7 +262,7 @@ function messagesAt(t: number): UIMessage[] {
   }
 
   const preview = toolPart(t, {
-    tool: 'execute_tools', id: 'movie-preview',
+    tool: 'eval', id: 'movie-preview',
     startAt: MOVIE_CUES.previewStart, doneAt: MOVIE_CUES.previewDone,
     input: { code: "// Boot the preview and hand back its URL\nconst preview = await workspace.slate({ op: 'preview', id: 'support-queue' });\nreturn preview;" },
     output: JSON.stringify({ ok: true, value: { url: SLATE_PREVIEW_URL, port: 8789 } }),

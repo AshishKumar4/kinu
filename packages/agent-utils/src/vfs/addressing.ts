@@ -39,6 +39,6 @@ export async function vfsAddressingHint(
 		+ "runs on: a path here is not the machine path of the same name"
 		+ (roots ? `, and this filesystem's roots are: ${roots}` : "")
 		+ ". To reach files that live on a real machine or container, run a shell command there with the "
-		+ "`run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+		+ "`shell` tool (choosing the runtime that owns them), or address them through the root that maps to it."
 	);
 }

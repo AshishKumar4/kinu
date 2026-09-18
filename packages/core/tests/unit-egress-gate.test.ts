@@ -191,7 +191,7 @@ describe('grants are the workspace set, or a subset', () => {
     const own = [
       { rule: 'rm-rf', executor: 'sandbox' },
       { rule: egressSecretRule('bind-prod-db'), executor: 'sandbox' },
-      { rule: 'rm-rf', executor: 'laptop' },
+      { rule: 'rm-rf', executor: 'device' },
     ];
 
     const resolved = resolveInheritedGrants({ root, own });
@@ -200,7 +200,7 @@ describe('grants are the workspace set, or a subset', () => {
   });
 
   test('grantsAreSubset is exact about the executor', () => {
-    expect(grantsAreSubset([{ rule: 'rm-rf', executor: 'laptop' }], root)).toBe(false);
+    expect(grantsAreSubset([{ rule: 'rm-rf', executor: 'device' }], root)).toBe(false);
     expect(grantsAreSubset([], root)).toBe(true);
     expect(grantsAreSubset(root, root)).toBe(true);
   });

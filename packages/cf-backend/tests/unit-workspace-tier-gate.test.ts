@@ -294,7 +294,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
 
   // The registry and the daemon's own credential exchange.
   { capability: 'device.manage', name: 'listDevices', run: (u, c) => u.listDevices(c) },
-  { capability: 'device.manage', name: 'registerDevice', run: (u, c) => u.registerDevice(c, 'laptop') },
+  { capability: 'device.manage', name: 'registerDevice', run: (u, c) => u.registerDevice(c, 'device') },
   { capability: 'device.manage', name: 'revokeDevice', run: (u, c) => u.revokeDevice(c, 'dev-1') },
   { capability: 'device.manage', name: 'acknowledgeUnstoppedDevice', run: (u, c) => u.acknowledgeUnstoppedDevice(c, 'dev-1') },
   { capability: 'device.manage', name: 'renameDevice', run: (u, c) => u.renameDevice(c, 'dev-1', 'studio tower') },

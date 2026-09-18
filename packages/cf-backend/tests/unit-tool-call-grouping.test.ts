@@ -49,19 +49,19 @@ describe('tool effects follow the operation', () => {
     { name: 'agents', input: { action: 'hire' }, effect: 'mutate' },
     { name: 'agents', input: { action: 'list' }, effect: 'read' },
     { name: 'agents', input: { action: 'status' }, effect: 'read' },
-    { name: 'run', input: { command: 'touch notes.txt' }, effect: 'unknown' },
-    { name: 'run', input: { command: 'bun test' }, effect: 'unknown' },
-    { name: 'run', input: { command: 'curl https://example.com' }, effect: 'unknown' },
-    { name: 'run', input: { command: 'ls -la' }, effect: 'unknown' },
-    { name: 'run', input: { command: 'LC_ALL=C /usr/bin/rg needle src' }, effect: 'unknown' },
-    { name: 'run', input: { command: 'git status --short' }, effect: 'unknown' },
-    { name: 'run', input: { command: 'git commit -m fix' }, effect: 'unknown' },
-    { name: 'run', input: { command: 'cat source > copy' }, effect: 'unknown' },
-    { name: 'run', input: { command: 'ls; touch changed' }, effect: 'unknown' },
-    { name: 'run', input: { command: 'rg --pre ./rewrite needle' }, effect: 'unknown' },
-    { name: 'run', input: { command: 'git diff --output=changes.patch' }, effect: 'unknown' },
-    { name: 'execute_tools', input: { code: 'await workspace.writeFile("a", "b")' }, effect: 'unknown' },
-    { name: 'execute_tools', input: { code: 'return await workspace.readFile("a")' }, effect: 'unknown' },
+    { name: 'shell', input: { command: 'touch notes.txt' }, effect: 'unknown' },
+    { name: 'shell', input: { command: 'bun test' }, effect: 'unknown' },
+    { name: 'shell', input: { command: 'curl https://example.com' }, effect: 'unknown' },
+    { name: 'shell', input: { command: 'ls -la' }, effect: 'unknown' },
+    { name: 'shell', input: { command: 'LC_ALL=C /usr/bin/rg needle src' }, effect: 'unknown' },
+    { name: 'shell', input: { command: 'git status --short' }, effect: 'unknown' },
+    { name: 'shell', input: { command: 'git commit -m fix' }, effect: 'unknown' },
+    { name: 'shell', input: { command: 'cat source > copy' }, effect: 'unknown' },
+    { name: 'shell', input: { command: 'ls; touch changed' }, effect: 'unknown' },
+    { name: 'shell', input: { command: 'rg --pre ./rewrite needle' }, effect: 'unknown' },
+    { name: 'shell', input: { command: 'git diff --output=changes.patch' }, effect: 'unknown' },
+    { name: 'eval', input: { code: 'await workspace.writeFile("a", "b")' }, effect: 'unknown' },
+    { name: 'eval', input: { code: 'return await workspace.readFile("a")' }, effect: 'unknown' },
   ];
 
   test.each(cases)('$name $input is $effect', ({ name, input, effect }) => {
@@ -72,7 +72,7 @@ describe('tool effects follow the operation', () => {
   test.each(['read', 'mutate'])('arbitrary program output cannot establish a %s effect', (effect) => {
     for (const output of [{ effect }, { result: { effect } }]) {
       const part: ToolUIPart = {
-        type: 'tool-execute_tools', toolCallId: 'program', state: 'output-available',
+        type: 'tool-eval', toolCallId: 'program', state: 'output-available',
         input: { code: 'await workspace.writeFile("a", "b"); return { effect: "read" }' }, output,
       };
 
@@ -81,8 +81,8 @@ describe('tool effects follow the operation', () => {
   });
 
   test('unclassified contracts and source hints stay unknown', () => {
-    expect(toolCallEffect('execute_tools', { effect: 'read' })).toBe('unknown');
-    expect(toolCallEffect('run', undefined)).toBe('unknown');
+    expect(toolCallEffect('eval', { effect: 'read' })).toBe('unknown');
+    expect(toolCallEffect('shell', undefined)).toBe('unknown');
     expect(toolCallEffect('crafted_unknown', { action: 'read' })).toBe('unknown');
     expect(toolCallEffect('file', 'read a')).toBe('unknown');
     expect(toolCallEffect('web_search', { query: 'docs' })).toBe('read');
@@ -107,7 +107,7 @@ describe('grouping a turn into blocks', () => {
       step,
       tool('1', 'file', 'output-available'),
       step,
-      tool('2', 'run', 'output-available', { command: 'ls' }),
+      tool('2', 'shell', 'output-available', { command: 'ls' }),
       step,
       tool('3', 'file', 'output-available'),
     ])).toEqual(['run(3)']);
@@ -118,8 +118,8 @@ describe('grouping a turn into blocks', () => {
       tool('1', 'file', 'output-available'),
       tool('2', 'file', 'output-available'),
       tool('3', 'file', 'output-available'),
-      tool('4', 'run', 'input-available'),
-    ])).toEqual(['run(3)', 'tool-run']);
+      tool('4', 'shell', 'input-available'),
+    ])).toEqual(['run(3)', 'tool-shell']);
   });
 
   test('a failed read groups in its original position', () => {
@@ -139,9 +139,9 @@ describe('grouping a turn into blocks', () => {
     expect(kinds([
       tool('1', 'file', 'output-available'), tool('2', 'file', 'output-available'), tool('3', 'file', 'output-available'),
       text('now the tests'),
-      tool('4', 'run', 'output-available', { command: 'ls' }),
-      tool('5', 'run', 'output-available', { command: 'cat notes.txt' }),
-      tool('6', 'run', 'output-available', { command: 'git status' }),
+      tool('4', 'shell', 'output-available', { command: 'ls' }),
+      tool('5', 'shell', 'output-available', { command: 'cat notes.txt' }),
+      tool('6', 'shell', 'output-available', { command: 'git status' }),
     ])).toEqual(['run(3)', 'text', 'run(3)']);
   });
 
@@ -237,7 +237,7 @@ describe('what a call does, from its own arguments', () => {
   test('an unknown action or unknown tool describes nothing', () => {
     expect(describeToolCall('file', { action: 'chmod', path: 'a' })).toBe('');
     expect(describeToolCall('some_mcp_tool', { anything: 'here' })).toBe('');
-    expect(describeToolCall('run', { command: 42 })).toBe('');
+    expect(describeToolCall('shell', { command: 42 })).toBe('');
     expect(describeToolCall('file', 'not an object')).toBe('');
   });
 });

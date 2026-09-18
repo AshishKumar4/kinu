@@ -150,7 +150,7 @@ export interface PromptSurface {
   identity: ResolvedPromptIdentity;
 }
 
-const EXECUTOR_PROMPT_ORDER = ['laptop', 'sandbox', 'workspace'];
+const EXECUTOR_PROMPT_ORDER = ['device', 'sandbox', 'workspace'];
 
 function executorSortKey(name: string): number {
   const idx = EXECUTOR_PROMPT_ORDER.indexOf(name);

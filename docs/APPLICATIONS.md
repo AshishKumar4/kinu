@@ -19,7 +19,7 @@ Adaptation runs at four timescales:
 
 | Timescale | Frequency | What changes |
 |-----------|-----------|--------------|
-| **In-episode** | Each settled `execute_tools` call | Crafted-tool fitness |
+| **In-episode** | Each settled `eval` call | Crafted-tool fitness |
 | **Turn** | Classifiable feedback or execution evidence | Provisional lessons and outcome evidence |
 | **Session** | Session close with negative signal | A focused reflection in workspace memory |
 | **Lifetime** | Periodic or on demand | Search, tool retirement, and scaffold candidates |
@@ -85,7 +85,7 @@ capabilities still differ from the Cloudflare backend.
 ```bash
 kinu create dev-helper --purpose "A TypeScript development assistant"
 kinu chat dev-helper
-# Agent has access to execute_tools, run, file, agents, memory, tasks, web, report
+# Agent has access to eval, run, file, agents, memory, tasks, web, report
 # Evolution happens locally; crafted tools persist in ~/.kinu/dev-helper/agent.db
 ```
 

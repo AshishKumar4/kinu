@@ -4,7 +4,7 @@
  * The defect, named by scripts/preflight.ts after it refused a push on
  * 2026-09-02: a stray `pyproject.toml` in `/tmp` made every host write under
  * `/tmp` resolve its checkpoint working directory to `/tmp` and shadow-git-add
- * all of it — measured at 24,483 ms for one laptop.writeFile, surfacing
+ * all of it — measured at 24,483 ms for one device.writeFile, surfacing
  * elsewhere as 5,000 ms test timeouts. The walk must stop at the temp boundary
  * and at the filesystem root, and a marker AT the temp directory is no project.
  *

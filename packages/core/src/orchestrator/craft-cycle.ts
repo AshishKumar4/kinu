@@ -7,7 +7,7 @@
  * — the agent can craft a tool mid-turn and no machinery ever asks whether the
  * tool was any good. This is the clock that ticks there.
  *
- * What this file owns is the TRIGGER and the bookkeeping: every `execute_tools`
+ * What this file owns is the TRIGGER and the bookkeeping: every `eval`
  * call, at the moment it settles, read as a creation diff of the callable set
  * plus the call sites in the submitted code — both from the runtime's
  * own record, never from anything the model asserts. What an observation is
@@ -36,14 +36,14 @@ import { isBackgroundOutcomeText } from '../jobs/threshold';
 import type { BuiltinToolName } from '../tools/registry';
 
 /** The one tool crafted tools are reachable from. */
-const EXECUTE_TOOLS: BuiltinToolName = 'execute_tools';
+const CODEMODE_TOOL: BuiltinToolName = 'eval';
 
 /**
  * Where this clock publishes which crafted tools the turn used — the
  * TurnAccumulator in production.
  *
  * The call-site scan below is the only thing in the system that can see it.
- * Crafted tools are codemode-only, reached from inside an `execute_tools`
+ * Crafted tools are codemode-only, reached from inside an `eval`
  * block, so a crafted tool never appears as a tool-call name — and a consumer
  * that infers the answer from the turn's tool-call list instead ("every name
  * that is not built in") selects MCP and extension tools and nothing else.
@@ -102,7 +102,7 @@ export class CraftCycle {
    *
    * The result carries the call's own `args`, so the code being graded is the
    * code that ran — no pairing against the dispatch hook, and therefore no
-   * ambiguity when the model issues several `execute_tools` calls in one step.
+   * ambiguity when the model issues several `eval` calls in one step.
    *
    * A result that is a background HANDLE is not a result — the work crossed the
    * detach threshold and is still running (jobs/threshold.ts), and its refusal
@@ -112,7 +112,7 @@ export class CraftCycle {
    * still rolled forward: whatever the call already wrote, it wrote.
    */
   onToolResult(ctx: ToolResultContext): void {
-    if (!this.enabled || ctx.toolName !== EXECUTE_TOOLS) return;
+    if (!this.enabled || ctx.toolName !== CODEMODE_TOOL) return;
 
     const known = this.ledger.names();
     const before = this.seen;

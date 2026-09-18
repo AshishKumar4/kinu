@@ -64,6 +64,14 @@ export interface AppBackgroundHandle {
   time(): number;
   mode(): ConnectomeMode;
   pointer(): number;
+}
+
+/** The stepping controls a GALLERY page adds to the handle: freeze the rAF
+ *  loop, step the picture by hand, let it run again — how a pixel readback
+ *  is taken off a picture that is not moving under it. Never on the shipped
+ *  handle: the gallery declares itself before the shell mounts
+ *  (`__kinuGalleryStepping`), and only then are these attached. */
+export interface AppBackgroundStepping {
   advance(dt: number): void;
   freeze(): void;
   thaw(): void;
@@ -71,7 +79,9 @@ export interface AppBackgroundHandle {
 
 declare global {
   interface Window {
-    __kinuAppBackground?: AppBackgroundHandle;
+    __kinuAppBackground?: AppBackgroundHandle & Partial<AppBackgroundStepping>;
+    /** Set by the gallery's own page script, never by the shipped app. */
+    __kinuGalleryStepping?: true;
   }
 }
 
@@ -195,16 +205,21 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
       document.documentElement.addEventListener('pointerleave', onLeave);
     }
 
-    const handle: AppBackgroundHandle = {
+    const handle: AppBackgroundHandle & Partial<AppBackgroundStepping> = {
       renderer: () => mounted.renderer(),
       frameTimes: () => mounted.frameTimes(),
       time: () => mounted.time(),
       mode: () => mounted.art().mode(),
       pointer: () => mounted.art().pointerHold(),
-      advance: (dt: number) => mounted.advance(dt),
-      freeze: () => mounted.freeze(),
-      thaw: () => mounted.thaw(),
     };
+
+    if (window.__kinuGalleryStepping === true) {
+      Object.assign(handle, {
+        advance: (dt: number) => mounted.advance(dt),
+        freeze: () => mounted.freeze(),
+        thaw: () => mounted.thaw(),
+      } satisfies AppBackgroundStepping);
+    }
 
     living.current = mounted;
     window.__kinuAppBackground = handle;

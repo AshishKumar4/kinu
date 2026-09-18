@@ -18,7 +18,7 @@ actors that work inside it.
 │              A mount table adds live `/pc` and `/sandbox` views.          │
 │   exec plane ExecutionRouter: every environment keeps its native path:   │
 │                sandbox.*   full Linux container   (when configured)      │
-│                laptop.*    the user's own machine  (connect + consent)   │
+│                device.*    the user's own machine  (connect + consent)   │
 │                parent.*    a hosted head's view of its hiring workspace  │
 │   state      conversations · SOUL.md · memory · scaffold · craft store · │
 │              evolution ledgers · triggers · release changes              │
@@ -80,13 +80,13 @@ actors that work inside it.
   authoritative Nimbus filesystem. A LOCAL workspace keeps TWO planes,
   deliberately: agent state (SOUL.md, scaffold, memory, craft store,
   conversation, every ledger) always lives in its own SQLite-backed
-  filesystem, while the WORKSPACE plane that `file`, `run`, `execute_tools`
+  filesystem, while the WORKSPACE plane that `file`, `shell`, `eval`
   and AGENTS.md address binds to the directory on the agent's ref
   (`CLIRuntimeConfig.cwd`, never `process.cwd()`). With no directory bound,
   both planes are the one in-SQLite tree an isolated fixture or eval episode
   gets. Relative paths resolve at `/home/user` (`WORKSPACE_ROOT`,
-  `packages/core/src/vfs/workspace-path.ts:2`). The mount table adds a connected device
-  at `/pc`, a container at `/sandbox`, and each actor's own working context at
+  `packages/core/src/vfs/workspace-path.ts:2`). The mount table adds each connected
+  device at `/pc/<name>`, a container at `/sandbox`, and each actor's own working context at
   `/context`. That last one is the only editable surface over an agent's
   history: `/context/working.jsonl` is writable. Line 1 is a header naming the
   actor and the revision the reader observed, then one encoded `ModelMessage`
@@ -194,7 +194,7 @@ actors that work inside it.
   - Subordinates (`agents`, `action: 'hire'`) are durable: a
     logical actor with its own `actor_id`-scoped history in `actor_messages` and a
     full turn loop,
-    using the canonical workspace files and the parent's sandbox/laptop
+    using the canonical workspace files and the parent's sandbox/device
     planes. Locally it opens over its root's stored directory, keeping the
     parent's plane while memory, craft store, and conversation stay its own.
     Assigned tasks and reports ride the `subordinate` ingress. Owner-driven

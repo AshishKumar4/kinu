@@ -281,7 +281,7 @@ describe('default-agent prompt model context', () => {
     const { rt } = createTestRuntime();
 
     const prompt = buildSystemPromptSync(rt, {
-      availableTools: ['run', 'memory'],
+      availableTools: ['shell', 'memory'],
       backend: 'cf',
       model: { id: modelId, provider },
     });

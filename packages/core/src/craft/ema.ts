@@ -52,7 +52,7 @@ export function effectiveScore(
  * state and nothing passes by accident of a missing row.
  *
  * Used by both injection paths — core's buildCraftedToolSetFromExecute and
- * the CF execute_tools sandbox — so the filter cannot drift between them.
+ * the CF eval sandbox — so the filter cannot drift between them.
  */
 export function filterByEffectiveScore<T extends { name: string }>(
   sql: SqlExecutor,

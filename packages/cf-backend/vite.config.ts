@@ -54,7 +54,12 @@ const stubClientNodeBuiltins = {
   resolveId(this: { environment?: { name: string } }, source: string): string | null {
     if (this.environment !== undefined && this.environment.name !== "client") return null;
 
-    if (source === "node:crypto" || source === "node:async_hooks") return clientNodeStubs;
+    if (
+      source === "node:crypto" ||
+      source === "node:async_hooks" ||
+      source === "node:util"
+    )
+      return clientNodeStubs;
 
     return null;
   },

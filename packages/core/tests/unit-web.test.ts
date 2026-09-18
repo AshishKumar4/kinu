@@ -12,7 +12,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@kinu.run/test-utils';
+import { handClock, toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
@@ -30,7 +30,7 @@ import {
   projectJsonValue,
   type CraftedToolExecute,
   type CodemodeProvider,
-  type ExecuteToolsBuilder,
+  type CodemodeBuilder,
   type JsonValue,
   type WebSearchProvider,
 } from '../src/index';
@@ -39,9 +39,9 @@ const unusedCraftedExecute: CraftedToolExecute = () => async () => {
   throw new Error('This web-tool suite does not install crafted tools');
 };
 
-/** execute_tools builder that wires every injected provider namespace into the
+/** eval builder that wires every injected provider namespace into the
  *  sandbox by name (mirrors the cli-backend builder) so codemode `web.*` works. */
-function createNodeExecBuilder(codemodeProviders: CodemodeProvider[] = []): ExecuteToolsBuilder {
+function createNodeCodemodeBuilder(codemodeProviders: CodemodeProvider[] = []): CodemodeBuilder {
   return (surface) => {
     const codemode = surface.craftedTools();
     const nsBindings: Record<string, Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>> = {};
@@ -394,13 +394,7 @@ describe('web provider — fetch', () => {
     // The budget's timer is the provider's own, handed in (D19): the body
     // sends one chunk and then never another, and the test fires the budget
     // once that chunk has been pulled. Nothing here races a real timer.
-    let expire: (() => void) | undefined;
-
-    const schedule = (fire: () => void): (() => void) => {
-      expire = fire;
-
-      return () => { expire = undefined; };
-    };
+    const clock = handClock();
 
     const trickle = () => {
       const pulled = Promise.withResolvers<void>();
@@ -429,7 +423,7 @@ describe('web provider — fetch', () => {
       { preconnect: fetch.preconnect },
     ) satisfies typeof fetch;
 
-    const provider = createDefaultWebSearchProvider({ fetch: slowFetch, timeoutMs: 40, schedule });
+    const provider = createDefaultWebSearchProvider({ fetch: slowFetch, timeoutMs: 40, clock });
 
     // The rejection is caught at a lexical boundary before the budget fires
     // (bun's `.rejects` spins until the promise settles, so it cannot be
@@ -452,7 +446,7 @@ describe('web provider — fetch', () => {
 
       const body = await fetched.promise;
       await body.pulled;
-      expire?.();
+      clock.advance(40);
       const refused = await outcome;
 
       if (refused === undefined) throw new Error('the fetch past its budget resolved');
@@ -563,7 +557,7 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
   return buildActorTools({
     rt,
     craftedToolExecute: unusedCraftedExecute,
-    executeTools: createNodeExecBuilder([createWebCodemodeProvider(provider)]),
+    codemode: createNodeCodemodeBuilder([createWebCodemodeProvider(provider)]),
     effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
     webSearch: provider,
   });
@@ -637,7 +631,7 @@ describe('web builtin', () => {
     });
 
     const execute = toolExecute<{ code: string }, { result: JsonValue | undefined }>(
-      buildWithWeb(rt, provider).execute_tools,
+      buildWithWeb(rt, provider).eval,
     );
 
     const searched = await execute({

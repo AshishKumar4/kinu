@@ -342,12 +342,12 @@ describe('v2 e2e: approval gate', () => {
         return `ran:${cmd}`;
       },
       (msg) => `DENIED:${msg}`,
-      'laptop',
+      'device',
       { mode: () => 'strict', requestApproval: async () => 'allow' },
     );
 
     expect(await gated('ls')).toBe('ran:ls');
-    expect(reviewCommand('ls', 'laptop').decision).toBe('allow');
+    expect(reviewCommand('ls', 'device').decision).toBe('allow');
     expect(await gated('printenv')).toContain('ran:');
     expect(await gated('sudo apt-get install nginx')).toContain('ran:');
 

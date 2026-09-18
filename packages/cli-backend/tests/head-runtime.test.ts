@@ -2,7 +2,7 @@
 // the parent runtime: the parent's real host executor + files, a private durable
 // scratch. These tests drive a full HeadController split → run → merge cycle with
 // a prompt-aware fake model, assert the head's real tool surface, and prove the
-// runtime-level fork capability (real /parent files + real `run laptop` exec)
+// runtime-level fork capability (real /parent files + real `run device` exec)
 // that the caffe fork lacked — all without a network LLM.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -51,7 +51,7 @@ const stubWeb: WebSearchProvider = {
  */
 type LocalParent = CLIRuntime & { readonly db: Database };
 
-function makeParent(): LocalParent {
+function makeParent(cwd?: string): LocalParent {
   const dbPath = scratchPath('head-runtime-parent', 'parent.db');
   const db = new Database(dbPath);
   // THE PRODUCTION INITIALIZER, before the runtime opens over it. Every head
@@ -62,10 +62,14 @@ function makeParent(): LocalParent {
   // on its own first touch, because a branch worker legitimately has no more.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
-  return Object.assign(createCLIRuntime(db, {
+  const config: Parameters<typeof createCLIRuntime>[1] = {
     dbPath,
     llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' },
-  }), { db });
+  };
+
+  if (cwd !== undefined) config.cwd = cwd;
+
+  return Object.assign(createCLIRuntime(db, config), { db });
 }
 
 /** A governor over its own scratch ledger. A local head charges through this
@@ -163,7 +167,7 @@ function capturingHeadModel(
       promptSink?.(JSON.stringify(opts.prompt));
 
       if (runSchemaSink) {
-        runSchemaSink(JSON.stringify((opts.tools ?? []).find((candidate) => candidate.name === 'run')));
+        runSchemaSink(JSON.stringify((opts.tools ?? []).find((candidate) => candidate.name === 'shell')));
       }
 
       return {
@@ -374,13 +378,13 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     });
   });
 
-  test('a head is offered the real fork surface: run + file + execute_tools + web + record + split', async () => {
+  test('a head is offered the real fork surface: run + file + eval + web + record + split', async () => {
     let captured: string[] = [];
     const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel('done', (t) => { captured = t; })));
     await (await runtime.spawnHead(aHeadInput())).run();
     expect(new Set(captured)).toEqual(new Set([
       'record_evidence', 'record_decision',
-      'execute_tools', 'run', 'file', 'web',
+      'eval', 'shell', 'file', 'web',
       'split_subheads',
     ]));
   });
@@ -395,7 +399,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 
       return {
         content: invoke
-          ? [{ type: 'tool-call', toolName: 'execute_tools', toolCallId: 'unbound', input: JSON.stringify({ code: '// Probe an unbound function\nreturn await tools.secret_echo({});' }) }]
+          ? [{ type: 'tool-call', toolName: 'eval', toolCallId: 'unbound', input: JSON.stringify({ code: '// Probe an unbound function\nreturn await tools.secret_echo({});' }) }]
           : [{ type: 'text', text: 'done' }],
         finishReason: { unified: invoke ? 'tool-calls' : 'stop', raw: undefined },
         usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -430,13 +434,13 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
   });
 
   test('allowedTools maps the PARENT vocabulary onto real tools (never empties)', async () => {
-    // The old bug: a fork with allowedTools:["run"] was filtered against a
+    // The old bug: a fork with allowedTools:["shell"] was filtered against a
     // disjoint sandbox_* head surface and silently ran with ZERO tools. Now the
-    // head's vocabulary IS the parent's, so ["run"] resolves to exactly run.
+    // head's vocabulary IS the parent's, so ["shell"] resolves to exactly run.
     let captured: string[] = [];
     const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel('done', (t) => { captured = t; })));
-    await (await runtime.spawnHead(aHeadInput({ allowedTools: ['run'] }))).run();
-    expect(captured).toEqual(['run']);
+    await (await runtime.spawnHead(aHeadInput({ allowedTools: ['shell'] }))).run();
+    expect(captured).toEqual(['shell']);
   });
 
   test('phase events fire on split and merge', async () => {
@@ -558,10 +562,9 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     expect(String(await parentExec.tools.exec.execute('cat hello.txt')))
       .toContain('from the parent workspace');
 
-    // Real commands run through the parent's shared laptop executor.
-    const laptop = rt.executionRouter!.getProvider('laptop')!;
-    const out = await laptop.tools.exec!.execute(`cat ${join(dir, 'hello.txt')}`);
-    expect(String(out)).toContain('from the real machine');
+    // No device runtime: the machine is the workspace, and an unbound parent
+    // offers no machine at all.
+    expect(rt.executionRouter!.getProvider('device')).toBeUndefined();
 
     // Its own filesystem is PRIVATE scratch — not the host, not the parent.
     await rt.storage.vfs.writeFile(`/home/head-${rt.actor.storageKey}/scratch.txt`, 'head-only');
@@ -573,22 +576,23 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     expect(rt.actor.actorId).not.toBe(parent.actor.actorId);
   });
 
-  test('the head run tool reaches the real host with runtime=laptop', async () => {
+  test('a head of a parent bound to a directory runs its shell there: the machine is the workspace', async () => {
     const dir = scratchDir('head-runtime-cwd');
     writeFileSync(join(dir, 'note.txt'), 'real file content');
-    const rt = await createHeadRuntime(makeParent(), 'h2');
+    const rt = await createHeadRuntime(makeParent(dir), 'h2');
     const capture = new HeadCapture();
 
     const tools = buildHeadToolSet({
       input: aHeadInput(), capture, rt,
-      executeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
+      codemodeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
       webSearch: stubWeb,
       split: async () => ({ narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }),
     });
 
-    const run = toolExecute<{ command: string; runtime: string }, string>(tools.run);
-    const out = await run({ command: `cat ${join(dir, 'note.txt')}`, runtime: 'laptop' });
-    expect(String(out)).toContain('real file content');
+    const run = toolExecute<{ command: string; runtime?: string }, string>(tools.shell);
+    expect(String(await run({ command: 'cat note.txt' }))).toContain('real file content');
+    // No second shell over the same tree: a machine name is refused, not routed.
+    await expect(run({ command: 'cat note.txt', runtime: 'device' })).rejects.toMatchObject({ code: 'unavailable' });
   });
 
   /**
@@ -796,7 +800,7 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
       // Through the parent EXECUTOR: that is where a head's writes to its
       // parent land, and where attribution is recorded.
       const write = (content: string) => envelope([{
-        type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'execute_tools',
+        type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'eval',
         input: JSON.stringify({
           code: `await parent.writeFile(${JSON.stringify(`${marker}.ts`)}, ${JSON.stringify(content)})`,
         }),
@@ -844,7 +848,7 @@ describe('a head reports the files IT changed, with concurrent siblings on the s
   });
 });
 
-describe("a head's execute_tools holds the namespaces the shared description promises", () => {
+describe("a head's eval holds the namespaces the shared description promises", () => {
   // The description every backend renders promises `state.set`/`state.get` to
   // every program. Red on 2026-09-05: the CLI head bound web and llm only, so a
   // fork program calling `state.set` answered a bare ReferenceError while the
@@ -860,7 +864,7 @@ describe("a head's execute_tools holds the namespaces the shared description pro
 
         const content = step === 1
           ? [{
-            type: 'tool-call' as const, toolCallId: 'state-1', toolName: 'execute_tools',
+            type: 'tool-call' as const, toolCallId: 'state-1', toolName: 'eval',
             input: JSON.stringify({
               code: '// Keep a marker between programs\nawait state.set("marker", "kept");\nreturn await state.get("marker");',
             }),
@@ -884,7 +888,7 @@ describe("a head's execute_tools holds the namespaces the shared description pro
 
     const outputs = journal.readSteps('stateful')
       .flatMap((s) => s.toolCalls)
-      .filter((c) => c.name === 'execute_tools')
+      .filter((c) => c.name === 'eval')
       .map((c) => JSON.stringify(c.output ?? ''));
 
     expect(outputs).toHaveLength(1);

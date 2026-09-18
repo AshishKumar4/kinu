@@ -99,6 +99,7 @@ interface Observed {
   readonly filesRoot: { crumbs: string; entries: string[]; badges: string[] };
   /** The drive after crossing into the /pc mount, which must land inside the
    *  device's consented directory rather than on the device root. */
+  readonly filesRoster: { crumbs: string; entries: string[] };
   readonly filesInMount: { crumbs: string; entries: string[] };
   readonly filesAfterUp: string;
   /** File names the TREE pane carries, not only its folders. */
@@ -444,14 +445,18 @@ async function run(): Promise<Observed> {
       badges: await files.$$eval('[data-files-entry] [data-mount-badge]', (els) => els.map((el) => el.textContent ?? '')),
     };
 
-    // Crossing into a mount is ordinary navigation, and it lands INSIDE the
-    // device's consented directory. Landing on the mount point itself was the
-    // reported failure: `/pc` strips to the device's `/`, which its consent
-    // boundary refuses, so the first click answered EACCES.
+    // Crossing into `/pc` is ordinary navigation onto the roster: one row per
+    // live machine. Crossing into a machine lands INSIDE its consented
+    // directory. Landing on the machine root itself was the reported failure:
+    // it strips to the device's `/`, which its consent boundary refuses, so
+    // the first click answered EACCES.
     await files.click(rowSelector('pc'));
+    await waitForRow("Ashish's MacBook");
+    const filesRoster = { crumbs: await crumbs(), entries: await rowNames() };
+    await files.click(rowSelector("Ashish's MacBook"));
     await waitForRow('quarterly-report.txt');
     await files.waitForFunction(
-      () => document.querySelectorAll('[data-files-crumb]').length === 4,
+      () => document.querySelectorAll('[data-files-crumb]').length === 5,
     );
     const filesInMount = { crumbs: await crumbs(), entries: await rowNames() };
 
@@ -540,7 +545,7 @@ async function run(): Promise<Observed> {
     // A disconnected device is a stated absence, not a missing row.
     const offline = await newPage();
     await offline.setViewport({ width: 1280, height: 1100 });
-    await offline.goto(`${origin}/gallery.html?frame=files&offline=laptop`, { waitUntil: 'networkidle0' });
+    await offline.goto(`${origin}/gallery.html?frame=files&offline=device`, { waitUntil: 'networkidle0' });
     await offline.reload({ waitUntil: 'networkidle0' });
     await offline.waitForSelector('[data-files-offline-mount]');
     const filesOfflineRow = await offline.$eval('[data-files-offline-mount]', (el) => el.textContent ?? '');
@@ -598,7 +603,7 @@ async function run(): Promise<Observed> {
 
     return {
       tails, reducedMotionTails, chat, forkInterruptedAfterClick, chatErrorHeadings, toolActivity,
-      filesRoot, filesInMount, filesAfterUp, treeFileNames,
+      filesRoot, filesRoster, filesInMount, filesAfterUp, treeFileNames,
       filesMarkdownRendered, filesPreviewText, filesEditorSeedsFromTheFile,
       filesAfterRename, filesAfterDelete, filesFiltered, filesOfflineRow,
       envCards, envCapabilityChips, envCapabilityAbsences, envFilesJumpLandsOnDrive,
@@ -775,16 +780,18 @@ describe('the drive, browsing the one composite plane', () => {
   test('the root is the workspace tree beside the mounts, badges on the mounted folders', () => {
     expect(observed.filesRoot.crumbs).toBe('/');
     expect(observed.filesRoot.entries).toEqual(expect.arrayContaining(['home', 'pc', 'sandbox']));
-    // The origin badge names the machine, not the executor id — the laptop
+    // The origin badge names the machine, not the executor id — the device
     // wears the user's own device name, per the consent naming contract.
     expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", 'Sandbox']));
   });
 
-  test('crossing into /pc lands inside the consented device directory', () => {
-    // `/pc` strips to the DEVICE's `/`, which its consent boundary refuses with
-    // EACCES, so the mount point lands on the directory the owner consented to
-    // instead.
-    expect(observed.filesInMount.crumbs).toBe('//pc/home/dev');
+  test('crossing into /pc lists the machines; a machine lands inside its consented directory', () => {
+    // `/pc` is the roster. A machine root strips to the DEVICE's `/`, which its
+    // consent boundary refuses with EACCES, so the machine lands on the
+    // directory the owner consented to instead.
+    expect(observed.filesRoster.crumbs).toBe('//pc');
+    expect(observed.filesRoster.entries).toEqual(["Ashish's MacBook"]);
+    expect(observed.filesInMount.crumbs).toBe("//pc/Ashish's MacBook/home/dev");
     expect(observed.filesInMount.entries).toEqual(
       expect.arrayContaining(['quarterly-report.txt', 'shot.png']),
     );
@@ -1198,7 +1205,7 @@ describe('an additional agent, as an ordinary conversation', () => {
 
       await page.click('[aria-label="New agent"]');
       await diagnosticsSettled(diagnostics, 1);
-      expect(diagnostics).toEqual([{
+      expect([...diagnostics]).toEqual([{
         event: 'subordinates.create_failed', code: 'io',
         cause: `create a subordinate agent: ${CREATE_REFUSAL_CHAIN}`, fields: {},
       }]);
@@ -1754,10 +1761,10 @@ describe('linking a machine happens on the surface that asked for it', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=environment&offline=laptop&connect=1`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-env-card="laptop"] [data-env-connect]');
+      await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=1`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-env-card="device"] [data-env-connect]');
 
-      await page.click('[data-env-card="laptop"] [data-env-connect]');
+      await page.click('[data-env-card="device"] [data-env-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-state="ready"]');
       // In place: the Environment surface is still mounted behind the dialog,
       // and the URL never moved.
@@ -1800,9 +1807,9 @@ describe('linking a machine happens on the surface that asked for it', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=environment&offline=laptop&connect=stall`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-env-card="laptop"] [data-env-connect]');
-      await page.click('[data-env-card="laptop"] [data-env-connect]');
+      await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=stall`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-env-card="device"] [data-env-connect]');
+      await page.click('[data-env-card="device"] [data-env-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-start]');
       await page.click('[role="dialog"] [data-connect-start]');
       await page.waitForSelector('[data-connect-waiting]');
@@ -1828,7 +1835,7 @@ describe('linking a machine happens on the surface that asked for it', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=files&offline=laptop&connect=1`, { waitUntil: 'networkidle0' });
+      await page.goto(`${origin}/gallery.html?frame=files&offline=device&connect=1`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-files-connect]');
       await page.click('[data-files-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-state="ready"]');
@@ -2080,7 +2087,7 @@ const ASSEMBLED = `cfut_${'a'.repeat(48)}`;
  * nowhere in the document.
  *
  * VALUE-LEVEL REDACTION (KINU-011's second half). Field names cannot see a
- * token inside a free-form string, and the `run`/`execute_tools` inputs plus
+ * token inside a free-form string, and the `run`/`eval` inputs plus
  * `errorText` render as free text, not JSON — so the canonical policy's other
  * half, `redactSecrets`, masks secret-shaped VALUES off the same
  * `SECRET_PATTERNS` list the commit-tier scan runs. The gallery fixture
@@ -2974,7 +2981,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // That is a claim about a write that must never come, and geometry
       // cannot synchronize the read (panels reflow through plain CSS ahead
       // of the commit pipeline), so the end condition is the pipeline's own:
-      // the panel counts the layout commits the hook has classified, and the
+      // the group counts the layout commits the hook has classified, and the
       // storage is read once the second tweak's commit has been counted —
       // after which the hook has either persisted or adopted, and nothing
       // more is scheduled.

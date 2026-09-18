@@ -213,7 +213,7 @@ entry `chars` show what the page leaves out. The bounds are structural. At most
 `SCAFFOLD_HISTORY_MAX_LIMIT` (100) messages,
 `SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS` (8,000) per message, and
 `SCAFFOLD_HISTORY_MAX_PAGE_CHARS` (40,000) characters per page. Prose returns
-as written. Tool traffic returns named as `[tool-call run {...}]`, not dumped.
+as written. Tool traffic returns named as `[tool-call shell {...}]`, not dumped.
 
 The bridge returns plain data and exposes no writer. Context shrinking still
 goes through the compaction ladder, the sole owner of the model-visible stream.
@@ -263,7 +263,7 @@ Effort is the cheapness lever on most paths, not an output-token cap.
 
 `TOOL_REACH` (`packages/core/src/tools/registry.ts:80`) is the authoritative map of
 native and codemode-only capabilities and their namespaces. `BUILTIN_TOOLS`
-marks 8 native tools: `execute_tools`, `run`, `file`, `agents`,
+marks 8 native tools: `eval`, `shell`, `file`, `agents`,
 `memory`, `tasks`, `web`, `report`. `actorActiveTools()` narrows them per
 actor. `release` and `agent` are codemode-only. `skills` is neither. A SKILL.md
 is an ordinary `/workspace/skills/` path on the VFS that
@@ -271,10 +271,10 @@ is an ordinary `/workspace/skills/` path on the VFS that
 the same bytes. See [TOOLS.md](./TOOLS.md) for the full list and the
 owner-facing `experience` RPC.
 
-Inside `execute_tools`, the LLM also sees:
+Inside `eval`, the LLM also sees:
 
 - `workspace.*`: VFS, including exact-match `editFile`, shell, memory,
-  `createTool`, and `slate`. It is always available. `run` and `file`
+  `createTool`, and `slate`. It is always available. `shell` and `file`
   project here.
 - `sandbox.*`: Linux container exec and port preview when bound.
 - `agents.*`, `memory.*`, `tasks.*`, `web.*`, `report.*`: codemode projections
@@ -286,7 +286,7 @@ Inside `execute_tools`, the LLM also sees:
 - Crafted tools: `tools.<name>(args)`, defined in the sandbox by the `tools`
   provider's prelude (`packages/cf-backend/src/codemode-sandbox.ts`) or bound as the
   `tools` argument of the evaluated function
-  (`packages/cli-backend/src/execute-tools-factory.ts`).
+  (`packages/cli-backend/src/codemode-tool-factory.ts`).
 
 `tools.<name>(args)` is the one call form on every backend, for native builtins
 and crafted tools alike. `packages/core/src/tools/sandbox-contract.ts` states it in one

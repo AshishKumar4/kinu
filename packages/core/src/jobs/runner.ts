@@ -1,5 +1,5 @@
 // BackgroundJobRunner — the backend-agnostic lifecycle for auto-detached >30s
-// tool calls (think-heads, long execute_tools/run). Mints a job, keeps the
+// tool calls (think-heads, long eval/shell). Mints a job, keeps the
 // in-flight promise alive in a durable fiber, settles/fails it, and wakes the
 // agent with a synthesis signal — over the AgentRuntime fiber + the one
 // signal-delivery seam.
@@ -14,7 +14,8 @@
 import type { Schedule } from '../types/primitives';
 import type { AgentSignal, AgentInbox, SignalUndeliveredReason } from '../types/signals';
 import type { EventLog } from '../events/hub/log';
-import { BACKGROUND_POLICY, REAL_SCHEDULE, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
+import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
+import { REAL_CLOCK } from '../types/clock';
 import type { DeviceRequestOwnership } from './device-ownership';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store';
 import { nanoid } from '../utils/nanoid';
@@ -69,7 +70,7 @@ export function backgroundJobWakeTrigger(jobId: string): string {
   return `background-job-wake:${jobId}`;
 }
 
-/** Thrown by a resumer for a kind it cannot re-drive (e.g. `run`/`execute_tools`,
+/** Thrown by a resumer for a kind it cannot re-drive (e.g. `shell`/`eval`,
  *  whose partial side effects make blind re-execution unsafe). The runner treats
  *  it as "not resumable" → the job is failed with the eviction message, exactly
  *  as before this recovery path existed. A closed signal, not a bare Error. */
@@ -103,7 +104,7 @@ export type JobResumer = (
  * have RIGHT NOW", read out of the durable rows the work already wrote.
  *
  * Null when the kind has nothing partial to give, which is the honest answer for a
- * side-effecting call: `run` and `execute_tools` either happened or did not.
+ * side-effecting call: `shell` and `eval` either happened or did not.
  */
 export type JobHarvester = (
   kind: string,
@@ -245,7 +246,7 @@ function describeJobInput<T>(kind: string, input: T): string | undefined {
     }
   }
 
-  if (kind === 'run') {
+  if (kind === 'shell') {
     const parsed = v.safeParse(RunJobInputSchema, input);
 
     if (parsed.success) {
@@ -255,7 +256,7 @@ function describeJobInput<T>(kind: string, input: T): string | undefined {
     }
   }
 
-  if (kind === 'execute_tools') {
+  if (kind === 'eval') {
     const parsed = v.safeParse(ExecuteJobInputSchema, input);
 
     if (parsed.success) return parsed.output.code.trim().slice(0, 80);
@@ -383,7 +384,7 @@ export class BackgroundJobRunner {
   ): ThresholdDeps {
     return {
       thresholdMs: this.policy.detachAfterMs,
-      schedule: REAL_SCHEDULE,
+      clock: REAL_CLOCK,
       onThreshold: async (k, promise) =>
         await this.onThreshold(k, input, mode, controller, promise, ownership),
     };
@@ -563,7 +564,7 @@ export class BackgroundJobRunner {
     // Three outcomes, because a kind that cannot be re-driven is neither a
     // success nor a crash: it is the LAST word on a job whose work already
     // happened, so it settles with what that work produced rather than with a
-    // failure string over it. A `run` has nothing partial and fails saying so; a
+    // failure string over it. A `shell` has nothing partial and fails saying so; a
     // search that had measured two candidates hands them back.
     type Recorded =
       | { readonly kind: 'settled'; readonly result: T }

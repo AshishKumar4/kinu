@@ -41,7 +41,7 @@ const SHOWCASE: { Icon: PhosphorIcon; title: string; copy: string }[] = [
   {
     Icon: DesktopTowerIcon,
     title: 'Your machines, when you want them',
-    copy: 'Link a laptop or a server with one command. Agents can use it when you allow it, sandboxed by default.',
+    copy: 'Link a device or a server with one command. Agents can use it when you allow it, sandboxed by default.',
   },
 ];
 

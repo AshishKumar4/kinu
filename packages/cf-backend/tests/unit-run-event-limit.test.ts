@@ -17,6 +17,7 @@ import {
   RUN_EVENT_LIMIT_DEFAULT, RUN_EVENT_LIMIT_MAX, type RunEventQuery,
 } from '@kinu.run/core';
 import { testActorHandle } from '@kinu.run/test-utils';
+import { REAL_CLOCK } from '@kinu.run/core';
 import { makeSql, makeExecRaw } from '../../core/tests/helpers';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -24,7 +25,7 @@ mockAgentsSdk();
 
 // Dynamic on purpose: the route module resolves the Agent SDK at import time, so
 // it may only load AFTER the stub is installed. Same seam as unit-sse-disconnect.
-const { handleRunEventsRequest, REAL_SSE_PACING } = await import('../src/run-events-routes');
+const { handleRunEventsRequest } = await import('../src/run-events-routes');
 
 const SEEDED_EVENTS = 700;
 
@@ -62,7 +63,7 @@ async function eventsVia(env: Env, query: string): Promise<{ status: number; cou
   // The list route never polls, so the real pacing is never asked for a wait.
   const res = await handleRunEventsRequest(new Request(
     `https://kinu.example.com/api/workspaces/jarvis/runs/run-1/events${query}`,
-  ), env, REAL_SSE_PACING);
+  ), env, REAL_CLOCK);
 
   if (!res) throw new Error('the route did not claim the request');
   const body: unknown = await res.json();

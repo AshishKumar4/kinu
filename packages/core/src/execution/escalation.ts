@@ -2,7 +2,7 @@
  * Escalation — a turn reaching past its own shell into a provisioned
  * environment, recorded as a decision with a reason.
  *
- * The `run` tool defaults to `workspace`, the agent's own shell over its own
+ * The `shell` tool defaults to `workspace`, the agent's own shell over its own
  * file plane. Naming any other runtime is a different KIND of act: it moves the
  * work onto a substrate that has to be provisioned, that costs a cold start,
  * and that is capped — `max_instances` on the container binding is a hard

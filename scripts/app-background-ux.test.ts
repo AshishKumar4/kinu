@@ -123,9 +123,11 @@ interface BackgroundHandle {
   time(): number;
   mode(): 'idle' | 'working' | 'attention';
   pointer(): number;
-  advance(dt: number): void;
-  freeze(): void;
-  thaw(): void;
+  /** The stepping controls the GALLERY page attaches (`__kinuGalleryStepping`);
+   *  the shipped shell's handle carries none, so these are optional here. */
+  advance?(dt: number): void;
+  freeze?(): void;
+  thaw?(): void;
 }
 
 declare global {
@@ -484,9 +486,13 @@ describe('the living background', () => {
         // takes, and the pixels are a pure function of them.
         const disc = { x: 0.94, y: 0.2, r: 0.06 };
 
-        await page.evaluate(() => window.__kinuAppBackground?.freeze());
+        // The gallery attaches the stepping controls; a page without them is
+        // not the gallery, and this readback has no picture to hold still.
+        expect(await page.evaluate(() => window.__kinuAppBackground?.freeze !== undefined)).toBe(true);
+        await page.evaluate(() => window.__kinuAppBackground?.freeze?.());
 
         const quiet = await page.screenshot({ captureBeyondViewport: false });
+        const quietHold = await page.evaluate(() => window.__kinuAppBackground?.pointer() ?? 0);
 
         // Onto the card first: the hold arms there.
         await page.mouse.move(0.8 * 1440, 0.3 * 900, { steps: 12 });
@@ -494,7 +500,7 @@ describe('the living background', () => {
         const cardHold = await page.evaluate(() => {
           const handle = window.__kinuAppBackground;
 
-          for (let i = 0; i < 30; i += 1) handle?.advance(1 / 60);
+          for (let i = 0; i < 30; i += 1) handle?.advance?.(1 / 60);
 
           return handle?.pointer() ?? 0;
         });
@@ -506,12 +512,19 @@ describe('the living background', () => {
         const crossHold = await page.evaluate(() => {
           const handle = window.__kinuAppBackground;
 
-          for (let i = 0; i < 30; i += 1) handle?.advance(1 / 60);
+          for (let i = 0; i < 30; i += 1) handle?.advance?.(1 / 60);
 
           return handle?.pointer() ?? 0;
         });
 
         process.stdout.write(`mesh-live: card hold=${cardHold.toFixed(3)} cross=${crossHold.toFixed(3)}\n`);
+        // The hold ARMED under the card: above the resting hold the frozen
+        // picture had before the pointer arrived, and above zero — so the
+        // ratio below compares two live holds, never two zeros. Not a fixed
+        // level: how high thirty steps lift it depends on the nearest node's
+        // distance, which the seeded picture's state at freeze decides.
+        expect(cardHold).toBeGreaterThan(quietHold);
+        expect(cardHold).toBeGreaterThan(0);
         expect(crossHold).toBeGreaterThanOrEqual(cardHold * 0.9);
         const held = await page.screenshot({ captureBeyondViewport: false });
         await Bun.write(join(MESH, 'home-light-pointer.png'), held);
@@ -520,7 +533,7 @@ describe('the living background', () => {
         await page.evaluate(() => {
           const handle = window.__kinuAppBackground;
 
-          for (let i = 0; i < 40; i += 1) handle?.advance(1 / 60);
+          for (let i = 0; i < 40; i += 1) handle?.advance?.(1 / 60);
         });
 
         const after = await page.screenshot({ captureBeyondViewport: false });
@@ -533,7 +546,7 @@ describe('the living background', () => {
 
         const ground = await page.screenshot({ captureBeyondViewport: false });
 
-        await page.evaluate(() => window.__kinuAppBackground?.thaw());
+        await page.evaluate(() => window.__kinuAppBackground?.thaw?.());
 
         const quietPresence = await bandDeltas(page, quiet, ground, disc);
         const heldPresence = await bandDeltas(page, held, ground, disc);

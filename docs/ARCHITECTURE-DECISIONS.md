@@ -94,9 +94,9 @@ CLI, with one prelude. Every native tool is a binding `tools.<name>(input)`
 with the native input shape; files are `workspace.*` over the same VFS and
 ledger as the `file` tool; crafted tools are `tools.<name>` re-read from the
 store per call, and code defines new ones through `workspace.createTool`.
-`execute_tools` itself is not nested. Reviewed 2026-09-13 against
+`eval` itself is not nested. Reviewed 2026-09-13 against
 `tools/sandbox-contract.ts`, `cf-backend/src/codemode-sandbox.ts`,
-`cli-backend/src/execute-tools-factory.ts`; pinned by `unit-tool-reach`,
+`cli-backend/src/codemode-tool-factory.ts`; pinned by `unit-tool-reach`,
 `unit-agents-codemode`, `unit-crafted-codemode-schema`.
 
 M2. Binding failures resolve to `{ success: false, reason, error, execution? }`,
@@ -105,7 +105,7 @@ payloads are unchanged. Both backends use the core dispatcher: host rejections
 and returned refusals take the same value channel. A program that recovers
 returns normally; returning or throwing its refusal propagates through the SDK
 error channel. Inner failures survive recovery in `ToolOutcome.failures` and
-the census attributes them to their binding, not `execute_tools`. Malformed
+the census attributes them to their binding, not `eval`. Malformed
 programs still throw, with the native-name correction. Decided 2026-09-13,
 commit `526f618d7`.
 Measured: `unit-sandbox-errors` rejected the host-disconnect regression before

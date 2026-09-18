@@ -66,7 +66,7 @@ function withOutcome(taskId: string, reached: number, total: number): EvalObserv
       name: TASK_OUTCOME, asserts: 'solved', eligible: total, passed: reached,
       rate: reached / total, detail: 'fixture ground truth',
     }],
-    turns: 2, toolCalls: 5, toolNames: ['run', 'file'], tokensIn: 10, tokensOut: 1, ms: 1,
+    turns: 2, toolCalls: 5, toolNames: ['shell', 'file'], tokensIn: 10, tokensOut: 1, ms: 1,
   };
 }
 

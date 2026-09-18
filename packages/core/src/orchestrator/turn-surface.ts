@@ -165,9 +165,9 @@ async function admitTurnSkills(
 /** The one restriction rule: the active skills' allowed_tools union bounds
  *  the surface (empty union = skills don't restrict). No name is exempted —
  *  there is no `skills` tool left to protect from its own restriction, and
- *  `execute_tools` (the only remaining path to a skill's own VFS bytes) is
+ *  `eval` (the only remaining path to a skill's own VFS bytes) is
  *  deliberately NOT exempted either: a skill that restricts the surface
- *  and omits execute_tools means it, the same as it means it for any other
+ *  and omits eval means it, the same as it means it for any other
  *  tool. Discovering or authoring more skills mid-restriction can wait for
  *  the next turn, where resolveTurnSkills re-evaluates from the new message,
  *  unaffected by what the previous turn excluded.
