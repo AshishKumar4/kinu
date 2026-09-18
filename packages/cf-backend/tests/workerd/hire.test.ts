@@ -159,6 +159,15 @@ describe('hire', () => {
     // And exactly one turn ran for it.
     const childTurns = observed.turns.filter((row) => row.actorId !== observed.rootActorId);
 
+    // A task hire's lifetime IS the task on the IDENTITY plane too, and the
+    // read below depends on that: the child retires itself inside the turn that
+    // answers, before its caller is told anything, so every count of its work
+    // is a read of rows a retired actor left behind.
+    const child = observed.actors.filter((row) => row.kind === 'subordinate');
+
+    expect(child).toHaveLength(1);
+    expect(child[0]?.retiringAt).not.toBeNull();
+
     expect(childTurns).toHaveLength(1);
     expect(childTurns[0]?.runs).toBe(1);
   });

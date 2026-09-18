@@ -253,10 +253,23 @@ produces exactly one child turn"): before, one hire brief produced 242
 reactor digested the row into "1 event arrived while you were idle …" and the
 hosted turn admission re-published that digest as a new assignment while the
 durable sweep ran the raw brief beside it; after, 1 row whose body is the
-brief. The cloud wake still arms for a pending assignment through
-`hasAdmittedDelegations`, which is workspace-wide SQL and never read
-`wakesADrain`; the local host arms nothing and re-drives on every pass and on
-open.
+brief. Re-measured 2026-09-17 on 4e7da0360, one hire alone: exactly 1 row, body
+253 characters, `consumed_at` still set because the child retires itself inside
+the turn that answers and the runner's lease close is then refused by its dead
+handle.
+
+D4. A delegated turn brackets its run in the durable ledger, like every other
+turn. The local host already did, because an assignment is admitted there as
+the child's own chat turn and `ChatSession.processTurn` calls `openTurnRun`
+(`caused_by: subordinate_task`); the cloud runner drives `runHeadInference`
+directly, which never enters that queue, so it wrote none. Decided 2026-09-17:
+the stricter side wins and `runHostedTask` opens and closes the run with the
+same cause and the same input text. Measured the same day in the workerd pool:
+before, a hired child's ledger held `step_finish` alone — one run id, no
+`run_start`, no `run_end` — so `getRunSummaries` answered `causedBy: null,
+userMessage: null, status: null` for it, which is exactly what
+`subordinateInspection`'s `runs` view shows a reader of a hired child.
+
 
 ## Deploy ladder
 
