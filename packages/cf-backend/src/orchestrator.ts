@@ -1378,6 +1378,65 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
+  /**
+   * ARM 1½: give the assignments an interrupted turn still owes back to the
+   * sweep below.
+   *
+   * `recoverActorTurns` establishes WHICH claims a dead activation left owed —
+   * it verifies the claimed program, settles what it cannot verify
+   * `indeterminate`, and leaves a live actor alone — and then does nothing
+   * more, deliberately: "verified claims remain owed: retained program bytes
+   * alone do not provide a resumable execution". Nothing re-executed them. A
+   * hosted subordinate's interrupted turn therefore sat with its claim
+   * unsettled and its assignment row bound to the runner's `evt-*` lease, and
+   * the ONLY thing that would ever free it was `unbindStale` once the row had
+   * been leased for the full `STALE_EVENT_DELIVERY_MS` — ten minutes during
+   * which the caller's `agents.ask` is blocked on an answer nothing is
+   * producing.
+   *
+   * The lease grace is right for what it guards (an activation racing its own
+   * predecessor) and wrong as the recovery path, because recovery has just
+   * ANSWERED that question for these actors. So the rows it names are re-pended
+   * here, and the sweep that runs immediately below re-runs each through
+   * `runHostedTask`.
+   *
+   * NO NEW STATE, and the identity that makes the re-run safe already exists: a
+   * delegated turn is claimed under `turnId = assignmentId` (the ROW's id), so
+   * a recovered claim names its own row, the re-run carries the same
+   * `sequenceId`, and the parent's report ingress dedupes a replayed report
+   * rather than counting a second answer. `beginTurn` re-admits the same turn
+   * under the next epoch, which is what the epoch fence is for.
+   *
+   * A claim id that names no row — every head and swarm node, whose turn id is
+   * the head's own name — matches nothing and unbinds nothing.
+   */
+  private rependRecoveredAssignments(owedClaims: readonly string[]): void {
+    if (owedClaims.length === 0) return;
+    const owed = new Set(owedClaims);
+    const exec = this.boundExec();
+
+    for (const turn of this.actorHost().resumable()) {
+      if (turn.record.kind !== 'subordinate' || !owed.has(turn.claim.turnId)) continue;
+
+      try {
+        const bound = this.actorHost().bindStores({
+          actorId: turn.record.actorId,
+          workspaceId: turn.record.workspaceId,
+          parentActorId: turn.record.parentActorId,
+        });
+
+        new EventLog(exec, bound.handle).unbind(turn.claim.turnId);
+        diagnostics.event('subordinate.assignment_repended', {
+          workspace: this.name, actor: turn.record.name, assignment: turn.claim.turnId,
+        });
+      } catch (cause) {
+        diagnostics.failure('subordinate.assignment_repend_failed', toKinuError({
+          doing: 'returning an interrupted delegated turn to the admitted queue', cause, otherwise: 'io',
+        }), { workspace: this.name, actor: turn.record.name });
+      }
+    }
+  }
+
    * Finish what one interrupted terminal transition still owes: the reply an
    * answered event batch never dispatched.
    *
@@ -3356,7 +3415,9 @@ export class OrchestratorAgent extends ActorAgent {
 
       // Think owns the foreground root, not the host's logical ActorSession.
       // Core reads liveness through the actual driver, including after awaits.
-      await recoverActorTurns({
+      const recovered = await recoverActorTurns({
+    let owedClaims: readonly string[] = [];
+
         resumable: (limit) => host.resumable(limit),
         acquire: async (reference) => {
           const actor = await host.acquire(reference);
@@ -3381,11 +3442,14 @@ export class OrchestratorAgent extends ActorAgent {
     // Retained claims still fence new work; verification alone is not execution.
     const delegationsTruncated = await this.drainAdmittedDelegations();
 
+      owedClaims = recovered.verified;
+
     if (!this.activationRecoveryPending) return delegationsTruncated || await super.maintenanceWork();
 
     // AFTER the branch seal has drained, and the seal's own remainder is what
     // says so: a branch head still `running` from before the cutoff is a row
     // the LIMIT-256 seal has not reached, and the fork reconcile — which reads
+    this.rependRecoveredAssignments(owedClaims);
     // every pre-cutoff running head as a stale FORK — would retire it as lost
     // fork work and announce a steer branch as a fork run. Asked at limit 1,
     // because presence is the whole question, and asked of the journal rather
