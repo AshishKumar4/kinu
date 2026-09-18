@@ -1,9 +1,9 @@
 {
   "measuredAt": "2026-09-18",
-  "files": 2451,
-  "functions": 60326,
+  "files": 2483,
+  "functions": 60986,
   "ceiling": 125,
-  "line": 36,
+  "line": 35,
   "inventory": [
     {
       "key": "packages/cli/src/slash-commands.ts#executeSlashCommand",
@@ -218,10 +218,6 @@
       "complexity": 36
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/WorkPlans.tsx#WorkPlans",
-      "complexity": 36
-    },
-    {
       "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#7>handler",
       "complexity": 36
     },
@@ -248,6 +244,34 @@
     {
       "key": "scripts/bench-devbox-strategies.ts#executeDecisiveSegment",
       "complexity": 36
+    },
+    {
+      "key": "packages/cf-backend/src/deploy/routes.ts#handleDeployRequest",
+      "complexity": 35
+    },
+    {
+      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>attachChainOnce",
+      "complexity": 35
+    },
+    {
+      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>checkpoint",
+      "complexity": 35
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#devboxRequirements",
+      "complexity": 35
+    },
+    {
+      "key": "scripts/bench-external.ts#readHarborTrial",
+      "complexity": 35
+    },
+    {
+      "key": "scripts/fixtures/payload-transport/worker.ts#fetch",
+      "complexity": 35
+    },
+    {
+      "key": "tests/evals/kinu-tasks.eval.ts#open>afterTurnOne",
+      "complexity": 35
     }
   ]
 }
