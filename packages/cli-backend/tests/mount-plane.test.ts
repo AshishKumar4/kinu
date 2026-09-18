@@ -1,10 +1,12 @@
 // The local backend's environments, and the mount table that joins them into
-// one view. The workspace keeps its own durable filesystem; the machine the
-// CLI runs on is the `laptop` EXECUTOR, whose files ALSO appear in the
-// workspace plane at `/pc` (vfs/mounts.ts). The property this suite has always
-// protected — that the agent can actually reach the host's files, and that
-// they are never silently confused with its own — survives as: host files
-// under the mount point, workspace bytes canonical, no container locally.
+// one view. In the CLI the machine IS the workspace: a session bound to a
+// directory works on that directory's real bytes through the one `workspace`
+// executor, and a session bound to nothing keeps the in-SQLite plane. There
+// is no device runtime and no container locally, so `/pc` and `/sandbox` are
+// stated absences rather than empty folders — the property this suite has
+// always protected, that the agent's own files are never silently confused
+// with anything else, survives as: one executor, one plane, each mount point
+// naming what it cannot serve.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -14,47 +16,63 @@ import { walkRecursive } from '@kinu.run/agent-utils/vfs';
 import { isVfsError } from '@kinu.run/core';
 import { scratchDir, scratchPath } from '@kinu.run/test-utils';
 
-function freshRuntime() {
+function freshRuntime(cwd?: string) {
   const db = new Database(scratchPath('mount-plane', 'agent.db'), { create: true });
 
-  return createCLIRuntime(db, {
+  const config: Parameters<typeof createCLIRuntime>[1] = {
     dbPath: db.filename,
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
-  });
+  };
+
+  if (cwd !== undefined) config.cwd = cwd;
+
+  return createCLIRuntime(db, config);
 }
 
 describe('the local backend file plane', () => {
-  test('the workspace and the machine stay separate executors with different bytes', () => {
-    const rt = freshRuntime();
-    const names = rt.executionRouter!.listExecutors().map((e) => e.name).sort();
-    expect(names).toEqual(['laptop', 'workspace']);
-
-    const workspace = rt.executionRouter!.getProvider('workspace')!.files;
-    const laptop = rt.executionRouter!.getProvider('laptop')!.files;
-    expect(workspace).toBeDefined();
-    expect(laptop).toBeDefined();
-    expect(workspace).not.toBe(laptop);
+  test('the workspace is the one executor: no device runtime, bound or not', () => {
+    const dir = scratchDir('mount-plane-bound');
+    expect(freshRuntime().executionRouter!.listExecutors().map((e) => e.name)).toEqual(['workspace']);
+    expect(freshRuntime(dir).executionRouter!.listExecutors().map((e) => e.name)).toEqual(['workspace']);
   });
 
-  test('/pc serves the real host filesystem inside the agent own plane', async () => {
-    const rt = freshRuntime();
+  test('a bound directory IS the workspace: its real files, whole, through the one plane', async () => {
     const dir = scratchDir('mount-plane-host');
     writeFileSync(join(dir, 'existing.txt'), 'from the host');
+    const rt = freshRuntime(dir);
     const mounted = rt.storage.vfs;
 
-    // The machine's own absolute path, whole, under the mount point.
-    expect(await mounted.readFile(`/pc${join(dir, 'existing.txt')}`, { encoding: 'utf8' }))
-      .toBe('from the host');
-    expect(await mounted.readdir(`/pc${dir}`)).toEqual(['existing.txt']);
+    // The directory's own absolute path and the plane-relative name are one
+    // file; nothing is copied and nothing sits under a mount point.
+    expect(await mounted.readFile(join(dir, 'existing.txt'), { encoding: 'utf8' })).toBe('from the host');
+    expect(await mounted.readFile('existing.txt', { encoding: 'utf8' })).toBe('from the host');
+    expect(await mounted.readdir('/')).toContain('existing.txt');
 
-    // A walk crosses the mount boundary and reports the machine's entries.
-    const walk = await walkRecursive(mounted, `/pc${dir}`, 10, 100);
+    // A walk reports the machine's entries as the workspace's own.
+    const walk = await walkRecursive(mounted, '', 10, 100);
     expect(walk.truncated).toBe(false);
-    expect(walk.entries.map((e) => e.path)).toEqual([`/pc${dir}/existing.txt`]);
+    expect(walk.entries.map((e) => e.path)).toContain('existing.txt');
 
-    // Writes through the plane land on the machine.
-    await mounted.writeFile(`/pc${dir}/written.txt`, 'from the agent');
+    // Writes through the plane land in the directory.
+    await mounted.writeFile('written.txt', 'from the agent');
     expect(readFileSync(join(dir, 'written.txt'), 'utf8')).toBe('from the agent');
+
+    // And the workspace shell runs THERE: the machine is the workspace.
+    const out = await rt.executionRouter!.getProvider('workspace')!.tools.exec!.execute('cat existing.txt');
+    expect(String(out)).toContain('from the host');
+  });
+
+  test('/pc states its absence: no machine is mounted in the CLI', async () => {
+    const mounted = freshRuntime().storage.vfs;
+
+    let error: unknown;
+
+    try { await mounted.readdir('/pc'); } catch (caught) { error = caught; }
+
+    if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
+    expect(error.code).toBe('ENXIO');
+    expect(await mounted.exists('/pc')).toBe(false);
+    expect(await mounted.stat('/pc')).toBeNull();
   });
 
   test('/sandbox states its absence: no container binding exists locally', async () => {

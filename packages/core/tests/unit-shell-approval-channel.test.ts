@@ -1,10 +1,10 @@
-// The `run` tool's 'gate' decision is wired to a real approval channel. These
+// The `shell` tool's 'gate' decision is wired to a real approval channel. These
 // tests pin it — who gets asked, what the answer does, and that with no
 // channel wired 'strict' still keeps its explanatory refusal rather than
 // running the command unasked.
 //
 // The gate itself lives at the execution seam (withApprovalGatedShell —
-// see execution/approval.ts), not inside `run`'s own executor, so the
+// see execution/approval.ts), not inside `shell`'s own executor, so the
 // harness wraps a mock `Shell` with the policy under test and hands it to
 // `rt.shell`, exactly as a backend's runtime.ts does at construction.
 import { describe, test, expect } from 'bun:test';
@@ -58,7 +58,7 @@ function harness(opts: {
   const tools = buildBuiltinTools({ rt: runtime });
 
   const run: RunTool = {
-    execute: toolExecute<{ command: string; runtime?: string }, string>(tools.run),
+    execute: toolExecute<{ command: string; runtime?: string }, string>(tools.shell),
   };
 
   return { run, executed, asked };

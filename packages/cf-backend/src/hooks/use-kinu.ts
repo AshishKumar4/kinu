@@ -6,7 +6,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
-  branchHeadId, ORCHESTRATOR_AGENT_SLUG, SLATES_CHANGED_EVENT, SUBORDINATE_AGENT_SLUG,
+  branchHeadId, ORCHESTRATOR_AGENT_SLUG, SLATES_CHANGED_EVENT, hostedActorSocketPath,
   type PendingAction, type PlanReview, type RoleId, type SlateProblem, type SlateSummary,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
@@ -1126,7 +1126,12 @@ export function useKinu(target?: string | KinuActorAddress) {
   };
 
   if (subordinate) {
-    agentOptions.sub = [{ agent: SUBORDINATE_AGENT_SLUG, name: subordinate }];
+    // The actor's own chat path under this workspace's room — NOT the SDK's
+    // `sub` facet hop, whose rendered path names a child class and key: there
+    // is no child Durable Object to hop to, so this transport refuses that
+    // path and the socket never opened. `hostedActorSocketPath` carries the
+    // measurement.
+    agentOptions.path = hostedActorSocketPath(subordinate);
   }
 
   const agent = useAgent(agentOptions);
@@ -1690,7 +1695,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const refreshExposedPorts = useCallback(async () => {
     const generation = ++exposedPortsRefreshGeneration.current;
 
-    const results = await Promise.all(["workspace", "sandbox", "laptop"].map(async (executor) => {
+    const results = await Promise.all(["workspace", "sandbox", "device"].map(async (executor) => {
       try {
         const result = await rpc<{
           ports: Array<{ port: number; url: string; name?: string }>;

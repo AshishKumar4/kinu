@@ -207,7 +207,7 @@ export function fileDiff(path: string, status: FileStatus, d: LineDiff): FileDif
 
 /**
  * Parse `git diff` unified output into FileDiff[] — the general per-executor
- * change-set for executors with a real git repo (sandbox, laptop, or standalone
+ * change-set for executors with a real git repo (sandbox, device, or standalone
  * Nimbus integrations). Pure: the caller runs `git diff` via the executor's
  * shell and passes the text here. Handles new/deleted/modified/renamed files
  * and binary markers; hunk `@@` headers are kept as context rows.

@@ -103,6 +103,7 @@ export class HeadCapture {
 }
 
 import { permitInPlan } from '../execution/work-mode';
+import type { Clock } from '../types/clock';
 
 /** The two accumulator tools every head has — record_evidence / record_decision,
  *  pushing into the shared HeadCapture. Backend scratch tools are merged on top. */
@@ -158,7 +159,7 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
  * The head tool builders in this module record themselves (they also record
  * artifacts, which only they can classify, and per-tool outcomes only they can
  * name). This wrapper is for the SHARED builtin surface a backend hands a head —
- * `run`, `execute_tools`, `web` know nothing about heads, and without it
+ * `shell`, `eval`, `web` know nothing about heads, and without it
  * `HeadReport.toolCalls` (which the journal persists and the no-prose fallback
  * summary reads) would be empty for exactly the tools a head does its real work
  * with. It records the one outcome a generic wrapper honestly knows — resolved
@@ -207,8 +208,8 @@ function recordingTool<Entry extends ToolSet[string]>(
 const HEAD_PROMPT_TOOL_NAMES = [
   'record_evidence',
   'record_decision',
-  'execute_tools',
-  'run',
+  'eval',
+  'shell',
   'file',
   'web',
   'split_subheads',
@@ -217,7 +218,7 @@ const HEAD_PROMPT_TOOL_NAMES = [
 /** Every tool through which a head can reach a filesystem or run a command. If
  *  it holds none of them, the prompt says so instead of implying it can look
  *  things up. */
-const HEAD_WORK_TOOLS = ['execute_tools', 'run', 'file'] as const satisfies readonly BuiltinToolName[];
+const HEAD_WORK_TOOLS = ['eval', 'shell', 'file'] as const satisfies readonly BuiltinToolName[];
 
 export type HeadWorkspaceLayout = 'shared-workspace' | 'private-scratch';
 
@@ -241,32 +242,32 @@ function renderHeadToolConventions(
     lines.push('- record_decision when you make a substantive choice the parent might want to reconcile.');
   }
 
-  if (hasHeadTool(tools, 'execute_tools')) {
+  if (hasHeadTool(tools, 'eval')) {
     const executionDoctrine = workspaceLayout === 'shared-workspace'
-      ? '- execute_tools runs JavaScript against the SAME resources your parent agent has. Each environment is its own filesystem in its own paths: '
+      ? '- eval runs JavaScript against the SAME resources your parent agent has. Each environment is its own filesystem in its own paths: '
         + '`workspace.*` is the canonical workspace you were forked from (start there — the code and data you were spawned to study usually live in it), '
-        + '`sandbox.*` is its container, and `laptop.*` is the user\'s machine. '
+        + '`sandbox.*` is its container, and `device.*` is the user\'s machine. '
         + '`workspace.exec` runs a real shell in the workspace, so `grep -rn X .` searches it in one call. '
         + '`web.*` is also in scope.'
-      : '- execute_tools runs JavaScript across the environments exposed to this local head: '
+      : '- eval runs JavaScript across the environments exposed to this local head: '
         + '`workspace.*` is your private scratch, `parent.*` is the canonical parent workspace containing the task\'s code and data, '
-        + 'and `laptop.*` is the user\'s machine. Start with `parent.*` for project work; use `workspace.*` only for private scratch. '
+        + 'and `device.*` is the user\'s machine. Start with `parent.*` for project work; use `workspace.*` only for private scratch. '
         + '`web.*` is also in scope.';
 
     lines.push(
       executionDoctrine,
       ...(input.mode === 'plan'
-        ? ['- This is a Plan research head: use execute_tools only for read-only inspection. Do not call mutating workspace, process, port, release, or deployment operations.']
+        ? ['- This is a Plan research head: use eval only for read-only inspection. Do not call mutating workspace, process, port, release, or deployment operations.']
         : []),
     );
   }
 
-  if (hasHeadTool(tools, 'run')) {
+  if (hasHeadTool(tools, 'shell')) {
     const runDoctrine = workspaceLayout === 'shared-workspace'
-      ? '- run executes one shell command. Name the runtime: `sandbox` / `laptop` are the parent agent\'s separate environments, '
+      ? '- run executes one shell command. Name the runtime: `sandbox` / `device` are the parent agent\'s separate environments, '
         + 'and the default `workspace` runtime is the canonical workspace you were forked from.'
       : '- run executes one shell command. The runtime `parent` is the canonical parent workspace, the default `workspace` runtime is private scratch, '
-        + 'and runtime `laptop` is the user\'s machine.';
+        + 'and runtime `device` is the user\'s machine.';
 
     lines.push(
       runDoctrine,
@@ -279,7 +280,7 @@ function renderHeadToolConventions(
   if (hasHeadTool(tools, 'file')) {
     const filePlane = workspaceLayout === 'shared-workspace'
       ? 'the canonical workspace filesystem'
-      : 'your private scratch filesystem; use parent.* inside execute_tools for the canonical parent workspace';
+      : 'your private scratch filesystem; use parent.* inside eval for the canonical parent workspace';
 
     lines.push(input.mode === 'plan'
       ? `- file is available for reading ${filePlane}. Do not edit, write, or delete files in Plan mode.`
@@ -532,6 +533,11 @@ export interface HeadInferenceDeps {
    * flag can never observe it.
    */
   signal?: AbortSignal;
+  /** The clock the report's wall time is measured on (D19): the composition
+   *  root hands the real one; a test hands one it advances per step, so "how
+   *  long the work took" is a figure the test can make non-zero without
+   *  pausing. */
+  clock: Clock;
   /** Abort reason, surfaced in errorMessage. */
   abortReason?: () => string | null;
   /**
@@ -735,8 +741,8 @@ function classifyHeadOutcome(
  * treats a thrown run() as budget_exceeded and that is a different claim.
  */
 export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
-  const { capture, mission } = deps;
-  const startedAt = Date.now();
+  const { capture, mission, clock } = deps;
+  const startedAt = clock.now();
 
   // The mission refusal that stopped this head, if one did. Held so the report
   // says which budget ran out rather than reporting a bare stop.
@@ -1034,7 +1040,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   }
 
   if (refusal) {
-    return exhaustedMissionReport(input, capture, refusal, Date.now() - startedAt, recorded);
+    return exhaustedMissionReport(input, capture, refusal, clock.now() - startedAt, recorded);
   }
 
   const { status, stopReason } = classifyHeadOutcome(input.budget, deps, failure);
@@ -1057,7 +1063,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     toolCalls: [...capture.toolCalls],
     stepCount: recorded,
     usage: capture.usage,
-    wallClockMs: Date.now() - startedAt,
+    wallClockMs: clock.now() - startedAt,
     errorMessage: status === 'completed' ? undefined : stopReason ?? undefined,
   };
 }

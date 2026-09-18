@@ -1,5 +1,5 @@
 /**
- * The laptop runtime's DeviceTransport over the user-level device hub (UserDO).
+ * The device runtime's DeviceTransport over the user-level device hub (UserDO).
  *
  * `status()` is sync + hot (it gates per-turn tool exposure), so it serves a
  * cached snapshot refreshed from the hub in the background once it goes stale —
@@ -11,6 +11,7 @@
  * re-seeds the snapshot.
  */
 import { WORKSPACE_HAS_NO_OWNER, isDeviceAmbiguityError, isDeviceNotConnectedError, nextDeviceRequestId } from './device-tunnel';
+import type { Clock } from '../types/clock';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { shellQuote } from '../utils/shell';
 import { type DeviceCheckpointHint } from '../checkpoints/types';
@@ -82,14 +83,14 @@ export interface HubDeviceTransportOpts {
   caller(): Promise<UserCaller>;
   /** Passed with every RPC so the hub can enforce per-agent consent. */
   agentName: string;
-  /** CLI-forwarded working directory for laptop exec calls, when present. */
+  /** CLI-forwarded working directory for device exec calls, when present. */
   cliCwd(): string | null;
   /** Current turn identity for the daemon's pre-mutation shadow-git snapshot
    *  (deduped daemon-side per turn). Null outside turns / when unwired. */
   checkpointMeta?: () => { turnId: string; sessionId: string } | null;
-  /** The status TTL's clock: `Date.now` in production, a clock a test
-   *  advances past the TTL by hand rather than sleeping through it. */
-  now: () => number;
+  /** The status TTL's clock: real in production, one a test advances past
+   *  the TTL by hand rather than sleeping through it. */
+  clock: Clock;
 }
 
 interface StatusRefresh {
@@ -116,7 +117,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
 
     if (!hub) {
       snapshot = DISCONNECTED;
-      checkedAt = opts.now();
+      checkedAt = opts.clock.now();
 
       return { promise: Promise.resolve(snapshot) };
     }
@@ -137,7 +138,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           otherwise: 'unavailable',
         }));
       } finally {
-        checkedAt = opts.now();
+        checkedAt = opts.clock.now();
 
         if (inFlight === owner) inFlight = null;
       }
@@ -162,7 +163,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
      * rejection to lose.
      */
     status: (): DeviceStatus => {
-      if (!inFlight && opts.now() - checkedAt >= DEVICE_STATUS_TTL_MS) beginStatusRefresh();
+      if (!inFlight && opts.clock.now() - checkedAt >= DEVICE_STATUS_TTL_MS) beginStatusRefresh();
 
       return snapshot;
     },
@@ -177,7 +178,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         // told an owner to run `kinu connect` for a machine they may already
         // have linked.
         snapshot = DISCONNECTED;
-        checkedAt = opts.now();
+        checkedAt = opts.clock.now();
         throw new Error(WORKSPACE_HAS_NO_OWNER);
       }
 
@@ -228,7 +229,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         // forward rather than dropped. Overwriting it here would blank the row
         // the moment the agent used the device.
         snapshot = { ...snapshot, connected: true, registered: true };
-        checkedAt = opts.now();
+        checkedAt = opts.clock.now();
 
         return rawResult === undefined
           ? undefined
@@ -236,7 +237,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
       } catch (err) {
         if (isDeviceNotConnectedError(err)) {
           snapshot = { ...snapshot, connected: false };
-          checkedAt = opts.now();
+          checkedAt = opts.clock.now();
         }
 
         // Several machines are live and the call named none. The hub's

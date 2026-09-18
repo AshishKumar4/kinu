@@ -121,6 +121,10 @@ export interface InlineExecutorDeps {
    * the same list that decides which commands get registered.
    */
   toolchain?: readonly ExecutorCapability[];
+  /** What the host can neither claim nor rule out (`docker`, `gpu` on a bare
+   *  PATH probe). Declared rather than dropped: an omission reads to the
+   *  model exactly like a measured absence. */
+  unmeasured?: readonly ExecutorCapability[];
   /** The owning workspace's slate operations; absent when this backend has no slate host. */
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
 }
@@ -265,7 +269,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description:
         'Run a command in the workspace shell, over the SAME files readFile/readdir address. '
         + 'A real POSIX shell with ~95 coreutils, pipes, redirects, loops, variables and a working directory that persists across calls. '
-        + 'Available binaries and process features are listed in this workspace provider’s capabilities; use sandbox or laptop only when the task needs that separate machine.',
+        + 'Available binaries and process features are listed in this workspace provider’s capabilities; use sandbox or device only when the task needs that separate machine.',
       execute: async (...args: unknown[]) => {
         const command = parseInput(StringSchema, { value: args[0] });
 
@@ -341,7 +345,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         'Create or update a reusable tool in CraftStore. ' +
         'Code is JavaScript that denotes an async function: `async (args) => { ... }`, `async function name(args) { ... }`, or `const name = async (args) => { ... }` (helpers may precede it). ' +
         'Inside the body you may call `workspace.*`, `state.*`, other tools as `tools.<name>(...)`, `require(...)` and `fetch`. ' +
-        'Callable as `tools.<name>(...)` from the NEXT execute_tools call on. ' +
+        'Callable as `tools.<name>(...)` from the NEXT eval call on. ' +
         'Returns { ok, name, action: "created"|"updated" }.',
       execute: async (...args: unknown[]): Promise<JsonValue> => {
         const name = parseInput(StringSchema, { value: args[0] });
@@ -388,7 +392,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           // The misevolution gate, before any write, on the `craft_tool`
           // surface — the safety-machinery criteria in full, deliberately
           // without `network-egress` (the same fetch runs unrestricted in an
-          // ephemeral execute_tools call, so vetoing only its persisted form
+          // ephemeral eval call, so vetoing only its persisted form
           // buys nothing; see SURFACE_CRITERIA). What IS refused is a stored,
           // reusable, publishable tool that names the promotion tables, the
           // rollout knobs, the gate entry points, or the consent settings.
@@ -536,7 +540,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   function listTools(): Promise<Array<{ name: string; description: string; qualityScore: number }>>;
   /**
    * Create or update a crafted tool. Callable as \`tools.<name>(args)\` on the NEXT
-   * execute_tools call in this turn: the sandbox that created it is already built,
+   * eval call in this turn: the sandbox that created it is already built,
    * so the new tool is not in it. \`tools\` is the only namespace it is callable
    * in — the same one the native tools are in.
    * Name is sanitized to a valid JS identifier; original case preserved.
@@ -590,6 +594,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
   if (resourceLimits !== undefined) {
     Object.assign(provider, { resourceLimits });
+  }
+
+  if (deps.unmeasured !== undefined) {
+    Object.assign(provider, { unmeasuredCapabilities: new Set(deps.unmeasured) });
   }
 
   return provider;

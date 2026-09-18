@@ -3,7 +3,7 @@
 // episode sequence for a long-horizon continuation task.
 //
 // A subprocess is not incidental here — it is what makes the isolation real.
-// The local shell and laptop executor root themselves at process.cwd(), and
+// The local shell and device executor root themselves at process.cwd(), and
 // KINU_HOME is read once at module load, so an in-process driver would run
 // every attempt against the harness's own cwd and home. Spawned with cwd set to
 // the sandbox and KINU_HOME set to the attempt's throwaway home, both are

@@ -44,7 +44,7 @@ function scriptedBinding(frames: string[], hangOpen: boolean, onCancel?: () => P
     stream,
     cancels,
     // The fixture IS the narrow binding contract the adapter calls: one
-    // `run` answering the shapes workerd can hand back. No cast — the
+    // `shell` answering the shapes workerd can hand back. No cast — the
     // parameter takes this exactly.
     run: (_model: string, _inputs: JsonObject, _options?: {
       signal?: AbortSignal;

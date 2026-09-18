@@ -1,7 +1,7 @@
 /**
- * Node-side `execute_tools` builder — the CLI's answer to the CF backend's
- * codemode-backed tool. Handed to `buildActorTools` as `executeTools`, it
- * gives the CLI a working `execute_tools` without a workerd loader.
+ * Node-side `eval` builder — the CLI's answer to the CF backend's
+ * codemode-backed tool. Handed to `buildActorTools` as `codemode`, it
+ * gives the CLI a working `eval` without a workerd loader.
  *
  * The returned tool's execute compiles the LLM's code via `new Function()`
  * and runs it in-process with the execution router's provider namespaces
@@ -24,7 +24,7 @@ import { requireBuild } from '@kinu.run/core';
 import type {
   CodemodeProvider,
   CraftedToolSet,
-  ExecuteToolsBuilder,
+  CodemodeBuilder,
   ExecutorProvider,
   JsonValue,
 } from '@kinu.run/core';
@@ -32,7 +32,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
   decodeJsonValue, explainNativeToolReferenceError, nativeToolFunctions,
-  renderExecuteToolsDescription, renderToolsDeclaration, executeToolsInputSchema,
+  renderCodemodeDescription, renderToolsDeclaration, codemodeInputSchema,
   withCraftedToolDeclarations,
   codemodeFunction, withCodemodeProgram,
 } from '@kinu.run/core';
@@ -69,10 +69,10 @@ interface ExecuteSuccess {
 }
 
 /**
- * Build the CLI's `execute_tools` builder. Pass as `executeTools` to
+ * Build the CLI's `eval` builder. Pass as `codemode` to
  * `buildActorTools`, or call it with a finished confined surface (heads).
  */
-export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = {}): ExecuteToolsBuilder {
+export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps = {}): CodemodeBuilder {
   return (surface) => {
     const providers: CodemodeProvider[] = [
       ...surface.providers.map(adaptExecutorProvider),
@@ -88,21 +88,21 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
 
     return withCraftedToolDeclarations(tool({
       // The one description, composed in core (registry.
-      // renderExecuteToolsDescription) so this builder really is the CF
+      // renderCodemodeDescription) so this builder really is the CF
       // codemode tool on a different runtime rather than a different tool. The
       // namespace declarations are the point: each provider carries its own
       // `types` and every one of them is read into this description.
       // Collecting them and reading none tells the model nothing about
       // `memory.*`, `tasks.*`, `agents.*`, `web.*` or `llm.*` while handing it
       // all of them as callables.
-      description: renderExecuteToolsDescription(
+      description: renderCodemodeDescription(
         [
           toolsDeclaration,
           ...providers.map((provider) => provider.types).filter((types) => !!types),
         ].join('\n\n'),
         'local',
       ),
-      inputSchema: executeToolsInputSchema(),
+      inputSchema: codemodeInputSchema(),
       execute: (args, options) => withCodemodeProgram(async () => {
         requireBuild('Native JavaScript execution without a constrained runtime');
         // `console` is shadowed by a capturing stand-in: this builder runs the
@@ -182,7 +182,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           return payload;
         } catch (error) {
           // A bare `run(...)` etc. inside the model's code throws a plain V8
-          // ReferenceError here (no dispatcher involved — `run` was simply
+          // ReferenceError here (no dispatcher involved — `shell` was simply
           // never one of the bound argNames above); rewrite that one shape
           // into an actionable correction, same as the CF codemode sandbox.
           const message = explainNativeToolReferenceError(renderThrownChain({ cause: error }));

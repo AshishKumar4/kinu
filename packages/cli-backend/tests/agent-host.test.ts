@@ -1,4 +1,5 @@
 import { scratchDir } from '../../test-utils/src/scratch';
+import { REAL_CLOCK } from '@kinu.run/core';
 import { HIRE_FORK_PARENT, HIRE_FORK_REQUEST, HIRE_FORK_PREFIX, HIRE_FORK_MISSION,
   hireForkModel, hireConversation, hireRetentionModel, HIRE_FORK_FOLLOWUP_REQUEST,
   HIRE_FORK_FOLLOWUP, HIRE_CHILD_CONTEXT } from '../../test-utils/src/hire-fork';
@@ -937,7 +938,7 @@ describe('LocalAgentHost', () => {
    * NO HANG, EXACTLY ONE RESULT — for every way a temporary child's turn can end.
    *
    * There is no deadline anywhere in this rung by ruling, so the ONLY thing that
-   * makes `run` return is the child reporting. These drive the two endings the
+   * makes `shell` return is the child reporting. These drive the two endings the
    * durable relay policy withholds — a finished turn with nothing to say, and a
    * turn that failed — on the real local substrate, and assert the call returns
    * with exactly one report and no duplicate.
@@ -1112,7 +1113,7 @@ describe('LocalAgentHost', () => {
     }, {
       actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
       model: streamingModel('The probe succeeded.', (options) => { requests.push(JSON.stringify(options.prompt)); }),
-      tools: {}, capture: new HeadCapture(), isAborted: () => false, workspaceLayout: 'shared-workspace',
+      clock: REAL_CLOCK, tools: {}, capture: new HeadCapture(), isAborted: () => false, workspaceLayout: 'shared-workspace',
     });
 
     expect(report).toMatchObject({ status: 'completed', errorMessage: undefined });

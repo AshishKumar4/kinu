@@ -518,11 +518,11 @@ describe('Live Smoke — one real turn per backend', () => {
         llm: LLM_CONFIG,
       });
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-      // `hostRoot: null` for the reason tests/evals/harness.ts states at length:
-      // an episode reaches every registered executor and the default `laptop`
-      // plane is rooted at the repo this suite was launched from. Asserted
-      // rather than trusted, immediately below.
-      const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM_CONFIG, hostRoot: null });
+      // No directory bound, for the reason tests/evals/harness.ts states at
+      // length: an episode reaches every registered executor, and a bound
+      // workspace shell runs in the repo this suite was launched from.
+      // Asserted rather than trusted, immediately below.
+      const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM_CONFIG });
       requireSandboxedExecutors('live-smoke', rt);
 
       const toolNames: string[] = [];

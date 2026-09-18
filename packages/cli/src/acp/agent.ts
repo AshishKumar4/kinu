@@ -46,13 +46,13 @@ export interface AcpAgentDeps {
  *  `skills`, `release` and `experience` are absent on purpose: none of the
  *  three is a tool name a live turn produces. Skills are workspace.* file
  *  calls and release is a release.* codemode call — both surface as
- *  `execute_tools`, already mapped below — and experience is an owner-only
+ *  `eval`, already mapped below — and experience is an owner-only
  *  RPC, off the tool surface entirely. Entries for them would be dead code
  *  with no "old transcript" justification, since ACP maps calls as they
  *  happen rather than rendering stored history. */
 const TOOL_KINDS = new Map<string, ToolKind>([
-  ['run', 'execute'],
-  ['execute_tools', 'execute'],
+  ['shell', 'execute'],
+  ['eval', 'execute'],
   ['memory', 'think'],
   ['tasks', 'think'],
   ['report', 'think'],
@@ -71,12 +71,12 @@ function toolKind(name: string, args: JsonObject): ToolKind {
 }
 
 /** A one-line summary of what a call is doing — the tool call's ACP title.
- *  `run` gets its command because that is the thing a user is deciding about. */
+ *  `shell` gets its command because that is the thing a user is deciding about. */
 function toolTitle(name: string, args: JsonObject): string {
   const command = args.command;
   const parsedCommand = v.safeParse(v.string(), command);
 
-  if (name === 'run' && parsedCommand.success) return parsedCommand.output;
+  if (name === 'shell' && parsedCommand.success) return parsedCommand.output;
   const action = args.action;
   const parsedAction = v.safeParse(v.string(), action);
 

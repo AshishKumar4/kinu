@@ -186,8 +186,8 @@ describe('a refusal is not output', () => {
   });
 
   test('an executor error with no refusal channel does not invent a no-dispatch reason', () => {
-    expect(readDeviceCommand({ error: 'Executor "laptop" is not available' })).toEqual({
-      kind: 'refused', reason: 'unclassified', text: 'Executor "laptop" is not available',
+    expect(readDeviceCommand({ error: 'Executor "device" is not available' })).toEqual({
+      kind: 'refused', reason: 'unclassified', text: 'Executor "device" is not available',
     });
   });
 
@@ -352,7 +352,7 @@ describe('the client speaks the routes the product\'s own surfaces speak', () =>
     // `GET /devices/consents` and `DELETE /devices/:id/consent`. Pinning a route
     // this fake does not serve is green anyway, because the fake answers 200 to
     // anything — so the pin is the flow an owner really performs:
-    // one harmless `laptop` call raises the card, the workspace's own pending
+    // one harmless `device` call raises the card, the workspace's own pending
     // list is read, and the card is answered `always` through the RPC its
     // button calls. All three go through `/api/cli` under the bearer, because
     // consent is keyed on the PROVEN workspace when the workspace asks.

@@ -429,11 +429,11 @@ export function budgetExhausted(b: HeadBudget) {
 import type { WorkMode } from '../types/turn';
 
 /** The builtin tools a head keeps. `file` is the runtime's native file plane,
- *  `execute_tools` its executor namespaces, `run` its shell router, and `web`
+ *  `eval` its executor namespaces, `shell` its shell router, and `web`
  *  live research. Hosted `file` reaches the canonical workspace; local `file`
  *  reaches private scratch while `parent.*` reaches canonical files. `memory`
  *  and `skills` are withheld because they would address head-private stores. */
-export const HEAD_BUILTIN_TOOLS = ['execute_tools', 'run', 'file', 'web'] as const satisfies readonly BuiltinToolName[];
+export const HEAD_BUILTIN_TOOLS = ['eval', 'shell', 'file', 'web'] as const satisfies readonly BuiltinToolName[];
 
 /**
  * The builtin surface narrowed to an explicit allow-list.

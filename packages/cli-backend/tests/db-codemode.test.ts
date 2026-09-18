@@ -1,5 +1,5 @@
 // `db.*` through the REAL local codemode sandbox: the model writes a program,
-// `createNodeExecuteToolFactory` normalizes and runs it in-process with the
+// `createNodeCodemodeToolFactory` normalizes and runs it in-process with the
 // provider bound as a namespace global, and the rows land in a real workspace
 // SQLite the test reads back through neither the store nor the provider.
 //
@@ -16,7 +16,7 @@ import {
   type ActorHandle, type JsonValue, type SqlExecutor,
 } from '@kinu.run/core';
 import { createTestActors, toolExecute, type TestActors } from '@kinu.run/test-utils';
-import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
+import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { localTransactions, makeWorkspaceSchemaSql } from '../src/runtime';
 
 interface ExecuteToolResult {
@@ -71,7 +71,7 @@ function sandbox(): Sandbox {
       // `extraProviders` is the seam the production sites bind a codemode
       // namespace through (`local-session.ts`, `head-runtime.ts`);
       // `surface.providers` is the EXECUTOR list and takes a different shape.
-      const factory = createNodeExecuteToolFactory({ extraProviders: [createDbCodemodeProvider(store)] });
+      const factory = createNodeCodemodeToolFactory({ extraProviders: [createDbCodemodeProvider(store)] });
       const tool = factory({ native: {}, craftedTools: () => ({}), providers: [] });
 
       return toolExecute(tool)({ code });

@@ -163,7 +163,7 @@ export interface AgentRuntime {
   abortBranch: AbortBranch;
   /**
    * Multi-executor routing. Manages named executor providers (workspace,
-   * nimbus, sandbox, laptop) for the codemode sandbox. Optional — core
+   * nimbus, sandbox, device) for the codemode sandbox. Optional — core
    * code that doesn't need multi-executor support ignores this field.
    */
   executionRouter?: ExecutionRouter;
@@ -178,7 +178,7 @@ export interface AgentRuntime {
   deviceTransport?: DeviceTransport;
   /**
    * POSIX shell bound to the agent's VFS. Supplied by the backend adapter
-   * (CF: createShell(sqliteFS); CLI: createShell(sqliteFS)). The `run` tool
+   * (CF: createShell(sqliteFS); CLI: createShell(sqliteFS)). The `shell` tool
    * reads this directly for workspace-scoped commands; absence degrades to
    * router-only routing.
    */

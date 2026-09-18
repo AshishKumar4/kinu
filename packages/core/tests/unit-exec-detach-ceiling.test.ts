@@ -2,7 +2,7 @@
 // once.
 //
 // The incident (owner screenshot, workspace my-ai-engineer-b3b8b792): a tee'd
-// training script dispatched through `run` at `runtime: 'sandbox'` came back
+// training script dispatched through `shell` at `runtime: 'sandbox'` came back
 // `CommandError: … Command timeout after 60000ms`. Not a handle, not an answer —
 // a killed command. Two separate facts produced it:
 //
@@ -92,14 +92,14 @@ function fakeContainer(): FakeContainer {
 /** The screenshot's exact call. */
 const TRAINING = 'python3 train.py --epochs 40 2>&1 | tee /workspace/train.log';
 
-interface RunInput { command: string; runtime?: string }
+interface ShellToolInput { command: string; runtime?: string }
 
-/** A `run` tool shaped like the real one at `runtime: 'sandbox'`: it dispatches
+/** A `shell` tool shaped like the real one at `runtime: 'sandbox'`: it dispatches
  *  to the router's sandbox provider, which is where the incident ran. */
 function runToolOverSandbox(provider: ExecutorProvider): ToolSet[string] {
   return tool({
-    description: 'run',
-    inputSchema: jsonSchema<RunInput>({
+    description: 'shell',
+    inputSchema: jsonSchema<ShellToolInput>({
       type: 'object',
       properties: { command: { type: 'string' }, runtime: { type: 'string' } },
       required: ['command'],
@@ -116,17 +116,17 @@ function fakeJobRunner(
   return { policy, thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold }) };
 }
 
-function wrapRun(provider: ExecutorProvider, runner: ReturnType<typeof fakeJobRunner>) {
+function wrapShellTool(provider: ExecutorProvider, runner: ReturnType<typeof fakeJobRunner>) {
   const wrapped = wrapToolsForBackground(
-    { run: runToolOverSandbox(provider) },
+    { shell: runToolOverSandbox(provider) },
     { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
   );
 
-  const entry = wrapped.run;
+  const entry = wrapped.shell;
 
-  if (!entry) throw new Error('Expected the run tool to survive wrapping');
+  if (!entry) throw new Error('Expected the shell tool to survive wrapping');
 
-  return toolExecute<RunInput, object | string>(entry);
+  return toolExecute<ShellToolInput, object | string>(entry);
 }
 
 describe('the sandbox lane carries no deadline of its own', () => {
@@ -166,7 +166,7 @@ describe("the incident replayed: a long tee'd training run through run → sandb
       },
     );
 
-    const out = await wrapRun(provider, runner)({ command: TRAINING, runtime: 'sandbox' });
+    const out = await wrapShellTool(provider, runner)({ command: TRAINING, runtime: 'sandbox' });
 
     // The model is handed a handle and keeps working.
     expect(isBackgroundHandle(out)).toBe(true);
@@ -198,7 +198,7 @@ describe("the incident replayed: a long tee'd training run through run → sandb
     );
 
     container.finish();
-    const out = await wrapRun(provider, runner)({ command: TRAINING, runtime: 'sandbox' });
+    const out = await wrapShellTool(provider, runner)({ command: TRAINING, runtime: 'sandbox' });
 
     expect(crossed).toBe(0);
     expect(String(out)).toContain('epoch 40/40 done');
@@ -213,13 +213,13 @@ describe('every long-capable surface is declared backgroundable', () => {
   test('the shell and the code lane both ride the window, on every surface', () => {
     // A confined surface (a swarm node, a head) holds only these two, and the
     // actor's map is built FROM them — so the sandbox namespace reached through
-    // `execute_tools` and the shell reached through `run` cannot diverge. Read
+    // `eval` and the shell reached through `shell` cannot diverge. Read
     // through the declared contract, which is what the wrapper indexes.
     const declared: Readonly<Record<string, BackgroundableTool>> = BACKGROUNDABLE_TOOLS;
-    expect(declared.run?.completion).toBe('result');
-    expect(declared.execute_tools?.completion).toBe('result');
-    expect(declared.run?.detachable({ command: 'x', runtime: 'sandbox' })).toBe(true);
-    expect(declared.execute_tools?.detachable({ code: 'await sandbox.exec("x")' })).toBe(true);
+    expect(declared.shell?.completion).toBe('result');
+    expect(declared.eval?.completion).toBe('result');
+    expect(declared.shell?.detachable({ command: 'x', runtime: 'sandbox' })).toBe(true);
+    expect(declared.eval?.detachable({ code: 'await sandbox.exec("x")' })).toBe(true);
   });
 });
 
@@ -273,15 +273,15 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
     const provider = createSandboxExecutor(container.handle);
 
     const wrapped = wrapToolsForBackground(
-      { run: runToolOverSandbox(provider) },
+      { shell: runToolOverSandbox(provider) },
       { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
     );
 
-    const entry = wrapped.run;
+    const entry = wrapped.shell;
 
-    if (!entry) throw new Error('Expected the run tool to survive wrapping');
+    if (!entry) throw new Error('Expected the shell tool to survive wrapping');
 
-    const out = await toolExecute<RunInput, object | string>(entry)({
+    const out = await toolExecute<ShellToolInput, object | string>(entry)({
       command: TRAINING, runtime: 'sandbox',
     });
 

@@ -126,13 +126,13 @@ describe('rendering', () => {
   test('prose is verbatim; tool traffic is named rather than dumped', async () => {
     const messages = [
       { role: 'user', content: [{ type: 'text', text: 'find it' }] },
-      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 't1', toolName: 'run', input: { cmd: 'ls' } }] },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 't1', toolName: 'shell', input: { cmd: 'ls' } }] },
       {
         role: 'tool',
         content: [{
           type: 'tool-result',
           toolCallId: 't1',
-          toolName: 'run',
+          toolName: 'shell',
           output: { type: 'json', value: { ok: true } },
         }],
       },
@@ -140,8 +140,8 @@ describe('rendering', () => {
 
     const page = await read(messages)({ offset: 0 });
     expect(page.entries[0]!.text).toBe('find it');
-    expect(page.entries[1]!.text).toBe('[tool-call run {"cmd":"ls"}]');
-    expect(page.entries[2]!.text).toBe('[tool-result run {"type":"json","value":{"ok":true}}]');
+    expect(page.entries[1]!.text).toBe('[tool-call shell {"cmd":"ls"}]');
+    expect(page.entries[2]!.text).toBe('[tool-result shell {"type":"json","value":{"ok":true}}]');
   });
 
   test('an unknown part is named, not dropped silently', async () => {

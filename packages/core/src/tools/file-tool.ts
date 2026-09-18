@@ -14,6 +14,7 @@
  * one error vocabulary, one read ledger, one durable outcome counter.
  */
 
+import { formatReference, type ReferenceRoot } from '../vfs/references';
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
@@ -44,6 +45,9 @@ export interface FileToolDeps {
    *  `workspace.writeFile` does. Without it the FTS index would silently go
    *  stale for the one directory whose whole purpose is being searchable. */
   memory?: Memory;
+  /** The live reference roots (`vfs/references.ts`), so a result that names
+   *  a file names it the way a person reads it: `root://path`. */
+  roots?: () => readonly ReferenceRoot[];
 }
 
 export interface FileToolInput {
@@ -225,6 +229,8 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
   const ActionSchema = v.picklist(FILE_TOOL_ACTIONS);
   const PathSchema = v.pipe(v.string(), v.trim(), v.minLength(1));
+  /** How a result names its file: the reference the live table gives it. */
+  const referenceOf = (path: string): string => formatReference(path, deps.roots?.() ?? []);
 
   return async (args: FileToolInput): Promise<JsonValue> => {
     // Declared types, not established ones: the AI SDK leaves
@@ -322,7 +328,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
           return failure(vfsFail.reason, vfsFail.error);
         }
 
-        return { ok: true, path, bytes: args.content.length, action: existing === null ? 'created' : 'replaced' };
+        return { ok: true, path, reference: referenceOf(path), bytes: args.content.length, action: existing === null ? 'created' : 'replaced' };
       }
 
       case 'edit': {
@@ -389,6 +395,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         return {
           ok: true,
           path,
+          reference: referenceOf(path),
           applied: outcome.applied.map((a) => ({ line: a.line, removed_lines: a.removedLines, added_lines: a.addedLines })),
         };
       }
@@ -410,7 +417,7 @@ export function createFileTool(deps: FileToolDeps): ToolSet[string] {
           enum: [...FILE_TOOL_ACTIONS],
           description: 'read contents, list a directory, stat a path, search a file for literal text, edit exact text, or write a whole file.',
         },
-        path: { type: 'string', description: 'Path in this agent\'s own durable workspace filesystem; relative paths resolve at its root. Mounted executors\' files also appear under their mounts — a bound container at /sandbox, a connected device at /pc. Other environments have their own filesystems, reached through their namespaces in execute_tools.' },
+        path: { type: 'string', description: 'Path in this agent\'s own durable workspace filesystem; relative paths resolve at its root. Mounted executors\' files also appear under their mounts — a bound container at /sandbox, a connected device at /pc. Other environments have their own filesystems, reached through their namespaces in eval.' },
         offset: { type: 'number', description: 'For action=read: 1-indexed first line to return (default 1).' },
         limit: { type: 'number', description: 'For action=read: how many lines to return (default: as many as fit).' },
         content: { type: 'string', description: 'For action=write: the file\'s complete new contents.' },

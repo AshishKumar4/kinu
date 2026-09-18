@@ -206,16 +206,16 @@ describe('scaffold host callTool ids', () => {
       },
     });
 
-    const claimed = () => withEffectClaims({ run: entry }, deps);
+    const claimed = () => withEffectClaims({ shell: entry }, deps);
     const firstHost = createScaffoldCallTool(claimed);
     const secondHost = createScaffoldCallTool(claimed);
     const realNow = Date.now;
     Date.now = () => 1_700_000_000_000;
 
     try {
-      const first = await firstHost('run', { to: 'ops@example.test' });
-      const second = await firstHost('run', { to: 'ops@example.test' });
-      const third = await secondHost('run', { to: 'ops@example.test' });
+      const first = await firstHost('shell', { to: 'ops@example.test' });
+      const second = await firstHost('shell', { to: 'ops@example.test' });
+      const third = await secondHost('shell', { to: 'ops@example.test' });
       expect(calls).toEqual(['ops@example.test', 'ops@example.test', 'ops@example.test']);
       expect(first).toEqual({ sent: 'ops@example.test', attempt: 1 });
       expect(second).toEqual({ sent: 'ops@example.test', attempt: 2 });

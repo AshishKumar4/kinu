@@ -8,7 +8,7 @@
  * — the marker tells the model exactly where to read the rest (the Claude
  * Code / Manus drop-content-keep-the-path pattern).
  *
- * Applied inside `buildBuiltinTools` (run + execute_tools), so both backends
+ * Applied inside `buildBuiltinTools` (run + eval), so both backends
  * share one budget policy.
  */
 
@@ -89,11 +89,11 @@ export async function clampToolResult(
     : '';
 
   // The marker promises workspace.readFile, which reads the same filesystem
-  // the run tool's `workspace` shell runs over on every backend — so the
+  // the shell tool's `workspace` shell runs over on every backend — so the
   // model can also grep the file it names.
   const marker = savedPath
     ? `[output truncated: ${omitted} chars omitted; full output saved to ${savedPath} — ` +
-      'read or filter it with workspace.readFile inside execute_tools ' +
+      'read or filter it with workspace.readFile inside eval ' +
       `(oversize: name the path in a lifetime:"task" agents hire so that agent reads it, or range-read it), or rerun with a filter]${reason}`
     : `[output truncated: ${omitted} chars omitted; rerun with a filter (grep/head/tail) to see the rest]${reason}`;
 
@@ -102,7 +102,7 @@ export async function clampToolResult(
   if (opts.budget) {
     opts.budget.admit(clamped.length);
     opts.budget.recordSpill({
-      producer: opts.producer ?? 'execute_tools',
+      producer: opts.producer ?? 'eval',
       omitted,
       referenced: savedPath !== null,
       tightened,
@@ -112,7 +112,7 @@ export async function clampToolResult(
   return clamped;
 }
 
-/** Serialize-and-clamp for tools whose results are structured (execute_tools).
+/** Serialize-and-clamp for tools whose results are structured (eval).
  *  Within budget the original value passes through untouched; oversize values
  *  are offloaded as JSON and replaced by the clamped serialization. */
 export async function clampSerializedToolResult(

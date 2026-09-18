@@ -1,7 +1,7 @@
 /**
  * Who owns the durable device requests ONE tool invocation issues.
  *
- * A laptop `exec` registers its command on the user's device under a request
+ * A device `exec` registers its command on the user's device under a request
  * identity, and that identity is what a cancellation names. So the identity has
  * an owner, and the owner decides which cancel reaches the command: the TURN
  * while the call is in the foreground, and the background JOB once the call has

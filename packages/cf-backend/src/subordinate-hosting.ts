@@ -40,6 +40,7 @@
  * with the others.
  */
 
+import { REAL_CLOCK } from '@kinu.run/core';
 import type { LanguageModel, ToolSet } from 'ai';
 import {
   EventLog, HeadCapture, runHeadInference,
@@ -421,6 +422,7 @@ export async function runHostedTask(
     const inference: HeadInferenceDeps = {
       actor,
       runId: crypto.randomUUID(),
+      clock: REAL_CLOCK,
       delegation: {
         assignmentId: task.sequenceId,
         birthContext: input.inheritedContext.map(inheritedAsModelMessage),

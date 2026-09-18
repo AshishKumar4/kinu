@@ -147,7 +147,7 @@ function displayToolValue(value: JsonValue): string {
 
 const TOOL_LABELS = new Map(Object.entries({
   run: "Run command",
-  execute_tools: "Tool program",
+  eval: "Tool program",
   file: "Files",
   agents: "Agents",
   memory: "Memory",
@@ -161,9 +161,9 @@ function toolLabel(toolName: string): string {
 }
 
 function toolIcon(toolName: string): ReactNode {
-  if (toolName === "run") return <TerminalWindowIcon size={15} />;
+  if (toolName === "shell") return <TerminalWindowIcon size={15} />;
 
-  if (toolName === "execute_tools") return <LightningIcon size={15} />;
+  if (toolName === "eval") return <LightningIcon size={15} />;
 
   if (toolName === "file") return <FileTextIcon size={15} />;
 
@@ -213,10 +213,10 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
 
   const durationLabel = elapsed !== null && elapsed > 100 ? `${(elapsed / 1000).toFixed(1)}s` : null;
 
-  // Surface the runtime the `run` tool dispatched on so the user can see
+  // Surface the runtime the `shell` tool dispatched on so the user can see
   // at a glance whether the agent ran something in workspace / sandbox /
-  // laptop. Default = workspace.
-  const runtime = toolName === 'run'
+  // device. Default = workspace.
+  const runtime = toolName === 'shell'
     ? (jsonString(input, "runtime") ?? 'workspace')
     : null;
 
@@ -229,14 +229,14 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   const failed = isError || !!provisionErr;
   const prominent = effect === 'mutate' || isRunning;
 
-  // The free-text previews — an execute_tools program or a run command —
+  // The free-text previews — an eval program or a run command —
   // render their argument verbatim rather than as pretty-printed JSON, so the
   // structured `redactPayload` walk never reaches them. They pass through the
   // same policy's value-level half (`redactSecrets`) before render: a token
   // inside a shell command is the same leak as one inside a named field.
-  const codePreview = toolName === "execute_tools"
+  const codePreview = toolName === "eval"
     ? jsonString(input, "code")
-    : toolName === "run"
+    : toolName === "shell"
       ? jsonString(input, "command")
       : null;
 
@@ -304,8 +304,8 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
               <pre className="p-t-code p-danger max-h-40 overflow-auto whitespace-pre-wrap m-0">{redactSecrets(errorText)}</pre>
             </div>
           )}
-          {/* execute_tools is the agent's primary doing-mechanism: render the
-              LLM-authored JS program legibly, not as escaped JSON. A `run`
+          {/* eval is the agent's primary doing-mechanism: render the
+              LLM-authored JS program legibly, not as escaped JSON. A `shell`
               command gets the same treatment — its args are just
               {runtime, command}, and pretty-printed JSON turns every quote
               and newline in the command into an escape sequence, which is
@@ -313,7 +313,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
               to read. The runtime stays visible in the collapsed row's `@x`
               badge, so nothing is lost by not repeating it here. */}
           {codePreview !== null ? (
-            <CodeBlock className={toolName === "execute_tools" ? "language-js" : "language-bash"}>{redactSecrets(codePreview)}</CodeBlock>
+            <CodeBlock className={toolName === "eval" ? "language-js" : "language-bash"}>{redactSecrets(codePreview)}</CodeBlock>
           ) : input != null ? (
             <div>
               <div className="p-eyebrow mb-1">Input</div>

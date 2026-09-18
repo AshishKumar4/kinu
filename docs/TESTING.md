@@ -146,7 +146,7 @@ A cloud arm must provision through `resolveEvalTarget`. A suite that calls `prov
 
 Each runs `kinu create <name> --mode local`, then `kinu exec --workspace <name> --json`, in a scratch `KINU_HOME`. It judges the child event stream and `$home/<workspace>/agent.db`. `tests/evals/cli-driver.ts` is the glue and `bench/harbor/kinu_agent.py` the precedent.
 
-The child CWD is scratch. `createCLIRuntime` uses `cwd ?? process.cwd()` for the `laptop` executor unless `hostRoot: null`. Spawned CLI has no flag, so the driver CWD is its filesystem. On 2026-08-24 evals left `reference.mjs`, `solution.mjs`, `test-eval.mjs`, `.kinu/tool-output/`, and `attachments/` in this repository. Children now use `<home>/project`.
+The child CWD is scratch. `createCLIRuntime` uses `cwd ?? process.cwd()` for the `device` executor unless `hostRoot: null`. Spawned CLI has no flag, so the driver CWD is its filesystem. On 2026-08-24 evals left `reference.mjs`, `solution.mjs`, `test-eval.mjs`, `.kinu/tool-output/`, and `attachments/` in this repository. Children now use `<home>/project`.
 
 An eval must drive the shipped agent, not `LocalAgentSession` in-process. The latter bypasses turn assembly, client boundary, and research MCP resolution. `resolveMcpServers()` reads `mcpServers` from `~/.kinu/config.json`, and `LocalAgentClient` connects them. Handing `connectMcp` servers proves none of that. Create and exec with the same child environment. Measured 2026-08-20, creating against one endpoint then execing against another failed every turn with `Your Cloudflare login is no longer valid` while the latter answered a direct request.
 

@@ -1,5 +1,5 @@
 /**
- * Outbound network policy for execute_tools and resident slate code.
+ * Outbound network policy for eval and resident slate code.
  *
  * Both WorkerLoader paths explicitly select this loopback capability as
  * globalOutbound, rather than inherit unclassified network access. Null disables
@@ -16,7 +16,7 @@
  * is the project's one classifier, and this is its third enforcement point: the
  * container's egress hop judges with it (`egress/outbound.ts`), the agent's own
  * `web.fetch` judges with it (`core/src/web/url-safety.ts`), and so does the
- * same request as `fetch()` inside an `execute_tools` program. Leave this seam
+ * same request as `fetch()` inside an `eval` program. Leave this seam
  * out and that request is judged by nothing at all — while the identical URL is
  * DENIED as a shell command by the approval gate. One judgment for the whole
  * project means this seam asks it too.
@@ -39,7 +39,7 @@
  * `safety/egress-destination.ts` states for the other two. What bounds it is a
  * platform property nothing in this repository measures: that Workers `fetch`
  * egress does not reach RFC1918 or link-local addresses. Settling that needs a
- * deployed run, not a reading: on a STAGING deployment, one `execute_tools`
+ * deployed run, not a reading: on a STAGING deployment, one `eval`
  * program that fetches a name whose A record points at 169.254.169.254 and one
  * that fetches a public control, with both outcomes recorded. Source cannot
  * answer it: no line here decides what the runtime's resolver and egress path

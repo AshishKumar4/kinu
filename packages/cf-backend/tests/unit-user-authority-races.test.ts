@@ -412,11 +412,11 @@ describe('one browser approval mints one CLI token', () => {
     const harness = createTestUserDO({ durableObjectId: USER_ID });
     const owner = await testOwner();
 
-    await harness.userDO.mintCliToken(owner, USER_ID, AUTHORIZATION, 'laptop');
+    await harness.userDO.mintCliToken(owner, USER_ID, AUTHORIZATION, 'device');
     await harness.userDO.mintCliToken(owner, USER_ID, 'd'.repeat(64), 'desktop');
 
     expect((await harness.userDO.listCliTokens(owner)).map((row) => row.label).sort())
-      .toEqual(['desktop', 'laptop']);
+      .toEqual(['desktop', 'device']);
     harness.close();
   });
 });

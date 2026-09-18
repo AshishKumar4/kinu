@@ -180,7 +180,7 @@ describe('hosted Nimbus workspace provider', () => {
     });
     box.runtimes = { list: async () => ({ installed: [], available: [{ name: 'bun' }] }) };
 
-    // The plain `Shell` the run tool drives carries the classification; the
+    // The plain `Shell` the shell tool drives carries the classification; the
     // refusal text must name the command and both exits — the sandbox runtime
     // and the install path this box's catalog CAN serve (`bun` is available).
     const shell = await nimbusSessionShell(box).exec('bun test broken.test.mjs');

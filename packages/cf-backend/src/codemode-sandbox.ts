@@ -1,5 +1,5 @@
 /**
- * The `execute_tools` sandbox on Cloudflare: `@cloudflare/codemode`'s
+ * The `eval` sandbox on Cloudflare: `@cloudflare/codemode`'s
  * DynamicWorkerExecutor, given the three things Kinu adds to it.
  *
  *   1. A MODULE. `kinu-node.js` (codemode-node-shim.ts) is loaded beside the

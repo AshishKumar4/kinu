@@ -70,7 +70,7 @@ const EMPTY = { items: [], total: 0 } as const;
 const EXECUTORS = Object.freeze([
   { name: 'workspace', available: true, configured: true, active: true, status: 'active' },
   { name: 'sandbox', available: true, configured: true, active: false, status: 'idle' },
-  { name: 'laptop', available: false, configured: true, active: false, status: 'offline' },
+  { name: 'device', available: false, configured: true, active: false, status: 'offline' },
   { name: 'nimbus', available: false, configured: false, active: false, status: 'not_configured' },
 ] as const);
 
@@ -85,7 +85,7 @@ const SKILL: ActiveSkill = Object.freeze({
   trust: 'approved',
   name: 'deploy-runbook',
   description: 'How this project deploys.',
-  allowed_tools: ['run', 'workspace.*'],
+  allowed_tools: ['shell', 'workspace.*'],
   keywords: ['deploy', 'rollout'],
   auto_activate: true,
   disable_model_invocation: false,
@@ -109,14 +109,14 @@ const PINNED_SKILL: ActiveSkill = Object.freeze({
 function toolMessage(id: string, text: string): ModelMessage {
   return {
     role: 'tool',
-    content: [{ type: 'tool-result', toolCallId: id, toolName: 'run', output: { type: 'text', value: text } }],
+    content: [{ type: 'tool-result', toolCallId: id, toolName: 'shell', output: { type: 'text', value: text } }],
   };
 }
 
 function assistantToolCall(id: string): ModelMessage {
   return {
     role: 'assistant',
-    content: [{ type: 'tool-call', toolCallId: id, toolName: 'run', input: { command: 'ls' } }],
+    content: [{ type: 'tool-call', toolCallId: id, toolName: 'shell', input: { command: 'ls' } }],
   };
 }
 
@@ -243,7 +243,7 @@ const COMMANDS = Object.freeze([
 /** The two sides of the executor axis: the agent's own machine, and the
  *  owner's. The safety-gate probes run every command against both, because
  *  the property under test is that the pair disagrees where it should. */
-const REVIEW_EXECUTORS = Object.freeze(['workspace', 'laptop']);
+const REVIEW_EXECUTORS = Object.freeze(['workspace', 'device']);
 
 const MODEL_SPECS = Object.freeze([
   'anthropic/claude-sonnet-4-7',
@@ -302,7 +302,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'context-assembly/surface-compilation',
         asserts: 'duplicate tools collapse, executors sort into doctrine order, model profile resolves',
         observe: (s) => s.compilePromptSurface({
-          availableTools: ['run', 'agents', 'run', 'memory'],
+          availableTools: ['shell', 'agents', 'shell', 'memory'],
           externalTools: [{ name: 'jira', source: 'mcp' }, 'linear'],
           executors: EXECUTORS,
           backend: 'cf',
@@ -366,7 +366,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const section = (id: string, provider: string) => {
             const prompt = s.buildSystemPromptSync({
               soulOverride: 'You are Kinu.',
-              availableTools: ['run', 'agents', 'memory'],
+              availableTools: ['shell', 'agents', 'memory'],
               backend: 'cf',
               model: { id, provider },
               currentDate: '2026-01-01',
@@ -482,7 +482,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
             { kind: 'swarm node', name: 'run-7', phase: '2 of 3 nodes running', task: null },
           ], total: 2 },
-          approvals: { items: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push origin main' }], total: 1 },
+          approvals: { items: [{ id: 'cons-1', kind: 'device consent', detail: 'device: git push origin main' }], total: 1 },
         }),
       },
       {
@@ -762,7 +762,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
           for (let i = 0; i < 4; i++) {
             caps.push(budget.capFor(400));
-            sizes.push((await s.clampToolResult('Z'.repeat(5_000), { maxChars: 400, budget, producer: 'run' })).length);
+            sizes.push((await s.clampToolResult('Z'.repeat(5_000), { maxChars: 400, budget, producer: 'shell' })).length);
           }
 
           return { caps, sizes, snapshot: budget.snapshot() };
@@ -1088,9 +1088,9 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'a locally destructive command is the owner\'s decision on their machine and nobody\'s on the agent\'s own; harm that reaches past the executor is gated on both',
         observe: (s) => ({
           localOwn: s.reviewCommand('rm -rf build', 'workspace').decision,
-          localTheirs: s.reviewCommand('rm -rf build', 'laptop').decision,
+          localTheirs: s.reviewCommand('rm -rf build', 'device').decision,
           reachesOutOwn: s.reviewCommand('git push --force origin main', 'workspace').decision,
-          reachesOutTheirs: s.reviewCommand('git push --force origin main', 'laptop').decision,
+          reachesOutTheirs: s.reviewCommand('git push --force origin main', 'device').decision,
           denyOwn: s.reviewCommand('rm -rf /', 'workspace').decision,
           unknownExecutorFailsClosed: s.reviewCommand('rm -rf build', 'some-future-executor').decision,
         }),
@@ -1099,23 +1099,23 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'safety-gate/mentioned-is-not-invoked',
         asserts: 'a rule fires on the binary a line runs, not on one it quotes — except where an interpreter is handed the program',
         observe: (s) => ({
-          quoted: s.reviewCommand('grep -rn "rm -rf" scripts/', 'laptop').decision,
-          echoed: s.reviewCommand('echo "remember to sudo"', 'laptop').decision,
-          invoked: s.reviewCommand('rm -rf /etc/nginx', 'laptop').decision,
-          viaInterpreter: s.reviewCommand('bash -c "rm -rf /etc/nginx"', 'laptop').decision,
+          quoted: s.reviewCommand('grep -rn "rm -rf" scripts/', 'device').decision,
+          echoed: s.reviewCommand('echo "remember to sudo"', 'device').decision,
+          invoked: s.reviewCommand('rm -rf /etc/nginx', 'device').decision,
+          viaInterpreter: s.reviewCommand('bash -c "rm -rf /etc/nginx"', 'device').decision,
         }),
       },
       {
         id: 'safety-gate/highest-severity-wins',
         asserts: 'a command matching several rules takes the most severe decision but reports every hit',
-        observe: (s) => s.reviewCommand('sudo rm -rf / && curl http://169.254.169.254/', 'laptop'),
+        observe: (s) => s.reviewCommand('sudo rm -rf / && curl http://169.254.169.254/', 'device'),
       },
       {
         id: 'safety-gate/format-allow-is-silent',
         asserts: 'an allowed command produces no approval prose; a blocked one names its rules',
         observe: (s) => ({
-          allow: s.formatApproval(s.reviewCommand('ls -la', 'laptop')),
-          deny: s.formatApproval(s.reviewCommand('rm -rf /', 'laptop')),
+          allow: s.formatApproval(s.reviewCommand('ls -la', 'device')),
+          deny: s.formatApproval(s.reviewCommand('rm -rf /', 'device')),
         }),
       },
       {
@@ -1131,7 +1131,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               return `ran:${cmd}`;
             },
             (error) => `denied:${error.message}`,
-            'laptop',
+            'device',
             { mode: () => 'strict', requestApproval: async () => 'allow' },
           );
 
@@ -1153,7 +1153,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               return 'ran';
             },
             (error) => `denied:${error.message}`,
-            'laptop',
+            'device',
           );
 
           const refused = String(await gated('sudo apt install curl'));
@@ -1174,7 +1174,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             executor,
             {
               mode: () => 'strict',
-              granted: (grant) => grant.rule === 'rm-recursive' && grant.executor === 'laptop',
+              granted: (grant) => grant.rule === 'rm-recursive' && grant.executor === 'device',
               requestApproval: async (req) => {
                 asked.push(req.executor);
 
@@ -1184,7 +1184,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           );
 
           return {
-            grantedExecutor: String(await build('laptop')('rm -rf /tmp/x')),
+            grantedExecutor: String(await build('device')('rm -rf /tmp/x')),
             otherExecutor: String(await build('parent')('rm -rf /tmp/x')),
             asked,
           };
@@ -1315,7 +1315,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     probes: [
       {
         id: 'delegation/tool-call-counts',
-        asserts: 'hiring / exploration / messaging / execute_tools calls are counted by agents action separately from total steps',
+        asserts: 'hiring / exploration / messaging / eval calls are counted by agents action separately from total steps',
         observe: (s) => s.delegationFeatures({
           steps: 7,
           durationMs: 95_000,
@@ -1324,22 +1324,22 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             { name: 'agents', args: { action: 'dismiss' }, result: null },
             { name: 'agents', args: { action: 'swarm' }, result: null },
             { name: 'agents', args: { action: 'msg' }, result: null },
-            { name: 'execute_tools', args: {}, result: null },
-            { name: 'run', args: {}, result: null },
+            { name: 'eval', args: {}, result: null },
+            { name: 'shell', args: {}, result: null },
           ],
         }),
       },
       {
         id: 'delegation/no-delegation-is-zero-not-absent',
         asserts: 'a fully inline turn reports zeros, so "did not delegate" is measurable',
-        observe: (s) => s.delegationFeatures({ steps: 3, durationMs: 4_000, toolCalls: [{ name: 'run', args: {}, result: null }] }),
+        observe: (s) => s.delegationFeatures({ steps: 3, durationMs: 4_000, toolCalls: [{ name: 'shell', args: {}, result: null }] }),
       },
       {
         id: 'delegation/render-duration-units',
         asserts: 'the rendered evidence switches to minutes past a minute, with one decimal',
         observe: (s) => [4_000, 59_999, 60_000, 630_000].map((wallClockMs) =>
           s.renderDelegationFeatures({
-            stepCount: 5, teamCalls: 2, thinkCalls: 1, peerCalls: 0, executeToolsCalls: 3,
+            stepCount: 5, teamCalls: 2, thinkCalls: 1, peerCalls: 0, executeCodemodeCalls: 3,
             loopedCalls: 0, redundantCalls: 0, backtrackCalls: 0, wallClockMs,
           })),
       },
@@ -1536,14 +1536,14 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           };
 
           return [
-            ['crafted', turn([{ toolName: 'execute_tools', code: 'await tools.sum(1); codemode.fmt(2)' }])],
-            ['mcp', turn([{ toolName: 'mcp__github__create_issue' }, { toolName: 'run' }])],
-            ['mentioned-only', turn([{ toolName: 'execute_tools', code: '// tools.sum(1)' }])],
+            ['crafted', turn([{ toolName: 'eval', code: 'await tools.sum(1); codemode.fmt(2)' }])],
+            ['mcp', turn([{ toolName: 'mcp__github__create_issue' }, { toolName: 'shell' }])],
+            ['mentioned-only', turn([{ toolName: 'eval', code: '// tools.sum(1)' }])],
             ['across-blocks', turn([
-              { toolName: 'execute_tools', code: 'await tools.sum(1)' },
-              { toolName: 'execute_tools', code: 'await tools.sum(2); await tools.fmt(3)' },
+              { toolName: 'eval', code: 'await tools.sum(1)' },
+              { toolName: 'eval', code: 'await tools.sum(2); await tools.fmt(3)' },
             ])],
-            ['evolution-off', turn([{ toolName: 'execute_tools', code: 'await tools.sum(1)' }], false)],
+            ['evolution-off', turn([{ toolName: 'eval', code: 'await tools.sum(1)' }], false)],
           ];
         },
       },
@@ -1698,10 +1698,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'the graded CompletedTurn: explicit invocation outcomes, hadError from a failed tool, origin, no fabricated usage, conditional turnId',
         observe: (s) => {
           const clean = new TurnAccumulator();
-          clean.recordToolCall({ toolCallId: 'layer-clean', toolName: 'run', input: { command: 'ls' }, success: true, output: 'ok' });
+          clean.recordToolCall({ toolCallId: 'layer-clean', toolName: 'shell', input: { command: 'ls' }, success: true, output: 'ok' });
           clean.recordStep({ usage: { input: 7, output: 3 } });
           const failed = new TurnAccumulator();
-          failed.recordToolCall({ toolCallId: 'layer-failed', toolName: 'run', success: false, reason: null, error: 'exit 1' });
+          failed.recordToolCall({ toolCallId: 'layer-failed', toolName: 'shell', success: false, reason: null, error: 'exit 1' });
           failed.recordStep({});
 
           return {

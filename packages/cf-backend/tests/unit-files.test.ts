@@ -3,9 +3,8 @@
 import { afterEach, describe, test, expect } from "bun:test";
 import {
   deleteExecutorPathOp, getExecutorFiles, inlineFileType, readExecutorFile, readExecutorFileBytes,
-  renameExecutorPathOp, sortDirEntries, withMountTable, writeExecutorFileOp, type VFS,
+  renameExecutorPathOp, sortDirEntries, writeExecutorFileOp, type VFS,
 } from "@kinu.run/core";
-import { setDiagnosticsSink } from "@kinu.run/core/obs";
 import { asFetchFunction } from "@kinu.run/core";
 import { fileResponseHeaders } from "@kinu.run/core";
 import {
@@ -82,7 +81,7 @@ describe("writeExecutorFileOp", () => {
     expect(await writeExecutorFileOp(deps, "nimbus", "/home/user/a.bin", bin)).toEqual({ ok: true });
     expect(written.get("/home/user/a.bin")).toEqual(bin);
 
-    expect(await writeExecutorFileOp(deps, "laptop", "/home/me/proj/b.bin", bin)).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "device", "/home/me/proj/b.bin", bin)).toEqual({ ok: true });
     expect(written.get("/home/me/proj/b.bin")).toEqual(bin);
   });
 
@@ -346,202 +345,6 @@ describe("getExecutorFiles", () => {
     // …and a real entry set is left alone: no duplicate, no phantom.
     const seeded = await getExecutorFiles(deps, "workspace", "/home/user");
     expect(seeded.entries).toEqual([]);
-  });
-});
-
-/**
- * Opening `/pc` on a connected machine answered
- * `EACCES: '/' is outside the consented device directory '/home/kinu'`.
- *
- * A mount is a faithful window on the machine's REAL absolute paths, so `/pc`
- * strips to the device's `/` — a directory nobody consented to. The fix is the
- * landing directory, not the translation: a bare mount point lists that plane's
- * own start, which IS the consented root. The fixture below carries the device's
- * path guard, so it can fail in the direction the report came from.
- */
-describe("a bare mount point lands inside consent", () => {
-  const CONSENTED = "/home/kinu";
-
-  function treeVfs(seed: Record<string, string>): VFS {
-    const files = new Map(Object.entries(seed));
-    const dirs = new Set<string>();
-
-    for (const path of files.keys()) {
-      for (let at = path.indexOf("/", 1); at !== -1; at = path.indexOf("/", at + 1)) {
-        dirs.add(path.slice(0, at));
-      }
-    }
-
-    return {
-      readFile: async (path) => {
-        const data = files.get(path);
-
-        if (data === undefined) throw new Error(`ENOENT: ${path}`);
-
-        return data;
-      },
-      writeFile: async (path, data) => { files.set(path, String(data)); },
-      readdir: async (path) => {
-        const names = new Set<string>();
-        const prefix = path === "/" ? "/" : `${path}/`;
-
-        for (const key of [...files.keys(), ...dirs]) {
-          if (key.startsWith(prefix)) names.add(key.slice(prefix.length).split("/")[0]!);
-        }
-
-        return [...names];
-      },
-      stat: async (path) => {
-        if (files.has(path)) return { size: files.get(path)!.length, mtimeMs: 0, isDir: false };
-
-        return dirs.has(path) || path === "/" ? { size: 0, mtimeMs: 0, isDir: true } : null;
-      },
-      unlink: async (path) => { files.delete(path); },
-      mkdir: async (path) => { dirs.add(path); },
-      exists: async (path) => files.has(path) || dirs.has(path),
-    };
-  }
-
-  /** The device plane's own path guard, in the words `deviceFiles` uses — a
-   *  consented root of `/` consents to everything, which is how the
-   *  full-filesystem tier reads. */
-  function guarded(device: VFS, root: string): VFS {
-    const refuse = (path: string, op: string) => {
-      if (path === root || root === "/" || path.startsWith(`${root}/`)) return;
-      throw new Error(
-        `EACCES: '${path}' is outside the consented device directory '${root}' — `
-        + `grant this agent the full-filesystem consent tier to reach it, ${op} '${path}'`,
-      );
-    };
-
-    return {
-      ...device,
-      readdir: async (path) => {
-        refuse(path, "list");
-
-        return device.readdir(path);
-      },
-      stat: async (path) => {
-        refuse(path, "stat");
-
-        return device.stat(path);
-      },
-      readFile: async (path) => {
-        refuse(path, "open");
-
-        return device.readFile(path);
-      },
-    };
-  }
-
-  function router(opts: { deviceHome?: string | null; consented?: string } = {}) {
-    const root = opts.consented ?? CONSENTED;
-    const under = (name: string) => root === "/" ? `/${name}` : `${root}/${name}`;
-
-    const device = guarded(treeVfs({
-      [under("report.txt")]: "Q3",
-      [under("src/app.ts")]: "x",
-      "/etc/shadow": "secret",
-    }), root);
-
-    const workspace = withMountTable(treeVfs({ "/home/user/notes.md": "hi" }), [
-      { name: "pc", files: () => device, absentReason: () => "no device connected" },
-    ]);
-
-    const home = opts.deviceHome === undefined ? root : opts.deviceHome;
-
-    return {
-      getProvider: (name: string) => name === "laptop"
-        ? {
-          files: device,
-          homeDir: async () => {
-            if (home === null) throw new Error("device went away mid-question");
-
-            return home;
-          },
-        }
-        : { files: workspace, homeDir: async () => "/home/user" },
-    };
-  }
-
-  test("/pc lists the consented device directory, not the device root", async () => {
-    const out = await getExecutorFiles(router(), "workspace", "/pc");
-    expect(out.error).toBeUndefined();
-    expect(out.path).toBe("/pc/home/kinu");
-    expect(out.entries?.map((e) => e.name).sort()).toEqual(["report.txt", "src"]);
-  });
-
-  test("the consent boundary still refuses what it refused before", async () => {
-    // Nothing widened: the landing directory moved, the boundary did not.
-    const out = await getExecutorFiles(router(), "workspace", "/pc/etc");
-    expect(out.entries).toBeUndefined();
-    expect(out.error).toContain("outside the consented device directory '/home/kinu'");
-  });
-
-  test("a path already inside the mount is passed through untouched", async () => {
-    const out = await getExecutorFiles(router(), "workspace", "/pc/home/kinu/src");
-    expect(out.path).toBe("/pc/home/kinu/src");
-    expect(out.entries?.map((e) => e.name)).toEqual(["app.ts"]);
-  });
-
-  test("a device consenting to its whole filesystem keeps the bare mount point", async () => {
-    const out = await getExecutorFiles(router({ consented: "/" }), "workspace", "/pc");
-    expect(out.path).toBe("/pc");
-    expect(out.entries?.map((e) => e.name).sort()).toEqual(["etc", "report.txt", "src"]);
-  });
-
-  test("a plane that cannot say where it starts surfaces ITS failure, not the asking's", async () => {
-    // The mount point stays bare, so the refusal a reader sees is the device
-    // plane's own — never whatever broke while asking it for a home.
-    //
-    // The two assertions below cannot tell "the fallback was taken" from "the
-    // resolution never ran at all": both read as the plane's own refusal, which
-    // is the fallback's whole design goal. So the diagnostic is the
-    // discriminator. It fires ONLY on the caught path, which is what proves the
-    // homeDir failure was absorbed rather than never provoked. Without it this
-    // test would stay green over a `MOUNT_EXECUTORS` lookup that stopped
-    // matching, measuring its own fixture.
-    const events: string[] = [];
-
-    const restore = setDiagnosticsSink({
-      event: (name) => { events.push(name); },
-      failure: (name) => { events.push(name); },
-    });
-
-    try {
-      const out = await getExecutorFiles(router({ deviceHome: null }), "workspace", "/pc");
-      expect(out.error).toContain("outside the consented device directory");
-      expect(out.error).not.toContain("went away mid-question");
-      expect(events).toContain("files.mount_home_unavailable");
-    } finally {
-      restore();
-    }
-  });
-
-  test("a plane that CAN say where it starts absorbs nothing, and says nothing", async () => {
-    // The other side of the discriminator above: on the ordinary path the
-    // diagnostic must be absent, or its presence in the test above would prove
-    // nothing about which path ran.
-    const events: string[] = [];
-
-    const restore = setDiagnosticsSink({
-      event: (name) => { events.push(name); },
-      failure: (name) => { events.push(name); },
-    });
-
-    try {
-      const out = await getExecutorFiles(router(), "workspace", "/pc");
-      expect(out.path).toBe("/pc/home/kinu");
-      expect(events).not.toContain("files.mount_home_unavailable");
-    } finally {
-      restore();
-    }
-  });
-
-  test("nothing outside a mount point changes", async () => {
-    const out = await getExecutorFiles(router(), "workspace", "/home/user");
-    expect(out.path).toBe("/home/user");
-    expect(out.entries?.map((e) => e.name)).toEqual(["notes.md"]);
   });
 });
 

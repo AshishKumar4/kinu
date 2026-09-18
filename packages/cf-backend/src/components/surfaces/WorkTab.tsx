@@ -44,11 +44,13 @@ import type { SurfaceKind } from "./WorkSurface";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { WorkPlans } from "./WorkPlans";
 
-/** Which filter a journal row answers to. `All` is not a filter, it is no
- *  filter — the chips are filters over one list. Plan history is not one of
- *  them: `WorkPlans` above owns the plan read model (`inspectSubordinate`
- *  over `plan_reviews`), so a second Plan here would be the duplicate B12
- *  removed — the journal's closed tasks are the settled tail, not the home. */
+/** The chips over the journal. `All` is not the absence of a filter — it is
+ *  every row that reports something happening, which is all of them bar a
+ *  self-review that changed nothing; {@link buildJournal} decides that. Plan
+ *  history is not a chip: `WorkPlans` above owns the plan read model
+ *  (`inspectSubordinate` over `plan_reviews`), so a second Plan here would be
+ *  the duplicate B12 removed — closed tasks are the settled tail, not the
+ *  home. */
 type JournalFilter = "all" | "jobs" | "self";
 
 const FILTERS: Array<{ id: JournalFilter; label: string }> = [
@@ -146,7 +148,7 @@ export function WorkTab({
     [settledJobs, closedTasks, changelog],
   );
 
-  const visible = journal.filter((row) => filter === "all" || row.filter === filter);
+  const visible = journal.filter((row) => row.chips.includes(filter));
 
   // Commands the agent parked on the owner decide HERE — grouped so a night's
   // worth is one decision rather than N scattered rows. Everything else keeps
@@ -508,18 +510,30 @@ function PendingRow(
 
 /* ── the journal ───────────────────────────────────────────────── */
 
+/** A row and the chips it answers to. Membership is decided by the builder
+ *  below, never by the renderer: `All` is the one chip whose list is not
+ *  "every row of a kind", and a component that re-derived it would be a second
+ *  place the rule lives. */
 type JournalRow =
-  | { key: string; at: number; filter: "jobs"; kind: "job"; job: BackgroundJob }
-  | { key: string; at: number; filter: "self"; kind: "task"; task: AgentTaskTree }
-  | { key: string; at: number; filter: "self"; kind: "self"; entry: ChangelogEntry };
+  | { key: string; at: number; chips: readonly JournalFilter[]; kind: "job"; job: BackgroundJob }
+  | { key: string; at: number; chips: readonly JournalFilter[]; kind: "task"; task: AgentTaskTree }
+  | { key: string; at: number; chips: readonly JournalFilter[]; kind: "self"; entry: ChangelogEntry };
 
 /**
  * One reverse-chronological feed out of three ledgers.
  *
  * Exported for its test: the ordering IS the feature — three separate ledgers
  * have to read as one stream, or the merge has bought nothing but a longer
- * page. Closed tasks ride the `self` filter: they are settled history, and
- * the live plan already has its home in `WorkPlans` above.
+ * page. The chips each row answers to are here for the same reason. Closed
+ * tasks ride the `self` filter: they are settled history, and the live plan
+ * already has its home in `WorkPlans` above.
+ *
+ * A SELF-REVIEW THAT CHANGED NOTHING IS NOT IN `All`. The journal reads as what
+ * happened, and "I reviewed my own recent failures and changed nothing"
+ * ({@link ChangelogEntry.noChange}) reports a run whose result is that nothing
+ * happened — placed beside the rows that did move behaviour, it buries them.
+ * Self-changes keeps it, because there the question being asked is what the
+ * agent has done about itself, and the honest answer includes the no-ops.
  */
 export function buildJournal(
   jobs: readonly BackgroundJob[],
@@ -528,15 +542,18 @@ export function buildJournal(
 ): JournalRow[] {
   const rows: JournalRow[] = [
     ...jobs.map((job): JournalRow => ({
-      key: `job:${job.id}`, at: job.settledAt ?? job.createdAt, filter: "jobs", kind: "job", job,
+      key: `job:${job.id}`, at: job.settledAt ?? job.createdAt, chips: ["all", "jobs"], kind: "job", job,
     })),
     ...tasks.map((task): JournalRow => ({
-      key: `task:${task.id}`, at: task.updatedAt, filter: "self", kind: "task", task,
+      key: `task:${task.id}`, at: task.updatedAt, chips: ["all", "self"], kind: "task", task,
     })),
     ...entries.map((entry): JournalRow => ({
-      key: `self:${entry.id}`, at: entry.at, filter: "self", kind: "self", entry,
+      key: `self:${entry.id}`, at: entry.at,
+      chips: entry.noChange === true ? ["self"] : ["all", "self"],
+      kind: "self", entry,
     })),
   ];
 
   return rows.sort((a, b) => b.at - a.at);
 }
+

@@ -1,7 +1,7 @@
 /**
  * Cross-implementation PATH-resolver parity.
  *
- * The `laptop` capability row is produced by ONE table (core
+ * The `device` capability row is produced by ONE table (core
  * `execution/toolchain.ts`) and TWO resolvers, because only a host can look at
  * its own PATH: `Bun.which` when the CLI is that host, and the zero-dep daemon's
  * own walk when the host is at the far end of a device tunnel. The table being

@@ -8,7 +8,7 @@
  * craft admission gate (core craft/conflict.ts) enforces at the write.
  *
  * The factory is idempotent: each call to craftedToolExecute(tool) returns a
- * fresh closure. The crafted set is resolved once per `execute_tools` call, so
+ * fresh closure. The crafted set is resolved once per `eval` call, so
  * this runs once per tool per call; the returned function caches the compiled
  * fn via a closure variable, so a tool called repeatedly inside one block
  * compiles once.

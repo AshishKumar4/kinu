@@ -2,7 +2,7 @@
  * The global view: one filesystem, a home per agent, permissions as the boundary.
  *
  * Every claim is driven through the REAL Nimbus shell — `rpcExec`, the same
- * `_rpcExec` path a workspace agent's `run` tool takes — because a boundary
+ * `_rpcExec` path a workspace agent's `shell` tool takes — because a boundary
  * asserted only against a filesystem API is a boundary the thing that actually
  * runs commands has never been held to. There is no second shell to test, which
  * is the point: `/home/<agent>` is an ordinary directory in the one tree, so the

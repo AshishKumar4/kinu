@@ -78,39 +78,46 @@ const DiagnosticLineSchema = v.object({
  * Console output that is not a diagnostic line (the product's own prose) does
  * not parse and is not collected.
  */
-export function recordDiagnostics(page: Page): DiagnosticLine[] {
+/** The collected diagnostics, and the wait for a count of them: resolved by
+ *  the console relay's own delivery, never by a poll against a clock. */
+export type RecordedDiagnostics = DiagnosticLine[] & { readonly settled: (count: number) => Promise<void> };
+
+export function recordDiagnostics(page: Page): RecordedDiagnostics {
   const lines: DiagnosticLine[] = [];
+  const waiting: { readonly count: number; readonly resolve: () => void }[] = [];
+
   page.on('console', (message) => {
     const parsed = v.safeParse(
       DiagnosticLineSchema,
       tolerate(() => JSON.parse(message.text()), 'malformed-input'),
     );
 
-    if (parsed.success) lines.push(parsed.output);
+    if (!parsed.success) return;
+    lines.push(parsed.output);
+
+    for (const waiter of waiting.splice(0)) {
+      if (lines.length >= waiter.count) waiter.resolve();
+      else waiting.push(waiter);
+    }
   });
 
-  return lines;
+  return Object.assign(lines, {
+    settled: (count: number): Promise<void> => {
+      if (lines.length >= count) return Promise.resolve();
+      const { promise, resolve } = Promise.withResolvers<void>();
+      waiting.push({ count, resolve });
+
+      return promise;
+    },
+  });
 }
 
 /** Wait for at least `count` collected diagnostics: the console relay is
  *  asynchronous, so a click's diagnostic lands a beat after its DOM effect.
- *  Fails naming what DID arrive rather than timing out silently. */
-export async function diagnosticsSettled(
-  lines: readonly DiagnosticLine[], count: number, timeoutMs = 10_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-
-  while (lines.length < count) {
-    if (Date.now() > deadline) {
-      throw new Error(
-        `waited ${String(timeoutMs)}ms for ${String(count)} diagnostic(s); saw ${JSON.stringify(lines)}`,
-      );
-    }
-
-    const tick = Promise.withResolvers<void>();
-    setTimeout(tick.resolve, 50);
-    await tick.promise;
-  }
+ *  An end condition on the relay's own delivery; a diagnostic that never
+ *  arrives is a hang the ladder's deadline ends and names. */
+export function diagnosticsSettled(lines: RecordedDiagnostics, count: number): Promise<void> {
+  return lines.settled(count);
 }
 
 

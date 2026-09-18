@@ -13,8 +13,15 @@ import {
 } from '@kinu.run/core/web/art';
 import { SearchTree } from '@kinu.run/core/web/hero-art';
 import { createCanvasRenderer, type StrokeSurface } from '@kinu.run/core/web/hero-canvas';
-import { createWebGpuRenderer } from '../src/components/landing/search-tree/renderer-webgpu';
+import { installFakeVgpu, lastFakeGpu, MockVGPUError, resetFakeVgpu, setVgpuInit } from './helpers/fake-vgpu';
+
 import { keepOutOf } from '../src/components/landing/search-tree/stage';
+
+await installFakeVgpu();
+
+// Dynamic on purpose: the renderer imports vgpu at module load, so it may
+// only load AFTER the fake is installed.
+const { createWebGpuRenderer } = await import('../src/components/landing/search-tree/renderer-webgpu');
 
 const TREE_DIR = resolve(import.meta.dir, '../src/components/landing/search-tree');
 
@@ -293,123 +300,8 @@ describe('the frame is what both renderers read', () => {
  *  this half pins is the outcome contract `createWebGpuRenderer` hands the
  *  mount, and the live-fault path the renderer takes on `gpu.onError`. ── */
 
-class MockVGPUError extends Error {
-  readonly code: string;
-
-  constructor(data: { readonly code: string; readonly message: string }) {
-    super(data.message);
-    this.name = 'VGPUError';
-    this.code = data.code;
-  }
-}
-
-/** A `Gpu` that records its listeners and its end, so a test can drop the device. */
-class FakeGpu {
-  readonly errorListeners = new Set<(error: Error) => void>();
-  frames = 0;
-  disposed = false;
-  /** When set, the next `frame()` throws it — the way a dead device throws
-   *  VGPU-DEVICE-LOST out of `frame()` rather than through `onError`. */
-  frameThrows: Error | undefined;
-
-  onError(cb: (error: Error) => void): () => void {
-    this.errorListeners.add(cb);
-
-    return () => { this.errorListeners.delete(cb); };
-  }
-
-  /** A device loss reaching the registered listener, the way reportError delivers one. */
-  emitError(error: Error): void {
-    for (const cb of this.errorListeners) cb(error);
-  }
-
-  dispose(): void {
-    this.disposed = true;
-    this.errorListeners.clear();
-  }
-}
-
-let vgpuInit: () => Promise<FakeGpu>;
-
-let lastGpu: FakeGpu | null = null;
-
-/** The fake's stand-in for a vgpu draw or effect handle. */
-interface FakeHandle {
-  compile(): Promise<void>;
-  set(): void;
-}
-
-/** The fake's stand-in for a vgpu surface, target or sampler. */
-interface FakeResource {
-  dispose(): void;
-}
-
-/** What the renderer hands a pass: a target spec and an encoder or effect. */
-interface FakePassSpec {
-  readonly target?: FakeResource;
-  readonly clear?: readonly number[];
-  readonly colors?: readonly string[];
-}
-
-interface FakeEncoder {
-  draw(_drawable: FakeHandle, _options: { readonly instances: number }): void;
-}
-
-type FakePassPayload = FakeHandle | ((encoder: FakeEncoder) => void);
-
-interface FakePass {
-  pass(_spec: FakePassSpec, payload: FakePassPayload): void;
-}
-
-await mock.module('vgpu', () => ({
-  VGPUError: MockVGPUError,
-  init: (): Promise<FakeGpu> => {
-    const started = vgpuInit().then((gpu) => {
-      lastGpu = gpu;
-
-      return gpu;
-    });
-
-    return started;
-  },
-  surface: () => ({
-    format: 'bgra8unorm',
-    resize: () => undefined,
-    dispose: () => undefined,
-  }),
-  target: (_gpu: FakeGpu, options: { readonly size: readonly [number, number] }) => ({
-    texelSize: [1 / options.size[0], 1 / options.size[1]],
-    resize: () => undefined,
-    dispose: () => undefined,
-  }),
-  sampler: () => ({}),
-  geometry: () => ({
-    write: () => undefined,
-    destroy: () => undefined,
-  }),
-  draw: () => ({
-    compile: () => Promise.resolve(),
-    set: () => undefined,
-  }),
-  effect: () => ({
-    compile: () => Promise.resolve(),
-    set: () => undefined,
-  }),
-  frame: (gpu: FakeGpu, callback: (pass: FakePass) => void): void => {
-    if (gpu.frameThrows !== undefined) throw gpu.frameThrows;
-    gpu.frames += 1;
-    callback({
-      pass(_spec: FakePassSpec, payload: FakePassPayload): void {
-        // Strokes and nodes arrive as encoders; effects arrive as objects.
-        if (payload instanceof Function) payload({ draw: () => undefined });
-      },
-    });
-  },
-}));
-
 beforeEach(() => {
-  vgpuInit = () => Promise.resolve(new FakeGpu());
-  lastGpu = null;
+  resetFakeVgpu();
 });
 
 
@@ -419,7 +311,7 @@ afterAll(() => {
 
 describe('the GPU half hands the mount an outcome, never a throw', () => {
   test('a missing adapter answers unsupported', async () => {
-    vgpuInit = () => Promise.reject(new MockVGPUError({ code: 'VGPU-RING1-UNSUPPORTED', message: 'no adapter' }));
+    setVgpuInit(() => Promise.reject(new MockVGPUError({ code: 'VGPU-RING1-UNSUPPORTED', message: 'no adapter' })));
     // The canvas only reaches vgpu's `surface`, which a rejecting init never gets to.
     const canvas: HTMLCanvasElement = Object.create(null);
     const outcome = await createWebGpuRenderer(canvas, PALETTE, 1200, 600, 1);
@@ -428,7 +320,7 @@ describe('the GPU half hands the mount an outcome, never a throw', () => {
   });
 
   test('any other init failure is a fallback outcome that carries the reason', async () => {
-    vgpuInit = () => Promise.reject(new TypeError('device request was denied'));
+    setVgpuInit(() => Promise.reject(new TypeError('device request was denied')));
     const canvas: HTMLCanvasElement = Object.create(null);
     const outcome = await createWebGpuRenderer(canvas, PALETTE, 1200, 600, 1);
 
@@ -444,7 +336,7 @@ describe('the GPU half hands the mount an outcome, never a throw', () => {
 
     if (outcome.kind !== 'renderer') throw new Error('expected a renderer outcome');
 
-    const gpu = lastGpu;
+    const gpu = lastFakeGpu();
 
     if (gpu === null) throw new Error('init did not produce the fake gpu');
 
@@ -471,7 +363,7 @@ describe('a device loss mid-run is the same fault the listener reports', () => {
 
     if (outcome.kind !== 'renderer') throw new Error(`expected a renderer, got ${outcome.kind}`);
 
-    const gpu = lastGpu;
+    const gpu = lastFakeGpu();
 
     if (gpu === null) throw new Error('init was never called');
 

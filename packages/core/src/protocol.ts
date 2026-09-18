@@ -104,7 +104,7 @@ export interface ToolInfo {
 	/**
 	 * How the model reaches it, as the registry DECLARES it (`TOOL_REACH`):
 	 * `native` = a tool definition in the turn's ToolSet, `codemode` = only from
-	 * inside an `execute_tools` program, `both` = both, over one dispatcher.
+	 * inside an `eval` program, `both` = both, over one dispatcher.
 	 *
 	 * Deriving this as `nativeNames.has(name) ? "native" : "codemode"` is a
 	 * binary with no way to say "neither" — the one deps-gated builtin

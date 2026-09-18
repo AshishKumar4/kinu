@@ -46,6 +46,13 @@ interface PlanAnnounceRpc extends Rpc.DurableObjectBranded {
   }>;
 }
 
+/** `public-surface-probe`'s control entrypoint. Declared here rather than
+ *  imported: that file is compiled by the cf-backend project against the
+ *  production `Env`, and a type import would drag the whole worker in here. */
+interface SurfaceControlRpc extends Rpc.WorkerEntrypointBranded {
+  resetModelLog(): Promise<void>;
+}
+
 interface UserSocketProbeRpc extends Rpc.DurableObjectBranded {
   deliverBareFrame(): Promise<'handled' | { readonly threw: string }>;
 }
@@ -75,6 +82,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: Array<{ id: string; role: string }>; factsCompressed: number }>;
   twinSends(): Promise<{ http: HttpCall[]; transcript: Array<{ id: string; role: string }>; steers: PendingSteer[]; runEnds: Array<{ runId: string; reason: string }> }>;
   evalAbort(): Promise<{ receipt: string | null; alive: boolean }>;
+  hostedActorTab(): Promise<{ name: string; snapshot: string; tasks: string; frames: number }>;
   firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; failures: Array<{ event: string; code: string; cause: string }> }>;
   parityPrepare(): Promise<ParityPrepared>;
   parityComplete(prepared: ParityPrepared): Promise<ParityCompleted>;
@@ -171,8 +179,14 @@ declare global {
   // two halves of `RestoreReadiness` plus the normalization control —
   // deliberately NOT a sandbox stub, so it says nothing about containers.
   DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
-      /** The dynamic-Worker loader the execute_tools sandbox runs in. */
+      /** The dynamic-Worker loader the eval sandbox runs in. */
       LOADER: WorkerLoader;
+      /** The production Worker entry, hosted by `public-surface-probe`: the
+       *  public route table as a peer of this runner, WebSocket upgrades
+       *  included. */
+      PUBLIC_SURFACE: Fetcher;
+      /** That worker's one test-only entrypoint, for the shared model log. */
+      SURFACE_CONTROL: Service<SurfaceControlRpc>;
     }
 
     /** The test worker re-exports the production egress entrypoint, so

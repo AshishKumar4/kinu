@@ -60,7 +60,7 @@ const DETACH_MS = 60;
 const SETTLE_MS = 200;
 
 /** The one long-running tool a node has to hold for any of this to be reachable: a
- *  `preBuiltExecuteTool` whose work outlives the detach threshold. `settle` is called
+ *  `prebuiltCodemodeTool` whose work outlives the detach threshold. `settle` is called
  *  by the test at the instant it wants the job to finish, so "after the turn ended" is
  *  an ordering the test controls rather than a race it hopes for. */
 function slowExecuteTool() {
@@ -102,7 +102,7 @@ function detachThenReport(seen: string[][], onRequest?: (count: number) => void)
       seen.push(prompt.map((message) => JSON.stringify(message.content)));
       onRequest?.(seen.length);
       const text = JSON.stringify(prompt);
-      const woken = text.includes('Background execute_tools job');
+      const woken = text.includes('Background eval job');
       const reported = text.includes('"received":true');
       const launched = prompt.some((message) => message.role === 'tool');
 
@@ -123,7 +123,7 @@ function detachThenReport(seen: string[][], onRequest?: (count: number) => void)
           : [{
             type: 'tool-call',
             toolCallId: 'exec-1',
-            toolName: 'execute_tools',
+            toolName: 'eval',
             input: JSON.stringify({ code: 'await sandbox.run()' }),
           }];
 
@@ -184,7 +184,7 @@ interface Fixture {
 
 function fixture(over: {
   readonly model: NodeAgentDeps['model'];
-  readonly executeTool?: unknown;
+  readonly codemodeTool?: unknown;
 }): Fixture {
   const { rt, db } = createTestRuntime();
   initHeadsTables(rt.storage.execRaw);
@@ -241,7 +241,7 @@ function fixture(over: {
     }),
   };
 
-  if (over.executeTool !== undefined) deps.executeTool = over.executeTool;
+  if (over.codemodeTool !== undefined) deps.codemodeTool = over.codemodeTool;
 
   const jobStarted = (): Promise<void> => started.promise;
 
@@ -266,7 +266,7 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
 
     const { input, deps, journal, detached, jobStarted } = fixture({
       model: detachThenReport(prompts, (count) => { if (count === 2) secondRequest.resolve(); }),
-      executeTool: slow.entry,
+      codemodeTool: slow.entry,
     });
 
     const running = runNodeAgent(input, deps);
@@ -306,7 +306,7 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     const firstTurn = prompts[0] ?? [];
     expect(resumed.length).toBeGreaterThan(firstTurn.length);
     expect(resumed.slice(0, firstTurn.length)).toEqual(firstTurn);
-    expect(resumed.at(-1)).toContain('Background execute_tools job');
+    expect(resumed.at(-1)).toContain('Background eval job');
     expect(resumed.at(-1)).toContain('completed');
 
     // AND IT FINISHED. Through its own `report`, which is the terminal condition — not
@@ -338,7 +338,7 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     const prompts: string[][] = [];
 
     const { input, deps, detached, jobStarted } = fixture({
-      model: detachThenReport(prompts), executeTool: slow.entry,
+      model: detachThenReport(prompts), codemodeTool: slow.entry,
     });
 
     const running = runNodeAgent(input, deps);
@@ -353,7 +353,7 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     // handle and the turn was released, and the model saw exactly that.
     const afterLaunch = (prompts[1] ?? []).join(' ');
     expect(afterLaunch).toContain('"background":true');
-    expect(afterLaunch).toContain('execute_tools');
+    expect(afterLaunch).toContain('eval');
     // Not the real result, which had not been produced yet when that request was built.
     expect(afterLaunch).not.toContain('exit 0');
     // And the node did NOT run the work twice: one launch, one job.
@@ -417,10 +417,10 @@ describe("a node's tool surface is partitioned exactly, with a reason on every w
     const { input, deps } = fixture({ model: PROSE_ONLY_MODEL });
     const run = await runNodeAgent(input, deps);
     expect(run.report.status).toBe('completed');
-    // `execute_tools` is absent from the surface when no factory is wired, which is the
+    // `eval` is absent from the surface when no factory is wired, which is the
     // "absent deps, absent tool" half — so the surface is a SUBSET of what is given and
     // is disjoint from what is withheld.
-    const surface: readonly string[] = ['run', 'file', 'report'];
+    const surface: readonly string[] = ['shell', 'file', 'report'];
     const given: readonly string[] = NODE_BUILTIN_TOOLS;
 
     for (const name of surface) expect(given).toContain(name);
@@ -429,11 +429,11 @@ describe("a node's tool surface is partitioned exactly, with a reason on every w
   });
 });
 
-describe('a node resolves a function-form executeTool through the finished surface', () => {
-  test('function-form dep becomes a working execute_tools, not the NOT CONFIGURED stub', async () => {
-    // The production defect: the search hands `deps.executeTool` as a FUNCTION
+describe('a node resolves a function-form codemodeTool through the finished surface', () => {
+  test('function-form dep becomes a working eval, not the NOT CONFIGURED stub', async () => {
+    // The production defect: the search hands `deps.codemodeTool` as a FUNCTION
     // `(finished) => factory.toolFor(finished)` (exploration builds it over the
-    // actor's factory), and the node handed it raw into `preBuiltExecuteTool` —
+    // actor's factory), and the node handed it raw into `prebuiltCodemodeTool` —
     // which only accepts a finished Tool. The function failed the entry check,
     // no factory branch existed on this path, and every hosted node got the
     // NOT CONFIGURED stub. The sibling builder (`buildHeadToolSet`) already
@@ -468,7 +468,7 @@ describe('a node resolves a function-form executeTool through the finished surfa
             : [{
               type: 'tool-call',
               toolCallId: 'exec-1',
-              toolName: 'execute_tools',
+              toolName: 'eval',
               input: JSON.stringify({ code: 'const x = 1' }),
             }];
 
@@ -487,7 +487,7 @@ describe('a node resolves a function-form executeTool through the finished surfa
       },
     });
 
-    const { input, deps } = fixture({ model, executeTool: factoryForm });
+    const { input, deps } = fixture({ model, codemodeTool: factoryForm });
     const run: NodeRun = await runNodeAgent(input, deps);
     expect(run.report.status).toBe('completed');
     expect(run.candidate).toContain('factory-ran');

@@ -1,5 +1,5 @@
 // Background-job registry — the correlation source of truth for work that a
-// tool call detaches to the background (think-heads, long execute_tools/run).
+// tool call detaches to the background (think-heads, long eval/run).
 // A job is created when a call crosses the background threshold, settled when
 // the detached work resolves, and read back by the synthesis turn the reactor
 // wakes. `settle`/`fail` are guarded on status='running' so a duplicate
@@ -82,10 +82,10 @@ function toJob(r: Row): BackgroundJob {
 }
 
 /** Serialize a job result for storage — never throws (a non-serializable value,
- *  e.g. a BigInt from execute_tools, falls back to String()). Stored WHOLE:
+ *  e.g. a BigInt from eval, falls back to String()). Stored WHOLE:
  *  the wake message promises "read the full result with agent.jobResult", and
  *  a row truncated at storage time made that a lie with no recovery path —
- *  while the read-back already rides the execute_tools clamp, which windows an
+ *  while the read-back already rides the eval clamp, which windows an
  *  oversize result and spills the full text with an address. Inputs must be
  *  whole for a different reason: driveResume JSON.parses them, and a marker
  *  appended to a clipped input turned every resumed fork into a corrupted

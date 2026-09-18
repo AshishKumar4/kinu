@@ -10,7 +10,7 @@
  *   the real Worker `fetch`  (auth → CSRF → ownership → files route)
  *     over a real browser session in real KV + the owner's real UserDO,
  *   into a real OrchestratorAgent, whose runtime is the production one —
- *     the workspace plane, the mount table, and the laptop executor over
+ *     the workspace plane, the mount table, and the device executor over
  *     `createHubDeviceTransport`,
  *   into the real `UserDO.deviceRpc` consent chokepoint,
  *   into a device socket that answers the way the daemon does.
@@ -63,8 +63,8 @@ const DEVICE_HOME = '/home/dev';
 
 const DEVICE_FILE = `${DEVICE_HOME}/notes.md`;
 
-/** The same file as the file manager addresses it: the `/pc` mount point. */
-const PC_FILE = `/pc${DEVICE_FILE}`;
+/** The same file as the file manager addresses it: the `/pc/<name>` mount. */
+const PC_FILE = `/pc/ashish@studio${DEVICE_FILE}`;
 
 const WORKSPACE_FILE = '/home/user/report.bin';
 
@@ -313,7 +313,7 @@ async function bytesOf(response: Response): Promise<string> {
 
 /** Where a rename puts the device's file — the mount-relative path both the
  *  refused mutation and the allowed one name. */
-const MOVED = `/pc${DEVICE_HOME}/moved.md`;
+const MOVED = `/pc/ashish@studio${DEVICE_HOME}/moved.md`;
 
 describe('a workspace the caller does not hold', () => {
   test('a name outside the registry never reaches a file plane, in either direction', async () => {
@@ -456,7 +456,7 @@ describe('an executor id the caller made up', () => {
     const rail = await seam({ workspaces: ['executor-forged'] });
     rail.user.consentDecision = 'always';
 
-    for (const executor of ['laptop-2', 'workspace/../laptop', 'ashish@studio', '']) {
+    for (const executor of ['device-2', 'workspace/../device', 'ashish@studio', '']) {
       const read = await rail.files({
         session: rail.ownerSession, workspace: 'executor-forged', path: DEVICE_FILE, executor,
       });
@@ -483,10 +483,10 @@ describe('an executor id the caller made up', () => {
     const rail = await seam({ workspaces: ['executor-forged-rpc'] });
     const agent = rail.actorFor('executor-forged-rpc');
 
-    expect(await agent.renameExecutorFile('laptop-2', DEVICE_FILE, `${DEVICE_HOME}/moved.md`))
-      .toEqual({ error: 'Executor "laptop-2" has no file plane' });
-    expect(await agent.deleteExecutorFile('laptop-2', DEVICE_FILE))
-      .toEqual({ error: 'Executor "laptop-2" has no file plane' });
+    expect(await agent.renameExecutorFile('device-2', DEVICE_FILE, `${DEVICE_HOME}/moved.md`))
+      .toEqual({ error: 'Executor "device-2" has no file plane' });
+    expect(await agent.deleteExecutorFile('device-2', DEVICE_FILE))
+      .toEqual({ error: 'Executor "device-2" has no file plane' });
     expect(rail.fileFrames()).toEqual([]);
   });
 });

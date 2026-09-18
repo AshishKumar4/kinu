@@ -244,7 +244,7 @@ describe('sanitizeAttachmentsForModel', () => {
     const input: ModelMessage[] = [
       { role: 'system', content: 'be helpful' },
       { role: 'user', content: 'plain text' },
-      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'run', output: { type: 'text', value: 'ok' } }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'shell', output: { type: 'text', value: 'ok' } }] },
     ];
 
     const out = await sanitizeAttachmentsForModel(input, { accepts: accepts(), vfs });

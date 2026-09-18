@@ -1,8 +1,8 @@
 /**
- * The PC daemon's `exec` RPC — the cf backend's `laptop` runtime.
+ * The PC daemon's `exec` RPC — the cf backend's `device` runtime.
  *
  * `packages/pc-agent/src/index.js` is the other end of the device tunnel: when
- * a cloud agent calls `run laptop`, this is the process that actually runs the
+ * a cloud agent calls `run device`, this is the process that actually runs the
  * command on the user's machine. It ships as one dependency-free file the user
  * downloads, it had no suite at all, and it carried the same two defects as the
  * local host shell — which is the point. The bug was never "a mistake in one
@@ -741,7 +741,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
 
     await expect(pending).rejects.toMatchObject({
       name: 'AbortError',
-      message: 'laptop exec stopped — the device confirmed its owned command process group terminated; separately sessioned processes may still run',
+      message: 'device exec stopped — the device confirmed its owned command process group terminated; separately sessioned processes may still run',
     });
     expect(await gone(descendant)).toBe(true);
     tunnel.dispose();

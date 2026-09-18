@@ -38,7 +38,7 @@ function readLocal(expression: string): JsonValue {
   };
 
   row(0, 'run_start', { agentId: 'jarvis', caused_by: 'chat', userMessage: 'hi' });
-  row(1, 'tool_call_end', { name: 'run', toolCallId: 'tc-1', result: 'ok' });
+  row(1, 'tool_call_end', { name: 'shell', toolCallId: 'tc-1', result: 'ok' });
   row(2, 'run_end', { reason: 'completed' });
   db.close();
 

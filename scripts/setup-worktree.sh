@@ -95,7 +95,7 @@ done
 cd "$TREE"
 # Quiet on success, loud on failure: the suite names the fix command, and a
 # plain redirect hid exactly that line.
-resolution_out="$(bun test --timeout=0 packages/*/tests/workspace-resolution.test.ts 2>&1)" \
+resolution_out="$(bun scripts/ladder.ts --run bun test --timeout=0 packages/*/tests/workspace-resolution.test.ts 2>&1)" \
   || { printf '%s\n' "$resolution_out"; exit 1; }
 
 # The commit and push tiers are hooks, and a hook nobody installs is a hook that

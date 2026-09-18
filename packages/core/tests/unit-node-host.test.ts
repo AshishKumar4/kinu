@@ -228,7 +228,7 @@ describe('one node, run as an agent', () => {
         step++;
 
         const content: LanguageModelV3Content[] = step === 1
-          ? [{ type: 'tool-call', toolCallId: 'run-owned', toolName: 'run', input: JSON.stringify({ command: 'echo owned-seat' }) }]
+          ? [{ type: 'tool-call', toolCallId: 'run-owned', toolName: 'shell', input: JSON.stringify({ command: 'echo owned-seat' }) }]
           : step === 2
             ? [{ type: 'tool-call', toolCallId: 'report-owned', toolName: 'report', input: JSON.stringify({ status: 'completed', content: 'The owned runtime answered.' }) }]
             : [{ type: 'text', text: 'Reported.' }];

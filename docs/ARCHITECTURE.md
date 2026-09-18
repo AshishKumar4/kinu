@@ -30,7 +30,7 @@ graph TB
         subgraph Execs["ExecutionRouter, target-native exec, each its own filesystem"]
             W["workspace.*: the file plane above (default runtime)"]
             S["sandbox.*: Linux container, KinuSandbox (when configured)"]
-            P["laptop.*: the user's own machine (connect + consent)"]
+            P["device.*: the user's own machine (connect + consent)"]
         end
         State["Actor SQL: sessions · plans · task/evolution/search ledgers<br/>Nimbus files: SOUL.md · memory · actor scaffolds"]
     end
@@ -44,7 +44,7 @@ The environment list is the source of truth. `listMounts()` (an orchestrator RPC
 over `listEnvironments(executionRouter)`, `packages/core/src/read-models/files.ts`)
 returns one row per executor with a filesystem: namespace prefix, liveness,
 and declared policy (`readOnly`, `rootPath`,
-`durable | ephemeral | live-shared`). `laptop` is served by the `pc-agent`
+`durable | ephemeral | live-shared`). `device` is served by the `pc-agent`
 reverse-WebSocket daemon (`packages/pc-agent`) on your machine. `sandbox` is a
 Cloudflare container, and containers are spot capacity, so
 `@kinu.run/devbox` (`packages/devbox`) presents one as a machine that stays.
@@ -105,7 +105,7 @@ hire, a branching head, a swarm node, and an MCTS branch are rows in
 `HostedActor`s with their own runtime objects (session, stores, queue, abort,
 roles, loop pointer) under the root's lifecycle. A subordinate runs delegated
 turns through the common head-inference runner with the confined tool surface
-(execute_tools, run, file, web) plus the report lane that settles the
+(eval, shell, file, web) plus the report lane that settles the
 `agents.hire` that gave it the work. A head runs the same runner over the
 parent's promoted loop with
 the head tool surface (evidence, decisions, depth-budgeted subheads). A swarm node
@@ -436,7 +436,7 @@ Evolution runs across four timescales. Each feeds the next. The step clock
 ticks inside one long turn. The other three belong to the `EvolutionEngine`
 (`packages/core/src/evolution/engine.ts`):
 
-- In-episode: every settled `execute_tools` call scores crafted-tool
+- In-episode: every settled `eval` call scores crafted-tool
   fitness into `craft_scores` with one synchronous SQL write and no model call
   (`craft-cycle.ts` over `craft/in-episode.ts`).
 - Turn-level: `reviewTurn()` assesses the finished turn. A negative outcome
@@ -471,7 +471,7 @@ graph TB
         Devbox["devbox/<br/>@kinu.run/devbox: an ephemeral container<br/>presented as a machine that stays<br/>(snapshot-chain · supervision · ports)"]
         CLI["cli/<br/>kinu create/chat/exec/evolve/…"]
         CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess sandbox, child_process branches"]
-        PC["pc-agent/<br/>reverse-WS device daemon → laptop.*"]
+        PC["pc-agent/<br/>reverse-WS device daemon → device.*"]
         TU["test-utils/<br/>shared test fakes + fixtures"]
     end
 
