@@ -7,6 +7,10 @@
  * a parked command, a device consent, a plan review, a scaffold trial the
  * deployment does not auto-promote — is a decision; unseen changes and
  * auto-promoted trials are updates, and a curriculum proposal is neither.
+ *
+ * `primarySlate` is the one slate a tile can draw: the first the caller's
+ * store already holds an address for. A slate whose URL exists only after
+ * something starts is not one — a card read looks, it never launches.
  */
 import * as v from 'valibot';
 import type { PendingAction, PendingActionKind } from './pending-actions';
@@ -20,15 +24,34 @@ const WorkspaceOverviewRunSchema = v.object({
   task: v.nullable(v.string()),
 });
 
+/** The slate a tile draws: its durable preview URL, which outlives the
+ *  process behind it, so the picture is the live app and not a capture. */
+const WorkspaceOverviewSlateSchema = v.object({
+  id: v.string(),
+  title: v.string(),
+  url: v.string(),
+});
+
 export const WorkspaceOverviewSchema = v.object({
   observedAt: v.number(),
   activity: v.picklist(['working', 'unfinished', 'idle']),
   decisionsWaiting: v.number(),
   hasUpdates: v.boolean(),
   latestRun: v.nullable(WorkspaceOverviewRunSchema),
+  primarySlate: v.nullable(WorkspaceOverviewSlateSchema),
 });
 
 export type WorkspaceOverview = v.InferOutput<typeof WorkspaceOverviewSchema>;
+
+/** One slate as the store answers it for a card read: `url` is the address
+ *  its durable reservation already holds, and `null` where there is none to
+ *  read — a reservation is minted by the act that starts the app, never by
+ *  looking at it. */
+export interface WorkspaceOverviewSlate {
+  readonly id: string;
+  readonly title: string;
+  readonly url: string | null;
+}
 
 export interface WorkspaceOverviewInputs {
   readonly observedAt: number;
@@ -43,6 +66,10 @@ export interface WorkspaceOverviewInputs {
    *  update to read; one it cannot apply waits on the owner. */
   readonly scaffoldAutoApply: boolean;
   readonly latestRun: { readonly status: string | null; readonly task: string | null } | null;
+  /** The workspace's slates in the order the store lists them, each with the
+   *  URL its held reservation already answers — `null` where showing it would
+   *  mean starting a process, which a card read never does. */
+  readonly slates: readonly WorkspaceOverviewSlate[];
 }
 
 type QueueEffect = 'decision' | 'update' | 'ignore';
@@ -61,6 +88,14 @@ function pendingActionEffect(kind: PendingActionKind, scaffoldAutoApply: boolean
     case 'plan_review':
       return 'decision';
   }
+}
+
+function reservedSlate(slates: readonly WorkspaceOverviewSlate[]): WorkspaceOverview['primarySlate'] {
+  for (const slate of slates) {
+    if (slate.url !== null) return { id: slate.id, title: slate.title, url: slate.url };
+  }
+
+  return null;
 }
 
 export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): WorkspaceOverview {
@@ -86,6 +121,11 @@ export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): Workspa
     latestRun: inputs.latestRun === null
       ? null
       : { status: inputs.latestRun.status, task: task === null ? null : task.slice(0, TASK_PREVIEW_MAX) },
+
+    // The tile's picture is the FIRST slate the store can already address:
+    // the order is the store's, and a slate whose URL would have to be minted
+    // is skipped rather than waited for, so no card read boots a process.
+    primarySlate: reservedSlate(inputs.slates),
   };
 }
 

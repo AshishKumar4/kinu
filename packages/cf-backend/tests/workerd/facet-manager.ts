@@ -9,6 +9,7 @@ import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { composeFacetManager, type ComposedFacetManager } from '@nimbus-sh/worker/workspace-host';
+import { readPortReservationByOwner } from '@nimbus-sh/worker/port-capability';
 import { facetDiagnosticsHooks } from '../../src/nimbus-programmatic';
 
 export interface ProbeFacetManagerDeps {
@@ -36,9 +37,16 @@ export function probeFacetManager(deps: ProbeFacetManagerDeps): ComposedFacetMan
   return composed;
 }
 
-/** `SlateApps.ensure` over the composed manager: the reservation a durable spawn is pre-flighted against. */
-export function probeDurableApps(composed: ComposedFacetManager) {
+/** `SlateApps.ensure`/`reserved` over the composed manager: the reservation a durable spawn is pre-flighted against, and the read of it. */
+export function probeDurableApps(composed: ComposedFacetManager, ctx: DurableObjectState) {
   return {
+    reserved: async (owner: string) => {
+      const held = await readPortReservationByOwner(ctx, owner);
+
+      return held === null || held.reservation.capability === null
+        ? null
+        : { port: held.port, capability: held.reservation.capability };
+    },
     ensure: async (input: { readonly owner: string; readonly preferredPort?: number }) => {
       const reserved = await composed.apps.ensureDurableApp({ owner: input.owner, preferredPort: input.preferredPort, visibility: 'scoped' });
 

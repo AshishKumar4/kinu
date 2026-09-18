@@ -787,27 +787,34 @@ function deviceConnectFixture(path: string, method: string): Response | null {
    `gallery:overview` ({name, outcome}) — `{kind:'status'}` answers it with
    that HTTP status, so "unavailable" and "last-known after a refresh failure"
    are reachable without leaving the page. `?overflowRoster=1` adds a sixth
-   workspace the cards must never ask about: the page shows five. */
+   workspace the cards must never ask about: the page shows five. One row
+   carries a primary slate — the tile draws it live, so the tiled view has
+   both shapes in one photograph. */
 const STOCK_OVERVIEWS = {
   "checkout-fixes": {
     observedAt: NOW - 30e3, activity: "working", decisionsWaiting: 2, hasUpdates: true,
     latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration" },
+    primarySlate: { id: "coupon-board", title: "Coupon board", url: SLATE_GALLERY_URL },
   },
   "perf-audit": {
     observedAt: NOW - 30e3, activity: "working", decisionsWaiting: 0, hasUpdates: false,
     latestRun: { status: null, task: "Profile the landing bundle and split the vendor chunk" },
+    primarySlate: null,
   },
   "email-triage": {
     observedAt: NOW - 60e3, activity: "idle", decisionsWaiting: 0, hasUpdates: true,
     latestRun: { status: "completed", task: "Sort this week's receipts into the ledger" },
+    primarySlate: null,
   },
   "design-sys": {
     observedAt: NOW - 60e3, activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
     latestRun: { status: "error", task: "Regenerate the token sheet from the palette spec" },
+    primarySlate: null,
   },
   "handwrought-walnut-4166c321": {
     observedAt: NOW - 60e3, activity: "idle", decisionsWaiting: 0, hasUpdates: false,
     latestRun: null,
+    primarySlate: null,
   },
 };
 
@@ -821,10 +828,12 @@ const EVIDENCE_OVERVIEWS = {
   "ledger-keeper": {
     observedAt: NOW - 20e3, activity: "working", decisionsWaiting: 2, hasUpdates: true,
     latestRun: { status: "completed", task: EVIDENCE_TASK },
+    primarySlate: null,
   },
   "quiet-desk": {
     observedAt: NOW - 2 * 36e5, activity: "idle", decisionsWaiting: 0, hasUpdates: false,
     latestRun: null,
+    primarySlate: null,
   },
 };
 
@@ -857,6 +866,7 @@ if (EXTRA_WORKSPACE) {
   overviewOutcomes.set("audit-sweep", { kind: "body", body: {
     observedAt: NOW - 60e3, activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
     latestRun: { status: "completed", task: "Recount the quarter's shares against the register" },
+    primarySlate: null,
   } });
 }
 

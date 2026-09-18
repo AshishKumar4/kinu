@@ -33,6 +33,7 @@ const EMPTY: WorkspaceOverviewInputs = {
   activePlan: null,
   scaffoldAutoApply: true,
   latestRun: null,
+  slates: [],
 };
 
 describe('buildWorkspaceOverview', () => {
@@ -99,6 +100,26 @@ describe('buildWorkspaceOverview', () => {
     expect(v.is(WorkspaceOverviewSchema, overview)).toBe(true);
     expect(overview.latestRun?.task?.length).toBe(240);
     expect(overview.latestRun?.status).toBe('aborted');
+  });
+
+  test('the tile draws the first slate already addressed; an unaddressed one is not a picture', () => {
+    expect(buildWorkspaceOverview(EMPTY).primarySlate).toBeNull();
+
+    // A slate whose URL would have to be minted — nothing has reserved it —
+    // is skipped, not waited for: the card read starts no process, so the
+    // picture is the first slate that can already be pointed at.
+    const overview = buildWorkspaceOverview({
+      ...EMPTY,
+      slates: [
+        { id: 'sketch', title: 'Sketch', url: null },
+        { id: 'board', title: 'Coupon board', url: 'https://board.preview.test/' },
+        { id: 'ledger', title: 'Ledger', url: 'https://ledger.preview.test/' },
+      ],
+    });
+
+    expect(overview.primarySlate).toEqual({ id: 'board', title: 'Coupon board', url: 'https://board.preview.test/' });
+    expect(v.is(WorkspaceOverviewSchema, overview)).toBe(true);
+    expect(buildWorkspaceOverview({ ...EMPTY, slates: [{ id: 'sketch', title: 'Sketch', url: null }] }).primarySlate).toBeNull();
   });
 });
 

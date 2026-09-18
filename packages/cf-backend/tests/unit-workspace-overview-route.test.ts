@@ -44,7 +44,7 @@ function appRequest(path: string, forgedUserId?: string): Request {
 
 const OVERVIEW = {
   observedAt: 1, activity: 'idle', decisionsWaiting: 3, hasUpdates: true,
-  latestRun: { status: 'completed', task: 'the last thing' },
+  latestRun: { status: 'completed', task: 'the last thing' }, primarySlate: null,
 };
 
 async function harness(opts: {
