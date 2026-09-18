@@ -15,7 +15,7 @@ export class DefaultExecutionRouter implements ExecutionRouter {
   private providers = new Map<string, ExecutorProvider>();
 
   /**
-   * Every provider this router hands out — to `run`'s dispatch via
+   * Every provider this router hands out — to `shell`'s dispatch via
    * `getProvider` and to codemode via `getProviders` — answers to the SAME
    * approval policy, applied once here rather than by each caller. Backends
    * with no live policy to thread (heads, tests) fall back to the safe

@@ -97,7 +97,7 @@ for (const { rule } of cases) {
  * only three shapes it takes are a quoted literal, a `SCREAMING_CASE` constant, or a TEMPLATE LITERAL.
  * The third is the defect — `` `head.${id}_failed` `` produces a name per id, so nothing can be
  * grepped and the varying part belongs in a field. The second is not: `const RUN_SHELL_ABSENT =
- * 'run.shell_absent'` is one spelling in one place, which is what `builtins.ts:357-361` already does
+ * 'shell.shell_absent'` is one spelling in one place, which is what `builtins.ts:357-361` already does
  * and is strictly better than repeating the literal. Both are counted as named; only interpolation is
  * rejected.
  */

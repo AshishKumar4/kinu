@@ -2,7 +2,7 @@
  * Unit tests for runScaffold — the scaffold execution closure.
  *
  * Uses a mock Executor that interprets the wrapper code naively: it parses
- * out the scaffold's `run` function body and emits canned events via the
+ * out the scaffold's `shell` function body and emits canned events via the
  * host provider. This validates the contract that:
  *   • emits flow through to the callback
  *   • doneEmitted is true iff scaffold called host.emit({type:'done'})

@@ -27,9 +27,10 @@ import { useMediaQuery } from "./use-media-query";
 
 import {
   INSPECTOR_DEFAULT_PX, INSPECTOR_MIN_PX, INSPECTOR_WIDE_QUERY,
-  isInspectorInputKey, readDecision, readInspectorChoice,
-  type InspectorTarget,
-} from "./inspector-policy";
+  applyInspectorDecision, claimInspectorTarget, commitInspectorLayout, initialInspectorState,
+  decideInspector, isInspectorInputKey, newInspectorGroup, readStoredInspector,
+  type InspectorEffects, type InspectorState, type InspectorTarget,
+} from "@kinu.run/core/web/inspector-layout";
 
 const CHAT_PANEL_ID = "chat";
 
@@ -108,11 +109,6 @@ export interface InspectorLayout {
   readonly expandVisible: boolean;
   readonly resetToDefault: () => void;
   readonly ready: boolean;
-  /** How many committed layouts have reported to `onLayoutChanged`. Rendered
-   *  onto the panel so a reader can wait for a commit to have been classified
-   *  — the one end condition for "this commit persisted nothing" — instead of
-   *  watching a clock for a write that must never come. */
-  readonly layoutCommits: number;
   readonly panelRef: RefObject<PanelImperativeHandle | null>;
   readonly panelProps: InspectorPanelProps;
   readonly groupProps: InspectorGroupProps;
@@ -157,150 +153,104 @@ export function useInspectorLayout(input: {
   }, []);
 
   const mountDecision = desktopPanels && widePanels
-    ? readDecision(account, workspace, worthShowing)
+    ? decideInspector(readStoredInspector(account, workspace), worthShowing)
     : null;
 
-  const [collapsed, setCollapsed] = useState(mountDecision?.collapsed ?? false);
-  const [widthPx, setWidthPx] = useState(mountDecision?.widthPx ?? INSPECTOR_DEFAULT_PX);
-  const [ready, setReady] = useState(false);
-  const [layoutCommits, setLayoutCommits] = useState(0);
-  const panelRef = usePanelRef();
-
   // ── Owned state ────────────────────────────────────────────────────────
+  // The machine (core `web/inspector-layout.ts`) decides; this hook applies.
+  // Its state lives in a ref so a commit report and a control action read
+  // the step before them, never a render behind; the three fields a render
+  // needs are mirrored into React state after each step.
+  const machineRef = useRef<InspectorState>(initialInspectorState(mountDecision));
+  const [collapsed, setCollapsed] = useState(machineRef.current.collapsed);
+  const [widthPx, setWidthPx] = useState(machineRef.current.widthPx);
+  const [ready, setReady] = useState(false);
+  const panelRef = usePanelRef();
   // The input mark: set only by a separator capture listener where the
   // user's act begins — never by a control action, which already knows its
   // target and claims it directly. A press that produced nothing is cleared
   // by the releasing event's zero-delay timeout, so it can never leak onto
   // a later environment commit.
   const inputRef = useRef<InspectorInput | null>(null);
-  // The workspace the user has gestured on, and the workspace the one
-  // automatic open already served — comparing the id is the per-workspace
-  // flag, so a gesture or a second signal in another workspace is its own.
-  const userDecidedRef = useRef<string | null>(null);
-  const autoOpenedRef = useRef<string | null>(null);
   // The group element: committed px read as the inspector's flex share of its
-  // measured box.
+  // measured box, and where the commit count is written.
   const groupElementRef = useRef<HTMLDivElement | null>(null);
-  // A decision made before the group's first committed pass — a write issued
-  // into an unmeasured group is recomputed against a zero-size box and lost,
-  // so the slot waits for the first emission, which applies it once. This is
-  // not a loop: the library's own commit is the schedule, and a gesture that
-  // lands first clears the slot and wins.
-  const pendingDecisionRef = useRef<InspectorTarget | null>(null);
-  // The group has committed a layout at least once, so imperative writes land.
-  const groupMeasuredRef = useRef(false);
+  // How many committed layouts have reported: written onto the group element
+  // imperatively so a reader can wait for a commit to have been classified —
+  // the one end condition for "this commit persisted nothing" — without a
+  // render per commit.
+  const commitsRef = useRef(0);
 
-  const persistWidth = useCallback((nextWidth: number) => {
+  const persist = useCallback((target: InspectorTarget) => {
     if (account === null || !widePanels) return;
-    localStorage.setItem(`kinu.inspector.${account}`, String(nextWidth));
-  }, [account, widePanels]);
+    localStorage.setItem(`kinu.inspector.${account}`, String(target.widthPx));
 
-  const persistChoice = useCallback((open: boolean) => {
-    if (account === null || workspace === undefined || !widePanels) return;
-    localStorage.setItem(`kinu.inspector.open.${account}.${workspace}`, open ? "1" : "0");
+    if (workspace !== undefined) localStorage.setItem(`kinu.inspector.open.${account}.${workspace}`, target.collapsed ? "0" : "1");
   }, [account, workspace, widePanels]);
 
+  // One step of the machine, applied: the state mirrored, the effects done.
+  // The one place imperative writes leave the hook; a write marks no input,
+  // so whatever commit it produces lands in the adopt branch.
+  const apply = useCallback((step: { readonly state: InspectorState; readonly effects: InspectorEffects }) => {
+    machineRef.current = step.state;
+    setCollapsed(step.state.collapsed);
+    setWidthPx(step.state.widthPx);
+    setReady(step.state.ready);
 
-  // A layout the user now owns: reflected into state, persisted as theirs,
-  // latched so no policy transition ever crosses it in this workspace.
-  const claim = useCallback((target: InspectorTarget) => {
-    userDecidedRef.current = workspace ?? null;
-    setCollapsed(target.collapsed);
-    setWidthPx(target.widthPx);
-    persistWidth(target.widthPx);
-    persistChoice(!target.collapsed);
-  }, [workspace, persistWidth, persistChoice]);
-
-  // The one place imperative writes leave the hook. Control actions already
-  // know their target — `claim` persisted it at call time — so the write
-  // marks no input; whatever emission it produces (or none, for a no-op)
-  // lands in the adopt branch like any other non-input commit.
-  const issueWrite = useCallback((target: InspectorTarget) => {
+    if (step.effects.persist !== undefined) persist(step.effects.persist);
+    const write = step.effects.write;
     const panel = panelRef.current;
 
-    if (panel === null) return;
+    if (write === undefined || panel === null) return;
 
-    if (target.collapsed) panel.collapse();
-    else panel.resize(target.widthPx);
-  }, [panelRef]);
+    if (write.collapsed) panel.collapse();
+    else panel.resize(write.widthPx);
+  }, [panelRef, persist]);
 
   // The workspace's layout, decided and applied in one place: on mount, on a
   // workspace switch, when the account key lands, and on the signal that
-  // opens a policy-closed column once on the workspace's behalf. A gesture
-  // the user already made wins outright. The signal open is a
-  // once-per-workspace latch; a stored choice ends the policy's say entirely.
+  // opens a policy-closed column once on the workspace's behalf.
   useLayoutEffect(() => {
-    if (!desktopPanels || !widePanels || userDecidedRef.current === workspace) return;
+    if (!desktopPanels || !widePanels) return;
 
-    const target = readDecision(account, workspace,
-      worthShowing || autoOpenedRef.current === workspace);
+    apply(applyInspectorDecision(machineRef.current, {
+      workspace, stored: readStoredInspector(account, workspace), worthShowing, panelPresent: panelRef.current !== null,
+    }));
+  }, [account, workspace, worthShowing, desktopPanels, widePanels, panelRef, apply]);
 
-    if (worthShowing && account !== null
-      && readInspectorChoice(account, workspace) === null) {
-      autoOpenedRef.current = workspace ?? null;
-    }
-
-    // Already where the decision lands: nothing writes, and the column is
-    // still marked ready — the stored state stands.
-    if (collapsed === target.collapsed
-      && (target.collapsed || widthPx === target.widthPx)) {
-      setReady(true);
-
-      return;
-    }
-
-    if (!groupMeasuredRef.current || panelRef.current === null) {
-      pendingDecisionRef.current = target;
-
-      return;
-    }
-
-    setCollapsed(target.collapsed);
-    setWidthPx(target.widthPx);
-    setReady(true);
-
-    if (target.collapsed) panelRef.current.collapse();
-    else panelRef.current.resize(target.widthPx);
-  }, [account, workspace, worthShowing, desktopPanels, widePanels, collapsed, widthPx, panelRef]);
+  const claim = useCallback((target: InspectorTarget) => {
+    apply(claimInspectorTarget(machineRef.current, target, workspace));
+  }, [apply, workspace]);
 
   const collapse = useCallback(() => {
     const width = panelRef.current?.getSize().inPixels ?? 0;
-    const rounded = width >= 1 ? Math.max(INSPECTOR_MIN_PX, Math.round(width)) : widthPx;
-    const target = { collapsed: true, widthPx: rounded };
+    const rounded = width >= 1 ? Math.max(INSPECTOR_MIN_PX, Math.round(width)) : machineRef.current.widthPx;
 
-    claim(target);
-    issueWrite(target);
-  }, [panelRef, widthPx, claim, issueWrite]);
+    claim({ collapsed: true, widthPx: rounded });
+  }, [panelRef, claim]);
 
   const expand = useCallback(() => {
-    const target = { collapsed: false, widthPx };
-
-    claim(target);
-    issueWrite(target);
-  }, [widthPx, claim, issueWrite]);
+    claim({ collapsed: false, widthPx: machineRef.current.widthPx });
+  }, [claim]);
 
   const toggleCollapsed = useCallback(() => {
-    if (collapsed) expand();
+    if (machineRef.current.collapsed) expand();
     else collapse();
-  }, [collapsed, collapse, expand]);
+  }, [collapse, expand]);
 
   const resetToDefault = useCallback(() => {
-    const target = { collapsed: false, widthPx: INSPECTOR_DEFAULT_PX };
-
-    claim(target);
-    issueWrite(target);
-  }, [claim, issueWrite]);
+    claim({ collapsed: false, widthPx: INSPECTOR_DEFAULT_PX });
+  }, [claim]);
 
   // Every committed layout reports here exactly once, and the classification
   // is the input mark, not a layout match: a report carrying a mark is the
-  // user's (claim it); anything else — mount, a decision the hook issued, a
+  // user's; anything else — mount, a decision the hook issued, a
   // ResizeObserver constraint — is adopted without persisting.
   const onLayoutChanged = useCallback((layout: Layout) => {
     if (!desktopPanels) return;
 
-    const first = !groupMeasuredRef.current;
-    groupMeasuredRef.current = true;
-    setLayoutCommits((count) => count + 1);
+    commitsRef.current += 1;
+    groupElementRef.current?.setAttribute("data-inspector-commits", String(commitsRef.current));
 
     const share = layout[INSPECTOR_PANEL_ID];
     const collapsedNow = share !== undefined && share <= 0;
@@ -309,58 +259,19 @@ export function useInspectorLayout(input: {
       // A collapsed report carries no width of its own: the remembered
       // expansion width is the last open one, never zero.
       collapsed: collapsedNow,
-      widthPx: collapsedNow ? widthPx : Math.max(INSPECTOR_MIN_PX, committedWidthPx(
+      widthPx: collapsedNow ? machineRef.current.widthPx : Math.max(INSPECTOR_MIN_PX, committedWidthPx(
         layout, groupElementRef.current,
         () => Math.round(panelRef.current?.getSize().inPixels ?? 0),
       )),
     };
 
-    if (first) {
-      setCollapsed(now.collapsed);
-
-      if (!now.collapsed) setWidthPx(now.widthPx);
-
-      setReady(true);
-
-      // A decision parked for this pass applies now, once — the single write
-      // the unmeasured group could not take. A parked decision is the
-      // hook's, not a gesture, so its write marks nothing for input.
-      const pending = pendingDecisionRef.current;
-      pendingDecisionRef.current = null;
-
-      if (pending !== null) {
-        setCollapsed(pending.collapsed);
-        setWidthPx(pending.widthPx);
-        setReady(true);
-
-        const panel = panelRef.current;
-
-        if (panel !== null) {
-          if (pending.collapsed) panel.collapse();
-          else panel.resize(pending.widthPx);
-        }
-      }
-
-      return;
-    }
-
     const input = inputRef.current;
     inputRef.current = null;
 
-    if (input !== null) {
-      // A gesture: the column is the user's — anything still parked dies with it.
-      pendingDecisionRef.current = null;
-      claim(now);
-      setReady(true);
-
-      return;
-    }
-
-    // Environment or our own commit: adopt what landed, persist nothing.
-    setCollapsed(now.collapsed);
-
-    if (!now.collapsed) setWidthPx(now.widthPx);
-  }, [desktopPanels, panelRef, widthPx, claim]);
+    apply(commitInspectorLayout(machineRef.current, {
+      now, marked: input !== null, workspace, panelPresent: panelRef.current !== null,
+    }));
+  }, [desktopPanels, panelRef, workspace, apply]);
 
   // The separator's own listeners mark user input where it starts. Capture
   // phase on the element runs before the library's bubble-phase keydown and
@@ -461,8 +372,7 @@ export function useInspectorLayout(input: {
     if (element === groupElementRef.current) return;
 
     groupElementRef.current = element;
-    groupMeasuredRef.current = false;
-    pendingDecisionRef.current = null;
+    machineRef.current = newInspectorGroup(machineRef.current);
   }, []);
 
   const groupProps: InspectorGroupProps = {
@@ -489,7 +399,6 @@ export function useInspectorLayout(input: {
     expandVisible: desktopPanels && collapsed,
     resetToDefault,
     ready,
-    layoutCommits,
     panelRef,
     panelProps,
     groupProps,

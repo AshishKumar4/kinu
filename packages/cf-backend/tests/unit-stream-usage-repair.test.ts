@@ -275,7 +275,7 @@ describe('cached-usage repair through the direct binding pass', () => {
       },
     };
 
-    // SAFETY: the fixture above declares `run` with the exact signature
+    // SAFETY: the fixture above declares `shell` with the exact signature
     // DirectWorkersAIRunner requires, and `createDirectWorkersAIFetch` narrows
     // its argument to that one member before calling anything — every other
     // member of `Ai` is unreachable from this transport, so the assertion is

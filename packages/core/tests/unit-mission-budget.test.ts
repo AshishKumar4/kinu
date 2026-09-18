@@ -85,14 +85,14 @@ describe('mission budget — the uncapped default', () => {
 describe('mission budget — caps and refusal', () => {
   test('a token cap refuses at the seam once spend reaches it', () => {
     const { governor } = makeGovernor();
-    governor.declare('run', { tokens: 100 });
-    governor.activate(['run']);
+    governor.declare('shell', { tokens: 100 });
+    governor.activate(['shell']);
     governor.debit(99);
     expect(governor.guard('model_call')).toBeNull();
     governor.debit(1);
     const refusal = governor.guard('model_call');
     expect(refusal?.error).toBe('budget_exhausted');
-    expect(refusal?.label).toBe('run');
+    expect(refusal?.label).toBe('shell');
     expect(refusal?.seam).toBe('model_call');
     expect(refusal?.spent.tokens).toBe(100);
     expect(refusal?.limit.tokens).toBe(100);
@@ -101,8 +101,8 @@ describe('mission budget — caps and refusal', () => {
   test('a USD cap converts through the same blended rate the rest of the system uses', () => {
     const { governor } = makeGovernor();
     const tokens = 20_000;
-    governor.declare('run', { usd: estimateUsdCost(tokens) });
-    governor.activate(['run']);
+    governor.declare('shell', { usd: estimateUsdCost(tokens) });
+    governor.activate(['shell']);
     governor.debit(tokens - 1);
     expect(governor.guard('spawn')).toBeNull();
     governor.debit(1);
@@ -112,14 +112,14 @@ describe('mission budget — caps and refusal', () => {
   test('exhaustion fires the run-event sink exactly once per label', () => {
     const seen: MissionBudgetRefusal[] = [];
     const { governor } = makeGovernor({ onExhausted: (r) => seen.push(r) });
-    governor.declare('run', { tokens: 10 });
-    governor.activate(['run']);
+    governor.declare('shell', { tokens: 10 });
+    governor.activate(['shell']);
     governor.debit(10);
     governor.guard('model_call');
     governor.guard('spawn');
     governor.guard('model_call');
     expect(seen).toHaveLength(1);
-    expect(seen[0]?.label).toBe('run');
+    expect(seen[0]?.label).toBe('shell');
   });
 });
 

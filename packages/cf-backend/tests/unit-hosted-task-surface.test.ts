@@ -224,7 +224,7 @@ test('a hosted child advertises only its callable crafted surface and loses it w
   child.actor.stores.config.setRoleSelection('reader');
   await workspace.agent.runHostedTaskTurn(child.actor, 'Inspect the remaining capabilities.');
   const last = model.doStreamCalls.at(-1);
-  expect(last?.tools?.map((entry) => entry.name)).not.toContain('execute_tools');
+  expect(last?.tools?.map((entry) => entry.name)).not.toContain('eval');
   const current = last?.prompt.filter((message) => message.role === 'user').at(-1);
   expect(JSON.stringify(current)).not.toContain('workspace_echo(...args');
 });

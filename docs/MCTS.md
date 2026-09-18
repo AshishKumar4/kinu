@@ -234,7 +234,7 @@ They spawn per child by `HeadController.spawnHead` and score through
 
 | | `mcts` | `heads` |
 |---|---|---|
-| Branch | one `generateText`, no tools | multi-step loop, `execute_tools`/`run`/`file`/`web` |
+| Branch | one `generateText`, no tools | multi-step loop, `eval`/`shell`/`file`/`web` |
 | Isolation | actor boundary: logical actors on one SQLite (CF) or one process per branch on the same database file (CLI) | prompt-level: heads share the canonical workspace and are *asked* to make their own git worktree |
 | Branches per run | tens (budget times branches, re-expanded by UCT) | a handful, spawned once |
 | Relationship | rivals; most are pruned | collaborators; all are merged |

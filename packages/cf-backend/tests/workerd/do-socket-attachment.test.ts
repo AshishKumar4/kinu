@@ -51,25 +51,25 @@ describe('hibernatable socket attachments', () => {
 
   it('the record written on one invocation reads back on the next', async () => {
     const userDo = open('reads-back');
-    await connect(userDo, 'laptop');
+    await connect(userDo, 'device');
 
     // Two separate invocations: `recordProbe` writes, `probeRecord` re-finds the
     // socket by tag and parses. Production splits them exactly this way — the
     // probe is recorded on the turn that asked, and read on every later turn
     // that renders the capability row.
-    await userDo.recordProbe('laptop', false);
+    await userDo.recordProbe('device', false);
 
-    expect(await userDo.probeRecord('laptop')).toEqual({
-      device: 'laptop',
+    expect(await userDo.probeRecord('device')).toEqual({
+      device: 'device',
       probe: { present: ['node', 'python3'], probedAt: 1 },
     });
   });
 
   it('a Set in the record survives as a Set and fails its own parse', async () => {
     const userDo = open('set-trap');
-    await connect(userDo, 'laptop');
+    await connect(userDo, 'device');
 
-    await userDo.recordProbe('laptop', true);
+    await userDo.recordProbe('device', true);
 
     // An attachment is structured-cloned, not JSON-encoded, so the Set is still a
     // Set on the way back and `v.array(v.string())` rejects it. The connection is
@@ -78,8 +78,8 @@ describe('hibernatable socket attachments', () => {
     // forever, and no error is raised anywhere. That is what the explicit
     // `[...probe.present]` at `device-hub.ts:199` is buying, and it is a
     // one-character edit away.
-    expect(await userDo.isConnected('laptop')).toBe(true);
-    expect(await userDo.probeRecord('laptop')).toBeNull();
+    expect(await userDo.isConnected('device')).toBe(true);
+    expect(await userDo.probeRecord('device')).toBeNull();
   });
 
   it('each tag resolves to its own device, never a neighbour on the same object', async () => {
@@ -88,13 +88,13 @@ describe('hibernatable socket attachments', () => {
     // (`device-hub.ts:208-213`), which is why a mis-scoped tag would not fail —
     // it would answer with somebody else's machine.
     const userDo = open('two-devices');
-    await connect(userDo, 'laptop');
+    await connect(userDo, 'device');
     await connect(userDo, 'desktop');
 
-    await userDo.recordProbe('laptop', false);
+    await userDo.recordProbe('device', false);
     await userDo.recordProbe('desktop', false);
 
-    expect(await userDo.probeRecord('laptop')).toMatchObject({ device: 'laptop' });
+    expect(await userDo.probeRecord('device')).toMatchObject({ device: 'device' });
     expect(await userDo.probeRecord('desktop')).toMatchObject({ device: 'desktop' });
   });
 

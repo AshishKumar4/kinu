@@ -257,7 +257,7 @@ describe('createHostCheckpoints', () => {
   test('a path it may not read is skipped and named in the record, not a failed checkpoint', async () => {
     // The live failure verbatim: `checkpoint staging failed: warning: could not
     // open directory 'systemd-private-…'`, which accounted for 3 of 4
-    // `execute_tools` failures in one run. A directory owned by someone else is
+    // `eval` failures in one run. A directory owned by someone else is
     // not a failed checkpoint, and refusing to snapshot is not a reason to
     // refuse the agent's write.
     const { work, engine } = setup();

@@ -237,7 +237,7 @@ export function isSandboxTransientError(error: Error | string): boolean {
  * UI can name it, which means every tool here is reachable and has to answer.
  *
  * `unavailable`, and deliberately not `unsupported`: it is the same fact the
- * `run` tool already spells `unavailable` when a runtime is not registered
+ * `shell` tool already spells `unavailable` when a runtime is not registered
  * (tools/builtins.ts, `runtime_not_provisioned`), and one fact given two codes
  * splits one platform gap across two parts of the census. It lands in
  * `runtimeMissing`, whose definition is exactly this — an environment Kinu

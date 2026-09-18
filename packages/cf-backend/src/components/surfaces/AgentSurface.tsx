@@ -57,7 +57,7 @@ export interface AgentSurfaceProps {
  *
  * `exposure` is the registry's DECLARED reach (`TOOL_REACH`): `native` = the
  * turn hands it to the model as a tool definition, `codemode` = it exists only
- * as a namespace inside an `execute_tools` program, `both` = both, over one
+ * as a namespace inside an `eval` program, `both` = both, over one
  * dispatcher. That is a real difference in how the agent has to call it and
  * therefore worth a word on screen.
  *
@@ -73,10 +73,10 @@ function ExposureBadge({ exposure, wired }: { exposure: ToolInfo["exposure"]; wi
   const label = exposure === "both" ? "native · code mode" : exposure === "native" ? "native" : "code mode";
 
   const reach = exposure === "both"
-    ? "The model can call this tool, and so can an execute_tools program."
+    ? "The model can call this tool, and so can an eval program."
     : exposure === "native"
       ? "The model can call this tool."
-      : "Only an execute_tools program can call this tool.";
+      : "Only an eval program can call this tool.";
 
   return (
     <>

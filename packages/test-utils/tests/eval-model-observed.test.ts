@@ -53,7 +53,7 @@ function scored(): EvalObservation {
   return {
     taskId: 'case-a', repetition: 0, outcome: 'scored',
     scores: [{ name: TASK_OUTCOME, asserts: 'solved', eligible: 1, passed: 1, rate: 1, detail: 'solved' }],
-    turns: 2, toolCalls: 3, toolNames: ['run'], tokensIn: 10, tokensOut: 5, ms: 7,
+    turns: 2, toolCalls: 3, toolNames: ['shell'], tokensIn: 10, tokensOut: 5, ms: 7,
   };
 }
 

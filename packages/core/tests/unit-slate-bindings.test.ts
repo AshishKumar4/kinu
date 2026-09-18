@@ -101,16 +101,16 @@ test('an agent binding routes one inbox message carrying its slate id', () => {
 });
 
 test('an ai binding routes one model call, and a declared tier pins it', () => {
-  expect(route('MODEL', 'run', [{ prompt: 'sum this' }])).toEqual({ kind: 'ai', prompt: 'sum this' });
-  expect(route('MODEL', 'run', [{ prompt: 'p', system: 's', tier: 'deep' }])).toEqual({ kind: 'ai', prompt: 'p', system: 's', tier: 'deep' });
-  expect(route('TUNED', 'run', [{ prompt: 'p' }])).toEqual({ kind: 'ai', prompt: 'p', tier: 'fast' });
+  expect(route('MODEL', 'shell', [{ prompt: 'sum this' }])).toEqual({ kind: 'ai', prompt: 'sum this' });
+  expect(route('MODEL', 'shell', [{ prompt: 'p', system: 's', tier: 'deep' }])).toEqual({ kind: 'ai', prompt: 'p', system: 's', tier: 'deep' });
+  expect(route('TUNED', 'shell', [{ prompt: 'p' }])).toEqual({ kind: 'ai', prompt: 'p', tier: 'fast' });
   // A call naming the pinned tier asks for nothing different, so it routes.
-  expect(route('TUNED', 'run', [{ prompt: 'p', tier: 'fast' }])).toEqual({ kind: 'ai', prompt: 'p', tier: 'fast' });
+  expect(route('TUNED', 'shell', [{ prompt: 'p', tier: 'fast' }])).toEqual({ kind: 'ai', prompt: 'p', tier: 'fast' });
 
-  expect(() => route('TUNED', 'run', [{ prompt: 'p', tier: 'deep' }])).toThrow('pins tier fast');
+  expect(() => route('TUNED', 'shell', [{ prompt: 'p', tier: 'deep' }])).toThrow('pins tier fast');
   expect(() => route('MODEL', 'stream', [{ prompt: 'p' }])).toThrow('offers run');
-  expect(() => route('MODEL', 'run', [])).toThrow('takes one { prompt, system?, tier? } object');
-  expect(() => route('MODEL', 'run', [{ prompt: 4 }])).toThrow('takes one { prompt, system?, tier? } object');
+  expect(() => route('MODEL', 'shell', [])).toThrow('takes one { prompt, system?, tier? } object');
+  expect(() => route('MODEL', 'shell', [{ prompt: 4 }])).toThrow('takes one { prompt, system?, tier? } object');
 });
 
 test('a path-scoped workspace binding offers only file members inside its prefixes', () => {

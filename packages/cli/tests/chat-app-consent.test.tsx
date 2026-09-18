@@ -7,7 +7,7 @@ import type { ShellApprovalRequest, ShellApprovalOutcome } from '@kinu.run/core'
 afterEach(cleanupChats);
 
 const shellRequest: ShellApprovalRequest = {
-  command: 'sudo whoami', executor: 'laptop',
+  command: 'sudo whoami', executor: 'device',
   review: { decision: 'gate', hits: [{ decision: 'gate', rule: 'sudo', explanation: 'Privilege escalation' }] },
 };
 
@@ -29,7 +29,7 @@ describe('inline shell approval', () => {
       const answer = agent.requestShellApproval(shellRequest);
       await screen.waitFor('shell approval', () => screen.frame().includes('Run this command?'));
       expect(screen.frame()).toContain('sudo whoami');
-      expect(screen.frame()).toContain('Executor: laptop');
+      expect(screen.frame()).toContain('Executor: device');
       expect(screen.frame()).toContain('Privilege escalation');
       await screen.mockInput.typeText('zzz');
       await screen.mockInput.pasteBracketedText('blocked paste');
@@ -79,7 +79,7 @@ describe('ChatApp consent ownership', () => {
     const pending = {
       consentId: 'consent-1',
       deviceLabel: 'Workstation',
-      method: 'run',
+      method: 'shell',
       command: 'bun test',
     };
 
@@ -124,7 +124,7 @@ describe('ChatApp consent ownership', () => {
         listPending: async () => [{
           consentId: 'consent-enter',
           deviceLabel: 'Workstation',
-          method: 'run',
+          method: 'shell',
           command: 'bun test',
         }],
         resolve: async (_id, decision) => {
@@ -156,7 +156,7 @@ describe('ChatApp consent ownership', () => {
         listPending: async () => [{
           consentId: 'long-consent',
           deviceLabel: 'Workstation',
-          method: 'run',
+          method: 'shell',
           command: `bun run ${'private-argument '.repeat(200)}`,
         }],
         resolve: async (_id, decision) => {

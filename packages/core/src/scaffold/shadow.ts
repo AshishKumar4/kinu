@@ -847,7 +847,7 @@ export async function applyPromotionDecision(
  * the pointer records it: the owner's manual decision, the shadow gate's
  * automatic one, and the veto that turns a promote into a rollback. One backend
  * recorded only its manual RPC and the other recorded nothing, so the same
- * promotion was dated in the cloud and undated on a laptop.
+ * promotion was dated in the cloud and undated on a device.
  *
  * Filed under the reserved workspace run: a decision is not a turn's event.
  */

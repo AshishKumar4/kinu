@@ -3,7 +3,7 @@
  *
  * Workspace instruction files — the AGENTS.md chain and `/workspace/skills/*.md`
  * — are read every turn and were rendered straight into the system prompt with
- * instruction force. The agent's own `file` tool, its `execute_tools` codemode
+ * instruction force. The agent's own `file` tool, its `eval` codemode
  * and its shell all write the very same bytes on the very same plane, and
  * nothing in discovery recorded who wrote them. So an agent could author its
  * own future system instructions, and a poisoned skill could bound the next

@@ -28,8 +28,8 @@ const AT = Date.UTC(2026, 8, 3, 12, 0, 0);
   *  test is injected, so the seam stays silent. */
 const SILENT_RPC: Rpc = () => Promise.withResolvers<never>().promise;
 
-function parked(id: string, detail = `run \`deploy --${id}\` on laptop`): PendingAction {
-  return { id, kind: 'deferred_action', title: `laptop · ${id}`, detail, at: AT };
+function parked(id: string, detail = `run \`deploy --${id}\` on device`): PendingAction {
+  return { id, kind: 'deferred_action', title: `device · ${id}`, detail, at: AT };
 }
 
 const ACTIONS = [parked('a'), parked('b'), parked('c')];

@@ -32,7 +32,7 @@ export { createNodeCraftedExecute } from './craft-executor';
 
 export { discoverAgentsMd } from './agents-md';
 
-export { createNodeExecuteToolFactory, type NodeExecuteToolFactoryDeps } from './execute-tools-factory';
+export { createNodeCodemodeToolFactory, type NodeExecuteToolFactoryDeps } from './codemode-tool-factory';
 
 export {
   createLocalProfileAuthority, resolverModelPlane, staticModelPlane, STATIC_MODEL_SPEC,

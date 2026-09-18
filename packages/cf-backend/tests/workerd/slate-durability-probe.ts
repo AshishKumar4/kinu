@@ -268,7 +268,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeEnv> {
     return { ok: value.removed, port: value.port };
   }
 
-  /** One command through the workspace executor, the way the `run` tool
+  /** One command through the workspace executor, the way the `shell` tool
    *  reaches it: a process left running beside a served slate. */
   async runInWorkspace(workspace: string, command: string): Promise<{ exitCode: number; stdout: string }> {
     const target = await this.workspaceTarget(workspace);

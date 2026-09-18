@@ -120,7 +120,7 @@ function actionOn(action: string, target?: string, body?: string): string {
   return tail ? `${head} — ${tail}` : head;
 }
 
-/** The first line of an execute_tools program that isn't blank or a comment —
+/** The first line of an eval program that isn't blank or a comment —
  *  the expanded card shows the rest. */
 function firstCodeLine(code: string): string {
   for (const raw of code.split("\n")) {
@@ -336,8 +336,8 @@ function summarizeRelease(input: JsonObject): string {
 type ToolSummarizer = (input: JsonObject) => string;
 
 const SUMMARIZERS = new Map<string, ToolSummarizer>(Object.entries({
-  execute_tools: (input) => clip(firstCodeLine(str(input, "code"))),
-  run: (input) => clip(str(input, "command")),
+  eval: (input) => clip(firstCodeLine(str(input, "code"))),
+  shell: (input) => clip(str(input, "command")),
   file: summarizeFile,
   agents: summarizeAgents,
   memory: summarizeMemory,
@@ -490,7 +490,7 @@ function describeAgents(input: JsonObject): string {
 type ToolDescriber = (input: JsonObject) => string;
 
 const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
-  run: (input) => describeCommand(str(input, "command")),
+  shell: (input) => describeCommand(str(input, "command")),
   file: (input) => {
     const verb = FILE_VERBS.get(str(input, "action"));
 
@@ -505,13 +505,13 @@ const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
   web: (input) => (str(input, "action") === "fetch" ? "Fetched a page" : str(input, "query") ? "Searched the web" : ""),
   web_search: () => "Searched the web",
   web_fetch: () => "Fetched a page",
-  execute_tools: (input) => codemodeIntent(str(input, "code")) || "Ran a tool program",
+  eval: (input) => codemodeIntent(str(input, "code")) || "Ran a tool program",
   think: (input) => {
     const heads = Array.isArray(input.heads) ? input.heads.length : 0;
 
     return heads > 0 ? `Explored with ${heads} heads` : "Explored the problem";
   },
-  skills: (input) => (str(input, "action") === "run" ? "Ran a skill" : ""),
+  skills: (input) => (str(input, "action") === "shell" ? "Ran a skill" : ""),
   release: (input) => {
     const action = str(input, "action");
 

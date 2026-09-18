@@ -28,7 +28,7 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
 import { diagnosticsSettled, recordDiagnostics, withGallery, type Gallery } from './gallery-harness';
-import { parseJsonValue, redactPayload } from '@kinu.run/core';
+import { parseJsonArray, parseJsonValue, redactPayload, type JsonValue } from '@kinu.run/core';
 
 /** One live-tail message, as the browser laid it out. */
 interface TailFrame {
@@ -99,6 +99,7 @@ interface Observed {
   readonly filesRoot: { crumbs: string; entries: string[]; badges: string[] };
   /** The drive after crossing into the /pc mount, which must land inside the
    *  device's consented directory rather than on the device root. */
+  readonly filesRoster: { crumbs: string; entries: string[] };
   readonly filesInMount: { crumbs: string; entries: string[] };
   readonly filesAfterUp: string;
   /** File names the TREE pane carries, not only its folders. */
@@ -444,14 +445,18 @@ async function run(): Promise<Observed> {
       badges: await files.$$eval('[data-files-entry] [data-mount-badge]', (els) => els.map((el) => el.textContent ?? '')),
     };
 
-    // Crossing into a mount is ordinary navigation, and it lands INSIDE the
-    // device's consented directory. Landing on the mount point itself was the
-    // reported failure: `/pc` strips to the device's `/`, which its consent
-    // boundary refuses, so the first click answered EACCES.
+    // Crossing into `/pc` is ordinary navigation onto the roster: one row per
+    // live machine. Crossing into a machine lands INSIDE its consented
+    // directory. Landing on the machine root itself was the reported failure:
+    // it strips to the device's `/`, which its consent boundary refuses, so
+    // the first click answered EACCES.
     await files.click(rowSelector('pc'));
+    await waitForRow("Ashish's MacBook");
+    const filesRoster = { crumbs: await crumbs(), entries: await rowNames() };
+    await files.click(rowSelector("Ashish's MacBook"));
     await waitForRow('quarterly-report.txt');
     await files.waitForFunction(
-      () => document.querySelectorAll('[data-files-crumb]').length === 4,
+      () => document.querySelectorAll('[data-files-crumb]').length === 5,
     );
     const filesInMount = { crumbs: await crumbs(), entries: await rowNames() };
 
@@ -540,7 +545,7 @@ async function run(): Promise<Observed> {
     // A disconnected device is a stated absence, not a missing row.
     const offline = await newPage();
     await offline.setViewport({ width: 1280, height: 1100 });
-    await offline.goto(`${origin}/gallery.html?frame=files&offline=laptop`, { waitUntil: 'networkidle0' });
+    await offline.goto(`${origin}/gallery.html?frame=files&offline=device`, { waitUntil: 'networkidle0' });
     await offline.reload({ waitUntil: 'networkidle0' });
     await offline.waitForSelector('[data-files-offline-mount]');
     const filesOfflineRow = await offline.$eval('[data-files-offline-mount]', (el) => el.textContent ?? '');
@@ -598,7 +603,7 @@ async function run(): Promise<Observed> {
 
     return {
       tails, reducedMotionTails, chat, forkInterruptedAfterClick, chatErrorHeadings, toolActivity,
-      filesRoot, filesInMount, filesAfterUp, treeFileNames,
+      filesRoot, filesRoster, filesInMount, filesAfterUp, treeFileNames,
       filesMarkdownRendered, filesPreviewText, filesEditorSeedsFromTheFile,
       filesAfterRename, filesAfterDelete, filesFiltered, filesOfflineRow,
       envCards, envCapabilityChips, envCapabilityAbsences, envFilesJumpLandsOnDrive,
@@ -775,16 +780,18 @@ describe('the drive, browsing the one composite plane', () => {
   test('the root is the workspace tree beside the mounts, badges on the mounted folders', () => {
     expect(observed.filesRoot.crumbs).toBe('/');
     expect(observed.filesRoot.entries).toEqual(expect.arrayContaining(['home', 'pc', 'sandbox']));
-    // The origin badge names the machine, not the executor id — the laptop
+    // The origin badge names the machine, not the executor id — the device
     // wears the user's own device name, per the consent naming contract.
     expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", 'Sandbox']));
   });
 
-  test('crossing into /pc lands inside the consented device directory', () => {
-    // `/pc` strips to the DEVICE's `/`, which its consent boundary refuses with
-    // EACCES, so the mount point lands on the directory the owner consented to
-    // instead.
-    expect(observed.filesInMount.crumbs).toBe('//pc/home/dev');
+  test('crossing into /pc lists the machines; a machine lands inside its consented directory', () => {
+    // `/pc` is the roster. A machine root strips to the DEVICE's `/`, which its
+    // consent boundary refuses with EACCES, so the machine lands on the
+    // directory the owner consented to instead.
+    expect(observed.filesRoster.crumbs).toBe('//pc');
+    expect(observed.filesRoster.entries).toEqual(["Ashish's MacBook"]);
+    expect(observed.filesInMount.crumbs).toBe("//pc/Ashish's MacBook/home/dev");
     expect(observed.filesInMount.entries).toEqual(
       expect.arrayContaining(['quarterly-report.txt', 'shot.png']),
     );
@@ -1198,7 +1205,7 @@ describe('an additional agent, as an ordinary conversation', () => {
 
       await page.click('[aria-label="New agent"]');
       await diagnosticsSettled(diagnostics, 1);
-      expect(diagnostics).toEqual([{
+      expect([...diagnostics]).toEqual([{
         event: 'subordinates.create_failed', code: 'io',
         cause: `create a subordinate agent: ${CREATE_REFUSAL_CHAIN}`, fields: {},
       }]);
@@ -1285,6 +1292,227 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.waitForFunction(() => (
         (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Payments triage')
       ));
+      await page.close();
+    });
+  });
+
+  test('a user-created chat deletes on click with no modal; an agent-created one keeps its confirmation', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const rig = await openRig(newPage, origin, { width: 1280, height: 900 });
+      const { page } = rig;
+
+      // What each flow did to the THREAD, read off the rig's record of the
+      // call the strip made. The dialog's sentence is not the assertion: what
+      // it promises about the conversation is, and only the call says that.
+      const dismissals = async (): Promise<JsonValue[]> => parseJsonArray(await page.$eval(
+        '[data-dismiss-log]',
+        (el) => el.getAttribute('data-dismiss-log') ?? '[]',
+      ));
+
+      // The agent-created seed keeps a labelled dismiss control that opens the
+      // confirmation: the two flows are different controls, not one modal with
+      // two words in it.
+      expect(await page.$('[aria-label="Dismiss Auto scout"]')).not.toBeNull();
+      await page.click('[aria-label="Dismiss Auto scout"]');
+      await page.waitForSelector('[role="dialog"]');
+
+      // Cancel is a real way out and decides nothing.
+      await page.evaluate(() => {
+        const cancel = [...document.querySelectorAll('[role="dialog"] button')]
+          .find((button) => (button.textContent ?? '').includes('Cancel'));
+
+        if (!(cancel instanceof HTMLButtonElement)) throw new Error('Cancel absent in the dismiss dialog');
+        cancel.click();
+      });
+      await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null);
+      expect(await dismissals()).toEqual([]);
+      expect(await page.$('[aria-label="Dismiss Auto scout"]')).not.toBeNull();
+
+      // Confirmed, it dismisses: the tab closes and the conversation is KEPT,
+      // which is the one thing that dialog tells the reader.
+      await page.click('[aria-label="Dismiss Auto scout"]');
+      await page.waitForSelector('[role="dialog"]');
+      await page.evaluate(() => {
+        const confirm = [...document.querySelectorAll('[role="dialog"] button')]
+          .find((button) => (button.textContent ?? '').trim() === 'Dismiss');
+
+        if (!(confirm instanceof HTMLButtonElement)) throw new Error('Dismiss absent in the dismiss dialog');
+        confirm.click();
+      });
+      await page.waitForFunction(() => document.querySelector('[aria-label="Dismiss Auto scout"]') === null);
+      expect(await dismissals()).toEqual([{ agent: 'auto-scout', historyKept: true }]);
+
+      // The user-created seed deletes on click: no modal at all, the tab gone,
+      // and the conversation deleted with it.
+      expect(await page.$('[aria-label="Delete Checkout scout"]')).not.toBeNull();
+      await page.click('[aria-label="Delete Checkout scout"]');
+      await page.waitForFunction(() => document.querySelector('[aria-label="Delete Checkout scout"]') === null);
+      expect(await page.evaluate(() => document.body.innerText)).not.toContain('Checkout scout');
+      expect(await page.$('[role="dialog"]')).toBeNull();
+      expect(await dismissals()).toEqual([
+        { agent: 'auto-scout', historyKept: true },
+        { agent: 'scout', historyKept: false },
+      ]);
+      await page.close();
+    });
+  });
+
+  test('the workspace panel does not remount or refetch when the agent tab changes', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const rig = await openRig(newPage, origin, { width: 1440, height: 900 });
+      const { page } = rig;
+
+      // The agentchats rig mounts the real tab strip over a scripted roster,
+      // so switching tabs exercises the production remount behaviour with no
+      // backend create. (Creating on the workspacepage frame hangs — the
+      // gallery answers /api/* from fixtures and has no backend to create an
+      // actor — so the create-then-switch path is covered by the live-app
+      // tier instead.)
+      await rig.clickTab('Checkout scout');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/scout"]');
+      expect(await rig.activeTab()).toContain('Checkout scout');
+
+      await rig.clickTab('Main');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/main"]');
+      expect(await rig.activeTab()).toContain('Main');
+
+      // The per-conversation chrome survived the round trip: the drafts the
+      // rig owns per conversation are the observable half of "nothing
+      // remounted that should not have".
+      await page.type('[data-agent-pane] textarea', 'main draft');
+      await rig.clickTab('Checkout scout');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/scout"]');
+      await rig.clickTab('Main');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/main"]');
+      expect(await rig.draft()).toBe('main draft');
+
+      await page.close();
+    });
+  });
+});
+
+describe('the shell rails collapse and reopen, and the choice survives a reload', () => {
+  test('rail and inspector each collapse then reopen by role and state, persisted across reload', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=app&path=/`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('button[aria-label="Hide sidebar"]');
+
+      const railVisible = () => page.evaluate(() => {
+        const rail = document.querySelector('aside [aria-label="Primary"]');
+
+        return rail instanceof HTMLElement && rail.offsetParent !== null;
+      });
+
+      expect(await railVisible()).toBe(true);
+      await page.click('button[aria-label="Hide sidebar"]');
+      await page.waitForSelector('button[aria-label="Show sidebar"]');
+      expect(await railVisible()).toBe(false);
+      expect(await page.evaluate(() => localStorage.getItem('kinu:rail-open'))).toBe('0');
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('button[aria-label="Show sidebar"]');
+      expect(await railVisible()).toBe(false);
+
+      await page.click('button[aria-label="Show sidebar"]');
+      await page.waitForSelector('button[aria-label="Hide sidebar"]');
+      expect(await railVisible()).toBe(true);
+      expect(await page.evaluate(() => localStorage.getItem('kinu:rail-open'))).toBe('1');
+
+      // B8's other half, on the panel that carries the defect: a collapsed
+      // right panel has to be reopenable, and the control is addressed the way
+      // a reader reaches it — a button with that name — over the panel's own
+      // measured width, never a test hook.
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('nav[aria-label="Workspace agents"]');
+      await page.waitForSelector('button[aria-label="Hide inspector"]');
+
+      const opened = await page.evaluate(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ));
+
+      expect(opened).toBeGreaterThan(200);
+
+      await page.click('button[aria-label="Hide inspector"]');
+      await page.waitForFunction(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ) === 0);
+      // The rail's choice is the rail's: collapsing this panel is not a shell
+      // preference, and the two controls are not one.
+      expect(await page.evaluate(() => localStorage.getItem('kinu:rail-open'))).toBe('1');
+      expect(await page.$('button[aria-label="Hide inspector"]')).toBeNull();
+
+      await page.click('button[aria-label="Show inspector"]');
+      await page.waitForSelector('button[aria-label="Hide inspector"]');
+      // Reopened at the width it was collapsed from, and the reopen handle is
+      // gone because there is nothing left to reopen.
+      expect(await page.evaluate(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ))).toBe(opened);
+      expect(await page.$('button[aria-label="Show inspector"]')).toBeNull();
+
+      await page.close();
+    });
+  });
+});
+
+/**
+ * One workspace, one Durable Object, one socket per pane — and `broadcast`
+ * reaches every one of them. The frames a hosted actor's host emits are
+ * stamped with that actor; the root's own are not. A client that ignored the
+ * stamp rendered a subordinate's cards in the workspace's own chat, which is
+ * how the refiner's self-review brief arrived in the owner's thread.
+ *
+ * A browser row because the stamp only matters where the frames land: this
+ * drives the real page over the gallery's transport, makes the SERVER send
+ * both a stamped and an unstamped card, and reads the thread the owner would.
+ * No fixture READ can produce a stamped frame, so the gate dispatches
+ * `gallery:push-frame` and the stub delivers it on the open connection.
+ */
+describe('a hosted actor’s cards stay out of the workspace’s own chat', () => {
+  test('an unstamped card joins the workspace thread and a stamped one never does', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('nav[aria-label="Workspace agents"]');
+      await page.waitForSelector('.p-thread-column');
+
+      // The refiner's own card first, stamped with its actor, then the
+      // workspace's own drain with no stamp. The order is the failure's: the
+      // stamped frame arrives before anything a reader could confuse it with,
+      // so the unstamped card rendering is this row's end condition and the
+      // absence below is read after the socket has certainly been heard.
+      await page.evaluate(() => {
+        window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail: {
+          type: 'signal_card', id: 'sig-refiner', state: 'pending', actorId: 'actor-refiner',
+          metadata: { kinuEvent: 'event_drain' },
+          text: '- [refinement] from refiner (self-review): reviewed 3 graded turns and changed nothing',
+        } }));
+        window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail: {
+          type: 'signal_card', id: 'sig-workspace', state: 'pending',
+          metadata: { kinuEvent: 'event_drain' },
+          text: '- [webhook] from stripe: a payout of 240.00 settled',
+        } }));
+      });
+
+      await page.waitForFunction(() => (
+        document.querySelector('.p-thread-column')?.textContent?.includes('a payout of 240.00 settled') === true
+      ));
+
+      const thread = await page.$eval('.p-thread-column', (el) => el.textContent ?? '');
+
+      expect(thread).not.toContain('reviewed 3 graded turns and changed nothing');
+      expect(thread).not.toContain('refiner');
+      // One card, not two: the count is the assertion, because a dropped frame
+      // and a rendered-but-scrolled-away one read the same in a text search.
+      expect(await page.$$eval(
+        '.p-thread-column button',
+        (buttons) => buttons.filter((button) => button.innerText.includes('settled') || button.innerText.includes('graded turns')).length,
+      )).toBe(1);
+
       await page.close();
     });
   });
@@ -1754,10 +1982,10 @@ describe('linking a machine happens on the surface that asked for it', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=environment&offline=laptop&connect=1`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-env-card="laptop"] [data-env-connect]');
+      await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=1`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-env-card="device"] [data-env-connect]');
 
-      await page.click('[data-env-card="laptop"] [data-env-connect]');
+      await page.click('[data-env-card="device"] [data-env-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-state="ready"]');
       // In place: the Environment surface is still mounted behind the dialog,
       // and the URL never moved.
@@ -1800,9 +2028,9 @@ describe('linking a machine happens on the surface that asked for it', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=environment&offline=laptop&connect=stall`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-env-card="laptop"] [data-env-connect]');
-      await page.click('[data-env-card="laptop"] [data-env-connect]');
+      await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=stall`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-env-card="device"] [data-env-connect]');
+      await page.click('[data-env-card="device"] [data-env-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-start]');
       await page.click('[role="dialog"] [data-connect-start]');
       await page.waitForSelector('[data-connect-waiting]');
@@ -1828,7 +2056,7 @@ describe('linking a machine happens on the surface that asked for it', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=files&offline=laptop&connect=1`, { waitUntil: 'networkidle0' });
+      await page.goto(`${origin}/gallery.html?frame=files&offline=device&connect=1`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-files-connect]');
       await page.click('[data-files-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-state="ready"]');
@@ -2080,7 +2308,7 @@ const ASSEMBLED = `cfut_${'a'.repeat(48)}`;
  * nowhere in the document.
  *
  * VALUE-LEVEL REDACTION (KINU-011's second half). Field names cannot see a
- * token inside a free-form string, and the `run`/`execute_tools` inputs plus
+ * token inside a free-form string, and the `run`/`eval` inputs plus
  * `errorText` render as free text, not JSON — so the canonical policy's other
  * half, `redactSecrets`, masks secret-shaped VALUES off the same
  * `SECRET_PATTERNS` list the commit-tier scan runs. The gallery fixture
@@ -2459,6 +2687,64 @@ test('rail gap is zero with one border, the footer keeps one rule, both strips s
     expect(Math.abs(measured.chatY - measured.stripY)).toBeLessThan(1);
     expect(Math.abs(measured.activeY - measured.stripY)).toBeLessThan(1);
     await page.close();
+  });
+});
+
+test('the panel strip is one continuous rule with the underline on it', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    for (const theme of ['dark', 'light'] as const) {
+      for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 800 }]) {
+        const page = await newPage();
+        await page.setViewport(viewport);
+        await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
+        await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+        await page.reload({ waitUntil: 'networkidle0' });
+        await page.waitForSelector('[aria-label="Work"]');
+
+        const geometry = await page.evaluate(() => {
+          const work = document.querySelector('[aria-label="Work"]');
+          const panel = work === null ? null : work.closest('div.p-sidebar');
+          const row = panel === null ? null : panel.querySelector(':scope > div[class*="border-b"]');
+          const strip = panel === null ? null : panel.querySelector('.p-tabstrip');
+          const active = panel === null ? null : panel.querySelector('.p-tab-active');
+          const activity = panel === null ? null : panel.querySelector('[aria-label="Activity"]');
+
+          if (panel === null || !(row instanceof HTMLElement) || !(strip instanceof HTMLElement) || !(active instanceof HTMLElement)) return null;
+
+          const panelBox = panel.getBoundingClientRect();
+          const rowBox = row.getBoundingClientRect();
+          const stripBox = strip.getBoundingClientRect();
+          const activeBox = active.getBoundingClientRect();
+          const activityBox = activity instanceof HTMLElement ? activity.getBoundingClientRect() : null;
+
+          return {
+            panelLeft: panelBox.left, panelRight: panelBox.right,
+            rowLeft: rowBox.left, rowRight: rowBox.right, rowBottom: rowBox.bottom,
+            stripLeft: stripBox.left, stripRight: stripBox.right, stripBottom: stripBox.bottom,
+            activeBottom: activeBox.bottom,
+            activityLeft: activityBox?.left ?? -1, activityRight: activityBox?.right ?? -1,
+          };
+        });
+
+        expect(geometry).not.toBeNull();
+
+        if (geometry !== null) {
+          // One continuous rule: the row spans the panel's full width with
+          // the icons inside it — the strip scrolls within it, so the strip's
+          // scrolled width may exceed the row, but nothing may stick out past
+          // the panel's right edge.
+          expect(geometry.rowLeft).toBeLessThanOrEqual(geometry.panelLeft + 1);
+          expect(geometry.rowRight).toBeGreaterThanOrEqual(geometry.panelRight - 1);
+          expect(geometry.activityRight).toBeLessThanOrEqual(geometry.panelRight + 1);
+          expect(geometry.activityRight).toBeLessThanOrEqual(geometry.rowRight + 1);
+          // The underline sits exactly on the rule.
+          expect(Math.abs(geometry.activeBottom - geometry.rowBottom)).toBeLessThan(1.5);
+          expect(Math.abs(geometry.stripBottom - geometry.rowBottom)).toBeLessThan(1.5);
+        }
+
+        await page.close();
+      }
+    }
   });
 });
 
@@ -2974,7 +3260,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // That is a claim about a write that must never come, and geometry
       // cannot synchronize the read (panels reflow through plain CSS ahead
       // of the commit pipeline), so the end condition is the pipeline's own:
-      // the panel counts the layout commits the hook has classified, and the
+      // the group counts the layout commits the hook has classified, and the
       // storage is read once the second tweak's commit has been counted —
       // after which the hook has either persisted or adopted, and nothing
       // more is scheduled.

@@ -181,7 +181,7 @@ export function PreviewTabsGallery() {
         // has ever named it. `archive` is dismissed, so it is absent and its
         // history presents as retained.
         activePlanActors={actors ? ['worker', 'courier'] : ['courier']}
-        pinnedPorts={[{ executor: 'workspace', port: 8789, url: SLATE_GALLERY_URL, name: 'Duplicate dashboard port' }, { executor: 'sandbox', port: 8080, url: SANDBOX_URL, name: 'Sandbox app' }, { executor: 'laptop', port: 3000, url: DEVICE_URL, name: 'Device app' }]}
+        pinnedPorts={[{ executor: 'workspace', port: 8789, url: SLATE_GALLERY_URL, name: 'Duplicate dashboard port' }, { executor: 'sandbox', port: 8080, url: SANDBOX_URL, name: 'Sandbox app' }, { executor: 'device', port: 3000, url: DEVICE_URL, name: 'Device app' }]}
         slates={slates} slateReloads={new Map(slates.map(item => [item.id, reload]))}
         previewError={null} onRefreshPorts={NOTHING} plan={owner === "main" ? plan : workerPlan} snapshot={{ status: 'loading' }} onRetryLoad={NOTHING}
         tools={[]} memory={[]} memoryContent="" onSearchMemory={NOTHING} mctsTrees={new Map()} headActivity={new Map()} isStreaming={false}

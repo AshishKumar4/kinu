@@ -219,7 +219,7 @@ describe('the logger records what a code path claimed', () => {
     // Enforced by the signature, so this asserts the runtime half: whatever
     // classification the error carries is what the line reports, with no default.
     const log = createRecordingLogger();
-    log.failure('run.escalation_refused', new KinuError('unavailable', 'not provisioned'));
+    log.failure('shell.escalation_refused', new KinuError('unavailable', 'not provisioned'));
     expect(log.emitted[0]?.code).toBe('unavailable');
     expect(log.emitted[0]?.fields).toEqual({});
   });

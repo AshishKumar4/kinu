@@ -56,7 +56,7 @@ export interface TerminalPaneProps {
   /** The workspace this terminal belongs to. The socket is per workspace, so
    *  the pane is told which one rather than re-deriving it from the URL. */
   workspace: string;
-  /** Executor namespace: `sandbox`, `workspace`, `laptop`, `parent`. */
+  /** Executor namespace: `sandbox`, `workspace`, `device`, `parent`. */
   executor: string;
   /** Line-mode inputs. Unused by either PTY driver, which streams live from
    *  its own transport instead of reading broadcast exec rows. */
@@ -82,7 +82,7 @@ export function TerminalPane({ workspace, executor, outputs, onExecute }: Termin
 
   if (lane.mode !== "pty") return <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} />;
 
-  return executor === "laptop"
+  return executor === "device"
     ? <DeviceTerminal workspace={workspace} executor={executor} />
     : <PtyTerminal workspace={workspace} executor={executor} />;
 }

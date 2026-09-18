@@ -16,7 +16,8 @@ import { join } from 'node:path';
 
 import { LADDER } from './ladder';
 import {
-  auditCorpus, auditFile, CLOCK_KINDS, readLock, reconcileLock, tally, writeShrinkingLock, type ClockKind, type ClockSite,
+  auditCorpus, auditFile, CLOCK_KINDS, readClockCorpus, readLock, reconcileLock, tally, writeShrinkingLock,
+  type ClockKind, type ClockSite,
 } from './test-clocks';
 import { scratchDir } from '@kinu.run/test-utils';
 import { readTests } from './sources';
@@ -157,6 +158,30 @@ describe('test-clocks gate', () => {
       expect(readLock(path)).toEqual(paidDown);
     });
 
+    test('--lock refuses an equal total that moved a site, per file and kind', () => {
+      const path = join(scratchDir('test-clocks-lock-move'), 'test-clocks.lock.json');
+      writeShrinkingLock(locked, path);
+
+      // Three sites, three sites: one sleep left a.test.ts and a sleep
+      // arrived in b.test.ts — a new site the gate refuses, laundered by
+      // the total alone.
+      const moved = tally([
+        site('packages/core/tests/a.test.ts', 'sleep'),
+        site('packages/core/tests/b.test.ts', 'clock-compare'), site('packages/core/tests/b.test.ts', 'sleep'),
+      ], '2026-09-16');
+
+      expect(() => writeShrinkingLock(moved, path)).toThrow(/packages\/core\/tests\/b\.test\.ts \[sleep\]: 1 > 0/u);
+
+      // And a new file arriving as another is paid down, equal total.
+      const arrived = tally([
+        site('packages/core/tests/a.test.ts', 'sleep'), site('packages/core/tests/a.test.ts', 'sleep', 2),
+        site('packages/core/tests/c.test.ts', 'clock-compare'),
+      ], '2026-09-16');
+
+      expect(() => writeShrinkingLock(arrived, path)).toThrow(/adds a site: packages\/core\/tests\/c\.test\.ts/u);
+      expect(readLock(path)).toEqual(locked);
+    });
+
     test('a moved file is re-keyed on the path half with its counts byte-identical', () => {
       const moved = tally([
         site('packages/core/tests/moved/a.test.ts', 'sleep'), site('packages/core/tests/moved/a.test.ts', 'sleep', 2),
@@ -168,16 +193,22 @@ describe('test-clocks gate', () => {
     });
 
     test('the live lock reproduces the tree', () => {
-      const current = tally(auditCorpus(readTests()), '2026-09-16');
+      const current = tally(auditCorpus(readClockCorpus()), '2026-09-16');
 
       expect(reconcileLock(current, readLock())).toEqual({ unlocked: [], raised: [], stale: [] });
     });
   });
 
-  test('the live corpus is the one sources.ts enumerates, and it is not empty', () => {
+  test('the live corpus is every test sources.ts enumerates plus the helpers tests wait through', () => {
     const tests = readTests();
+    const corpus = readClockCorpus();
 
     expect(tests.size).toBeGreaterThan(100);
+    // The helpers are inside the corpus: a wait moved into test-utils or the
+    // browser harness is read where it is written.
+    expect(corpus.size).toBeGreaterThan(tests.size);
+    expect(corpus.has('scripts/gallery-harness.ts')).toBe(true);
+    expect([...corpus.keys()].some((file) => file.startsWith('packages/test-utils/src/'))).toBe(true);
     // The census over the real tree runs, whatever it finds: a scan that
     // silently stopped parsing would be a clean report.
     expect(() => auditCorpus(tests)).not.toThrow();

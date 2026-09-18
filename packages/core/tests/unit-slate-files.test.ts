@@ -17,7 +17,7 @@ test('a Slate tree restores binaries, executable modes, symlinks and empty direc
     const directory = slateDirectory(id);
     vfs.mkdir(`${directory}/empty`, { recursive: true });
     vfs.writeFile(`${directory}/run`, new Uint8Array([0, 255, 3]), { mode: 0o755 });
-    vfs.symlink('run', `${directory}/link`);
+    vfs.symlink('shell', `${directory}/link`);
     vfs.mkdir(`${directory}/protected`);
     vfs.writeFile(`${directory}/protected/config`, 'read-only source');
     vfs.chmod(`${directory}/protected`, 0o555);
@@ -27,7 +27,7 @@ test('a Slate tree restores binaries, executable modes, symlinks and empty direc
     session.vfs.withTransaction(() => files.restore(id, version));
     expect(vfs.readFile(`${directory}/run`)).toEqual(new Uint8Array([0, 255, 3]));
     expect(vfs.stat(`${directory}/run`).mode & 0o777).toBe(0o755);
-    expect(vfs.readlink(`${directory}/link`)).toBe('run');
+    expect(vfs.readlink(`${directory}/link`)).toBe('shell');
     expect(vfs.isDirectory(`${directory}/empty`)).toBe(true);
     expect(vfs.readFileString(`${directory}/protected/config`)).toBe('read-only source');
     expect(vfs.stat(`${directory}/protected`).mode & 0o777).toBe(0o555);

@@ -31,7 +31,7 @@ import { dirname, join } from 'node:path';
 import { recordNoModelEpisode, recordUnmeasuredEpisode, recordWorkspaceSpend, type LiveModelSpend } from './live-model';
 import {
   BUILTIN_TOOLS, classifyToolFailure, DEFAULT_WORKERS_AI_MODEL_ID, minimumPairsForSignificance, requiredPairs,
-  type ActorHandle, type RunEvent, type SqlExecutor, type WorkspaceSpend, type ToolOutcome,
+  type ActorHandle, type Clock, type RunEvent, type SqlExecutor, type WorkspaceSpend, type ToolOutcome,
 } from '@kinu.run/core';
 import { gitEnv } from './git';
 import { BEHAVIOUR_SCORERS, type BehaviourScorer } from './agent-evals';
@@ -253,6 +253,10 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
   open: () => Promise<Reader>,
   options: {
     readonly transcripts: string; readonly taskId: string; readonly modelCalls: 'expected' | 'none';
+    /** The budget runs on this clock (D19): production hands `REAL_CLOCK`, a
+     *  test hands a `handClock` it advances so "the budget was spent" is a
+     *  step the test takes, never a sleep racing a real timer. */
+    readonly clock: Clock;
     /** The most wall time the operation may take once the session is open.
      *  When it is spent the operation is told (its `budget` signal aborts),
      *  the episode is recorded as spent under `failure.json` with
@@ -353,11 +357,11 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
    *  below has no losing rejection to leave unread. */
   const spent = Promise.withResolvers<{ readonly spent: Error }>();
 
-  const timer = options.budgetMs === undefined ? null : setTimeout(() => {
+  const disarm = options.budgetMs === undefined ? null : options.clock.after(options.budgetMs, () => {
     const reason = new Error(`${options.taskId}: the episode budget of ${String(options.budgetMs)} ms was spent before the operation ended`);
     budget.abort(reason);
     spent.resolve({ spent: reason });
-  }, options.budgetMs);
+  });
 
   try {
     const raced = await Promise.race([
@@ -374,7 +378,7 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
       name: failure.name, message: failure.message, ...(budget.signal.aborted && { phase: 'budget' }),
     }), { mode: 0o600 });
   } finally {
-    if (timer !== null) clearTimeout(timer);
+    if (disarm !== null) disarm();
   }
 
   try {
@@ -407,7 +411,7 @@ export type EvalObservation =
      * why "did the agent ever enter codemode" had to be re-derived from source
      * twice instead of read off the artifact. It is the cheapest possible
      * covariate and it explains outcomes directly: a run whose tool list contains
-     * no `execute_tools` cannot have crafted anything, and one that never touched
+     * no `eval` cannot have crafted anything, and one that never touched
      * `file` produced no gradable edit signal however well it did the task.
      *
      * Optional for exactly one reason: `tests/eval/runs/flash-a.json` and

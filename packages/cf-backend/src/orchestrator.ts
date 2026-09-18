@@ -20,7 +20,7 @@ import {
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
-  createReportCodemodeProvider, HeadController, REAL_HEAD_CLOCK, SubordinateRosterStore,
+  createReportCodemodeProvider, HeadController, REAL_CLOCK, SubordinateRosterStore,
   recoverActorTurns, EventLog, actorReferenceOf,
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
@@ -52,7 +52,7 @@ import {
   reportSettlesRun, runHostedTask,
   type HostedTaskProfile, type HostedTaskTurn, type SubordinateHostSeams,
 } from "./subordinate-hosting";
-import { createExecuteToolsFactory } from "./execute-tools";
+import { createCodemodeToolFactory } from "./codemode-tool";
 import { codemodeEgress } from "./codemode-egress";
 import type { ReportToolDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
@@ -88,6 +88,9 @@ import {
   type ForkTransport, type ForkFrame,
   readWorkspaceArchivePage, type ArchiveCursor, type ArchivePage,
   nanoid, type HeadRunView,
+  // The ONE delegation runner, shared with the local host: an assignment is a
+  // whole turn input and no reactor may digest it.
+  drainAssignments,
   // Canonical memory-note write primitive
   appendMemoryNote,
   type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT,
@@ -151,7 +154,7 @@ import {
   ReleaseEngine, createSandboxReleaseExec,
   // Peer-agent teams (the agents tool's team deps contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
-  type EnqueueTurnResult,
+  type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
   readMission, summarizeSoul, writeSoul, workspaceGenesisSignal,
   // The durable answer an interrupted terminal transition still owes a reply
@@ -684,12 +687,16 @@ export class OrchestratorAgent extends ActorAgent {
    * into this object's transcript. That is the whole difference from the root's
    * own `enqueueTurn`, which goes through Think's message store because the
    * root's turns ARE that transcript.
+   *
+   * The mode comes off the turn's own metadata through core's one reader, which
+   * answers `build` for a turn that named none. Hardcoding `build` here was the
+   * same value by coincidence and lost a Plan bar the producer had stated.
    */
   private async enqueueHostedTurn(
-    actor: BoundActor, input: Parameters<WorkspaceHostSeams['enqueueTurn']>[1],
-  ): ReturnType<WorkspaceHostSeams['enqueueTurn']> {
+    actor: BoundActor, input: ProgrammaticTurn,
+  ): Promise<EnqueueTurnResult> {
     const admitted = await admitHostedTask(this.subordinateSeams(), actor.reference, {
-      kind: 'message', body: input.text, mode: 'build',
+      kind: 'message', body: input.text, mode: workModeForTurnMetadata(input.metadata),
     });
 
     return { status: admitted.admitted ? 'queued' : 'skipped' };
@@ -728,8 +735,8 @@ export class OrchestratorAgent extends ActorAgent {
         { homeHost: () => this.facetHomeHost(), directory: this.workspaceActors() },
         actor.record, actor.reference, 'head',
       ),
-      executeTool: (runtime, webSearch) => {
-        const factory = createExecuteToolsFactory({
+      codemodeTool: (runtime, webSearch) => {
+        const factory = createCodemodeToolFactory({
           loader: this.env.LOADER, egress: codemodeEgress(), rt: runtime,
           sql: this.boundSql, workspace: this.workspaceName(), webSearch,
         });
@@ -803,7 +810,7 @@ export class OrchestratorAgent extends ActorAgent {
    * fresh tree, so a subordinate holding the peer transport could leave its own
    * subtree in one call and the depth cap below would be decorative.
    *
-   * `executeTools` rather than a pre-built entry: the sandbox declares every
+   * `codemode` rather than a pre-built entry: the sandbox declares every
    * other tool as `tools.<name>`, so it is built last over the finished surface
    * and keeps the clamp and the effect claim the registry declares for it.
    *
@@ -817,7 +824,7 @@ export class OrchestratorAgent extends ActorAgent {
   private async hostedTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
 
-    const factory = createExecuteToolsFactory({
+    const factory = createCodemodeToolFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), rt: turn.runtime,
       sql: this.boundSql, workspace: this.workspaceName(), webSearch,
       // `report.*` in the sandbox as well as at the top level, on the factory's
@@ -860,7 +867,7 @@ export class OrchestratorAgent extends ActorAgent {
         sql: turn.runtime.storage.sql,
         turnId: () => turn.input.id,
       },
-      executeTools: ({ native }) => factory.toolFor(native),
+      codemode: ({ native }) => factory.toolFor(native),
       craftedToolExecute: null,
       agents,
       // This actor's own semantic index and its own keyed world model — the
@@ -991,7 +998,7 @@ export class OrchestratorAgent extends ActorAgent {
    * as a sibling of its own parent.
    *
    * No `temporary` port, and that absence is a boundary rather than an
-   * oversight: the port holds live `run` promises and must outlive the turn
+   * oversight: the port holds live `shell` promises and must outlive the turn
    * that parked them, and the one the report ingress resolves waiters through
    * is the HIRING actor's. So a hosted actor gets the two durable rungs — hire,
    * ask by name, send, list, dismiss — and no role-targeted temporary of its
@@ -1073,7 +1080,7 @@ export class OrchestratorAgent extends ActorAgent {
       throw new KinuError('missing', 'This workspace has no owner, so a head cannot split further.');
     }
 
-    const controller = new HeadController(runtimeForSplit, journal, REAL_HEAD_CLOCK);
+    const controller = new HeadController(runtimeForSplit, journal, REAL_CLOCK);
 
     const controllerInput: Parameters<HeadController['run']>[0] = {
       parentHeadId: parent.id,
@@ -1316,18 +1323,11 @@ export class OrchestratorAgent extends ActorAgent {
    * nothing here may take. So the runner is here, on the durable wake, where
    * nothing holds a request open.
    *
-   * THE DOUBLE-EXECUTION GUARD IS `markConsumed` BEFORE THE `await`. It is
-   * synchronous, so it is atomic with respect to the event loop: the row leaves
-   * the pending set before this frame yields, and a concurrent or re-woken
-   * sweep reading `pending()` cannot see it. Every other ordering runs the turn
-   * twice — which for a delegated task means two answers to one `agents.ask`.
-   *
-   * A FAILED TURN LEAVES ITS LEASE OPEN, deliberately. `unbindStale` above
-   * re-pends it once the grace has passed, so the work is retried on a later
-   * frame rather than stranded; closing the lease on failure would drop the
-   * task silently, and re-pending it immediately would spin. The grace is
-   * non-zero because a Durable Object activation may be racing its own
-   * predecessor, which is the case `unbindStale` requires callers to state.
+   * What one child's queue COSTS is core's `drainAssignments` — the lease
+   * order, the double-execution guard and the failed-run policy are its
+   * invariants, stated once there and shared with the local host. This method
+   * is the cf half: which actors have a queue, the budget across them, and what
+   * running one assignment means here.
    */
   private async drainAdmittedDelegations(): Promise<boolean> {
     const seams = this.subordinateSeams();
@@ -1351,36 +1351,20 @@ export class OrchestratorAgent extends ActorAgent {
         // session, no model — and it still refuses a retired or re-parented
         // actor, so reading a child's queue is not a way around membership.
         const log = new EventLog(exec, this.actorHost().bindStores(reference).handle);
-        log.unbindStale(STALE_EVENT_DELIVERY_MS, now);
 
-        for (const event of log.pending({ variant: 'subordinate_task', limit: budget })) {
-          if (budget <= 0) { truncated = true; break; }
-
-          if (event.variant !== 'subordinate_task') continue;
-
-          if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') continue;
-          const turnId = `evt-${nanoid()}`;
-          log.markConsumed(event.id, turnId, 0);
-          budget -= 1;
-
-          try {
-            // The EVENT ID is the relay's dedupe key, and it is the right one:
-            // it is stable across a re-delivery, so a report a recovered
-            // sequence replays is recognised as the one the parent already
-            // holds rather than counted as a second answer.
-            await runHostedTask(seams, reference, {
-              body: event.payload.body,
-              mode: event.payload.kinu_mode,
-              sequenceId: event.id,
-              inheritedContext: event.payload.inherited_context,
-            });
-            log.markTurnCompleted(turnId);
-          } catch (cause) {
+        const swept = await drainAssignments(log, {
+          now, budget, staleMs: STALE_EVENT_DELIVERY_MS,
+          run: async (task) => { await runHostedTask(seams, reference, task); },
+          onFailure: ({ cause }) => {
             diagnostics.failure('subordinate.delegated_turn_failed', toKinuError({
               doing: 'running a delegated turn this workspace admitted', cause, otherwise: 'io',
             }), { workspace: this.name, actor: record.name });
-          }
-        }
+          },
+        });
+
+        budget -= swept.consumed;
+
+        if (swept.truncated) truncated = true;
       } catch (cause) {
         // One unreadable child must not end the sweep — the same per-actor
         // isolation core's recovery arm applies for the same reason.
@@ -2171,7 +2155,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** release.* (tools/release-codemode.ts) is constructed once per DO
-   *  lifetime along with execute_tools, so it cannot re-check ownership on
+   *  lifetime along with eval, so it cannot re-check ownership on
    *  every call the way a callable RPC does. An unclaimed workspace gets a
    *  deps object whose every method rejects with the same honest reason,
    *  rather than a namespace that silently vanished or crashed on first use. */
@@ -2313,7 +2297,7 @@ export class OrchestratorAgent extends ActorAgent {
   /** `agent.*` (self-steering) and `release.*` (the governed release lane —
    *  left the native surface; see tools/release-codemode.ts). Both read
    *  their deps lazily so a claimOwner mid-DO-lifetime lands without
-   *  rebuilding execute_tools. */
+   *  rebuilding eval. */
   protected extraCodemodeProviders(): CodemodeProvider[] {
     return [
       createAgentSelfProvider(this),
@@ -3089,7 +3073,7 @@ export class OrchestratorAgent extends ActorAgent {
   // ── DO initialization ──────────────────────────────────────────
 
   // Device connection is user-level: UserDO owns the tunnel socket and the
-  // tokens, and the laptop executor forwards to it. Nothing per-agent verifies,
+  // tokens, and the device executor forwards to it. Nothing per-agent verifies,
   // attaches, issues or lists a device token.
 
   /**
@@ -4017,7 +4001,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /**
    * `agent.proposeScaffold` host method — the agent proposes a new version of
-   * its own agentic loop from inside execute_tools. Routes through the
+   * its own agentic loop from inside eval. Routes through the
    * EXISTING modifyScaffold 4-gate pipeline; an accepted proposal lands as
    * status='pending' and is scored by the sampled shadow eval + promotion
    * gate (core queueTurnShadowTrial → runQueuedShadowTrials) like any other
@@ -4100,7 +4084,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * Change how the `run` builtin handles 'gate' decisions from the
+   * Change how the `shell` builtin handles 'gate' decisions from the
    * approval-gate review. Stored in actor_config; effective on the NEXT
    * turn (the tool cache rebuilds when CraftStore changes — and on cold-
    * start any value here is read).
@@ -4824,6 +4808,10 @@ export class OrchestratorAgent extends ActorAgent {
 
     return {
       name: entry.name,
+      // The actor this name resolves to, which is the id every frame the
+      // hosting seam broadcasts for it is stamped with. The pane reads it to
+      // tell its own stamped frames from a sibling's on the shared socket.
+      actorId: child.handle.actorId,
       displayName: child.stores.config.getDisplayName() ?? entry.name,
       role: child.stores.config.getRoleSelection(),
       mission: entry.birth?.seed.mission ?? '',
@@ -5346,12 +5334,12 @@ export class OrchestratorAgent extends ActorAgent {
     };
   }
 
-  @callable() async dismissSubordinate(name: string): Promise<{
+  @callable() async dismissSubordinate(name: string, keepHistory = true): Promise<{
     ok: true;
     name: string;
     historyKept: boolean;
   }> {
-    return this.getTeamToolDeps().dismiss({ name, requestedBy: 'user' });
+    return this.getTeamToolDeps().dismiss({ name, requestedBy: 'user', keepHistory });
   }
 
   /**
@@ -5537,7 +5525,7 @@ export class OrchestratorAgent extends ActorAgent {
 
     // The fleet names its machine per call (docs/EXECUTION-LAYER-SPEC.md
     // "The user's account is a fleet"): device rides as the tool context
-    // the laptop executor reads (readDeviceSelection), and a call that
+    // the device executor reads (readDeviceSelection), and a call that
     // carries none keeps today's unnamed answer. Tools that read no context
     // never see one.
     try {
@@ -5737,8 +5725,8 @@ export class OrchestratorAgent extends ActorAgent {
     // there is a machine that is actually attached, and each answer below is
     // one a person can act on: a machine that was linked and is now offline
     // needs one command, and an account with none linked needs a different
-    // one. "laptop has no terminal" was true until its agent grew one.
-    if (executorId === 'laptop') {
+    // one. "device has no terminal" was true until its agent grew one.
+    if (executorId === 'device') {
       const device = this.rt.deviceTransport.status();
 
       if (device.connected) return { ok: true };

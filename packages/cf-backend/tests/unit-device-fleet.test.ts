@@ -19,7 +19,7 @@ import {
   type DeviceFrame, type FakeDaemon, type TestUserDO,
 } from './helpers/user-do';
 import type { UserCaller } from '@kinu.run/core';
-import { createHubDeviceTransport } from '@kinu.run/core';
+import { createHubDeviceTransport, REAL_CLOCK } from '@kinu.run/core';
 
 const WORKSPACE = 'workspace-a';
 
@@ -173,7 +173,7 @@ describe('two daemons connected at once', () => {
       caller: async () => fleet.workspace,
       agentName: WORKSPACE,
       cliCwd: () => null,
-      now: () => Date.now(),
+      clock: REAL_CLOCK,
     });
 
     await expect(transport.rpc('exec', ['make'])).rejects.toMatchObject({ code: 'bad_input' });
@@ -267,7 +267,7 @@ describe('what the model is told', () => {
   function context(status: DeviceStatus): DynamicContext {
     return {
       executors: [{
-        name: 'laptop', kind: 'laptop', available: status.connected, configured: status.registered,
+        name: 'device', kind: 'device', available: status.connected, configured: status.registered,
         active: status.connected, status: status.connected ? 'active' : 'disconnected',
       }],
       devices: status.devices,
@@ -283,7 +283,7 @@ describe('what the model is told', () => {
 
     const block = render(await fleet.userDO.deviceRuntimeStatus(fleet.workspace));
 
-    expect(block).toContain("## Your user's machines (the `laptop` runtime)");
+    expect(block).toContain("## Your user's machines (the `device` runtime)");
     expect(block).toContain('Several machines are connected: name the machine');
     expect(block).toContain('- ashish@mac (darwin): connected, files at /pc/ashish@mac, this workspace holds its grant');
     expect(block).toContain('- mrwhite@rig (linux): connected, files at /pc/mrwhite@rig, no grant yet for this workspace');
@@ -323,7 +323,7 @@ describe('what the model is told', () => {
     const after = await snapshot();
     expect(after).not.toBe(first);
     expect(after).toContain('- mrwhite@rig (linux): registered, offline');
-    expect(after).toContain('- ashish@mac (darwin): connected, files at /pc,');
+    expect(after).toContain('- ashish@mac (darwin): connected, files at /pc/ashish@mac,');
     expect(after).toContain('One machine is connected');
     expect(await snapshot()).toBe(after);
     await fleet.end();

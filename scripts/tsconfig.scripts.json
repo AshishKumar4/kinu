@@ -1,6 +1,6 @@
 {
   "//": "Typecheck for the standalone scripts that gate CI. Every .ts here is included by default: a maintained list silently excludes the next script someone forgets. `moduleDetection: force` makes that glob safe because scripts/ is a folder of runnable programs, not a package, and files with no import or export would otherwise share one global scope.",
-  "excluded": "The first five entries are declared compiler debt. scripts/typecheck-coverage.ts resolves this config through TypeScript and asserts that its five SCRIPT_TYPECHECK_DEBT rows are exactly the untypechecked scripts/*.ts files; delete both rows when each error is fixed. The remaining four exclusions are workerd workers with their own checked configs.",
+  "excluded": "The first four entries are declared compiler debt. scripts/typecheck-coverage.ts resolves this config through TypeScript and asserts that its four SCRIPT_TYPECHECK_DEBT rows are exactly the untypechecked scripts/*.ts files; delete both rows when each error is fixed. The remaining six exclusions are workerd workers with their own checked configs.",
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
@@ -22,12 +22,11 @@
     "../packages/agent-core/drift.test.ts",
     "../packages/cf-backend/src/slate-vendor.d.ts"
   ],
-  "//exclude": "The first five are declared compiler debt. The last six are workerd sources, not Bun programs: they need @cloudflare/workers-types rather than [bun, node] and are compiled by the tsconfig.json beside each of them, which `bun run check` runs. `fixtures/payload-transport/isolate-relay.ts` is one of those sources rather than a Worker entry — it is the isolate upload the payload instrument's owning-DO arm imports, and it takes R2 types for the same reason the Worker beside it does. Excluding them here is layering, not an exemption.",
+  "//exclude": "The first four are declared compiler debt. The last six are workerd sources, not Bun programs: they need @cloudflare/workers-types rather than [bun, node] and are compiled by the tsconfig.json beside each of them, which `bun run check` runs. `fixtures/payload-transport/isolate-relay.ts` is one of those sources rather than a Worker entry — it is the isolate upload the payload instrument's owning-DO arm imports, and it takes R2 types for the same reason the Worker beside it does. Excluding them here is layering, not an exemption.",
   "exclude": [
     "eval.ts",
     "eval.test.ts",
     "layergate.ts",
-    "cli-test-runner.ts",
     "schema-drift.ts",
     "fixtures/r2-bench/worker.ts",
     "fixtures/payload-transport/worker.ts",

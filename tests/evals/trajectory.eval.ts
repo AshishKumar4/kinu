@@ -83,7 +83,7 @@ import { afterAll, describe, expect, test } from 'vitest';
 import * as v from 'valibot';
 
 import {
-  type EvalBudget, isBackgroundHandle, type LLMProviderConfig, type RunEvent,
+  type EvalBudget, isBackgroundHandle, type LLMProviderConfig, REAL_CLOCK, type RunEvent,
 } from '../../packages/core/src/index';
 import {
   budgetRow, createObservedModelAccumulator, EVAL_MODELS, FULL_TOOL_SURFACE, ledgerTotalsFromEvents,
@@ -383,7 +383,7 @@ const CASES: readonly TrajectoryCase[] = [
       { path: 'broken.test.mjs', content: BROKEN_TEST },
     ],
     turns: [
-      `Copy broken.mjs and broken.test.mjs into the sandbox, run \`${RECOVERY_TEST_COMMAND}\` there with the run tool's runtime 'sandbox', and reply with only PASS or FAIL.`,
+      `Copy broken.mjs and broken.test.mjs into the sandbox, run \`${RECOVERY_TEST_COMMAND}\` there with the shell tool's runtime 'sandbox', and reply with only PASS or FAIL.`,
       `Fix the bug in broken.mjs so that test passes, copy both files into the sandbox, run \`${RECOVERY_TEST_COMMAND}\` again with runtime 'sandbox', and `
       + 'reply with only PASS or FAIL.',
     ],
@@ -619,12 +619,12 @@ function promptToolCalls(
 }
 
 
-/** What a settled `run` job's stored result carries when it carries an exit
+/** What a settled `shell` job's stored result carries when it carries an exit
  *  verdict at all: the serialized refusal shape a failed command's error was
  *  packed into — never the stdout string a zero exit resolves to. */
 const SettledRunResultSchema = v.looseObject({ execution: v.optional(v.looseObject({ exitCode: v.number() })) });
 
-/** The exit code a `run` call's row proves, or null when the row proves none.
+/** The exit code a `shell` call's row proves, or null when the row proves none.
  *
  *  Foreground: `success: true` IS the zero — the tool throws a classified
  *  failure on any nonzero exit (builtins.ts clamps a refusal into a thrown
@@ -799,7 +799,7 @@ function toolActionOn(
 }
 
 function isRecoveryTestRun(call: Extract<RunEvent, { type: 'tool_call_end' }>): boolean {
-  return call.name === 'run' && v.is(RecoveryTestRunSchema, call.args);
+  return call.name === 'shell' && v.is(RecoveryTestRunSchema, call.args);
 }
 
 /** Missing attribution is a harness evidence gap, not an agent failure or
@@ -960,12 +960,12 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       { type: 'run_start', runId: 'first', eventIndex: 0, timestamp: '2026-09-07T00:00:01Z',
         agentId: 'eval-public', userMessage: entry.turns[0] },
       { type: 'tool_call_end', runId: 'first', eventIndex: 99, timestamp: '2026-09-07T00:00:02Z',
-        name: 'run', toolCallId: 'failed-test', args: { command: 'bun test broken.test.mjs', runtime: 'sandbox' },
+        name: 'shell', toolCallId: 'failed-test', args: { command: 'bun test broken.test.mjs', runtime: 'sandbox' },
         outcome: { success: false, reason: null, execution: { exitCode: 1 } } },
       { type: 'run_start', runId: 'second', eventIndex: 0, timestamp: '2026-09-07T00:00:03Z',
         agentId: 'eval-public', userMessage: entry.turns[1] },
       { type: 'tool_call_end', runId: 'second', eventIndex: 2, timestamp: '2026-09-07T00:00:04Z',
-        name: 'run', toolCallId: 'rerun-test', args: { command: 'bun test broken.test.mjs', runtime: 'sandbox' },
+        name: 'shell', toolCallId: 'rerun-test', args: { command: 'bun test broken.test.mjs', runtime: 'sandbox' },
         result: '1 pass, 0 fail', outcome: { success: true } },
     ];
 
@@ -1025,19 +1025,19 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
    */
   test('a background handle is never a recovery until its job settles', async () => {
     const handle = {
-      background: true, jobId: 'bgjob-live', kind: 'run',
+      background: true, jobId: 'bgjob-live', kind: 'shell',
       message: 'Outran the 30s foreground window; backgrounded — still running, not cancelled.',
     };
 
     const detached: Extract<RunEvent, { type: 'tool_call_end' }> = {
       type: 'tool_call_end', runId: 'second', eventIndex: 2, timestamp: '2026-09-07T00:00:04Z',
-      name: 'run', toolCallId: 'rerun-test',
+      name: 'shell', toolCallId: 'rerun-test',
       args: { command: `cd / && ${RECOVERY_TEST_COMMAND}`, runtime: 'sandbox' },
       result: handle, outcome: { success: true },
     };
 
     const job = (status: string, result?: string): PublicBackgroundJob => ({
-      id: 'bgjob-live', kind: 'run', status, result: result ?? null, error: null,
+      id: 'bgjob-live', kind: 'shell', status, result: result ?? null, error: null,
     });
 
     expect(runExitedZero(detached, [])).toBe(false);
@@ -1075,7 +1075,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     const session: Pick<KinuPublicSession, 'readFile' | 'execute' | 'backgroundJobs'> = {
       readFile: (path) => Bun.file(join(root, path)).text(),
       backgroundJobs: async () => [
-        { id: 'bgjob-live', kind: 'run', status: 'completed', result: '"1 pass, 0 fail"', error: null },
+        { id: 'bgjob-live', kind: 'shell', status: 'completed', result: '"1 pass, 0 fail"', error: null },
       ],
       async execute(_executor, command) {
         const translated = command.replaceAll('/workspace', root);
@@ -1092,14 +1092,14 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       { type: 'run_start', runId: 'first', eventIndex: 0, timestamp: '2026-09-07T00:00:01Z',
         agentId: 'eval-public', userMessage: entry.turns[0] },
       { type: 'tool_call_end', runId: 'first', eventIndex: 99, timestamp: '2026-09-07T00:00:02Z',
-        name: 'run', toolCallId: 'failed-test', args: { command: RECOVERY_TEST_COMMAND, runtime: 'sandbox' },
+        name: 'shell', toolCallId: 'failed-test', args: { command: RECOVERY_TEST_COMMAND, runtime: 'sandbox' },
         outcome: { success: false, reason: null, execution: { exitCode: 1 } } },
       { type: 'run_end', runId: 'first', eventIndex: 100, timestamp: '2026-09-07T00:00:03Z', reason: 'reply' },
       { type: 'run_start', runId: 'second', eventIndex: 0, timestamp: '2026-09-07T00:00:04Z',
         agentId: 'eval-public', userMessage: entry.turns[1] },
       { type: 'tool_call_end', runId: 'second', eventIndex: 2, timestamp: '2026-09-07T00:00:05Z',
-        name: 'run', toolCallId: 'rerun-test', args: { command: `cd / && ${RECOVERY_TEST_COMMAND}`, runtime: 'sandbox' },
-        result: { background: true, jobId: 'bgjob-live', kind: 'run', message: 'Outran the 30s foreground window.' },
+        name: 'shell', toolCallId: 'rerun-test', args: { command: `cd / && ${RECOVERY_TEST_COMMAND}`, runtime: 'sandbox' },
+        result: { background: true, jobId: 'bgjob-live', kind: 'shell', message: 'Outran the 30s foreground window.' },
         outcome: { success: true } },
       { type: 'run_end', runId: 'second', eventIndex: 3, timestamp: '2026-09-07T00:00:06Z', reason: 'reply' },
       // The settle's wake: a new run whose message is the wake text naming the
@@ -1133,7 +1133,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     const stillRunning = await entry.verify({
       ...input,
       session: { ...session, backgroundJobs: async () => [
-        { id: 'bgjob-live', kind: 'run', status: 'running', result: null, error: null },
+        { id: 'bgjob-live', kind: 'shell', status: 'running', result: null, error: null },
       ] },
     });
 
@@ -1266,7 +1266,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     const scored = (id: string): EvalObservation => ({
       taskId: id, repetition: 0, outcome: 'scored',
       scores: [outcomeRow(subgoalOutcome(3, 3, 'every subgoal reached'))],
-      turns: 2, toolCalls: 4, toolNames: ['file', 'run'], tokensIn: 10, tokensOut: 5, ms: 1_000,
+      turns: 2, toolCalls: 4, toolNames: ['file', 'shell'], tokensIn: 10, tokensOut: 5, ms: 1_000,
     });
 
     const partial = assessAdmissibility(DECLARED, [scored(DECLARED[0] ?? '')]);
@@ -1283,7 +1283,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     // task performance however many tool calls it made.
     const covariatesOnly: EvalObservation = {
       taskId: 'public-file-artifact', repetition: 0, outcome: 'scored', scores: [],
-      turns: 2, toolCalls: 4, toolNames: ['file', 'run'], tokensIn: 10, tokensOut: 5, ms: 1_000,
+      turns: 2, toolCalls: 4, toolNames: ['file', 'shell'], tokensIn: 10, tokensOut: 5, ms: 1_000,
     };
 
     const activityOnly = assessAdmissibility(['public-file-artifact'], [covariatesOnly]);
@@ -1316,7 +1316,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
           opened = await plan.open({ subject: entry.id, purpose: entry.purpose, genesis: false });
 
           return opened;
-        }, { transcripts: TRANSCRIPTS, taskId: entry.id, modelCalls: 'expected' }, async (session, collect) => {
+        }, { transcripts: TRANSCRIPTS, taskId: entry.id, modelCalls: 'expected', clock: REAL_CLOCK }, async (session, collect) => {
         console.warn(`    [trajectory] ${entry.id} on ${session.describe}`);
 
         // Seeded through the PUBLIC files route — the plane the web file manager
@@ -1355,7 +1355,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
 
         for (const turn of rest) recordLanding(turn, await session.prompt(turn));
 
-        // A `run` that outran the foreground window detached into a job whose
+        // A `shell` that outran the foreground window detached into a job whose
         // settlement arrives as a WAKE turn — a new run this episode's prompts
         // never asked for. Wait for those runs before collecting, or the
         // recovery the product already produced is scored on a ledger that

@@ -26,12 +26,12 @@ describe('measureContext', () => {
   test('measures each tool definition including its schema', () => {
     const tools = {
       file: { description: 'edit files', inputSchema: { type: 'object' } },
-      run: { description: 'shell', inputSchema: { type: 'object' } },
+      shell: { description: 'shell', inputSchema: { type: 'object' } },
     };
 
     const { segments } = measureContext({ tools, messages: [] });
     const toolRows = segments.filter((s) => s.plane === 'tools');
-    expect(toolRows.map((s) => s.label)).toEqual(['file', 'run']);
+    expect(toolRows.map((s) => s.label)).toEqual(['file', 'shell']);
     expect(toolRows[0]?.chars).toBe('file'.length + 'edit files'.length + '{"type":"object"}'.length);
   });
 
@@ -61,7 +61,7 @@ describe('measureContext', () => {
   test('structured content is measured as the JSON it is serialised to', () => {
     const message: ModelMessage = {
       role: 'tool',
-      content: [{ type: 'tool-result', toolCallId: '1', toolName: 'run', output: { type: 'text', value: 'ok' } }],
+      content: [{ type: 'tool-result', toolCallId: '1', toolName: 'shell', output: { type: 'text', value: 'ok' } }],
     };
 
     const { segments } = measureContext({ messages: [message] });

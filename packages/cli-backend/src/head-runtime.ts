@@ -1,8 +1,8 @@
 // createCLIHeadRuntime — the local HeadRuntime backing the `agents` tool's fork
 // action. The cf backend runs heads as SubordinateAgent facets in head mode; locally each
 // head runs IN-PROCESS as a LOGICAL ACTOR of the workspace it forks
-// (buildCLIHeadRuntime): the parent's real host executor (`run laptop` /
-// codemode `laptop.*`), the parent's canonical workspace through `parent.*`,
+// (buildCLIHeadRuntime): the parent's real host executor (`run device` /
+// codemode `device.*`), the parent's canonical workspace through `parent.*`,
 // and its own home in the one file plane so siblings can't corrupt each other.
 // Heads are LLM-bound, so the HeadController's Promise.all gives real
 // concurrency without subprocesses; the merge LLM runs in this process.
@@ -14,7 +14,7 @@
 // instead of an unclaimed loop over private bytes nobody else could read.
 //
 // The tool surface is the SAME backend-agnostic buildHeadToolSet the cf Facet
-// uses: `run` + `execute_tools` + `web` (the parent's vocabulary, so a fork's
+// uses: `shell` + `eval` + `web` (the parent's vocabulary, so a fork's
 // allowedTools maps onto real tools) + record_evidence/record_decision +
 // split_subheads (recursive nested HeadController, depth-budgeted).
 
@@ -27,14 +27,14 @@ import {
   type PublishHeadStream,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
   type DynamicContext, type HostedActor, type ProfileAuthorityInputs, type WorkMode, type WriteObserver,
-  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, REAL_HEAD_CLOCK, type HeadJournal,
+  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, REAL_CLOCK, type HeadJournal,
   createDbCodemodeProvider, createStateCodemodeProvider,
   headMergeLLM,
   localMissionScope,
 } from '@kinu.run/core';
 import { diagnostics, toKinuError, renderThrownChain } from '@kinu.run/core/obs';
 import type { CLIRuntime } from './runtime';
-import { createNodeExecuteToolFactory } from './execute-tools-factory';
+import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 
 /**
  * One head's seat: the runtime objects its CLAIMED loop runs on.
@@ -82,7 +82,7 @@ export interface CLIHeadRuntimeDeps {
   /** The shared web research provider — same seam the main loop uses. Backs the
    *  head's `web` tool. */
   webSearch: WebSearchProvider;
-  /** Extra codemode namespaces spliced into the head's execute_tools sandbox —
+  /** Extra codemode namespaces spliced into the head's eval sandbox —
    *  `web.*`, WITHOUT `agents.*`/`agent.*`: a head forks its
    *  parent's resources, never its authority to delegate. */
   codemodeExtras: () => CodemodeProvider[];
@@ -208,8 +208,8 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
   try {
     const rt = seat.actor.runtime;
 
-    // execute_tools over the head's OWN router providers (its own home in the
-    // one file plane + the parent's real `laptop.*`) plus the web/llm codemode
+    // eval over the head's OWN router providers (its own home in the
+    // one file plane + the parent's real `device.*`) plus the web/llm codemode
     // namespaces, `state.*` over the head's own program state and `db.*` over
     // the head's own app data — the shared description promises both to every
     // program, and the hosted head binds the same providers over its own
@@ -219,7 +219,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
     // function of the finished head surface, the shape buildHeadToolSet
     // resolves after its own filtering, so `tools.<name>` declares and binds
     // exactly the tools this head holds.
-    const sandbox = createNodeExecuteToolFactory({
+    const sandbox = createNodeCodemodeToolFactory({
       extraProviders: [
         ...deps.codemodeExtras(),
         createStateCodemodeProvider(seat.actor.handle.programState),
@@ -227,7 +227,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
       ],
     });
 
-    const executeTool = (finished: ToolSet) => sandbox({
+    const codemodeTool = (finished: ToolSet) => sandbox({
       native: finished,
       // A head reads the workspace's crafted tools through its own router; it
       // crafts none of its own for the length of one fork.
@@ -239,7 +239,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
       input,
       capture,
       rt,
-      executeTool,
+      codemodeTool,
       webSearch: deps.webSearch,
       split: (request) => runLocalSplit(request, input, deps),
     });
@@ -254,6 +254,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
       // own live context — so a fork's turn is durable, pinned and cancellable
       // exactly like the parent's.
       actor: seat.actor,
+      clock: REAL_CLOCK,
       runId: seat.runId,
       profile: seat.profile,
       dynamic: seat.dynamic,
@@ -282,7 +283,7 @@ async function runLocalSplit(
   input: HeadInput,
   deps: CLIHeadRuntimeDeps,
 ): Promise<HeadSplitResult> {
-  const controller = new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_HEAD_CLOCK);
+  const controller = new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_CLOCK);
 
   const controllerInput: Parameters<HeadController['run']>[0] = {
     parentHeadId: input.id,

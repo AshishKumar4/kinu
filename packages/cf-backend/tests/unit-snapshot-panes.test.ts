@@ -53,7 +53,7 @@ const STATUS: AgentStatus = {
 };
 
 const TOOL: ToolInfo = {
-  name: 'run',
+  name: 'shell',
   description: 'Run a command.',
   summary: 'Run a command.',
   learned: false,

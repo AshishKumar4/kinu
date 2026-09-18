@@ -26,7 +26,7 @@ describe('forkCandidates', () => {
       { role: 'system', content: 'welcome' },
       { role: 'user', content: '   ' },
       { role: 'user', content: 'real input' },
-      { role: 'tool_call', content: 'run' },
+      { role: 'tool_call', content: 'shell' },
     ], 1);
 
     expect(candidates).toEqual([{ text: 'real input', occurrenceFromEnd: 1 }]);

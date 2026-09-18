@@ -33,10 +33,10 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 
 import {
-  BEHAVIOUR_SCORERS, EPISODE_TRANSCRIPT_FILES, ledgerTotalsFromEvents, projectRunEventProvenance,
+  BEHAVIOUR_SCORERS, EPISODE_TRANSCRIPT_FILES, handClock, ledgerTotalsFromEvents, projectRunEventProvenance,
   retainEpisodeTranscript, scratchDir, TASK_OUTCOME, withEpisodeEvidence, liveModelSpend, resetLiveModelSpend,
 } from '@kinu.run/test-utils';
-import { renderSoulMarkdown, RunEventSchema, type RunEvent, type WorkspaceSpend, type JsonValue } from '../../packages/core/src/index';
+import { REAL_CLOCK, renderSoulMarkdown, RunEventSchema, type RunEvent, type WorkspaceSpend, type JsonValue } from '../../packages/core/src/index';
 import {
   PUBLIC_IDENTITY_ENV, decodeFrame, encodeChatRequest, encodeRpcRequest,
   recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity, scorePublicLedger,
@@ -129,9 +129,9 @@ test('executor RPC decoding preserves refusal provenance and successful refusal-
 
   try {
     await session.connect();
-    expect(await session.execute('laptop', 'work')).toEqual(response);
+    expect(await session.execute('device', 'work')).toEqual(response);
     response = { stdout: '{"reason":"denied","error":"historical incident"}', stderr: '', exitCode: 0 };
-    expect(await session.execute('laptop', 'read')).toEqual(response);
+    expect(await session.execute('device', 'read')).toEqual(response);
   } finally { await session.teardown(); await server.stop(true); }
 });
 
@@ -372,7 +372,7 @@ describe('route-shaped run events score through the production instruments', () 
     expect(totals.toolCalls).toBe(4);
     expect(totals.steps).toBe(2);
     expect(totals.tokensIn).toBe(2_700);
-    expect(totals.toolNames).toEqual(['file', 'run', 'file', 'run']);
+    expect(totals.toolNames).toEqual(['file', 'shell', 'file', 'shell']);
   });
 
   test('every instrument scores, and the failing tool call is counted as one', () => {
@@ -431,9 +431,9 @@ describe('route-shaped run events score through the production instruments', () 
     expect(provenance.totalEvents).toBe(LEDGER_EVENTS.length);
     expect(provenance.events.map((event) => event.eventIndex))
       .toEqual(LEDGER_EVENTS.map((event) => event.eventIndex));
-    // The failing `run` keeps its CLASS and its name; the clean one keeps no class.
+    // The failing `shell` keeps its CLASS and its name; the clean one keeps no class.
     const calls = provenance.events.filter((event) => event.type === 'tool_call_end');
-    expect(calls.map((event) => event.name)).toEqual(['file', 'run', 'file', 'run']);
+    expect(calls.map((event) => event.name)).toEqual(['file', 'shell', 'file', 'shell']);
     expect(calls.map((event) => event.failureClass ?? null)).toEqual([null, 'exit_1', null, null]);
     expect(calls.map((event) => event.durationMs)).toEqual([12, 900, 20, 850]);
     expect(calls[1]?.outcome).toEqual({ success: false, reason: null, execution: { exitCode: 1 } });
@@ -473,7 +473,7 @@ describe('route-shaped run events score through the production instruments', () 
     expect(lines).toHaveLength(LEDGER_EVENTS.length);
     const events = lines.map((line) => v.parse(RunEventSchema, JSON.parse(line)));
     expect(ledgerTotalsFromEvents(events)).toEqual({
-      turns: 2, toolCalls: 4, toolNames: ['file', 'run', 'file', 'run'],
+      turns: 2, toolCalls: 4, toolNames: ['file', 'shell', 'file', 'shell'],
       tokensIn: 2700, tokensOut: 520, reasoningOut: 0, steps: 2, failures: ['run: exit_1'],
     });
     expect(JSON.parse(readFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.history), 'utf8'))).toEqual(history);
@@ -505,7 +505,7 @@ describe('route-shaped run events score through the production instruments', () 
     };
 
     try {
-      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'failure', modelCalls: 'expected' }, async () => {
+      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'failure', modelCalls: 'expected', clock: REAL_CLOCK }, async () => {
         throw new Error('failed after model work');
       })).rejects.toThrow('failed after model work');
       expect(liveModelSpend().calls).toBe(8);
@@ -515,7 +515,7 @@ describe('route-shaped run events score through the production instruments', () 
       expect(readFileSync(join(root, 'failure/failure.json'), 'utf8')).toContain('failed after model work');
 
       resetLiveModelSpend();
-      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'assertion', modelCalls: 'expected' }, async (_reader, collect) => {
+      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'assertion', modelCalls: 'expected', clock: REAL_CLOCK }, async (_reader, collect) => {
         await collect();
         throw new Error('subgoal missed');
       })).rejects.toThrow('subgoal missed');
@@ -523,7 +523,7 @@ describe('route-shaped run events score through the production instruments', () 
 
       resetLiveModelSpend();
       await expect(withEpisodeEvidence(async () => ({ ...reader, async spend() { throw new Error('spend endpoint unavailable'); } }),
-        { transcripts: root, taskId: 'outage', modelCalls: 'expected' }, async () => 'finished')).rejects.toThrow('spend endpoint unavailable');
+        { transcripts: root, taskId: 'outage', modelCalls: 'expected', clock: REAL_CLOCK }, async () => 'finished')).rejects.toThrow('spend endpoint unavailable');
       expect(liveModelSpend().episodesUnmeasured).toBe(1);
       expect(readFileSync(join(root, 'outage/history.json'), 'utf8')).toContain('partial answer');
       expect(JSON.parse(readFileSync(join(root, 'outage/collection.json'), 'utf8'))).toContainEqual({
@@ -553,15 +553,22 @@ describe('route-shaped run events score through the production instruments', () 
     try {
       // The operation is a wait the product never ends; the budget is the
       // subject's own configuration, and the operation stops on its signal.
+      // The budget runs on a clock the test hands it, so "the budget was
+      // spent" is the advance below, never a sleep racing a real timer.
       let told = false;
+      const clock = handClock();
 
-      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'budget', modelCalls: 'expected', budgetMs: 20 },
+      const episode = withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'budget', modelCalls: 'expected', clock, budgetMs: 20 },
         async (_reader, _collect, budget) => {
           await new Promise<void>((resolve) => { budget.addEventListener('abort', () => resolve(), { once: true }); });
           told = true;
 
           return 'never';
-        })).rejects.toThrow('the episode budget of 20 ms was spent');
+        });
+
+      await clock.whenArmed(1);
+      clock.advance(20);
+      await expect(episode).rejects.toThrow('the episode budget of 20 ms was spent');
       expect(told).toBe(true);
       expect(JSON.parse(readFileSync(join(root, 'budget/failure.json'), 'utf8'))).toMatchObject({ phase: 'budget' });
       expect(readFileSync(join(root, 'budget/history.json'), 'utf8')).toContain('still waiting');
@@ -579,7 +586,7 @@ describe('route-shaped run events score through the production instruments', () 
 
     try {
       await expect(withEpisodeEvidence(async () => { throw failure; },
-        { transcripts: root, taskId: 'opening', modelCalls: 'expected' },
+        { transcripts: root, taskId: 'opening', modelCalls: 'expected', clock: REAL_CLOCK },
         async () => { throw new Error('unreachable operation'); })).rejects.toBe(failure);
       expect(JSON.parse(readFileSync(join(root, 'opening/failure.json'), 'utf8'))).toMatchObject({ phase: 'open', message: failure.message });
       expect(JSON.parse(readFileSync(join(root, 'opening/collection.json'), 'utf8'))).toEqual([

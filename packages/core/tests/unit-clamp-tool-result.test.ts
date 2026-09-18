@@ -20,7 +20,7 @@ import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../src/utils/json';
 
-interface RunInput {
+interface ShellToolInput {
   command: string;
   runtime?: string;
 }
@@ -136,20 +136,20 @@ describe('run tool result budget (behavior through the public tool surface)', ()
 
     const rtWithShell: AgentRuntime = { ...rt, shell: { exec: fakeShellExec } };
     const tools = buildBuiltinTools({ rt: rtWithShell });
-    const run = toolExecute<RunInput, string>(tools.run);
+    const invoke = toolExecute<ShellToolInput, string>(tools.shell);
 
-    const clamped = await run({ command: 'generate-huge-log' });
+    const clamped = await invoke({ command: 'generate-huge-log' });
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS + 300);
     expect(clamped).toContain('FINAL-ERROR-LINE'); // the tail survives
     expect(clamped).toContain('chars omitted');
 
     // Restorable: the marker path round-trips via the file surface
-    // (workspace.readFile) and is filterable through the run tool's shell —
+    // (workspace.readFile) and is filterable through the shell tool's shell —
     // exactly what the marker tells the model to do.
     const path = markerPath(clamped);
     const restored = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
     expect(restored).toBe(original);
-    const grepped = await run({ command: `grep UNIQUE-MIDDLE-MARKER ${path}` });
+    const grepped = await invoke({ command: `grep UNIQUE-MIDDLE-MARKER ${path}` });
     expect(grepped).toContain('UNIQUE-MIDDLE-MARKER');
   });
 
@@ -162,8 +162,8 @@ describe('run tool result budget (behavior through the public tool surface)', ()
 
     const rtWithShell: AgentRuntime = { ...rt, shell };
     const tools = buildBuiltinTools({ rt: rtWithShell });
-    const run = toolExecute<RunInput, string>(tools.run);
-    const pending = run({ command: 'boom' });
+    const invoke = toolExecute<ShellToolInput, string>(tools.shell);
+    const pending = invoke({ command: 'boom' });
     await expect(pending).rejects.toMatchObject({ code: 'io', execution: { exitCode: 2 } });
     await expect(pending).rejects.toThrow('Error (exit 2)\n--- stderr ---');
     await expect(pending).rejects.toThrow('chars omitted');
@@ -175,7 +175,7 @@ describe('run tool result budget (behavior through the public tool surface)', ()
 // whole policy, because eight in-budget results still bury the root. Once a
 // turn has admitted its budget the remaining results clamp to the floor —
 // full text still spilled, marker recipe unchanged.
-describe('turn-cumulative egress budget (through the run tool)', () => {
+describe('turn-cumulative egress budget (through the shell tool)', () => {
   function runToolWithBudget(budget: TurnContextBudget, output: () => string) {
     const { rt } = createTestRuntime();
     const shell = { exec: async () => ({ stdout: output(), stderr: '', exitCode: 0 }) };
@@ -186,32 +186,32 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
       contextBudget: budget,
     });
 
-    return { run: toolExecute<RunInput, string>(tools.run), rt };
+    return { shell: toolExecute<ShellToolInput, string>(tools.shell), rt };
   }
 
   test('the first results keep full fidelity; once the turn is heavy the rest clamp to the floor', async () => {
     const budget = new TurnContextBudget();
-    const { run } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
+    const { shell } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
 
     const sizes: number[] = [];
 
-    for (let i = 0; i < 5; i++) sizes.push((await run({ command: `big-${i}` })).length);
+    for (let i = 0; i < 5; i++) sizes.push((await shell({ command: `big-${i}` })).length);
 
     // 40k per result until 120k cumulative is admitted → three full, then floor.
     expect(sizes.slice(0, 3).every((n) => n > 39_000)).toBe(true);
     expect(sizes.slice(3).every((n) => n < 9_000)).toBe(true);
     const snapshot = budget.snapshot();
-    expect(snapshot.trips.run).toBe(5);
+    expect(snapshot.trips.shell).toBe(5);
     expect(snapshot.referenced).toBe(5);
     expect(snapshot.tightened).toBe(2);
   });
 
   test('the tightened result still spills the whole output and keeps the same recipe', async () => {
     const budget = new TurnContextBudget();
-    const { run, rt } = runToolWithBudget(budget, () => `UNIQUE-${'M'.repeat(200_000)}-END`);
+    const { shell, rt } = runToolWithBudget(budget, () => `UNIQUE-${'M'.repeat(200_000)}-END`);
 
-    for (let i = 0; i < 4; i++) await run({ command: `big-${i}` });
-    const tightened = await run({ command: 'big-last' });
+    for (let i = 0; i < 4; i++) await shell({ command: `big-${i}` });
+    const tightened = await shell({ command: 'big-last' });
 
     expect(tightened.length).toBeLessThan(9_000);
     expect(tightened).toContain('agents hire so that agent reads it');
@@ -228,14 +228,14 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
     // it there, and costs nothing on the turns (most turns) that never reach the
     // floor.
     const budget = new TurnContextBudget();
-    const { run } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
+    const { shell } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
 
-    const first = await run({ command: 'big-0' });
+    const first = await shell({ command: 'big-0' });
     expect(first).toContain('output truncated');
     expect(first).not.toContain('the cap tightened');
 
-    for (let i = 1; i < 4; i++) await run({ command: `big-${i}` });
-    const tightened = await run({ command: 'big-last' });
+    for (let i = 1; i < 4; i++) await shell({ command: `big-${i}` });
+    const tightened = await shell({ command: 'big-last' });
     expect(tightened).toContain('This turn has already admitted enough tool output that the cap tightened');
     // And it names the lever, at the moment the signal is real.
     expect(tightened).toContain('hand the bulk to a search or a subordinate');
@@ -243,17 +243,17 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
 
   test('a fresh turn starts at full fidelity again', async () => {
     const budget = new TurnContextBudget();
-    const { run } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
+    const { shell } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
 
-    for (let i = 0; i < 4; i++) await run({ command: `big-${i}` });
+    for (let i = 0; i < 4; i++) await shell({ command: `big-${i}` });
     budget.reset();
-    expect((await run({ command: 'next-turn' })).length).toBeGreaterThan(39_000);
+    expect((await shell({ command: 'next-turn' })).length).toBeGreaterThan(39_000);
   });
 
   test('small results accumulate toward the budget without ever tripping the counters', async () => {
     const budget = new TurnContextBudget();
-    const { run } = runToolWithBudget(budget, () => 'ok'.repeat(10));
-    await run({ command: 'small' });
+    const { shell } = runToolWithBudget(budget, () => 'ok'.repeat(10));
+    await shell({ command: 'small' });
     expect(budget.snapshot()).toMatchObject({ admittedChars: 20, omittedChars: 0, trips: {} });
   });
 
@@ -261,10 +261,10 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
     const { rt } = createTestRuntime();
     const shell = { exec: async () => ({ stdout: 'L'.repeat(200_000), stderr: '', exitCode: 0 }) };
     const rtWithShell: AgentRuntime = { ...rt, shell };
-    const run = toolExecute<RunInput, string>(buildBuiltinTools({ rt: rtWithShell }).run);
+    const invoke = toolExecute<ShellToolInput, string>(buildBuiltinTools({ rt: rtWithShell }).shell);
 
-    for (let i = 0; i < 3; i++) await run({ command: `big-${i}` });
-    expect((await run({ command: 'big-4' })).length).toBeLessThan(9_000);
+    for (let i = 0; i < 3; i++) await invoke({ command: `big-` });
+    expect((await invoke({ command: 'big-4' })).length).toBeLessThan(9_000);
   });
 });
 

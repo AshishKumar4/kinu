@@ -32,6 +32,7 @@
  * The swarm action's call contract is specified by docs/EXPLORATION.md — "Presets",
  * "Validity over the resolved configuration" and "Accepted and ignored".
  */
+import { REAL_CLOCK } from '../types/clock';
 import { tool, jsonSchema } from 'ai';
 import { currentWorkMode, inWorkMode, permitInPlan, workModeRefusal } from '../execution/work-mode';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
@@ -1679,6 +1680,9 @@ async function runSwarmAction(
     // caller set is enforced while the money is still there to save.
     mission: mission?.scope,
     signal,
+    // Real time on every node's ledger (D19): the composition root hands the
+    // clock, so a test can hand one it advances instead.
+    clock: REAL_CLOCK,
     publishHeadStream,
     announceHeadActivity,
     provisionHome,

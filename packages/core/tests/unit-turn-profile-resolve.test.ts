@@ -70,7 +70,7 @@ function resolve(overrides: Partial<ResolveTurnProfileInput> = {}) {
     provider: provider(),
     roleId: 'task',
     workMode: 'build',
-    availableTools: ['search', 'read', 'run'],
+    availableTools: ['search', 'read', 'shell'],
     activeSkills: [],
     ...overrides,
   };
@@ -325,8 +325,8 @@ describe('action narrowing', () => {
   });
 
   test('no allowedTools field means the full merged surface, de-duplicated', () => {
-    expect(resolve({ availableTools: ['run', 'search', 'search'] }).allowedTools)
-      .toEqual(['run', 'search']);
+    expect(resolve({ availableTools: ['shell', 'search', 'search'] }).allowedTools)
+      .toEqual(['shell', 'search']);
   });
   test('a role can never widen: names absent from the surface never appear', () => {
     const catalogFixture = catalog({ roles: { 'ghost-hunter': { ...SCOUT, allowedTools: ['seance', 'search'] } } });
@@ -375,7 +375,7 @@ describe('output discipline', () => {
     expect(Object.isFrozen(profile.allowedTools)).toBe(true);
     expect(Object.isFrozen(profile.authority)).toBe(true);
     expect(() => Object.defineProperty(profile.allowedTools, profile.allowedTools.length, {
-      value: 'run',
+      value: 'shell',
     })).toThrow();
   });
 

@@ -1,6 +1,6 @@
-// Confined surfaces finish `execute_tools` over the finished set, and only it.
+// Confined surfaces finish `eval` over the finished set, and only it.
 //
-// A head's function-form `executeTool` runs after the `allowedTools` filter, so
+// A head's function-form `codemodeTool` runs after the `allowedTools` filter, so
 // `tools.*` declares exactly the tools the head holds. A node's proposal tool
 // merges after the finish, so the sandbox never declares it while the node
 // still proposes through it. These arms pin both orderings through the public
@@ -53,13 +53,13 @@ function sandboxEntry(marker: string) {
   });
 }
 
-describe('head function-form execute_tools resolves over the allowed surface', () => {
+describe('head function-form eval resolves over the allowed surface', () => {
   test('the function builds over the filtered tools, and its entry runs', async () => {
     const { rt } = createTestRuntime();
-    const allowed = ['execute_tools', 'run', 'file', 'record_evidence'];
+    const allowed = ['eval', 'shell', 'file', 'record_evidence'];
     let seen: readonly string[] | null = null;
 
-    const executeTool = (finished: ToolSet) => {
+    const codemodeTool = (finished: ToolSet) => {
       seen = Object.keys(finished);
 
       return sandboxEntry('fn-ran');
@@ -69,71 +69,71 @@ describe('head function-form execute_tools resolves over the allowed surface', (
       input: headInput({ allowedTools: allowed }),
       capture: new HeadCapture(),
       rt,
-      executeTool,
+      codemodeTool,
       webSearch: stubWeb,
       split: neverSplit,
     });
 
-    const runSandbox = toolExecute<{ code: string }, string>(tools.execute_tools);
+    const runSandbox = toolExecute<{ code: string }, string>(tools.eval);
     await expect(runSandbox({ code: 'const x = 1' })).resolves.toBe('fn-ran:const x = 1');
     const names: readonly string[] = seen ?? [];
     expect(names.length).toBeGreaterThan(0);
 
     for (const name of names) expect(allowed).toContain(name);
-    expect(names).toContain('run');
+    expect(names).toContain('shell');
     expect(names).not.toContain('web');
     expect(names).not.toContain('record_decision');
   });
 
-  test('the function never runs when allowedTools drops execute_tools', () => {
+  test('the function never runs when allowedTools drops eval', () => {
     const { rt } = createTestRuntime();
     let calls = 0;
 
-    const executeTool = (_finished: ToolSet) => {
+    const codemodeTool = (_finished: ToolSet) => {
       calls += 1;
 
       return sandboxEntry('fn-ran');
     };
 
     const tools = buildHeadToolSet({
-      input: headInput({ allowedTools: ['run'] }),
+      input: headInput({ allowedTools: ['shell'] }),
       capture: new HeadCapture(),
       rt,
-      executeTool,
+      codemodeTool,
       webSearch: stubWeb,
       split: neverSplit,
     });
 
-    expect(tools.execute_tools).toBeUndefined();
+    expect(tools.eval).toBeUndefined();
     expect(calls).toBe(0);
-    expect(Object.keys(tools)).toEqual(['run']);
+    expect(Object.keys(tools)).toEqual(['shell']);
   });
 
-  test('a finished executeTool entry installs directly and runs', async () => {
+  test('a finished codemodeTool entry installs directly and runs', async () => {
     const { rt } = createTestRuntime();
 
     const tools = buildHeadToolSet({
       input: headInput(),
       capture: new HeadCapture(),
       rt,
-      executeTool: sandboxEntry('direct-ran'),
+      codemodeTool: sandboxEntry('direct-ran'),
       webSearch: stubWeb,
       split: neverSplit,
     });
 
-    const runSandbox = toolExecute<{ code: string }, string>(tools.execute_tools);
+    const runSandbox = toolExecute<{ code: string }, string>(tools.eval);
     await expect(runSandbox({ code: 'const x = 1' })).resolves.toBe('direct-ran:const x = 1');
   });
 });
 
-describe('node proposal merges after the execute_tools finish', () => {
+describe('node proposal merges after the eval finish', () => {
   test('the function never sees propose_branch, and propose still grants', async () => {
     const { rt, db } = createTestRuntime();
     initHeadsTables(rt.storage.execRaw);
     const journal = new HeadJournal(rt.storage.sql, rt.actor);
     let seen: readonly string[] | null = null;
 
-    const executeTool = (finished: ToolSet) => {
+    const codemodeTool = (finished: ToolSet) => {
       seen = Object.keys(finished);
 
       return sandboxEntry('fn-ran');
@@ -214,7 +214,7 @@ describe('node proposal merges after the execute_tools finish', () => {
       journal,
       logger: createRecordingLogger(),
       maxWallClockMs: 60_000,
-      executeTool,
+      codemodeTool,
     };
 
     const run = await runNodeAgent(input, deps);
@@ -222,7 +222,7 @@ describe('node proposal merges after the execute_tools finish', () => {
     // The sandbox declarations predate the proposal tool.
     const names: readonly string[] = seen ?? [];
     expect(names.length).toBeGreaterThan(0);
-    expect(names).toContain('execute_tools');
+    expect(names).toContain('eval');
     // And the proposal still landed: the grant the tool returned is the run's.
     expect(run.granted?.kind).toBe('granted');
 

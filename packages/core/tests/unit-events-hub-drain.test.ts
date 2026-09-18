@@ -47,6 +47,13 @@ function peer(id: string, replyExpected = false): KinuEvent {
       };
 }
 
+function assignment(id: string): KinuEvent {
+  return {
+    ...EVENT_BASE, id, ingress: 'subordinate', variant: 'subordinate_task', payload_visibility: 'full',
+    payload: { from_workspace: 'atlas', kind: 'task', body: 'Survey the auth module.', kinu_mode: 'build' },
+  };
+}
+
 describe('buildDrainBatch', () => {
   test('returns null when nothing is pending', () => {
     expect(buildDrainBatch([])).toBeNull();
@@ -94,6 +101,22 @@ describe('buildDrainBatch', () => {
     const batch = buildDrainBatch(events)!;
     expect(batch.ids).toEqual(['ext']);
     expect(batch.text).toContain('1 event arrived');
+  });
+
+  /**
+   * B10. An assignment is the subordinate's whole turn input and the delegation
+   * runner owns it, so a drain that took it handed the child a paraphrase of
+   * its own brief — and on a backend whose hosted turn admission re-publishes a
+   * queued turn as a new assignment, the digest became the next brief. Measured
+   * 2026-09-17 in the workerd pool: 242 rows from one hire, bodies nesting
+   * 253 → 850 characters.
+   */
+  test('an assignment never wakes a drain, alone or beside external work', () => {
+    expect(buildDrainBatch([assignment('as1')])).toBeNull();
+
+    const batch = buildDrainBatch([assignment('as1'), webhook('wh1')])!;
+    expect(batch.ids).toEqual(['wh1']);
+    expect(batch.text).not.toContain('[subordinate_task]');
   });
 });
 

@@ -698,7 +698,7 @@ export function createTeamToolDeps(deps: {
    * The temporary-agent port, built ONCE per actor by its composition root.
    *
    * Not a store this function turns into a port, and the reason is the waiter:
-   * the port holds the live `run` promises, and these deps are rebuilt per call
+   * the port holds the live `shell` promises, and these deps are rebuilt per call
    * (owner state resolves late), so building the port here would hand the report
    * ingress a second one whose waiter map is empty — a run that could never be
    * answered. Lifetime belongs to whoever outlives a turn, which is the actor.

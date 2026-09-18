@@ -11,7 +11,7 @@ test('a bound role governs provider tools, actual execution and the dynamic read
   let executions = 0;
 
   const tools = {
-    execute_tools: tool({ description: 'A gated effect', inputSchema: jsonSchema({ type: 'object' }), execute: async () => {
+    eval: tool({ description: 'A gated effect', inputSchema: jsonSchema({ type: 'object' }), execute: async () => {
       executions++;
 
       return 'effect executed';
@@ -21,7 +21,7 @@ test('a bound role governs provider tools, actual execution and the dynamic read
 
   try {
     for (const permitted of [true, false]) {
-      const allowedTools = permitted ? ['execute_tools', 'file'] : ['file'];
+      const allowedTools = permitted ? ['eval', 'file'] : ['file'];
 
       const catalog = { roles: { reader: { description: 'Read what is allowed', instructions: 'Use current permissions.',
         tier: 'default', preset: 'ideate', allowedTools } }, tiers: { default: { model: 'test-model' } } } satisfies ProfileCatalog;
@@ -40,7 +40,7 @@ test('a bound role governs provider tools, actual execution and the dynamic read
         const invoke = calls++ === 0;
 
         return { content: invoke
-          ? [{ type: 'tool-call', toolName: 'execute_tools', toolCallId: `effect-${permitted}`, input: '{}' }]
+          ? [{ type: 'tool-call', toolName: 'eval', toolCallId: `effect-${permitted}`, input: '{}' }]
           : [{ type: 'text', text: 'done' }],
         finishReason: { unified: invoke ? 'tool-calls' : 'stop', raw: undefined },
         usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },

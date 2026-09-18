@@ -135,7 +135,7 @@ describe('a partial first-run tier is not evidence', () => {
     const scored = (id: string): EvalObservation => ({
       taskId: id, repetition: 0, outcome: 'scored',
       scores: [outcomeRow(subgoalOutcome(3, 3, 'every subgoal reached'))],
-      turns: 1, toolCalls: 2, toolNames: ['laptop.exec'], tokensIn: 10, tokensOut: 5, ms: 1_000,
+      turns: 1, toolCalls: 2, toolNames: ['device.exec'], tokensIn: 10, tokensOut: 5, ms: 1_000,
     });
 
     const declared = [...FIRST_RUN_CASES];

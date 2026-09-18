@@ -1,5 +1,5 @@
 /**
- * The hosted Plan/execute_tools probe and the sealed-actor RPC probe, after the
+ * The hosted Plan/eval probe and the sealed-actor RPC probe, after the
  * actor cutover.
  *
  * WHAT CHANGED, so a reader of the two tests does not go looking for the old
@@ -22,7 +22,7 @@
  *
  * `code` is unchanged in shape: hosted Plan analysis reads files and keeps
  * research state, with no writes and no raw network. The one post-cutover
- * addition is `rt.actor` — `createExecuteToolsFactory` now builds the `state`
+ * addition is `rt.actor` — `createCodemodeToolFactory` now builds the `state`
  * provider over the actor's program state, so the probe binds a fixture handle
  * over its own SQL. Only the final read model is fixture data, so no model
  * call or external service is needed.
@@ -33,7 +33,7 @@ import type { JsonValue, CraftedTool } from '@kinu.run/core';
 import { craftedToolDeclarations, DynamicContextLedger } from '@kinu.run/core';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { createExecuteToolsFactory } from '../../src/execute-tools';
+import { createCodemodeToolFactory } from '../../src/codemode-tool';
 import { bindAgentSql } from '../../src/runtime';
 import { bindActorHandle, createDefaultWebSearchProvider, initCodemodeStateTable, toolsInWorkMode, inWorkMode, narrowToolSurface, slateToolReach, type WorkMode } from '@kinu.run/core';
 import { CodemodeEgress as ProductionEgress, codemodeEgress } from '../../src/codemode-egress';
@@ -77,7 +77,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       params: null, scope: 'local', createdAt: 0, updatedAt: 0,
     };
 
-    const factory = createExecuteToolsFactory({
+    const factory = createCodemodeToolFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), sql, workspace: 'binding-probe',
       webSearch: createDefaultWebSearchProvider({ fetch }), reach: slateToolReach(narrowToolSurface(undefined)),
       rt: {
@@ -106,7 +106,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
 
     const call = (mode: WorkMode) => host.bindingCall({ ...ROOT_SLATE_CALLER, workMode: mode }, 'crafted', 'CALCULATE', { member: 'call', args: [{ n: 21 }], invocation: null });
     const tool = factory.toolFor({});
-    const declarations = () => craftedToolDeclarations({ execute_tools: tool }, { workMode: 'build', allowedTools: ['execute_tools'] });
+    const declarations = () => craftedToolDeclarations({ eval: tool }, { workMode: 'build', allowedTools: ['eval'] });
     const before = declarations();
     const first = await call('build');
     crafted.code = 'async ({n}) => n*3';
@@ -171,7 +171,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS crafted_tools(name TEXT, score REAL, last_used_at INTEGER)');
     initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
 
-    const factory = createExecuteToolsFactory({
+    const factory = createCodemodeToolFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), sql, workspace: 'mode-probe',
       webSearch: createDefaultWebSearchProvider({ fetch }),
       rt: {
@@ -194,7 +194,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       },
     });
 
-    const tool = toolsInWorkMode(mode, { execute_tools: factory.toolFor({}) }).execute_tools;
+    const tool = toolsInWorkMode(mode, { eval: factory.toolFor({}) }).eval;
     const execute = tool?.execute;
 
     if (execute === undefined) throw new Error('No callable codemode tool');

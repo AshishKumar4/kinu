@@ -394,13 +394,13 @@ test('a tool binding keeps native Plan checks and the same approval ladder as co
   const files = actor.agent.observeRuntime().storage.vfs;
   await files.mkdir('/home/user/slates/tool-gate', { recursive: true });
   await files.writeFile('/home/user/slates/tool-gate/package.json', JSON.stringify({
-    main: 'server.ts', slate: { bindings: { RUN: { kind: 'tool', name: 'run' }, FILE: { kind: 'tool', name: 'file' } } },
+    main: 'server.ts', slate: { bindings: { RUN: { kind: 'tool', name: 'shell' }, FILE: { kind: 'tool', name: 'file' } } },
   }));
   const marker = '/home/user/slate-tool-approved';
   const command = `npm publish --dry-run && printf ran > ${marker}`;
   const binding = () => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'tool-gate', 'RUN', { member: 'call', args: [{ command }], invocation: null });
   const native = nativeToolFunctions(actor.agent.observeRawTools());
-  const codemode = () => native.run?.execute({ command });
+  const codemode = () => native.shell?.execute({ command });
 
   for (const [mode, reason] of [['deny_all', 'denied'], ['strict', 'unavailable']]) {
     await actor.agent.setShellApprovalMode(v.parse(v.picklist(['deny_all', 'strict']), mode));
@@ -616,7 +616,7 @@ test('a slate ai binding runs one model call under the caller authority, as a sl
   });
 
   const call = (args: JsonValue[]) =>
-    actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'thinker', 'MODEL', { member: 'run', args, invocation: null });
+    actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'thinker', 'MODEL', { member: 'shell', args, invocation: null });
 
   const answer = await call([{ prompt: 'summarize', system: 'be brief' }]);
 

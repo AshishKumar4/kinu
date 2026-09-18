@@ -21,7 +21,7 @@
  *
  * WHAT EVERY TASK HAS IN COMMON. The agent is handed a correct but wasteful
  * reference and asked to beat it on the one metered resource. There is no
- * mechanism to exercise and no tool it is asked to use: `edit`, `run` and
+ * mechanism to exercise and no tool it is asked to use: `edit`, `shell` and
  * `codemode` are means, and measuring them would say how the agent WORKED rather
  * than whether it SOLVED anything. Those still land in the run record as
  * covariates, where `isCovariateRow` keeps them out of any headline.

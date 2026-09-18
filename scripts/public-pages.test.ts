@@ -866,6 +866,13 @@ describe('the standalone landing runs', () => {
     expect(required(facts.heroGraphWidth, 'hero graph width')).toBeGreaterThan(620);
   });
 
+  test('the settled graph keeps flowing without restarting its reveal', () => {
+    // Measured after the reveal settled: the canvas changed again under a
+    // settled mark, so the picture is alive after the reveal rather than a
+    // frozen still or a restarted one.
+    expect(required(facts.treeFlows, 'tree flow after settle')).toBe(true);
+  });
+
   test('the hero mount landed: the handle and the canvas name the same renderer', () => {
     const mount = required(facts.heroMount, 'hero mount');
 
@@ -917,10 +924,15 @@ describe('the standalone landing runs', () => {
     // captured on `window`; the test then destroys it — exactly what a dead
     // device means — and the next frame() throws VGPU-DEVICE-DISPOSED into
     // the mount's fault path. Headless needs --enable-unsafe-webgpu to expose
-    // navigator.gpu on this lane; whether the adapter is real or SwiftShader,
-    // the destroy is a genuine loss event for the mount. (If SwiftShader dies
-    // on its own before the destroy lands, renderer() already reports canvas
-    // — the swap is the assertion either way.)
+    // navigator.gpu on this lane.
+    //
+    // WHICH PATH RAN IS ASSERTED, never glossed: a lane where the mount
+    // landed on WebGPU must swap on the destroy; a lane where it landed on
+    // canvas (no adapter, or SwiftShader gone before the destroy) has no
+    // device to destroy, proves only the resting renderer, and says so. The
+    // swap itself is proved on every lane by
+    // packages/cf-backend/tests/unit-search-tree-mount.test.ts, through the
+    // real mount over a faked vgpu.
     await withGallery(async ({ newPage: freshPage, origin: freshOrigin }) => {
       const page = await freshPage();
       await page.setViewport(DESKTOP);
@@ -994,9 +1006,13 @@ describe('the standalone landing runs', () => {
       expect(after.canvasRenderer).toBe('canvas');
       expect(after.time).toBeGreaterThanOrEqual(landed.time ?? 0);
 
-      // Which loss path fired — for the report: 'webgpu+destroy' is the full
-      // real-device path, 'canvas-already' means the lane had no WebGPU and
-      // the mount's resting renderer was exercised instead.
+      // The path that ran, asserted: a WebGPU landing had a device and it
+      // was destroyed — the full real-device path, and a landing there with
+      // no captured device is a harness fault. A canvas landing proves the
+      // resting renderer; a device may still have been captured (SwiftShader
+      // hands one out and the start fails after), so nothing is claimed of
+      // the destroy there.
+      if (landed.renderer === 'webgpu') expect(destroyed).toBe(true);
       console.log(`hero loss path: landed=${landed.renderer ?? 'none'} destroyed=${destroyed}`);
 
       await page.close();
@@ -1176,7 +1192,7 @@ describe('public pages are responsive', () => {
 
   test('the wide landing keeps its intended measure', () => {
     // The shell is one measure, 84rem: 1264 inside its 40px gutters on every
-    // screen from a laptop to 4K, so the page reads as one page rather than
+    // screen from a device to 4K, so the page reads as one page rather than
     // growing with the viewport. Copy blocks keep their own max-width.
     const expected = { '1568': 1264, '1920': 1264, '2560': 1264, '3840': 1264 };
 

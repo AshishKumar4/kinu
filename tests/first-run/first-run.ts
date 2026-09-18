@@ -50,6 +50,7 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { REAL_CLOCK } from '../../packages/core/src/index';
 import {
   createObservedModelAccumulator, EVAL_MODELS, ledgerTotalsFromEvents, outcomeRow,
   projectRunEventProvenance, publishRunRecord,
@@ -257,7 +258,7 @@ export const FIRST_RUN_DEFECTS = {
       + 'text the turn was started with, so every check but `no-agents-call` missed. '
       + 'One check per tool, each off durable state: `sees-every-tool` reds when the '
       + 'prompt hides a root tool; `file-wrote` when `file` writes nothing or the wrong bytes; '
-      + '`run-ran` when `run` errors or drops stdout; `execute-tools-ran` when codemode cannot '
+      + '`shell-ran` when `shell` errors or drops stdout; `codemode-tool-ran` when codemode cannot '
       + 'return a string; `memory-saved-and-found` when a save or the search that should find it '
       + 'errors or comes back empty; `tasks-written` when `tasks` refuses an add; `web-fetched` '
       + 'when `web` cannot reach the health route; `every-tool-answered` names any call that '
@@ -564,7 +565,7 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
       opened = await plan.open({ subject: spec.id, purpose: spec.purpose, genesis: spec.genesis });
 
       return opened;
-    }, { transcripts: TRANSCRIPTS, taskId: episode, modelCalls: spec.modelCalls, ...(spec.budgetMs !== undefined && { budgetMs: spec.budgetMs }) }, async (session, collect, budget) => {
+    }, { transcripts: TRANSCRIPTS, taskId: episode, modelCalls: spec.modelCalls, clock: REAL_CLOCK, ...(spec.budgetMs !== undefined && { budgetMs: spec.budgetMs }) }, async (session, collect, budget) => {
     console.warn(`    [first-run] ${spec.id} on ${session.describe}`);
     const subgoals = await spec.run({ session, plan, budget });
 

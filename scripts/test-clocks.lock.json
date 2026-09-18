@@ -1,6 +1,6 @@
 {
   "measuredAt": "2026-09-16",
-  "total": 242,
+  "total": 238,
   "files": {
     "packages/cf-backend/tests/fixtures/nimbus-capability-websocket-workerd.mjs": {
       "sleep": 2
@@ -70,8 +70,8 @@
       "sleep": 1
     },
     "packages/cf-backend/tests/workerd/two-turn-probe.ts": {
-      "sleep": 13,
-      "clock-compare": 11
+      "sleep": 11,
+      "clock-compare": 9
     },
     "packages/cf-backend/tests/workerd/worker.ts": {
       "sleep": 3
@@ -86,7 +86,7 @@
       "clock-compare": 1,
       "sleep": 1
     },
-    "packages/cli-backend/tests/execute-tools-factory.test.ts": {
+    "packages/cli-backend/tests/codemode-tool-factory.test.ts": {
       "sleep": 1
     },
     "packages/cli-backend/tests/fixtures/echo-mcp-server.mjs": {

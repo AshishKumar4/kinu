@@ -28,7 +28,7 @@ function connectionFor(binding: SlateBindingDeclaration): BindingConnection {
   switch (binding.kind) {
     case "mcp": return { text: `Connect an MCP server named "${binding.target}" to your account.`, to: APP_ROUTES.userMcp, label: "MCP servers" };
     case "tool": return { text: `Needs a tool named "${binding.target}": a native tool, or one crafted in this workspace.` };
-    case "namespace": return binding.target === "laptop"
+    case "namespace": return binding.target === "device"
       ? { text: "Runs on one of your machines: link a device and grant this workspace access.", to: APP_ROUTES.userSettings, label: "Account settings" }
       : { text: `Runs on the ${binding.target} executor of this workspace.` };
     case "app": return { text: `Calls another slate with id "${binding.target}"; fork or author it in this workspace.` };
