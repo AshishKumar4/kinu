@@ -255,7 +255,7 @@ import {
   // Core's once-only lifecycle for one settled response, and the per-effect
   // ledger it wraps. Both backends drive this same state machine.
   TerminalTransitions, initTerminalEffectTable,
-  terminalEffect, overflowRetryTerminalEffect, outputLimitContinuationTerminalEffect,
+  terminalEffect, overflowRetryTerminalEffect, outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
   turnRecordTerminalEffect, eventDrainTerminalEffect, shadowTrialTerminalEffect,
   RunEndReasonSchema, WorkModeSchema,
   CompletedTurnSchema, AdvisorRecoverySnapshotSchema,
@@ -1721,6 +1721,11 @@ export abstract class ActorAgent extends Think<Env> {
       turn_record: turnRecordTerminalEffect(this.orch),
       event_drain: eventDrainTerminalEffect(this.orch),
 
+      // The third signal a settled turn can owe: it ended while its task list
+      // still held open items. One queued turn, keyed on this response — the
+      // ledger, not RAM, says the once.
+      task_reminder: taskReminderTerminalEffect(this.orch.inbox),
+
       improvement_lanes: terminalEffect({
         input: v.object({
           status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema,
@@ -2589,6 +2594,10 @@ export abstract class ActorAgent extends Think<Env> {
           prepareTurn: (item, lease) => this.prepareTurn(item, lease),
           owedTerminalEffects: (input) => this.owedTerminalEffects(input),
           terminal: () => this.terminal,
+          taskList: () => this.stores.taskList,
+          // A running job's own settle wakes the session: a reminder fired
+          // behind it would race that wake.
+          hasPendingAsyncWake: () => this.stores.jobs.listRunning(1).total > 0,
           holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
           driverGate: () => this.driverGate(),
           // The workspace UI IS the review surface: a plan turn is admitted.

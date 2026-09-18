@@ -111,6 +111,10 @@ export interface TerminalTurnParts {
    * turn and has no follow-up to owe.
    */
   readonly outputContinuation?: boolean;
+  /** The reminder this turn owes for settling with open tasks — the
+   *  already-rendered signal text, decided by the caller because only the
+   *  caller can read the list AND the turn's outcome together. */
+  readonly taskReminder?: { readonly text: string };
   /** The advisor's recovery snapshot, as the improvement lanes replay it. */
   readonly advisor?: JsonValue;
   /** The sampling plan, when this turn is sampled against a candidate. */
@@ -247,6 +251,17 @@ export function declareTerminalRoster(
   if (parts.outputContinuation) {
     owed.push({
       name: 'output_continuation', scope: messageId, lane: 'inline', input: {},
+    });
+  }
+
+  // Beside the continuation, for the same reason and on the same lane: the
+  // signal is one queued turn this response owes, and claiming it inside the
+  // commit is what lets a killed process re-drive the delivery. A turn whose
+  // list had nothing open declares no part, so an idle list owes no row.
+  if (parts.taskReminder) {
+    owed.push({
+      name: 'task_reminder', scope: messageId, lane: 'inline',
+      input: { text: parts.taskReminder.text },
     });
   }
 
