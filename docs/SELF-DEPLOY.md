@@ -121,8 +121,8 @@ self-update work already covers the devices.
 `kinu deploy local` (and, later, `curl kinu.run/install-local.sh | bash`) lays
 down, under `~/.kinu/local/`, the same release artifact, a pinned workerd
 binary, a generated workerd configuration rendered from `release.json`
-(Durable Object storage and KV and R2 on local disk, assets from the artifact,
-the runtime cache seed unpacked), and a supervisor in the shape of the
+(Durable Object storage and KV on local disk, assets from the artifact, the
+runtime cache seed unpacked), and a supervisor in the shape of the
 existing daemon command. No container
 and no monitor: the cron-driven monitor is kinu.run's own uptime probe and has
 no job on a local instance. Sign-in is a local account the installer creates
@@ -180,13 +180,28 @@ Cloudflare door. No user repository and no Workers Builds.
    with a `current` symlink, renders `workerd.capnp` and `config.json` from
    `release.json` (`packages/core/src/deploy/local.ts`), and starts workerd on
    8787 through a pidfile supervisor — `kinu deploy local [start|stop|status]`.
-   Durable Object storage and every KV and R2 binding are directories under
-   `state/`; Vectorize, AI, the Worker loader, Analytics Engine and the
-   container are not hosted by workerd and are printed by name as what a local
-   instance is without. Proved end to end against the real workerd binary in
-   `packages/cli/tests/deploy-local.test.ts` (the instance answers on its own
-   port), the rendering in
-   `packages/core/tests/unit-deploy-flow.test.ts`.
+   Durable Object storage and every KV binding are directories under `state/`:
+   a KV binding is rendered as `kvNamespace` over a writable disk service, and
+   `put`/`get`/`delete` round-trip through a file there (workerd 2026-09-03,
+   measured 2026-09-18; a key holding a `/` is the one shape that does not
+   answer, and Kinu's keys are `session:`, `oauth-state:` and `ingress:`).
+   R2 is not hosted — `r2Bucket` speaks R2's own protocol, which a disk
+   directory does not implement — so a bucket is printed by name at install,
+   beside Vectorize, AI, the Worker loader, Analytics Engine and the
+   container, as what a local instance is without. Proved end to end against
+   the real workerd binary in `packages/cli/tests/deploy-local.test.ts` (the
+   instance answers on its own port and round-trips its own KV binding), the
+   rendering in `packages/core/tests/unit-deploy-flow.test.ts`.
+
+   The pid rule: `workerd.pid` is a hint and never a licence to signal. Every
+   read of it confirms the process's own argv names `workerd` and that
+   instance's `workerd.capnp` — `/proc/<pid>/cmdline` on Linux, `ps -o args=`
+   elsewhere — and the start time is recorded beside the pid for `status`.
+   `stop` refuses a pid that fails the test and clears the stale file instead
+   of killing whatever inherited the number. Starting is proved the same way:
+   the child must still be alive and `/api/health` must answer on the port,
+   because a process that already holds the port kills workerd on EADDRINUSE
+   while a connect to it still succeeds.
 
    Still to come: the one-line installer (`curl kinu.run/install-local.sh |
    bash`) that puts a pinned workerd in `~/.kinu/local/bin/` — until then a
