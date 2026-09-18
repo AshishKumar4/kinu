@@ -21,14 +21,16 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import {
-  ACCESS_TOKEN_KEY, DEPLOY_CLIENT_ID_KEY, DeployInputsSchema, DeployRunPhaseSchema,
-  DeployStepRowSchema, FACT_ADDRESS, MINTED_SECRETS, REFRESH_TOKEN_KEY, SELF_UPDATE_RUN_ID,
+  ACCESS_TOKEN_KEY, DEPLOY_CLIENT_ID_KEY, DEPLOY_SOCKET_PROTOCOL, DeployInputsSchema,
+  DeployRunPhaseSchema, DeployStepRowSchema, FACT_ADDRESS, MINTED_SECRETS, REFRESH_TOKEN_KEY,
+  SELF_UPDATE_RUN_ID,
   bearerTransport, cloudflareResult, deployPlan, exchangeDeployCode, factsFrom,
   fetchReleaseArtifact, fetchReleaseManifest, refreshDeployToken, runDeployPlan, runKeyAdmits,
   type DeployChoice, type DeployInputs, type DeployLedger,
   type DeployProgress, type DeploySecretVault, type DeploySnapshot, type DeployStepFailure,
   type DeployStepRow, type DeployStepSeed, type DeploymentRecord,
 } from '@kinu.run/core/deploy';
+import { randomToken } from '@kinu.run/core';
 import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
@@ -77,6 +79,10 @@ const VERSION_KEY = 'run.version';
 
 const SECRET_PREFIX = 'secret.';
 
+/** The state nonce, in bytes. 128 bits of CSPRNG beside the run id, so a
+ *  `state` is not guessable by somebody who knows which run is authorizing. */
+const NONCE_BYTES = 16;
+
 export class DeployRunDO extends DurableObject<Env> {
   private readonly sql: SqlStorage;
 
@@ -99,10 +105,8 @@ export class DeployRunDO extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-
     if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
-      return this.accept(url);
+      return this.accept(request);
     }
 
     return new Response('not a deploy socket', { status: 400 });
@@ -126,13 +130,11 @@ export class DeployRunDO extends DurableObject<Env> {
    * The verifier stays here: it is the proof a public client has, and a
    * verifier that travelled would make the PKCE exchange forgeable by whoever
    * saw it. The state is the run's name and a nonce this object keeps, so a
-   * callback carrying somebody else's state is refused rather than exchanged.
+   * callback carrying somebody else's state is refused rather than exchanged;
+   * the route binds the same state to the browser that asked for it.
    */
   async holdAuthorization(verifier: string): Promise<string> {
-    const nonce = new Uint8Array(16);
-
-    crypto.getRandomValues(nonce);
-    const state = `${await this.runId()}.${[...nonce].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+    const state = `${await this.runId()}.${randomToken(NONCE_BYTES)}`;
 
     await this.ctx.storage.put(VERIFIER_KEY, verifier);
     await this.ctx.storage.put(STATE_KEY, state);
@@ -141,18 +143,27 @@ export class DeployRunDO extends DurableObject<Env> {
     return state;
   }
 
-  async landAuthorization(clientId: string, redirectUri: string, code: string, state: string): Promise<void> {
+  /**
+   * The code, exchanged for this run's own leg.
+   *
+   * False rather than a throw for the two ways a callback is not this run's —
+   * no leg in flight, or a state that is not the one minted here. Both are a
+   * stranger's callback URL arriving at a route, which is a 400 and not a
+   * crash; the exchange itself still throws, because a refusal from the
+   * authorization server is the sentence a person has to read.
+   */
+  async landAuthorization(clientId: string, redirectUri: string, code: string, state: string): Promise<boolean> {
     const expected = await this.ctx.storage.get<string>(STATE_KEY) ?? '';
     const verifier = await this.ctx.storage.get<string>(VERIFIER_KEY) ?? '';
 
-    if (expected === '' || verifier === '') throw new Error('this run has no authorization in flight');
-
-    if (state !== expected) throw new Error('that authorization belongs to another run');
+    if (expected === '' || verifier === '' || state !== expected) return false;
 
     const token = await exchangeDeployCode({ clientId, redirectUri, code, verifier });
 
     await this.ctx.storage.delete([VERIFIER_KEY, STATE_KEY]);
     await this.landToken(clientId, token.accessToken, token.refreshToken);
+
+    return true;
   }
 
   /** The token pair, however it was obtained: the page's callback exchanges the
@@ -424,20 +435,28 @@ export class DeployRunDO extends DurableObject<Env> {
     return v.parse(DeployRunPhaseSchema, held);
   }
 
-  private async accept(url: URL): Promise<Response> {
+  private async accept(request: Request): Promise<Response> {
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
 
     // Hibernation, not a held reference: a run is minutes of network calls and
     // a page that may sit open through all of it, and an object evicted between
     // two steps must not take the page's socket with it.
-    this.ctx.acceptWebSocket(server, [`run:${url.pathname}`]);
+    this.ctx.acceptWebSocket(server, [`run:${new URL(request.url).pathname}`]);
     // Awaited, not fired: the first frame is this run's whole state, and a
     // page that got the 101 before the snapshot was queued would render an
     // empty ledger until the next change.
     await this.sendSnapshot(server);
 
+    // The upgrade carried the run key as its second subprotocol token, so the
+    // 101 selects the FIRST one — the name. Echoing the key would put it in a
+    // response header for nothing.
+    const named = (request.headers.get('sec-websocket-protocol') ?? '')
+      .split(',').map((token) => token.trim()).includes(DEPLOY_SOCKET_PROTOCOL);
+
     const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
+
+    if (named) init.headers = { 'sec-websocket-protocol': DEPLOY_SOCKET_PROTOCOL };
 
     return new Response(null, init);
   }

@@ -11,7 +11,11 @@ export {
   type ReleaseVectorIndex, type ReleaseWorker, type SecretHandling, type VarPolicy,
 } from './manifest';
 
-export { TarArtifact, sha256Hex } from './artifact';
+export { TarArtifact } from './artifact';
+
+export {
+  DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_PAGE_PATH, isDeployPath,
+} from './paths';
 
 export { fetchReleaseArtifact, fetchReleaseManifest } from './channel';
 
@@ -28,7 +32,8 @@ export {
 } from './pkce';
 
 export {
-  DEPLOY_RUN_ID, mintDeployRun, runKeyAdmits, runKeyDigest, type DeployRunTicket,
+  DEPLOY_RUN_ID, DEPLOY_SOCKET_PROTOCOL, mintDeployRun, runKeyAdmits, runKeyDigest,
+  type DeployRunTicket,
 } from './session';
 
 export {

@@ -622,28 +622,46 @@ describe('an eviction in the middle of a step', () => {
 });
 
 /** The one call layer the page and the CLI share. What a caller of either door
- *  observes: the run key on every call, `wss` on a secure origin, and the
- *  door's own sentence when it refuses. */
+ *  observes: the run key in the `authorization` header of every call and in NO
+ *  URL, `wss` on a secure origin, and the door's own sentence when it
+ *  refuses. */
 describe('the door client', () => {
-  test('carries the run key on every call and upgrades the socket with the origin', async () => {
-    const seen: string[] = [];
+  test('carries the run key in a header, never in a URL, and upgrades the socket with the origin', async () => {
+    const seen: { url: string; authorization: string }[] = [];
 
     const answering = Object.assign(
-      async (input: RequestInfo | URL): Promise<Response> => {
-        seen.push(String(input));
+      async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        seen.push({
+          url: String(input),
+          authorization: new Headers(init?.headers).get('authorization') ?? '',
+        });
 
-        return new Response('[]', { headers: { 'content-type': 'application/json' } });
+        return new Response(init?.method === 'POST' ? '{"held":"OPENAI_API_KEY"}' : '[]', {
+          headers: { 'content-type': 'application/json' },
+        });
       },
       { preconnect: fetch.preconnect },
     ) satisfies typeof fetch;
 
-    const door = deployDoor({ origin: 'https://kinu.run', runId: 'run-1', runKey: 'k/ey+1' }, answering);
+    const key = 'k-ey_1';
+    const door = deployDoor({ origin: 'https://kinu.run', runId: 'run-1', runKey: key }, answering);
 
     expect(await door.accounts()).toEqual([]);
-    expect(seen).toEqual(['https://kinu.run/api/deploy/runs/run-1/accounts?key=k%2Fey%2B1']);
-    expect(door.socketUrl()).toBe('wss://kinu.run/api/deploy/runs/run-1/socket?key=k%2Fey%2B1');
+    expect(await door.holdProviderKey('OPENAI_API_KEY', 'a-provider-key')).toBe('OPENAI_API_KEY');
+
+    expect(seen.map((call) => call.url))
+      .toEqual(['https://kinu.run/api/deploy/runs/run-1/accounts', 'https://kinu.run/api/deploy/runs/run-1/keys']);
+    expect(seen.map((call) => call.authorization)).toEqual([`Bearer ${key}`, `Bearer ${key}`]);
+
+    // The whole point of the header: the key is in nothing that a browser
+    // history, a referrer or an invocation log records.
+    const urls = [...seen.map((call) => call.url), door.socketUrl()];
+
+    expect(urls.filter((url) => url.includes(key))).toEqual([]);
+    expect(door.socketUrl()).toBe('wss://kinu.run/api/deploy/runs/run-1/socket');
+    expect(door.socketProtocols()).toEqual(['kinu.deploy.run-key', key]);
     expect(deployDoor({ origin: 'http://127.0.0.1:8787', runId: 'run-1', runKey: 'k' }).socketUrl())
-      .toBe('ws://127.0.0.1:8787/api/deploy/runs/run-1/socket?key=k');
+      .toBe('ws://127.0.0.1:8787/api/deploy/runs/run-1/socket');
   });
 
   test('a refusal reads as the door wrote it, and a body that is not JSON names the URL', async () => {
@@ -660,7 +678,7 @@ describe('the door client', () => {
       { preconnect: fetch.preconnect },
     ) satisfies typeof fetch);
 
-    await expect(misrouted.snapshot()).rejects.toThrow('/api/deploy/runs/run-1?key=k did not answer JSON');
+    await expect(misrouted.snapshot()).rejects.toThrow('/api/deploy/runs/run-1 did not answer JSON');
   });
 });
 

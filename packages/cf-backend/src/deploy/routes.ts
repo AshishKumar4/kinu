@@ -9,36 +9,33 @@
  * digest. That is why these routes answer before the auth gate, and why none
  * of them trusts anything but the key.
  *
- * The OAuth leg never carries the key: `state` names the run and a nonce the
- * object holds, and the page keeps its key in the tab it minted it from. A
- * redirect that leaked the key would put it in a referrer, a browser history
- * entry and Cloudflare's own logs.
+ * THE KEY IS NEVER IN A URL. `authorization: Bearer <key>` on every call, and
+ * the socket upgrade's second subprotocol token where a browser can set no
+ * header. A query parameter would be in the browser's history and in this
+ * deployment's own invocation logs (`wrangler.jsonc` samples them at 100%),
+ * and this key writes into somebody's Cloudflare account.
+ *
+ * THE OAUTH LEG CARRIES NO KEY EITHER: `state` names the run and a nonce the
+ * object holds, and `/deploy/callback` is a navigation. What proves the browser
+ * finishing the leg is the browser that started it is the
+ * `__Host-kinu_deploy_state` cookie, set to the digest of that `state` — the
+ * same binding `auth/session.ts` puts on a Kinu sign-in, for the same reason.
  */
 import {
-  CLOUDFLARE_DEPLOY_SCOPES, DEPLOY_RUN_ID, DeployInputsSchema, RELEASE_MANIFEST_PATH, authorizeUrl,
-  createPkcePair, mintDeployRun, parseReleaseManifest, promptedSecrets, runKeyDigest,
+  CLOUDFLARE_DEPLOY_SCOPES, DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_PAGE_PATH, DEPLOY_RUN_ID,
+  DEPLOY_SOCKET_PROTOCOL, DeployInputsSchema, RELEASE_MANIFEST_PATH, authorizeUrl, createPkcePair,
+  isDeployPath, mintDeployRun, parseReleaseManifest, promptedSecrets, runKeyDigest,
   type DeployOptions,
 } from '@kinu.run/core/deploy';
-import { err, json, safeJson } from '@kinu.run/core';
+import { err, json, safeJson, sha256Hex, timingSafeEqual } from '@kinu.run/core';
 import * as v from 'valibot';
+import { DEPLOY_STATE_COOKIE_NAME, readCookie, setCookie } from '../auth/session';
 import type { DeployRunDO } from './deploy-do';
 
-const API = '/api/deploy';
-
-const DEPLOY_PAGE_PATH = '/deploy';
-
-const DEPLOY_CALLBACK_PATH = '/deploy/callback';
-
-const DEPLOY_AUTHORIZE_PATH = '/deploy/authorize';
-
-/** Paths this module owns. `server.ts` answers them before the auth gate, and
- *  the SPA page itself before the login redirect. */
-export function isDeployPath(pathname: string): boolean {
-  return pathname === DEPLOY_PAGE_PATH
-    || pathname.startsWith(`${API}/`)
-    || pathname === DEPLOY_AUTHORIZE_PATH
-    || pathname === DEPLOY_CALLBACK_PATH;
-}
+/** How long a person has to finish the Cloudflare consent screen before the
+ *  binding cookie expires. Ten minutes: long enough to read a permission list,
+ *  short enough that a shared machine does not carry a usable half-leg. */
+const STATE_TTL_MS = 600_000;
 
 const ProviderKeySchema = v.object({
   name: v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/u)),
@@ -61,19 +58,36 @@ function deployClientId(env: Env): string {
   return (env.CLOUDFLARE_DEPLOY_CLIENT_ID ?? '').trim();
 }
 
+/**
+ * The key the caller presented, from the one place each caller can put it.
+ *
+ * An `authorization` header for every fetch. For the socket upgrade — where a
+ * browser can set no header — the offered subprotocols, whose first token names
+ * the scheme and whose second IS the key. Anything else is no key at all: a
+ * query parameter is not read here, so a caller that put one there is refused
+ * rather than quietly admitted.
+ */
+function presentedKey(request: Request): string {
+  const header = request.headers.get('authorization') ?? '';
+
+  if (/^bearer /iu.test(header)) return header.slice('bearer '.length).trim();
+
+  const offered = (request.headers.get('sec-websocket-protocol') ?? '').split(',').map((token) => token.trim());
+
+  return offered[0] === DEPLOY_SOCKET_PROTOCOL ? offered[1] ?? '' : '';
+}
+
 export async function handleDeployRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
   const path = url.pathname;
 
   if (!isDeployPath(path)) return null;
 
-  if (path === `${API}/options`) return options(env);
+  if (path === `${DEPLOY_API}/options`) return options(env);
 
-  if (path === `${API}/runs` && request.method === 'POST') return create(env);
+  if (path === `${DEPLOY_API}/runs` && request.method === 'POST') return create(env);
 
-  if (path === DEPLOY_AUTHORIZE_PATH) return authorize(request, env, url);
-
-  if (path === DEPLOY_CALLBACK_PATH) return callback(env, url);
+  if (path === DEPLOY_CALLBACK_PATH) return callback(request, env, url);
 
   const run = /^\/api\/deploy\/runs\/([A-Za-z0-9_-]+)(\/[a-z/-]*)?$/u.exec(path);
 
@@ -84,7 +98,7 @@ export async function handleDeployRequest(request: Request, env: Env): Promise<R
   if (!DEPLOY_RUN_ID.test(runId)) return err(404, 'No such deploy run.');
 
   const stub = runStub(env, runId);
-  const key = url.searchParams.get('key') ?? '';
+  const key = presentedKey(request);
 
   if (!await stub.admits(key)) return err(403, 'This deploy run does not know that key.');
 
@@ -101,6 +115,11 @@ export async function handleDeployRequest(request: Request, env: Env): Promise<R
   if (tail === '/accounts' && request.method === 'GET') return json(await stub.accounts());
 
   if (tail === '/zones' && request.method === 'GET') return json(await stub.zones());
+
+  // The authorization leg starts here rather than at a navigated GET: the key
+  // authorizes this POST in its header, and what the browser navigates to is
+  // the answer's `location`, which carries only `state` and the challenge.
+  if (tail === '/authorize' && request.method === 'POST') return authorize(request, env, stub);
 
   if (tail === '/start' && request.method === 'POST') {
     const inputs = await safeJson(request, DeployInputsSchema);
@@ -181,7 +200,7 @@ async function options(env: Env): Promise<Response> {
 async function create(env: Env): Promise<Response> {
   const ticket = mintDeployRun();
 
-  await runStub(env, ticket.runId).open(ticket.runId, await runKeyDigest(ticket.runKey));
+  await runStub(env, ticket.runId).open(ticket.runId, runKeyDigest(ticket.runKey));
 
   // The only time the key is ever sent. It is not stored here, not logged, and
   // not recoverable: a lost key is a lost run, which is the correct trade for a
@@ -189,55 +208,74 @@ async function create(env: Env): Promise<Response> {
   return json(ticket);
 }
 
-async function authorize(request: Request, env: Env, url: URL): Promise<Response> {
+/**
+ * One authorization leg, and the binding that makes it this browser's.
+ *
+ * The answer carries the URL to navigate to and a cookie holding the digest of
+ * the `state` that URL names. `/deploy/callback` lands a token pair only when
+ * the browser presents that digest, so a consent screen completed by somebody
+ * who was handed the URL puts their Cloudflare tokens nowhere.
+ */
+async function authorize(request: Request, env: Env, stub: DurableObjectStub<DeployRunDO>): Promise<Response> {
   const clientId = deployClientId(env);
 
   if (clientId === '') return err(503, 'The Cloudflare door has no OAuth client configured.');
-
-  const runId = url.searchParams.get('run') ?? '';
-
-  if (!DEPLOY_RUN_ID.test(runId)) return err(400, 'That is not a deploy run.');
-
-  const stub = runStub(env, runId);
-
-  if (!await stub.admits(url.searchParams.get('key') ?? '')) {
-    return err(403, 'This deploy run does not know that key.');
-  }
 
   const pkce = await createPkcePair();
   const state = await stub.holdAuthorization(pkce.verifier);
   const redirectUri = new URL(DEPLOY_CALLBACK_PATH, new URL(request.url).origin).href;
 
-  return new Response(null, {
-    status: 302,
-    headers: {
-      location: authorizeUrl({ clientId, redirectUri, state, challenge: pkce.challenge, scopes: CLOUDFLARE_DEPLOY_SCOPES }),
-      'cache-control': 'no-store',
-      // The authorize URL carries the state and the challenge; a referrer
-      // would hand both to Cloudflare's page for no reason.
-      'referrer-policy': 'no-referrer',
-    },
+  const handoff = json({
+    location: authorizeUrl({
+      clientId, redirectUri, state, challenge: pkce.challenge, scopes: CLOUDFLARE_DEPLOY_SCOPES,
+    }),
   });
+
+  handoff.headers.set('cache-control', 'no-store');
+  handoff.headers.append('set-cookie', setCookie(DEPLOY_STATE_COOKIE_NAME, sha256Hex(state), Date.now() + STATE_TTL_MS));
+
+  return handoff;
 }
 
-async function callback(env: Env, url: URL): Promise<Response> {
+async function callback(request: Request, env: Env, url: URL): Promise<Response> {
   const state = url.searchParams.get('state') ?? '';
   const code = url.searchParams.get('code') ?? '';
   const runId = state.split('.')[0] ?? '';
 
-  if (!DEPLOY_RUN_ID.test(runId) || code === '') return err(400, 'That is not an authorization this flow started.');
+  if (!DEPLOY_RUN_ID.test(runId) || code === '') {
+    return burnt(err(400, 'That is not an authorization this flow started.'));
+  }
+
+  // The one check that makes a callback this browser's. Refused before the run
+  // is touched at all: a run whose leg this browser did not start must come out
+  // of a forwarded callback URL exactly as unauthorized as it went in.
+  const bound = readCookie(request, DEPLOY_STATE_COOKIE_NAME) ?? '';
+
+  if (bound === '' || !timingSafeEqual(bound, sha256Hex(state))) {
+    return burnt(err(400, 'This browser did not start that authorization.'));
+  }
 
   const clientId = deployClientId(env);
 
-  if (clientId === '') return err(503, 'The Cloudflare door has no OAuth client configured.');
+  if (clientId === '') return burnt(err(503, 'The Cloudflare door has no OAuth client configured.'));
 
   const redirectUri = new URL(DEPLOY_CALLBACK_PATH, url.origin).href;
 
-  await runStub(env, runId).landAuthorization(clientId, redirectUri, code, state);
+  const landed = await runStub(env, runId).landAuthorization(clientId, redirectUri, code, state);
+
+  if (!landed) return burnt(err(400, 'That authorization is not one this run started.'));
 
   // Back to the page, which still holds the run key in the tab that minted it.
-  return new Response(null, {
+  return burnt(new Response(null, {
     status: 302,
     headers: { location: `${DEPLOY_PAGE_PATH}?run=${encodeURIComponent(runId)}`, 'cache-control': 'no-store' },
-  });
+  }));
+}
+
+/** The binding cookie, spent. One leg, one cookie, whatever the outcome: a
+ *  browser that keeps it is a browser that keeps offering it. */
+function burnt(response: Response): Response {
+  response.headers.append('set-cookie', setCookie(DEPLOY_STATE_COOKIE_NAME, '', 0));
+
+  return response;
 }

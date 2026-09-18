@@ -35,10 +35,9 @@ import { StepRow } from "@/components/deploy/DeployStepRow";
 
 /**
  * THE RUN KEY IS A CAPABILITY, so this tab holds it like one: `sessionStorage`
- * under the run's id, handed to the core door for the calls that need it, and
- * never put in a URL the browser navigates to except the authorize redirect
- * this app itself owns. A closed tab loses it, which is correct — a run nobody
- * holds the key to is a run nobody may drive.
+ * under the run's id, handed to the core door, which puts it in an
+ * `authorization` header and never in a URL. A closed tab loses it, which is
+ * correct — a run nobody holds the key to is a run nobody may drive.
  */
 function heldRunKey(runId: string): string {
   return sessionStorage.getItem(`kinu.deploy.run.${runId}`) ?? "";
@@ -56,12 +55,6 @@ async function openDeployRun(): Promise<string> {
   sessionStorage.setItem(`kinu.deploy.run.${ticket.runId}`, ticket.runKey);
 
   return ticket.runId;
-}
-
-/** Where the browser goes to authorize. A full navigation, not a fetch: the
- *  authorization happens on Cloudflare's own page. */
-function authorizeHref(runId: string): string {
-  return `/deploy/authorize?run=${encodeURIComponent(runId)}&key=${encodeURIComponent(heldRunKey(runId))}`;
 }
 
 /** The answers being collected, before they are a `DeployInputs`. Kept as text
@@ -322,7 +315,9 @@ export default function DeployPage({ fixture, fixtureOptions }: {
 
     door.snapshot().then((held) => { if (mounted) setSnapshot(held); }).catch(failed);
 
-    const opened = new WebSocket(door.socketUrl());
+    // The key rides the upgrade's subprotocol list: a WebSocket URL cannot
+    // carry it, and a browser can set no header on the upgrade.
+    const opened = new WebSocket(door.socketUrl(), [...door.socketProtocols()]);
 
     socket.current = opened;
     opened.addEventListener("message", (event: MessageEvent) => {
@@ -342,7 +337,9 @@ export default function DeployPage({ fixture, fixtureOptions }: {
     try {
       const minted = await openDeployRun();
 
-      location.assign(authorizeHref(minted));
+      // The door mints the leg and answers where to go; the key authorized
+      // that POST in a header and is in nothing the browser navigates to.
+      location.assign(await doorFor(minted).authorize());
     } catch (cause) {
       setErr(renderThrownChain({ cause }));
     }

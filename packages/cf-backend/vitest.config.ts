@@ -51,7 +51,8 @@ import { defineConfig, type Plugin } from 'vitest/config';
 import { probeOutbound } from './tests/workerd/http-model-fake';
 import { hireOutbound } from './tests/workerd/hire-model-fake';
 import {
-  DEPLOY_FAKE_CHANNEL, DEPLOY_FAKE_RECORD, DEPLOY_FAKE_REFRESH_TOKEN, assetsOutbound, deployOutbound,
+  DEPLOY_FAKE_CHANNEL, DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_RECORD, DEPLOY_FAKE_REFRESH_TOKEN,
+  assetsOutbound, deployOutbound,
 } from './tests/workerd/deploy-fake';
 import { kCurrentWorker } from 'miniflare';
 import { builtinModules } from 'node:module';
@@ -487,6 +488,10 @@ export default defineConfig({
             KINU_SELF_DEPLOY_REFRESH_TOKEN: DEPLOY_FAKE_REFRESH_TOKEN,
             CREDENTIAL_ENCRYPTION_KEY: 'ZGVwbG95LXByb2JlLWNyZWRlbnRpYWwta2V5LTMyYg==',
             WEBHOOK_ROUTE_SECRET: 'ZGVwbG95LXByb2JlLXdlYmhvb2stcm91dGUtc2VjcmV0',
+            // The OAuth client the door's own routes authorize through. Without
+            // it the door answers 503 to every leg, which is the unconfigured
+            // deployment rather than the door under test.
+            CLOUDFLARE_DEPLOY_CLIENT_ID: DEPLOY_FAKE_CLIENT_ID,
           },
           outboundService: deployOutbound,
           // The deployment's own asset bundle, which holds exactly the build
@@ -517,6 +522,9 @@ export default defineConfig({
           // production handlers over the production Durable Object, on the
           // worker that is bound like a deployed Kinu.
           UPDATES_PROBE: { name: 'deploy-probe', entrypoint: 'UpdatesProbe' },
+          // The door's own routes on that worker: the callback's binding to the
+          // browser that started a leg, and where the run key may travel.
+          DEPLOY_DOOR_PROBE: { name: 'deploy-probe', entrypoint: 'DeployDoorProbe' },
         },
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
