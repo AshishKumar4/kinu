@@ -856,6 +856,15 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  rather than a re-declaration of it. */
   observeExplorationSeams(): ExplorationHostSeams { return this.explorationSeams(); }
 
+  /** THE profile one hosted actor's turn resolves under — the authority every
+   *  hosted kind reaches (`resolveProfile` on both host seams), asked here
+   *  directly so a suite can read the resolution rather than a turn's effect
+   *  on a model it cannot call under bun. */
+  observeHostedActorProfile(actor: HostedActor, workMode: WorkMode = 'build'): Promise<ResolvedTurnProfile> {
+    return this.hostedActorProfile({ actor: actor.handle, availableTools: [], workMode })
+      .then((resolved) => resolved.profile);
+  }
+
   /** A hired child's DELEGATED-turn profile, as the runner received it: the
    *  ToolSet it may call and the framing it was told it runs under.
    *
