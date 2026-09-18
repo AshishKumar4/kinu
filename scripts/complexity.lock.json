@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-18",
-  "files": 2483,
-  "functions": 60986,
+  "files": 2484,
+  "functions": 61112,
   "ceiling": 125,
   "line": 35,
   "inventory": [
@@ -11,7 +11,7 @@
     },
     {
       "key": "packages/cf-backend/src/cli/routes.ts#handleCliRequest",
-      "complexity": 114
+      "complexity": 108
     },
     {
       "key": "packages/cf-backend/src/user/routes.ts#handleUserRequest",
