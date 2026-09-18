@@ -231,8 +231,17 @@ function readTree(session: number, dumpMembers = false): Reading {
       continue;
     }
 
-    for (const task of tolerate(() => readdirSync(`/proc/${String(pid)}/task`), 'enoent') ?? []) {
-      const taskStat = tolerate(() => readFileSync(`/proc/${String(pid)}/task/${task}/stat`, 'utf8'), 'enoent');
+    // Same vanished-process race as the rollup above, one level down: a pool
+    // thread that exits between the listing and the read answers ESRCH, and
+    // an unhandled one there killed a whole 200 s browser row mid-measurement
+    // (2026-09-18). A member that is gone contributes nothing.
+    const tasks = tolerate(() => tolerate(() => readdirSync(`/proc/${String(pid)}/task`), 'esrch'), 'enoent') ?? [];
+
+    for (const task of tasks) {
+      const taskStat = tolerate(
+        () => tolerate(() => readFileSync(`/proc/${String(pid)}/task/${task}/stat`, 'utf8'), 'esrch'),
+        'enoent',
+      );
 
       if (taskStat === undefined) continue;
 
