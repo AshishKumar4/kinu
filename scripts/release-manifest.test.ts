@@ -16,7 +16,7 @@ import { deriveInfrastructure, SUPPLY, type Supply } from './infra-manifest';
 import {
   VAR_POLICY, buildReleaseManifest, readWranglerConfig, releaseBindings, releaseSecrets, releaseVars,
 } from './release-manifest';
-import { ReleaseManifestSchema } from '../packages/core/src/deploy/manifest';
+import { RELEASE_ARTIFACT_ROUTE, ReleaseManifestSchema } from '../packages/core/src/deploy/manifest';
 
 const CONFIG = readWranglerConfig();
 
@@ -72,6 +72,18 @@ describe('the manifest is the config', () => {
     expect(MANIFEST.vectorIndexes.every((index) => index.dimensions === 384 && index.metric === 'cosine')).toBe(true);
     expect(MANIFEST.vectorIndexes.map((index) => index.name))
       .toEqual((CONFIG.vectorize ?? []).map((index) => index.index_name));
+  });
+
+  test('the artifact it names is the route the Worker serves from R2', () => {
+    // The tarball is over Cloudflare's per-file asset limit, so it is an R2
+    // object behind `/downloads/kinu-worker-<version>.tar.gz`
+    // (packages/cf-backend/src/deploy/artifact-route.ts). A manifest naming any
+    // other path would send every self-deploy run at a 404.
+    expect(RELEASE_ARTIFACT_ROUTE.test(`/downloads/kinu-worker-${MANIFEST.version}.tar.gz`)).toBe(true);
+    // A version string this route cannot match is an artifact nothing can
+    // download; `+` and `.` are in every build stamp this repository makes.
+    expect(RELEASE_ARTIFACT_ROUTE.test('/downloads/kinu-worker-0.1.0+abcdef1.tar.gz')).toBe(true);
+    expect(RELEASE_ARTIFACT_ROUTE.test('/downloads/kinu-worker-../secrets.tar.gz')).toBe(false);
   });
 
   test('it parses as a release manifest', () => {

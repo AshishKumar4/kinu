@@ -190,3 +190,13 @@ export const ReleaseManifestSchema: v.GenericSchema<ReleaseManifest> = v.object(
   })),
 });
 
+
+/**
+ * Where a release artifact is published, and the pattern the Worker serves it
+ * on. One spelling: the artifact is an R2 object rather than a static asset
+ * (it is larger than the per-file limit `scripts/deploy.test.ts` measures), so
+ * the path exists twice by construction — in the manifest a deployment reads, and in the route
+ * that streams the bytes — and two spellings of it would be a 404 nobody sees
+ * until somebody's install.
+ */
+export const RELEASE_ARTIFACT_ROUTE = /^\/downloads\/(kinu-worker-[A-Za-z0-9._+-]+\.tar\.gz)$/u;

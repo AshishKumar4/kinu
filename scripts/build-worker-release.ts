@@ -45,7 +45,17 @@ if (version === undefined || sha === undefined) {
 
 const dist = distArg ?? join(REPO, 'packages/cf-backend/dist');
 
+/** Where the small, publishable things go: `release.json` and the artifact's
+ *  `.sha256`, both assets, both signed with the CLI's by `sign-release.ts`. */
 const outDir = outArg ?? join(dist, 'client/downloads');
+
+/** Where the tarball goes, and deliberately NOT the assets directory:
+ *  this artifact is larger than Cloudflare's per-file static-asset limit, so a
+ *  deploy that staged it beside the CLI tarballs would fail at asset upload.
+ *  `scripts/deploy.sh` puts this file into the `kinu-releases` R2 bucket and
+ *  the Worker streams it at the same public path it would have had as an
+ *  asset. `scripts/deploy.test.ts` measures both halves. */
+const artifactDir = join(dist, 'worker-release');
 
 /** Every file under `root`, depth first, as paths relative to it. */
 function walk(root: string, base = ''): readonly string[] {
@@ -135,16 +145,18 @@ writeFileSync(join(staging, 'release.json'), manifestText);
 
 mkdirSync(outDir, { recursive: true });
 
+mkdirSync(artifactDir, { recursive: true });
+
 const artifact = `kinu-worker-${version}.tar.gz`;
 
-const tar = Bun.spawnSync(['tar', '-czf', join(outDir, artifact), '-C', staging, 'release.json', 'worker', 'client']);
+const tar = Bun.spawnSync(['tar', '-czf', join(artifactDir, artifact), '-C', staging, 'release.json', 'worker', 'client']);
 
 if (tar.exitCode !== 0) {
   console.error(`build-worker-release: tar failed — ${new TextDecoder().decode(tar.stderr)}`);
   process.exit(1);
 }
 
-const packed = readFileSync(join(outDir, artifact));
+const packed = readFileSync(join(artifactDir, artifact));
 
 const digest = createHash('sha256').update(packed).digest('hex');
 
@@ -159,6 +171,6 @@ rmSync(staging, { recursive: true, force: true });
 const megabytes = (packed.length / 1_000_000).toFixed(1);
 
 console.log(
-  `build-worker-release: ${artifact} ${megabytes} MB — ${modules.length} module(s), `
+  `build-worker-release: ${join(artifactDir, artifact)} ${megabytes} MB — ${modules.length} module(s), `
   + `${files.length - modules.length} asset(s), sha256 ${digest.slice(0, 12)}`,
 );

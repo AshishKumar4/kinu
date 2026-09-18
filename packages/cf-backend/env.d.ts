@@ -68,6 +68,11 @@ declare global {
      *  blob. Absent ⇒ note-only feedback still lands and a screenshot
      *  submission is refused with a reason. */
     FEEDBACK_BUCKET?: R2Bucket;
+    /** The worker release artifacts the self-deploy flow downloads. Absent ⇒
+     *  /downloads/kinu-worker-<version>.tar.gz answers 404 and a self-deploy
+     *  run stops at the artifact with that status; every other surface is
+     *  unaffected, which is why it is optional. */
+    RELEASES_BUCKET?: R2Bucket;
     /** Analytics Engine datasets — the fleet-level aggregate plane. All three
      *  OPTIONAL so a deployment without the bindings degrades to
      *  console-only diagnostics instead of throwing. Nothing user-authored is

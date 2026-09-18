@@ -16,6 +16,8 @@
  *   3. /login, /auth/*, /logout, /api/auth/* — OAuth/OIDC app auth.
  *   4. / — public landing page when no Kinu session is present.
  *   5. /install, /install.sh, /downloads/kinu, /api/cli/* — CLI install/auth/API.
+ *   5b. /downloads/kinu-worker-<version>.tar.gz — the worker release artifact,
+ *       streamed from R2 because it exceeds the 25 MiB static-asset limit.
  *   6. /api/health, /api/shared/blueprint/<id> — public endpoints (no auth;
  *      the blueprint id carries its own signature).
  *   6b. /mcp/v1/* — MCP server; CLI-bearer-token or session auth + ownership
@@ -55,6 +57,7 @@ import { handleClientErrorRequest } from "./client-error/route";
 import { handleUserRequest } from "./user/routes";
 import { handleAccountRequest } from "./user/account-routes";
 import { handleCliRequest } from "./cli/routes";
+import { handleReleaseArtifactRequest } from "@kinu.run/core";
 import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
 import { handleSharedPublicRequest, handleSharedRequest } from "./shared/routes";
@@ -568,6 +571,13 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   const cliResp = await handleCliRequest(request, env, ctx);
 
   if (cliResp) return cliResp;
+
+  // 5b. The worker release artifact, beside the CLI's downloads and public for
+  //     the same reason: it is served out of R2 rather than as an asset,
+  //     because it is larger than Cloudflare's per-file asset limit.
+  const releaseResp = await handleReleaseArtifactRequest(request, env.RELEASES_BUCKET);
+
+  if (releaseResp) return releaseResp;
 
   // 6. Public JSON — health's build stamp, and a blueprint's page data by
   //    link. The blueprint id carries a signature checked inside its handler
