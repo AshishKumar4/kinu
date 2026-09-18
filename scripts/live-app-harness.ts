@@ -12,6 +12,10 @@
  * answers `/api/health` on, racing the child's own exit, and every page wait is
  * a condition. Port 3000 is reserved, so the caller names a port or takes an
  * ephemeral one and the harness reads the actual port back.
+ *
+ * Nothing of the box carries into a run: every boot persists its Durable
+ * Objects into a state directory minted for it, never the checkout's
+ * `.wrangler/state` (`statePath` below).
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -21,12 +25,19 @@ import type { Subprocess } from 'bun';
 import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppeteer';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '@kinu.run/core';
-import { holdForRelease } from '../packages/test-utils/src/scratch';
+import { holdForRelease, releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
 import { signalGroup } from './process-group';
 
 const REPO = join(import.meta.dir, '..');
 
 const CF = join(REPO, 'packages', 'cf-backend');
+
+// A caller that is a script rather than a `bun test` row has no preload
+// `afterAll` to release this run's scratch — the state directory each boot
+// mints below would outlive it. Registered once for the module, not once per
+// boot: eleven boots would be eleven listeners. gallery-harness does the same
+// at its own single mint.
+process.once('exit', releaseScratch);
 
 /** The dev server's own output, by origin, for as long as `withLiveApp` holds
  *  that server up. A 500 out of the Worker is printed by vite as `Internal
@@ -123,6 +134,10 @@ export interface LiveApp {
   newPage(): Promise<Page>;
   /** `http://127.0.0.1:<port>` — this run's dev server. */
   readonly origin: string;
+  /** The directory this run's Durable Objects, KV and R2 live in: a scratch
+   *  root minted for this boot, never the checkout's. The plugin writes its
+   *  `v3/do/<namespace>` tree under it. */
+  readonly statePath: string;
 }
 
 function chromePath(): string | undefined {
@@ -278,12 +293,27 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
 
   const output: string[] = [];
 
+  // This boot's OWN Durable Object state. Without it the Cloudflare plugin
+  // persists into `packages/cf-backend/.wrangler/state`, the checkout's one
+  // directory: every run on the box shares it, it outlives every schema
+  // change made since it was written, and genesis is locked with no column
+  // reconcile — so a table it holds from before a column existed makes the
+  // first route naming that column answer 500 (`no such column:
+  // delete_pending`, the deploy wave at 18fbea162, while the same file was
+  // green from a fresh worktree). A tier reads the product, never the box's
+  // leftovers. Released with the rest of this run's scratch.
+  const statePath = scratchDir('live-app-state');
+
   const child = Bun.spawn(
     ['bun', 'x', 'vite', 'dev', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
     {
       cwd: CF,
       stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
-      env: { ...process.env, ...liveAppEnv(), ...options.env },
+      // `KINU_DEV_STATE_DIR` is read by packages/cf-backend/vite.config.ts and
+      // handed to the plugin as `persistState.path`; `options.env` cannot
+      // reach it, a caller asking for the checkout's state is asking for the
+      // defect this directory exists to end.
+      env: { ...process.env, ...liveAppEnv(), ...options.env, KINU_DEV_STATE_DIR: statePath },
       // setsid, so vite leads its own process group: teardown can signal the
       // workerd children with it rather than orphaning them to systemd
       // (deploy.sh:357-362 — this accumulation OOM-killed the box once).
@@ -339,7 +369,7 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
     };
 
     try {
-      return await body({ browser, newPage, origin });
+      return await body({ browser, newPage, origin, statePath });
     } finally {
       devServerOutput.delete(origin);
       signalGroup(browserGroup, 'SIGTERM');
