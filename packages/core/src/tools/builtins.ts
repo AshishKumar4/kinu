@@ -724,6 +724,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           enum: [...TASK_STATUSES],
           description: 'For action=update: active when you start the item, done when it is finished, dropped when it is no longer needed, open to reopen it.',
         },
+        note: {
+          type: ['string', 'null'],
+          description: 'For action=update: a one-line annotation beside the item, or null to clear it. Either `status` or `note` must be present.',
+        },
         role: {
           type: 'string',
           description: 'For action=mode: the role id to switch to (kebab-case; the catalog defines which exist — unknown ids are refused with the known list). The switch applies from your NEXT turn. Omit to read the active role id.',
