@@ -683,6 +683,194 @@ test('an explicitly missing file is an oracle miss; authorization and server fai
 });
 
 /**
+ * THE FIVE VERIFIER READS, each over the RPC it wraps.
+ *
+ * One row per read, because each one is a claim about a DIFFERENT product
+ * surface and a shared happy path would prove only that the socket works: the
+ * roster's `lifetime`, the task list's statuses, the plan view at the ROOT
+ * path, the decision's queued handoff, and a preview request that carries a
+ * query string. That last one is the row that would have caught the defect
+ * this test was written against — assigning a path with `?` to `pathname`
+ * percent-encodes the `?`, so `/tickets?status=claimed` reached a fixture app
+ * as `/tickets%3Fstatus=claimed` and answered 404.
+ */
+/** One RPC method → the reply this fixture answers it with. A named contract
+ *  because the probes REWRITE entries mid-test (the plan view's three shapes),
+ *  so the map is mutable by design rather than by omission. */
+const FixtureRpcMethodSchema = v.picklist([
+  'listSubordinates', 'listAgentTasks', 'inspectSubordinate', 'decidePlanReview',
+]);
+
+interface FixtureRpcAnswers {
+  listSubordinates: JsonValue;
+  listAgentTasks: JsonValue;
+  inspectSubordinate: JsonValue;
+  decidePlanReview: JsonValue;
+}
+
+describe('the verifier reads speak the RPCs the web app is bound to', () => {
+  const PLAN_ROW = {
+    id: 'plan-7', sessionId: 'default', revision: 2, content: '1. one\n2. two\n3. three',
+    status: 'pending', annotations: [], feedback: null, handoffAccepted: true,
+    createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_001, decidedAt: null,
+  };
+
+  const answers: FixtureRpcAnswers = {
+    listSubordinates: [
+      { name: 'alpha', status: 'dismissed', lifetime: 'task', createdBy: 'orchestrator',
+        currentTask: null, createdAt: 1, dismissedAt: 2, actorReference: null, birth: null,
+        deleteRequested: false, taskEventId: null },
+    ],
+    listAgentTasks: [
+      { id: 't1', parentId: null, title: 'write the doc', status: 'done', createdAt: 3, updatedAt: 4, subtasks: [] },
+    ],
+    inspectSubordinate: { view: 'plans', path: [], page: { status: 'end', items: [PLAN_ROW] } },
+    decidePlanReview: { ok: true, plan: { ...PLAN_ROW, status: 'approved' }, queued: true },
+  };
+
+  /** Every RPC this fixture was ASKED, so a read that reached a different
+   *  method than the one its doc names fails here rather than passing on a
+   *  lenient parse. */
+  const asked: { method: string; args: readonly unknown[] }[] = [];
+
+  const open = () => {
+    const server = Bun.serve({
+      port: 0, hostname: '127.0.0.1',
+      fetch(request, upgrading) {
+        if (request.method === 'DELETE') return Response.json({ ok: true });
+
+        if (upgrading.upgrade(request)) return;
+        const url = new URL(request.url);
+
+        return Response.json({ path: url.pathname, query: url.search });
+      },
+      websocket: {
+        message(socket, message) {
+          const frame = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
+          asked.push({ method: frame.method, args: frame.args });
+          const known = v.safeParse(FixtureRpcMethodSchema, frame.method);
+          socket.send(rpcReplyFrame({ requestId: frame.id, result: known.success ? answers[known.output] : null }));
+        },
+      },
+    });
+
+    return {
+      server,
+      session: new KinuPublicSession({
+        origin: server.url.origin, identity: { kind: 'loopback' },
+        workspace: 'probe', purpose: 'verifier read probe',
+        llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+      }, 'probe'),
+    };
+  };
+
+  test('subordinates() is listSubordinates, narrowed to name, status and lifetime', async () => {
+    const { server, session } = open();
+    asked.length = 0;
+
+    try {
+      await session.connect();
+      // `lifetime` is the point: it is the column no later state recovers, so
+      // dropping it would make "a task hire retired itself" unaskable.
+      expect(await session.subordinates())
+        .toEqual([{ name: 'alpha', status: 'dismissed', lifetime: 'task' }]);
+
+      expect(asked).toEqual([{ method: 'listSubordinates', args: [] }]);
+    } finally { await session.teardown(); await server.stop(true); }
+  });
+
+  test('tasks() is listAgentTasks, with the status a reply is checked against', async () => {
+    const { server, session } = open();
+    asked.length = 0;
+
+    try {
+      await session.connect();
+
+      expect(await session.tasks()).toEqual([
+        { id: 't1', title: 'write the doc', status: 'done', createdAt: 3, updatedAt: 4, subtasks: [] },
+      ]);
+
+      expect(asked).toEqual([{ method: 'listAgentTasks', args: [] }]);
+    } finally { await session.teardown(); await server.stop(true); }
+  });
+
+  test('plans() is inspectSubordinate over the ROOT path, and a missing view is an empty list', async () => {
+    const { server, session } = open();
+    asked.length = 0;
+
+    try {
+      await session.connect();
+      expect((await session.plans()).map((plan) => plan.id)).toEqual(['plan-7']);
+      // The ROOT path and the `plans` view: a request that walked into a
+      // subordinate would credit the wrong actor with the root's plan.
+      expect(asked).toEqual([{
+        method: 'inspectSubordinate', args: [{ path: [], view: 'plans', page: { limit: 50 } }],
+      }]);
+
+      answers.inspectSubordinate = { view: 'missing', path: [], reason: 'missing', error: 'no plan_reviews table' };
+      expect(await session.plans()).toEqual([]);
+
+      // Any OTHER view is a protocol disagreement, not an empty reading.
+      answers.inspectSubordinate = { view: 'children', path: [], page: { status: 'end', items: [] } };
+      await expect(session.plans()).rejects.toThrow('children');
+    } finally {
+      answers.inspectSubordinate = { view: 'plans', path: [], page: { status: 'end', items: [PLAN_ROW] } };
+      await session.teardown();
+      await server.stop(true);
+    }
+  });
+
+  test('decidePlan() is decidePlanReview, and reports the queued handoff', async () => {
+    const { server, session } = open();
+    asked.length = 0;
+
+    try {
+      await session.connect();
+      const decided = await session.decidePlan('plan-7', 2, 'approve');
+
+      if (!decided.ok) throw new Error('the fixture answered a refusal');
+      // `queued` is the fact a caller that must WAIT for the implementation
+      // turn needs; an approval whose handoff was accepted starts one.
+      expect(decided.queued).toBe(true);
+      expect(decided.plan.status).toBe('approved');
+      expect(asked).toEqual([{ method: 'decidePlanReview', args: ['plan-7', 2, 'approve'] }]);
+
+      await session.decidePlan('plan-7', 2, 'request_changes', 'needs a rollback step');
+      expect(asked.at(-1)?.args).toEqual(['plan-7', 2, 'request_changes', 'needs a rollback step']);
+    } finally { await session.teardown(); await server.stop(true); }
+  });
+
+  test('fetchPreview() keeps the query string, the exposure path prefix and the method', async () => {
+    const { server, session } = open();
+
+    try {
+      await session.connect();
+      // A bare path.
+      expect(JSON.parse((await session.fetchPreview(server.url.origin, '/health')).text))
+        .toEqual({ path: '/health', query: '' });
+
+      // A QUERY, which is the contract a slate case exercises.
+      expect(JSON.parse((await session.fetchPreview(server.url.origin, '/tickets?status=claimed&agent=ana')).text))
+        .toEqual({ path: '/tickets', query: '?status=claimed&agent=ana' });
+
+      // A preview URL that carries its own path prefix — a capability URL
+      // does — keeps it in front of the request path.
+      expect(JSON.parse((await session.fetchPreview(`${server.url.origin}/p/abc123/`, '/metrics')).text))
+        .toEqual({ path: '/p/abc123/metrics', query: '' });
+
+      // And it WRITES: an app's own contract cannot be checked with reads
+      // alone.
+      const posted = await session.fetchPreview(server.url.origin, '/tickets', {
+        method: 'POST', json: { id: 'q-1', priority: 2 },
+      });
+
+      expect(posted.status).toBe(200);
+      expect(JSON.parse(posted.text)).toEqual({ path: '/tickets', query: '' });
+    } finally { await session.teardown(); await server.stop(true); }
+  });
+});
+
+/**
  * The `genesis: false` open, end to end against a fake deployment.
  *
  * The product's own surfaces do the work and the fake only records them: the
