@@ -66,8 +66,18 @@ const WORKSPACE_PURPOSE = 'Fix the checkout coupon 500 and report on the support
  *  expected must cost hold time, never an unbounded palette. */
 const FRAME_BUDGET = 170;
 
+/**
+ * The tick a hold is priced in. Measured with ffmpeg 8.0 / ffprobe on this
+ * host, 2026-09-18: the concat demuxer truncates every `duration` to a whole
+ * 1/25 s tick, so a planned 0.07 s frame reaches the GIF as 0.04 s. Holds are
+ * therefore snapped DOWN onto this grid before the manifest states them —
+ * the film's plan and the file's packets then agree exactly, and the
+ * verification below can fail on a real drift of one tick.
+ */
+const FRAME_TICK_MS = 40;
+
 /** A hold below this reads as a stutter, above it as a stall. */
-const MIN_HOLD_MS = 40;
+const MIN_HOLD_MS = FRAME_TICK_MS;
 
 const MAX_HOLD_MS = 1_400;
 
@@ -136,8 +146,15 @@ const INSPECTOR_WIDTH = `(() => {
 const STRIP_LABELS = `[...document.querySelectorAll('#inspector .p-tabstrip button')]
   .map((button) => (button.textContent ?? '').trim()).filter((label) => label.length > 0)`;
 
-/** Tool cards standing in the transcript — what a turn that ran tools leaves. */
-const TOOL_CARDS = `document.querySelectorAll('#chat [data-tool-group]').length`;
+/**
+ * Tool cards standing in the transcript — what a turn that ran tools leaves.
+ *
+ * `data-tool-state` is on EVERY call's card; `data-tool-group` is only on the
+ * header a run of two or more shares (core's `MIN_GROUP`), so counting groups
+ * read zero for the plan turn's single `submit_plan` and missed the whole
+ * point of the count.
+ */
+const TOOL_CARDS = `document.querySelectorAll('#chat [data-tool-state]').length`;
 
 const PLAN_STATUS = `(document.querySelector('#inspector [data-plan-status]')?.textContent ?? '').trim()`;
 
@@ -172,9 +189,19 @@ const ControlSchema = v.object({ x: v.number(), y: v.number(), name: v.string() 
 /**
  * The first visible control whose accessible name matches, scoped to a
  * container: its centre in viewport coordinates and the name that matched.
-  * Role and NAME only — the accessible name: `aria-label`, else the control's
- * own text, else `title` — so a
- * relabelled control still answers and a copied sentence never does.
+ * Role and NAME only — the accessible name: `aria-label`, else the control's
+ * own text, else `title` — so a relabelled control still answers and a copied
+ * sentence never does.
+ *
+ * The match is scrolled into its own scroller before it is measured, because
+ * the press is a real mouse click at real coordinates: a long plan puts
+ * `Approve & implement` ~600 px below a 900 px viewport inside the
+ * inspector's `overflow-y-auto` column, and the coordinates of an element
+ * outside the viewport belong to nothing — Chrome delivers that click to
+ * `<html>` and the product never sees it. `nearest` scrolls the least amount
+ * that makes the control clickable, so the film pans only where a person
+ * would. A control still outside the viewport after that is named as such
+ * rather than clicked into the void.
  */
 async function control(page: Page, input: { within: string; name: string }): Promise<v.InferOutput<typeof ControlSchema>> {
   const found = await page.evaluate(`(() => {
@@ -188,12 +215,20 @@ async function control(page: Page, input: { within: string; name: string }): Pro
       const text = (element.textContent ?? '').trim();
       const name = element.getAttribute('aria-label') ?? (text.length > 0 ? text : (element.getAttribute('title') ?? ''));
       const shut = element.disabled === true;
-      const box = element.getBoundingClientRect();
       candidates.push(name + (shut ? ' [disabled]' : '') + (element.getClientRects().length === 0 ? ' [hidden]' : ''));
 
       if (shut || element.getClientRects().length === 0 || !pattern.test(name)) continue;
+      element.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
 
-      return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2), name };
+      const box = element.getBoundingClientRect();
+      const x = Math.round(box.x + box.width / 2);
+      const y = Math.round(box.y + box.height / 2);
+
+      if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) {
+        return { unreachable: name + ' at ' + String(x) + ',' + String(y) };
+      }
+
+      return { x, y, name };
     }
 
     return { candidates };
@@ -202,6 +237,12 @@ async function control(page: Page, input: { within: string; name: string }): Pro
   const control = v.safeParse(ControlSchema, found);
 
   if (!control.success) {
+    const offscreen = v.safeParse(v.object({ unreachable: v.string() }), found);
+
+    if (offscreen.success) {
+      throw new Error(`the ${input.name} control inside ${input.within} stays outside the viewport: ${offscreen.output.unreachable}`);
+    }
+
     const seen = v.parse(v.object({ candidates: v.array(v.string()) }), found);
 
     throw new Error(`no ${input.name} control inside ${input.within}; saw ${JSON.stringify(seen.candidates)}`);
@@ -404,7 +445,8 @@ function reel(page: Page, framesDir: string) {
     const last = entries[entries.length - 1];
 
     if (last !== undefined) {
-      last.holdMs = Math.min(MAX_HOLD_MS, Math.max(MIN_HOLD_MS, now - shotAt));
+      const spent = Math.min(MAX_HOLD_MS, Math.max(MIN_HOLD_MS, now - shotAt));
+      last.holdMs = FRAME_TICK_MS * Math.floor(spent / FRAME_TICK_MS);
     }
 
     shotAt = now;
@@ -592,8 +634,8 @@ export async function filmPlanReview(
   }
 
   for (const [index, entry] of entries.entries()) {
-    // GIF frame delays are centiseconds, so a hold lands within ~20ms of
-    // plan; 30ms of slack keeps quantization from failing a true beat.
+    // Every hold is already on the demuxer's tick, so plan and packet agree
+    // exactly; the slack is under one tick, and a frame off by a tick fails.
     if (Math.abs((facts.packetDurations[index] ?? 0) - entry.holdMs / 1000) > 0.03) {
       throw new Error(`GIF packet ${String(index)} holds ${String(facts.packetDurations[index])}s, the film planned ${String(entry.holdMs / 1000)}s`);
     }
