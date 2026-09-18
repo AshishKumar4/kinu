@@ -889,7 +889,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts',
+    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -912,6 +912,11 @@ export const LADDER: readonly Gate[] = [
     // `client-graph.test.ts`, `install-scripts-gate.test.ts` and
     // `tracing-gate.test.ts` join 2026-09-12: three gates that had shipped with
     // no red proof at all. Measured solo on the 24-thread box: 0.7/0.4/0.2s.
+    // `release-manifest.test.ts` joins 2026-09-18: it shipped with fcc3ec7ec
+    // claimed by no tier at all — the same defect `capability-parity` was, and
+    // the reason `bun test scripts/ladder.test.ts` was red on main that day.
+    // Measured solo on the 24-thread box: 0.09s wall, 34ms in-suite, 14 tests.
+    // The row stays 24s for the reason stated above.
     seconds: 24,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
@@ -944,7 +949,11 @@ export const LADDER: readonly Gate[] = [
       + 'including the `tag@digest` form that pulls correctly and leaves a mutable tag in the '
       + 'file — against the `@cloudflare/sandbox` version that actually ships, and every one of '
       + 'them uploads source maps with the Vite half that produces them, called rather than read '
-      + 'as text. For capability-parity, the ATTRIBUTION boundary its whole count rests '
+      + 'as text. For the release MANIFEST, two readers of one `wrangler.jsonc` held '
+      + 'equal — the manifest\'s binding set against what `deriveInfrastructure()` reads '
+      + 'out of the same file — and a var left unclassified until somebody says whether a '
+      + 'stranger\'s Worker gets our value, computes its own, or must never see it. '
+      + 'For capability-parity, the ATTRIBUTION boundary its whole count rests '
       + 'on: a literal missing a REQUIRED member is a DIFFERENT TYPE, never an adapter '
       + 'omitting an optional capability — a foreign turn config sharing two '
       + 'optional-looking names, a fetch options bag sharing `cache` and `signal`, and an '
@@ -1465,19 +1474,76 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/*-ux.test.ts scripts/computed-style.test.ts',
+    run: 'bun test --timeout=0 scripts/chat-and-files-ux.test.ts',
+    label: 'UI gate self-tests: chat and files',
+    tier: 'ci',
+    // Measured 2026-09-18 alone on the 24-thread workstation under the wave's
+    // own wrapper (`bun scripts/gate-cost-measure.ts`), load 0.8 at start:
+    // 155.6s wall, 34.4s CPU, 2356 MiB peak for 89 tests over one vite boot.
+    // Declared with headroom for the load the wave runs it under; the two
+    // figures the wave admits against are scripts/gate-cost.json's, not this.
+    seconds: 175,
+    catches: 'the workspace page as a browser lays it out — the four defects this suite '
+      + 'was built for, each invisible to `tsc`, `oxlint` and every source-reading test '
+      + 'here: the streaming caret sitting on a line of its OWN below the paragraph '
+      + 'instead of riding the last line, a turn that finished its prose and went quiet '
+      + 'between steps drawing no live affordance at all, "go to the parent directory" '
+      + 'landing on the filesystem root because every environment reported its working '
+      + 'directory as the literal `.` and the pane did string arithmetic on it, and the '
+      + 'capability row rendering raw snake_case ids with no reading and no absences. '
+      + 'Around them the whole WorkspacePage boundary: chat send admission, terminal '
+      + 'workspace denial, the file-preview and history/roster request generations, the '
+      + 'one composite file plane, the supervise view live, a revoked device whose '
+      + 'command may still run, machine linking on the surface that asked for it, '
+      + 'composer and message continuity, the tool preview redacting through the one '
+      + 'canonical policy, WorkTab drawing a section only when it has something to '
+      + 'show, the owner\'s model tiers with each model\'s own levels, the workbench '
+      + 'type scale, the shell rails collapsing and reopening across a reload, and a '
+      + 'hosted actor\'s cards staying out of the workspace\'s own chat. And the '
+      + 'INSPECTOR COLUMN end to end: the account\'s width, the workspace\'s open or '
+      + 'closed choice, a gesture outranking the arriving signal, and an anonymous '
+      + 'session\'s column opening on the one signal that it has something to show — '
+      + '`stored === null` read as "nothing keys this layout, so nothing is decided" '
+      + 'kept that column shut for the page\'s life, and a browser is the only place '
+      + 'that shows. And the Environment tab\'s LINE TERMINAL, which no gate read: a '
+      + 'command output arrived as bare LF and every row of an `ls -la` started where '
+      + 'the row above it ended, while a pasted two-line command ran its first line and '
+      + 'dropped the second with no echo and no error. Both are measured by driving the '
+      + 'real pane and reading the rows a browser drew.',
+    blind: 'the gallery render itself, and every frame this suite does not open. It '
+      + 'drives the workspace page and the home creation form through gallery fixtures '
+      + 'over a locally built bundle — never a deployed session, a real OAuth flow or a '
+      + 'live model — and nothing compares pixels. The diagnostics drive costs nothing '
+      + 'measurable: 55.8s before and 55.6s after for this suite, 2026-09-01.',
+    inputs: AMBIENT_BY_NAME,
+  },
+  {
+    run: 'bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts scripts/*-ux.test.ts scripts/computed-style.test.ts',
     label: 'UI gate self-tests',
     tier: 'ci',
-    // Measured 2026-09-14 with both the app-background and the account-ux
-    // self-tests in this row: 347.00s over one run on the 24-thread
-    // workstation (293.62s with app-background alone, declared 315; 324.74s
-    // with account-ux alone, declared 350; 265.76s before either joined).
+    // Measured 2026-09-18 alone on the 24-thread workstation under the wave's
+    // own wrapper, load 1.9 at start: 270.9s wall, 62.4s CPU, 2534 MiB peak
+    // over the sixteen files this row runs — fifteen `*-ux` suites and
+    // `computed-style`.
+    //
     // The row is the `*-ux` FAMILY since 2026-09-15 rather than a list: a
     // fifteenth suite joined on 2026-09-14 by a hand edit in three files, and
     // a suite outside every family is what the orphan test below catches. The
     // client-failure trio (45 s, measured 13.84 s on 2026-09-06) and
     // `workspace-name-ux` fold in; their declared seconds are added here.
-    seconds: 420,
+    //
+    // Since 2026-09-18 it carves ONE suite back out of that family —
+    // `chat-and-files-ux`, the row above — with bun's own
+    // `--path-ignore-patterns`, so the family still claims every new `*-ux`
+    // suite and a file is in exactly one of the two rows. The two together
+    // are ~500s serial against the 480s shared deadline, which is a row that
+    // reports a hang wherever the defect is: this row died at 124 in the
+    // 2026-09-16 wave and again at 480.42s measured alone on 2026-09-18,
+    // while its declared 420 was never a measurement of the set it had grown
+    // into. Earlier figures for the unsplit row: 347.00s on 2026-09-14
+    // (293.62s with app-background alone, 324.74s with account-ux alone,
+    // 265.76s before either joined).
+    seconds: 300,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
@@ -1506,12 +1572,8 @@ export const LADDER: readonly Gate[] = [
       + 'block leaves the rail an entry that can never draw — plus the '
       + 'narrow-container scrim actually CLOSING the rail rather than dimming a '
       + 'document with no way back, and the action strip collapsing on a settled plan '
-      + 'instead of spending a margin on buttons nobody can press. And the Environment '
-      + 'tab\'s LINE TERMINAL, which no gate read: a command output arrived as bare LF '
-      + 'and every row of an `ls -la` started where the row above it ended, while a '
-      + 'pasted two-line command ran its first line and dropped the second with no echo '
-      + 'and no error. Both are measured now by driving the real pane and reading the '
-      + 'rows a browser drew. The models section\'s accessible names and the '
+      + 'instead of spending a margin on buttons nobody can press. The models '
+      + 'section\'s accessible names and the '
       + 'Phase 1 sharing surfaces are read the same way: every tier row and '
       + 'role field stays reachable by the name assistive technology announces, '
       + 'and the shared library, the blueprint page, the share dialog and the '
@@ -1522,9 +1584,7 @@ export const LADDER: readonly Gate[] = [
       + 'z-index, stops its clock when the document is hidden, draws one still '
       + 'under reduced motion and on a phone width, never mounts under a '
       + 'workspace route, and follows the overview read model through idle, '
-      + 'working and attention. The '
-      + 'drive costs nothing measurable: 55.8s before and '
-      + '55.6s after for chat-and-files-ux alone, 2026-09-01. The account surfaces '
+      + 'working and attention. The account surfaces '
       + 'join here: the setup modal over the home chrome, the settings providers '
       + 'section, the onboarding wizard at each of its four steps with only the '
       + 'active panel reachable, the account section whose delete button wakes '
@@ -1535,7 +1595,8 @@ export const LADDER: readonly Gate[] = [
       + '21 frames × 4 themes and stays a standalone run — a gate that fails because '
       + 'Chrome is missing fails for a reason unrelated to the change under test. Also '
       + 'MOST OF THE GALLERY: only `shell`, `streaming` and `environment` carry any '
-      + 'assertion here, while gallery.tsx dispatches ~29 frames, so the rest are proven '
+      + 'assertion across the two UI rows, and the last two are the chat-and-files '
+      + 'row\'s, while gallery.tsx dispatches ~29 frames — so the rest are proven '
       + 'to mount and nothing more. The three non-default themes are audited on `shell` '
       + 'alone. The control-plane and feedback frames use authenticated gallery fixtures, not '
       + 'a deployed OAuth flow. Browser capture fidelity outside those fixed frames remains '
@@ -2489,6 +2550,12 @@ export function bunWouldSkip(path: string): boolean {
   return bunIgnores.some((glob) => glob.match(path));
 }
 
+/** The flag a row carves a suite out of its own glob with, spelled as bun
+ *  spells it. One token, read by {@link claims} and dropped by
+ *  {@link runnableArgv}, which re-supplies the resolved set that already has
+ *  the subtraction in it. */
+export const PATH_IGNORE_FLAG = '--path-ignore-patterns';
+
 /**
  * Which test files a command runs. This is how monotonicity and reachability are
  * decided — comparing command text would call a gate that gained an argument a
@@ -2576,6 +2643,17 @@ export function claims(command: string, tracked: readonly string[]): string[] {
   // `preload` and `pathIgnorePatterns` silently, so no gate may use it — and a
   // gate that does claims nothing and fails as an orphan rather than passing.
 
+  // `--path-ignore-patterns=<glob>` carves a named suite out of a family glob,
+  // which is how the UI self-tests are two rows: the family claims every
+  // `*-ux` suite and this subtracts the one heavy enough to be a row of its
+  // own. Matched with `Bun.Glob`, the matcher bun applies to the flag itself,
+  // so the set credited here and the set bun runs are one set whether the row
+  // reaches bun as resolved argv (this runner) or as bash-expanded words
+  // (deploy.sh). A file is then in exactly one of the two rows.
+  const ignored = words
+    .filter((word) => word.startsWith(`${PATH_IGNORE_FLAG}=`))
+    .map((word) => new Bun.Glob(word.slice(PATH_IGNORE_FLAG.length + 1)));
+
   const targets = words.slice(2).filter((word) => !word.startsWith('-'));
   const claimed: string[] = [];
 
@@ -2604,7 +2682,8 @@ export function claims(command: string, tracked: readonly string[]): string[] {
   // resolver answered "which files live here" where the question is "which
   // files does this command execute".
   return [...new Set(claimed)]
-    .filter((path) => !bunWouldSkip(path) && isBunDiscoverableSuite(path));
+    .filter((path) => !bunWouldSkip(path) && isBunDiscoverableSuite(path)
+      && !ignored.some((glob) => glob.match(path)));
 }
 
 /**
@@ -2645,7 +2724,11 @@ export function runnableArgv(run: string, tracked: readonly string[]): string[] 
   // named suite TWICE, once as the literal and once from the glob that also
   // matched it — so a row mixing a glob with a named file ran one suite twice
   // and compared unequal to the set it is measured as.
-  const flags = words.filter((word) => !word.includes('/'));
+  //
+  // `--path-ignore-patterns=<suite>` goes with them: its subtraction is
+  // already in `claims()`'s answer, and passing it beside an explicit argv
+  // would only ask bun to remove a file this list does not contain.
+  const flags = words.filter((word) => !word.includes('/') && !word.startsWith(`${PATH_IGNORE_FLAG}=`));
 
   return [...flags, ...files];
 }
