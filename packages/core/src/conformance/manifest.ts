@@ -299,6 +299,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // the owner's own sequence, so two actors both hold a `t1` and the
     // uniqueness that makes the id referable is UNIQUE (actor_id, seq).
     agent_tasks: EVERYWHERE,
+    // The operator's annotation on a task row, owned alongside the task. Its
+    // own table because agent_tasks is genesis-locked — every read LEFT JOINs
+    // it in, so a missing row is a null note, not a missing column on storage
+    // that predates it.
+    agent_task_notes: EVERYWHERE,
     // The plan revision a task was added under, owned alongside the task.
     plan_task_links: EVERYWHERE,
     // SPLIT OWNERSHIP, and the store interface is where the split is stated.
