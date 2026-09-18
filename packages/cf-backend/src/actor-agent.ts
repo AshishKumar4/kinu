@@ -6725,6 +6725,16 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * The requested actor resolves its own authority; the root's admitted
    * operation is not this actor's profile.
+   *
+   * THE WORKSPACE'S PINNED MODEL IS PASSED, exactly as the root's own chat turn
+   * passes it (`beforeTurn`), because the pin is the workspace's and a hosted
+   * actor's turn is one of that workspace's turns. Without it every hosted turn
+   * — an actor pane's chat, a hire's delegated turn, a head, a node — ran on
+   * the account catalog's tier model while the workspace said it was pinned:
+   * measured 2026-09-18 on a local dev build, a workspace pinned to
+   * `openai-compat/fake-live` answered its subordinate pane's message on
+   * `workers-ai/@cf/zai-org/glm-5.3`. The role still decides the TIER; the pin
+   * decides the model, and `tier.source` records which one the turn ran under.
    */
   protected async hostedActorProfile(input: {
     readonly actor: ActorHandle;
@@ -6744,6 +6754,7 @@ export abstract class ActorAgent extends Think<Env> {
         availableTools: [...input.availableTools],
         activeSkills: [],
         explicitTier: input.explicitTier ?? config.getAssignedTier() ?? undefined,
+        workspaceModel: this.config.getModel(),
       }),
       inputs,
     };
