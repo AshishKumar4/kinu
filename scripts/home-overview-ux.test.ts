@@ -1,11 +1,13 @@
 /**
- * The home workspace cards, in a real browser.
+ * The home page's recent workspaces, in a real browser: one 56px line per
+ * workspace — title, the last task when it says something the title does
+ * not, one status chip, the relative time.
  *
- * What only a browser can say about this row: whether "Needs you" outranks a
+ * What only a browser can say about this line: whether "Needs you" outranks a
  * run in flight, whether a failed refresh keeps the last answer AND says it is
  * stale, whether a card with no answer renders "unavailable" beside a retry
  * that actually reloads, whether the page asks only for the five names it
- * shows, and whether a long task title truncates instead of widening the row.
+ * shows, and whether a long task truncates instead of widening the line.
  * Every one of those is markup plus a live fetch — a unit test reads neither.
  *
  * The fixture is the gallery's own: `?frame=home` mounts the real HomePage
@@ -25,19 +27,10 @@ import { withGallery, type Gallery } from './gallery-harness';
 
 const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'home-status');
 
-const CARDS_SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'home-cards');
-
 mkdirSync(SHOTS, { recursive: true });
-
-mkdirSync(CARDS_SHOTS, { recursive: true });
 
 /** The five names the stock gallery roster displays, in card order. */
 const DISPLAYED = ['checkout-fixes', 'perf-audit', 'email-triage', 'design-sys', 'handwrought-walnut-4166c321'];
-
-/** The evidence roster's task text, spelled the same as gallery.tsx's
- *  EVIDENCE_TASK — the assertion binds the fixture, not a paraphrase. */
-const EVIDENCE_TASK =
-  'Reconcile the supplier ledger against the bank export for August: match every settlement row to its invoice, flag the three unpriced returns, and post the corrected totals back to the weekly ledger sheet before the payout window closes';
 
 /** Names the page asked an overview for, as the fixture recorded them. */
 async function requestedNames(page: Page): Promise<string[]> {
@@ -65,39 +58,31 @@ async function waitForRequests(page: Page, name: string, count: number): Promise
   );
 }
 
-/** One rendered evidence item: which fact, what it says, its classes. */
-interface EvidenceChip {
-  key: string;
-  text: string;
-  className: string;
-}
-
-/** The card rows as a reader sees them: title, the status cluster's whole
- *  text, the evidence items beneath the lead line, and whether a retry
- *  button sits beside the link. */
+/** A line as a reader sees it: the title, the task beneath it (null when
+ *  the line shows none), the one chip's text and classes, whether the line
+ *  says its answer is old, and whether a retry button sits beside the link. */
 interface CardView {
   title: string;
-  /** Everything the right-hand status cluster says, evidence included. */
-  status: string;
+  task: string | null;
+  chip: string;
+  chipClass: string;
+  stale: boolean;
   retry: boolean;
-  evidence: EvidenceChip[];
 }
 
 async function cards(page: Page): Promise<CardView[]> {
   return page.evaluate(() =>
     [...document.querySelectorAll('section[aria-label="Recent workspaces"] a')].map((row) => {
       const [nameEl] = [...row.children];
-
-      const statusEl = row.querySelector('[role="status"]');
+      const [titleEl, taskEl] = [...(nameEl?.children ?? [])];
+      const chip = row.querySelector('[data-overview-chip]');
 
       return {
-        title: nameEl?.textContent ?? '',
-        status: statusEl?.textContent ?? '',
-        evidence: [...row.querySelectorAll('[data-evidence]')].map((el) => ({
-          key: el.getAttribute('data-evidence') ?? '',
-          text: el.textContent ?? '',
-          className: el instanceof HTMLElement ? el.className : '',
-        })),
+        title: titleEl?.textContent ?? '',
+        task: taskEl?.textContent ?? null,
+        chip: chip?.textContent?.trim() ?? '',
+        chipClass: chip instanceof HTMLElement ? chip.className : '',
+        stale: (row.textContent ?? '').includes('checked '),
         // The retry is a sibling of the link, not a child of it.
         retry: row.parentElement?.querySelector('button')?.textContent?.trim() === 'retry',
       };
@@ -111,15 +96,6 @@ function cardNamed(list: CardView[], name: string): CardView {
   if (!found) throw new Error(`no card titled ${name}: ${JSON.stringify(list)}`);
 
   return found;
-}
-
-/** The one evidence item a card shows for `key`. */
-function fact(card: CardView, key: string): EvidenceChip {
-  const hit = card.evidence.find((item) => item.key === key);
-
-  if (!hit) throw new Error(`card "${card.title}" has no ${key} evidence: ${JSON.stringify(card.evidence)}`);
-
-  return hit;
 }
 
 /** One card's next answer, in the tagged shape the fixture's event expects. */
@@ -163,36 +139,37 @@ describe('the home workspace cards', () => {
           'Design system v2', 'Untitled workspace',
         ]);
 
+        // One chip per line, the shared headline: a waiting decision outranks
+        // the live turn beside it, and its count rides the label.
         const coupon = cardNamed(list, 'Checkout coupon bug');
-        expect(coupon.status).toContain('Needs you · 2');
-        expect(coupon.evidence.map((item) => item.text)).toEqual([
-          '2 decisions waiting', 'Working now', 'Updates to read',
-          'Last run: error', 'Investigate intermittent checkout failures in the coupon migration',
-        ]);
+        expect(coupon.chip).toBe('Needs you · 2');
+        expect(coupon.chipClass).toContain('p-accent');
+        expect(coupon.task).toBe('Investigate intermittent checkout failures in the coupon migration');
 
-        expect(cardNamed(list, 'Perf audit — landing').status).toContain('Working');
-        expect(cardNamed(list, 'Perf audit — landing').evidence.some((item) => item.key === 'updates')).toBe(false);
+        expect(cardNamed(list, 'Perf audit — landing').chip).toBe('Working');
 
+        // A sealed run with unread updates: the chip says so, and no run word
+        // decorates the line.
         const triage = cardNamed(list, 'Email triage automation');
-        expect(triage.status).toContain('Last run completed');
-        expect(fact(triage, 'updates').text).toBe('Updates to read');
-        expect(fact(triage, 'run').text).toBe('Last run: completed');
-        expect(fact(triage, 'run').className).toContain('p-success');
+        expect(triage.chip).toBe('Updated');
+        expect(triage.task).toBe("Sort this week's receipts into the ledger");
 
-        // Durable leftovers read as unfinished work, not a live run.
-        expect(cardNamed(list, 'Design system v2').status).toContain('Work remains');
-        expect(fact(cardNamed(list, 'Design system v2'), 'unfinished').text).toBe('Unfinished work');
+        // A sealed error outranks the durable leftovers beside it; and the
+        // task that IS the title (a workspace titled by its first prompt)
+        // is not repeated under it.
+        const design = cardNamed(list, 'Design system v2');
+        expect(design.chip).toBe('Last run failed');
+        expect(design.chipClass).toContain('p-danger');
+        expect(design.task).toBeNull();
 
         const quiet = cardNamed(list, 'Untitled workspace');
-        expect(quiet.status).toContain('No active work');
-        expect(quiet.evidence.map((item) => item.text)).toEqual(['No runs yet']);
-        expect(quiet.status).not.toContain('completed');
+        expect(quiet.chip).toBe('Idle');
+        expect(quiet.task).toBeNull();
 
         // Every displayed name — and nothing else — was asked.
         expect((await uniqueRequested(page)).sort()).toEqual([...DISPLAYED].sort());
-        // lastVisited is labelled as what it is, never implied activity.
-        expect(cardNamed(list, 'Checkout coupon bug').status).toContain('Opened');
-        expect(cardNamed(list, 'Checkout coupon bug').status).not.toContain('last activity');
+        // Nothing on a healthy line claims its answer is old.
+        expect(list.every((card) => !card.stale && !card.retry)).toBe(true);
       } finally {
         await page.close();
       }
@@ -208,25 +185,26 @@ describe('the home workspace cards', () => {
 
         let list = await cards(page);
         // Seeded failure: this card never held a good answer.
-        expect(cardNamed(list, 'Design system v2').status).toContain('unavailable');
+        expect(cardNamed(list, 'Design system v2').chip).toBe('unavailable');
         expect(cardNamed(list, 'Design system v2').retry).toBe(true);
 
         // The other four are healthy — a per-card failure, not a page one.
-        expect(cardNamed(list, 'Email triage automation').status).toContain('Last run completed');
+        expect(cardNamed(list, 'Email triage automation').chip).toBe('Updated');
 
         // Break a healthy card mid-session: the next poll turns its last good
         // answer stale rather than erasing it.
         await setOutcome(page, 'email-triage', { kind: 'status', status: 503 });
         await page.waitForFunction(
           () => [...document.querySelectorAll('section[aria-label="Recent workspaces"] a')]
-            .some((row) => (row.textContent ?? '').includes('Last checked')),
+            .some((row) => (row.textContent ?? '').includes('checked ')),
         );
 
         list = await cards(page);
         const stale = cardNamed(list, 'Email triage automation');
 
-        expect(stale.status).toContain('Last checked');
-        expect(stale.status).toContain('Last run completed');
+        expect(stale.stale).toBe(true);
+        expect(stale.chip).toBe('Updated');
+        expect(stale.chipClass).toContain('p-text-4');
         expect(stale.retry).toBe(true);
 
         // The in-row retry reloads without navigating — arm a good answer
@@ -240,7 +218,7 @@ describe('the home workspace cards', () => {
 
         await page.evaluate(() => {
           const row = [...document.querySelectorAll('section[aria-label="Recent workspaces"] a')]
-            .find((node) => (node.textContent ?? '').includes('Last checked'));
+            .find((node) => (node.textContent ?? '').includes('checked '));
 
           const retry = [...(row?.parentElement?.querySelectorAll('button') ?? [])]
             .find((node) => (node.textContent ?? '').trim() === 'retry');
@@ -251,11 +229,12 @@ describe('the home workspace cards', () => {
         await waitForRequests(page, 'email-triage', before + 1);
         await page.waitForFunction(
           () => ![...document.querySelectorAll('section[aria-label="Recent workspaces"] a')]
-            .some((row) => (row.textContent ?? '').includes('Last checked')),
+            .some((row) => (row.textContent ?? '').includes('checked ')),
         );
 
         list = await cards(page);
-        expect(cardNamed(list, 'Email triage automation').status).not.toContain('Last checked');
+        expect(cardNamed(list, 'Email triage automation').stale).toBe(false);
+        expect(cardNamed(list, 'Email triage automation').retry).toBe(false);
         expect(page.url()).toContain('gallery.html');
       } finally {
         await page.close();
@@ -290,7 +269,7 @@ describe('the home workspace cards', () => {
     });
   });
 
-  test('a narrow viewport wraps the degraded card — updates, last-known, retry all visible', async () => {
+  test('a narrow viewport keeps the degraded line whole — chip, task and retry visible, nothing sideways', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, '');
       await page.setViewport({ width: 390, height: 844 });
@@ -298,21 +277,38 @@ describe('the home workspace cards', () => {
       try {
         for (const name of DISPLAYED) await waitForRequests(page, name, 1);
 
-        // Degrade the card that carries every kind of metadata at once:
-        // a completed run, updates, and a refresh failure on top.
+        // Degrade the line that carries the most: a sealed run, unread
+        // updates, a task beneath the title, and a refresh failure on top.
         await setOutcome(page, 'email-triage', { kind: 'status', status: 503 });
         await page.waitForFunction(
           () => [...document.querySelectorAll('section[aria-label="Recent workspaces"] a')]
-            .some((row) => (row.textContent ?? '').includes('Last checked')),
+            .some((row) => (row.parentElement?.querySelector('button')?.textContent ?? '').trim() === 'retry'),
         );
 
         const list = await cards(page);
         const card = cardNamed(list, 'Email triage automation');
 
-        expect(card.status).toContain('Updates to read');
-        expect(card.status).toContain('Last run completed');
-        expect(card.status).toContain('Last checked');
+        expect(card.chip).toBe('Updated');
+        expect(card.task).toBe("Sort this week's receipts into the ledger");
         expect(card.retry).toBe(true);
+
+        // The line's rule at 390px: the title and task keep to one line
+        // each, and the visible chip does not push past the line's box.
+        const boxes = await page.evaluate(() => {
+          const line = [...document.querySelectorAll('section[aria-label="Recent workspaces"] a')]
+            .find((node) => (node.textContent ?? '').includes('Email triage automation'));
+
+          const chip = line?.querySelector('[data-overview-chip]');
+
+          return {
+            line: line?.getBoundingClientRect().height ?? -1,
+            chipRight: chip?.getBoundingClientRect().right ?? -1,
+            lineRight: line?.getBoundingClientRect().right ?? -1,
+          };
+        });
+
+        expect(boxes.line).toBeLessThanOrEqual(56);
+        expect(boxes.chipRight).toBeLessThanOrEqual(boxes.lineRight);
 
         const overflow = await page.evaluate(() => ({
           scrollWidth: document.documentElement.scrollWidth,
@@ -357,88 +353,6 @@ describe('the home workspace cards', () => {
 
           expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1);
           await page.screenshot({ path: join(SHOTS, `${entry.name}.png`), fullPage: true });
-        } finally {
-          await page.close();
-        }
-      }
-    });
-  });
-
-  test('the evidence roster lists every fact as a chip, and idle is never a completion', async () => {
-    await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, '&roster=evidence');
-
-      try {
-        for (const name of ['ledger-keeper', 'quiet-desk']) await waitForRequests(page, name, 1);
-
-        const list = await cards(page);
-
-        expect(list.map((card) => card.title)).toEqual(['Ledger reconciliation', 'Quiet desk']);
-
-        const ledger = cardNamed(list, 'Ledger reconciliation');
-
-        // The lead slot still wins the line; the row beneath it is the whole
-        // answer, fact by fact, in core's order.
-        expect(ledger.status).toContain('Needs you · 2');
-        expect(ledger.evidence.map((item) => item.text)).toEqual([
-          '2 decisions waiting',
-          'Working now',
-          'Updates to read',
-          'Last run: completed',
-          EVIDENCE_TASK,
-        ]);
-        expect(fact(ledger, 'decisions').className).toContain('p-warning');
-        expect(fact(ledger, 'working').className).toContain('p-accent');
-        expect(fact(ledger, 'updates').className).toContain('p-text-3');
-        expect(fact(ledger, 'run').className).toContain('p-success');
-        expect(fact(ledger, 'task').className).toContain('p-text-4');
-
-        const desk = cardNamed(list, 'Quiet desk');
-
-        expect(desk.status).toContain('No active work');
-        expect(desk.evidence.map((item) => item.text)).toEqual(['No runs yet']);
-        expect(fact(desk, 'empty').className).toContain('p-text-4');
-        // Idle is not evidence of completion: the word must not appear on a
-        // card that never ran, in either status or evidence.
-        expect(desk.status.toLowerCase()).not.toContain('completed');
-        expect(desk.status).not.toContain('Last run');
-      } finally {
-        await page.close();
-      }
-    });
-  });
-
-  test('the evidence roster photographs in dark and light, desktop and mobile', async () => {
-    await withGallery(async (gallery) => {
-      const cases: { name: string; width: number; height: number; theme: 'dark' | 'light' }[] = [
-        { name: 'desktop-dark', width: 1568, height: 829, theme: 'dark' },
-        { name: 'desktop-light', width: 1568, height: 829, theme: 'light' },
-        { name: 'mobile-dark', width: 390, height: 844, theme: 'dark' },
-        { name: 'mobile-light', width: 390, height: 844, theme: 'light' },
-      ];
-
-      for (const entry of cases) {
-        const page = await gallery.newPage();
-        await page.setViewport({ width: entry.width, height: entry.height });
-        await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), entry.theme);
-        await page.goto(`${gallery.origin}/gallery.html?frame=home&roster=evidence`, { waitUntil: 'networkidle0' });
-
-        try {
-          for (const name of ['ledger-keeper', 'quiet-desk']) await waitForRequests(page, name, 1);
-
-          // Chips wrap inside the row; the task always sits on its own second
-          // line; nothing may scroll sideways at 390px.
-          const layout = await page.evaluate(() => ({
-            scrollWidth: document.documentElement.scrollWidth,
-            clientWidth: document.documentElement.clientWidth,
-            tops: [...document.querySelectorAll('[data-evidence]')].map((el) =>
-              el instanceof HTMLElement ? el.offsetTop : -1),
-          }));
-
-          expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
-          expect(new Set(layout.tops).size).toBeGreaterThanOrEqual(2);
-
-          await page.screenshot({ path: join(CARDS_SHOTS, `${entry.name}.png`), fullPage: true });
         } finally {
           await page.close();
         }

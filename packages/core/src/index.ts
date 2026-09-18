@@ -2193,9 +2193,9 @@ export type { TurnAuthor, StoredRowProjection } from './utils/ui-message';
 
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions';
 
-export { buildWorkspaceOverview, overviewHeadline, rosterActivity, workspaceOverviewEvidence, workspaceOverviewStatus, WorkspaceOverviewSchema } from './read-models/workspace-overview';
+export { buildWorkspaceOverview, overviewHeadline, rosterActivity, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
-export type { RosterActivity, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewFact, WorkspaceOverviewSlate, WorkspaceOverviewStatus } from './read-models/workspace-overview';
+export type { RosterActivity, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewSlate } from './read-models/workspace-overview';
 
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
@@ -2305,7 +2305,7 @@ export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 // describe a shape the resolver does not produce.
 export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
 
-export { fmtPct, fmtTokens, fmtUsd, timeAgo } from './utils/format';
+export { fmtPct, fmtTokens, fmtUsd, shortAge, timeAgo } from './utils/format';
 
 export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
 

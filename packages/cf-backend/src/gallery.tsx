@@ -227,25 +227,8 @@ const ACCOUNT_ONBOARDED_AT: number | null = frame === "welcome" ? null : NOW - 8
 const ACCOUNT_WORKSPACE_COUNT = frame === "welcome" ? 0 : 1;
 
 /** `?roster=` selects the home page's account: `empty` is the first-run
- *  account, `evidence` is the two-workspace rig the card evidence pin shoots —
- *  anything else is the five-workspace stock roster. */
+ *  account; anything else is the five-workspace stock roster. */
 const ROSTER = new URLSearchParams(location.search).get("roster") ?? "stock";
-
-/** The evidence rig. `ledger-keeper` carries every kind of fact at once —
- *  decisions, a live turn, unread updates and a sealed run whose task is long
- *  enough to wrap — and `quiet-desk` is the idle card: no runs, nothing
- *  waiting, so "No runs yet" is all it may say and "completed" can never
- *  appear on it. */
-const EVIDENCE_TASK =
-  "Reconcile the supplier ledger against the bank export for August: match every settlement row to its invoice, flag the three unpriced returns, and post the corrected totals back to the weekly ledger sheet before the payout window closes";
-
-const EVIDENCE_ROSTER = {
-  entries: [
-    { name: "ledger-keeper", displayName: "Ledger reconciliation", createdAt: NOW - 9 * 864e5, lastVisited: NOW - 45e3, archivedAt: null },
-    { name: "quiet-desk", displayName: "Quiet desk", createdAt: NOW - 30 * 864e5, lastVisited: 0, archivedAt: null },
-  ],
-  total: 2,
-};
 
 const STOCK_ROSTER = {
   entries: [
@@ -270,7 +253,6 @@ const STOCK_ROSTER = {
 // account ever takes.
 const GALLERY_ROSTER: { entries: WorkspaceEntry[]; total: number } =
     ROSTER === "empty" ? { entries: [], total: 0 }
-  : ROSTER === "evidence" ? EVIDENCE_ROSTER
   : STOCK_ROSTER;
 
 const STUB_DATA = v.parse(JsonObjectSchema, {
@@ -780,10 +762,10 @@ function deviceConnectFixture(path: string, method: string): Response | null {
 
 /* Home-card overview fixture. The stock roster gets five rows, five states
    the card exists to show: a decision waiting, a live turn, a sealed
-   completed run, durable unfinished work, and a quiet idle row. The evidence
-   roster gets its own pair — `ledger-keeper` answers with every fact at once
-   and `quiet-desk` has never run, which is the state the card must not let a
-   completion word leak into. A gate rewrites a row's answer with
+   completed run, durable unfinished work, and a quiet idle row. One row's
+   last task is its own title — the shape every workspace titled by its first
+   prompt has — so the line's task text can prove it stays off a repeat. A
+   gate rewrites a row's answer with
    `gallery:overview` ({name, outcome}) — `{kind:'status'}` answers it with
    that HTTP status, so "unavailable" and "last-known after a refresh failure"
    are reachable without leaving the page. `?overflowRoster=1` adds a sixth
@@ -808,7 +790,7 @@ const STOCK_OVERVIEWS = {
   },
   "design-sys": {
     observedAt: NOW - 60e3, activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: { status: "error", task: "Regenerate the token sheet from the palette spec" },
+    latestRun: { status: "error", task: "Design system v2" },
     primarySlate: null,
   },
   "handwrought-walnut-4166c321": {
@@ -824,20 +806,7 @@ const STOCK_OVERVIEWS = {
  *  quiet. The home roster's pins keep it off the stock five. */
 const EXTRA_WORKSPACE = new URLSearchParams(location.search).get("extraWorkspace") === "1";
 
-const EVIDENCE_OVERVIEWS = {
-  "ledger-keeper": {
-    observedAt: NOW - 20e3, activity: "working", decisionsWaiting: 2, hasUpdates: true,
-    latestRun: { status: "completed", task: EVIDENCE_TASK },
-    primarySlate: null,
-  },
-  "quiet-desk": {
-    observedAt: NOW - 2 * 36e5, activity: "idle", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: null,
-    primarySlate: null,
-  },
-};
-
-const OVERVIEW_BODIES = v.parse(JsonObjectSchema, ROSTER === "evidence" ? EVIDENCE_OVERVIEWS : STOCK_OVERVIEWS);
+const OVERVIEW_BODIES = v.parse(JsonObjectSchema, STOCK_OVERVIEWS);
 
 /** One card's next answer, tagged so the body/status branch reads a domain
  *  word rather than a representation check. */
