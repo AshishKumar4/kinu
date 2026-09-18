@@ -227,17 +227,30 @@ describe('AssistantMessagesTranscript', () => {
     expect(uiMessageText(rows()[1]!.content)).toBe('Ran the checks.');
   });
 
-  test('the restore reads user and assistant text newest first, and the operator check reads authorship', () => {
+  test('the restore reads user and assistant rows newest first with their tools, and the operator check reads authorship', () => {
     const { store } = transcript();
     expect(store.operatorSpoke()).toBe(false);
     store.appendUser({ id: 'programmatic:g', text: 'genesis', metadata: { kinuAuthor: 'harness' } });
     expect(store.operatorSpoke()).toBe(false);
     store.appendUser({ id: 'u1', text: 'hello' });
+
+    const streamed = {
+      id: 'a1', role: 'assistant' as const,
+      parts: [
+        { type: 'tool-file', toolCallId: 'c1', state: 'output-available' as const, input: {}, output: 'x' },
+        { type: 'dynamic-tool', toolName: 'mcp_search', toolCallId: 'c2', state: 'output-available' as const, input: {}, output: 'y' },
+      ],
+    };
+
+    store.answersFrom({ answer: (id) => id === 'a1' ? streamed : null, streamed: (id) => id === 'a1' ? streamed : null });
     store.appendAssistant({ id: 'a1', parentId: 'u1', text: 'hi' });
 
     expect(store.newestFirst()).toEqual([
-      { role: 'assistant', content: 'hi' }, { role: 'user', content: 'hello' }, { role: 'user', content: 'genesis' },
+      { id: 'a1', role: 'assistant', content: 'hi', toolCalls: ['file', 'mcp_search'] },
+      { id: 'u1', role: 'user', content: 'hello', toolCalls: [] },
+      { id: 'programmatic:g', role: 'user', content: 'genesis', toolCalls: [] },
     ]);
+    expect(store.newestFirst(2).map((row) => row.id)).toEqual(['a1', 'u1']);
     expect(store.operatorSpoke()).toBe(true);
   });
 });

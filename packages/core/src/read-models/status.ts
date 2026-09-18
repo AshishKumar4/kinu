@@ -176,8 +176,8 @@ function projectStoredRow(row: ConversationPageRow): StoredRowProjection {
   const parsed = decoded === undefined ? undefined : v.safeParse(MirrorStampSchema, decoded);
 
   return parsed?.success && parsed.output !== undefined
-    ? { text: projected.text, metadata: parsed.output }
-    : { text: projected.text };
+    ? { ...projected, metadata: parsed.output }
+    : projected;
 }
 
 /** The agent's tool inventory: the fixed builtins plus every crafted tool with

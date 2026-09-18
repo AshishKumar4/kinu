@@ -729,6 +729,31 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       ON CONFLICT(effect_key) DO NOTHING`;
   }
 
+  /**
+   * Turn the lane on behind a scripted fast model that answers every compute
+   * with `answer`, and hand back the list the prompts land in — the oracle for
+   * WHETHER a run happened and WHAT evidence it read. The same `fastLlm` seat
+   * the production compute reads (`rt.fastLlm ?? rt.llm`).
+   */
+  harnessScriptSleepTimeModel(answer: SleepTimeUpdate): string[] {
+    this.config.setSleepTimeComputeEnabled(true);
+    const prompts: string[] = [];
+
+    Object.defineProperty(this.rt, 'fastLlm', {
+      configurable: true,
+      value: {
+        stream: async function* () { yield ''; },
+        complete: async (prompt: string) => {
+          prompts.push(prompt);
+
+          return JSON.stringify(answer);
+        },
+      },
+    });
+
+    return prompts;
+  }
+
   /** The world-model store, through its own API: a hand-written INSERT would be
    *  a second copy of its confidence and provenance policy. */
   harnessFacts(): FactsStore { return this.facts; }

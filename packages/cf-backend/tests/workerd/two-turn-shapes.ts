@@ -190,7 +190,7 @@ export const ExerciseResultSchema = v.object({
   failures: v.array(DiagnosticFailureSchema),
   /** Owed-effect keys any finished close left behind — empty is clean. */
   owedEffects: v.array(v.string()),
-  factsCompressed: v.number(),
+  sleepTimeSettled: v.number(),
   /** `models_dev.catalog_fallback` events the drive emitted. Zero is the
    *  proof the provider catalog was served, not refused: refused, every
    *  provider took a slow fallback path — 51 per gate run on 2026-09-15. */
@@ -223,7 +223,7 @@ export const DriveOnceResultSchema = v.object({
   http: v.array(HttpCallSchema),
   failures: v.array(DiagnosticFailureSchema),
   owedEffects: v.array(v.string()),
-  factsCompressed: v.number(),
+  sleepTimeSettled: v.number(),
   /** `models_dev.catalog_fallback` events the drive emitted. Zero is the
    *  proof the provider catalog was served, not refused: refused, every
    *  provider took a slow fallback path — 51 per gate run on 2026-09-15. */

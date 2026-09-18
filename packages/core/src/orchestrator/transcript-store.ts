@@ -20,13 +20,8 @@ import { operatorMessageAdmitted } from '../identity/conversation-store';
 import type { PromptFile } from '../types/backend-host';
 import type { SqlExecutor } from '../types/primitives';
 import type { JsonObject } from '../utils/json';
-import { uiMessageText } from '../utils/ui-message';
+import { transcriptRow, type TranscriptRow, type TranscriptSourceRow } from '../utils/ui-message';
 
-/** A stored row as the restore reads it. */
-export interface TranscriptRow {
-  readonly role: string;
-  readonly content: string;
-}
 
 export interface TranscriptStore {
   /** Whether a row with this id is on disk in this conversation. */
@@ -60,8 +55,9 @@ export interface TranscriptStore {
     readonly text: string;
   }): void;
 
-  /** Every user and assistant row of this conversation, newest first. */
-  newestFirst(): readonly TranscriptRow[];
+  /** Every user and assistant row of this conversation, newest first — or
+   *  the newest `limit` of them, for a reader that walks back a bounded way. */
+  newestFirst(limit?: number): readonly TranscriptRow[];
 
   /** Whether the operator has spoken in this conversation — a row a person
    *  wrote, as opposed to one the harness announced. */
@@ -109,14 +105,15 @@ export class ActorMessagesTranscript implements TranscriptStore {
       VALUES (${this.actor.actorId}, ${row.id}, ${this.sessionId}, ${row.parentId}, ${'assistant'}, ${content})`;
   }
 
-  newestFirst(): readonly TranscriptRow[] {
-    return this.sql<{ role: string; content: string }>`
-      SELECT role, content
+  newestFirst(limit?: number): readonly TranscriptRow[] {
+    return this.sql<TranscriptSourceRow>`
+      SELECT id, role, content
       FROM actor_messages
       WHERE actor_id = ${this.actor.actorId}
         AND session_id = ${this.sessionId} AND role IN ('user', 'assistant')
-      ORDER BY created_at DESC, rowid DESC`
-      .map((row) => ({ role: row.role, content: uiMessageText(row.content) }));
+      ORDER BY created_at DESC, rowid DESC
+      LIMIT ${limit ?? -1}`
+      .map(transcriptRow);
   }
 
   operatorSpoke(): boolean {
