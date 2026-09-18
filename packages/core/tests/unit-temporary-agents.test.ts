@@ -210,7 +210,6 @@ function makeScene(options: {
     runtime,
     createName: (role: string) => `${role}-a1b2c3`,
     now: () => NOW,
-    renderInheritedContext: () => undefined,
   };
 
   const temporary = createTemporaryAgentPort(portInput);
