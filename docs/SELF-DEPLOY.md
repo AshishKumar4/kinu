@@ -1,12 +1,13 @@
 # Self-deploy: kinu.run/deploy, `kinu deploy cloudflare`, `kinu deploy local`
 
 Design, decided with the owner on 2026-09-15 and 2026-09-16: the deployment
-owns its own key (Option A below), the local account model, no monitor
-locally; the owner creates the OAuth client. Step 1 of the order of work is
-in progress.
+owns its own key, the local account model, no monitor locally; the owner
+creates the OAuth client. Step 1 of the order of work is built.
 Research and measurements: `~/kinu-logs/self-deploy/RESEARCH.md` and
 `oauth-scopes.json` (the 387-scope catalog, read 2026-09-15 with a wrangler
-session).
+session). The research file's "Option A" is a different thing — Workers Builds
+on a repository in the user's account — and this design rejects it; see § Not
+in this design.
 
 ## The promise
 
