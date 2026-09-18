@@ -16,8 +16,10 @@
  *   3. /login, /auth/*, /logout, /api/auth/* — OAuth/OIDC app auth.
  *   4. / — public landing page when no Kinu session is present.
  *   5. /install, /install.sh, /downloads/kinu, /api/cli/* — CLI install/auth/API.
- *   6. /api/health, /api/shared/blueprint/<id> — public endpoints (no auth;
- *      the blueprint id carries its own signature).
+ *   6. /downloads/kinu-worker-<version>.tar.gz, /api/health,
+ *      /api/shared/blueprint/<id> — public endpoints (no auth). The worker
+ *      release artifact is streamed from R2 because it exceeds the 25 MiB
+ *      static-asset limit; the blueprint id carries its own signature.
  *   6b. /mcp/v1/* — MCP server; CLI-bearer-token or session auth + ownership
  *       enforced inside (external MCP clients can't do browser OAuth).
  *   7. AUTH GATE — every other request needs a Kinu session
@@ -55,6 +57,7 @@ import { handleClientErrorRequest } from "./client-error/route";
 import { handleUserRequest } from "./user/routes";
 import { handleAccountRequest } from "./user/account-routes";
 import { handleCliRequest } from "./cli/routes";
+import { handleReleaseArtifactRequest } from "@kinu.run/core";
 import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
 import { handleSharedPublicRequest, handleSharedRequest } from "./shared/routes";
@@ -569,11 +572,15 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
   if (cliResp) return cliResp;
 
-  // 6. Public JSON — health's build stamp, and a blueprint's page data by
-  //    link. The blueprint id carries a signature checked inside its handler
-  //    before any object is touched, and the owner's object re-reads the
-  //    share row on every call.
+  // 6. Public, unauthenticated answers, in one band: the worker release
+  //    artifact, health's build stamp, and a blueprint's page data by link.
+  //    The artifact is served out of R2 rather than as an asset because it is
+  //    larger than Cloudflare's per-file asset limit, and it answers first so
+  //    it keeps its place beside the CLI's downloads above. The blueprint id
+  //    carries a signature checked inside its handler before any object is
+  //    touched, and the owner's object re-reads the share row on every call.
   const publicResp = await firstResponse(request, [
+    (req) => handleReleaseArtifactRequest(req, env.RELEASES_BUCKET),
     (req) => handleHealthRequest(req, env),
     (req) => handleSharedPublicRequest(req, env),
   ]);

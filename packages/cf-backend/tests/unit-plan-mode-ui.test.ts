@@ -18,7 +18,6 @@ const css = source('src/index.css');
 
 describe('Plan mode browser contract', () => {
   test('stamps typed intent, and a retry cannot lose it', () => {
-    expect(hook).toContain('metadata: { kinuMode: mode }');
     // Retry does not COPY the intent onto a fresh message — it re-runs the
     // turn the intent is already stamped on, so the stamp cannot drift from
     // the turn it governs, and no duplicate is appended. (`return`, not

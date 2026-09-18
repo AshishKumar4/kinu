@@ -167,6 +167,17 @@
     "created_at",
     "settled_at"
   ],
+  "cache_warm@packages/core/src/providers/cache-warming.ts": [
+    "actor_id",
+    "requests",
+    "refreshes",
+    "due_at",
+    "armed_requests",
+    "spec",
+    "model_id",
+    "retention",
+    "body"
+  ],
   "cli_agent_connect_tickets@packages/core/src/state/user-schema.ts": [
     "ticket_hash",
     "user_id",

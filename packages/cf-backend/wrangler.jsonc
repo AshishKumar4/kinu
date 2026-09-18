@@ -424,7 +424,14 @@
     // the admin list view, and an AE datapoint has a 16 KiB budget. The row in
     // ControlPlaneDO carries the object key only.
     //   wrangler r2 bucket create kinu-feedback
-    { "binding": "FEEDBACK_BUCKET", "bucket_name": "kinu-feedback" }
+    { "binding": "FEEDBACK_BUCKET", "bucket_name": "kinu-feedback" },
+    // The worker release artifact the self-deploy flow installs. It is larger
+    // than Cloudflare's per-file static-asset limit, so it cannot be published
+    // the way the CLI tarballs are; `release.json` and the
+    // artifact's `.sha256` are small and stay assets. The Worker streams the
+    // object at /downloads/kinu-worker-<version>.tar.gz (deploy/artifact-route.ts).
+    //   wrangler r2 bucket create kinu-releases
+    { "binding": "RELEASES_BUCKET", "bucket_name": "kinu-releases" }
   ],
   // Browser sessions, one-time OAuth state, and CLI browser-approval state.
   // All of it expires on its own clock, and all of it is read at the edge on

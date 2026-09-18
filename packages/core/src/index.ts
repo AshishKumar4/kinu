@@ -966,12 +966,9 @@ export {
   promptCacheOptions,
   promptCachePlan,
   resolvePromptCacheStrategy,
-  isCacheRetention,
   ANTHROPIC_MAX_BREAKPOINTS,
-  DEFAULT_CACHE_RETENTION,
   type CacheBreakpointInput,
   type CacheBreakpointPlan,
-  type CacheRetention,
   type PromptCachePlan,
   type PromptCachePlanInput,
   type PromptCacheStrategy,
@@ -2372,6 +2369,10 @@ export {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
   fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
 } from './http/deployed-assets';
+
+export {
+  handleReleaseArtifactRequest, type ReleaseArtifactObject, type ReleaseArtifactStore,
+} from './http/release-artifact';
 
 export {
   RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, SignedReleaseSchema,

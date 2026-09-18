@@ -666,6 +666,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: LAZY_ON_FIRST_USE('the in-episode craft clock'),
     },
+    // The prompt-cache warm obligation and the actor's real-request counter,
+    // created by the shared `initWorkspaceSchema` on every root. Present
+    // everywhere the schema is; whether a warm ever arms is a property of the
+    // provider and the retention, not of the backend.
+    cache_warm: EVERYWHERE,
 
     // ── shared FTS5 stores (agent-utils MemoryStore / CraftStore) ──
     memory_chunks: EVERYWHERE,

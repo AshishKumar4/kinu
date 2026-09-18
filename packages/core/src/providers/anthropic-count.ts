@@ -36,9 +36,10 @@ import type { ProviderDeps } from './types';
 import { createAuthedFetch } from './util';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 
-/** The wire version the AI SDK's Anthropic package sends, so the count is taken
- *  under the same API contract as the request it is about. */
-const ANTHROPIC_VERSION = '2023-06-01';
+/** The wire version the AI SDK's Anthropic package sends, so a raw POST beside
+ *  the SDK — this count, and the cache warm in `anthropic-warm.ts` — travels
+ *  under the same API contract as the requests it is about. */
+export const ANTHROPIC_VERSION = '2023-06-01';
 
 interface Base64Source { type: 'base64'; media_type: string; data: string }
 

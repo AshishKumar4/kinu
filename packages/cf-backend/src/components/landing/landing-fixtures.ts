@@ -10,7 +10,7 @@
  */
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import { JsonValueSchema, SubordinateInspectionRequestSchema, seekPage, type PageRequest, type PendingAction, type PlanReview, type RunSummary, type SlateSummary } from '@kinu.run/core';
+import { JsonValueSchema, SubordinateInspectionRequestSchema, seekPage, type PageRequest, type PendingAction, type PlanReview, type RunSummary, type SlateSummary, type TabPresence } from '@kinu.run/core';
 import type { Rpc } from '@kinu.run/core';
 import type { BackgroundJob, SubordinateRosterEntry } from '@kinu.run/core/protocol';
 import type { ModelMenuEntry, UserProfile, WorkspaceEntry } from '@/lib/user-api';
@@ -31,6 +31,11 @@ export const LANDING_MODELS: ModelMenuEntry[] = [
 ];
 
 export const LANDING_WORKSPACE = 'checkout-fixes';
+
+/** What the sample workspace has content for. It has no release lane and no
+ *  exploration runs, so `surfaceHasContent` leaves Releases and Swarms off the
+ *  strip — the same read the product answers per workspace. */
+export const LANDING_TAB_PRESENCE: TabPresence = { releases: false, explorations: false };
 
 export const LANDING_SUBORDINATES: readonly SubordinateRosterEntry[] = [
   { name: 'coupon-tester', displayName: 'Coupon tester', role: 'QA', createdBy: 'orchestrator', status: 'working', currentTask: 'Running the checkout regression suite', createdAt: NOW - 36e5, dismissedAt: null },

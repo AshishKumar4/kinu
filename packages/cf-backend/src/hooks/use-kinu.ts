@@ -435,6 +435,20 @@ function admitsActorFrame(
   return pane.isSubordinate && pane.ownActorId === msg.actorId;
 }
 
+/** This pane's frame off the wire, or null. The decode and the pane's own
+ *  admission are one question: a frame stamped for another actor's chat is no
+ *  more this pane's message than an unreadable one is. */
+function paneFrame(
+  data: MessageEvent["data"],
+  pane: { readonly isSubordinate: boolean; readonly ownActorId: string | null },
+): v.InferOutput<typeof SocketMessageSchema> | null {
+  const msg = parseSocketMessage(data);
+
+  if (msg === null || !admitsActorFrame(msg, pane)) return null;
+
+  return msg;
+}
+
 
 /** Runtime admission for plan broadcasts/RPC results. The browser treats the
  * actor boundary as untrusted even though both ends share the TypeScript type. */
@@ -1564,13 +1578,11 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (!agent) return;
 
     const handler = async (event: MessageEvent) => {
-      const msg = parseSocketMessage(event.data);
+      // A frame stamped for another actor's pane belongs to that chat, and this
+      // socket carries every pane's — so the decode is this pane's decode.
+      const msg = paneFrame(event.data, { isSubordinate, ownActorId: ownActorIdRef.current });
 
       if (!msg) return;
-
-      // Before any state write: a frame stamped for another actor's pane
-      // belongs to that chat, and this socket carries every pane's.
-      if (!admitsActorFrame(msg, { isSubordinate, ownActorId: ownActorIdRef.current })) return;
 
         if (msg.type === "cf_agent_chat_messages") {
           setTranscriptSeeded(true);

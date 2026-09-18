@@ -11,7 +11,7 @@ import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
 import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../profiles/catalog';
 import {
   DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
-} from '../prompting/cache-breakpoints';
+} from '../providers/types';
 import {
   formatApprovalGrant, parseApprovalGrant, type ApprovalGrant,
 } from '../safety/approval-gate';
