@@ -18,7 +18,7 @@ import type { WorkspaceOverview } from '@kinu.run/core';
 const { OverviewLabel } = await import('../src/pages/home-overview-label');
 
 const BASE: WorkspaceOverview = {
-  observedAt: 0, activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null,
+  observedAt: 0, activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, primarySlate: null,
 };
 
 function withRun(status: string | null): WorkspaceOverview {

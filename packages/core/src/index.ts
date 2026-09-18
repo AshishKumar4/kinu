@@ -2195,7 +2195,7 @@ export type { PendingAction, PendingActionKind, PendingActionInputs } from './re
 
 export { buildWorkspaceOverview, overviewHeadline, rosterActivity, workspaceOverviewEvidence, workspaceOverviewStatus, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
-export type { RosterActivity, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewFact, WorkspaceOverviewStatus } from './read-models/workspace-overview';
+export type { RosterActivity, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewFact, WorkspaceOverviewSlate, WorkspaceOverviewStatus } from './read-models/workspace-overview';
 
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,

@@ -5454,6 +5454,7 @@ export class OrchestratorAgent extends ActorAgent {
       dispatch: (caller, route) => this.slateBindingDispatch(caller.path, route, caller.workMode),
       apps: {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),
+        reserved: (owner) => this.hostedWorkspace().apps.reserved(owner),
         remove: (owner) => this.hostedWorkspace().apps.remove(owner),
         url: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       },
@@ -5848,15 +5849,18 @@ export class OrchestratorAgent extends ActorAgent {
    * Sized for a roster row: the run line is {@link RunEventRecorder.latestRunHeader},
    * two payloads at most rather than a summary fold; the in-flight answer comes
    * from `hosted`, never `acquire` — a status read that started a turn would
-   * make visiting the home page run work. Host-owned like `listPendingActions`
+   * make visiting the home page run work, and `slates.addressed` holds the
+   * same line: it reads the reservations the slates already hold and boots
+   * nothing. Host-owned like `listPendingActions`
    * (rpc-gate marks it interactive), and a failed read propagates rather than
    * zeroing, since "needs nothing" is the one false answer the card must not give.
    */
   @callable() async getWorkspaceOverview(): Promise<WorkspaceOverview> {
-    const [pendingActions, pendingConsents, activePlan] = await Promise.all([
+    const [pendingActions, pendingConsents, activePlan, slates] = await Promise.all([
       this.listPendingActions(),
       this.listPendingConsents(),
       this.getActivePlanReview(),
+      this.slates.addressed(ROOT_SLATE_CALLER),
     ]);
 
     const hostedBusy = this.actorHost().list()
@@ -5873,6 +5877,7 @@ export class OrchestratorAgent extends ActorAgent {
       activePlan,
       scaffoldAutoApply: this.config.getAutoPromoteScaffold(),
       latestRun: header === null ? null : { status: header.status, task: header.userMessage },
+      slates,
     });
   }
 

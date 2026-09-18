@@ -235,7 +235,7 @@ describe('the home workspace cards', () => {
 
         await setOutcome(page, 'email-triage', { kind: 'body', body: {
           observedAt: Date.now(), activity: 'idle', decisionsWaiting: 0, hasUpdates: false,
-          latestRun: { status: 'completed', task: 'Sort this week\'s receipts into the ledger' },
+          latestRun: { status: 'completed', task: 'Sort this week\'s receipts into the ledger' }, primarySlate: null,
         } });
 
         await page.evaluate(() => {
