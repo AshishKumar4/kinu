@@ -722,7 +722,6 @@ export {
   normalizeReportContent,
   parentAdmitsSubordinateReport,
   readSubordinateLiveStatus,
-  renderSubordinateInheritedContext,
   subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
   type SubordinateDescriptor,
