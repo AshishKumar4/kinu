@@ -88,6 +88,9 @@ import {
   type ForkTransport, type ForkFrame,
   readWorkspaceArchivePage, type ArchiveCursor, type ArchivePage,
   nanoid, type HeadRunView,
+  // The ONE delegation runner, shared with the local host: an assignment is a
+  // whole turn input and no reactor may digest it.
+  drainAssignments,
   // Canonical memory-note write primitive
   appendMemoryNote,
   type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT,
@@ -151,7 +154,7 @@ import {
   ReleaseEngine, createSandboxReleaseExec,
   // Peer-agent teams (the agents tool's team deps contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
-  type EnqueueTurnResult,
+  type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
   readMission, summarizeSoul, writeSoul, workspaceGenesisSignal,
   // The durable answer an interrupted terminal transition still owes a reply
@@ -684,12 +687,16 @@ export class OrchestratorAgent extends ActorAgent {
    * into this object's transcript. That is the whole difference from the root's
    * own `enqueueTurn`, which goes through Think's message store because the
    * root's turns ARE that transcript.
+   *
+   * The mode comes off the turn's own metadata through core's one reader, which
+   * answers `build` for a turn that named none. Hardcoding `build` here was the
+   * same value by coincidence and lost a Plan bar the producer had stated.
    */
   private async enqueueHostedTurn(
-    actor: BoundActor, input: Parameters<WorkspaceHostSeams['enqueueTurn']>[1],
-  ): ReturnType<WorkspaceHostSeams['enqueueTurn']> {
+    actor: BoundActor, input: ProgrammaticTurn,
+  ): Promise<EnqueueTurnResult> {
     const admitted = await admitHostedTask(this.subordinateSeams(), actor.reference, {
-      kind: 'message', body: input.text, mode: 'build',
+      kind: 'message', body: input.text, mode: workModeForTurnMetadata(input.metadata),
     });
 
     return { status: admitted.admitted ? 'queued' : 'skipped' };
@@ -1316,18 +1323,11 @@ export class OrchestratorAgent extends ActorAgent {
    * nothing here may take. So the runner is here, on the durable wake, where
    * nothing holds a request open.
    *
-   * THE DOUBLE-EXECUTION GUARD IS `markConsumed` BEFORE THE `await`. It is
-   * synchronous, so it is atomic with respect to the event loop: the row leaves
-   * the pending set before this frame yields, and a concurrent or re-woken
-   * sweep reading `pending()` cannot see it. Every other ordering runs the turn
-   * twice — which for a delegated task means two answers to one `agents.ask`.
-   *
-   * A FAILED TURN LEAVES ITS LEASE OPEN, deliberately. `unbindStale` above
-   * re-pends it once the grace has passed, so the work is retried on a later
-   * frame rather than stranded; closing the lease on failure would drop the
-   * task silently, and re-pending it immediately would spin. The grace is
-   * non-zero because a Durable Object activation may be racing its own
-   * predecessor, which is the case `unbindStale` requires callers to state.
+   * What one child's queue COSTS is core's `drainAssignments` — the lease
+   * order, the double-execution guard and the failed-run policy are its
+   * invariants, stated once there and shared with the local host. This method
+   * is the cf half: which actors have a queue, the budget across them, and what
+   * running one assignment means here.
    */
   private async drainAdmittedDelegations(): Promise<boolean> {
     const seams = this.subordinateSeams();
@@ -1351,36 +1351,20 @@ export class OrchestratorAgent extends ActorAgent {
         // session, no model — and it still refuses a retired or re-parented
         // actor, so reading a child's queue is not a way around membership.
         const log = new EventLog(exec, this.actorHost().bindStores(reference).handle);
-        log.unbindStale(STALE_EVENT_DELIVERY_MS, now);
 
-        for (const event of log.pending({ variant: 'subordinate_task', limit: budget })) {
-          if (budget <= 0) { truncated = true; break; }
-
-          if (event.variant !== 'subordinate_task') continue;
-
-          if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') continue;
-          const turnId = `evt-${nanoid()}`;
-          log.markConsumed(event.id, turnId, 0);
-          budget -= 1;
-
-          try {
-            // The EVENT ID is the relay's dedupe key, and it is the right one:
-            // it is stable across a re-delivery, so a report a recovered
-            // sequence replays is recognised as the one the parent already
-            // holds rather than counted as a second answer.
-            await runHostedTask(seams, reference, {
-              body: event.payload.body,
-              mode: event.payload.kinu_mode,
-              sequenceId: event.id,
-              inheritedContext: event.payload.inherited_context,
-            });
-            log.markTurnCompleted(turnId);
-          } catch (cause) {
+        const swept = await drainAssignments(log, {
+          now, budget, staleMs: STALE_EVENT_DELIVERY_MS,
+          run: async (task) => { await runHostedTask(seams, reference, task); },
+          onFailure: ({ cause }) => {
             diagnostics.failure('subordinate.delegated_turn_failed', toKinuError({
               doing: 'running a delegated turn this workspace admitted', cause, otherwise: 'io',
             }), { workspace: this.name, actor: record.name });
-          }
-        }
+          },
+        });
+
+        budget -= swept.consumed;
+
+        if (swept.truncated) truncated = true;
       } catch (cause) {
         // One unreadable child must not end the sweep — the same per-actor
         // isolation core's recovery arm applies for the same reason.
