@@ -76,6 +76,49 @@ describe('the recorder publishes the film at the width the README shows', () => 
     expect(facts.packetDurations[2]).toBeCloseTo(0.04, 2);
   });
 
+  /**
+   * THE PREMISE THE RECORDER SNAPS ITS HOLDS ONTO, MEASURED HERE.
+   *
+   * The recorder rounds every hold down to a whole 1/25 s tick. The reason is
+   * a claim about ffmpeg, so it is measured rather than asserted in a
+   * comment: the concat demuxer snaps each frame's CUMULATIVE timestamp onto
+   * that grid, so an off-grid hold reaches the GIF as a delay the film never
+   * planned — and which delay depends on every hold before it, which is why
+   * the recorder's plan-versus-packet check failed on one beat out of 24.
+   * Holds already on the grid pass through byte-exact.
+   *
+   * ffmpeg 8.0.1 / ffprobe, this host, 2026-09-18.
+   */
+  test("an off-grid hold reaches the GIF as a delay the film never planned", () => {
+    const dir = scratchDir(`plan-demo-film-tick-${String(process.pid)}`);
+    viewportFrame(join(dir, 'a.png'), 'black');
+    viewportFrame(join(dir, 'b.png'), 'gray');
+
+    const holds = (first: number, second: number): readonly number[] => {
+      const manifest = join(dir, `frames-${String(first)}.txt`);
+      writeFileSync(manifest, concatManifest([
+        { file: 'a.png', holdMs: first },
+        { file: 'b.png', holdMs: second },
+      ]));
+
+      const gif = join(dir, `holds-${String(first)}.gif`);
+      muxGif(dir, manifest, gif);
+
+      return probeGif(gif).packetDurations;
+    };
+
+    // 70ms and 110ms: cumulative 0.07s and 0.18s snap to 0.08s and 0.20s,
+    // so the film would have shown 0.08s and 0.12s.
+    const offGrid = holds(70, 110);
+    expect(offGrid[0]).toBeCloseTo(0.08, 2);
+    expect(offGrid[1]).toBeCloseTo(0.12, 2);
+
+    // The same pair snapped down onto the grid arrives as planned.
+    const onGrid = holds(40, 80);
+    expect(onGrid[0]).toBeCloseTo(0.04, 2);
+    expect(onGrid[1]).toBeCloseTo(0.08, 2);
+  });
+
   test('the shipped film is the size the README reserves for it', () => {
     const facts = probeGif(FILM);
 

@@ -29,10 +29,10 @@
 ## Demo
 
 <p align="center">
-  <img alt="Animated walkthrough: the agent plans the checkout fix, submits the plan for review, the cursor approves it, and the support-queue slate builds and opens, using sample data." src="docs/assets/kinu-plan-demo.gif" width="976" height="818">
+  <img alt="Animated walkthrough: the agent plans the checkout fix, submits the plan for review, the cursor approves it, and the support-queue slate builds and opens, using sample data." src="docs/assets/kinu-plan-demo.gif" width="1200" height="750">
 </p>
 
-<p align="center"><em>The planning walkthrough with sample data, recorded from the live interface. Try it at <a href="https://kinu.run">kinu.run</a>.</em></p>
+<p align="center"><em>The planning walkthrough, recorded from the product at build <code>7ff36af30</code> — a real workspace driven through its own controls, with a stand-in model. Try it at <a href="https://kinu.run">kinu.run</a>.</em></p>
 
 ## What Kinu is
 
