@@ -726,9 +726,7 @@ beforeAll(async () => {
         () => document.querySelector('button[aria-label="Copy install command"]')?.textContent?.trim() === 'Copied',
       ).then(() => true);
       facts.deploy = await page.evaluate(() => ({
-        button: document.querySelector<HTMLAnchorElement>(
-          '#deploy a[href^="https://deploy.workers.cloudflare.com"]',
-        )?.href ?? null,
+        button: document.querySelector<HTMLAnchorElement>('#deploy a[href="/deploy"]')?.href ?? null,
         guide: document.querySelector<HTMLAnchorElement>(
           '#deploy a[href*="SELF-HOSTING.md"]',
         )?.href ?? null,
@@ -1393,11 +1391,9 @@ describe('public actions work', () => {
     expect(required(facts.homeLink, 'home link')).toEqual({ visible: true, hasGraphic: true });
   });
 
-  test('self-host actions reach the deploy flow and guide', () => {
+  test('self-host actions reach the guided door and the guide', () => {
     const deploy = required(facts.deploy, 'self-host links');
-    expect(deploy.button).toBe(
-      'https://deploy.workers.cloudflare.com/?url=https://github.com/AshishKumar4/kinu',
-    );
+    expect(deploy.button).toMatch(/\/deploy$/);
     expect(deploy.guide).toContain('/docs/SELF-HOSTING.md');
   });
 

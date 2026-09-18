@@ -49,9 +49,12 @@ function PlatformSection({ install }: { install: string }): ReactElement {
             <span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Give it your devices</span>
             <p className="mt-2 text-sm leading-[1.7] p-text-3">A cloud agent can reach your own machines. Connect one and it shows up at <code className="font-mono text-xs p-text-2">/pc</code>, and each extra machine gets its own name. It only ever gets the access you grant it.</p>
           </div>
-          <div className="mt-auto flex flex-wrap gap-3"><LandingActionLink href="/login" primary>Sign in to kinu.run →</LandingActionLink></div>
+          <div className="mt-auto flex flex-wrap gap-3">
+            <LandingActionLink href="/login" primary>Sign in to kinu.run →</LandingActionLink>
+            <LandingActionLink href="/deploy">Deploy your own →</LandingActionLink>
+          </div>
           <div id="deploy" className="mt-6 border-t p-border pt-5 text-sm leading-[1.7] p-text-3">
-            To run it in your own Cloudflare account, <a className="p-accent underline underline-offset-4" href="https://deploy.workers.cloudflare.com/?url=https://github.com/AshishKumar4/kinu" target="_blank" rel="noreferrer">deploy Kinu</a> with the <a className="p-accent underline underline-offset-4" href={REPOSITORY + '/blob/main/docs/SELF-HOSTING.md'} target="_blank" rel="noreferrer">self-hosting guide</a>. You need a Workers Paid plan and your model credentials.
+            Your own Kinu in your own Cloudflare account: sign in with Cloudflare at <a className="p-accent underline underline-offset-4" href="/deploy">kinu.run/deploy</a>, answer four questions, and watch it deploy. You need a Workers Paid plan and your model credentials; the <a className="p-accent underline underline-offset-4" href={REPOSITORY + '/blob/main/docs/SELF-HOSTING.md'} target="_blank" rel="noreferrer">self-hosting guide</a> covers the manual route.
           </div>
         </article>
         <article className="flex min-w-0 flex-col border-t p-border p-6 sm:p-8 md:border-l md:border-t-0">

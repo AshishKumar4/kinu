@@ -139,7 +139,8 @@ export function LandingHero({ install }: { install: string }): ReactElement {
                 </div>
                 <div className="mt-[22px] flex flex-wrap items-center gap-3">
                   <LandingActionLink href="/login" primary>Try cloud agents →</LandingActionLink>
-                  <LandingActionLink href="#platform">Choose where to run</LandingActionLink>
+                  <LandingActionLink href="/deploy">Self-host</LandingActionLink>
+                  <LandingActionLink href="#platform">Run locally</LandingActionLink>
                   <span className="w-full text-[12.5px] p-text-4 sm:w-auto">MIT · open source</span>
                 </div>
               </div>

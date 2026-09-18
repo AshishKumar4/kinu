@@ -62,6 +62,17 @@ function missionOf(overview: WorkspaceOverview | null): string | null {
   return task === undefined || task === null || task === "" ? null : task;
 }
 
+/** A hue of the workspace's own, from its name: stable across sessions and
+ *  devices, distinct between neighbours, and never the same for two tiles
+ *  that sit together by chance of creation order. */
+function hueOf(name: string): number {
+  let hash = 0;
+
+  for (const char of name) hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
+
+  return hash % 360;
+}
+
 export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   workspace: WorkspaceEntry;
   /** `row` is the home roster's ruled entry; `line` is the Workspaces list;
@@ -137,17 +148,34 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
     );
   }
 
+  const hue = hueOf(workspace.name);
+
   return (
-    <div className="p-card flex min-h-[120px] items-start gap-2 p-4 transition-colors hover:p-elevated">
-      <Link to={`/workspace/${workspace.name}`} className="flex min-h-[88px] min-w-0 flex-1 flex-col">
-        <span className="truncate p-row-text font-medium p-text">{title}</span>
-        <span className="mt-1"><StatusChip overview={overview} stale={stale} loading={resource.status === "loading"} unavailable={unavailable} /></span>
-        {mission !== null && <span className="mt-1.5 line-clamp-2 p-meta p-text-3">{mission}</span>}
-        {workspace.lastVisited > 0 && (
-          <span className="mt-auto self-end p-meta p-text-4 tabular-nums">{timeAgo(workspace.lastVisited)}</span>
-        )}
+    <div className="p-card flex min-h-[150px] flex-col overflow-hidden transition-colors hover:p-elevated">
+      <Link to={`/workspace/${workspace.name}`} className="flex min-h-0 flex-1 flex-col">
+        {/* The tile's own colour: a band and a monogram in the workspace's hue. */}
+        <span
+          className="flex h-14 items-end px-4 pb-2"
+          style={{ background: `linear-gradient(180deg, oklch(62% 0.13 ${hue} / 0.28), oklch(62% 0.13 ${hue} / 0.08))` }}
+        >
+          <span
+            className="flex size-8 items-center justify-center rounded-lg text-sm font-semibold"
+            style={{ background: `oklch(62% 0.14 ${hue} / 0.35)`, color: `oklch(78% 0.12 ${hue})` }}
+            aria-hidden="true"
+          >
+            {title.trim().charAt(0).toUpperCase() || "·"}
+          </span>
+        </span>
+        <span className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-2.5">
+          <span className="truncate p-row-text font-medium p-text">{title}</span>
+          <span className="mt-1"><StatusChip overview={overview} stale={stale} loading={resource.status === "loading"} unavailable={unavailable} /></span>
+          {mission !== null && <span className="mt-1.5 line-clamp-2 p-meta p-text-3">{mission}</span>}
+          {workspace.lastVisited > 0 && (
+            <span className="mt-auto self-end pt-2 p-meta p-text-4 tabular-nums">{timeAgo(workspace.lastVisited)}</span>
+          )}
+        </span>
       </Link>
-      {retry}
+      {retry && <span className="px-4 pb-3">{retry}</span>}
     </div>
   );
 }
