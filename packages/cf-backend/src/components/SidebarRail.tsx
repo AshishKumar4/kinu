@@ -48,7 +48,7 @@ export function SidebarRail() {
         aria-label="Hide sidebar"
         title="Hide sidebar"
         data-rail-collapse
-        className="absolute right-1 top-1/2 z-[3] hidden h-16 w-5 -translate-y-1/2 items-center justify-center rounded-l-md border border-r-0 p-border p-elevated p-text-3 shadow-sm transition-colors hover:p-text md:flex"
+        className="absolute -right-2.5 top-1/2 z-[3] hidden h-16 w-5 -translate-y-1/2 items-center justify-center rounded-l-md border border-r-0 p-border p-elevated p-text-3 shadow-sm transition-colors hover:p-text md:flex"
       >
         <CaretLeftIcon size={12} weight="bold" />
       </button>

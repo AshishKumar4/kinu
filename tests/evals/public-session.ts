@@ -1034,6 +1034,20 @@ export class KinuPublicSession {
   /** Callers waiting on one response chunk of a request: settled by the
    *  first frame body the predicate accepts, then dropped. */
   private readonly chunkWatchers = new Map<string, Array<{ readonly accept: (body: string) => boolean; readonly resolve: () => void }>>();
+  /** Turns this session never submitted that have CLOSED on the socket — the
+   *  ones the product opened by itself (a wake, a rerun, the implementation
+   *  turn an approved plan queues, `actor-agent.ts:972-978`). The DO streams
+   *  each of them to every connected client under an id it minted itself
+   *  (`chat-transport.ts:381`) and closes it with a done frame
+   *  (`chat-transport.ts:410,654-655`), which is the product's own signal that such
+   *  a turn is over. Counted, so `watchProgrammaticTurn` can take the count
+   *  BEFORE the act that queues one and settle on the count moving. */
+  private programmaticTurns = 0;
+  private readonly programmaticWatchers: {
+    readonly after: number;
+    readonly resolve: () => void;
+    readonly reject: (error: Error) => void;
+  }[] = [];
   /** Done-frame arrival instants for sends the DO answered `mid-turn` — the
    *  landing instant the absorbing run is named at, in the run events' own
    *  clock domain. Outlives the `turns` entry, which is deleted at settle. */
@@ -1528,6 +1542,28 @@ export class KinuPublicSession {
   }
 
   /**
+   * Watch for the next turn the PRODUCT opens by itself, and resolve when that
+   * turn closes.
+   *
+   * Called BEFORE the act that queues one — a plan approval — so the count it
+   * holds is the one taken before the turn could exist; a turn that closes
+   * between the call and the await still settles it. The bound is the done
+   * frame the DO broadcasts for that turn, the same frame the chat pane
+   * renders it from, so this waits on the product's own signal and on nothing
+   * else. No poll and no duration: a socket that dies takes the wait with it
+   * (`failInFlight`), and a wake that never lands hangs where the ladder kills
+   * a gate — at its deadline — rather than reading as a red on the subgoal
+   * behind it.
+   */
+  watchProgrammaticTurn(): Promise<void> {
+    const after = this.programmaticTurns;
+    const settled = Promise.withResolvers<void>();
+    this.programmaticWatchers.push({ after, resolve: settled.resolve, reject: settled.reject });
+
+    return settled.promise;
+  }
+
+  /**
    * Follow one run's ledger over the SSE route, from `since` (exclusive), as
    * a wait on the stream: each event as the route sends it, re-opened with
    * `Last-Event-ID` whenever the route closes the stream short of `run_end`
@@ -1875,7 +1911,14 @@ export class KinuPublicSession {
     if (frame.kind !== 'response') return;
     const turn = this.turns.get(frame.frame.id);
 
-    if (!turn) return;
+    if (!turn) {
+      // A stream nobody here submitted: a turn the product opened on its own.
+      // Its done frame is the one thing a caller waiting for such a turn is
+      // waiting for; its bodies belong to no request of ours.
+      if (frame.frame.done === true) this.noteProgrammaticTurn();
+
+      return;
+    }
 
     if (frame.frame.done === true && frame.frame.landed === 'mid-turn') {
       this.midTurnLandings.set(frame.frame.id, new Date().toISOString());
@@ -1905,6 +1948,17 @@ export class KinuPublicSession {
     turn.resolve(done);
   }
 
+  /** One turn the product opened by itself has closed: settle everyone whose
+   *  count it moved past, and leave the rest waiting for the next one. */
+  private noteProgrammaticTurn(): void {
+    this.programmaticTurns += 1;
+
+    for (const watcher of this.programmaticWatchers.splice(0)) {
+      if (this.programmaticTurns > watcher.after) watcher.resolve();
+      else this.programmaticWatchers.push(watcher);
+    }
+  }
+
   /** Reject what the dead socket was carrying. A turn is durable up there and
    *  its answer lands in the transcript either way, but this process cannot
    *  report it — and an eval that hangs on a closed socket reports nothing at
@@ -1915,9 +1969,12 @@ export class KinuPublicSession {
     this.midTurnLandings.clear();
     const rpcs = [...this.rpcs.values()];
     this.rpcs.clear();
+    const watchers = this.programmaticWatchers.splice(0);
 
     for (const turn of turns) turn.reject(new Error(reason));
 
     for (const rpc of rpcs) rpc.reject(new Error(reason));
+
+    for (const watcher of watchers) watcher.reject(new Error(reason));
   }
 }
