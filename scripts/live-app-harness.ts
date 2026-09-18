@@ -8,25 +8,20 @@
  * the product itself. Same puppeteer setup (clockless waits, desktop pointer),
  * same teardown-everything shape.
  *
- * No wall-clock waits anywhere: the dev server is awaited on its printed
- * ready line plus its port, and every page wait is a condition. Port 3000 is
- * reserved, so the caller names a port or takes an ephemeral one and the
- * harness reads the actual port back.
+ * No wall-clock waits anywhere: the dev server is awaited on the port it
+ * answers `/api/health` on, racing the child's own exit, and every page wait is
+ * a condition. Port 3000 is reserved, so the caller names a port or takes an
+ * ephemeral one and the harness reads the actual port back.
  */
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Subprocess } from 'bun';
 import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppeteer';
-import * as v from 'valibot';
 
 const REPO = join(import.meta.dir, '..');
 
 const CF = join(REPO, 'packages', 'cf-backend');
-
-const TcpAddressSchema = v.object({
-  port: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65_535)),
-});
 
 export interface LiveApp {
   readonly browser: Browser;
@@ -44,18 +39,22 @@ function chromePath(): string | undefined {
   return undefined;
 }
 
-/** Wait for the dev server to print its ready line AND answer its port. */
+/** Wait until the dev server ANSWERS its port — the banner line is decoration
+ *  here, not a gate: under the Cloudflare plugin it prints only after the
+ *  worker's remote-connection phase, which can lag the live listener by
+ *  minutes on a cold machine. The stream pump still runs, because it carries
+ *  the failure signal (`error when starting dev server`) and the output kept
+ *  for the error report. A refused connection is the expected not-yet state;
+ *  anything else propagates. */
 async function waitForDevServer(child: Subprocess<'ignore', 'pipe', 'pipe'>, port: number, output: string[]): Promise<string> {
-  const ready = Promise.withResolvers<string>();
-
-  const fail = (why: string): void => {
-    ready.reject(new Error(why));
-  };
-
-  await child.exited.then(() => fail(`vite dev exited before ready: ${output.slice(-10).join('\n')}`));
+  const failed = Promise.withResolvers<never>();
+  void child.exited.then(
+    () => failed.reject(new Error(`vite dev exited before ready: ${output.slice(-10).join('\n')}`)),
+    (...rejection: [unknown]) => failed.reject(rejection[0]),
+  );
 
   // Bun's piped stdout is a WHATWG stream, not an emitter: readers feed the
-  // ready-line scan below, and a torn stream fails the wait it was feeding.
+  // output buffer below, and a torn stream fails the wait it was feeding.
   const pump = (stream: ReadableStream<Uint8Array>, label: string): void => {
     const reader = stream.getReader();
 
@@ -64,7 +63,7 @@ async function waitForDevServer(child: Subprocess<'ignore', 'pipe', 'pipe'>, por
         if (done) return;
         onData(Buffer.from(value), label);
         next();
-      }).catch(() => fail(`vite dev ${label} went unreadable before ready`));
+      }).catch(() => failed.reject(new Error(`vite dev ${label} went unreadable before ready`)));
     };
 
     next();
@@ -73,37 +72,29 @@ async function waitForDevServer(child: Subprocess<'ignore', 'pipe', 'pipe'>, por
   const onData = (chunk: Buffer, _label: string): void => {
     output.push(chunk.toString());
 
-    const text = output.join('\n');
-
-    if (/ready in \d+ ms/u.test(text) || /Local:.*http/u.test(text)) {
-      ready.resolve(text);
-    }
-
-    if (/error when starting dev server/u.test(text)) {
-      ready.reject(new Error(`vite dev refused to start: ${output.slice(-15).join('\n')}`));
+    if (/error when starting dev server/u.test(output.join('\n'))) {
+      failed.reject(new Error(`vite dev refused to start: ${output.slice(-15).join('\n')}`));
     }
   };
 
   pump(child.stdout, 'stdout');
   pump(child.stderr, 'stderr');
 
-  await ready.promise;
+  const up = (async (): Promise<string> => {
+    for (;;) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${String(port)}/api/health`);
 
-  // The ready line is printed before the worker is reachable; the port is the
-  // condition, polled by attempting the health route until it answers. A
-  // refused connection is the expected not-yet state (the drill's own probe
-  // reads it the same way); anything else propagates.
-  for (;;) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${String(port)}/api/health`);
+        if (response.ok) return `http://127.0.0.1:${String(port)}`;
+      } catch (cause) {
+        if (!(cause instanceof TypeError || cause instanceof DOMException)) throw cause;
+      }
 
-      if (response.ok) return `http://127.0.0.1:${String(port)}`;
-    } catch (cause) {
-      if (!(cause instanceof TypeError || cause instanceof DOMException)) throw cause;
+      await new Promise<void>((resolve) => setImmediate(resolve));
     }
+  })();
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
+  return Promise.race([up, failed.promise]);
 }
 
 export interface LiveAppOptions {
@@ -124,14 +115,12 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
   let port = requested;
 
   if (requested === 0) {
+    // Listen on :0, take the kernel's pick, let it go — the chosen number is
+    // then handed to vite's own --strictPort bind a beat later.
     const probe = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {}, close() {}, error() {} } });
-    const parsed = v.safeParse(TcpAddressSchema, probe.port);
 
+    port = probe.port;
     probe.stop(true);
-
-    if (!parsed.success) throw new Error('withLiveApp: ephemeral port probe has no TCP address');
-
-    port = parsed.output.port;
   }
 
   const output: string[] = [];
