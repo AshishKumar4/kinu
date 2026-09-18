@@ -1056,6 +1056,69 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     expect(isDynamicBlock(String(out[2]!.content))).toBe(true);
   });
 
+  test('cross-turn sandbox-only change emits a delta naming only that section', () => {
+    const ledger = new DynamicContextLedger();
+    const firstTurn: ModelMessage[] = [{ role: 'user', content: 'first turn' }];
+    const base = { factsBlock: '- k = v', executors: [workspace, idleSandbox] };
+    const first = ledger.weave(firstTurn, base);
+    expect(ledger.size).toBe(1);
+
+    const secondTurn: ModelMessage[] = [
+      { role: 'user', content: 'first turn' },
+      { role: 'assistant', content: 'answer-1' },
+      { role: 'user', content: 'second turn' },
+    ];
+
+    const changed = { factsBlock: '- k = v', executors: [workspace, activeSandbox] };
+    const second = ledger.weave(secondTurn, changed);
+    expect(ledger.size).toBe(2);
+    expect(second[1]).toBe(first[1]);
+    const tail = second.at(-1);
+    expect(tail).toBeDefined();
+    const text = String(tail?.content);
+    expect(text).toContain('kind="delta"');
+    expect(text).toContain('## Execution status');
+    expect(text).not.toContain('## World model');
+    expect(text).not.toContain('- workspace:');
+  });
+
+  test('cross-turn cleared section is reported, never omitted silently', () => {
+    const ledger = new DynamicContextLedger();
+    const history: ModelMessage[] = [{ role: 'user', content: 'first turn' }];
+    ledger.weave(history, state);
+    history.push({ role: 'assistant', content: 'answer-1' }, { role: 'user', content: 'second turn' });
+    const cleared = { executors: [idleSandbox] };
+    const out = ledger.weave(history, cleared);
+    expect(ledger.size).toBe(2);
+    const tail = out.at(-1);
+    expect(tail).toBeDefined();
+    const text = String(tail?.content);
+    expect(text).toContain('kind="delta"');
+    expect(text).toContain('## World model');
+    expect(text).toContain('Cleared: no current entries.');
+  });
+
+  test('compaction boundary re-emits one full block', () => {
+    const ledger = new DynamicContextLedger();
+    ledger.weave([{ role: 'user', content: 'a' }], state);
+    ledger.weave(
+      [{ role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }, { role: 'user', content: 'c' }],
+      { ...state, factsBlock: '- changed = yes' },
+    );
+    expect(ledger.size).toBe(2);
+
+    ledger.reset();
+
+    const compacted: ModelMessage[] = [{ role: 'user', content: 'summary' }, { role: 'user', content: 'next' }];
+    const out = ledger.weave(compacted, state);
+    expect(ledger.size).toBe(1);
+    const tail = out.at(-1);
+    expect(tail).toBeDefined();
+    const text = String(tail?.content);
+    expect(text).toContain('kind="full"');
+    expect(text).toBe(renderDynamicContextBlock(state) ?? '');
+  });
+
   test('a shorter rewritten history self-heals stale frozen indices without duplicating messages', () => {
     const ledger = new DynamicContextLedger();
 
