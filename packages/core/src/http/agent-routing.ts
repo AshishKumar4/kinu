@@ -136,3 +136,36 @@ export function hostedActorRoute(pathname: string): { name: string; suffix: stri
 
   return { name: decodeURIComponent(match[1]), suffix: match[2] };
 }
+
+/** The connection tag prefix recording WHICH actor a socket addressed. One
+ *  workspace is one Durable Object, so the addressed actor is the only thing
+ *  separating a hired agent's pane from the workspace's own on the wire. */
+const ACTOR_CONNECTION_TAG_PREFIX = 'actor:';
+
+/**
+ * The connection tag for a socket opened on this path, or null for the
+ * workspace itself.
+ *
+ * A TAG rather than in-memory state because tags ride the WebSocket attachment
+ * and survive Durable Object hibernation: a pane whose socket came back from
+ * hibernation still has to receive its own actor's chat frames and nobody
+ * else's, and a map keyed by connection id is empty after a wake.
+ *
+ * Root connections get NO tag, which is what makes "untagged" the root's own
+ * recipient set rather than a set anything has to enumerate.
+ */
+export function actorConnectionTag(pathname: string): string | null {
+  const route = hostedActorRoute(pathname);
+
+  return route === null ? null : `${ACTOR_CONNECTION_TAG_PREFIX}${route.name}`;
+}
+
+/** The actor a connection addressed, off its persisted tags; null for a
+ *  connection that addressed the workspace itself. */
+export function actorFromConnectionTags(tags: Iterable<string>): string | null {
+  for (const tag of tags) {
+    if (tag.startsWith(ACTOR_CONNECTION_TAG_PREFIX)) return tag.slice(ACTOR_CONNECTION_TAG_PREFIX.length);
+  }
+
+  return null;
+}

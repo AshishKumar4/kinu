@@ -2575,6 +2575,8 @@ export {
 } from './preview/sandbox-id';
 
 export {
+  actorConnectionTag,
+  actorFromConnectionTags,
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
   isForeignAgentNamespacePath,

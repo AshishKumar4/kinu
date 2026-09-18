@@ -35,6 +35,9 @@ import {
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
+import { ActorMessagesTranscript, CHAT_SESSION_ID } from '@kinu.run/core';
+import { actorChatClear, actorChatHistory, actorChatNewestId } from './chat-transcript';
+import type { HostedChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
@@ -651,9 +654,14 @@ export class OrchestratorAgent extends ActorAgent {
       modelOperations: this.modelOperations,
       pricing: () => this.modelCatalog.pricing(),
       broadcast: (actorId, event) => {
-        // Stamped with the actor, so a subordinate's pane and the workspace's
-        // pane are never one stream on a shared socket.
-        this.broadcast(JSON.stringify({ ...event, actorId }));
+        // Stamped with the actor AND addressed to it: the stamp is what a pane
+        // reads, the recipient set is what keeps a subordinate's cards off
+        // every other socket on this one object. A frame for an actor the
+        // directory no longer names has no pane to reach.
+        const name = this.actorHost().describe(actorId)?.name;
+
+        if (name === undefined) return;
+        this.broadcastToActor(name, JSON.stringify({ ...event, actorId }));
       },
       enqueueTurn: (actor, input) => this.enqueueHostedTurn(actor, input),
       // The reference the host ISSUED, off the bound actor, never rebuilt from
@@ -1355,7 +1363,10 @@ export class OrchestratorAgent extends ActorAgent {
 
         const swept = await drainAssignments(log, {
           now, budget, staleMs: STALE_EVENT_DELIVERY_MS,
-          run: async (task) => { await runHostedTask(seams, reference, task); },
+          run: async (task) => {
+            const { text } = await runHostedTask(seams, reference, task);
+            this.recordHostedChatAnswer(reference, text, record.name);
+          },
           onFailure: ({ cause }) => {
             diagnostics.failure('subordinate.delegated_turn_failed', toKinuError({
               doing: 'running a delegated turn this workspace admitted', cause, otherwise: 'io',
@@ -2155,6 +2166,82 @@ export class OrchestratorAgent extends ActorAgent {
     } catch (cause) {
       return refusalOf(toKinuError({ doing: 'resolving a hosted actor chat path', cause, otherwise: 'io' }));
     }
+  }
+
+  /**
+   * ONE HOSTED ACTOR'S CHAT, as the room serving its pane's sockets asks for
+   * it: that actor's transcript, that actor's queue, that actor's connections.
+   *
+   * The ROSTER is the authority here and the directory is not, because they
+   * answer at different times: the directory's validation ran at the edge
+   * before this socket was admitted (`resolveHostedActorRoute`), and what can
+   * change under an open socket is dismissal — a dismissed actor keeps its
+   * rows and must lose its chat.
+   *
+   * `send` is the delegation runner's own admission path, so a message typed
+   * in a pane and a task handed over by the `agents` tool land the same way:
+   * a row on that actor's event log plus a durable wake. The opening row is
+   * written under the id the CLIENT renders it by — the hook sends its whole
+   * list on every request, so `admitted` has to recognise it — and the answer
+   * is recorded when the turn ends ({@link recordHostedChatAnswer}).
+   */
+  protected override hostedChatWire(name: string): HostedChatWire | null {
+    const row = this.subordinateRoster.get(name);
+
+    if (!row || row.status === 'dismissed' || !row.actorReference) return null;
+    const reference = row.actorReference;
+    const rows = new ActorMessagesTranscript(this.boundSql, reference, CHAT_SESSION_ID);
+
+    return {
+      broadcast: (message, exclude) => { this.broadcastToActor(name, message, exclude); },
+      history: () => actorChatHistory(this.boundSql, reference),
+      admitted: (id) => rows.has(id),
+      send: async (input) => {
+        // The opening row FIRST, under the id the client renders it by: the
+        // hook resends its whole list, and `admitted` is what stops the same
+        // words becoming a second turn.
+        rows.appendUser({ id: input.id, text: input.text });
+
+        const handoff = await admitHostedTask(this.subordinateSeams(), reference, {
+          kind: 'message', body: input.text, mode: input.mode,
+        });
+
+        // NOTHING IS ARMED HERE, and that is a decision rather than an
+        // omission. `admitHostedTask` arms the WORKSPACE wake itself
+        // (`seams.armWake`, subordinate-hosting.ts), and `nextWakeAt` folds
+        // `hasAdmittedDelegations()` at `now`, so the runner
+        // (`drainAdmittedDelegations`) is due in the next alarm frame. A
+        // second arm from this seam would be one more row for the same fact.
+
+        // A message the actor takes now opened its turn; one that joined work
+        // already running landed mid-turn, which is what the composer reports.
+        return handoff.delivery === 'starts_now' ? 'turn' : 'mid-turn';
+      },
+      interrupt: () => { this.actorHost().hosted(reference)?.session.interrupt(); },
+      clear: () => {
+        actorChatClear(this.boundSql, reference);
+
+        return Promise.resolve();
+      },
+    };
+  }
+
+  /**
+   * The answer one hosted turn produced, into that actor's own chat.
+   *
+   * `runHeadInference` records the turn's steps in the run ledger and reports
+   * its summary; nothing wrote the actor's conversation, so a hired agent's
+   * pane had no transcript of its own to render — which is half of why the
+   * root's leaked into it. The row lands here, at the one place a hosted turn
+   * ends, and the pane is told in the same breath.
+   */
+  private recordHostedChatAnswer(reference: ActorReference, text: string, name: string): void {
+    const parentId = actorChatNewestId(this.boundSql, reference);
+
+    if (parentId === null || text.trim().length === 0) return;
+    new ActorMessagesTranscript(this.boundSql, reference, CHAT_SESSION_ID)
+      .appendAssistant({ id: crypto.randomUUID(), parentId, text });
+    this.chatRooms.hostedRoom(name)?.announce();
   }
   /** The agents tool's peer deps over the cross-workspace transport. Owner
    *  resolution is lazy inside each action (the toolset is cached across

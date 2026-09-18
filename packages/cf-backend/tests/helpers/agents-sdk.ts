@@ -590,6 +590,15 @@ export function mockAgentsSdk(): void {
        *  test that observes broadcasts overrides it on the instance
        *  (unit-mcts-broadcast.test.ts). */
       broadcast(_message: string | ArrayBuffer | ArrayBufferView, _without?: string[]): void {}
+      /** The connection set, which this stand-in has none of: workerd owns
+       *  hibernating sockets and a bun process holds no `acceptWebSocket`
+       *  state at all. The real one (`agents/dist/src-5W6JNKVb.js:3175`) is a
+       *  generator over the lifecycle's manager, so a stand-in that omitted it
+       *  turned every per-actor fan-out into a TypeError — which is how the
+       *  chat-room scoping first went red here. The RECIPIENT-SET behaviour it
+       *  feeds is measured where connections are real, in
+       *  `tests/workerd/public-surface.test.ts`. */
+      *getConnections(_tag?: string): Iterable<Connection> {}
       /** The sub-agent registry, reproduced rather than faked. `subAgent` and
        *  `hasSubAgent` are the pair the parent facet gate is built on, and in
        *  the real SDK the registry half of both is pure SQL over the DO's own
