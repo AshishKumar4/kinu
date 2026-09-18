@@ -605,7 +605,7 @@ describe("deploy gate", () => {
     // rows that hold nothing are held to the opposite property.
     const free = run.spans.filter((span) => !sharedRuns.includes(span.run));
     expect(overlapping(free).length, "no two unshared rows overlapped; the wave ran serially").toBeGreaterThan(0);
-  }, 120_000);
+  });
 
   test("the serial gates are the ends of the real run", () => {
     const run = runDeploy();
