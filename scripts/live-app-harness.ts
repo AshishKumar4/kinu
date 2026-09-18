@@ -50,15 +50,46 @@ const WorkspaceEntrySchema = v.object({ name: v.string() });
  *  the one the URL takes, which is not always the one asked for. */
 export async function createWorkspace(
   origin: string, name: string, purpose: string, model: string,
+  opts?: { displayName?: string },
 ): Promise<string> {
   const created = v.parse(
     WorkspaceEntrySchema,
     await apiJson(origin, '/api/user/workspaces', {
-      method: 'POST', body: JSON.stringify({ name, purpose, model }),
+      method: 'POST',
+      body: JSON.stringify({ name, purpose, model, displayName: opts?.displayName }),
     }),
   );
 
   return created.name;
+}
+
+const RosterPageSchema = v.object({
+  entries: v.array(WorkspaceEntrySchema), nextCursor: v.nullable(v.string()),
+});
+
+/** Every workspace name on the caller's own roster, paged through the
+ *  route's own cursor. */
+export async function listWorkspaces(origin: string): Promise<string[]> {
+  const names: string[] = [];
+  let cursor: string | null = null;
+
+  do {
+    const page: v.InferOutput<typeof RosterPageSchema> = v.parse(
+      RosterPageSchema,
+      await apiJson(origin, `/api/user/workspaces${cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`}`),
+    );
+
+    names.push(...page.entries.map((entry) => entry.name));
+    cursor = page.nextCursor;
+  } while (cursor !== null);
+
+  return names;
+}
+
+/** Remove a workspace through the app's own route — the same DELETE the
+ *  sidebar's Remove control issues. */
+export async function deleteWorkspace(origin: string, name: string): Promise<void> {
+  await apiJson(origin, `/api/user/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
 export interface LiveApp {

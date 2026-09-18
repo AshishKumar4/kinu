@@ -1456,6 +1456,43 @@ describe('the shell rails collapse and reopen, and the choice survives a reload'
       await page.close();
     });
   });
+
+  test('the rail collapse handle never covers a roster row timestamp', async () => {
+    // The handle is absolutely positioned at the rail's mid-height inside a
+    // scrollable roster: any row that reaches that band was covered. Shorter
+    // than the stock 900px so the five-row stock roster reaches the band.
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 640 });
+      await page.goto(`${origin}/gallery.html?frame=app&path=/`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('button[aria-label="Hide sidebar"]');
+      await page.waitForSelector('aside[data-rail] ul li');
+
+      const fact = await page.evaluate(() => {
+        const handle = document.querySelector('button[aria-label="Hide sidebar"]');
+
+        if (!(handle instanceof HTMLElement)) return { handle: null };
+
+        const handleBox = handle.getBoundingClientRect();
+
+        const stamps = [...document.querySelectorAll('aside[data-rail] ul li span.w-\\[30px\\]')]
+          .map((stamp) => {
+            const box = stamp.getBoundingClientRect();
+
+            return {
+              text: (stamp.textContent ?? '').trim(),
+              intersects: box.right > handleBox.left && box.left < handleBox.right
+                && box.bottom > handleBox.top && box.top < handleBox.bottom,
+            };
+          });
+
+        return { handle: { left: handleBox.left, right: handleBox.right, top: handleBox.top, bottom: handleBox.bottom }, stamps };
+      });
+
+      expect(fact.stamps?.length ?? 0).toBeGreaterThan(0);
+      expect(fact.stamps?.filter((stamp) => stamp.intersects)).toEqual([]);
+    });
+  });
 });
 
 /**

@@ -10,6 +10,12 @@
  * (`scripted-model.ts`), because a local run has none. The README's caption can
  * therefore say where the film comes from, and name the build it was cut from.
  *
+ * The staging is the recorder's, not the product's: the run signs in as its
+ * own dev identity whose workspace list is this film's alone (a workspace an
+ * earlier run left on it is removed first), and the workspace carries a title
+ * a person would read, so the sidebar and header show the film, not a dev
+ * box's history.
+ *
  *   bun scripts/plan-demo-film.ts                    # docs/assets/kinu-plan-demo.gif
  *   bun scripts/plan-demo-film.ts --out /tmp/x.gif --evidence /tmp/stills
  *
@@ -37,10 +43,11 @@ import { execFileSync } from 'node:child_process';
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 
-import { withLiveApp, createWorkspace, type LiveApp } from './live-app-harness';
+import { withLiveApp, createWorkspace, deleteWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
   PLAN_MISSION, SCRIPTED_MODEL_SPEC, SLATE_TITLE,
-  planWalkthrough, registerScriptedModel, startScriptedModel,
+  countingScript, planWalkthrough, registerScriptedModel, startScriptedModel,
+  type ScriptedModel,
 } from './scripted-model';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 
@@ -61,6 +68,28 @@ export const GIF_WIDTH = 1200;
 /** The workspace's standing brief — what the workspace IS, shown by the empty
  *  conversation before the first turn. The mission is sent, not this. */
 const WORKSPACE_PURPOSE = 'Fix the checkout coupon 500 and report on the support queue';
+
+/** The title the workspace wears in the film — the header and its one sidebar
+ *  row. The slug stays the recorder's, since a reader never sees it. */
+const WORKSPACE_TITLE = 'Checkout coupon fix';
+
+/** The dev identity the film records as. A fresh account rather than the dev
+ *  liveness one: its sidebar holds only this run's workspace, and its account
+ *  row reads as a person, not a fixture. */
+const FILM_USER_EMAIL = 'dev@kinu.run';
+
+/** The agent's first line, answering the workspace's first turn — the one the
+ *  create itself queues. The shared walkthrough's fallback ("Live answer from
+ *  the fake model.") is what a test row waits on; the film says what a
+ *  workspace owner reads instead. */
+export const OPENING_LINE = 'Ready when you are. What should I fix?';
+
+/** The walkthrough the film records: the run's FIRST request is the genesis
+ *  turn by construction — filmPlanReview creates the workspace and nothing
+ *  else has spoken — so the counter, not the request's text, names it. Every
+ *  later request is the live tier's own script. A factory, since the count is
+ *  per run. */
+export const filmScript = (): ScriptedModel => countingScript(planWalkthrough, { text: OPENING_LINE });
 
 /** How many distinct frames the film may hold. A turn that takes longer than
  *  expected must cost hold time, never an unbounded palette. */
@@ -610,8 +639,16 @@ export async function filmPlanReview(
   const page = await app.newPage();
   const film = reel(page, framesDir);
 
+  // The roster the film's sidebar shows is this identity's alone; a workspace
+  // an earlier run of this recorder left on it would read as clutter, so it
+  // goes before the workspace the film names is created.
+  for (const stale of await listWorkspaces(app.origin)) {
+    await deleteWorkspace(app.origin, stale);
+  }
+
   const workspace = await createWorkspace(
-    app.origin, `plan-demo-${crypto.randomUUID().slice(0, 8)}`, WORKSPACE_PURPOSE, SCRIPTED_MODEL_SPEC);
+    app.origin, `plan-demo-${crypto.randomUUID().slice(0, 8)}`, WORKSPACE_PURPOSE, SCRIPTED_MODEL_SPEC,
+    { displayName: WORKSPACE_TITLE });
 
   const verdict = await drivePlanReview(page, app.origin, workspace, film.shoot);
   await page.close();
@@ -674,13 +711,13 @@ if (import.meta.main) {
   const out = named === undefined ? DEFAULT_OUT : resolve(named);
   const evidenceFlag = process.argv.indexOf('--evidence');
   const evidenceDir = evidenceFlag >= 0 ? resolve(process.argv[evidenceFlag + 1] ?? '') : undefined;
-  const model = await startScriptedModel(planWalkthrough);
+  const model = await startScriptedModel(filmScript());
 
   const result = await withLiveApp(async (app) => {
     await registerScriptedModel(app.origin, model.port);
 
     return filmPlanReview(app, out, evidenceDir);
-  });
+  }, { env: { DEV_USER_EMAIL: FILM_USER_EMAIL } });
 
   await model.stop();
   console.log(JSON.stringify(result, null, 2));
