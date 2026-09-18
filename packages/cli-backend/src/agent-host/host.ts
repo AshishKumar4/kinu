@@ -43,7 +43,6 @@ import {
   samePeerGroup,
   createTeamToolDeps,
   createTemporaryAgentPort,
-  renderSubordinateInheritedContext,
   delegationBudgetOf,
   delegationExhausted,
   describeSubordinateHandoff,
@@ -888,9 +887,6 @@ export class LocalAgentHost {
         // workspace's one database, like every other actor here.
         runtime: this.childRuntime(input.key),
         now: () => Date.now(),
-        renderInheritedContext: () => renderSubordinateInheritedContext(
-          readConversationTail(this.requireEntry(input.key)),
-        ),
         createName: mintSubordinateName,
       }),
       team: null,

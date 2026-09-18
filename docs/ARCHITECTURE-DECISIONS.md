@@ -228,8 +228,8 @@ held by the workerd wake case alone.
 ## Delegation
 
 D1. One delegation surface, `agents`, with `hire` (durable or task lifetime),
-`swarm`, `msg`, `list`, `dismiss`. A hire starts fresh on role, mission and a
-digest; a swarm node may inherit the parent's conversation
+`swarm`, `msg`, `list`, `dismiss`. A hire starts fresh on role and mission; a
+swarm node may inherit the parent's conversation
 (`config.context:'inherit'`). Decided 2026-09-03. Being extended 2026-09-13:
 `hire` gains the same `context` field so a subordinate can be forked when the
 work is contextual (`feat/hire-fork`).
@@ -253,10 +253,38 @@ produces exactly one child turn"): before, one hire brief produced 242
 reactor digested the row into "1 event arrived while you were idle …" and the
 hosted turn admission re-published that digest as a new assignment while the
 durable sweep ran the raw brief beside it; after, 1 row whose body is the
-brief. The cloud wake still arms for a pending assignment through
-`hasAdmittedDelegations`, which is workspace-wide SQL and never read
-`wakesADrain`; the local host arms nothing and re-drives on every pass and on
-open.
+brief. Re-measured 2026-09-17 on 4e7da0360, one hire alone: exactly 1 row, body
+253 characters, `consumed_at` still set because the child retires itself inside
+the turn that answers and the runner's lease close is then refused by its dead
+handle. The cloud wake arms for a pending assignment from `nextWakeAt`, which
+folds `hasAdmittedDelegations()` at `now`; the local host arms nothing and
+re-drives on every pass and on open.
+
+D4. A delegated turn brackets its run in the durable ledger, like every other
+turn. The local host already did, because an assignment is admitted there as
+the child's own chat turn and `ChatSession.processTurn` calls `openTurnRun`
+(`caused_by: subordinate_task`); the cloud runner drives `runHeadInference`
+directly, which never enters that queue, so it wrote none. Decided 2026-09-17:
+the stricter side wins and `runHostedTask` opens and closes the run with the
+same cause and the same input text. Measured the same day in the workerd pool:
+before, a hired child's ledger held `step_finish` alone — one run id, no
+`run_start`, no `run_end` — so `getRunSummaries` answered `causedBy: null,
+userMessage: null, status: null` for it, which is exactly what
+`subordinateInspection`'s `runs` view shows a reader of a hired child.
+
+D5. There is one inherited-context kind, `fork`. The `digest` kind rendered the
+parent's recent conversation as prose for a fresh hire, and its only reader was
+the reactor's rendering of the assignment row, which D3 removed: both turn
+runners read the messages and answered `[]` for a digest, so from e6e24f547 it
+reached nobody. Deleted end to end 2026-09-17 — schema arm, both producers, the
+`renderSubordinateInheritedContext` renderer and the visibility prefix — rather
+than spliced into the turn, because the product's own pin refuses it:
+`cf-backend/tests/unit-hire-fork.test.ts`, "a cf hire context=fresh starts from
+its birth-time conversation", requires a fresh hire's first message to BE its
+mission and no parent message in its conversation. Measured the same day:
+splicing the digest as a birth message turned both non-inherit rows of that
+test red; deleting the kind left 3316 of 3316 cf tests green.
+
 
 ## Deploy ladder
 

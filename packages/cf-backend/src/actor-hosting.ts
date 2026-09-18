@@ -160,9 +160,18 @@ export interface WorkspaceHostSeams {
   /** Serialize a programmatic turn for one hosted actor. The root owns
    *  admission; the actor's own event log is the durable queue. */
   enqueueTurn(actor: BoundActor, input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
-  /** Is THIS actor mid-turn. Per actor, because `host.run` serializes per actor
-   *  and nothing else. */
-  turnInFlight(actorId: string): boolean;
+  /**
+   * Is THIS actor mid-turn. Per actor, because `host.run` serializes per actor
+   * and nothing else.
+   *
+   * Takes the BOUND ACTOR and not an id, like `enqueueTurn` beside it, because
+   * the host CHECKS the whole reference: an id forces the answerer to guess the
+   * workspace and the parent, and the guess "my parent is the root" is wrong
+   * for the root itself — `slotFor` then refuses the read with "The hosted
+   * actor reference does not match the one this root issued", which reached the
+   * inbox through `AgentInbox.busy` and killed the root's own event drain.
+   */
+  turnInFlight(actor: BoundActor): boolean;
   /** The drain-debounce timer, held open by the root's activation. */
   setTimer(fn: () => Promise<void>, ms: number): void;
   /** Re-derive the root's durable wake. A hosted actor has no alarm slot of its
@@ -538,7 +547,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
       const host: BackendHost = {
         broadcast: (event) => { seams.broadcast(handle.actorId, event); },
         enqueueTurn: (input) => seams.enqueueTurn(bound, input),
-        turnInFlight: () => seams.turnInFlight(handle.actorId),
+        turnInFlight: () => seams.turnInFlight(bound),
         setTimer: (fn, ms) => { seams.setTimer(fn, ms); },
         // A hosted actor has no alarm slot: the root owns the one alarm and
         // every actor's deadline folds into it, so this is how a child's

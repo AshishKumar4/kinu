@@ -177,7 +177,6 @@ import {
   type SubordinateRuntime, type TemporaryAgentPort,
   SubordinateRosterStore,
   createTeamToolDeps, createTemporaryAgentPort, receiveSubordinateEvent,
-  renderSubordinateInheritedContext,
   type SubordinatesChangedEvent, type SubordinateReportStatus, type SubordinateReportOrigin,
   type SubordinateEventResult,
   // One minting rule for every subordinate, on either backend
@@ -1276,7 +1275,6 @@ export abstract class ActorAgent extends Think<Env> {
       roster: this.subordinateRoster,
       runtime: this.subordinateRuntime(),
       now: () => Date.now(),
-      renderInheritedContext: () => renderSubordinateInheritedContext(this.readInheritedContext()),
       createName: mintSubordinateName,
     });
 

@@ -425,9 +425,10 @@ export const DELEGATION_FRAME =
  * (strategy/swarm.ts, SWARM_CONTEXTS): `inherit` hands it the parent's conversation
  * VERBATIM as one cacheable prefix per branch point, `fresh` hands it the
  * engine-authored seed and its focus and nothing else, and each preset takes the
- * value its search needs. A fresh hire gets renderSubordinateInheritedContext's
- * bounded digest plus its role and mission. An inherited hire gets the shared
- * heads-support conversation window, frozen into its birth assignment.
+ * value its search needs. A fresh hire gets its role and mission and nothing
+ * else — the bounded digest it used to get reached no reader on either backend
+ * and was deleted. An inherited hire gets the shared heads-support conversation
+ * window, frozen into its birth assignment.
  */
 export const DELEGATION_CONTEXT_DESCRIPTION =
   'Under `inherit` your recent turns arrive as its conversation, so it already knows what you know; under `fresh` it starts from the brief. Fork when the work needs the conversation you share; use fresh when your own framing is the thing in question.';
