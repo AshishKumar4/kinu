@@ -5,7 +5,8 @@ import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { childEnv, scratchDir } from "@kinu.run/test-utils";
 import {
-  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, PATH_IGNORE_FLAG, claims, deployPlan, printPlan,
+  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, PATH_IGNORE_FLAG, SHARED_RESOURCES, claims, deployPlan,
+  printPlan,
 } from "./ladder";
 import { costRssMb, costThreads, readCosts } from "./gate-cost";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
@@ -100,6 +101,15 @@ printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
 if [ "$command_line" = "bun run gate:infra" ]; then
   printf '%s\\n' "\${KINU_INFRA_PHASE:-unset}" > "$KINU_DEPLOY_PHASE_LOG"
 fi
+# WHEN EACH GATE RAN, for the one question a launch log cannot answer: did two
+# rows holding the same resource overlap. Written only when a run asks for it,
+# because it costs every stub a sleep long enough to be measurable against the
+# clock, and every other test here spawns the whole tier per gate.
+if [ -n "$KINU_DEPLOY_SPAN_LOG" ]; then
+  printf 'start\\t%s\\t%s\\n' "$(date +%s%N)" "$command_line" >> "$KINU_DEPLOY_SPAN_LOG"
+  sleep "$KINU_DEPLOY_SPAN_SLEEP"
+  printf 'end\\t%s\\t%s\\n' "$(date +%s%N)" "$command_line" >> "$KINU_DEPLOY_SPAN_LOG"
+fi
 if [ "$KINU_DEPLOY_KILL" = "$command_line" ]; then
   # SIGKILL the process the runner is waiting on: the timeout wrapper, which is
   # this stub's parent. The gate then ends having published nothing about itself,
@@ -113,6 +123,57 @@ if [ "$KINU_DEPLOY_FAIL" = "$command_line" ]; then
 fi
 exit 0
 `;
+}
+
+/** How long a stub gate holds its slot in a span run. Long enough that two
+ *  rows launched together overlap by more than the clock's own resolution,
+ *  short enough that the whole tier is a few seconds: the wave admits most
+ *  rows in parallel, so the run's wall is the shared lane's chain. */
+const SPAN_SLEEP_SECONDS = 0.4;
+
+/** One gate's run, as the span log records it: nanoseconds, from the stub's
+ *  own clock, so the two ends of one row are comparable with another row's. */
+interface Span {
+  readonly run: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+function readSpans(text: string): Span[] {
+  const started = new Map<string, number>();
+  const spans: Span[] = [];
+
+  for (const line of text.trim().split("\n").filter(Boolean)) {
+    const [edge, stamp, run] = line.split("\t");
+
+    if (edge === undefined || stamp === undefined || run === undefined) continue;
+
+    if (edge === "start") {
+      started.set(run, Number(stamp));
+      continue;
+    }
+
+    const start = started.get(run);
+
+    if (start === undefined) continue;
+    started.delete(run);
+    spans.push({ run, start, end: Number(stamp) });
+  }
+
+  return spans;
+}
+
+/** Two runs of the wave that were in flight at the same moment. */
+function overlapping(spans: readonly Span[]): [Span, Span][] {
+  const pairs: [Span, Span][] = [];
+
+  for (const [index, left] of spans.entries()) {
+    for (const right of spans.slice(index + 1)) {
+      if (left.start < right.end && right.start < left.end) pairs.push([left, right]);
+    }
+  }
+
+  return pairs;
 }
 
 /** One deploy run against stub gates.
@@ -137,6 +198,9 @@ interface DeployRun {
   readonly threads?: number;
   /** The resident-set cap in MiB; derived from MemAvailable when absent. */
   readonly rssMb?: number;
+  /** Record when each gate started and ended, each stub holding its slot for
+   *  `spanSleep` seconds: the only way to see whether two rows overlapped. */
+  readonly spans?: boolean;
 }
 
 function runDeploy({
@@ -149,11 +213,13 @@ function runDeploy({
   ambientPhase = "",
   threads,
   rssMb,
+  spans = false,
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
   const log = join(fixture, "events.log");
   const buildEnvironmentLog = join(fixture, "build-environment.log");
   const phaseLog = join(fixture, "infra-phase.log");
+  const spanLog = join(fixture, "spans.log");
 
   mkdirSync(join(fixture, "scripts"));
   mkdirSync(join(fixture, "node_modules"));
@@ -219,6 +285,10 @@ exit 87
       KINU_DEPLOY_PLAN: planFile,
       KINU_DEPLOY_BUILD_ENV_LOG: buildEnvironmentLog,
       KINU_DEPLOY_PHASE_LOG: phaseLog,
+      // A span run only: every other run leaves both empty, and the stub then
+      // writes no span and sleeps not at all.
+      KINU_DEPLOY_SPAN_LOG: spans ? spanLog : "",
+      KINU_DEPLOY_SPAN_SLEEP: spans ? String(SPAN_SLEEP_SECONDS) : "0",
       // Always set, so the assertion that the script overrides it is about the
       // script rather than about whichever shell ran the suite.
       KINU_INFRA_PHASE: ambientPhase,
@@ -241,7 +311,12 @@ exit 87
   const infraPhase = existsSync(phaseLog) ? readFileSync(phaseLog, "utf8").trim() : null;
 
   return {
-    status: run.exitCode, events, stdout: run.stdout.toString(), buildEnvironment, infraPhase,
+    status: run.exitCode,
+    events,
+    stdout: run.stdout.toString(),
+    buildEnvironment,
+    infraPhase,
+    spans: existsSync(spanLog) ? readSpans(readFileSync(spanLog, "utf8")) : [],
   };
 }
 
@@ -353,17 +428,19 @@ describe("deploy gate", () => {
     expect(source).toContain("run_phase post-publish");
     expect(source).not.toContain("run_required_gate");
 
-    // The plan is machine-readable and complete: one line per gate, six
+    // The plan is machine-readable and complete: one line per gate, seven
     // tab-separated fields, no quotes, and every command a plain argv.
     for (const line of PLAN_TEXT.split("\n")) {
       const fields = line.split("\t");
-      expect(fields).toHaveLength(6);
+      expect(fields).toHaveLength(7);
       const phases: readonly string[] = DEPLOY_PHASES;
       expect(phases).toContain(fields[0] ?? "");
       expect(Number(fields[2])).toBeGreaterThan(0);
       expect(Number(fields[3])).toBeGreaterThan(0);
       expect(Number(fields[4])).toBeGreaterThan(0);
-      expect(fields[5]).not.toMatch(/['"]/u);
+      const resources: readonly string[] = [...SHARED_RESOURCES, "none"];
+      expect(resources).toContain(fields[5] ?? "");
+      expect(fields[6]).not.toMatch(/['"]/u);
     }
   });
 
@@ -453,13 +530,12 @@ describe("deploy gate", () => {
     // memory, 3.1 GiB there and 3.2 to 5.1 GiB across the family. So the claim
     // is per dimension, and the 2026-09-16 shape it was written for still
     // fails it: the three workerd rows read one thread AND no memory at all.
-    // Derived from the tree, not a list.
-    const browserSuites = tracked.filter((file) => file.startsWith("scripts/") && file.endsWith(".test.ts")
-      && /from ['"](?:\.\/gallery-harness|puppeteer)['"]/.test(readRepositoryFile(REPO_ROOT, file)));
+    // Derived from the tree, not a list: the plan's own `shared` column, which
+    // is the closure over the modules each row claims.
+    const browserRows = PLAN.filter((row) => row.shared === "browser").map((row) => row.run);
 
     for (const row of PLAN) {
-      const expanded = expandGlobs(row.run);
-      const opensChrome = browserSuites.some((file) => expanded.split(" ").includes(file));
+      const opensChrome = browserRows.includes(row.run);
       const multiWorker = row.run.includes("--parallel=") || row.run === "bun run test:core" || row.run === "bun run test:cli";
 
       if (!opensChrome && !multiWorker) continue;
@@ -493,6 +569,43 @@ describe("deploy gate", () => {
     expect(gates).toEqual([...REQUIRED_GATES]);
     expect(run.stdout).toContain("within 1 threads and");
   });
+
+  // ONE BROWSER ROW AT A TIME, WHICH NO COST FIGURE CAN EXPRESS. The nine rows
+  // that boot Chrome are admitted at 1 to 3 threads and 0.5 to 6.4 GiB, so no
+  // value of either cap refuses the overlap — the lane is the only admission
+  // that can. Whether the overlap HARMS them is unproved and written as a
+  // hypothesis: measured 2026-09-18 on the 24-thread workstation, quiet box,
+  // the three browser rows of that day's red wave ran 480.1 s/124, 480.1 s/124
+  // and 152.8 s/1 concurrently and 480.2 s/124, 480.2 s/124 and 149.7 s/1
+  // serially — red either way, on one product defect (L9 in
+  // docs/ARCHITECTURE-DECISIONS.md).
+  //
+  // Read off SPANS rather than the launch log, because the launch log cannot
+  // see an overlap at all: it records the order rows started, and the
+  // scheduler starts them in plan order whether they overlap or not. Each stub
+  // holds its slot for SPAN_SLEEP_SECONDS, which is longer than the clock's
+  // resolution by three orders of magnitude. RED on the pre-mutex scheduler:
+  // with the resource check taken out of the admission loop (measured
+  // 2026-09-18) this reports twelve overlapping browser-row pairs.
+  test("two rows holding the browser never overlap, and the rest of the wave still does", () => {
+    const run = runDeploy({ spans: true });
+    const sharedRuns = PLAN.filter((row) => row.shared === "browser").map((row) => expandGlobs(row.run));
+
+    expect(sharedRuns.length, "no row holds the browser; the derivation stopped deriving").toBeGreaterThan(1);
+    const shared = run.spans.filter((span) => sharedRuns.includes(span.run));
+    expect(shared.map((span) => span.run).sort()).toEqual([...sharedRuns].sort());
+
+    expect(
+      overlapping(shared).map(([left, right]) => `${left.run} || ${right.run}`),
+      "two rows held the browser at the same moment",
+    ).toEqual([]);
+
+    // AND THE WAVE IS STILL A WAVE. A mutex that serialised everything would
+    // pass the assertion above and cost the deploy its concurrency, so the
+    // rows that hold nothing are held to the opposite property.
+    const free = run.spans.filter((span) => !sharedRuns.includes(span.run));
+    expect(overlapping(free).length, "no two unshared rows overlapped; the wave ran serially").toBeGreaterThan(0);
+  }, 120_000);
 
   test("the serial gates are the ends of the real run", () => {
     const run = runDeploy();
