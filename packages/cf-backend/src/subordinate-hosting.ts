@@ -48,6 +48,7 @@ import {
   receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles,
   subordinateForkContext, type SubordinateInheritedContext,
   inheritedAsModelMessage,
+  classifyRunEnd, closeTurnRun, openTurnRun,
   terminalTaskReport, defaultLoopOrigin, delegationBudgetOf, delegationExhausted,
   type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
   type DelegationBudget,
@@ -421,7 +422,7 @@ export async function runHostedTask(
     // that charges nothing — and a conditional spread hides which one this is.
     const inference: HeadInferenceDeps = {
       actor,
-      runId: crypto.randomUUID(),
+      runId,
       clock: REAL_CLOCK,
       delegation: {
         assignmentId: task.sequenceId,
@@ -439,6 +440,8 @@ export async function runHostedTask(
       // parent hanging up, by a socket closing or by an eviction: an interrupted
       // turn leaves its claim unsettled, which is the record that work is owed.
       isAborted: () => false,
+    const runId = crypto.randomUUID();
+
       profile: (request) => seams.profile({ actor, ...request }),
       dynamic: (profile, tools) => seams.dynamic(actor, profile, tools),
     };
@@ -464,8 +467,45 @@ export async function runHostedTask(
 
     if (relayed === null) return { text: report.summary, relayed: null };
 
+
+    // THE RUN'S DURABLE BRACKET, and it is the LOCAL host's rule adopted here
+    // rather than a cf invention: on the CLI an assignment is admitted as the
+    // child's own turn, so `ChatSession.processTurn` opens and closes its run
+    // (`openTurnRun`, caused by `subordinate_task`) and the child's `runs` view
+    // names what it was asked and how it ended. This runner drives
+    // `runHeadInference` directly, which never enters that queue, so the same
+    // delegated turn wrote `model_call` and `step_finish` rows under a run id
+    // with NO `run_start` and no `run_end` — measured 2026-09-17 in the workerd
+    // pool: one hire produced a child ledger of `step_finish` alone. Every
+    // reader of that plane then reads the run as causeless: `getRunSummaries`
+    // folds `run_start` for the cause and the input and `run_end` for the
+    // status, and `subordinateInspection`'s `runs` view is exactly that read on
+    // a hired child. Same `caused_by` and same `userMessage` as the local host
+    // writes, so one delegated turn is one shape of row on both backends.
+    //
+    // A run left open by a THROWN runner stays open on purpose: that is what an
+    // unterminated run means, the assignment's own lease stays open beside it,
+    // and the retry opens a new run rather than re-closing this one.
+    openTurnRun(actor.stores.eventRecorder, runId, {
+      agentId: actor.record.actorId,
+      causedBy: 'subordinate_task',
+      userMessage: task.body,
+      turnIndex: actor.session.orchestrator.sessionTurnIndex,
+    });
+
     return {
       text: report.summary,
+    closeTurnRun(actor.stores.eventRecorder, runId, {
+      turnIndex: actor.session.orchestrator.sessionTurnIndex,
+      usage: report.usage,
+      workMode: task.mode,
+      ...classifyRunEnd({
+        completed: report.status === 'completed',
+        interrupted: report.status === 'aborted',
+        errorText: report.errorMessage,
+      }),
+    });
+
       relayed: await relayHostedReport(seams, actor, {
         status: relayed.status, content: relayed.content, origin: 'turn_end',
         mode: task.mode, sequenceId: task.sequenceId,
