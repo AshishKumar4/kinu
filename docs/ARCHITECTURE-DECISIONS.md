@@ -228,8 +228,8 @@ held by the workerd wake case alone.
 ## Delegation
 
 D1. One delegation surface, `agents`, with `hire` (durable or task lifetime),
-`swarm`, `msg`, `list`, `dismiss`. A hire starts fresh on role, mission and a
-digest; a swarm node may inherit the parent's conversation
+`swarm`, `msg`, `list`, `dismiss`. A hire starts fresh on role and mission; a
+swarm node may inherit the parent's conversation
 (`config.context:'inherit'`). Decided 2026-09-03. Being extended 2026-09-13:
 `hire` gains the same `context` field so a subordinate can be forked when the
 work is contextual (`feat/hire-fork`).
@@ -271,6 +271,19 @@ before, a hired child's ledger held `step_finish` alone — one run id, no
 `run_start`, no `run_end` — so `getRunSummaries` answered `causedBy: null,
 userMessage: null, status: null` for it, which is exactly what
 `subordinateInspection`'s `runs` view shows a reader of a hired child.
+
+D5. There is one inherited-context kind, `fork`. The `digest` kind rendered the
+parent's recent conversation as prose for a fresh hire, and its only reader was
+the reactor's rendering of the assignment row, which D3 removed: both turn
+runners read the messages and answered `[]` for a digest, so from e6e24f547 it
+reached nobody. Deleted end to end 2026-09-17 — schema arm, both producers, the
+`renderSubordinateInheritedContext` renderer and the visibility prefix — rather
+than spliced into the turn, because the product's own pin refuses it:
+`cf-backend/tests/unit-hire-fork.test.ts`, "a cf hire context=fresh starts from
+its birth-time conversation", requires a fresh hire's first message to BE its
+mission and no parent message in its conversation. Measured the same day:
+splicing the digest as a birth message turned both non-inherit rows of that
+test red; deleting the kind left 3316 of 3316 cf tests green.
 
 
 ## Deploy ladder

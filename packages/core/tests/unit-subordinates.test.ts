@@ -668,7 +668,7 @@ describe('team action routing', () => {
       .resolves.toMatchObject({ ok: true, historyKept: true });
   });
 
-  test('spawn gives the subordinate a filtered inherited-context digest before its first mission', async () => {
+  test('a fresh hire is born from its mission alone, and its row wakes no reactor', async () => {
     const inheritedContext: SerializedMessage[] = [
       { id: 's1', role: 'system', content: 'Internal system policy', createdAt: 1 },
       { id: 'u1', role: 'user', content: 'Fix auth and billing in parallel.', createdAt: 2 },
@@ -680,21 +680,17 @@ describe('team action routing', () => {
 
     await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Repair the auth flow.' });
 
-    const context = h.assignments[0]?.inheritedContext;
-    expect(context?.kind).toBe('digest');
+    // A hire that named no context to inherit inherits none. The digest this
+    // used to build reached no reader on either backend once the reactor
+    // stopped rendering assignment rows, and the cf pin
+    // (`unit-hire-fork.test.ts`) requires a fresh hire's first message to BE
+    // its mission.
+    expect(h.assignments[0]?.inheritedContext).toBeUndefined();
+    expect(h.assignments[0]?.body).toBe('Repair the auth flow.');
 
-    if (context?.kind !== 'digest') throw new Error('The fresh hire did not receive its digest.');
-    const digest = context.text;
-    expect(digest).toContain('<inherited_context>');
-    expect(digest).toContain('[user] Fix auth and billing in parallel.');
-    expect(digest).toContain('[assistant] I will split the independent workstreams.');
-    expect(digest).not.toContain('Internal system policy');
-    expect(digest).not.toContain('Very noisy tool output');
-    expect(digest?.length).toBeLessThanOrEqual(2400);
-
-    // The digest rides the assignment ROW, and the row belongs to the
-    // delegation runner: `wakesADrain` excludes it, so no reactor may hand the
-    // child a summary of its own brief.
+    // The assignment rides its own ROW, and the row belongs to the delegation
+    // runner: `wakesADrain` excludes it, so no reactor may hand the child a
+    // summary of its own brief.
     const { sql, actor } = makeWorld();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
@@ -702,7 +698,6 @@ describe('team action routing', () => {
       fromWorkspace: 'kinu-main',
       kind: 'task',
       body: 'Repair the auth flow.',
-      inheritedContext: context,
       mode: 'build',
       now: 10,
     });
