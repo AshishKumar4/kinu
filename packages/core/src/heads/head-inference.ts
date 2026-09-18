@@ -743,6 +743,11 @@ function classifyHeadOutcome(
  * NEVER THROWS: a failure becomes an `errored` report, because the controller
  * treats a thrown run() as budget_exceeded and that is a different claim.
  */
+/** The pane relay as a `chat` option, absent when nothing watches. */
+function streamRelay(deps: HeadInferenceDeps): { observeStream?: HeadInferenceDeps['observeStream'] } {
+  return deps.observeStream === undefined ? {} : { observeStream: deps.observeStream };
+}
+
 export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
   const { capture, mission, clock } = deps;
   const startedAt = clock.now();
@@ -941,7 +946,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
             },
             stopWhen,
             onStep,
-            ...(deps.observeStream !== undefined && { observeStream: deps.observeStream }),
+            ...streamRelay(deps),
           },
           extensions: [{ name: 'kinu.head-lifetime', prepareStep: prepareModelStep }],
           dynamic: deps.dynamic,
