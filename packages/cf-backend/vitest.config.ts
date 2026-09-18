@@ -49,6 +49,7 @@ import { buildSync, transform } from 'esbuild';
 import { buildSlateVendor, slateVendor } from './slate-vendor';
 import { defineConfig, type Plugin } from 'vitest/config';
 import { probeOutbound } from './tests/workerd/http-model-fake';
+import { hireOutbound } from './tests/workerd/hire-model-fake';
 import { kCurrentWorker } from 'miniflare';
 import { builtinModules } from 'node:module';
 import { promptText } from './vite-prompt-text';
@@ -163,6 +164,15 @@ const slateEgressProbe = buildSync({
 const twoTurnProbe = buildSync({
   entryPoints: [fileURLToPath(new URL('./tests/workerd/two-turn-probe.ts', import.meta.url))],
   outfile: fileURLToPath(new URL('./tests/workerd/.compiled/two-turn-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
+const hireProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/hire-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/hire-probe.js', import.meta.url)),
   bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
   conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
   alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
@@ -323,6 +333,30 @@ export default defineConfig({
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         }, {
+          // The delegation tier: a real hire, authored by the model through the
+          // real `agents` tool, run against a real OrchestratorAgent. Same
+          // shape as the two-turn worker — the shipped orchestrator under the
+          // production name, its own AI service binding for the CHILD's wire
+          // (a hosted actor's tier model is a `workers-ai/` spec, so its turn
+          // arrives on the binding and not on HTTP), and its own outbound for
+          // the ROOT's pinned `openai-compat` lane.
+          name: 'hire-probe',
+          compatibilityDate: workerCompatibility.compatibilityDate,
+          compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
+          workerLoaders: { LOADER: {} },
+          modules: hireProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          bindings: { DEV_USER_EMAIL: 'probe@local', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'HireAI' } },
+          outboundService: hireOutbound,
+          durableObjects: {
+            HIRE_PROBE: { className: 'HireProbeRoot', useSQLite: true },
+            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+            UserDO: { className: 'UserDO', useSQLite: true },
+          },
+        }, {
           // The durable-slate probe: the production preview edge
           // (`handleNimbusPreviewHostRequest`) driven against a real
           // OrchestratorAgent across `abortAllDurableObjects()`. The workspace
@@ -457,6 +491,7 @@ export default defineConfig({
           SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', scriptName: 'slate-egress-probe', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
           TWO_TURN_PROBE: { className: 'TwoTurnProbeRoot', scriptName: 'two-turn-probe', useSQLite: true },
+          HIRE_PROBE: { className: 'HireProbeRoot', scriptName: 'hire-probe', useSQLite: true },
           DEVBOX_NOT_READY_PROBE: { className: 'DevboxNotReadyProbeDO', useSQLite: true },
           SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', scriptName: 'slate-durability-probe', useSQLite: true },
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', scriptName: 'account-reset-probe', useSQLite: true },
