@@ -164,8 +164,16 @@ export interface SubordinateHostSeams {
   mission(actor: HostedActor): MissionScope | null;
   /** Announce a roster change to whoever is watching this actor's pane. */
   announce(actor: BoundActor): void;
-  /** Ask this actor's own orchestration to drain its event log. */
+  /** Ask this actor's own orchestration to drain its event log — a REACTION
+   *  arrived (a report from one of its own children). Never for an assignment:
+   *  `wakesADrain` excludes that variant, so the reactor would select nothing
+   *  and the row's real runner is the durable wake below. */
   scheduleDrain(actor: HostedActor): void;
+  /** Re-derive the workspace's ONE durable wake, because work that needs one
+   *  was just admitted. The arm an assignment needs: the row is run by
+   *  `drainAdmittedDelegations` in the alarm frame, and nothing else in the
+   *  admitting request may run it. */
+  armWake(): void;
   /** The temporary rung's waiter register, which lives on the PARENT: `ask`
    *  parks a waiter and the report ingress resolves it, and those are two
    *  different calls on one isolate. */
@@ -289,7 +297,19 @@ export async function admitHostedTask(
     if (input.creationId !== undefined) admission.creationId = input.creationId;
     const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);
 
-    if (result.admitted) seams.scheduleDrain(actor);
+    // THE WAKE, not the child's reactor. This used to call `scheduleDrain` on
+    // the actor it had just written to, and both halves of that were wrong once
+    // the assignment stopped being a reaction: the debounced drain selects
+    // `wakesADrain` rows and an assignment is not one, so it fired a drain that
+    // could only find nothing — and it was the ROOT's drain, reached the same
+    // way from the report ingress, that carried the refused liveness read this
+    // commit fixes. What admission genuinely owes is the arm: the runner is
+    // `drainAdmittedDelegations` in the alarm frame, and `nextWakeAt` now folds
+    // `hasAdmittedDelegations()` at `now`, so this row's wake is due
+    // immediately instead of riding whatever unrelated wake happened to be
+    // armed — measured before this commit: every hire in the workerd pool
+    // waited for the unrelated turn-open recovery row to come due.
+    if (result.admitted) seams.armWake();
 
     return {
       ...result,
@@ -420,6 +440,8 @@ export async function runHostedTask(
     // key at all rather than a spread of nothing. Absent and present are
     // different instructions to the runner — a mission it cannot see is a turn
     // that charges nothing — and a conditional spread hides which one this is.
+    const runId = crypto.randomUUID();
+
     const inference: HeadInferenceDeps = {
       actor,
       runId,
@@ -440,33 +462,11 @@ export async function runHostedTask(
       // parent hanging up, by a socket closing or by an eviction: an interrupted
       // turn leaves its claim unsettled, which is the record that work is owed.
       isAborted: () => false,
-    const runId = crypto.randomUUID();
-
       profile: (request) => seams.profile({ actor, ...request }),
       dynamic: (profile, tools) => seams.dynamic(actor, profile, tools),
     };
 
     if (mission !== null) inference.mission = mission;
-    const report = await runHeadInference(input, inference);
-
-    const ending: TaskTurnEnding = report.status === 'completed'
-      ? 'answered'
-      : report.status === 'aborted' ? 'interrupted' : 'errored';
-
-    const owed = reports.settled
-      ? null
-      : terminalTaskReport({ lifetime: hostedLifetime(actor.record), ending, assistantText: report.summary });
-
-    const relayed = owed ?? (
-      ending === 'answered' && subordinateRelaysTurnEnd({
-        reportedThisTurn: reports.spoke, ownerDriven: false, assistantText: report.summary,
-      })
-        ? { status: 'progress' as const, content: report.summary }
-        : null
-    );
-
-    if (relayed === null) return { text: report.summary, relayed: null };
-
 
     // THE RUN'S DURABLE BRACKET, and it is the LOCAL host's rule adopted here
     // rather than a cf invention: on the CLI an assignment is admitted as the
@@ -493,8 +493,8 @@ export async function runHostedTask(
       turnIndex: actor.session.orchestrator.sessionTurnIndex,
     });
 
-    return {
-      text: report.summary,
+    const report = await runHeadInference(input, inference);
+
     closeTurnRun(actor.stores.eventRecorder, runId, {
       turnIndex: actor.session.orchestrator.sessionTurnIndex,
       usage: report.usage,
@@ -506,6 +506,26 @@ export async function runHostedTask(
       }),
     });
 
+    const ending: TaskTurnEnding = report.status === 'completed'
+      ? 'answered'
+      : report.status === 'aborted' ? 'interrupted' : 'errored';
+
+    const owed = reports.settled
+      ? null
+      : terminalTaskReport({ lifetime: hostedLifetime(actor.record), ending, assistantText: report.summary });
+
+    const relayed = owed ?? (
+      ending === 'answered' && subordinateRelaysTurnEnd({
+        reportedThisTurn: reports.spoke, ownerDriven: false, assistantText: report.summary,
+      })
+        ? { status: 'progress' as const, content: report.summary }
+        : null
+    );
+
+    if (relayed === null) return { text: report.summary, relayed: null };
+
+    return {
+      text: report.summary,
       relayed: await relayHostedReport(seams, actor, {
         status: relayed.status, content: relayed.content, origin: 'turn_end',
         mode: task.mode, sequenceId: task.sequenceId,
