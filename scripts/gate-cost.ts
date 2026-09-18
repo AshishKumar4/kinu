@@ -47,10 +47,10 @@ const RowCostSchema = v.object({
   /** Wall clock alone, seconds. Reported against the row's deadline rather than
    *  used for admission: a wall is not a measure of load. */
   wallSeconds: v.number(),
-  /** User+system seconds over the whole session: work done, not time taken, so
-   *  a busy box does not change it. */
+  /** User+system seconds over the whole process tree: work done, not time
+   *  taken, so a busy box does not change it. */
   cpuSeconds: v.number(),
-  /** The session's summed resident pages at their highest sampled instant, MiB.
+  /** The tree's summed resident pages at their highest sampled instant, MiB.
    *  A SUM, because `/usr/bin/time -v`'s maximum resident set is the largest
    *  single child and reads four 1 GiB workers as one. */
   peakRssMb: v.number(),

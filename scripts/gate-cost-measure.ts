@@ -19,11 +19,21 @@
  *   - achieved parallelism: Δ(utime+stime+cutime+cstime) over a window wide
  *     enough that the 10 ms tick does not read as threads.
  *
- * THE SESSION, NOT THE SUBTREE. `setsid` makes the row a session leader, so a
- * re-parented orphan — workerd, a browser helper whose parent already exited —
- * still answers with the row's session id and is still counted. A child that
- * calls setsid itself escapes this sampler, and escapes deploy.sh's kill the
- * same way; the two have the same blind spot on purpose.
+ * THE TREE, NOT THE SESSION, since 2026-09-17. `setsid` makes the row a
+ * session leader, so a re-parented orphan still answers with the row's session
+ * id — but a child that calls `setsid` ITSELF leaves that session, and the two
+ * heaviest children a browser row has both do: `live-app-harness.ts` spawns
+ * `vite dev` detached so the teardown can signal workerd through the group
+ * (d6b075bd8), and puppeteer spawns Chrome detached by default. Measured on
+ * this box under both shapes, 2026-09-17: the live-app row reads 203 MiB by
+ * session and 5,013/5,115 MiB by pid tree (vite 2.6 GiB, workerd 1.1 GiB,
+ * Chrome 1.0 GiB), and the UI self-tests row read 141.97 CPU seconds over a
+ * 480 s wall — one thread for a row that drives 21 Chrome frames. So
+ * membership is the row's session PLUS every descendant by ppid, whatever
+ * session the descendant sits in. This reverses the sampling half of L6 in
+ * docs/ARCHITECTURE-DECISIONS.md, which held the sampler and deploy.sh's kill
+ * to one blind spot on purpose; killability and cost are different questions,
+ * and memory a detached child holds is memory the box does not have.
  *
  * THE ROW RUNS EXACTLY AS THE WAVE RUNS IT: same `timeout --signal=TERM
  * --kill-after=5s` wrapper, same argv-splitting `bash -c`, same per-row
@@ -56,7 +66,7 @@ const root = new URL('..', import.meta.url).pathname;
  * The sampling rates, and why there are two.
  *
  * One scan costs 5.4 ms on this box (measured 2026-09-17: 694 processes, one
- * `/proc/<pid>/stat` read each, tasks listed only for the row's own session),
+ * `/proc/<pid>/stat` read each, tasks listed only for the row's own tree),
  * so a fast rate is not free — it is measurement load on the thing measured.
  * But a row that runs in 0.3 s gets ONE sample at the standard rate and the
  * figure then depends on where that sample landed: the preflight row read
@@ -84,13 +94,14 @@ const CPU_WINDOW_SECONDS = 0.25;
  *  is not written down cannot be repeated, and a figure nobody can repeat is
  *  the declared number this replaced. */
 const COST_METHOD = 'each row alone under `setsid timeout --signal=TERM --kill-after=5s <deadline> '
-  + '/usr/bin/time -v bash -c <run>`; the row\'s whole session sampled every '
+  + '/usr/bin/time -v bash -c <run>`; the row\'s whole process tree — its session plus every '
+  + 'descendant by ppid, so a setsid\'d dev server or browser counts — sampled every '
   + `${String(BURST_SAMPLE_SECONDS)}s for its first ${String(BURST_SECONDS)}s and every `
   + `${String(SAMPLE_SECONDS)}s after — summed rss for memory, tasks in state R for parallel `
   + `demand, Δ(utime+stime+cutime+cstime) over at least ${String(CPU_WINDOW_SECONDS)}s for `
   + 'parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)';
 
-/** One instant of a row's session: what it has burned, what it holds, and how
+/** One instant of a row's tree: what it has burned, what it holds, and how
  *  many of its tasks want a CPU right now. */
 interface Reading {
   readonly cpuTicks: number;
@@ -99,23 +110,35 @@ interface Reading {
   readonly processes: number;
 }
 
+/** One process as `/proc/<pid>/stat` reports it, before membership is decided.
+ *  The fields are read positionally from after the `comm`, which is the one
+ *  field that holds spaces and parentheses; `lastIndexOf(') ')` is what makes
+ *  that parse safe for a process called `) (`. */
+interface ProcessStat {
+  readonly ppid: number;
+  readonly session: number;
+  readonly cpuTicks: number;
+  readonly rssPages: number;
+  readonly tasks: number;
+  readonly state: string;
+}
+
 /**
- * Every process whose session is `session`, summed.
+ * Every process in the row's TREE, summed: its own session plus every
+ * descendant by ppid — see the header for the two children that leave the
+ * session and what they cost.
  *
  * `cutime`/`cstime` are included because a reaped child's ticks move into its
  * parent's, so the sum over the LIVE processes of all four fields is the whole
- * session's CPU with nothing double counted — a process is either alive and
+ * tree's CPU with nothing double counted — a process is either alive and
  * counted by its own fields, or reaped and counted by its parent's.
  *
- * The fields are read positionally from after the `comm`, which is the one
- * field that holds spaces and parentheses; `lastIndexOf(') ')` is what makes
- * that parse safe for a process called `) (`.
+ * A descendant whose parent died before this sample is reparented to init and
+ * drops out of the walk. That is an orphan — a teardown defect the harnesses
+ * own — and the session arm still carries every child that never setsid'd.
  */
-function readSession(session: number): Reading {
-  let cpuTicks = 0;
-  let rssPages = 0;
-  let runnable = 0;
-  let processes = 0;
+function readTree(session: number): Reading {
+  const stats = new Map<number, ProcessStat>();
 
   for (const entry of readdirSync('/proc')) {
     const first = entry.charCodeAt(0);
@@ -128,23 +151,62 @@ function readSession(session: number): Reading {
 
     if (stat === undefined) continue;
     const fields = stat.slice(stat.lastIndexOf(') ') + 2).split(' ');
+    stats.set(Number(entry), {
+      ppid: Number(fields[1]),
+      session: Number(fields[3]),
+      cpuTicks: Number(fields[11]) + Number(fields[12]) + Number(fields[13]) + Number(fields[14]),
+      rssPages: Number(fields[21]),
+      tasks: Number(fields[17]),
+      state: fields[0] ?? '',
+    });
+  }
 
-    if (Number(fields[3]) !== session) continue;
-    cpuTicks += Number(fields[11]) + Number(fields[12]) + Number(fields[13]) + Number(fields[14]);
-    rssPages += Number(fields[21]);
+  // Membership walks UP: a process belongs when it wears the row's session or
+  // when its parent belongs, so a chain of setsid calls between the row and a
+  // workerd child changes nothing. Memoised, because a browser row is a
+  // hundred processes hanging off one chain.
+  const belonging = new Map<number, boolean>();
+
+  const belongs = (pid: number): boolean => {
+    const known = belonging.get(pid);
+
+    if (known !== undefined) return known;
+    const stat = stats.get(pid);
+
+    // Recorded BEFORE the walk continues, so a chain that cannot terminate
+    // cannot recur: pid 1, an exited parent and a self-parent all end here.
+    belonging.set(pid, false);
+
+    const verdict = stat !== undefined
+      && (stat.session === session || (stat.ppid > 1 && stat.ppid !== pid && belongs(stat.ppid)));
+
+    belonging.set(pid, verdict);
+
+    return verdict;
+  };
+
+  let cpuTicks = 0;
+  let rssPages = 0;
+  let runnable = 0;
+  let processes = 0;
+
+  for (const [pid, stat] of stats) {
+    if (!belongs(pid)) continue;
+    cpuTicks += stat.cpuTicks;
+    rssPages += stat.rssPages;
     processes += 1;
 
     // THREAD level, not process level: a `bun test` worker is one process
     // running a thread pool, and counting the process would read four busy pool
     // threads as one. Only a process with more than one task pays for the
     // second listing.
-    if (Number(fields[17]) === 1) {
-      if (fields[0] === 'R') runnable += 1;
+    if (stat.tasks === 1) {
+      if (stat.state === 'R') runnable += 1;
       continue;
     }
 
-    for (const task of tolerate(() => readdirSync(`/proc/${entry}/task`), 'enoent') ?? []) {
-      const taskStat = tolerate(() => readFileSync(`/proc/${entry}/task/${task}/stat`, 'utf8'), 'enoent');
+    for (const task of tolerate(() => readdirSync(`/proc/${String(pid)}/task`), 'enoent') ?? []) {
+      const taskStat = tolerate(() => readFileSync(`/proc/${String(pid)}/task/${task}/stat`, 'utf8'), 'enoent');
 
       if (taskStat === undefined) continue;
 
@@ -251,7 +313,7 @@ function round(value: number): number {
 }
 
 /**
- * Run one row alone under the wave's own wrapper, sampling its session until it
+ * Run one row alone under the wave's own wrapper, sampling its tree until it
  * ends. Asynchronous so the sampler is a timer beside a running child rather
  * than a poll that competes with the row for the CPU it is measuring.
  */
@@ -284,7 +346,7 @@ async function measureRow(request: MeasureRequest): Promise<RowCost> {
       const elapsed = (performance.now() - started) / 1000;
       await Bun.sleep((elapsed < BURST_SECONDS ? BURST_SAMPLE_SECONDS : SAMPLE_SECONDS) * 1000);
       const at = performance.now();
-      const reading = readSession(child.pid);
+      const reading = readTree(child.pid);
 
       if (reading.processes === 0) continue;
       samples += 1;
