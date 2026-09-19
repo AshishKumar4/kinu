@@ -392,10 +392,10 @@ flush_gates() {
     esac
   done
 
-  local -a launched=() statuses=()
+  local -a launched=() statuses=() started=()
   local -A gate_of_pid=()
   local -A resource_held=()
-  local pick finished status threads rss resource
+  local pick finished status threads rss resource wall
   local running=0 load=0 held=0 settled=0 failures=0
   for ((index = 0; index < total; index++)); do launched[index]=0; statuses[index]=-1; done
 
@@ -457,6 +457,7 @@ flush_gates() {
         exec timeout --signal=TERM --kill-after=5s "${GATE_DEADLINE[pick]}" ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1
       ) &
       gate_of_pid[$!]=$pick
+      started[pick]=$SECONDS
       running=$((running + 1))
     done
 
@@ -488,11 +489,14 @@ flush_gates() {
     if [ "${GATE_SHARED[index]}" != "none" ]; then unset "resource_held[${GATE_SHARED[index]}]"; fi
     settled=$((settled + 1))
     statuses[index]=$status
+    # Wall seconds since launch, on the line itself: which row a wave waits on
+    # is otherwise unanswerable once the gate dir is gone.
+    wall=$((SECONDS - started[index]))
     if [ "$status" -eq 0 ]; then
-      echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC}"
+      echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC} ${wall}s"
     else
       failures=$((failures + 1))
-      echo -e "${RED}❌ ${GATE_LABELS[index]} failed (exit $status)${NC}"
+      echo -e "${RED}❌ ${GATE_LABELS[index]} failed (exit $status)${NC} ${wall}s"
     fi
   done
 
