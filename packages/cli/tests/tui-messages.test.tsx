@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import type { CapturedSpan, RGBA } from '@opentui/core';
+import { TextAttributes, type CapturedSpan, type RGBA } from '@opentui/core';
 import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
@@ -218,6 +218,57 @@ describe('TUI transcript rendering', () => {
         flushSync(() => { root.unmount(); });
         renderer.destroy();
       }
+    }
+  });
+
+  test('assistant markdown renders: bold is bold, a bullet is a glyph, the markers are gone', async () => {
+    // The owner's transcript showed `**Build something**` and `- ` verbatim:
+    // the syntax styles were keyed by marked's token names, which opentui's
+    // tree-sitter captures never match, so every span fell to the flat ink.
+    const theme = BUILTIN_TUI_THEMES.find((candidate) => candidate.id === 'kinu-dark')!;
+    const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 20, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+
+    try {
+      root.render(
+        <TuiThemeProvider selection={{ mode: 'theme', themeId: 'kinu-dark' }} colorCapability="truecolor">
+          <box style={{ width: '100%', height: '100%' }}>
+            <MessageList
+              messages={[{ id: 'a1', role: 'assistant', content: 'Here is **what works** now:\n\n- Full bash and `git`\n- **GPU** work\n\n1. first\n2. second' }]}
+            />
+          </box>
+        </TuiThemeProvider>,
+      );
+
+      const spans = await renderUntil(renderOnce, captureSpans, (frame) => (
+        ['what works', 'Full bash', 'second'].every((text) => frame.some((span) => span.text.includes(text)))
+      ));
+
+      const text = spans.map((span) => span.text).join('');
+
+      expect(text).not.toContain('**');
+      expect(text).toContain('• Full bash');
+      expect(text).toContain('• ');
+      expect(text).toContain('1. first');
+      expect(text).toContain('2. second');
+      expect(text).not.toMatch(/^- /m);
+
+      const strong = spans.find((span) => span.text.includes('what works'))!;
+      const plain = spans.find((span) => span.text.includes('Here is'))!;
+      expect(strong.attributes & TextAttributes.BOLD).not.toBe(0);
+      expect(plain.attributes & TextAttributes.BOLD).toBe(0);
+
+      const gpu = spans.find((span) => span.text.includes('GPU'))!;
+      expect(gpu.attributes & TextAttributes.BOLD).not.toBe(0);
+
+      const codespan = spans.find((span) => span.text.includes('git'))!;
+      expect(hex(codespan.fg)).toBe(theme.colors.intent.accentStrong);
+
+      const bullet = spans.find((span) => span.text.startsWith('•'))!;
+      expect(hex(bullet.fg)).toBe(theme.colors.intent.accent);
+    } finally {
+      flushSync(() => { root.unmount(); });
+      renderer.destroy();
     }
   });
 

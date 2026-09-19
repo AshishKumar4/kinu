@@ -1,4 +1,5 @@
-import { BoxRenderable, CodeRenderable, type BoxOptions, type MarkdownOptions } from '@opentui/core';
+import { BoxRenderable, CodeRenderable, MarkdownRenderable, TextRenderable, type BoxOptions, type MarkdownOptions } from '@opentui/core';
+import * as v from 'valibot';
 import { useCallback, useRef } from 'react';
 
 import { TUI_MARKS } from '@kinu.run/core';
@@ -89,21 +90,83 @@ function wellBoxStyle(well: TuiThemeColors['well']): WellBoxStyle {
  */
 function useCodeWellRenderer(): NonNullable<MarkdownOptions['renderNode']> {
   const { colors } = useTuiTheme();
-  const well = useRef(colors.well);
-  well.current = colors.well;
+  const palette = useRef(colors);
+  palette.current = colors;
 
-  return useCallback((token, context) => {
+  const render: NonNullable<MarkdownOptions['renderNode']> = useCallback((token, context) => {
+    if (token.type === 'list') {
+      const list = v.safeParse(ListTokenSchema, token);
+
+      return list.success ? renderList(list.output, context, palette.current, render) : null;
+    }
+
+
     if (token.type !== 'code') return null;
     const code = context.defaultRender();
 
     if (!(code instanceof CodeRenderable)) return code;
-    code.fg = well.current.code;
+    code.fg = palette.current.well.code;
     code.marginTop = 0;
-    const box = new BoxRenderable(code.ctx, { ...wellBoxStyle(well.current), width: '100%', flexDirection: 'column' });
+    const box = new BoxRenderable(code.ctx, { ...wellBoxStyle(palette.current.well), width: '100%', flexDirection: 'column' });
     box.add(code);
 
     return box;
   }, []);
+
+  return render;
+}
+
+/**
+ * A list as markers and bodies. opentui's grammar leaves a list marker as
+ * the literal `-` it was typed with (its bullet-conceal rules are commented
+ * out upstream over a parser spacing issue), so the block is drawn here: one
+ * row per item, a glyph or an ordinal in the accent, and the item's own text
+ * as a nested markdown block, so emphasis inside a bullet still renders and
+ * a nested list comes back through this same hook.
+ */
+type RenderNode = NonNullable<MarkdownOptions['renderNode']>;
+
+/** The marked list token, read at the renderer boundary: marked's token
+ *  union carries a `Generic` member whose every field is `any`, so the shape
+ *  is parsed rather than trusted. */
+const ListTokenSchema = v.object({
+  ordered: v.boolean(),
+  start: v.union([v.number(), v.literal('')]),
+  items: v.array(v.object({ text: v.string(), task: v.boolean(), checked: v.optional(v.boolean()) })),
+});
+
+type ListToken = v.InferOutput<typeof ListTokenSchema>;
+
+function renderList(
+  token: ListToken,
+  context: Parameters<RenderNode>[1],
+  colors: ReturnType<typeof useTuiTheme>['colors'],
+  renderNode: RenderNode,
+) {
+  const probe = context.defaultRender();
+
+  if (probe === null) return null;
+  const list = new BoxRenderable(probe.ctx, { width: '100%', flexDirection: 'column' });
+  const first = token.start === '' ? 1 : token.start;
+
+  token.items.forEach((item, index) => {
+    const row = new BoxRenderable(probe.ctx, { width: '100%', flexDirection: 'row' });
+    const marker = token.ordered ? `${String(first + index)}. ` : item.task ? (item.checked ? '☑ ' : '☐ ') : '• ';
+    row.add(new TextRenderable(probe.ctx, { content: marker, fg: colors.intent.accent }));
+    row.add(new MarkdownRenderable(probe.ctx, {
+      content: item.text,
+      syntaxStyle: context.syntaxStyle,
+      conceal: context.conceal,
+      concealCode: context.concealCode,
+      fg: colors.text.strong,
+      renderNode,
+      flexGrow: 1,
+      flexShrink: 1,
+    }));
+    list.add(row);
+  });
+
+  return list;
 }
 
 /** Prose on the canvas, in the ink register: the agent's body must read as

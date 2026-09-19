@@ -733,22 +733,55 @@ function projectTheme(theme: TuiThemeDefinition, capability: TerminalColorCapabi
  */
 function markdownSyntaxForTheme(theme: TuiThemeDefinition): SyntaxStyle {
   const { border, text, intent } = theme.colors;
+  const prose = { fg: text.strong };
+  const heading = { fg: text.strong, bold: true };
+  const raw = { fg: intent.accentStrong };
+  const link = { fg: intent.accentStrong, underline: true };
+  const mark = { fg: intent.accent };
+  const punctuation = { fg: text.muted };
 
+  // Keyed by the tree-sitter CAPTURE names opentui's markdown grammar emits
+  // (`assets/markdown{,_inline}/highlights.scm`), because that is what
+  // `MarkdownRenderable.getStyle` looks up — the exact capture, then the
+  // segment before the first dot. A key marked's token vocabulary would
+  // suggest (`strong`, `heading`, `list`) reaches nothing, and every span
+  // falls to the flat `default` ink: bold, italic and headings all vanish
+  // while the markers stay concealed. Heading levels are listed one by one
+  // because `markup.heading.2` falls back to `markup`, not to `markup.heading`.
+  //
   // Prose takes the bright ink: the body register sits beside thinking
   // (`text.muted`, italic, `messages.tsx` PhaseLine) and beside the dim
   // system annotations, and a grey body read as neither.
+  // No `default` entry: a fenced block's chunks resolve `default` before the
+  // block's own ink, and the well's code ink is set on the block by
+  // `messages.tsx` — a default here would paint code in prose ink.
   return SyntaxStyle.fromStyles({
-    text: { fg: text.strong },
-    paragraph: { fg: text.strong },
-    heading: { fg: text.strong, bold: true },
-    strong: { fg: text.strong, bold: true },
-    emphasis: { fg: text.strong, italic: true },
-    codespan: { fg: intent.accentStrong },
-    link: { fg: intent.accentStrong, underline: true },
-    blockquote: { fg: text.muted, italic: true },
-    list: { fg: text.strong },
-    list_item: { fg: text.strong },
-    table: { fg: text.strong },
+    markup: prose,
+    'markup.strong': { fg: text.strong, bold: true },
+    'markup.italic': { fg: text.strong, italic: true },
+    'markup.strikethrough': { fg: text.muted, dim: true },
+    'markup.heading': heading,
+    'markup.heading.1': heading,
+    'markup.heading.2': heading,
+    'markup.heading.3': heading,
+    'markup.heading.4': heading,
+    'markup.heading.5': heading,
+    'markup.heading.6': heading,
+    'markup.raw': raw,
+    'markup.raw.block': raw,
+    'markup.link': link,
+    'markup.link.url': link,
+    'markup.link.label': { fg: intent.accentStrong },
+    'markup.quote': { fg: text.muted, italic: true },
+    'markup.list': mark,
+    'markup.list.checked': mark,
+    'markup.list.unchecked': mark,
+    punctuation,
+    'punctuation.special': punctuation,
+    'punctuation.delimiter': punctuation,
+    label: prose,
+    'string.escape': prose,
+    'character.special': punctuation,
     hr: { fg: border.default },
   });
 }
