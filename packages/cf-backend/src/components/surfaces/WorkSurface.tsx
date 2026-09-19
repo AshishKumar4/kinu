@@ -240,8 +240,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
         {/* Icons inside the strip's own rule: the row is one flex line with
             one bottom rule, so the gauge and the collapse chevron sit on the
             same edge the tabs underline — never a ruled strip beside an
-            unruled icon column with a visible break between them. */}
-        <div className={`flex shrink-0 items-center -mb-px ${tabStripH}`}>
+            unruled icon column with a visible break between them. This column
+            carries the rule itself rather than hanging a pixel below it with
+            `-mb-px`, or its edge lands a row below the strip's and leaves a
+            step where the tabs' rule meets it. */}
+        <div className={`flex shrink-0 items-center border-b p-border ${tabStripH}`}>
         <ShareSlateControl workspace={props.workspace} slate={openSlateSummary} rpc={props.rpc} />
         {chip !== null && (
           <button
