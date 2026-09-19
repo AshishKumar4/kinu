@@ -13,6 +13,8 @@
  */
 
 import { realpathSync } from 'node:fs';
+import { sameActorReference } from '@kinu.run/core';
+import type { ActorHandle } from '@kinu.run/core';
 import { resolve } from 'node:path';
 import {
   generateText, stepCountIs,
@@ -315,8 +317,8 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
       refinementLane: () => input.session().runRefinementLane(),
       sinks: {
         logActivity: (event, detail) => { input.session().logActivity(event, detail); },
-        onToolCallEvent: (ev) => { input.session().reportToolCallEnd(ev); },
-        onStepEvent: (ev) => { input.session().reportStepFinish(ev); },
+        onToolCallEvent: (ev) => { input.session().reportActorRunEvent(input.runtime.actor, { type: 'tool_call_end', ...ev }); },
+        onStepEvent: (ev) => { input.session().reportActorRunEvent(input.runtime.actor, { type: 'step_finish', ...ev }); },
       },
     },
   };
@@ -2184,12 +2186,12 @@ export class LocalAgentSession implements BackendHost {
    *  default (`runId` omitted); a caller with its OWN run id passes it
    *  explicitly so the row lands on that run once the calling turn has moved
    *  on. Never throws: losing a history row must not fail a turn. */
-  private recordRunEvent(input: RunEventInput, runId?: string | null): void {
+  private recordRunEvent(input: RunEventInput, runId?: string | null, recorder: RunEventRecorder = this.eventRecorder): void {
     const id = runId !== undefined ? runId : this.chat.currentRunId;
 
     if (!id) return;
 
-    try { this.eventRecorder.emit(id, input); }
+    try { recorder.emit(id, input); }
     catch (err) {
       diagnostics.failure(
         'event.run_row_write_failed',
@@ -3609,14 +3611,21 @@ export class LocalAgentSession implements BackendHost {
     this.recordRunEvent({ type: 'budget_exhausted', ...refusal });
   }
 
-  /** One settled tool call, into the run's durable event log. */
-  reportToolCallEnd(event: Omit<Extract<RunEventInput, { type: 'tool_call_end' }>, 'type'>): void {
-    this.recordRunEvent({ type: 'tool_call_end', ...event });
-  }
+  reportActorRunEvent(actor: ActorHandle, event: Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>): void {
+    if (sameActorReference(actor, this.rt.actor)) {
+      this.recordRunEvent(event);
 
-  /** One finished model step, into the run's durable event log. */
-  reportStepFinish(event: Omit<Extract<RunEventInput, { type: 'step_finish' }>, 'type'>): void {
-    this.recordRunEvent({ type: 'step_finish', ...event });
+      return;
+    }
+
+    const hosted = this.actorHost.hosted(actor);
+    const claim = hosted?.session.turnClaim;
+
+    if (hosted === null || claim === undefined || claim === null) {
+      throw new KinuError('missing', 'A reporting actor has no active turn for its event.');
+    }
+
+    this.recordRunEvent(event, claim.runId, hosted.stores.eventRecorder);
   }
 
   /** One evolution event onto this session's client stream. */

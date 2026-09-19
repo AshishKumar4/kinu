@@ -14,7 +14,7 @@ import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provid
 import {
   HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture, MergeOutputSchema,
   MissionGovernor, CRAFT_NEUTRAL_PRIOR, reasoningEffortOptions, explorationActorKey, headAgentName, defaultLoopOrigin,
-  initWorkspaceSchema,
+  initWorkspaceSchema, RunEventRecorder, startBranchHead, workspaceSpend,
   type ReasoningEffort,
   type HeadInput, type WebSearchProvider, type JsonObject, type WriteObserver,
   type ModelCallReport, type ModelOperationEvent,
@@ -29,6 +29,7 @@ import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runti
 import { makeSql, makeExecRaw, makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-fixture';
 import { openLocalActor } from '../src/actor-identity';
+import { LocalAgentSession } from '../src/local-session';
 
 // A head owns NO store of its own: it is a logical actor of the
 // workspace it forks, so there is no KINU_HOME scratch boundary to point
@@ -230,6 +231,57 @@ function controllerWithCLIRuntime(model: LanguageModel, probe?: RouteProbe) {
 }
 
 describe('createCLIHeadRuntime — full split → run → merge', () => {
+  test('a branch running beside a chat contributes its usage exactly once', async () => {
+    const parent = makeParent();
+    parent.actor.config.setDisplayNameOrigin('Spend measurement', 'user');
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let calls = 0;
+
+    const model = new TestLanguageModelV2({
+      doGenerate: async () => {
+        if (calls++ === 0) {
+          entered.resolve();
+          await release.promise;
+        }
+
+        return {
+          content: [{ type: 'text', text: 'The inspection is complete.' }],
+          finishReason: 'stop', usage: { inputTokens: 100, outputTokens: 7, totalTokens: 107 }, warnings: [],
+        };
+      },
+    });
+
+    const session = new LocalAgentSession({ rt: parent, db: parent.db, model, noAutoEvolve: true, onEvent: () => {} });
+    const turn = session.send('Inspect the parser.');
+
+    try {
+      await entered.promise;
+      const journal = new HeadJournal(parent.storage.sql, parent.actor);
+
+      const branch = await startBranchHead(session.headRuntime, journal, {
+        id: 'spend-branch', task: 'Inspect another angle.', inheritedContext: [],
+      });
+
+      const report = await branch.result;
+
+      expect(report.status).toBe('completed');
+      expect(report.usage).toMatchObject({ input: 100, output: 7 });
+
+      const spend = workspaceSpend({
+        events: new RunEventRecorder(parent.storage.sql, parent.actor), sql: parent.storage.sql, actor: parent.actor,
+      });
+
+      expect(spend.total.usage).toMatchObject({ input: 100, output: 7 });
+      expect(spend.producers.map((producer) => producer.source)).toEqual(['head']);
+    } finally {
+      release.resolve();
+      await turn;
+      await session.end();
+      parent.db.close();
+    }
+  });
+
   test('reasoning and prose stream in order under the emitting head identity', async () => {
     const frames: HeadStreamFrame[] = [];
 
