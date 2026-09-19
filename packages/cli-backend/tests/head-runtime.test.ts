@@ -428,8 +428,8 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 
     await (await runtime.spawnHead(aHeadInput())).run();
 
-    expect(prompt).toContain('`workspace.*` is the canonical workspace you were forked from');
-    expect(prompt).not.toContain('workspace.*` is your private scratch');
+    expect(prompt).toContain('workspace.exec');
+    expect(prompt).not.toContain('`parent.*`');
     expect(runSchema).toContain('"parent"');
   });
 

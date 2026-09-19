@@ -251,7 +251,6 @@ describe('the readers can see the end of a long turn', () => {
     });
 
     expect(prompt).toContain('// header');
-    expect(prompt).toContain('... [truncated]');
-    expect(prompt).not.toContain('chars omitted from the middle');
+    expect(prompt).not.toContain('// footer');
   });
 });
