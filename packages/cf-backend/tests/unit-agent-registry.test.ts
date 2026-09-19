@@ -7,8 +7,9 @@ import {
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   defaultSpecFor,
   parseModelSpec,
+  KINU_USER_AGENT,
 } from '@kinu.run/core';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createMockFetch, createTestRuntime, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
 import { createAgentProviderRegistry, type AgentProviderRegistry } from '../src/providers/agent-registry';
 import type { ModelMenuEntry } from '../src/user/available-models';
 import type { CredentialSummary } from '../src/user/user-do';
@@ -33,6 +34,32 @@ function fakeUserDOStub(
 }
 
 describe('AgentProviderRegistry composition', () => {
+  test('OpenCode Go receives the hosted conversation identity through Responses', async () => {
+    const mock = createMockFetch([
+      { match: 'models.dev/api.json', respond: { body: OPENCODE_GO_CATALOG } },
+      { match: 'https://opencode.ai/zen/go/v1/responses', respond: { body: OPENAI_RESPONSES_BODY } },
+    ]);
+
+    const reg = createAgentProviderRegistry({
+      env: {}, userDO: fakeUserDOStub({ 'opencode-go.bearer': { Authorization: 'Bearer hosted-key' } }),
+      fetch: mock.fetch, sessionAffinity: 'kinu-hosted-conversation',
+    });
+
+    const model = reg.resolveModel('opencode-go/muse-spark-1.3-contributor');
+
+    await generateText({ model, prompt: 'hello' });
+    await generateText({ model, prompt: 'continue' });
+    const calls = mock.requests.filter((request) => request.url.endsWith('/responses'));
+
+    expect(calls).toHaveLength(2);
+
+    for (const request of calls) {
+      expect(request.headers['x-opencode-session']).toBe('kinu-hosted-conversation');
+      expect(request.headers['user-agent']).toBe(KINU_USER_AGENT);
+      expect(request.headers.authorization).toBe('Bearer hosted-key');
+    }
+  });
+
   test('registers all 8 providers in preference order', () => {
     const reg = createAgentProviderRegistry({
       env: {},

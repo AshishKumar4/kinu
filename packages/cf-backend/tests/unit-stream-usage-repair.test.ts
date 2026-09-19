@@ -215,7 +215,7 @@ describe('cached-usage accounting end to end (workers-ai provider)', () => {
         async () => sseResponse(sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, ZEROED_USAGE_CHUNK, 'data: [DONE]')),
         { preconnect: globalThis.fetch.preconnect },
       ),
-      workersAI: { sessionAffinity: 'kinu-jarvis' },
+      sessionAffinity: 'kinu-jarvis',
     });
 
     const result = streamText({
@@ -238,7 +238,7 @@ describe('cached-usage accounting end to end (workers-ai provider)', () => {
         async () => sseResponse(sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, DROPPED_USAGE_CHUNK, 'data: [DONE]')),
         { preconnect: globalThis.fetch.preconnect },
       ),
-      workersAI: { sessionAffinity: 'kinu-stone-ash-71f2' },
+      sessionAffinity: 'kinu-stone-ash-71f2',
     });
 
     const result = streamText({

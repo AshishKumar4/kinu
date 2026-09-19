@@ -25,7 +25,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join, resolve as resolvePath } from 'node:path';
 import {
-  type LLMProviderConfig, actorScaffoldPath, buildRuntime, agentHome, headAgentName, facetHomeProvisioner,
+  type LLMProviderConfig, actorScaffoldPath, buildRuntime, agentHome, headAgentName, facetHomeProvisioner, agentAffinityKey,
   observeWrites, type WriteObserver,
   WORKSPACE_IDENTITY_DDL,
   createParentExecutor, createParentWorkspaceVfs,
@@ -510,6 +510,7 @@ export function createCLIRuntime(
 
   let modelRouteFactory = (resolution: ModelRouteResolution): LLM => createLocalProviderLLM({
     llm: config.llm,
+    sessionAffinity: agentAffinityKey(actor.name),
     credentials: config.providerCredentials,
     codexAuthStore: config.codexAuthStore,
     spec: resolution.model,

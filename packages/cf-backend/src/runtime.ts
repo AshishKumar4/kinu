@@ -1041,7 +1041,7 @@ function actorProviderRegistry(
     env,
     userDO: userCredentialSourceFor(env, actor),
     appTitle: title,
-    workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
+    sessionAffinity: agentAffinityKey(agent.name),
   });
 }
 

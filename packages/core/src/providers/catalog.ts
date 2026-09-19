@@ -1,22 +1,25 @@
 // Dynamic models.dev catalog source — serves every models.dev provider whose
-// auth shape Kinu can satisfy with a stored API key: an OpenAI-surface
-// endpoint (`api` base URL, openai-compat/openai SDK) driven through the
-// openai-compat wire path. Bespoke providers (anthropic, openai, openrouter,
+// auth shape Kinu can satisfy with a stored API key: Chat Completions or
+// Responses, selected by the model's declared SDK. Bespoke providers (anthropic, openai, openrouter,
 // codex, workers-ai, …) are statically registered and always take precedence —
 // the registry never consults this source for their ids.
 //
 // Credential convention: `<modelsDevProviderId>.bearer` (matches the bespoke
 // trio's existing keys: openai.bearer / anthropic.bearer / openrouter.bearer).
 //
-// createModel stays sync: the endpoint base URL is resolved from the (cached)
-// models.dev catalog inside customFetch, alongside the credential headers.
+// createModel stays synchronous. SDK operations resolve the cached catalog;
+// each HTTP request reads fresh credentials.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { createOpenAI } from '@ai-sdk/openai';
+import type { LanguageModelV3 } from '@ai-sdk/provider';
 import type { LanguageModel } from 'ai';
 import type { DynamicProviderSource } from './registry';
 import type { ModelProvider, ProviderDeps } from './types';
 import { createAuthedFetch } from './util';
+import { KINU_USER_AGENT } from '../utils/user-agent';
 import {
   getModelsDevProvider,
+  getModelsDevModelEndpoint,
   listModelsDevProviderModels,
   modelsDevCompatBaseURL,
 } from './models-dev';
@@ -95,28 +98,49 @@ function createCatalogProvider(providerId: string): ModelProvider {
     },
 
     createModel(modelId, deps): LanguageModel {
-      // Same placeholder trick as openai-compat: the SDK needs a baseURL at
-      // construction, but ours lives in the models.dev catalog. customFetch
-      // resolves it per request (cached) and rewrites the prefix.
-      const placeholder = `https://models-dev-${providerId}.invalid`;
+      // Keep registry resolution synchronous; select the SDK before it encodes
+      // the request, using the same cached catalog as the model menu.
+      async function resolveModel(): Promise<LanguageModelV3> {
+        const endpoint = await getModelsDevModelEndpoint(providerId, modelId, deps);
 
-      const customFetch = createAuthedFetch(deps, {
-        provider: providerId,
-        modelId,
-        credKey,
-        missingCredentialError: `No API key for ${providerId} (cred key: ${credKey})`,
-        resolveBaseURL: () => compatBaseURL(deps),
-        missingBaseURLError: `Provider ${providerId} is not in the models.dev catalog (or has no API endpoint Kinu can drive with an API key).`,
-        mutate: ({ url, auth }) => auth.baseURL && url.startsWith(placeholder)
-          ? auth.baseURL.replace(/\/+$/, '') + url.slice(placeholder.length)
-          : url,
-      });
+        if (endpoint === null) {
+          throw new Error(`Model ${providerId}/${modelId} has no supported models.dev API endpoint.`);
+        }
 
-      return createOpenAICompatible({
-        name: providerId,
-        baseURL: placeholder,
-        fetch: customFetch,
-      }).chatModel(modelId);
+        const baseURL = endpoint.baseURL.replace(/\/+$/, '');
+
+        const customFetch = createAuthedFetch(deps, {
+          provider: providerId,
+          modelId,
+          credKey,
+          missingCredentialError: `No API key for ${providerId} (cred key: ${credKey})`,
+          mutate: ({ url, auth, headers }) => {
+            // OpenCode Go's documented client contract requires these routing headers.
+            if (providerId === 'opencode' || providerId === 'opencode-go') {
+              headers.set('user-agent', KINU_USER_AGENT);
+
+              if (deps.sessionAffinity) headers.set('x-opencode-session', deps.sessionAffinity);
+            }
+
+            return auth.baseURL && url.startsWith(baseURL)
+              ? auth.baseURL.replace(/\/+$/, '') + url.slice(baseURL.length)
+              : url;
+          },
+        });
+
+        return endpoint.protocol === 'responses'
+          ? createOpenAI({ baseURL, apiKey: 'placeholder', fetch: customFetch }).responses(modelId)
+          : createOpenAICompatible({ name: providerId, baseURL, fetch: customFetch }).chatModel(modelId);
+      }
+
+      const model: LanguageModelV3 = {
+        specificationVersion: 'v3', provider: providerId, modelId,
+        get supportedUrls() { return resolveModel().then((resolved) => resolved.supportedUrls); },
+        async doGenerate(options) { return (await resolveModel()).doGenerate(options); },
+        async doStream(options) { return (await resolveModel()).doStream(options); },
+      };
+
+      return model;
     },
   };
 }

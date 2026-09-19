@@ -173,8 +173,7 @@ export interface LocalModelResolverConfig {
    *  the worker's AI proxy; when absent they list as unavailable with a
    *  `kinu auth` hint. */
   cloud?: LocalCloudSession;
-  /** Agent-level Workers AI replica pin, shared by the signed-in proxy and
-   * explicit Cloudflare-shaped endpoints. Explicit endpoint headers take precedence. */
+  /** Agent-level conversation identity for routing and prefix caching. */
   sessionAffinity?: string;
   fetch?: typeof fetch;
   /** Seam for the local Claude-subscription provider (tests inject a fake
@@ -390,6 +389,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   const deps: ProviderDeps = {
     env: {},
+    sessionAffinity: opts.sessionAffinity,
     fetch: cloud ? proxyFetchFor(cloud, opts.fetch) : opts.fetch,
     async getAuth(key, authOpts) {
       const local = await authStore.get(key, authOpts);

@@ -38,6 +38,7 @@ interface ModelsDevProvider {
 interface ModelsDevModel {
   id?: string;
   name?: string;
+  provider?: v.InferOutput<typeof ModelProviderOverrideSchema>;
   tool_call?: boolean;
   reasoning?: boolean;
   /** How a model's reasoning is steered, per models.dev: an `effort` row names
@@ -64,7 +65,7 @@ interface ModelsDevModel {
 
 interface ModelsDevReasoningOption {
   type?: string;
-  values?: string[];
+  values?: (string | null)[];
 }
 
 interface ModelsDevCache {
@@ -73,14 +74,20 @@ interface ModelsDevCache {
   data: Record<string, ModelsDevProvider>;
 }
 
+const ModelProviderOverrideSchema = v.object({
+  npm: v.optional(v.string()),
+  api: v.optional(v.string()),
+});
+
 const ModelsDevModelSchema = v.object({
   id: v.optional(v.string()),
   name: v.optional(v.string()),
+  provider: v.optional(ModelProviderOverrideSchema),
   tool_call: v.optional(v.boolean()),
   reasoning: v.optional(v.boolean()),
   reasoning_options: v.optional(v.array(v.object({
     type: v.optional(v.string()),
-    values: v.optional(v.array(v.string())),
+    values: v.optional(v.array(v.nullable(v.string()))),
   }))),
   status: v.optional(v.string()),
   limit: v.optional(v.object({
@@ -165,6 +172,34 @@ export async function getModelsDevProvider(
   return provider ? providerInfoFromModelsDev(providerId, provider) : null;
 }
 
+export interface ModelsDevModelEndpoint {
+  readonly baseURL: string;
+  readonly protocol: 'responses' | 'chat-completions';
+}
+
+/** A model can override its provider's SDK and endpoint in models.dev. */
+export async function getModelsDevModelEndpoint(
+  providerId: string,
+  modelId: string,
+  deps: Pick<ProviderDeps, 'fetch'>,
+): Promise<ModelsDevModelEndpoint | null> {
+  const data = await getModelsDevCatalog(deps.fetch, DEFAULT_TTL_MS);
+  const provider = data[providerId];
+
+  if (!provider) return null;
+
+  const model = Object.entries(provider.models ?? {})
+    .find(([key, entry]) => (nonEmptyString(entry.id) ?? key) === modelId)?.[1];
+
+  const info = providerInfoFromModelsDev(providerId, provider);
+  const npm = model?.provider?.npm ?? info.npm;
+  const baseURL = concreteAPI(model?.provider?.api) ?? modelsDevCompatBaseURL(info);
+
+  if (baseURL === null) return null;
+
+  return { baseURL, protocol: npm === '@ai-sdk/openai' ? 'responses' : 'chat-completions' };
+}
+
 /** Provider-level metadata for every models.dev provider. Throws when the
  *  catalog cannot be read — an empty list is what "you have no providers to
  *  connect" looks like, which is not what a fetch failure means. */
@@ -207,12 +242,14 @@ const COMPAT_ENDPOINT_SUPPLEMENT: CompatEndpointIndex = {
  * construct (no `api`, or an `api` with `${…}` account placeholders).
  */
 export function modelsDevCompatBaseURL(provider: ModelsDevProviderInfo): string | null {
-  const catalogEligible = provider.api && !provider.api.includes('${')
-    && (provider.npm === '@ai-sdk/openai-compatible' || provider.npm === '@ai-sdk/openai');
+  const catalogEligible = provider.npm === '@ai-sdk/openai-compatible' || provider.npm === '@ai-sdk/openai';
+  const api = catalogEligible ? concreteAPI(provider.api) : null;
 
-  if (catalogEligible) return provider.api ?? null;
+  return api ?? COMPAT_ENDPOINT_SUPPLEMENT[provider.id] ?? null;
+}
 
-  return COMPAT_ENDPOINT_SUPPLEMENT[provider.id] ?? null;
+function concreteAPI(api: string | undefined): string | null {
+  return api && !api.includes('${') ? api : null;
 }
 
 async function getModelsDevCatalog(fetchFn: typeof fetch | undefined, ttlMs: number): Promise<Record<string, ModelsDevProvider>> {
@@ -227,7 +264,12 @@ async function getModelsDevCatalog(fetchFn: typeof fetch | undefined, ttlMs: num
   if (!response.ok) throw new Error(`models.dev returned HTTP ${response.status}`);
   const body = v.safeParse(ModelsDevCatalogSchema, await response.json());
 
-  if (!body.success) throw new Error('models.dev response was not a valid catalog');
+  if (!body.success) {
+    const issue = body.issues[0];
+
+    throw new Error(`models.dev rejected ${v.getDotPath(issue) ?? 'catalog'}: ${issue.message}`);
+  }
+
   const data: Record<string, ModelsDevProvider> = body.output;
   cache = { at: Date.now(), fetchFn: fetchImpl, data };
 

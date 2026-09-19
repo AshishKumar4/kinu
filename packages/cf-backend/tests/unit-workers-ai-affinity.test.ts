@@ -45,7 +45,7 @@ async function captureWorkersAIRequest(workersAI?: { sessionAffinity?: string })
 
       return chatCompletionResponse();
     }),
-    workersAI,
+    sessionAffinity: workersAI?.sessionAffinity,
   });
 
   await generateText({
