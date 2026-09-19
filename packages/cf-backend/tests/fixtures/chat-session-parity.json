@@ -286,7 +286,7 @@
               ]
             }
           ],
-          "eventIndex": 5,
+          "eventIndex": 4,
           "timestamp": "<clock>"
         }
       },
@@ -296,7 +296,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 7,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       }
@@ -639,7 +639,7 @@
               ]
             }
           ],
-          "eventIndex": 5,
+          "eventIndex": 4,
           "timestamp": "<clock>"
         }
       },
@@ -649,7 +649,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 7,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },
@@ -1173,7 +1173,7 @@
               ]
             }
           ],
-          "eventIndex": 5,
+          "eventIndex": 4,
           "timestamp": "<clock>"
         }
       },
@@ -1183,7 +1183,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 7,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },

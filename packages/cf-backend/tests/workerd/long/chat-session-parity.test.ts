@@ -21,6 +21,11 @@
  * before its first token, writes no assistant row, so FOUR-TOOL's parent is
  * the operator's row; and no `error: true` frame follows a Stop. Every other
  * line of the diff is the opaque-id renumbering those two removals cause.
+ * Re-recorded 2026-09-18 for one change that means to change it (6 lines):
+ * sleep-time compute runs on a cadence, never after a workspace's first turn,
+ * so the `model_call` its compute used to record inside the NEXT run's event
+ * space is gone and `<run#7>`'s `step_finish` and `run_end` sit one index
+ * earlier. No row, frame or landing changed.
  */
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
