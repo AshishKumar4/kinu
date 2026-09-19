@@ -122,4 +122,3 @@ test('a provider connected through the port stores the key the connected check r
   const config = parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8'));
   expect(JSON.stringify(config)).toContain('sk-onboarding-key');
 });
-
