@@ -18,11 +18,10 @@
  * while I was away" is not a question anyone opens a CV to answer.
  */
 import { useCallback, useState } from "react";
-import { Link } from "react-router-dom";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
   FingerprintIcon, PackageIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon, BrainIcon,
-  CaretRightIcon, GitBranchIcon, UsersIcon,
+  CaretRightIcon, GitBranchIcon,
 } from "@phosphor-icons/react";
 import { ScoreBar } from "@/components/ui/score-bar";
 import type { AgentStatus } from "@/hooks/use-kinu";
@@ -32,7 +31,6 @@ import { timeAgo, workspaceDisplayTitle } from "@kinu.run/core";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { GepaView, QualityView } from "./evolution-panels";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { agentTitle } from "@/components/SubordinateTabs";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import * as v from "valibot";
 
@@ -268,10 +266,6 @@ export function AgentSurface(
         </Section>
       )}
 
-      {/* Subordinates — the mock's roster card. Real data off the same
-          @callable the chat strip uses; Message opens that subordinate's chat. */}
-        <SubordinatesCard rpc={rpc} workspaceName={as?.name ?? ""} />
-
       {/* Tools (CraftStore + builtins) */}
       <Section id="tools" title="Tools" icon={<PackageIcon size={14} className="p-text-2" />}
         badge={tools.length > 0 ? <Badge variant="secondary">{tools.length}</Badge> : undefined}>
@@ -315,48 +309,3 @@ function EvolutionBlock({ title, hint, children }: { title: string; hint: string
   );
 }
 
-/** One durable helper of this workspace, as the mock draws it: dot, name,
- *  role line, and a Message button into its chat. */
-function SubordinatesCard({ rpc, workspaceName }: { rpc: Rpc; workspaceName: string }) {
-  const loadRoster = useCallback(() => rpc<SubordinateRow[]>("listSubordinates", []), [rpc]);
-  const { resource, reload } = useAsyncResource(loadRoster);
-  const roster = (lastValue(resource) ?? []).filter((sub) => sub.status !== "dismissed");
-
-  return (
-    <Section id="subordinates" title="Agents" icon={<UsersIcon size={14} className="p-text-2" />}
-      badge={roster.length > 0 ? <Badge variant="secondary">{roster.length}</Badge> : undefined}>
-      {resource.status === "error" ? (
-        <LoadFailure what="the agent roster" message={resource.message} onRetry={reload} />
-      ) : roster.length === 0 ? (
-        <p className="text-xs leading-relaxed p-text-4">
-          No standing helpers. Each runs its own loop, outlives the turn, and shares workspace files.
-          Hire one from the chat tabs.
-        </p>
-      ) : (
-        <div className="p-group">
-          {roster.map((sub) => (
-            <div key={sub.name} className="flex items-center gap-2.5 px-4 py-3">
-              <span className={`size-1.5 shrink-0 rounded-full ${sub.status === "working" ? "p-dot-success p-dot-pulse" : sub.status === "awaiting_input" ? "p-dot-warning" : "bg-[var(--c-fill)] border p-border"}`} />
-              <div className="min-w-0 flex-1">
-                <div className={`truncate p-row-text ${sub.displayName ? "p-text-2" : "italic p-text-3"}`}>{agentTitle(sub.displayName)}</div>
-                <div className="truncate p-meta p-text-4">{sub.role}{sub.currentTask ? ` · ${sub.currentTask}` : ""}</div>
-              </div>
-              <Link
-                to={`/workspace/${workspaceName}/agents/${sub.name}`}
-                className="shrink-0 p-t-control p-accent"
-              >Message</Link>
-            </div>
-          ))}
-        </div>
-      )}
-    </Section>
-  );
-}
-
-interface SubordinateRow {
-  name: string;
-  displayName: string;
-  role: string;
-  status: string;
-  currentTask: string | null;
-}
