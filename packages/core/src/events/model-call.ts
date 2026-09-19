@@ -64,7 +64,7 @@ export type SpendSource = (typeof SPEND_SOURCES)[number];
 /** What each producer is, for a reader who did not write it. Keyed by the union
  *  so a source added above cannot reach a surface unlabelled. */
 export const SPEND_SOURCE_LABEL = {
-  agent: 'Main agent',
+  agent: 'Agents',
   scaffold: 'Scaffold loop',
   compaction: 'Compaction',
   judge: 'Judges',
@@ -82,7 +82,7 @@ export const SPEND_SOURCE_LABEL = {
 /** One sentence per producer saying what actually fires it — the difference
  *  between a legend and an answer. */
 export const SPEND_SOURCE_DETAIL = {
-  agent: 'every step of every turn — chat, wake, reactor drain',
+  agent: 'every step of every turn — chat, wake, reactor drain — of the main agent and every agent it hired',
   scaffold: 'an evolved scaffold driving its own inference loop',
   compaction: 'folding history when the context window fills',
   judge: 'grading this agent’s own work: ensemble, replay, branch scores, merge narrative',

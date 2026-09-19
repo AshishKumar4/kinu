@@ -859,6 +859,15 @@ export class RunEventRecorder {
    * workspace question, and a call made between runs is filed under
    * {@link WORKSPACE_RUN_ID} and belongs in the total.
    *
+   * NO ACTOR FILTER EITHER, and for the same reason. A hired agent is a logical
+   * actor of this same object, writing its turns into this same table under its
+   * own `actor_id`; a total scoped to the root's rows answered "what the main
+   * agent spent" while the panel said "workspace", and the first-run agent-tab
+   * row read a hired agent's whole conversation as zero calls (2026-09-19).
+   * Exploration heads are the one producer this table never sees — their usage
+   * comes back inside a `HeadReport` — and the read model folds their journal
+   * in beside this.
+   *
    * THREE PARSES PER ROW, NOT NINE. `payload` is opaque TEXT, so each field
    * costs a JSON walk of the whole row — and a `step_finish` payload carries the
    * step's messages, which makes it the expensive kind. The `call` CTE therefore
@@ -894,9 +903,8 @@ export class RunEventRecorder {
                json_extract(payload, '$.usd') AS usd,
                json_extract(payload, '$.usdFloorTokens') AS usdFloorTokens
         FROM run_events
-        WHERE actor_id = ${this.actorId}
-          AND (type = ${'step_finish' satisfies RunEventType}
-            OR type = ${'model_call' satisfies RunEventType})
+        WHERE type = ${'step_finish' satisfies RunEventType}
+           OR type = ${'model_call' satisfies RunEventType}
       ),
       field AS (
         SELECT source, usd, usdFloorTokens,

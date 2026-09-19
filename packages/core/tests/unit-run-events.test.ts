@@ -641,6 +641,24 @@ describe('RunEventRecorder.spendByProducer', () => {
     expect(spend.get('fast')).toMatchObject({ calls: 1 });
   });
 
+  test('a hired agent\'s turns are in the workspace total, under the same producer as the root\'s', () => {
+    // A hired agent is a logical actor of the same object, writing under its
+    // own actor_id. The Activity panel says "workspace", and a total scoped to
+    // the root's rows read a hired agent's whole conversation as nothing.
+    const { recorder, sql } = setup();
+    const hired = new RunEventRecorder(sql, testActorHandle(sql, { actorId: 'task-12qzhx' }));
+    recorder.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: { input: 100, output: 10 }, usd: 0.01 });
+    hired.emit('run-9', { type: 'step_finish', stepIndex: 0, usage: { input: 40, output: 4 }, usd: 0.004 });
+    hired.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'fast', usage: { input: 5, output: 1 } });
+
+    const spend = recorder.spendByProducer();
+    expect(spend.get('agent')).toMatchObject({ calls: 2, usage: { input: 140, output: 14 } });
+    expect(spend.get('agent')?.usd).toBeCloseTo(0.014);
+    expect(spend.get('fast')).toMatchObject({ calls: 1 });
+    // The same total from either actor: it is the workspace's, not a view.
+    expect(hired.spendByProducer().get('agent')).toMatchObject({ calls: 2 });
+  });
+
   test('a field no call reported is absent from the sum, never a zero', () => {
     const { recorder } = setup();
     recorder.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: { input: 100, output: 10 } });
