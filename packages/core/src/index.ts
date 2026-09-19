@@ -1790,7 +1790,7 @@ export {
 // The agent's own task list — what the `tasks` tool writes and the Tasks
 // surface reads.
 export {
-  TaskListStore, initTaskListTable, TASK_STATUSES, MAX_TASK_TITLE_CHARS,
+  TaskListStore, initTaskListTable, TASK_STATUSES, MAX_TASK_TITLE_CHARS, OPEN_STATUSES,
   type AgentTask, type AgentTaskTree, type TaskStatus,
   type TaskAddResult, type TaskAddRejection,
 } from './tasks/store';

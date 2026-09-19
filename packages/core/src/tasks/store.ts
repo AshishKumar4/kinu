@@ -28,7 +28,9 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 
 const TaskStatusSchema = v.picklist(TASK_STATUSES);
 
-const OPEN_STATUSES: ReadonlySet<string> = new Set(['open', 'active']);
+/** The statuses that mean a task still has work: `open` and `active`. The
+ *  store's `listOpen` and the Work tab's presence check read the same set. */
+export const OPEN_STATUSES: ReadonlySet<string> = new Set(['open', 'active']);
 
 export interface AgentTask {
   id: string;

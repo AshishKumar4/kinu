@@ -1018,7 +1018,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   // Whether the gated right-pane tabs (Releases, Swarms) have content.
   // Seeded by the snapshot, refreshed with the live cycle; a fresh workspace
   // starts with neither tab until its first release change or search run.
-  const [tabPresence, setTabPresence] = useState<TabPresence>({ releases: false, explorations: false });
+  const [tabPresence, setTabPresence] = useState<TabPresence>({ releases: false, explorations: false, work: false });
   // Unseen self-changes, kept only for the sidebar roster's dot — the tab badge
   // is the queue's length now.
   const [changelogUnseen, setChangelogUnseen] = useState(0);

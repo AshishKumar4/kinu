@@ -156,7 +156,7 @@ import {
   type ReleaseStatus, type ReleaseToolDeps,
   // Release execution engine — the driver beneath the governance ledger
   ReleaseEngine, createSandboxReleaseExec,
-  readWorkspaceWork, type WorkspaceWork,
+  readWorkspaceWork, type WorkspaceWork, OPEN_STATUSES,
   // Peer-agent teams (the agents tool's team deps contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
@@ -5988,7 +5988,30 @@ export class OrchestratorAgent extends ActorAgent {
     // read: without an owner there is no release lane to have content in.
     const board = this.getOwnerUserId() ? await this.getReleaseBoard(1) : null;
 
+    // The Work tab's own inputs, through the same reads the tab mounts: the
+    // pending queue (which already folds the unseen changelog in), a job
+    // still running, an open task on the board, or a turn in flight.
+    const [pendingActions, jobs, workspaceWork] = await Promise.all([
+      this.listPendingActions(),
+      this.listBackgroundJobs(20),
+      this.listWorkspaceWork(),
+    ]);
+
+    const openTask = workspaceWork.plans.some((owned) =>
+      owned.tasks.some((t) => OPEN_STATUSES.has(t.status) || t.subtasks.some((s) => OPEN_STATUSES.has(s.status)))
+    ) || workspaceWork.tasks.some((owned) =>
+      owned.tasks.some((t) => OPEN_STATUSES.has(t.status) || t.subtasks.some((s) => OPEN_STATUSES.has(s.status)))
+    );
+
+    const hostedBusy = this.actorHost().list()
+      .some((reference) => this.actorHost().hosted(reference)?.session.inFlight === true);
+
     return {
+      work: pendingActions.length > 0
+        || jobs.some((job) => job.status === 'running')
+        || openTask
+        || this._inFlight
+        || hostedBusy,
       releases: (board?.changes.length ?? 0) > 0,
       explorations: listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,
     };

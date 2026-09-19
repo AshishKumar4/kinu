@@ -487,7 +487,7 @@ describe('account panels', () => {
         }
       }
 
-      expect(shots.length).toBe(18);
+      expect(shots.length).toBe(22);
       process.stdout.write(`account-ux nav: ${String(shots.length)} screenshots under ${SHOTS}\n`);
     });
   });
