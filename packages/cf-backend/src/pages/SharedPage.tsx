@@ -177,7 +177,7 @@ function ShareCard({ row, onFork }: { row: SharedRow; onFork: (row: SharedRow) =
   const locked = row.visibility === "users" || (row.users !== undefined && row.users.length > 0);
 
   return (
-    <li className="p-card p-card-lift overflow-hidden">
+    <li data-share-row={`${row.kind}:${row.id}`} data-share-kind={row.kind} className="p-card p-card-lift overflow-hidden">
       <div className="relative aspect-[16/10] border-b p-border p-surface">
         <ShareTile id={row.id} />
         <span aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center justify-center p-display text-[28px] p-text-2">
@@ -217,7 +217,8 @@ function ShareCard({ row, onFork }: { row: SharedRow; onFork: (row: SharedRow) =
         </div>
         <div className="mt-2 flex items-center justify-end gap-1">
           {row.kind === "live" && <OpenLive row={row} />}
-          <button type="button" onClick={() => onFork(row)} disabled={row.kind === 'live' && row.workspace === undefined}
+          <button type="button" onClick={() => onFork(row)} data-fork-share
+            disabled={row.kind === 'live' && row.workspace === undefined}
             className="p-btn-quiet inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs">
             <GitBranchIcon size={13} /> Fork
           </button>
