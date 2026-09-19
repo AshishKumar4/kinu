@@ -5617,6 +5617,9 @@ export class OrchestratorAgent extends ActorAgent {
       },
       catalog: () => this.slateBindingCatalog(),
       shareUrl: (handle) => slateShareUrl(this.env, this.name, handle),
+      kv: this.env.AUTH_KV,
+      budget: () => this.budget,
+      ownerTitle: async () => this.safeDisplayName(),
     });
 
     return this._slates;
@@ -5654,6 +5657,32 @@ export class OrchestratorAgent extends ActorAgent {
    *   the S6 gate, plus its title and description off the slate's package.json. */
   async readLiveShare(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>> {
     return this.slates.readLiveShareRecord(share);
+  }
+
+  /**
+   * The bundle a live-share fork carries: the share row re-read through the
+   *   S6 gate — a revoked share answers 'missing' — the grant's fork flag,
+   *   and the viewer's own admission: a `users` share forks only for the
+   *   accounts it names (and the owner), a `public` share for anyone signed
+   *   in. The skeleton itself is the host's — the running slate's current
+   *   tree, never a publication.
+   */
+  async liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>> {
+    const record = await this.slates.readLiveShareRecord(share);
+
+    if (!record.ok) return { ok: false, reason: record.reason, error: record.error };
+    const { record: row } = record.value;
+    const ownerUserId = this.getOwnerUserId();
+
+    if (row.visibility === 'users' && userId !== ownerUserId && !this.slates.liveShareAdmitsUser(row.id, userId)) {
+      return { ok: false, reason: 'missing', error: 'No such share' };
+    }
+
+    if (row.grant.fork === false) {
+      return { ok: false, reason: 'denied', error: 'This share does not allow forking' };
+    }
+
+    return this.slates.liveShareBundle(row);
   }
 
   /** Record the users the owner named on a live share — DO-only beside the

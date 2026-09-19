@@ -12,6 +12,7 @@ import { GlobeIcon, UsersIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
 import {
   LiveShareRecordSchema, SlateCapabilityGraphSchema,
+  SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE,
   type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type Rpc, type SlateAnswer, type SlateCapability, type SlateCapabilityGraph, type SlateGraphBinding,
 } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
@@ -146,6 +147,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
   const [visibility, setVisibility] = useState<LiveShareVisibility>("users");
   const [emails, setEmails] = useState("");
   const [approved, setApproved] = useState<ReadonlySet<string>>(new Set());
+  const [fork, setFork] = useState(true);
   const [busy, setBusyState] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [created, setCreated] = useState<LiveShareCreated | null>(null);
@@ -197,7 +199,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
       const approvals = [...approved].map((key) => v.parse(v.tuple([v.string(), v.string(), v.string()]), JSON.parse(key)))
         .map(([slateId, binding, member]) => ({ slate: slateId, binding, member }));
 
-      const result = await shareLive({ workspace, slate, visibility, emails: visibility === "users" ? emailList : undefined, approved: approvals });
+      const result = await shareLive({ workspace, slate, visibility, emails: visibility === "users" ? emailList : undefined, approved: approvals, fork });
       setCreated(result);
       setShares((previous) => [result.share, ...previous]);
     } catch (cause) {
@@ -205,7 +207,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
     } finally {
       setBusy(false);
     }
-  }, [canShare, approved, workspace, slate, visibility, emailList, setBusy]);
+  }, [canShare, approved, workspace, slate, visibility, emailList, fork, setBusy]);
 
   const revoke = useCallback(async (share: string) => {
     setErr(null);
@@ -239,6 +241,9 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
         <div className="space-y-4 text-xs">
           <p className="p-text-2 leading-relaxed">
             A live share runs this slate here, in your workspace, for whoever you admit. Every call a viewer makes goes through the members below, as you.
+          </p>
+          <p className="p-text-3 leading-relaxed">
+            Every viewer is bounded: {SHARE_VIEWER_REQUESTS_PER_MINUTE} requests a minute each, and ${SHARE_SPEND_CAP_USD_PER_DAY} of model spend a day per share — a viewer who reaches a bound is refused until it renews.
           </p>
           <div role="radiogroup" aria-label="Who can open this share" className="flex flex-col gap-2 sm:flex-row">
             <VisibilityOption value="users" current={visibility} onPick={setVisibility} icon={UsersIcon} disabled={busy}
@@ -281,6 +286,10 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
               Viewers get {counts.read} read-only member{counts.read === 1 ? "" : "s"}. You approved {approved.size} of {counts.mutating} mutating member{counts.mutating === 1 ? "" : "s"}.
             </p>
           )}
+          <label className="flex items-center gap-2 p-text">
+            <input type="checkbox" checked={fork} onChange={(event) => setFork(event.target.checked)} disabled={busy} />
+            Viewers can fork <span className="p-text-3">— copy the slate's skeleton, with every binding unmapped, into a workspace of theirs</span>
+          </label>
           {shares.length > 0 && (
             <div className="space-y-1">
               <div className="p-meta p-text-3">Already shared live</div>
@@ -290,6 +299,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
                     <span className={`${row.visibility === "public" ? "p-badge-warning" : "p-badge-neutral"} shrink-0 rounded px-1.5 py-0.5 text-[10px]`}>{row.visibility === "public" ? "public" : "people"}</span>
                     <span className="min-w-0 flex-1 truncate p-text-2">
                       {row.grant.members.length} member{row.grant.members.length === 1 ? "" : "s"} granted · {new Date(row.createdAt).toLocaleDateString()}{row.users.length > 0 ? ` · ${row.users.join(", ")}` : ""}
+                      {row.paused === true && <span className="p-badge-warning rounded px-1 py-0.5 text-[10px]">paused today — spend bound</span>}
                     </span>
                     <button type="button" onClick={() => revoke(row.id)} className="p-btn-quiet rounded-md px-2 py-0.5" disabled={busy}>Stop sharing</button>
                   </li>

@@ -23,6 +23,7 @@ import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type
 import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
 import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, SpendSource, BackendHost } from '@kinu.run/core';
+import type { KvStore } from '@kinu.run/agent-utils';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { AssistantMessagesTranscript } from '../../src/chat-transcript';
 import { OwnedModelServices } from '../../src/owned-model-services';
@@ -288,6 +289,15 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   declareContainerBinding(): void {
     Object.assign(this.env, { Sandbox: { idFromName: (name: string) => name, get: () => ({}) } });
   }
+  /** The deployment bindings a suite declares on this actor's env after
+   *  construction — AUTH_KV for the share rail's request bound, the preview
+   *  suffix the share URL is minted under. Same seam as the webhook secret
+   *  above: configuration, not state, absent because most actors never read
+   *  it. Declare before the read: `slates` memoizes its deps on first use. */
+  harnessDeclareEnv(bindings: { AUTH_KV?: KvStore; PREVIEW_HOST_SUFFIX?: string; CREDENTIAL_ENCRYPTION_KEY?: string }): void {
+    Object.assign(this.env, bindings);
+  }
+
   protected override async profileInputs() {
     const overlay = this._catalogOverlay;
 
