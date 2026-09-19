@@ -11,9 +11,7 @@ import type { DeviceConnectPromptState } from './use-device-connect';
 import { clipText } from '@kinu.run/core';
 import { createKeyDispatcher, useKeybindingRegistry, type TuiActionId } from './actions';
 import {
-  SYSTEM_TUI_THEME_SELECTION,
   REFERENCE_TERMINAL_GROUNDS,
-  resolveThemeSelection,
   useTuiTheme,
   type ThemeSelection,
   type TuiThemeDefinition,
@@ -919,7 +917,6 @@ interface ThemeChoice {
   readonly label: string;
   readonly note: string;
   readonly selection: ThemeSelection;
-  /** What the row paints: for the system row, the theme the terminal gets now. */
   readonly theme: TuiThemeDefinition;
 }
 
@@ -930,48 +927,26 @@ const THEME_PREVIEW_MIN_COLUMNS = 34;
 /** Rows the preview transcript needs: strip, bubble, prose, well, composer, caption. */
 const THEME_PREVIEW_ROWS = 21;
 
-function sameSelection(left: ThemeSelection, right: ThemeSelection): boolean {
-  if (left.mode === 'theme' || right.mode === 'theme') {
-    return left.mode === 'theme' && right.mode === 'theme' && left.themeId === right.themeId;
-  }
-
-  return left.darkThemeId === right.darkThemeId && left.lightThemeId === right.lightThemeId;
-}
-
 /**
- * The theme picker: every registered theme plus "follow the terminal", each
- * row with its own bubble, brass and well swatches, and the highlighted one
- * drawn as a small transcript beside the list so the choice is visual.
- * Enter stores the selection through the preference store; Esc keeps things.
+ * The theme picker: every registered theme, each row with its own bubble,
+ * brass and well swatches, and the highlighted one drawn as a small
+ * transcript beside the list so the choice is visual. Enter stores the
+ * selection through the preference store; Esc keeps things.
  */
 export function ThemePickerOverlay({ terminal, selection, onSelect }: ThemePickerProps) {
-  const { colors, registry, terminalAppearance } = useTuiTheme();
+  const { colors, registry } = useTuiTheme();
   const keybindings = useKeybindingRegistry();
   const dispatcher = useMemo(() => createKeyDispatcher(keybindings), [keybindings]);
 
-  const choices = useMemo<ThemeChoice[]>(() => {
-    const system = selection.mode === 'system' ? selection : SYSTEM_TUI_THEME_SELECTION;
-    const systemTheme = resolveThemeSelection(registry, system, terminalAppearance);
+  const choices = useMemo<ThemeChoice[]>(() => registry.themes.map((theme) => ({
+    key: theme.id,
+    label: theme.label,
+    note: theme.colors.background.canvas === undefined ? theme.appearance : `${theme.appearance} · painted`,
+    selection: { mode: 'theme' as const, themeId: theme.id },
+    theme,
+  })), [registry]);
 
-    return [
-      {
-        key: 'system',
-        label: 'Follow the terminal',
-        note: `${terminalAppearance} now · ${systemTheme.label}`,
-        selection: system,
-        theme: systemTheme,
-      },
-      ...registry.themes.map((theme) => ({
-        key: theme.id,
-        label: theme.label,
-        note: theme.colors.background.canvas === undefined ? theme.appearance : `${theme.appearance} · painted`,
-        selection: { mode: 'theme' as const, themeId: theme.id },
-        theme,
-      })),
-    ];
-  }, [registry, selection, terminalAppearance]);
-
-  const currentIndex = choices.findIndex((choice) => sameSelection(choice.selection, selection));
+  const currentIndex = choices.findIndex((choice) => choice.selection.themeId === selection.themeId);
   const [highlighted, setHighlighted] = useState(Math.max(0, currentIndex));
   const choice = choices[Math.min(highlighted, choices.length - 1)]!;
 

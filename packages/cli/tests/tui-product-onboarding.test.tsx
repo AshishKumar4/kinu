@@ -28,8 +28,12 @@ describe('guided onboarding renderer', () => {
     const operations: TuiOnboardingOperations = {
       readReadiness: () => readiness,
       chooseLocation: (location) => update({ location }),
-      connectAccount: () => update({ accountConnected: true }),
-      connectProvider: () => update({ providerConnected: true }),
+      listProviders: async () => [],
+      connectProvider: async () => {
+        update({ accountConnected: true, providerConnected: true });
+
+        return { kind: 'connected', summary: 'connected' };
+      },
       configureTiers: () => update({ defaultModel: 'workers-ai/deepseek', tierAliasesResolved: true }),
       selectTheme: () => update({ themeSelected: true }),
       selectKeymap: () => update({ keymapSelected: true }),
@@ -48,7 +52,7 @@ describe('guided onboarding renderer', () => {
     const store = createMemoryTuiPreferenceStore();
 
     const scene = (
-      <TuiProductProvider runtime={{ preferenceStore: store, terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+      <TuiProductProvider runtime={{ preferenceStore: store, colorCapability: 'truecolor' }}>
         <GuidedOnboarding
           operations={operations}
           roles={[{ id: 'task', label: 'Task', description: 'General work' }]}
@@ -89,8 +93,8 @@ describe('guided onboarding renderer', () => {
     const operations: TuiOnboardingOperations = {
       readReadiness: () => readiness,
       chooseLocation: () => {},
-      connectAccount: () => {},
-      connectProvider: () => {},
+      listProviders: async () => [],
+      connectProvider: async () => ({ kind: 'connected', summary: 'connected' }),
       configureTiers: () => {},
       selectTheme: () => {},
       selectKeymap: () => {},
@@ -109,7 +113,7 @@ describe('guided onboarding renderer', () => {
 
     try {
       root.render(
-        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), colorCapability: 'truecolor' }}>
           <GuidedOnboarding
             operations={operations}
             roles={[{ id: 'task', label: 'Task', description: 'General work' }]}
@@ -132,8 +136,8 @@ describe('guided onboarding renderer', () => {
         throw new Error('readiness read failed', { cause: new Error('no such table: onboarding') });
       },
       chooseLocation: () => {},
-      connectAccount: () => {},
-      connectProvider: () => {},
+      listProviders: async () => [],
+      connectProvider: async () => ({ kind: 'connected', summary: 'connected' }),
       configureTiers: () => {},
       selectTheme: () => {},
       selectKeymap: () => {},
@@ -152,7 +156,7 @@ describe('guided onboarding renderer', () => {
 
     try {
       root.render(
-        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), colorCapability: 'truecolor' }}>
           <GuidedOnboarding
             operations={operations}
             roles={[]}
@@ -185,8 +189,8 @@ describe('guided onboarding renderer', () => {
       chooseLocation: () => {
         throw new Error('the location could not be saved', { cause: new Error('config.json is read-only') });
       },
-      connectAccount: () => {},
-      connectProvider: () => {},
+      listProviders: async () => [],
+      connectProvider: async () => ({ kind: 'connected', summary: 'connected' }),
       configureTiers: () => {},
       selectTheme: () => {},
       selectKeymap: () => {},
@@ -205,7 +209,7 @@ describe('guided onboarding renderer', () => {
 
     try {
       root.render(
-        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), colorCapability: 'truecolor' }}>
           <GuidedOnboarding
             operations={operations}
             roles={[{ id: 'task', label: 'Task', description: 'General work' }]}

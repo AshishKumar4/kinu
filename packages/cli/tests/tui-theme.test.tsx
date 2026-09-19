@@ -44,13 +44,13 @@ function contrast(foreground: string, background: string): number {
 }
 
 describe('TUI theme', () => {
-  test('a missing preference file opens on the painted light preset; an existing file keeps its choice', () => {
+  test('a missing preference file holds no theme; an existing file keeps its choice', () => {
     const path = join(scratchDir('tui-theme-prefs'), 'tui.json');
     const store = createFileTuiPreferenceStore(path);
-    // A fresh install paints the light product face. System appearance remains
-    // selectable, but should never make first paint depend on terminal state.
-    expect(store.read().theme).toEqual({ mode: 'theme', themeId: 'kinu-light-solid' });
-    expect(DEFAULT_TUI_THEME_SELECTION).toEqual(store.read().theme);
+    // Nothing is stored until the person picks in onboarding, and the TUI
+    // paints the dark product face meanwhile.
+    expect(store.read().theme).toBeUndefined();
+    expect(DEFAULT_TUI_THEME_SELECTION.themeId).toBe('kinu-dark-solid');
 
     for (const id of ['kinu-dark-solid', 'kinu-light-solid']) {
       const theme = BUILTIN_TUI_THEMES.find((candidate) => candidate.id === id);
@@ -118,7 +118,7 @@ describe('TUI theme', () => {
 
     try {
       root.render(
-        <TuiThemeProvider selection={{ mode: 'theme', themeId: 'kinu-light' }} terminalAppearance="light" colorCapability="truecolor">
+        <TuiThemeProvider selection={{ mode: 'theme', themeId: 'kinu-light' }} colorCapability="truecolor">
           <box style={{ width: '100%', height: '100%' }}>
             <MessageList
               messages={[
@@ -173,7 +173,7 @@ describe('TUI theme', () => {
 
     try {
       root.render(
-        <TuiThemeProvider selection={{ mode: 'theme', themeId: 'kinu-dark-solid' }} terminalAppearance="dark" colorCapability="truecolor">
+        <TuiThemeProvider selection={{ mode: 'theme', themeId: 'kinu-dark-solid' }} colorCapability="truecolor">
           <box style={{ width: '100%', height: '100%' }}>
             <MessageList
               messages={[

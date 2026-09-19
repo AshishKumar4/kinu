@@ -89,7 +89,7 @@ describe('role, tier, and agent hubs', () => {
         ['tiers', 'fast → default'],
       ] as const satisfies readonly (readonly [TuiHubView, string])[]) {
         root.render(
-          <TuiProductProvider runtime={{ preferenceStore: store, terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+          <TuiProductProvider runtime={{ preferenceStore: store, colorCapability: 'truecolor' }}>
             <box style={{ width: '100%', height: '100%' }}>
               <HubOverlay view={view} data={hubData} width={100} height={30} />
             </box>

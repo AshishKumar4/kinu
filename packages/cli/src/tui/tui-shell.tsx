@@ -27,7 +27,6 @@ import {
   parseCustomTheme,
   TuiThemeProvider,
   useTuiTheme,
-  type ThemeAppearance,
   type ThemeRegistry,
   type TerminalColorCapability,
 } from './theme';
@@ -209,7 +208,6 @@ export interface TuiRuntimeOptions {
   readonly preferenceStore?: TuiPreferenceStore;
   readonly themeRegistry?: ThemeRegistry;
   readonly customThemeDirectory?: string;
-  readonly terminalAppearance?: ThemeAppearance;
   readonly colorCapability?: TerminalColorCapability;
 }
 
@@ -256,7 +254,6 @@ export function TuiProductProvider(props: {
     <TuiThemeProvider
       registry={themeRegistry}
       selection={preferences.theme}
-      terminalAppearance={props.runtime?.terminalAppearance}
       colorCapability={props.runtime?.colorCapability}
     >
       <KeybindingProvider registry={keybindings}>

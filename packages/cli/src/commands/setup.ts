@@ -1,123 +1,68 @@
-import {
-  createCodexOAuthClient,
-  DEFAULT_WORKERS_AI_MODEL_SPEC,
-  decodeJsonValue,
-  decodeCodexAccountId,
-  tokensToCredential,
-} from '@kinu.run/core';
-import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
-import { checkClaudeAvailability, checkOpenCodeAvailability, createOpenCodeProvider } from '@kinu.run/cli-backend';
-import { setCloudCredential } from '../cloud-api';
-import { bumpProviderRevision, loadConfigFile, resolveCloudSession, setDefaultModel, updateConfigFile, type KinuConfig } from '../config';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
+import { checkClaudeAvailability } from '@kinu.run/cli-backend';
+import { loadConfigFile, setDefaultModel, updateConfigFile } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { ask, askSecret, canPrompt, confirm } from '../prompt';
-import { authCommand, openBrowser } from './auth';
-import { waitForAnswer } from '@kinu.run/core';
+import { authCommand } from './auth';
+import {
+  connectProvider,
+  PROVIDER_CONNECTORS,
+  type ProviderConnectId,
+  type ProviderConnectOutcome,
+  type ProviderConnectPort,
+} from './provider-connect';
 
 /**
- * Where a provider secret is written.
- *
- * Signed in, the answer is the Kinu account: sealed at rest there, reachable
- * from every machine through the provider proxy, and no second copy of the same
- * secret sitting in a config file on this disk. A local key remains an explicit
- * choice (`--local`) for working offline or against an endpoint only this
- * machine can see, and is still what happens when there is no account to
- * store it in.
- *
- * Returns where it landed so the caller can say so.
+ * The console side of a provider connect: progress in the dim register, one
+ * question at a time through the CLI's own prompt. The flows themselves live
+ * in `provider-connect.ts`, where the TUI reaches the same code with a port
+ * of its own.
  */
-export async function storeProviderSecret(opts: {
-  local: boolean;
-  credKey: string;
-  credential: unknown;
-  /** Applied when the secret stays on this machine. */
-  storeLocally: () => void;
-  /** Removes this provider's local entry — run after a successful account
-   *  write, because a local key WINS at resolution time and an older one left
-   *  behind would quietly be the key that gets spent. */
-  clearLocally: () => void;
-  /** Set as the default model either way — a pointer, not a secret. */
-  model: string;
-  /** The endpoint the key is for, when the provider has one. An endpoint the
-   *  proxy could never reach (loopback, a private range, plain http) forces
-   *  the local answer whatever the account could hold. Otherwise the key would
-   *  be stored somewhere it can never be used from. */
-  endpoint?: string;
-}): Promise<'account' | 'local'> {
-  const reachable = opts.endpoint === undefined || reachableFromTheInternet(opts.endpoint);
-  const cloud = opts.local || !reachable ? null : resolveCloudSession();
+function consoleProviderPort(): ProviderConnectPort {
+  return {
+    report: (line) => console.log(DIM(line)),
+    ask: async (request) => (request.secret === true
+      ? await askSecret(request.label, request.fallback)
+      : await ask(request.label, request.fallback)),
+  };
+}
 
-  if (!cloud) {
-    opts.storeLocally();
+/** The flags a connect flow reads, with the absent ones left absent rather
+ *  than handed over as undefined. */
+export function connectOptions(opts: {
+  readonly origin?: string;
+  readonly model?: string;
+  readonly local?: boolean;
+}): { readonly origin?: string; readonly model?: string; readonly local: boolean } {
+  const base = { local: opts.local ?? false };
+  const withOrigin = opts.origin === undefined ? base : { ...base, origin: opts.origin };
 
-    return 'local';
+  return opts.model === undefined ? withOrigin : { ...withOrigin, model: opts.model };
+}
+
+/** Run one provider's flow with the console port, and say how it ended. */
+export async function connectProviderOnConsole(
+  id: ProviderConnectId,
+  opts: { readonly origin?: string; readonly model?: string; readonly local?: boolean } = {},
+): Promise<ProviderConnectOutcome> {
+  const descriptor = PROVIDER_CONNECTORS.find((candidate) => candidate.id === id);
+
+  if (descriptor === undefined) throw new Error(`Unknown provider: ${id}`);
+  console.log('');
+  console.log(ACCENT(descriptor.label));
+  console.log(DIM(descriptor.blurb));
+  const outcome = await connectProvider(id, consoleProviderPort(), opts);
+
+  if (outcome.kind === 'connected') {
+    console.log(`${OK('✓')} ${outcome.summary}`);
+
+    if (outcome.detail !== undefined) console.log(DIM(outcome.detail));
+  } else {
+    console.log(`${WARN('!')} ${outcome.reason}`);
+    console.log(DIM(outcome.hint));
   }
 
-  try {
-    await setCloudCredential(cloud.origin, cloud.token, opts.credKey, decodeJsonValue({ value: opts.credential }));
-  } catch (err) {
-    // Deliberately not falling back to disk: the user asked for account
-    // storage, and writing the secret somewhere they did not choose is the
-    // surprise this refusal prevents. Say what happened and what to do about
-    // it, and leave nothing behind.
-    throw new Error(
-      `Your Kinu account did not accept the key (${renderThrownChain({ cause: err })}). `
-      + 'Nothing was saved. Try again, or re-run with --local to keep the key on this machine.',
-      { cause: err },
-    );
-  }
-
-  opts.clearLocally();
-  setDefaultModel(opts.model);
-  // The account now holds a credential it did not hold a moment ago, and the
-  // local copy is gone. Both change what a resident session can resolve.
-  bumpProviderRevision();
-
-  return 'account';
-}
-
-/** Whether the Kinu Worker could reach this endpoint at all: https, and not
- *  a loopback, private, link-local, IPv6 ULA or CGNAT host. */
-function reachableFromTheInternet(baseURL: string): boolean {
-  const url = tolerate(() => new URL(baseURL), 'malformed-input');
-
-  if (!url) return false;
-
-  if (url.protocol !== 'https:') return false;
-  const hostname = url.hostname;
-  const host = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
-
-  if (isIPv6Ula(host) || isCgnat(host)) return false;
-
-  return !/^(localhost|127\.|0\.0\.0\.0|\[?::1\]?|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostname);
-}
-
-/** IPv6 unique-local addresses (fc00::/7): routable nowhere the proxy runs. */
-function isIPv6Ula(host: string): boolean {
-  if (!host.includes(':')) return false;
-  const first = Number.parseInt(host.split(':')[0] ?? '', 16);
-
-  if (!Number.isFinite(first)) return false;
-  const top = first >>> 8;
-
-  return top === 0xfc || top === 0xfd;
-}
-
-/** Carrier-grade NAT (100.64.0.0/10): one provider's customers, not the internet. */
-function isCgnat(host: string): boolean {
-  const octets = host.split('.');
-
-  if (octets.length !== 4 || octets.some((o) => !/^\d+$/.test(o))) return false;
-  const [first, second] = octets.map(Number);
-
-  return first === 100 && (second ?? 0) >= 64 && (second ?? 0) <= 127;
-}
-
-function reportStored(where: 'account' | 'local', label: string, model: string): void {
-  console.log(where === 'account'
-    ? `${OK('✓')} Connected ${label} to your Kinu account. No key stored on this machine.`
-    : `${OK('✓')} Saved ${label} credentials to this machine.`);
-  console.log(DIM(`Default model: ${model}`));
+  return outcome;
 }
 
 /** Everything the setup preflight reads: the command flags and whether the
@@ -246,207 +191,7 @@ export async function setupCommand(opts: {
     return;
   }
 
-  if (provider === 'claude') {
-    await connectClaude();
-
-    return;
-  }
-
-  const next = loadConfigFile();
-
-  if (provider === 'codex') {
-    const model = stripProviderPrefix(opts.model ?? await ask('Default Codex model', next.model?.startsWith('codex/') ? next.model.slice('codex/'.length) : 'gpt-5.5'), 'codex');
-    const credential = await runCodexDeviceFlow();
-    updateConfigFile((config) => withProvider(config, {
-      model: `codex/${model}`,
-      providers: {
-        codex: {
-          accessToken: credential.accessToken,
-          refreshToken: credential.refreshToken,
-          expiresAt: credential.expiresAt,
-          metadata: credential.metadata,
-        },
-      },
-    }));
-    console.log(`${OK('✓')} Connected ChatGPT Codex subscription`);
-
-    return;
-  }
-
-  if (provider === 'openai') {
-    const key = await askSecret('OpenAI API key');
-    const model = opts.model ?? await ask('Default model', next.model?.startsWith('openai/') ? next.model.slice('openai/'.length) : 'gpt-4o-mini');
-    const spec = `openai/${model}`;
-    reportStored(await storeProviderSecret({
-      local: opts.local ?? false,
-      credKey: 'openai.bearer',
-      credential: { kind: 'bearer', token: key },
-      storeLocally: () => updateConfigFile((config) => withProvider(config, {
-        model: spec,
-        providers: { openai: { apiKey: key } },
-      })),
-      clearLocally: () => updateConfigFile((config) => { delete config.providers?.openai; }),
-      model: spec,
-    }), 'OpenAI', spec);
-
-    return;
-  }
-
-  if (provider === 'openrouter') {
-    const key = await askSecret('OpenRouter API key');
-    const model = opts.model ?? await ask('Default model', next.model?.startsWith('openrouter/') ? next.model.slice('openrouter/'.length) : 'openai/gpt-4o-mini');
-    const spec = `openrouter/${model}`;
-    reportStored(await storeProviderSecret({
-      local: opts.local ?? false,
-      credKey: 'openrouter.bearer',
-      credential: { kind: 'bearer', token: key },
-      storeLocally: () => updateConfigFile((config) => withProvider(config, {
-        model: spec,
-        providers: { openrouter: { apiKey: key } },
-      })),
-      clearLocally: () => updateConfigFile((config) => { delete config.providers?.openrouter; }),
-      model: spec,
-    }), 'OpenRouter', spec);
-
-    return;
-  }
-
-  if (provider === 'anthropic') {
-    const key = await askSecret('Anthropic API key');
-    const model = opts.model ?? await ask('Default model', next.model?.startsWith('anthropic/') ? next.model.slice('anthropic/'.length) : 'claude-sonnet-4-5');
-    const spec = `anthropic/${model}`;
-    reportStored(await storeProviderSecret({
-      local: opts.local ?? false,
-      credKey: 'anthropic.bearer',
-      credential: { kind: 'bearer', token: key },
-      storeLocally: () => updateConfigFile((config) => withProvider(config, {
-        model: spec,
-        providers: { anthropic: { apiKey: key } },
-      })),
-      clearLocally: () => updateConfigFile((config) => { delete config.providers?.anthropic; }),
-      model: spec,
-    }), 'Anthropic', spec);
-
-    return;
-  }
-
-  if (provider === 'openai-compatible') {
-    const baseURL = await ask('Base URL', 'http://localhost:11434/v1');
-    const apiKey = await askSecret('API key (use any non-empty value for local servers)', 'local');
-    const model = opts.model ?? await ask('Default model', 'gpt-oss:20b');
-    const spec = `openai-compat/${model}`;
-    reportStored(await storeProviderSecret({
-      local: opts.local ?? false,
-      credKey: 'openai-compat.default',
-      credential: { kind: 'openai-compat', baseURL, apiKey },
-      storeLocally: () => updateConfigFile((config) => withProvider(config, {
-        model: spec,
-        providers: {
-          openaiCompat: {
-            default: { baseURL, apiKey },
-          },
-        },
-      })),
-      clearLocally: () => updateConfigFile((config) => { delete config.providers?.openaiCompat?.default; }),
-      model: spec,
-      // The usual openai-compat endpoint is Ollama or vLLM on this machine.
-      // The proxy sends to https only and could not reach a loopback address
-      // from a Worker anyway, so that key belongs here.
-      endpoint: baseURL,
-    }), 'the OpenAI-compatible endpoint', spec);
-
-    return;
-  }
-
-  if (provider === 'opencode') {
-    console.log(ACCENT('Connecting to OpenCode…'));
-    console.log(DIM('Reading your opencode auth and model configuration.'));
-    const avail = await checkOpenCodeAvailability();
-
-    if (!avail.binary) {
-      console.log(`${WARN('!')} opencode CLI not found.`);
-      console.log(DIM(INSTALL_HINT_OPENCODE));
-
-      return;
-    }
-
-    if (!avail.authenticated) {
-      console.log(`${WARN('!')} opencode is not authenticated.`);
-      console.log(DIM(LOGIN_HINT_OPENCODE));
-
-      return;
-    }
-
-    // Discover available models by creating the provider and calling listModels
-    // with stub deps (the provider reads from the filesystem, not from deps).
-    const ocProvider = createOpenCodeProvider();
-    let model = opts.model ?? '';
-
-    if (!model) {
-      try {
-        const models = await ocProvider.listModels({
-          env: {},
-          getAuth: async () => null,
-          hasCredential: async () => false,
-        });
-
-        if (models.length === 0) {
-          console.log(`${WARN('!')} No models found in your opencode configuration.`);
-
-          return;
-        }
-
-        // Pick the provider's configured default, or fall back to the first model.
-        model = models[0].id;
-      } catch (e) {
-        console.log(`${WARN('!')} Could not read opencode models: ${renderThrownChain({ cause: e })}`);
-        console.log(DIM(LOGIN_HINT_OPENCODE));
-
-        return;
-      }
-    }
-
-    updateConfigFile((config) => withProvider(config, {
-      model: `opencode/${model}`,
-      providers: {},
-    }));
-    console.log(`${OK('✓')} Connected OpenCode`);
-    console.log(DIM(`Default model: opencode/${model}`));
-    console.log(DIM('Kinu reads models and auth from your local opencode install at request time.'));
-
-    return;
-  }
-
-  throw new Error(`Unknown provider: ${provider}`);
-}
-
-export const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
-
-export const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `kinu setup` again.';
-
-/**
- * The one shape every LOCAL provider write takes: this machine's credential
- * set plus the model spec that points at it.
- *
- * The provider revision advances here rather than at each call site, because
- * every caller of this function is by definition changing what a model
- * resolution can reach — that is what the function is for — and a new provider
- * branch added below would otherwise silently skip the signal.
- */
-function withProvider(config: KinuConfig, patch: Pick<KinuConfig, 'model' | 'providers'>): KinuConfig {
-  return {
-    ...config,
-    model: patch.model,
-    providerRevision: (config.providerRevision ?? 0) + 1,
-    providers: {
-      ...config.providers,
-      ...patch.providers,
-      openaiCompat: {
-        ...config.providers?.openaiCompat,
-        ...patch.providers?.openaiCompat,
-      },
-    },
-  };
+  await connectProviderOnConsole(provider, connectOptions(opts));
 }
 
 async function chooseProvider(cloudReady: boolean): Promise<string> {
@@ -544,84 +289,6 @@ function normalizeProvider(value: string): 'workers-ai' | 'claude' | 'codex' | '
     default:
       throw new Error('Provider must be workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, or skip.');
   }
-}
-
-const CLAUDE_INSTALL_HINT = 'Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup';
-
-export const CLAUDE_LOGIN_HINT = 'Run `claude` once to sign in to your Claude subscription.';
-
-const CLAUDE_READY = 'Claude subscription ready. Use kinu create --model claude/claude-opus-4-x';
-
-/** Claude subscription "connect" is a status check, not a credential we store:
- *  the official `claude` binary owns its own Claude Code login. We probe PATH +
- *  `claude auth status` and print the next step. LOCAL ONLY — cloud agents need
- *  an Anthropic API key (kinu provider connect anthropic), not this. */
-export async function connectClaude(): Promise<void> {
-  console.log('');
-  console.log(ACCENT('Claude subscription (via Claude Code)'));
-  console.log(DIM('Drives the `claude` binary with your Claude Code login. Local workspaces only.'));
-  const { binary, loggedIn } = await checkClaudeAvailability();
-  console.log('');
-
-  if (binary && loggedIn) {
-    console.log(`${OK('✓')} ${CLAUDE_READY}`);
-    // Nothing was written here — the `claude` binary owns its own login — but
-    // this command is how the user says they have just connected it, and its
-    // availability is what a listing sweep probes. A resident session has no
-    // other way to learn that the probe now succeeds.
-    bumpProviderRevision();
-  } else if (binary) {
-    console.log(`${WARN('!')} ${CLAUDE_LOGIN_HINT}`);
-  } else {
-    console.log(`${WARN('!')} ${CLAUDE_INSTALL_HINT}`);
-    console.log(DIM('Then run `claude` once to sign in.'));
-  }
-
-  console.log(DIM('Cloud workspaces cannot use the subscription. Connect an Anthropic API key for those.'));
-}
-
-async function runCodexDeviceFlow(opts: { readonly signal?: AbortSignal } = {}) {
-  const client = createCodexOAuthClient();
-  const flow = await client.startDeviceFlow();
-  console.log('');
-  console.log(`${DIM('Open:')} ${ACCENT(flow.portalURL)}`);
-  console.log(`${DIM('Code:')} ${ACCENT(flow.userCode)}`);
-  console.log('');
-  openBrowser(flow.portalURL);
-
-  // No clock on this wait. The device code's lifetime belongs to the
-  // provider: its expiry arrives as the provider's own expired answer and
-  // ends the wait below, as denial does. A Date.now() bound here would end
-  // the wait on an invented number while the approval may still be on its
-  // way. The start response names no expires_in to honor; if it ever does,
-  // stopping after it reports the provider's own decision, and that is the
-  // only bound this loop may keep.
-  const wait = {
-    intervalMs: Math.max(3, flow.pollIntervalSec) * 1000,
-    onWaiting: () => process.stdout.write('.'),
-  };
-
-  const probe = async () => {
-    const poll = await client.pollDeviceFlow(flow.deviceAuthId, flow.userCode);
-
-    return poll.status === 'pending' ? undefined : poll;
-  };
-
-  const outcome = opts.signal
-    ? await waitForAnswer(probe, { ...wait, signal: opts.signal })
-    : await waitForAnswer(probe, wait);
-
-  if (outcome === undefined) throw new Error('Codex login cancelled.');
-
-  if (outcome.status === 'expired' || outcome.status === 'denied') throw new Error(outcome.message);
-  console.log('');
-  const credential = tokensToCredential(outcome.tokens);
-  const accountId = decodeCodexAccountId(credential.accessToken);
-
-  return {
-    ...credential,
-    metadata: accountId ? { accountId } : credential.metadata,
-  };
 }
 
 function stripProviderPrefix(model: string, provider: string): string {
