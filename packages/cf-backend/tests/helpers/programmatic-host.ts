@@ -24,10 +24,10 @@ import {
   rpcDeleteFile,
   rpcExec,
   type ProgrammaticHost,
-} from '../../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+} from '@nimbus-sh/worker/programmatic';
 import {
   _rpcExists, _rpcFsReadRange, _rpcMkdir, _rpcReadFile, _rpcReadFileBytes, _rpcReaddir, _rpcRename, _rpcStat, _rpcWriteFile,
-} from '../../../../node_modules/@nimbus-sh/worker/dist/session/rpc.js';
+} from '@nimbus-sh/worker/rpc';
 import { facetDiagnosticsHooks } from '../../src/nimbus-programmatic';
 
 export type DurableState = Map<string, unknown>;

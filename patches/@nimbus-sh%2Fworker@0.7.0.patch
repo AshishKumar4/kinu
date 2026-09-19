@@ -1,0 +1,51 @@
+diff --git a/package.json b/package.json
+index 27bcc31..c1a46b4 100644
+--- a/package.json
++++ b/package.json
+@@ -73,6 +73,46 @@
+       "types": "./dist/git/commands.d.ts",
+       "import": "./dist/git/commands.js"
+     },
++    "./programmatic": {
++      "workspace": "./src/session/programmatic.ts",
++      "types": "./dist/session/programmatic.d.ts",
++      "import": "./dist/session/programmatic.js"
++    },
++    "./rpc": {
++      "workspace": "./src/session/rpc.ts",
++      "types": "./dist/session/rpc.d.ts",
++      "import": "./dist/session/rpc.js"
++    },
++    "./supervisor-rpc": {
++      "workspace": "./src/session/supervisor-rpc.ts",
++      "types": "./dist/session/supervisor-rpc.d.ts",
++      "import": "./dist/session/supervisor-rpc.js"
++    },
++    "./routes": {
++      "workspace": "./src/session/routes.ts",
++      "types": "./dist/session/routes.d.ts",
++      "import": "./dist/session/routes.js"
++    },
++    "./resident-identity": {
++      "workspace": "./src/facets/resident-identity.ts",
++      "types": "./dist/facets/resident-identity.d.ts",
++      "import": "./dist/facets/resident-identity.js"
++    },
++    "./package-manager": {
++      "workspace": "./src/runtime/package-manager.ts",
++      "types": "./dist/runtime/package-manager.d.ts",
++      "import": "./dist/runtime/package-manager.js"
++    },
++    "./facet-host": {
++      "workspace": "./src/runtime/facet-loader-host.ts",
++      "types": "./dist/runtime/facet-loader-host.d.ts",
++      "import": "./dist/runtime/facet-loader-host.js"
++    },
++    "./runtime-catalog": {
++      "workspace": "./src/runtime/runtime-catalog.ts",
++      "types": "./dist/runtime/runtime-catalog.d.ts",
++      "import": "./dist/runtime/runtime-catalog.js"
++    },
+     "./runtime-sync-helper": "./scripts/bundle-runtime.mjs",
+     "./public/*": "./public/*",
+     "./package.json": "./package.json"

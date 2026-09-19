@@ -96,6 +96,7 @@ export const SCRATCH_PREFIXES = [
   'no-wait-until-gate-',
   'return-await-gate-',
   'typescript-escapes-gate-',
+  'no-deep-import-gate-',
   'outcome-baseline-',
   'pi-worker-test-',
 ] as const;

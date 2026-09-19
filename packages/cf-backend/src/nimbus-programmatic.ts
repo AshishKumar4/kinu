@@ -9,16 +9,19 @@
  * functions here run in the actor's own isolate, against the actor's own
  * `ctx.storage.sql`.
  *
- * WHY ONE PATH STILL LOOKS LIKE THIS. `@nimbus-sh/worker@0.7.0` publishes
+ * WHERE THE SUBPATHS COME FROM. `@nimbus-sh/worker@0.7.0` publishes
  * `./workspace-host`, `./port-capability`, `./durable-slots` and `./git`
- * beside the router, auth, session-id and preview-host entries, and every
- * reach those cover goes through them. The programmatic RPC surface itself
- * (`dist/session/programmatic.js`: `rpcExec`, `rpcStartProcess`, the runtime,
- * process and port verbs, `ProgrammaticHost`) has no subpath yet, so that
- * one module is reached through the installed tree; its `.d.ts` is real and
- * shipped. The `./workspace` entry names `dist/workspace/nimbus-workspace.js`,
- * a file the 0.7.0 tarball does not carry; the workspace is
- * `@nimbus-sh/core/workspace`.
+ * beside the router, auth, session-id and preview-host entries. The
+ * programmatic RPC surface (`rpcExec`, `rpcStartProcess`, the runtime,
+ * process and port verbs, `ProgrammaticHost`), the loader facet host and
+ * the R2 runtime catalog are library-host needs the package does not yet
+ * export, so `patches/@nimbus-sh%2Fworker@0.7.0.patch` adds `./programmatic`,
+ * `./facet-host` and `./runtime-catalog` to its export map until upstream
+ * ships them. A reach through the installed tree is refused by lint
+ * (`no-restricted-imports`): a dependency is used through its export map or
+ * the map is patched, never around. The `./workspace` entry names
+ * `dist/workspace/nimbus-workspace.js`, a file the 0.7.0 tarball does not
+ * carry; the workspace is `@nimbus-sh/core/workspace`.
  *
  * WHY THE VALUES LOAD LAZILY. These modules' static graphs carry isomorphic-git,
  * tarball handling and the substrate's wasm-adjacent machinery. Every consumer
@@ -34,7 +37,7 @@
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import type { FacetManagerHostHooks } from '@nimbus-sh/worker/workspace-host';
 import { diagnostics } from '@kinu.run/core/obs';
-import type * as programmaticModule from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+import type * as programmaticModule from '@nimbus-sh/worker/programmatic';
 import type * as gitModule from '@nimbus-sh/worker/git';
 
 // The per-port reservation record is Nimbus-owned storage: the owner that holds
@@ -51,7 +54,7 @@ export {
 export type {
   ProgrammaticExecOptions,
   ProgrammaticHost,
-} from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+} from '@nimbus-sh/worker/programmatic';
 
 type Programmatic = typeof programmaticModule;
 
@@ -86,7 +89,7 @@ let loading: Promise<NimbusProgrammatic> | null = null;
 export function nimbusProgrammatic(): Promise<NimbusProgrammatic> {
   loading ??= (async () => {
     const [programmatic, git] = await Promise.all([
-      import('../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js'),
+      import('@nimbus-sh/worker/programmatic'),
       import('@nimbus-sh/worker/git'),
     ]);
 

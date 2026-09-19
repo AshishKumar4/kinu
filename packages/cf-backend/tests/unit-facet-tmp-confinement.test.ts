@@ -26,7 +26,7 @@ import {
   ensureProgrammaticReady,
   rpcExec,
   type ProgrammaticHost,
-} from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+} from '@nimbus-sh/worker/programmatic';
 import { credentialedSessionBox, programmaticHostOver } from './helpers/programmatic-host';
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };

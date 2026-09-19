@@ -24,7 +24,7 @@ import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlRow, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { runGitCommand } from '@nimbus-sh/worker/git';
-import { ensureRuntimesProgrammatic } from '../../../node_modules/@nimbus-sh/worker/dist/runtime/package-manager.js';
+import { ensureRuntimesProgrammatic } from '@nimbus-sh/worker/package-manager';
 
 const databases: Database[] = [];
 

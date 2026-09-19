@@ -36,7 +36,7 @@ import { durableStorage } from './helpers/programmatic-host';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { CRED_SESSION_USER, type SqlRow, type SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpEnvelope, SupervisorOpName } from '@nimbus-sh/core/workspace/supervisor-op.js';
-import { SupervisorRPC } from '../../../node_modules/@nimbus-sh/worker/dist/session/supervisor-rpc.js';
+import { SupervisorRPC } from '@nimbus-sh/worker/supervisor-rpc';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 // The entry's module graph reaches `agents`, which the harness stands in for;

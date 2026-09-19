@@ -14,7 +14,7 @@ import {
   rpcUnexposePort,
   type ProgrammaticExecOptions,
   type ProgrammaticHost,
-} from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+} from '@nimbus-sh/worker/programmatic';
 import type { SessionPortHost } from '@nimbus-sh/worker/port-capability';
 import { programmaticHostOver, type DurableState } from './helpers/programmatic-host';
 
@@ -293,7 +293,7 @@ describe('hosted workspace preview capabilities', () => {
     const { routeCapabilityPort } = await import('@nimbus-sh/worker/port-capability');
 
     const { routeHostedWebSocket } = await import(
-      '../../../node_modules/@nimbus-sh/worker/dist/session/rpc.js'
+      '@nimbus-sh/worker/rpc'
     );
 
     const portRegistry = new PortRegistry();

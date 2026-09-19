@@ -1,5 +1,5 @@
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
-import { handleFetch } from '../../../../node_modules/@nimbus-sh/worker/dist/session/routes.js';
+import { handleFetch } from '@nimbus-sh/worker/routes';
 
 const PORT = 4321;
 
