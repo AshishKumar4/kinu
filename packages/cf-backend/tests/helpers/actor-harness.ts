@@ -735,9 +735,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    * WHETHER a run happened and WHAT evidence it read. The same `fastLlm` seat
    * the production compute reads (`rt.fastLlm ?? rt.llm`).
    */
-  harnessScriptSleepTimeModel(answer: SleepTimeUpdate): string[] {
+  harnessScriptSleepTimeModel(answer: SleepTimeUpdate, prompts: string[]): void {
     this.config.setSleepTimeComputeEnabled(true);
-    const prompts: string[] = [];
 
     Object.defineProperty(this.rt, 'fastLlm', {
       configurable: true,
@@ -750,8 +749,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
         },
       },
     });
-
-    return prompts;
   }
 
   /** The world-model store, through its own API: a hand-written INSERT would be
@@ -1718,6 +1715,11 @@ export interface ActorHarness<T> {
   readonly db: Database;
   /** All user tables currently in the actor's storage. */
   tableNames(): string[];
+  /** Every prompt the scripted sleep-time model was asked, in order — the
+   *  oracle for WHETHER a run happened and WHAT evidence it read. Empty and
+   *  never appended to unless {@link orchestratorHarness} was given
+   *  `sleepTimeModel`. */
+  readonly sleepTimePrompts: string[];
 }
 
 
@@ -2010,6 +2012,7 @@ function instantiate<T extends object>(
     tableNames: () => db.prepare<{ name: string }, []>(
       "SELECT name FROM sqlite_master WHERE type IN ('table','view') AND type='table' ORDER BY name",
     ).all().map((row) => row.name),
+    sleepTimePrompts: [],
   };
 }
 
@@ -2069,6 +2072,13 @@ export function orchestratorHarness(
   userPlane?: RecordedUserPlaneCalls,
   world?: HarnessActorWorld,
   env?: Env,
+  opts?: {
+    /** Leave the between-turn compute lane ON, behind a scripted fast model
+     *  that answers every run with this update; the prompts it is asked land
+     *  in the harness's `sleepTimePrompts`. Absent, the lane is off — there is
+     *  no model behind the harness to run it. */
+    readonly sleepTimeModel?: SleepTimeUpdate;
+  },
 ): ActorHarness<HarnessOrchestratorAgent> {
   const harness = instantiate(HarnessOrchestratorAgent, new Database(':memory:'), undefined, userPlane, world, undefined, env);
   ensureActorSchema(harness.agent);
@@ -2080,7 +2090,12 @@ export function orchestratorHarness(
   // property of the harness, not of the sequence under test.
   harness.agent.harnessHoldsCapability('harness-capability');
   harness.agent.declareScaffoldPresent();
-  harness.agent.harnessDisableSleepTimeCompute();
+
+  if (opts?.sleepTimeModel) {
+    harness.agent.harnessScriptSleepTimeModel(opts.sleepTimeModel, harness.sleepTimePrompts);
+  } else {
+    harness.agent.harnessDisableSleepTimeCompute();
+  }
 
   return harness;
 }
