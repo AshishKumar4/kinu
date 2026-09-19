@@ -14,6 +14,7 @@ import {
   type ModelMenu, type ModelMenuEntry, type ProviderFailure,
 } from "../lib/user-api";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
+import { BrandMark, providerBrand } from "./ui/BrandMark";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import * as v from 'valibot';
 
@@ -107,7 +108,9 @@ export function ModelPicker({
         <Combobox.List>
           {(group: { value: string; items: ModelMenuEntry[] }) => (
             <Combobox.Group key={group.value} items={group.items}>
-              <Combobox.GroupLabel>{group.value}</Combobox.GroupLabel>
+              <Combobox.GroupLabel>
+                <ProviderLabel provider={group.value} />
+              </Combobox.GroupLabel>
               <Combobox.Collection>
                 {(model: ModelMenuEntry) => <ModelPickerItem key={model.spec} model={model} />}
               </Combobox.Collection>
@@ -283,6 +286,19 @@ function ProviderFailureNotice({ failures }: { failures?: ProviderFailure[] }) {
 
 function failureTitle(failures: ProviderFailure[]): string {
   return failures.map((f) => `${f.label ?? f.provider}: ${f.reason}`).join("\n");
+}
+
+/** A provider group's label: its official mark where simple-icons carries
+ *  the brand, the id alone where it does not. */
+function ProviderLabel({ provider }: { provider: string }) {
+  const brand = providerBrand(provider);
+
+  return (
+    <span className="flex items-center gap-1.5">
+      {brand !== undefined && <BrandMark brand={brand} size={13} bare />}
+      {provider}
+    </span>
+  );
 }
 
 function ModelPickerItem({ model }: { model: ModelMenuEntry }) {
