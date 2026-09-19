@@ -69,8 +69,10 @@ describe('slate sharing surfaces', () => {
             ]);
             expect(text).toContain('sam@example.com');
             expect(text).toContain('lee@example.com');
-            // A blueprint row forks; a live row opens. Four blueprints, three live rows in the union.
-            expect(await shared.$$eval('[data-share-grid] button', (buttons) => buttons.filter((button) => button.textContent?.trim() === 'Fork').length)).toBe(4);
+            // Every row forks — a blueprint's publication, a live row's running
+            // tree (forkable unless the owner said otherwise) — and a live row
+            // opens too. Four blueprints, three live rows in the union.
+            expect(await shared.$$eval('[data-share-grid] button', (buttons) => buttons.filter((button) => button.textContent?.trim() === 'Fork').length)).toBe(7);
             expect(await shared.$$eval('[data-open-live]', (buttons) => buttons.length)).toBe(3);
             expect(text).toContain('live · public');
             expect(text).toContain('live · people');
@@ -154,7 +156,10 @@ describe('slate sharing surfaces', () => {
             expect(text).toContain('Share live');
             expect(text).toContain('What a viewer reaches');
             // Read members are granted with no click; mutating ones wait for one.
-            expect(await live.$$eval('[role="dialog"] input[type="checkbox"]', (boxes) => boxes.filter((box) => box instanceof HTMLInputElement && box.checked).length)).toBe(0);
+            // The MEMBER boxes, by their own attribute: the dialog carries the
+            // fork permission on a checkbox too, and that one starts on.
+            expect(await live.$$eval('[role="dialog"] input[data-approve]', (boxes) => boxes.filter((box) => box instanceof HTMLInputElement && box.checked).length)).toBe(0);
+            expect(await live.$$eval('[role="dialog"] input[type="checkbox"]:not([data-approve])', (boxes) => boxes.filter((box) => box instanceof HTMLInputElement && box.checked).length)).toBe(1);
             expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('Viewers get 4 read-only members. You approved 0 of 5 mutating members.');
             // The risk statement is per member: the act, the workspace, who can trigger it.
             expect(text).toContain('Calls create_issue on GitHub with your credentials.');
@@ -162,7 +167,13 @@ describe('slate sharing surfaces', () => {
             expect(text).toContain("Sends a message to your agent's inbox as this slate.");
             expect(text).toContain('Runs a model call on your fast tier. Every call spends your inference.');
             expect(text).toContain('Anyone you named on this share can trigger it.');
-            expect(text).not.toMatch(/rate|spend cap|per hour|\$/);
+            // The bounds a live share actually runs under, in the dialog that
+            // creates it: this said "no bounds wording" until 2026-09-18, when
+            // the bounds themselves landed (host.ts admitViewerRequest and the
+            // per-share daily spend label). A dialog that hid them would be
+            // asking the owner to share on terms it never stated.
+            expect(text).toContain('120 requests a minute each');
+            expect(text).toContain('$2 of model spend a day per share');
             // The app hop is drawn as a subtree of the slate it names.
             expect(text).toContain('via PEER → digest');
             expect(text).toContain('DIGEST_FILES');
