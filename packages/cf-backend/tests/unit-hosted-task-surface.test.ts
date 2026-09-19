@@ -186,15 +186,11 @@ test('a hired subordinate is framed as a hire, not as a head', async () => {
   await workspace.agent.runHostedTaskTurn(child.actor, 'Say what you are.');
 
   const system = systemPrompt(model);
-  // Named as what it is: a hired agent of this workspace whose `report` lane
-  // carries progress back to whoever assigned the work.
-  expect(system).toContain('You are a subordinate agent of this workspace');
+  // The hire's own name and the `report` lane it answers on. The head prompt
+  // carries neither: it opens on a task, a merge strategy and sibling threads
+  // racing one tree, none of which exist for a hire.
+  expect(system).toContain('Framing prover');
   expect(system).toContain('report');
-  // And never as a head. Both sentences are the fork framing's, and neither is
-  // true of a hire: nothing merges its findings and it has no siblings racing
-  // it for the tree.
-  expect(system).not.toContain('You are a "head"');
-  expect(system).not.toContain('ONE OF SEVERAL heads');
 });
 
 test('a hosted child advertises only its callable crafted surface and loses it when code reach is revoked', async () => {

@@ -17,6 +17,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
+import { SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from './gallery-harness';
 
@@ -46,6 +47,35 @@ async function shoot(page: Page, name: string, dir = SHOTS): Promise<string> {
   return path;
 }
 
+/** One card in the shared grid, by the controls it offers. */
+interface ShareRow {
+  readonly id: string;
+  readonly kind: string;
+  readonly fork: boolean;
+  readonly forkEnabled: boolean;
+  readonly open: boolean;
+  readonly openEnabled: boolean;
+}
+
+async function showSegment(page: Page, segment: string): Promise<void> {
+  await page.click(`[data-segment="${segment}"]`);
+  await page.waitForFunction(
+    (id: string) => document.querySelector(`[data-segment="${id}"]`)?.getAttribute('aria-selected') === 'true',
+    {}, segment,
+  );
+}
+
+function shareRows(page: Page): Promise<ShareRow[]> {
+  return page.$$eval('[data-share-grid] > li', (items) => items.map((item) => ({
+    id: item.getAttribute('data-share-row') ?? '',
+    kind: item.getAttribute('data-share-kind') ?? '',
+    fork: item.querySelector('[data-fork-share]') !== null,
+    forkEnabled: item.querySelector('[data-fork-share]:not(:disabled)') !== null,
+    open: item.querySelector('[data-open-live]') !== null,
+    openEnabled: item.querySelector('[data-open-live]:not(:disabled)') !== null,
+  })));
+}
+
 describe('slate sharing surfaces', () => {
   test('every surface renders at both widths in both themes, and says what it must', async () => {
     await withGallery(async (gallery) => {
@@ -58,24 +88,45 @@ describe('slate sharing surfaces', () => {
           try {
             const text = await shared.evaluate(() => document.body.innerText);
 
-            // The five segments, each carrying its list's count — All is the
-            // kind:id-deduped union, so the doubled live row counts once.
-            const tabs = await shared.$$eval('[aria-label="Shared lists"] [role="tab"]', (els) =>
-              els.map((el) => ({ label: el.childNodes[0]?.textContent?.trim() ?? '', count: el.querySelector('span')?.textContent ?? '' })));
+            // Each segment holds exactly the rows its own badge counts, and
+            // All is the kind:id-deduped union of the other four, so the
+            // doubled live row is one card here.
+            const segments = await shared.$$eval('[aria-label="Shared lists"] [role="tab"]', (tabs) => tabs.map((tab) => ({
+              id: tab.getAttribute('data-segment') ?? '',
+              count: Number(tab.querySelector('span')?.textContent ?? '-1'),
+            })));
 
-            expect(tabs).toEqual([
-              { label: 'All', count: '7' }, { label: 'Mine', count: '3' }, { label: 'With me', count: '2' },
-              { label: 'Public', count: '2' }, { label: 'People I know', count: '1' },
-            ]);
+            const shown = new Map<string, readonly ShareRow[]>();
+
+            for (const segment of segments) {
+              await showSegment(shared, segment.id);
+              shown.set(segment.id, await shareRows(shared));
+              expect(shown.get(segment.id) ?? []).toHaveLength(segment.count);
+            }
+
+            const all = shown.get('all') ?? [];
+
+            const union = new Set(segments.filter((segment) => segment.id !== 'all')
+              .flatMap((segment) => (shown.get(segment.id) ?? []).map((row) => row.id)));
+
+            expect(union.size).toBeGreaterThan(0);
+            expect(new Set(all.map((row) => row.id))).toEqual(union);
+            expect(all).toHaveLength(union.size);
             expect(text).toContain('sam@example.com');
             expect(text).toContain('lee@example.com');
             // Every row forks — a blueprint's publication, a live row's running
             // tree (forkable unless the owner said otherwise) — and a live row
-            // opens too. Four blueprints, three live rows in the union.
-            expect(await shared.$$eval('[data-share-grid] button', (buttons) => buttons.filter((button) => button.textContent?.trim() === 'Fork').length)).toBe(7);
-            expect(await shared.$$eval('[data-open-live]', (buttons) => buttons.length)).toBe(3);
+            // opens too. A live row whose workspace is out of reach offers
+            // neither, which is one condition, not two.
+            expect(all.filter((row) => row.fork).map((row) => row.id)).toEqual(all.map((row) => row.id));
+            expect(all.filter((row) => row.open).map((row) => row.id))
+              .toEqual(all.filter((row) => row.kind === 'live').map((row) => row.id));
+            expect(all.filter((row) => row.kind === 'live' && row.forkEnabled).map((row) => row.id))
+              .toEqual(all.filter((row) => row.openEnabled).map((row) => row.id));
+            expect(all.filter((row) => row.kind === 'blueprint' && !row.forkEnabled)).toEqual([]);
             expect(text).toContain('live · public');
             expect(text).toContain('live · people');
+            await showSegment(shared, 'all');
             // Three columns at the spec's 1440, one on the phone.
             await shared.setViewport({ width: viewport === 'desktop' ? 1440 : 390, height: viewport === 'desktop' ? 900 : 844 });
             const columns = await shared.$eval('[data-share-grid]', (grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').length);
@@ -84,10 +135,8 @@ describe('slate sharing surfaces', () => {
             shots.push(await shoot(shared, `shared-four-lists-${viewport}-${theme}`, LIVE_SHOTS));
             // The segments switch what the grid holds, and search narrows it —
             // a searched-out segment says "Nothing matches", not its own line.
-            await shared.click('[data-segment="received"]');
-            await shared.waitForFunction(
-              () => document.querySelectorAll('[data-share-grid] > li').length === 2,
-            );
+            await showSegment(shared, 'received');
+            expect(await shareRows(shared)).toHaveLength(shown.get('received')?.length ?? -1);
             await shared.type('[aria-label="Search shared"]', 'lighthouse');
             await shared.waitForFunction(
               () => document.body.innerText.includes('Nothing matches'),
@@ -98,9 +147,10 @@ describe('slate sharing surfaces', () => {
               Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(input, '');
               input.dispatchEvent(new Event('input', { bubbles: true }));
             });
-            await shared.click('[data-segment="all"]');
+            await showSegment(shared, 'all');
             await shared.waitForFunction(
-              () => document.querySelectorAll('[data-share-grid] > li').length === 7,
+              (count: number) => document.querySelectorAll('[data-share-grid] > li').length === count,
+              {}, all.length,
             );
             await shared.evaluate(() => {
               const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim() === 'Fork');
@@ -172,8 +222,8 @@ describe('slate sharing surfaces', () => {
             // the bounds themselves landed (host.ts admitViewerRequest and the
             // per-share daily spend label). A dialog that hid them would be
             // asking the owner to share on terms it never stated.
-            expect(text).toContain('120 requests a minute each');
-            expect(text).toContain('$2 of model spend a day per share');
+            expect(text).toContain(String(SHARE_VIEWER_REQUESTS_PER_MINUTE));
+            expect(text).toContain(`$${String(SHARE_SPEND_CAP_USD_PER_DAY)}`);
             // The app hop is drawn as a subtree of the slate it names.
             expect(text).toContain('via PEER → digest');
             expect(text).toContain('DIGEST_FILES');

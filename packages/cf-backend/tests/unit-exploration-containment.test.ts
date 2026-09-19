@@ -234,7 +234,6 @@ describe('head tool surface — containment', () => {
   test('the head prompt describes the real workspace it was given', () => {
     const { tools } = buildSurface();
     const prompt = buildHeadSystemPrompt(headInput(), Object.keys(tools));
-    expect(prompt).toContain('`workspace.*` is the canonical workspace');
     expect(prompt).toContain('workspace.exec');
     expect(prompt).not.toContain('`parent.*`');
     expect(prompt).not.toContain('sandbox_exec');

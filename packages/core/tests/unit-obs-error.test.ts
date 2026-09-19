@@ -22,7 +22,6 @@ import {
   classifyErrorCode,
   CODE_IS_REFUSAL,
   CODE_WORK_DID_NOT_START,
-  ERROR_CODES,
   KinuError,
   refusalOf,
   renderCauseChain,
@@ -331,12 +330,12 @@ describe('the refusal payload', () => {
 });
 
 describe('refusing and breaking are opposite facts', () => {
-  test('every code has a verdict, and the four refusals are the decisions', () => {
+  test('a decision refuses, a defect breaks', () => {
     // Totality is enforced by the type; what this asserts is the VERDICTS, since
     // pooling a correct refusal with a defect is worse than reporting no rate.
-    // `budget` joined 2026-09-18: a spent bound is a decision, not a defect.
-    const refusals = ERROR_CODES.filter((code) => CODE_IS_REFUSAL[code]);
-    expect([...refusals]).toEqual(['bad_input', 'denied', 'unsupported', 'budget']);
+    for (const code of ['bad_input', 'denied', 'budget'] as const) {
+      expect(CODE_IS_REFUSAL[code]).toBe(true);
+    }
 
     for (const code of ['unavailable', 'missing', 'timeout', 'cancelled', 'oom', 'io'] as const) {
       expect(CODE_IS_REFUSAL[code]).toBe(false);

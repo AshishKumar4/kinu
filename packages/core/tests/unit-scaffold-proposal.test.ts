@@ -37,7 +37,6 @@ describe('buildScaffoldProposalPrompt — documents the real sandbox contract', 
 
   test('documents the host.* bridge verbatim from the executor', () => {
     expect(prompt).toContain(SCAFFOLD_HOST_TYPES);
-    expect(prompt).toContain('host');
   });
 
   test('documents the required signature and that both params are the task string', () => {
