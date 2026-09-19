@@ -23,7 +23,7 @@ import {
   TriggerRegistry,
   delegationExhausted,
   SUBORDINATE_REPORT_STATUSES,
-  HeadCapture, runHeadInference,
+  HeadCapture, runHeadInference, codenameFor,
   type HostedAgentRef,
   type LLMProviderConfig,
 } from '@kinu.run/core';
@@ -1356,6 +1356,66 @@ describe('LocalAgentHost', () => {
   });
 
   /**
+   * A hosted child's first owner message titles it through the turn's own
+   * `auto_title` effect — provisional, then the generated title — exactly as a
+   * root's chat does, once the plan reads the child's own roster name rather
+   * than the workspace slug `agentName()` returns for every actor in the tree.
+   */
+  test('a message to an unnamed hire titles it through the turn itself, once', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+
+    const { host } = makeHost(state, streamingModel('{"title":"Coupon Audit"}'), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ]);
+
+    // The generated title is announced by the rename the effect's OWN persist
+    // emits — awaited, not polled.
+    const titled = Promise.withResolvers<void>();
+    host.subscribe((agent, event) => {
+      if (agent === 'root/helper' && event.type === 'broadcast'
+        && event.event.type === 'workspace_renamed' && event.event.displayName === 'Coupon Audit') {
+        titled.resolve();
+      }
+    });
+
+    const codename = codenameFor('helper');
+
+    try {
+      const team = await host.team('root');
+      const created = await team.create({ name: 'helper' });
+
+      expect(created.displayName).toBe(codename);
+
+      const first = awaitTurns(host, 'root/helper', 1);
+      await team.message({ name: 'helper', content: 'Audit the coupon checkout', mode: 'build' });
+      await Promise.all([first, titled.promise]);
+
+      // The turn's own effect wrote the generated title, not the provisional.
+      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Audit');
+
+      // Once named, no later message moves it.
+      const second = awaitTurns(host, 'root/helper', 1);
+      await team.message({ name: 'helper', content: 'Name yourself something else entirely', mode: 'build' });
+      await second;
+
+      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Audit');
+
+      // The owner's word still beats any title the system wrote.
+      await team.rename({ name: 'helper', displayName: 'Coupon Auditor' });
+
+      const third = awaitTurns(host, 'root/helper', 1);
+      await team.message({ name: 'helper', content: 'Change your name again', mode: 'build' });
+      await third;
+
+      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Auditor');
+      expect(childConfigValue(dbPath, 'helper', 'name_origin')).toBe('user');
+    } finally {
+      await host.close();
+    }
+  });
+
+  /**
    * EXACTLY ONE RESULT, AND ONLY ONE.
    *
    * A failing turn fires an `error` event and a `turn-end` event, and both are
@@ -1822,6 +1882,22 @@ function childActorId(parent: string, name: string): string {
     if (!reference) throw new Error('The child has no recorded actor identity.');
 
     return reference.actorId;
+  } finally { db.close(); }
+}
+
+/** One config row off the child's own actor_id — where a title actually lands,
+ *  since the roster carries no display name. */
+function childConfigValue(parent: string, name: string, key: string): string | null {
+  const db = new Database(parent, { readonly: true });
+
+  try {
+    const actorId = childActorId(parent, name);
+
+    const row = db.query<{ value: string }, [string, string]>(
+      'SELECT value FROM actor_config WHERE actor_id = ? AND key = ?',
+    ).get(actorId, key);
+
+    return row?.value ?? null;
   } finally { db.close(); }
 }
 

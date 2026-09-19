@@ -43,7 +43,7 @@
 import { REAL_CLOCK } from '@kinu.run/core';
 import type { LanguageModel, ToolSet, UIMessageChunk } from 'ai';
 import {
-  EventLog, HeadCapture, runHeadInference,
+  EventLog, HeadCapture, runHeadInference, titleActorFromMessage,
   admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus,
   receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles,
   subordinateForkContext, type SubordinateInheritedContext,
@@ -300,6 +300,13 @@ export async function admitHostedTask(
 
     if (input.messageId !== undefined) admission.messageId = input.messageId;
     const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);
+
+    // A hosted actor has no chat session, so no `auto_title` effect exists —
+    // the first admitted message titles it here instead, and a landed title is
+    // announced so the parent's roster stops showing the codename.
+    if (result.admitted && input.kind === 'message' && titleActorFromMessage(actor.handle, input.body)) {
+      seams.announce(actor);
+    }
 
     // THE WAKE, not the child's reactor. This used to call `scheduleDrain` on
     // the actor it had just written to, and both halves of that were wrong once

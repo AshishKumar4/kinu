@@ -3,6 +3,7 @@ import * as v from 'valibot';
 import { isPlaceholderMission } from './soul';
 import { tolerate } from '../obs/index';
 import type { AgentConfigStore } from '../config/store';
+import type { ActorHandle } from './actor-handle';
 import { nanoid } from '../utils/nanoid';
 
 const WorkspaceTitleSchema = v.object({ title: v.string() });
@@ -301,6 +302,21 @@ export function persistAutoTitle(
   config.setDisplayNameOrigin(title, 'auto');
 
   return true;
+}
+
+/** The shared plan/persist title policy, synchronous, for a backend whose
+ *  actors are spoken to without a chat session's `auto_title` terminal effect. */
+export function titleActorFromMessage(actor: Pick<ActorHandle, 'name' | 'config'>, message: string): boolean {
+  const config = actor.config;
+
+  const plan = planWorkspaceTitle({
+    slug: actor.name,
+    displayName: config.getDisplayName(),
+    nameOrigin: config.getNameOrigin(),
+    mission: message,
+  });
+
+  return plan?.provisional ? persistAutoTitle(config, plan.provisional) : false;
 }
 
 /** Decide whether a workspace should be auto-titled, and from what.

@@ -5,11 +5,10 @@
  * mission, no role. It is hired with a blank display name, and a rename sets
  * the name the roster shows and the config keeps — on both sides, once.
  *
- * There is no first-message auto-title race to pin. Auto-titling is a terminal
- * effect of a chat turn — it fires a naming model and races the owner's own
- * rename — and hosted children hold no chat session: there is no turn to fire
- * it from and no second writer to race. A hire keeps the display name it was
- * hired with until the owner renames it, which is what these tests pin.
+ * The first ADMITTED message still titles it: the hosted actor holds no chat
+ * session, so the turn-time `auto_title` terminal effect never exists — the
+ * admission itself applies the shared title plan instead, which is the part
+ * these tests pin along with the rename path.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -103,6 +102,57 @@ describe('an agent the owner added without naming it', () => {
 
     expect(child.actor.stores.config.getDisplayName()).toBe('Jarvis');
     expect(await displayedName(parent, name)).toBe('Jarvis');
+  });
+});
+
+describe('the first message to an agent the owner added without naming it', () => {
+  const FIRST = 'Audit the coupon checkout';
+  const TITLE = 'Audit the coupon checkout';
+
+  test('titles the agent from that message, on both sides', async () => {
+    const { child, parent, name } = await addedAgent({
+      displayName: codenameFor('quiet-harbor-1a4e20'), nameOrigin: 'auto',
+    });
+
+    await parent.agent.observeSubordinateRuntime().message(name, FIRST, 'build');
+
+    expect(child.actor.stores.config.getDisplayName()).toBe(TITLE);
+    expect(await displayedName(parent, name)).toBe(TITLE);
+  });
+
+  test('keeps the first title once it has one', async () => {
+    const { child, parent, name } = await addedAgent({
+      displayName: codenameFor('quiet-harbor-1a4e20'), nameOrigin: 'auto',
+    });
+
+    await parent.agent.observeSubordinateRuntime().message(name, FIRST, 'build');
+    await parent.agent.observeSubordinateRuntime().message(name, 'Rename it to something else', 'build');
+
+    expect(child.actor.stores.config.getDisplayName()).toBe(TITLE);
+    expect(await displayedName(parent, name)).toBe(TITLE);
+  });
+
+  test('never touches a name the owner typed', async () => {
+    const { child, parent, name } = await addedAgent({
+      displayName: 'Jarvis', nameOrigin: 'user',
+    });
+
+    await parent.agent.observeSubordinateRuntime().message(name, FIRST, 'build');
+
+    expect(child.actor.stores.config.getDisplayName()).toBe('Jarvis');
+    expect(await displayedName(parent, name)).toBe('Jarvis');
+  });
+
+  test('a message admission refuses before it can title', async () => {
+    const { child, parent, name } = await addedAgent({
+      displayName: codenameFor('quiet-harbor-1a4e20'), nameOrigin: 'auto',
+    });
+
+    await expect(parent.agent.observeSubordinateRuntime().message(name, '', 'build'))
+      .rejects.toThrow();
+
+    expect(child.actor.stores.config.getDisplayName()).toBe(codenameFor(name));
+    expect(await displayedName(parent, name)).toBe(codenameFor(name));
   });
 });
 
