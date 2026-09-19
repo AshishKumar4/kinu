@@ -17,11 +17,8 @@ export interface MarkerLanding {
   readonly absorbedBy?: string | null;
 }
 
-/** What the assistant said in answer to the marker's prompt, whichever run
- *  answered it: every assistant row after the marker's own user row. A send
- *  that landed mid-turn has no turn result of its own — its answer is the
- *  absorbing run's, and the transcript is where it lands. Empty when the
- *  marker never landed or nothing has answered yet. */
+/** Bound transcript replies by the next user message so later conversations
+ * cannot satisfy this marker's checks. */
 export function firstRunReplyText(
   history: readonly { readonly role: string; readonly text: string }[],
   marker: string,
@@ -30,7 +27,11 @@ export function firstRunReplyText(
 
   if (asked === -1) return '';
 
-  return history.slice(asked + 1).filter((row) => row.role === 'assistant').map((row) => row.text).join('\n');
+  const following = history.slice(asked + 1);
+  const nextQuestion = following.findIndex((row) => row.role === 'user');
+  const reply = nextQuestion === -1 ? following : following.slice(0, nextQuestion);
+
+  return reply.filter((row) => row.role === 'assistant').map((row) => row.text).join('\n');
 }
 
 /** The step index the marker was spliced into, read off its transcript row —

@@ -241,10 +241,6 @@
     "tests/evals/prompt-ledger.ts": {
       "sleep": 1
     },
-    "tests/evals/public-session.ts": {
-      "clock-compare": 1,
-      "sleep": 1
-    },
     "tests/evals/swarm.eval.ts": {
       "sleep": 1
     },

@@ -136,6 +136,79 @@ test('executor RPC decoding preserves refusal provenance and successful refusal-
   } finally { await session.teardown(); await server.stop(true); }
 });
 
+test.each(['running', 'closed', 'missing', 'refused'])('a spliced send follows its absorbing run: %s', async (state) => {
+  let reads = 0;
+  const cursors: string[] = [];
+
+  const start: RunEvent = {
+    type: 'run_start', runId: 'absorbing', eventIndex: 0,
+    timestamp: '2000-01-01T00:00:00.000Z', agentId: 'root',
+  };
+
+  const end: RunEvent = {
+    type: 'run_end', runId: 'absorbing', eventIndex: 2,
+    timestamp: '9999-01-01T00:00:00.000Z', reason: 'completed',
+  };
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
+    fetch(request, upgrading) {
+      if (request.method === 'DELETE') return Response.json({ ok: true });
+
+      if (upgrading.upgrade(request)) return;
+      const path = new URL(request.url).pathname;
+
+      if (path.endsWith('/runs')) {
+        reads += 1;
+
+        if (reads > 1) return new Response('Settlement must follow the selected run, not poll the workspace.', { status: 500 });
+
+        return Response.json({ status: 'end', items: state === 'missing' ? [] : [{ runId: 'absorbing' }] });
+      }
+
+      if (path.endsWith('/events')) return Response.json(state === 'closed' ? [start, end] : [start]);
+
+      if (path.endsWith('/stream')) {
+        const cursor = request.headers.get('Last-Event-ID') ?? '';
+        cursors.push(cursor);
+
+        if (state === 'refused') return new Response('Stream unavailable', { status: 503 });
+
+        const event: RunEvent = cursor === '0'
+          ? { type: 'step_finish', runId: 'absorbing', eventIndex: 1, timestamp: start.timestamp, stepIndex: 1 }
+          : end;
+
+        return new Response(`event: message\ndata: ${JSON.stringify(event)}\n\n`, {
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      }
+
+      return new Response('Not found', { status: 404 });
+    },
+    websocket: { message(socket, message) {
+      const frame = v.parse(ChatRequestFrameSchema, JSON.parse(message.toString()));
+      socket.send(chatTerminalFrame({ requestId: frame.id, landed: 'mid-turn' }));
+    } },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'spliced send',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await session.connect();
+    const sent = session.prompt('Continue the running task.');
+
+    if (state === 'refused') await expect(sent).rejects.toThrow('HTTP 503');
+    else expect(await sent).toEqual({ landed: 'mid-turn', absorbedBy: state === 'missing' ? null : 'absorbing' });
+    expect(reads).toBe(1);
+    expect(cursors).toEqual(state === 'running' ? ['0', '1'] : state === 'refused' ? ['0'] : []);
+  } finally {
+    await session.teardown();
+    await server.stop(true);
+  }
+});
+
 describe('the public session speaks the frames the web client speaks', () => {
   test('the chat request carries the message, the trigger, and no one-shot flag', () => {
     const frame = decodeFrame(encodeChatRequest({ requestId: 'turn-1', text: 'write note.txt' }));
