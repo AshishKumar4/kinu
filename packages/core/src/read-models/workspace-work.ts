@@ -28,6 +28,7 @@ import { KinuError } from '../obs/error';
 import type { SqlExecutor } from '../types/primitives';
 import type { ChangelogEntry } from '../evolution/changelog';
 import type { MemoryNote } from '../memory/note';
+import type { BackgroundJob } from '../types/jobs';
 import type { PendingAction } from './pending-actions';
 
 
@@ -137,9 +138,7 @@ export function readWorkspaceWork(
 export function hasWorkspaceWork({ work, pending, jobs, changes, notes }: {
   work: WorkspaceWork | null;
   pending: readonly PendingAction[];
-  /** The server's store rows and the UI's protocol rows are different
-   *  BackgroundJob types; this gate only needs to know whether any exist. */
-  jobs: readonly unknown[];
+  jobs: readonly Pick<BackgroundJob, 'id'>[];
   changes: readonly ChangelogEntry[];
   notes: readonly MemoryNote[];
 }): boolean {

@@ -25,7 +25,7 @@
  * every assertion here reads from the same two frames.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
-import type { ElementHandle, Page } from 'puppeteer';
+import type { Page } from 'puppeteer';
 
 import { diagnosticsSettled, recordDiagnostics, withGallery, type Gallery } from './gallery-harness';
 import { codenameFor, parseJsonArray, parseJsonValue, redactPayload, type JsonValue } from '@kinu.run/core';
@@ -1400,19 +1400,23 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.waitForSelector('[role="option"]');
       // A real pointer press: a synthetic DOM click never registers the pick
       // on this select — the option commits on the pointer, not on click().
+      // `$$` + evaluate avoids evaluateHandle's `any`, and the bundled parsel
+      // drops `::-p-text(...)` arguments, so a p-selector can't name the row.
 
-      const picked = await page.evaluateHandle(() =>
-        [...document.querySelectorAll('[role="option"]')]
-          .find((option) => (option.textContent ?? '').trim() === 'High'),
-      );
+      let pickedHigh = false;
 
-      // SAFETY: the evaluate's return was checked to be a DOM Element — the
-      // SDK's asElement() only declares ElementHandle<Node>; its null-or-element
-      // contract carries the Element shape here.
-      const pickedOption = picked.asElement() as ElementHandle<Element> | null;
+      for (const option of await page.$$('[role="option"]')) {
+        const label = await option.evaluate((el) => el.textContent);
 
-      if (!pickedOption) throw new Error('High absent in the thinking-level popup');
-      await pickedOption.click();
+        if ((label ?? '').trim() === 'High') {
+          await option.click();
+          pickedHigh = true;
+          break;
+        }
+      }
+
+      if (!pickedHigh) throw new Error('High absent in the thinking-level popup');
+
       await page.waitForFunction(() => (document.documentElement.dataset.galleryModelCalls ?? '').includes('setReasoningEffort'));
       const calls = await page.evaluate(() => JSON.parse(document.documentElement.dataset.galleryModelCalls ?? '[]'));
       expect(calls).toEqual([{ method: 'setReasoningEffort', args: ['high', 'agent-1'] }]);

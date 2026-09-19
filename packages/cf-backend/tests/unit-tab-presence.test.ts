@@ -179,8 +179,10 @@ describe('the presence read over real ledgers', () => {
     await agent.activateActor();
 
     const tasks = new TaskListStore(agent.harnessSql(), agent.harnessActor(), (write) => write());
-    tasks.add(['done already'], null, 1);
-    tasks.update(tasks.list()[0]!.id, { status: 'done' }, 2);
+    const [task] = tasks.add(['done already'], null, 1).added;
+
+    if (!task) throw new Error('The fixture task was not created');
+    tasks.update(task.id, { status: 'done' }, 2);
 
     expect((await agent.getWorkspaceTabPresence()).work).toBe(true);
   });

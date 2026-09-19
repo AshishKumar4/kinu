@@ -87,7 +87,7 @@ const REACH = 0.17;
 const CORNER_REACH = 1.7;
 
 /** Roots along an edge sit this far apart, before the seeded jitter; a corner holds CORNER_ROOTS of its own. */
-const ROOT_SPACING = 0.026;
+const ROOT_SPACING = 0.016;
 
 const CORNER_ROOTS = 10;
 
