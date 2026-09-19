@@ -48,7 +48,7 @@ describe('guided onboarding renderer', () => {
     const store = createMemoryTuiPreferenceStore();
 
     const scene = (
-      <TuiProductProvider runtime={{ preferenceStore: store, terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+      <TuiProductProvider runtime={{ preferenceStore: store, colorCapability: 'truecolor' }}>
         <GuidedOnboarding
           operations={operations}
           roles={[{ id: 'task', label: 'Task', description: 'General work' }]}
@@ -109,7 +109,7 @@ describe('guided onboarding renderer', () => {
 
     try {
       root.render(
-        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), colorCapability: 'truecolor' }}>
           <GuidedOnboarding
             operations={operations}
             roles={[{ id: 'task', label: 'Task', description: 'General work' }]}
@@ -152,7 +152,7 @@ describe('guided onboarding renderer', () => {
 
     try {
       root.render(
-        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), colorCapability: 'truecolor' }}>
           <GuidedOnboarding
             operations={operations}
             roles={[]}
@@ -205,7 +205,7 @@ describe('guided onboarding renderer', () => {
 
     try {
       root.render(
-        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), colorCapability: 'truecolor' }}>
           <GuidedOnboarding
             operations={operations}
             roles={[{ id: 'task', label: 'Task', description: 'General work' }]}

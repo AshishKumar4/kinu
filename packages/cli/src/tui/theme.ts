@@ -1,6 +1,5 @@
 import { SyntaxStyle } from '@opentui/core';
-import { useRenderer } from '@opentui/react';
-import { createContext, createElement, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, createElement, useContext, useMemo, type ReactNode } from 'react';
 import * as v from 'valibot';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
@@ -33,7 +32,7 @@ export type TerminalColorCapability = 'truecolor' | 'ansi256' | 'ansi16';
  *
  *    One deliberate difference: opentui paints unset text `#FFFFFF` rather
  *    than emitting `39m` (measured on a pty, 2026-09-01), so prose takes the
- *    theme's ink for the detected appearance instead of the terminal's.
+ *    selected theme's ink instead of the terminal's.
  *
  * 2. Every colour is the web app's (`packages/cf-backend/src/index.css`, the
  *    `:root` dark block and the `[data-mode="light"]` block). A terminal has
@@ -153,13 +152,10 @@ export interface TuiThemeDefinition {
   readonly colors: TuiThemeColors;
 }
 
-export type ThemeSelection =
-  | { readonly mode: 'theme'; readonly themeId: string }
-  | {
-      readonly mode: 'system';
-      readonly darkThemeId: string;
-      readonly lightThemeId: string;
-    };
+export interface ThemeSelection {
+  readonly mode: 'theme';
+  readonly themeId: string;
+}
 
 export interface ThemeRegistry {
   readonly themes: readonly TuiThemeDefinition[];
@@ -171,22 +167,15 @@ const DEFAULT_DARK_TUI_THEME_ID = 'kinu-dark-solid';
 const DEFAULT_LIGHT_TUI_THEME_ID = 'kinu-light-solid';
 
 /**
- * What a fresh install paints: the web app's own canvas, chrome and cards,
- * whole. A panel keeps its edge and fill on every terminal, including one
- * whose background the ink set was never designed for. The transparent
- * presets stay in the picker for terminals that want their own background
- * to show through.
+ * What a fresh install paints, and what the onboarding theme step opens on:
+ * the web app's own dark canvas, chrome and cards, whole. A panel keeps its
+ * edge and fill on every terminal, including one whose background the ink set
+ * was never designed for. The transparent presets stay in the picker for
+ * terminals that want their own background to show through.
  */
 export const DEFAULT_TUI_THEME_SELECTION: ThemeSelection = Object.freeze({
   mode: 'theme',
-  themeId: DEFAULT_LIGHT_TUI_THEME_ID,
-});
-
-/** The optional appearance-following selection the picker offers explicitly. */
-export const SYSTEM_TUI_THEME_SELECTION: ThemeSelection = Object.freeze({
-  mode: 'system',
-  darkThemeId: DEFAULT_DARK_TUI_THEME_ID,
-  lightThemeId: DEFAULT_LIGHT_TUI_THEME_ID,
+  themeId: DEFAULT_DARK_TUI_THEME_ID,
 });
 
 /**
@@ -463,9 +452,9 @@ const HIGH_CONTRAST: TuiThemeDefinition = {
 };
 
 /**
- * Order matters twice: the picker lists themes in it, and `themeOrDefault`
- * takes the first theme of the terminal's appearance when a selection names
- * a theme that is gone, so the painted default of each appearance leads it.
+ * Order matters twice: the picker lists themes in it, and a selection naming
+ * a theme that is gone falls back to the first entry when the dark default
+ * itself is missing, so the painted defaults lead it.
  */
 export const BUILTIN_TUI_THEMES: readonly TuiThemeDefinition[] = Object.freeze([
   KINU_LIGHT_SOLID,
@@ -564,8 +553,8 @@ export function createThemeRegistry(themes: readonly TuiThemeDefinition[]): Them
 const DEFAULT_THEME_REGISTRY = createThemeRegistry(BUILTIN_TUI_THEMES);
 
 /**
- * The theme a selection names, or the appearance-appropriate default when it
- * names one this registry does not have.
+ * The theme a selection names, or the default when it names one this registry
+ * does not have.
  *
  * `tui.json` is a file a person edits, and its schema can only check that
  * `themeId` is a non-empty string — registry membership is not a fact the
@@ -577,49 +566,29 @@ const DEFAULT_THEME_REGISTRY = createThemeRegistry(BUILTIN_TUI_THEMES);
  * falling back silently would leave someone wondering why their theme stopped
  * applying.
  */
-function themeOrDefault(
+function resolveThemeSelection(
   registry: ThemeRegistry,
-  themeId: string,
-  terminalAppearance: ThemeAppearance,
+  selection: ThemeSelection,
 ): TuiThemeDefinition {
-  const known = registry.themes.find((candidate) => candidate.id === themeId);
+  const known = registry.themes.find((candidate) => candidate.id === selection.themeId);
 
   if (known !== undefined) return known;
 
-  const fallback = registry.themes.find((candidate) => candidate.appearance === terminalAppearance)
+  const fallback = registry.themes.find((candidate) => candidate.id === DEFAULT_DARK_TUI_THEME_ID)
     ?? registry.themes[0];
 
   if (fallback === undefined) throw new Error('the TUI theme registry is empty');
   diagnostics.failure(
     'tui.theme_absent',
     toKinuError({
-      doing: `resolving the selected TUI theme ${themeId}`,
-      cause: new Error(`no theme with id ${themeId} is registered`),
+      doing: `resolving the selected TUI theme ${selection.themeId}`,
+      cause: new Error(`no theme with id ${selection.themeId} is registered`),
       otherwise: 'bad_input',
     }),
-    { selected: themeId, applied: fallback.id },
+    { selected: selection.themeId, applied: fallback.id },
   );
 
   return fallback;
-}
-
-export function resolveThemeSelection(
-  registry: ThemeRegistry,
-  selection: ThemeSelection,
-  terminalAppearance: ThemeAppearance,
-): TuiThemeDefinition {
-  if (selection.mode === 'theme') {
-    return themeOrDefault(registry, selection.themeId, terminalAppearance);
-  }
-
-  const wanted = terminalAppearance === 'dark' ? selection.darkThemeId : selection.lightThemeId;
-  const theme = themeOrDefault(registry, wanted, terminalAppearance);
-
-  if (theme.appearance !== terminalAppearance) {
-    throw new Error(`System ${terminalAppearance} selection resolved ${theme.id}, which is ${theme.appearance}.`);
-  }
-
-  return theme;
 }
 
 
@@ -725,48 +694,6 @@ function themeContrastFailures(theme: TuiThemeDefinition): string[] {
   ));
 }
 
-/**
- * The terminal's appearance when it has not answered the renderer's OSC 11
- * query: `COLORFGBG` (a background index below 8 is dark), else dark. The
- * same tiers, in the same order, as omp's `detectTerminalBackground`
- * (`https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/modes/theme/theme.ts`): its tier 1 is the OSC
- * 11 luminance the renderer supplies here, its tier 2 is this env var, and
- * its last answer is dark.
- */
-function appearanceFromEnvironment(
-  environment: Readonly<Record<string, string | undefined>> = process.env,
-): ThemeAppearance {
-  const colorFgBg = environment.COLORFGBG?.split(';');
-  const background = colorFgBg !== undefined && colorFgBg.length >= 2 ? Number.parseInt(colorFgBg[1]!, 10) : Number.NaN;
-
-  if (!Number.isNaN(background)) return background < 8 ? 'dark' : 'light';
-
-  return 'dark';
-}
-
-/**
- * The appearance the terminal reports. The renderer queries OSC 10/11 at
- * start and re-queries on a DEC 2031 notification, classifying the answered
- * background by BT.601 brightness above 128 — the mechanism omp implements
- * itself in `https://github.com/can1357/oh-my-pi/blob/main/packages/tui/src/terminal.ts` (`#startDirectOsc11Query`,
- * `#handleOsc11Response`). Until an answer arrives, the environment decides.
- */
-function useTerminalAppearance(override?: ThemeAppearance): ThemeAppearance {
-  const renderer = useRenderer();
-  const [reported, setReported] = useState<ThemeAppearance | null>(() => renderer.themeMode);
-  useEffect(() => {
-    setReported(renderer.themeMode);
-    const onThemeMode = (mode: ThemeAppearance) => setReported(mode);
-    renderer.on('theme_mode', onThemeMode);
-
-    return () => {
-      renderer.off('theme_mode', onThemeMode);
-    };
-  }, [renderer]);
-
-  return override ?? reported ?? appearanceFromEnvironment();
-}
-
 function detectTerminalColorCapability(environment: Readonly<Record<string, string | undefined>> = process.env): TerminalColorCapability {
   const colorTerm = environment.COLORTERM?.toLowerCase() ?? '';
 
@@ -831,8 +758,6 @@ export interface ActiveTuiTheme {
   readonly definition: TuiThemeDefinition;
   readonly colors: TuiThemeColors;
   readonly markdownSyntax: SyntaxStyle;
-  /** What a `system` selection follows right now. */
-  readonly terminalAppearance: ThemeAppearance;
   readonly registry: ThemeRegistry;
 }
 
@@ -840,7 +765,6 @@ const DEFAULT_ACTIVE_THEME: ActiveTuiTheme = Object.freeze({
   definition: KINU_DARK,
   colors: KINU_DARK.colors,
   markdownSyntax: markdownSyntaxForTheme(KINU_DARK),
-  terminalAppearance: 'dark',
   registry: DEFAULT_THEME_REGISTRY,
 });
 
@@ -849,26 +773,23 @@ const ThemeContext = createContext<ActiveTuiTheme>(DEFAULT_ACTIVE_THEME);
 export function TuiThemeProvider(props: {
   readonly registry?: ThemeRegistry;
   readonly selection?: ThemeSelection;
-  readonly terminalAppearance?: ThemeAppearance;
   readonly colorCapability?: TerminalColorCapability;
   readonly children: ReactNode;
 }) {
   const registry = props.registry ?? DEFAULT_THEME_REGISTRY;
   const selection = props.selection ?? DEFAULT_TUI_THEME_SELECTION;
-  const appearance = useTerminalAppearance(props.terminalAppearance);
   const capability = props.colorCapability ?? detectTerminalColorCapability();
 
   const active = useMemo(() => {
-    const definition = projectTheme(resolveThemeSelection(registry, selection, appearance), capability);
+    const definition = projectTheme(resolveThemeSelection(registry, selection), capability);
 
     return Object.freeze({
       definition,
       colors: definition.colors,
       markdownSyntax: markdownSyntaxForTheme(definition),
-      terminalAppearance: appearance,
       registry,
     });
-  }, [appearance, capability, registry, selection]);
+  }, [capability, registry, selection]);
 
   return createElement(ThemeContext.Provider, { value: active }, props.children);
 }

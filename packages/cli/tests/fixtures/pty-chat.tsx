@@ -57,8 +57,6 @@ const agent = fakeClient({
 
 const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
 
-await renderer.waitForThemeMode(250);
-
 createRoot(renderer).render(
   <ChatApp
     client={agent.client}

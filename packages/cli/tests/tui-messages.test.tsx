@@ -190,7 +190,7 @@ describe('TUI transcript rendering', () => {
 
       try {
         root.render(
-          <TuiThemeProvider selection={{ mode: 'theme', themeId }} terminalAppearance={theme.appearance} colorCapability="truecolor">
+          <TuiThemeProvider selection={{ mode: 'theme', themeId }} colorCapability="truecolor">
             <box style={{ width: '100%', height: '100%' }}>
               <MessageList
                 messages={[{ id: 'a1', role: 'assistant', content: 'PROSELINE around the block\n\n```ts\nconst FENCED = 1;\n```' }]}
@@ -237,7 +237,7 @@ describe('TUI transcript rendering', () => {
       pick = setThemeId;
 
       return (
-        <TuiThemeProvider selection={{ mode: 'theme', themeId }} terminalAppearance={themeId === 'kinu-light' ? 'light' : 'dark'} colorCapability="truecolor">
+        <TuiThemeProvider selection={{ mode: 'theme', themeId }} colorCapability="truecolor">
           <box style={{ width: '100%', height: '100%' }}>
             <MessageList messages={[{ id: 'a1', role: 'assistant', content: 'PROSELINE\n\n```ts\nconst FENCED = 1;\n```' }]} />
           </box>

@@ -754,7 +754,7 @@ function createDefaultOnboarding(
         providerConnected,
         defaultModel: profile?.catalog.tiers.default.model,
         tierAliasesResolved: profile !== null,
-        themeSelected: true,
+        themeSelected: current.theme !== undefined,
         keymapSelected: true,
         workspaceCount: listKnownAgents().length,
         skippedSteps: current.skippedOnboardingSteps,
@@ -827,7 +827,6 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
   installTurnDiagnostics();
   requireInteractiveTerminal();
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
-  await renderer.waitForThemeMode(250);
   const root = createRoot(renderer);
   const { promise, resolve } = Promise.withResolvers<HomeTuiAction>();
 

@@ -22,7 +22,6 @@ import {
   createThemeRegistry,
   parseCustomTheme,
   useTuiTheme,
-  type ThemeAppearance,
   type ThemeSelection,
   type TuiThemeDefinition,
 } from '../src/tui/theme';
@@ -213,18 +212,8 @@ describe('TUI product registries', () => {
     expect(() => createThemeRegistry([invisible])).toThrow(/text\.primary\/background\.overlay contrast/);
   });
 
-  test('the default theme remains painted light regardless of terminal appearance', async () => {
-    for (const appearance of ['dark', 'light'] as const) {
-      expect(await renderedThemeId(appearance)).toBe('kinu-light-solid');
-    }
-  });
-
-  test('the selectable system theme follows terminal appearance', async () => {
-    const system: ThemeSelection = { mode: 'system', darkThemeId: 'kinu-dark-solid', lightThemeId: 'kinu-light-solid' };
-
-    for (const [appearance, expected] of [['dark', 'kinu-dark-solid'], ['light', 'kinu-light-solid']] as const) {
-      expect(await renderedThemeId(appearance, system)).toBe(expected);
-    }
+  test('nothing selected paints the dark default', async () => {
+    expect(await renderedThemeId()).toBe('kinu-dark-solid');
   });
 
   test('a selection naming a theme that is gone paints the default instead of crashing', async () => {
@@ -232,10 +221,8 @@ describe('TUI product registries', () => {
     // is a non-empty string, so a deleted or renamed custom theme leaves a live
     // selection pointing at nothing. That threw inside the provider's useMemo
     // and took the whole TUI down at first render.
-    expect(await renderedThemeId('dark', { mode: 'theme', themeId: 'deleted-custom-theme' }))
+    expect(await renderedThemeId({ mode: 'theme', themeId: 'deleted-custom-theme' }))
       .toBe('kinu-dark-solid');
-    expect(await renderedThemeId('light', { mode: 'theme', themeId: 'deleted-custom-theme' }))
-      .toBe('kinu-light-solid');
   });
 
   test('custom themes reject malformed colors and unknown fields', () => {
@@ -270,11 +257,10 @@ describe('adaptive TUI shell', () => {
 });
 
 
-/** The theme the provider hands its children for a system selection, read the
- *  way every TUI surface reads it — through `useTuiTheme` under a mounted
- *  provider, so the terminal-appearance resolution really runs. */
+/** The theme the provider hands its children, read the way every TUI surface
+ *  reads it — through `useTuiTheme` under a mounted provider, so the real
+ *  resolution runs. */
 async function renderedThemeId(
-  appearance: ThemeAppearance,
   selection: ThemeSelection = DEFAULT_TUI_THEME_SELECTION,
 ): Promise<string> {
   const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
@@ -291,7 +277,6 @@ async function renderedThemeId(
       <TuiThemeProvider
         registry={createThemeRegistry(BUILTIN_TUI_THEMES)}
         selection={selection}
-        terminalAppearance={appearance}
         colorCapability="truecolor"
       >
         <ActiveThemeProbe />
@@ -306,7 +291,7 @@ async function renderedThemeId(
       await Bun.sleep(5);
     }
 
-    throw new Error(`the theme probe never painted for a ${appearance} terminal`);
+    throw new Error(`the theme probe never painted ${selection.themeId}`);
   } finally {
     flushSync(() => { root.unmount(); });
     renderer.destroy();

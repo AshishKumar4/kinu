@@ -10,7 +10,7 @@ import {
   type KeymapPresetId,
   type TuiActionId,
 } from './actions';
-import { DEFAULT_TUI_THEME_SELECTION, type ThemeSelection } from './theme';
+import type { ThemeSelection } from './theme';
 
 export const ONBOARDING_STEP_IDS = [
   'location',
@@ -26,7 +26,9 @@ export type OnboardingStepId = (typeof ONBOARDING_STEP_IDS)[number];
 export type WorkspaceLocationChoice = 'cloud' | 'local' | 'both';
 
 export interface TuiPreferences {
-  readonly theme: ThemeSelection;
+  /** Absent until the person picks one; onboarding's theme step is what
+   *  absence means, and the TUI paints the default meanwhile. */
+  readonly theme?: ThemeSelection;
   readonly keymapPreset: KeymapPresetId;
   readonly keyOverrides: KeymapOverrides;
   readonly wideSidebarOpen: boolean;
@@ -41,7 +43,6 @@ export interface TuiPreferenceStore {
 }
 
 const DEFAULT_TUI_PREFERENCES: TuiPreferences = Object.freeze({
-  theme: DEFAULT_TUI_THEME_SELECTION,
   keymapPreset: 'pi-omp',
   keyOverrides: Object.freeze({}),
   wideSidebarOpen: true,
@@ -66,17 +67,20 @@ export function createFileTuiPreferenceStore(path = join(AGENT_HOME, 'tui.json')
 }
 
 
-const ThemeSelectionSchema = v.variant('mode', [
-  v.strictObject({
+/**
+ * A theme selection, or nothing. `v.fallback` rather than a bare optional:
+ * the file may still hold a selection of a shape this version no longer has
+ * (the retired appearance-following one), and a preference file written by an
+ * older Kinu must not take the whole TUI down over it. An unreadable value is
+ * no selection, which is exactly what onboarding's theme step answers.
+ */
+const ThemeSelectionSchema = v.fallback(
+  v.optional(v.strictObject({
     mode: v.literal('theme'),
     themeId: v.pipe(v.string(), v.minLength(1)),
-  }),
-  v.strictObject({
-    mode: v.literal('system'),
-    darkThemeId: v.pipe(v.string(), v.minLength(1)),
-    lightThemeId: v.pipe(v.string(), v.minLength(1)),
-  }),
-]);
+  })),
+  undefined,
+);
 
 const KeyOverrideSchema = v.record(
   v.string(),

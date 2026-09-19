@@ -94,7 +94,7 @@ import { initialInputState, reduceInput, type InputEffect, type InputMachineEven
 import { agentDisplayLabel, clipText } from '@kinu.run/core';
 import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import { buildAgentHubEntries, HubOverlay, type TuiHubData, type TuiHubView } from './hubs';
-import { useTuiTheme, type ThemeSelection } from './theme';
+import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
 import {
   TuiProductProvider,
   TuiShell,
@@ -385,7 +385,7 @@ function ChatScene({
         id: 'theme',
         group: 'Appearance',
         label: 'Theme',
-        value: preferences.theme.mode === 'system' ? `follows the terminal · ${activeTheme.label}` : activeTheme.label,
+        value: activeTheme.label,
         command: '/theme',
       },
     ];
@@ -410,7 +410,7 @@ function ChatScene({
     }
 
     return rows;
-  }, [activeTheme.label, client, efforts, modelSpec, preferences.theme.mode, status?.reasoningEffort]);
+  }, [activeTheme.label, client, efforts, modelSpec, status?.reasoningEffort]);
 
   useEffect(() => {
     if (activeSurface?.kind !== 'model') modelRequestRef.current += 1;
@@ -1826,7 +1826,7 @@ function ChatScene({
       ) : themePickerOpen ? (
         <ThemePickerOverlay
           terminal={{ width: sceneWidth, height }}
-          selection={preferences.theme}
+          selection={preferences.theme ?? DEFAULT_TUI_THEME_SELECTION}
           onSelect={(selection: ThemeSelection) => {
             setActiveSurface(null);
             updatePreferences((current) => ({ ...current, theme: selection }));
@@ -1969,10 +1969,6 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   const hubData = opts.hubData ?? await loadHubData(opts.client);
   const renderOptions: ChatAppOpts = { ...opts, hubData };
   const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
-  // The renderer asks the terminal for its background (OSC 11) as it sets
-  // up. Wait for the answer, bounded by the renderer's own query timeout, so
-  // the first frame already carries the right ink set instead of repainting.
-  await renderer.waitForThemeMode(250);
   const root = createRoot(renderer);
   let currentClient = opts.client;
 

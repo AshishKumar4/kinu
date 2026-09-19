@@ -16,7 +16,7 @@ import {
   type OnboardingStepId,
   type WorkspaceLocationChoice,
 } from './preferences';
-import { SYSTEM_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
+import { useTuiTheme, type ThemeAppearance, type ThemeSelection } from './theme';
 
 export interface OnboardingReadiness {
   readonly location?: WorkspaceLocationChoice;
@@ -55,6 +55,19 @@ export interface TuiOnboardingOperations {
   selectKeymap(presetId: KeymapPresetId): void | Promise<void>;
   createWorkspace(input: OnboardingWorkspaceInput): void | Promise<void>;
   skip(step: OnboardingStepId): void | Promise<void>;
+}
+
+const THEME_APPEARANCES: readonly ThemeAppearance[] = Object.freeze(['light', 'dark']);
+
+const THEME_GROUP_LABELS: Readonly<Record<ThemeAppearance, string>> = Object.freeze({
+  light: 'Light',
+  dark: 'Dark',
+});
+
+interface ThemeChoiceRow {
+  readonly appearance: ThemeAppearance;
+  readonly label: string;
+  readonly selection: ThemeSelection;
 }
 
 interface DerivedOnboardingState {
@@ -158,10 +171,18 @@ export function GuidedOnboarding(props: {
 
   const { registry } = useTuiTheme();
 
-  const themeChoices = useMemo<ReadonlyArray<{ readonly label: string; readonly selection: ThemeSelection }>>(() => [
-    { label: 'Follow the terminal', selection: SYSTEM_TUI_THEME_SELECTION },
-    ...registry.themes.map((theme) => ({ label: theme.label, selection: { mode: 'theme' as const, themeId: theme.id } })),
-  ], [registry]);
+  // Light first, then dark, each group in registry order: the step is a flat
+  // cursor over the themes with the two headings drawn between them, so the
+  // selected index never has to skip a row that cannot be chosen.
+  const themeChoices = useMemo<readonly ThemeChoiceRow[]>(() => (
+    THEME_APPEARANCES.flatMap((appearance) => registry.themes
+      .filter((theme) => theme.appearance === appearance)
+      .map((theme) => ({
+        appearance,
+        label: theme.label,
+        selection: { mode: 'theme' as const, themeId: theme.id },
+      })))
+  ), [registry]);
 
   const choices = activeStep === 'location'
     ? (['cloud', 'local', 'both'] as const)
@@ -321,8 +342,15 @@ export function GuidedOnboarding(props: {
         {activeStep === 'theme' && (
           <>
             <text><strong fg={colors.text.strong}>Choose a theme</strong></text>
-            <text><span fg={colors.text.muted}>Follow the terminal takes the light or dark set to match it. /theme changes it later.</span></text>
-            {themeChoices.map((choice, index) => <ChoiceRow key={choice.label} label={choice.label} selected={index === selectedIndex} />)}
+            <text><span fg={colors.text.muted}>/theme changes it later.</span></text>
+            {themeChoices.map((choice, index) => (
+              <box key={choice.selection.themeId} flexDirection="column">
+                {themeChoices[index - 1]?.appearance !== choice.appearance && (
+                  <text><span fg={colors.text.muted}>{THEME_GROUP_LABELS[choice.appearance]}</span></text>
+                )}
+                <ChoiceRow label={choice.label} selected={index === selectedIndex} />
+              </box>
+            ))}
           </>
         )}
         {activeStep === 'keymap' && (

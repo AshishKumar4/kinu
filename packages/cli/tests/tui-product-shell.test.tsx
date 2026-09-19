@@ -82,7 +82,7 @@ function GroupedShellProbe(props: {
   };
 
   return (
-    <TuiProductProvider runtime={{ preferenceStore: props.store, terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+    <TuiProductProvider runtime={{ preferenceStore: props.store, colorCapability: 'truecolor' }}>
       <TuiShell
         scene="chat"
         roster={roster}
@@ -566,7 +566,7 @@ function ShellProbe(props: {
   };
 
   return (
-    <TuiProductProvider runtime={{ preferenceStore: props.store, terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+    <TuiProductProvider runtime={{ preferenceStore: props.store, colorCapability: 'truecolor' }}>
       <TuiShell
         scene="chat"
         roster={roster}
@@ -623,7 +623,7 @@ function RosterFailureProbe(props: { readonly store: TuiPreferenceStore; readonl
   failingRoster = roster;
 
   return (
-    <TuiProductProvider runtime={{ preferenceStore: props.store, terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+    <TuiProductProvider runtime={{ preferenceStore: props.store, colorCapability: 'truecolor' }}>
       <TuiShell
         scene="chat"
         roster={roster}
