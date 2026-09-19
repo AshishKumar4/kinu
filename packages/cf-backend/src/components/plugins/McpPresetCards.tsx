@@ -9,10 +9,8 @@
  * which opens in a new tab (the same pattern the add form uses). `token`
  * presets expand one labelled field. Removal is the ordinary server remove.
  */
-import { useState, type ComponentType } from "react";
-import {
-  ArrowSquareOutIcon, GithubLogoIcon, TrashIcon,
-} from "@phosphor-icons/react";
+import { useState } from "react";
+import { ArrowSquareOutIcon, TrashIcon } from "@phosphor-icons/react";
 import {
   MCP_PRESETS, type McpPreset, type McpPresetId,
 } from "@kinu.run/core";
@@ -22,36 +20,15 @@ import {
 } from "@/lib/user-api";
 import { inputCls } from "@/components/ui/form";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
+import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
-/** Cloudflare's cloud in its own two oranges — the mark phosphor does not carry. */
-function CloudflareMark({ size = 20, className }: { size?: number; className?: string }) {
-  return (
-    <svg viewBox="0 0 256 256" width={size} height={size} className={className} aria-hidden="true">
-      <path d="M196,68a40,40,0,0,0-39.6,45.2A60,60,0,0,1,196,68Z" fill="#fbad41" />
-      <path d="M180,124a44,44,0,0,0-43.6,38H60a36,36,0,1,1,13.5-69.6A56,56,0,0,1,180,124Z" fill="#f6821f" />
-    </svg>
-  );
-}
-
-/** Google's four-colour G. */
-function GoogleMark({ size = 20, className }: { size?: number; className?: string }) {
-  return (
-    <svg viewBox="0 0 48 48" width={size} height={size} className={className} aria-hidden="true">
-      <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z" />
-      <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.2 5.5-4.7 7.2l7.5 5.8C43.9 38 46.5 31.8 46.5 24.5z" />
-      <path fill="#FBBC05" d="M10.5 28.7A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.7l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.8l7.9-6.1z" />
-      <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.9 2.3-8.4 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z" />
-    </svg>
-  );
-}
-
-/** Each provider in its own colours on its own tile, so the page reads as
- *  the services it names rather than as one grey grid. */
-const PRESET_MARK: Record<McpPresetId, { Icon: ComponentType<{ size?: number; className?: string }>; tile: string }> = {
-  github: { Icon: GithubLogoIcon, tile: "bg-[#24292f] text-[#f0f6fc]" },
-  cloudflare: { Icon: CloudflareMark, tile: "bg-[#f6821f]/15" },
-  google: { Icon: GoogleMark, tile: "bg-white" },
+/** Each provider's official mark; the tile is the brand's own — a mark drawn
+ *  in its own hex reads on the tile BrandMark picks for it in either theme. */
+const PRESET_MARK: Record<McpPresetId, BrandName> = {
+  github: "github",
+  cloudflare: "cloudflare",
+  google: "google",
 };
 
 /** The one status a preset card says. Rows that are mid-flight still read as
@@ -87,7 +64,7 @@ function PresetCard({ preset, server, appConfigured, onChanged }: {
   const [err, setErr] = useState<string | null>(null);
 
   const { word, dot } = presetWord(server);
-  const { Icon, tile } = PRESET_MARK[preset.id];
+  const brand = PRESET_MARK[preset.id];
   const added = server !== undefined;
 
   // Sign-in exists for every preset that answers an authorize URL: 'oauth'
@@ -142,9 +119,7 @@ function PresetCard({ preset, server, appConfigured, onChanged }: {
 
   return (
     <div className="p-card flex items-start gap-3 p-4" data-mcp-preset={preset.id}>
-      <div className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${tile}`}>
-        <Icon size={20} />
-      </div>
+      <BrandMark brand={brand} size={20} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <div className="truncate p-row-text font-medium p-text">{preset.title}</div>

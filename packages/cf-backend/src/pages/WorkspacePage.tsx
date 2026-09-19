@@ -133,7 +133,7 @@ export function ConversationSkeleton() {
  * Device card. A device is connected and this workspace has no binding on it
  * yet, so the agent's action is waiting on the owner. One question: use this
  * machine for this workspace? "Use <device>" IS the binding, per
- * workspace, revocable under Account settings → Devices. The card names
+ * workspace, revocable on the Devices page. The card names
  * no tier, because a binding has none: what a command may reach is the
  * machine's own Sandbox setting, set on the device row.
  */
@@ -153,7 +153,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
           </div>
           <code className="block mt-1 p-t-code p-text-2 break-all p-fill rounded-sm px-2 py-1">{consent.command || "(command)"}</code>
           <div className="mt-1 p-meta p-text-3">
-            Commands use {consent.deviceLabel}'s Sandbox setting. Revoke access under Account settings → Devices.
+            Commands use {consent.deviceLabel}'s Sandbox setting. Revoke access on the Devices page.
           </div>
         </div>
       </div>
@@ -161,7 +161,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
           command. "Always" on an exec would record full filesystem and shell
           access forever, from every ingress the workspace consumes, in answer
           to a question about a single `printf`. For an exec the card offers
-          once or deny, and the standing decision lives in Account settings. */}
+          once or deny, and the standing decision lives on the Devices page. */}
       <div className="flex items-center gap-2 mt-2.5 justify-end">
         <button onClick={() => onResolve(consent.consentId, "deny")}
             className="px-2.5 py-1 p-t-control rounded-md p-text-3 hover:p-text">Not now</button>

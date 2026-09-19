@@ -83,6 +83,9 @@ export interface ForkNode {
  * it mounts.
  */
 export interface TabPresence {
+	/** The work lane holds renderable content — plans, tasks (retained
+	 *  history counts), pending actions, jobs, changes, or notes. */
+	work: boolean;
 	/** The release lane holds at least one change. */
 	releases: boolean;
 	/** At least one exploration run exists in the run list. */

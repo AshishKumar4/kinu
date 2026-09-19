@@ -18,7 +18,8 @@ import { PlusIcon, SidebarSimpleIcon } from "@phosphor-icons/react";
 import { useAccount } from "@/hooks/use-account";
 import { lastValue } from "@/hooks/use-async-resource";
 import { KinuMark } from "./ui/KinuLogo";
-import Sidebar, { PRIMARY_NAV } from "./Sidebar";
+import Sidebar from "./Sidebar";
+import { PRIMARY_NAV } from "./nav";
 
 const RAIL_KEY = "kinu:rail-open";
 

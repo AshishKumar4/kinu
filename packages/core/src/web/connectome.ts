@@ -78,13 +78,16 @@ const SIGNAL_TAIL = 0.012;
 
 /** How far in from the nearest edge the mat reaches, in view width units;
  *  the rim's density falls to nothing here. A corner reaches CORNER_REACH
- *  times further, which is what makes the corners densest. */
-const REACH = 0.22;
+ *  times further, which is what makes the corners densest. The mat reads
+ *  as a frame around the content: most of its mass lives in the outer
+ *  band, so the reach is shallow and the falloff steep — the centre
+ *  column stays sparse. */
+const REACH = 0.17;
 
 const CORNER_REACH = 1.7;
 
 /** Roots along an edge sit this far apart, before the seeded jitter; a corner holds CORNER_ROOTS of its own. */
-const ROOT_SPACING = 0.026;
+const ROOT_SPACING = 0.016;
 
 const CORNER_ROOTS = 10;
 
@@ -119,11 +122,13 @@ const SIGNAL_ALPHA = 0.42;
 
 /** The pointer's reach over the tissue, in view width units: inside it the
  *  mat answers. Apart from the hero tree's own reach on purpose: the tree
- *  bends tips under a cursor, the tissue holds whole strokes. */
-const TISSUE_REACH = 0.12;
+ *  bends tips under a cursor, the tissue holds whole strokes. The disc is
+ *  wide enough that a cursor anywhere off-centre is felt, not just near
+ *  the rim. */
+const TISSUE_REACH = 0.16;
 
 /** How far a tissue stroke bends toward the pointer at most, in view widths. */
-const TISSUE_BEND = 0.015;
+const TISSUE_BEND = 0.028;
 
 /** How fast the pointer's hold eases in and out, per second. */
 const POINTER_RATE = 7;
@@ -581,7 +586,7 @@ export class Connectome {
       if (nx < -0.015 || nx > 1.015 || ny < -0.015 || ny > 1.015 || this.edges.length >= this.budget) return;
       const rimHere = this.rimOf(nx, ny);
 
-      if (rimHere < 0.03 || this.random() > 0.3 + 0.7 * rimHere) return;
+      if (rimHere < 0.03 || this.random() > 0.08 + 0.92 * rimHere * rimHere) return;
       const id = this.plant(from, shoot.generation, nx, ny);
       this.link(from, id, shoot.generation);
 
@@ -597,7 +602,7 @@ export class Connectome {
     if (shoot.generation >= MAX_GENERATION) return;
     const rim = this.rimOf(x, y);
     const roll = this.random();
-    const children = roll < 0.45 + 0.35 * rim ? 2 : roll < 0.93 ? 1 : 0;
+    const children = roll < 0.35 + 0.45 * rim ? 2 : roll < 0.95 ? 1 : 0;
 
     for (let child = 0; child < children; child += 1) {
       const side = children === 2 ? (child === 0 ? -1 : 1) : (this.random() < 0.5 ? -1 : 1);
@@ -906,6 +911,51 @@ export class Connectome {
 
     if (node !== undefined && edge !== undefined) {
       this.launch(nearest, edge, -1, 10, AMPLITUDE_LOW + this.random() * (AMPLITUDE_HIGH - AMPLITUDE_LOW));
+    }
+  }
+
+  /** A click — a pointer press, not a move — sends a front out from the
+   *  point: the nearest nodes each send a grain down the edge that leads
+   *  AWAY from the click, so the wave travels outward through the mat. */
+  click(x: number, y: number): void {
+    const near: Array<{ id: number; gap: number }> = [];
+
+    for (let id = 0; id < this.nodes.length; id += 1) {
+      const node = this.nodes[id];
+
+      if (node === undefined) continue;
+      const gap = this.distance(node.hx, node.hy, x, y);
+
+      if (gap < TISSUE_REACH * 1.4) near.push({ id, gap });
+    }
+
+    near.sort((a, b) => a.gap - b.gap);
+
+    for (const { id } of near.slice(0, 14)) {
+      const node = this.nodes[id];
+
+      if (node === undefined) continue;
+
+      // The outward way: the edge whose far end lies farther from the click.
+      let best: number | null = null;
+      let farthest = 0;
+
+      for (const edgeId of node.edges) {
+        const edge = this.edges[edgeId];
+
+        if (edge === undefined) continue;
+        const far = this.nodes[edge.a === id ? edge.b : edge.a];
+
+        if (far === undefined) continue;
+        const gap = this.distance(far.hx, far.hy, x, y);
+
+        if (gap > farthest) {
+          farthest = gap;
+          best = edgeId;
+        }
+      }
+
+      if (best !== null) this.launch(id, best, -1, 14, 1.5);
     }
   }
 

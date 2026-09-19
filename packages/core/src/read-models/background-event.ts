@@ -34,8 +34,8 @@ import * as v from 'valibot';
 /** A turn the backend enqueued, never typed by the operator. `system_event` is
  *  the rest: harness-authored, with no card of its own. */
 export type ClassifiedProgrammaticTurn =
-  | { kind: "event_drain" }
   | { kind: "workspace_created" }
+  | { kind: "event_drain" }
   | { kind: "background_job"; jobKind: string; status: string }
   | { kind: "deferred_approval"; decision: string; count: number }
   | { kind: "advisor"; severity: AdvisorSeverity }
@@ -95,10 +95,10 @@ export function classifyProgrammaticTurn<Metadata>(
   const turn = parsed.success ? parsed.output : {};
 
   switch (turn.kinuEvent) {
-    case "event_drain":
-      return { kind: "event_drain" };
     case "workspace_created":
       return { kind: "workspace_created" };
+    case "event_drain":
+      return { kind: "event_drain" };
     case "background_job":
       return {
         kind: "background_job",

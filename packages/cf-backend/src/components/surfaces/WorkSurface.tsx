@@ -28,11 +28,10 @@ import { ActivitySurface } from "./ActivitySurface";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
-import { SLATE_PREFIX, resolveGatedSurface, surfaceHasContent } from "./presence";
+import { SLATE_PREFIX, SURFACES, firstVisibleSurface, resolveGatedSurface, surfaceHasContent } from "./presence";
 import { useSurfaceFocus } from "./use-surface-focus";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
-const SURFACES = ["Work", "Diffs", "Files", "Releases", "Swarms", "Agent", "Environment"] as const;
 
 /** Not one of the segmented work surfaces: Activity is about the run rather
  *  than a place to work in it, so it sits apart at the right of the strip and
@@ -152,9 +151,9 @@ export function WorkSurface(props: WorkSurfaceProps) {
     const duplicate = surface.startsWith("preview:workspace:") ? props.slates?.find(slate => `preview:workspace:${slate.port}` === surface) : undefined;
 
     const resolved = duplicate ? slateSurface(duplicate.id)
-      : surface === "Diffs" && !hasDiffs ? "Work"
-      : surface.startsWith("preview:") && !openPort ? "Work"
-      : resolveGatedSurface(surface, props.tabPresence, props.mctsTrees, props.slates);
+      : surface.startsWith("preview:") && !openPort
+        ? firstVisibleSurface(props.tabPresence, props.mctsTrees, props.slates, hasDiffs)
+        : resolveGatedSurface(surface, props.tabPresence, props.mctsTrees, props.slates, hasDiffs);
 
     if (resolved !== surface) focus.navigate(resolved);
   }, [surface, focus.navigate, props.tabPresence, props.mctsTrees, props.slates, hasDiffs, openPort]);
@@ -228,7 +227,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               aria-current={surface === kind ? "true" : undefined}
               className={`${tabCls} text-left shrink-0 ${surface === kind ? "p-tab-active" : ""}`}>{title}</button>;
           })}
-          {SURFACES.filter(s => (s !== "Diffs" || hasDiffs) && surfaceHasContent(s, props.tabPresence, props.mctsTrees, props.slates)).map(s => (
+          {SURFACES.filter(s => surfaceHasContent(s, props.tabPresence, props.mctsTrees, props.slates, hasDiffs)).map(s => (
             <button key={s} onClick={() => focus.navigate(s)} title={s} aria-label={s}
               aria-current={surface === s ? "true" : undefined}
               className={`${tabCls} ${surface === s ? "p-tab-active p-accent" : ""}`}>
@@ -240,8 +239,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
         {/* Icons inside the strip's own rule: the row is one flex line with
             one bottom rule, so the gauge and the collapse chevron sit on the
             same edge the tabs underline — never a ruled strip beside an
-            unruled icon column with a visible break between them. */}
-        <div className={`flex shrink-0 items-center -mb-px ${tabStripH}`}>
+            unruled icon column with a visible break between them. This column
+            carries the rule itself rather than hanging a pixel below it with
+            `-mb-px`, or its edge lands a row below the strip's and leaves a
+            step where the tabs' rule meets it. */}
+        <div className={`flex shrink-0 items-center border-b p-border ${tabStripH}`}>
         <ShareSlateControl workspace={props.workspace} slate={openSlateSummary} rpc={props.rpc} />
         {chip !== null && (
           <button

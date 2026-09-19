@@ -5,7 +5,7 @@
   "main": "src/server.ts",
   "scripts": {
     "start": "vite dev --host 0.0.0.0",
-    "//deploy": "This package publishes nothing. Both environments deploy from the repository root \u2014 `bun run deploy` and `bun run deploy:staging` run scripts/deploy.sh \u2014 which is the only path carrying the required gates, the CLI download asset check and the post-deploy smoke gate. Publishing from here once shipped production with none of the three CLI download assets, and every fresh install died on a checksum mismatch while the site looked fine.",
+    "//deploy": "Publish from the repository root with bun run deploy; scripts/deploy.sh runs gates and packages the CLI assets.",
     "smoke:workspace": "bun scripts/smoke-workspace.ts",
     "types": "wrangler types env.d.ts --include-runtime false"
   },
@@ -53,6 +53,7 @@
     "react-router-dom": "^7.14.1",
     "remark-gfm": "^4.0.1",
     "shiki": "4.2.0",
+    "simple-icons": "^16.31.0",
     "valibot": "^1.4.1",
     "vgpu": "0.4.1",
     "zod": "^4.3.6"

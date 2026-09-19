@@ -26,6 +26,11 @@ import { PlanReviewStore, type PlanReview } from '../plans/review';
 import { tableExists } from '../identity/schema';
 import { KinuError } from '../obs/error';
 import type { SqlExecutor } from '../types/primitives';
+import type { ChangelogEntry } from '../evolution/changelog';
+import type { MemoryNote } from '../memory/note';
+import type { BackgroundJob } from '../types/jobs';
+import type { PendingAction } from './pending-actions';
+
 
 export interface WorkspaceWorkOwner {
   readonly actorId: string;
@@ -124,5 +129,24 @@ export function readWorkspaceWork(
   plans.sort((a, b) => b.plan.createdAt - a.plan.createdAt || b.plan.revision - a.plan.revision);
 
   return { plans, tasks };
+}
+
+/** Whether the Work tab has anything to show: a plan, any task — including a
+ *  completed one — a pending action, a job (settled counts: its record is the
+ *  content), a changelog entry, or a learning. An empty answer hides the tab;
+ *  a live turn with nothing renderable does not. */
+export function hasWorkspaceWork({ work, pending, jobs, changes, notes }: {
+  work: WorkspaceWork | null;
+  pending: readonly PendingAction[];
+  jobs: readonly Pick<BackgroundJob, 'id'>[];
+  changes: readonly ChangelogEntry[];
+  notes: readonly MemoryNote[];
+}): boolean {
+  return (work?.plans.length ?? 0) > 0
+    || (work?.tasks.some((row) => row.tasks.length > 0) ?? false)
+    || pending.length > 0
+    || jobs.length > 0
+    || changes.length > 0
+    || notes.length > 0;
 }
 
