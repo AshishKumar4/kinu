@@ -278,9 +278,8 @@ function ToolResultRow({ message, call, previewWidth, expanded }: {
     <box flexDirection="column" style={{ paddingLeft: 2 }}>
       {lines.map((line, index) => (
         <text key={`${String(index)}-${line}`}>
-          <span fg={success === false ? well.danger : well.muted}>
-            {index === 0 ? (success === false ? `${TUI_MARKS.failure} ` : `${TUI_MARKS.toolResult} `) : '  '}{line}
-          </span>
+          <span fg={well.muted}>{index === 0 ? (success === false ? `${TUI_MARKS.failure} ` : `${TUI_MARKS.toolResult} `) : '  '}</span>
+          <span fg={success === false ? well.danger : well.success}>{line}</span>
         </text>
       ))}
     </box>
