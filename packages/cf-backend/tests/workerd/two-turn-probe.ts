@@ -1945,8 +1945,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
 
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
       // ONE turn when the words landed inside it; a second turn when they
-      // could only run after it — each turn compresses its own facts.
-      await awaitFactsCompressed(recording, persistedWhileHeld ? 2 : 1);
+      // could only run after it — each turn settles its own sleep-time lane.
+      await awaitSleepTimeSettled(recording, persistedWhileHeld ? 2 : 1);
       await awaitQuiet(recording);
 
       return {

@@ -1822,8 +1822,11 @@ export const LADDER: readonly Gate[] = [
     // files-eio, step-cap, stream-lifecycle) live under `tests/workerd/long/`
     // and run as the row below; this row is the other 29 files. Measured as
     // split, the same day under the same load: 335 s (29 files, 120 tests,
-    // load 0.9 to 2.2).
-    seconds: 335,
+    // load 0.9 to 2.2). On 2026-09-18 the row had grown to 34 files and ran
+    // past the deadline twice under the deploy wave; `isolate: false` in the
+    // vitest config (one runner and one Miniflare per row instead of one per
+    // file) brought it to 40 s for 29 files at load 6-8, measured the same day.
+    seconds: 45,
     catches: 'Durable Object semantics no bun test can express, executed inside real '
       + 'workerd (1.20260811.1 — the pool\'s own nested copy, not the 1.20260601.1 the '
       + 'top-level miniflare serves `bun scripts/tracing-gate.ts` from) via '
@@ -1868,11 +1871,12 @@ export const LADDER: readonly Gate[] = [
     // measured as split 2026-09-16 under the same load: 169 s (load 1.3 to
     // 2.2); an eighth (busy-chat, one test, 24.9 s alone on 2026-09-18) sits
     // here because the row above ran into the 480 s deadline under the deploy
-    // wave that day. Same runner, same config, same `include`; the split is by path
+    // wave that day. With `isolate: false` (see the row above) the whole half
+    // measured 178 s on 2026-09-18 at load 6-8. Same runner, same config, same `include`; the split is by path
     // filter so no file can be in both halves or in neither — `bun run
     // test:workerd` still runs all three workerd rows in sequence for a hand
     // run, and ladder.test.ts holds the three rows to a partition of it.
-    seconds: 169,
+    seconds: 183,
     catches: 'the same defect classes as the row above, on the suites that hold a Durable '
       + 'Object across a real wake, a retention sweep, a spend aggregate over 20,000 rows, '
       + 'an EIO on files, a step cap and a stream lifecycle — the long-running half.',
