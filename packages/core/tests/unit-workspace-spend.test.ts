@@ -26,6 +26,8 @@ import { workspaceSpend } from '../src/read-models/workspace-spend';
 import { MissionGovernor } from '../src/mission-budget';
 import { usageTotal, USAGE_FIELDS, UsageSchema, type Usage } from '../src/usage';
 import { createTestActors } from '@kinu.run/test-utils';
+import type { HeadReport } from '../src/heads/types';
+import { explorationActorKey } from '../src/index';
 import { createTestWorkspace } from './helpers';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
@@ -35,12 +37,38 @@ const RUN_LIST_LIMIT = 50;
 
 function rig() {
   const ws = createTestWorkspace();
-  // The head journal half of this total is actor-private, so the aggregate is
-  // asked on behalf of a REAL owner rather than of the whole database — and the
-  // run-event half is written by a recorder bound to that same owner.
-  const actor = createTestActors(ws.sql, ws.execRaw).main;
 
-  return { ws, actor, events: new RunEventRecorder(ws.sql, actor) };
+  const actors = createTestActors(ws.sql, ws.execRaw);
+  const actor = actors.main;
+
+  return { ws, actor, actors, events: new RunEventRecorder(ws.sql, actor) };
+}
+
+function headRig(subordinate = false) {
+  const fixture = rig();
+  const parent = subordinate ? fixture.actors.sibling('helper') : fixture.actor;
+
+  const head = fixture.actors.directory.create({
+    parent, name: explorationActorKey('head-a'), creationId: 'head-a', kind: 'head', lifetime: 'task',
+  });
+
+  const journal = new HeadJournal(fixture.ws.sql, parent);
+
+  const input = {
+    id: 'head-a', rootId: 'root-a', parentId: null, depth: 0, task: 'inspect', rationale: 'inspect',
+    mode: 'build', inheritedContext: [], budget: { maxDepth: 3, spawnedAt: 1 },
+    mergeStrategy: 'synthesize', loop: defaultLoopOrigin('head'),
+  } satisfies Parameters<HeadJournal['insertSpawn']>[0];
+
+  journal.recordSplit('root-a', 'inspect', 1);
+  journal.insertSpawn(input);
+
+  const report: HeadReport = {
+    id: 'head-a', status: 'completed', summary: 'done', wallClockMs: 1, stepCount: 1, usage: { input: 100, output: 7 },
+    evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [],
+  };
+
+  return { ...fixture, head, journal, input, report, headEvents: new RunEventRecorder(fixture.ws.sql, head) };
 }
 
 /** One turn step, as the turn accumulator writes it. A step with no `usage` is a
@@ -52,6 +80,81 @@ function step(events: RunEventRecorder, usage: Usage, usd?: number): void {
 }
 
 describe('workspaceSpend', () => {
+  test('running head usage becomes reported usage once without losing auxiliary calls', () => {
+    const { ws, actor, events, journal, report, headEvents } = headRig();
+    step(headEvents, report.usage, 0.01);
+    headEvents.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'compaction', usage: { input: 5, output: 1 } });
+    const running = workspaceSpend({ sql: ws.sql, actor, events });
+
+    expect(running.total.usage).toEqual({ input: 105, output: 8 });
+    expect(running.producers.map((row) => row.source)).toEqual(['head', 'compaction']);
+    journal.recordReport(report);
+    const completed = workspaceSpend({ sql: ws.sql, actor, events });
+
+    expect(completed.total.usage).toEqual(running.total.usage);
+    expect(completed.total.usd).toBe(running.total.usd);
+    expect(completed.total.calls).toBe(running.total.calls);
+  });
+
+  test('an unreported final report does not erase measured steps or duplicate silent steps', () => {
+    for (const usage of [{ input: 100, output: 7 }, {}]) {
+      const { ws, actor, events, journal, report, headEvents } = headRig();
+      step(headEvents, usage);
+      journal.recordReport({ ...report, status: 'errored', usage: {} });
+      const spend = workspaceSpend({ sql: ws.sql, actor, events });
+
+      expect(spend.total.usage).toEqual(usage);
+      expect(spend.total.calls).toBe(1);
+      expect(spend.producers.map((row) => row.source)).toEqual(['head']);
+    }
+  });
+
+  test('a hired actor head report counts even after its trace is removed', () => {
+    const { ws, actor, events, head, journal, report, headEvents } = headRig(true);
+    step(headEvents, report.usage);
+    journal.recordReport(report);
+    void ws.sql`DELETE FROM run_events WHERE actor_id = ${head.actorId}`;
+
+    expect(workspaceSpend({ sql: ws.sql, actor, events }).total.usage).toEqual(report.usage);
+  });
+
+  test('identical head ids under different parents remain separate executions', () => {
+    const { ws, actor, actors, events, journal, input, report, headEvents } = headRig();
+    const parent = actors.sibling('helper');
+
+    const siblingHead = actors.directory.create({
+      parent, name: explorationActorKey(input.id), creationId: input.id, kind: 'head', lifetime: 'task',
+    });
+
+    const siblingJournal = new HeadJournal(ws.sql, parent);
+    siblingJournal.recordSplit(input.rootId, 'another parent', 1);
+    siblingJournal.insertSpawn(input);
+    step(headEvents, report.usage);
+    step(new RunEventRecorder(ws.sql, siblingHead), { input: 250, output: 13 });
+    journal.recordReport(report);
+    siblingJournal.recordReport({ ...report, usage: { input: 250, output: 13 } });
+    const spend = workspaceSpend({ sql: ws.sql, actor, events });
+
+    expect(spend.total.usage).toEqual({ input: 350, output: 20 });
+    expect(spend.total.calls).toBe(2);
+  });
+
+  test('a report replaces only its attempt, retaining earlier interrupted usage', () => {
+    const { ws, actor, events, head, journal, input, report, headEvents } = headRig();
+    step(headEvents, { input: 40, output: 3 });
+    const previous = '2000-01-01T00:00:00.000Z';
+    void ws.sql`UPDATE run_events SET ts = ${previous}, payload = json_set(payload, '$.timestamp', ${previous})
+      WHERE actor_id = ${head.actorId}`;
+    journal.insertSpawn({ ...input, budget: { ...input.budget, spawnedAt: Date.parse('2001-01-01T00:00:00.000Z') } });
+    step(headEvents, report.usage);
+    journal.recordReport(report);
+    const spend = workspaceSpend({ sql: ws.sql, actor, events });
+
+    expect(spend.total.usage).toEqual({ input: 140, output: 10 });
+    expect(spend.producers.map((row) => row.source)).toEqual(['head']);
+    expect(headEvents.read('run-1')).toHaveLength(2);
+  });
+
   test('an empty workspace has no producers and no coverage to report', () => {
     const { ws, events, actor } = rig();
     const spend = workspaceSpend({ events, sql: ws.sql, actor });
