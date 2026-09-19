@@ -133,7 +133,7 @@ export {
   fallbackWorkspaceIdentity,
   mintSubordinateName,
   parseWorkspaceTitle,
-  planWorkspaceTitle, autoTitleMayReplace, persistAutoTitle,
+  planWorkspaceTitle, autoTitleMayReplace, persistAutoTitle, titleActorFromMessage,
   resolveWorkspaceTitle,
   suggestWorkspaceTitle,
   workspaceSlug, workspaceAddressRefusal, isPlaceholderWorkspaceTitle, codenameFor,

@@ -3080,7 +3080,10 @@ export class LocalAgentSession implements BackendHost {
    */
   private async applyAutoTitle(mission: string): Promise<void> {
     const state: WorkspaceTitleState = {
-      slug: this.agentName(),
+      // The actor's own roster name for a hosted child — `agentName()` reads
+      // `workspace_identity`, which holds the ROOT's slug in every actor's
+      // session, and a child's codename is minted from ITS roster name.
+      slug: this.rt.actor.parentActorId === null ? this.agentName() : this.rt.actor.name,
       displayName: this.config.getDisplayName(),
       nameOrigin: this.config.getNameOrigin(),
       mission,
