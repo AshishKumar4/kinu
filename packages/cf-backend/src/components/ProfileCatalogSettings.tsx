@@ -422,7 +422,10 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
           : "sticky bottom-3 z-10 p-card p-surface px-4 py-3 shadow-[var(--shadow-composer)]"}>
           {error && <div className="mb-3 rounded-md px-3 py-2 text-xs p-notice-danger">{error}</div>}
           <div className="flex items-center justify-between gap-3">
-            <span className="p-meta p-text-3">Catalog version {envelope.version}</span>
+            {/* The left slot's answer is the bar's own state — whether what is
+                on screen is what the account has — not the envelope's internal
+                revision, which the owner cannot act on. */}
+            <span className={`p-meta ${dirty ? 'p-warning' : 'p-text-3'}`}>{dirty ? 'Unsaved changes' : 'Saved'}</span>
             <div className="flex gap-2">
               <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={() => setDraft(envelope.catalog)}>Discard</Button>
               <FilledButton disabled={!dirty || busy} onClick={save}>{busy ? 'Saving…' : (tiersOnly ? 'Save tiers' : 'Save roles and tiers')}</FilledButton>

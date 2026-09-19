@@ -59,6 +59,16 @@ function StatusMark({ subordinate }: { subordinate: SubordinateRosterEntry }) {
   );
 }
 
+/** A name that does not exist yet reads as a state, not a typo: the accent
+ *  dot names it — new, unnamed, awaiting its first message — where the
+ *  status mark beside it answers the working question. */
+function UnnamedMark() {
+  return (
+    <span className="size-1.5 shrink-0 rounded-full p-dot-accent"
+      aria-label="Not named yet" title="This agent has no name yet — it is named from its first message." />
+  );
+}
+
 export function SubordinateTabs({
   workspace, subordinates, activeName, onCreate, creating, onDismiss, onRename, trailing,
 }: SubordinateTabsProps) {
@@ -101,6 +111,7 @@ export function SubordinateTabs({
                 {active ? (
                   // The open tab is not a link anywhere; it is where the agent is renamed.
                   <div aria-current="page" className={`${tabCls} p-tab-active h-full max-w-64 pl-3 pr-8 font-medium`}>
+                    {subordinate.displayName.trim() === "" && <UnnamedMark />}
                     <InlineRenameTitle
                       title={title}
                       editValue={subordinate.displayName}
@@ -116,6 +127,7 @@ export function SubordinateTabs({
                     title={subordinate.currentTask ?? title}
                     className={`${tabCls} h-full max-w-52 pl-3 pr-8`}
                   >
+                    {subordinate.displayName.trim() === "" && <UnnamedMark />}
                     <span className={`truncate ${subordinate.displayName ? "" : "italic p-text-3"}`}>{title}</span>
                     <StatusMark subordinate={subordinate} />
                   </Link>
