@@ -1,7 +1,11 @@
 # Slate sharing
 
-A plan, written 2026-09-13 against `c0fed7a4e`. Nothing here is built. Each
-claim about today names its source file.
+A plan written 2026-09-13 against `c0fed7a4e`, and — as of 2026-09-18 — the
+as-built record of what it became. §1–§3 keep the plan's model and research
+verbatim where they still describe the system; §5–§6 now name the files that
+implement each rule rather than the files that would. The earlier headline
+"nothing here is built" is stale: live shares, blueprints, the Shared page,
+the consent page and the viewer bounds all exist, each cited below.
 
 ## 1. Today
 
@@ -49,9 +53,10 @@ The token is an HMAC over workspace, port and handle
 (`packages/cf-backend/src/server.ts:490-495`) and strips the Kinu session and every
 `x-kinu-*` header (`nimbus-route.ts:37-39`). The object checks the capability
 handle and forwards (`packages/cf-backend/src/workspace-host.ts:360-420`). A preview URL
-is a bearer capability. A leaked slate preview URL today is already a public
-live share with every declared binding. No consent step, no disclaimer, no
-per-viewer limit, and no audit row stand in front of it. Revocation means unexposing the port.
+is a bearer capability. A shared slate is fronted differently: the consent
+page for credentialed shares, the per-viewer request bound, the per-share
+per-day spend bound, and the audit row all stand in front of it (§5). Revocation
+means unexposing the port for previews, and `unshare` for shares.
 
 **URL durability.** Routing is by Durable Object name (`nimbus-route.ts:10-15`).
 Kinu currently routes its two slate configurations differently:
@@ -88,6 +93,12 @@ Sharing still needs section 5 authorization policy. Nimbus public
 link (`apps.expose(…, { visibility: 'public' })`) stays unwired. It needs
 Nimbus public directory binding and its own router, which this deployment
 does not run, so no host method offers it.
+
+What this paragraph was written against no longer holds: the §5 policy below
+is implemented — `slate_live_shares`/`slate_live_share_users`/`slate_viewer_requests`
+(`packages/core/src/slates/live-shares.ts`), the share rail
+(`packages/cf-backend/src/slate-share-route.ts`), and the viewer bounds
+(`admitViewerRequest`, `packages/cf-backend/src/slates/host.ts`).
 
 ## 2. Research
 
@@ -166,7 +177,7 @@ direction. This value derives. It is never stored.
 The discriminant is the share kind: `live` or `blueprint`. A live share has a
 visibility; a blueprint has a publication.
 
-Invariants, each named by the test that will pin it (section 5):
+Invariants, each pinned by a named test (§5 lists them):
 
 - S1. A slate holds no ambient authority. A viewer request reaches exactly the
   bindings `package.json` declares, and never the agent. M3 already covers this.
@@ -222,69 +233,77 @@ No Kinu chrome surrounds it. For a blueprint, the viewer sees a read-only page w
 the declared bindings by kind, the file tree, and one call to action, "Fork
 into Kinu". The action signs in and continues.
 
-## 5. What changes
+## 5. What changed
 
-**Data.** Workspace object: `slate_shares` (id, slate id, kind, visibility,
-handle secret hash, publication id, included paths, rate, spend cap, created,
-revoked), `slate_share_users` (share id, user id), `slate_viewer_requests`
-(share id, viewer or source hash, slate, path, bindings called, outcome,
-spend). Visibility lives in one home, this table. User object:
-`user_shares_received` (owner, workspace, share id, cached title), written when
-another owner names me on a share, read by "shared with me" and "known". Public listing: a
-singleton index object holding (owner, workspace, share id, kind, title) and
-never visibility. Every open asks the workspace object, so a stale index row
-lists only something that then refuses. That is the idiom
-`preview-exposures.ts:29-34` already states for previews: a projection, not a
-second authority.
+**Data, as built.** Workspace object: `slate_live_shares` (id, slate, title,
+visibility, handle, grants, created, revoked),
+`slate_live_share_users` (share id, user id), `slate_viewer_requests` (share
+id, viewer subject, slate, path, calls, outcome, settled) — all in
+`packages/core/src/slates/live-shares.ts`. Blueprints: `slate_blueprint_shares`
+in `packages/core/src/slates/blueprints.ts`. User object:
+`user_shares_received` for "shared with me" and "people I know". Public
+listing: `public_shares` on the control-plane object
+(`packages/core/src/control-plane/public-shares.ts`), written by
+`indexPublicShare` on live-share create/publish and read with per-row
+re-verification — a projection, never a second authority, the same idiom
+`preview-exposures.ts:29-34` states for previews.
 
-**Routes.** Edge: a share-label parser ahead of the preview parser in the
-preview-host step (`server.ts:490`), same HMAC check, then
-`routeSlateShare(handle, request)` on the workspace object. Workspace RPC: new
-`SlateOperation` ops `share`, `unshare`, and `publish` in
-`packages/core/src/slates/rpc.ts:42-68`, so the rule lives in core and both backends
-read it. `WorkspaceSlates.publish` already exists and the host wires it
-(`packages/core/src/slates/runtime.ts:118-128`, `host.ts:419-429`). App host:
-`/api/shared` list and fork, `/shared` and `/shared/blueprint/:id` pages, the
-viewer ticket mint.
+**Routes, as built.** Edge: the share hostname resolves ahead of the preview
+parser (`packages/cf-backend/src/slate-share-route.ts` `handleSlateShareHostRequest`),
+then `routeSlateShare(handle, request)` on the workspace object. Workspace RPC
+ops `share`, `unshare`, `publish`, `viewerRequests`, `revoke`, `blueprint*`
+in `packages/core/src/slates/rpc.ts`. App host: `/api/shared` list/fork/open
+in `packages/cf-backend/src/shared/routes.ts`, pages `/shared` and
+`/shared/blueprint/:id`, the viewer ticket mint.
 
-**The host, viewer versus owner.** `routeSlateShare` reads the share row (fail
-closed), checks the viewer against visibility, spends the viewer rate budget
-with the fixed-window counter in `packages/core/src/http/ingress-budget.ts`, mints the
-invocation with the viewer attached (extend `previewInvocation`,
-`host.ts:202-212`, and `SlateInvocation`), ensures the resident as
-`ROOT_SLATE_CALLER`, and forwards. This boot on demand is what makes the URL
-durable. In `bindingCall` (`host.ts:215`), after `resolveSlateChain` yields a
-viewer, the host re-reads the share row (S6), debits the mission-budget label
-`share:<share>:<viewer>` (`packages/core/src/mission-budget.ts`, opt-in and label-keyed
-already), writes the audit row (S7), then dispatches as the owner (S2). A
-blueprint or fork runs in the forker workspace as its own root. The owner
-object never receives the call (S8). The share row pins the slate port, closing the
-in-memory allocation gap from section 1.
+**The host, viewer versus owner, as built.** `SlateHost.routeShare` admits
+through `admitViewerRequest`: the share row re-read (S6, fail closed), the
+viewer checked against visibility — a named user by `userId`, a public
+viewer by its source hash — the per-viewer request bound spent against the
+ingress counter (`packages/core/src/http/ingress-budget.ts`,
+`SHARE_VIEWER_REQUESTS_PER_MINUTE`), and the per-share per-day spend bound
+checked against the mission-budget label `shareSpendLabel(share.id)` before
+the invocation mints (`SHARE_SPEND_CAP_USD_PER_DAY`,
+`packages/core/src/slates/sharing.ts`). The resident boots on demand as the
+owner caller — what makes the URL durable — and the forwarded request carries
+`x-slate-call` for the audit row (S7). `bindingCall` re-reads the row again,
+checks the grant (`grantAdmits`), debits the label, and settles the row.
+A blueprint or fork runs in the forker workspace as its own root (S8).
 
-**UI.** The share dialog, the Shared page, the blueprint page, the workspace
-picker, and the unmapped-bindings panel.
+**Consent, as built.** A share whose slate declares any credentialed binding
+— the set `credentialedBindings(project)` computes in
+`packages/core/src/slates/project.ts`, checked per request in `admitViewerRequest` —
+serves the consent page until the viewer's cookie is the consent-minted one
+(`consentMessage`, `slate-share-route.ts`), signed over a different claim than
+the identity cookie so one cannot mint the other.
 
-**CLI.** The CLI backend hosts no slates today. `workspace.slate` is present
-only when a backend supplies a slate host (`packages/core/src/execution/inline.ts:125-126`),
-and nothing under `packages/cli-backend/src` supplies one. Local sharing is
-therefore none. The CLI reaches sharing through the cloud account on a cloud
-workspace.
+**UI.** `ShareSlateDialog` on the work-strip tab, `SharedPage` with its four
+lists, `BlueprintPage` + `ForkDialog`, `UnmappedBindingsPanel`.
 
-**Security proofs**, as tests in the repo's shape:
+**CLI.** The CLI backend hosts no slates; `workspace.slate` exists only when
+a backend supplies a host (`packages/core/src/execution/inline.ts`). Local
+sharing is none; the CLI reaches sharing through a cloud workspace.
 
-- `packages/cf-backend/tests/unit-slate-sharing.test.ts`: a viewer request to an
-  undeclared binding receives the same refusal as the owner (S1). A viewer cannot
-  reach `agents` through a crafted tool (S1, extending the existing case at
-  `unit-slate-composition.test.ts:358`). A share revoked between two requests
-  refuses the second (S6). A fork `instantiate` returns `unsatisfied` equal
-  to the declared set, and the admitted tree contains no MCP header, vault id
-  or provider key (S8). One audit row per request carries the viewer identity (S7).
-- `packages/core/tests/unit-slate-project.test.ts`: `credentialedBindings(project)`
-  is non-empty exactly for the kinds in section 3 (S4).
-- A share-label sibling of `unit-preview-forgery.test.ts`: an unminted handle,
-  a revoked handle and a wrong token each receive 404 without touching an object.
-- The workerd `plan-code` fixture, run with a viewer: bindings resolve as the
-  owner and the audit row carries the viewer (S2).
+**Security proofs**, each a test in the repo's shape:
+
+- `packages/cf-backend/tests/unit-slate-sharing.test.ts`: undeclared binding
+  and `agents` refusal (S1), revoke-between-calls (S6), a fork that admits
+  with every requirement unsatisfied and carries nothing of the owner's (S8).
+- `packages/cf-backend/tests/unit-slate-live-shares.test.ts`: S1 problem
+  surfacing, the named-viewer grant/approval cases, S6 mid-flight revoke,
+  the credentialed-binding risk text.
+- `packages/cf-backend/tests/unit-share-gaps.test.ts`: the S2 bounds — the
+  per-viewer request counter (per viewer, on the exchange too), the per-share
+  per-day spend bound marking the share `paused`; the consent page and the
+  grant's `consent` flag; the public blueprint index; `forkable=false` absent
+  from a public listing.
+- `packages/cf-backend/tests/unit-share-forgery.test.ts`: unminted/revoked/
+  wrong-token handles never resolve an object.
+- `packages/core/tests/unit-slate-project.test.ts`: `credentialedBindings` is
+  non-empty exactly for §3's kinds (S4).
+- `tests/workerd/slate-share.test.ts`: the viewer fixture end to end — GET,
+  batch, socket, audit rows, replay refusal — plus share-URL survival across
+  `abortAllDurableObjects()`.
 
 ## 6. Plan
 

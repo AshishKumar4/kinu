@@ -155,9 +155,9 @@ type ProbeAnswer = { ok: true; value: unknown } | { ok: false; reason: string; e
 interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   start(): Promise<void>;
   share(): Promise<ProbeAnswer>;
-  viewerFetch(handle: string, claim: { userId: string | null; source: string }): Promise<{ status: number; body: string }>;
-  viewerBatch(handle: string, claim: { userId: string | null; source: string }): Promise<{ probe: string | null; mutateError: string }>;
-  viewerSocket(handle: string, claim: { userId: string | null; source: string }): Promise<{ probe: string | null; mutateError: string }>;
+  viewerFetch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ status: number; body: string }>;
+  viewerBatch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
+  viewerSocket(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
   replay(share: string): Promise<ProbeAnswer>;
   requests(share: string): Promise<ProbeAnswer>;
   revoke(share: string): Promise<ProbeAnswer>;

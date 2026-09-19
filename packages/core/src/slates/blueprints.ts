@@ -220,6 +220,32 @@ export class WorkspaceBlueprints {
       blobs,
     });
   }
+  /**
+   * The bundle a LIVE share forks: the same export as `bundle`, sourced from
+   * the running slate's current tree rather than a publication. A live share
+   * carries no publication row, so the skeleton is built directly — the
+   * synchronized source's digest, the declarations' requirements — and the
+   * blob set is the whole synchronized tree, never an included subset.
+   */
+  async liveBundle(slateId: string): Promise<BlueprintBundle> {
+    const slate = await this.deps.slates.synchronize(new SlateId(slateId));
+    const tree = this.tree(slate.source);
+    const project = this.project(tree);
+    const skeleton = new SlateSkeleton(slate.source.digest, blueprintRequirements(project));
+    const blobs: Record<string, string> = {};
+
+    for (const entry of tree.entries) {
+      if (entry.kind === 'file' && blobs[entry.content] === undefined) {
+        blobs[entry.content] = bytesToBase64(this.deps.content.read(new ContentRef(entry.content)));
+      }
+    }
+
+    return v.parse(BlueprintBundleSchema, {
+      skeleton: skeleton.toData(),
+      tree: new TextDecoder().decode(this.deps.content.read(slate.source)),
+      blobs,
+    });
+  }
 
   /**
    * Admit a bundle into this workspace: retain the bytes, prove they are the

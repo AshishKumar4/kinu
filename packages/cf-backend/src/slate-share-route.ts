@@ -40,7 +40,7 @@
 
 import {
   buildSlateShareHost, parseSlateShareLabel, previewHostSuffix, workspaceAddressRefusal,
-  labelSigner, reoriginateRequest, type ShareViewerClaim,
+  ingressAdmitted, labelSigner, reoriginateRequest, SHARE_VIEWER_REQUESTS_PER_MINUTE, type ShareViewerClaim, VIEWER_EXCHANGE_PATH,
 } from '@kinu.run/core';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { VIEWER_COOKIE_NAME } from './auth/session';
@@ -57,8 +57,6 @@ const viewerSigner = labelSigner('kinu.slate-viewer.salt', 'kinu.slate-viewer.v1
 /** The orchestrator's internal fetch path for a WebSocket upgrade. */
 export const SLATE_SHARE_PATH = '/_kinu/slate-share';
 
-/** On the share origin: `?ticket=…` → cookie → 303 `/`. */
-const VIEWER_EXCHANGE_PATH = '/__kinu/viewer';
 
 /** The Durable Object method a share request reaches. Declared here so the
  *  route holds the narrowest view of the orchestrator it needs. */
@@ -77,8 +75,15 @@ function ticketMessage(workspace: string, handle: string, userId: string, expire
   return `kinu:viewer-ticket:v1:${workspace}:${handle}:${userId}:${expiresAt}`;
 }
 
-function cookieMessage(workspace: string, handle: string, userId: string, expiresAt: number): string {
-  return `kinu:viewer-cookie:v1:${workspace}:${handle}:${userId}:${expiresAt}`;
+function cookieMessage(workspace: string, handle: string, subject: string, expiresAt: number): string {
+  return `kinu:viewer-cookie:v1:${workspace}:${handle}:${subject}:${expiresAt}`;
+}
+
+/** The consent cookie's signed message, diverged from the identity one's: a
+ *  cookie that says the viewer saw the consent page is a different claim than
+ *  one that names them, and a stolen identity cookie must not mint the other. */
+function consentMessage(workspace: string, handle: string, subject: string, expiresAt: number): string {
+  return `kinu:viewer-consent:v1:${workspace}:${handle}:${subject}:${expiresAt}`;
 }
 
 /**
@@ -128,26 +133,37 @@ export async function viewerEntryUrl(env: Env, workspace: string, handle: string
   return ticket === null ? null : `${base}${VIEWER_EXCHANGE_PATH.slice(1)}?ticket=${ticket}`;
 }
 
-/** The `userId` a viewer cookie minted for this workspace+handle names, or
- *  null — a cookie for another share, another workspace or a dead expiry is
- *  not this share's viewer. */
-async function viewerCookieUser(
+/** The subject a viewer cookie minted for this workspace+handle names, and
+ *  whether it is the consent-minted flavor: a ticket exchange mints the
+ *  identity cookie, the consent page's button mints the consent one, and a
+ *  share that reaches anything credentialed shows its consent page until the
+ *  second arrives. `userId` is the subject only when it is one — a public
+ *  viewer's consent subject is its source hash, which names no account.
+ *  `null` for a cookie minted for another share, another workspace, or a dead
+ *  expiry. */
+async function viewerCookie(
   env: Env, workspace: string, handle: string, cookieHeader: string | null,
-): Promise<string | null> {
+): Promise<{ userId: string | null; subject: string; consented: boolean } | null> {
   const value = cookieHeader?.split(';').map((part) => part.trim())
     .find((part) => part.startsWith(`${VIEWER_COOKIE_NAME}=`))
     ?.slice(VIEWER_COOKIE_NAME.length + 1);
 
-  const [userId, expiresAtText, sig] = value?.split('.') ?? [];
+  const [subject, expiresAtText, sig] = value?.split('.') ?? [];
 
-  if (userId === undefined || expiresAtText === undefined || sig === undefined || !USER_ID_RE.test(userId)) return null;
+  if (subject === undefined || expiresAtText === undefined || sig === undefined) return null;
   const expiresAt = Number(expiresAtText);
 
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
 
-  if (!await viewerSigner.verify(env, cookieMessage(workspace, handle, userId, expiresAt), sig)) return null;
+  if (await viewerSigner.verify(env, cookieMessage(workspace, handle, subject, expiresAt), sig)) {
+    return { userId: USER_ID_RE.test(subject) ? subject : null, subject, consented: false };
+  }
 
-  return userId;
+  if (await viewerSigner.verify(env, consentMessage(workspace, handle, subject, expiresAt), sig)) {
+    return { userId: USER_ID_RE.test(subject) ? subject : null, subject, consented: true };
+  }
+
+  return null;
 }
 
 /** The ticket a `?ticket=` carries, verified for THIS workspace and handle:
@@ -208,13 +224,29 @@ export async function handleSlateShareHostRequest(request: Request, env: Env): P
     return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   }
 
-  // The ticket exchange: a signed ticket becomes the viewer cookie and a 303
-  // home, so the ticket itself never appears in a request guest code sees.
+  // The exchange: a signed ticket becomes the identity cookie, and the
+  // consent page's button becomes the consent cookie — the claim a
+  // credentialed share actually gates on. Both mint over the subject the
+  // request already proves: the ticket's account for one, the existing
+  // cookie's subject (or, a public viewer's, its source hash) for the other.
   if (url.pathname === VIEWER_EXCHANGE_PATH) {
-    const claimed = await ticketUser(env, workspace, handle, url.searchParams.get('ticket') ?? '');
+    const source = await viewerSource(env, request);
+    const consent = url.searchParams.has('consent');
+    const ticket = consent ? null : await ticketUser(env, workspace, handle, url.searchParams.get('ticket') ?? '');
 
-    if (claimed === null) {
+    const subject = consent
+      ? (await viewerCookie(env, workspace, handle, request.headers.get('cookie')))?.subject ?? source
+      : ticket?.userId;
+
+    if (subject === undefined) {
       return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+    }
+
+    // S2's request bound reaches the exchange too: a viewer hammering the
+    // mint is a share route under load, counted under the same per-viewer key.
+    if (env.AUTH_KV !== undefined
+      && !await ingressAdmitted(env.AUTH_KV, 'slate-share', `${handle}:${subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) {
+      return new Response('Too many requests', { status: 429, headers: { 'cache-control': 'no-store' } });
     }
 
     const expiresAt = Date.now() + 12 * 60 * 60 * 1000;
@@ -225,13 +257,14 @@ export async function handleSlateShareHostRequest(request: Request, env: Env): P
       return new Response('Share authentication is unavailable.', { status: 503, headers: { 'cache-control': 'no-store' } });
     }
 
-    const sig = await viewerSigner.token(secret, cookieMessage(workspace, handle, claimed.userId, expiresAt));
+    const sig = await viewerSigner.token(secret,
+      (consent ? consentMessage : cookieMessage)(workspace, handle, subject, expiresAt));
 
     return new Response(null, {
       status: 303,
       headers: {
         location: '/',
-        'set-cookie': `${VIEWER_COOKIE_NAME}=${claimed.userId}.${expiresAt}.${sig}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=43200`,
+        'set-cookie': `${VIEWER_COOKIE_NAME}=${subject}.${expiresAt}.${sig}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=43200`,
         'cache-control': 'no-store',
       },
     });
@@ -239,8 +272,8 @@ export async function handleSlateShareHostRequest(request: Request, env: Env): P
 
   // The claim is read off the ORIGINAL headers, before the sanitizer strips the
   // cookie: a viewer cookie minted for another share names nobody here.
-  const userId = await viewerCookieUser(env, workspace, handle, request.headers.get('cookie'));
-  const claim: ShareViewerClaim = { userId, source: await viewerSource(env, request) };
+  const cookie = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
+  const claim: ShareViewerClaim = { userId: cookie?.userId ?? null, source: await viewerSource(env, request), consented: cookie?.consented === true };
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');
   const stub: SlateShareHost = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspace));

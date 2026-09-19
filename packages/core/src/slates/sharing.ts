@@ -44,6 +44,10 @@ export type ShareGrantMember = v.InferOutput<typeof ShareGrantMemberSchema>;
 export const ShareGrantSchema = v.object({
   slates: v.array(v.string()),
   members: v.array(ShareGrantMemberSchema),
+  /** Whether a viewer may copy the slate's skeleton into a workspace of
+   *  theirs (D4). Absent on rows written before the flag existed, and an
+   *  absent flag means what it means for blueprints: forkable. */
+  fork: v.optional(v.boolean()),
 });
 
 export type ShareGrant = v.InferOutput<typeof ShareGrantSchema>;
@@ -110,6 +114,10 @@ export const LiveShareRecordSchema = v.object({
   revokedAt: v.nullable(v.number()),
   /** Emails the owner named on this share, in the order they were added. */
   users: v.array(v.string()),
+  /** True while the share's per-day spend bound is spent; the viewer route
+   *  refuses until the bound renews. Set where the row is answered, never
+   *  stored — the bound is computed, not recorded. */
+  paused: v.optional(v.boolean()),
 });
 
 export type LiveShareRecord = v.InferOutput<typeof LiveShareRecordSchema>;
@@ -151,16 +159,42 @@ export type ViewerRequestRecord = v.InferOutput<typeof ViewerRequestRecordSchema
 
 /** Who a request on a share origin belongs to: the account a valid viewer
  *  cookie names, or null, plus the anonymous opener attributed by a signed
- *  hash of its source. The edge builds it, the socket upgrade carries it
- *  URL-encoded past the RPC boundary, and the host parses it back through
- *  this schema — so it lives in core, where both sides can name it without
- *  a worker-only import. */
+ *  hash of its source. `consented` is true only when the cookie is the one
+ *  the consent page mints: a ticket-minted cookie names a user but has never
+ *  seen the disclaimer, and a share that reaches anything credentialed shows
+ *  the consent page until it arrives. The edge builds it, the socket upgrade
+ *  carries it URL-encoded past the RPC boundary, and the host parses it back
+ *  through this schema — so it lives in core, where both sides can name it
+ *  without a worker-only import. */
 export const ShareViewerClaimSchema = v.object({
   userId: v.nullable(v.string()),
   source: v.string(),
+  consented: v.boolean(),
 });
 
 export type ShareViewerClaim = v.InferOutput<typeof ShareViewerClaimSchema>;
+
+/** On a share origin: `?ticket=…` mints the identity cookie, `?consent=1` the
+ *  consent one, both 303 `/`. Wire shape, so it lives beside the claim the
+ *  same exchange produces rather than in the edge file that happens to mint
+ *  it. */
+export const VIEWER_EXCHANGE_PATH = '/__kinu/viewer';
+
+/** The viewer bounds every live share runs under (docs/SLATE-SHARING.md §2):
+ *  a fixed-minute request rate per viewer — the account a viewer cookie
+ *  names, or the anonymous source hash — and a per-share spend bound that
+ *  renews each UTC day. One viewer inside the bound is the share working;
+ *  one viewer past it is one viewer refused, never the share paused. */
+export const SHARE_VIEWER_REQUESTS_PER_MINUTE = 120;
+
+export const SHARE_SPEND_CAP_USD_PER_DAY = 2;
+
+/** The mission-budget label a share's spend debits under, per UTC day — the
+ *  ledger is cumulative, so the day is part of the label. `share` is the
+ *  share row id, `day` is YYYY-MM-DD. */
+export function shareSpendLabel(share: string, day = new Date().toISOString().slice(0, 10)): string {
+  return `share:${share}:${day}`;
+}
 
 /**
  * A blueprint's public address: the workspace that holds the row, the row's

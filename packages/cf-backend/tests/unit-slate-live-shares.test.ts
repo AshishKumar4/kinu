@@ -114,7 +114,7 @@ test('S3/S1: no share row means a 404 admission; a share caller must name its in
   const world = await ownerWorld();
 
   try {
-    const admission = await world.owner.agent.observeSlateHost().admitViewerRequest({ handle: '0123456789', claim: { userId: null, source: 's' }, pathname: '/' });
+    const admission = await world.owner.agent.observeSlateHost().admitViewerRequest({ handle: '0123456789', claim: { userId: null, source: 's', consented: true }, pathname: '/' });
 
     expect(admission).toBeInstanceOf(Response);
 
@@ -146,7 +146,7 @@ test('a public share admits read members, refuses mutating ones, and audits ever
     expect(created.share.grant.slates).toEqual(['issues', 'digest']);
 
     const host = world.owner.agent.observeSlateHost();
-    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 'deadbeef' }, pathname: '/' });
+    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 'deadbeef', consented: true }, pathname: '/' });
 
     if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
     const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
@@ -194,7 +194,7 @@ test('a mutating member is granted by approval only, on public and users shares 
     const host = world.owner.agent.observeSlateHost();
     // An unnamed viewer is refused before any audit row exists.
 
-    for (const claim of [{ userId: null, source: 's' }, { userId: 'f'.repeat(32), source: 's' }]) {
+    for (const claim of [{ userId: null, source: 's', consented: true }, { userId: 'f'.repeat(32), source: 's', consented: true }]) {
       const refused = await host.admitViewerRequest({ handle: created.share.handle, claim, pathname: '/' });
 
       if (!(refused instanceof Response)) throw new Error('expected a refused admission');
@@ -203,7 +203,7 @@ test('a mutating member is granted by approval only, on public and users shares 
 
     const named = 'a'.repeat(32);
     await world.owner.agent.shareLiveWith(created.share.id, [{ userId: named, email: 'pat@example.test' }]);
-    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: named, source: 's' }, pathname: '/' });
+    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: named, source: 's', consented: true }, pathname: '/' });
 
     if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
     const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
@@ -224,7 +224,7 @@ test('S6: revoking between two calls refuses the second and stops new admissions
       v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) }));
 
     const host = world.owner.agent.observeSlateHost();
-    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 's' }, pathname: '/' });
+    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 's', consented: true }, pathname: '/' });
 
     if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
     const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
@@ -235,7 +235,7 @@ test('S6: revoking between two calls refuses the second and stops new admissions
     answered(await world.owner.agent.slate({ op: 'unshare', share: created.share.id }), LiveShareRecordSchema);
     expect(await world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', 'FILES', { member: 'readFile', args: ['/x'], invocation: admission.invocation }))
       .toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('no longer shared') });
-    const postRevoke = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 's' }, pathname: '/' });
+    const postRevoke = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 's', consented: true }, pathname: '/' });
 
     if (!(postRevoke instanceof Response)) throw new Error('expected a refused admission');
     expect(postRevoke.status).toBe(404);
@@ -269,7 +269,7 @@ test('S1: agent-control and eval bindings surface as problems and admit no membe
 
     expect(created.share.grant.members).toEqual([]);
     const host = world.owner.agent.observeSlateHost();
-    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 's' }, pathname: '/' });
+    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 's', consented: true }, pathname: '/' });
 
     if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
     const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
@@ -289,7 +289,7 @@ test('an app hop under a share is admitted by grant.slates and audited under its
 
     expect(created.share.grant.slates).toContain('digest');
     const host = world.owner.agent.observeSlateHost();
-    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 's' }, pathname: '/' });
+    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 's', consented: true }, pathname: '/' });
 
     if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
     const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };

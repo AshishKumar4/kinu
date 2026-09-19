@@ -51,6 +51,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fix
   const [busy, setBusyState] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [published, setPublished] = useState<Published | null>(null);
+  const [listed, setListed] = useState(false);
   const setBusy = useCallback((next: boolean) => { setBusyState(next); onBusy(next); }, [onBusy]);
   useEffect(() => {
     if (fixture !== undefined) return;
@@ -103,13 +104,13 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fix
 
     try {
       const list = emails.split(/[\s,;]+/).map((email) => email.trim()).filter(Boolean);
-      setPublished(await publishBlueprint({ workspace, slate, version, include: include === null ? undefined : [...include], emails: list }));
+      setPublished(await publishBlueprint({ workspace, slate, version, include: include === null ? undefined : [...include], emails: list, public: listed }));
     } catch (cause) {
       setErr(renderThrownChain({ cause }));
     } finally {
       setBusy(false);
     }
-  }, [busy, version, emails, workspace, slate, include]);
+  }, [busy, version, emails, workspace, slate, include, listed]);
 
   const unshare = useCallback(async (share: string) => {
     setErr(null);
@@ -183,6 +184,10 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fix
           <label className="block space-y-1">
             <span className="p-meta p-text-3">Share with users (emails, optional)</span>
             <input value={emails} onChange={(event) => setEmails(event.target.value)} className={inputCls} placeholder="pat@example.com, sam@example.com" disabled={busy} />
+          </label>
+          <label className="flex items-center gap-2 p-text">
+            <input type="checkbox" checked={listed} onChange={(event) => setListed(event.target.checked)} disabled={busy} />
+            List publicly <span className="p-text-3">— on the Shared page's public list, for anyone signed in to find</span>
           </label>
           {shares.length > 0 && (
             <div className="space-y-1">

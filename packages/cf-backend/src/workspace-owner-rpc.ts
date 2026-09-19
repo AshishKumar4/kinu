@@ -36,6 +36,10 @@ export interface WorkspaceOwnerRpc {
   routeSlateShare(handle: string, claim: ShareViewerClaim, request: Request, pathname: string): Promise<Response>;
   readLiveShare(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>>;
   shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>>;
+  // A live-share fork asks the owner's object for the running slate's
+  // skeleton: the row re-read, the grant's fork flag, and the caller's own
+  // admission checked there — never trusted from the route.
+  liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>>;
 }
 
 interface WorkspaceOwnerNamespace {
