@@ -485,10 +485,6 @@ var REVIEWED_ADVISORIES = {
     reason: "transitive: @opentui/core pins 8.0.2 exactly and just-bash requires ^8.0.2. " + "parsePatch/applyPatch DoS on a crafted patch. The fix is 8.0.3, which @opentui's exact " + "pin blocks until it moves.",
     ids: [1112706]
   },
-  "file-type": {
-    reason: "transitive: @jimp/core requires ^16.0.0 <- jimp <- @opentui/core, the CLI's TUI " + "image path. Infinite loop in the ASF parser on malformed input. 16.5.4 is the last of " + "that major line, so the fix (21.3.1) needs a @jimp bump.",
-    ids: [1114301]
-  },
   "ip-address": {
     reason: "transitive: express-rate-limit 8.5.2 <- @modelcontextprotocol/sdk. Leading-zero " + "octet and IPv4-mapped misclassification that can bypass an SSRF check \u2014 in the rate " + "limiter, which nothing here mounts.",
     ids: [1130722, 1130723, 1130724]
