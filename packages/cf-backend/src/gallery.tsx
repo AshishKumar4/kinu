@@ -28,6 +28,8 @@
  *   /gallery.html?frame=home     → HomePage
  *   /gallery.html?frame=workspaces → the Workspaces page (`&view=list` for the list)
  *   /gallery.html?frame=plugins  → the Plugins page
+ *   /gallery.html?frame=devices  → the Devices page: the linked machines, their
+ *     link states and the per-workspace grants
  *   /gallery.html?frame=setupmodal → HomePage with an account panel open in
  *                                  the modal the Setup card opens;
  *                                  `&panel=providers|mcp|cli` picks which
@@ -168,14 +170,15 @@ import { WorkspaceOverviewsProvider } from "@/hooks/use-workspace-overviews";
 import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
 import type { EvolutionEntry } from "@/components/surfaces/supervise-evolution";
 import { AddServerCard } from "@/components/account/McpServersPanel";
-import { PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
+import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
 import { AccountProvider } from "@/hooks/use-account";
 import SharedPage from "@/pages/SharedPage";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
 import type { BlueprintInspection, BlueprintView, LiveShareRecord, SharedLibrary, SlateBindingDeclaration, SlateCapabilityGraph } from "@kinu.run/core";
-import UserSettingsPage, { DeviceRow } from "@/pages/UserSettingsPage";
+import UserSettingsPage from "@/pages/UserSettingsPage";
+import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
@@ -296,8 +299,8 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
 
 /* The frames the account fixture answers: settings sections, and the surfaces
    that mount the account panels in place — the setup modal and the wizard
-   today; plugins and workspaces join when their commits land. */
-const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins"]);
+   today; plugins, workspaces and devices join when their commits land. */
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices"]);
 
 /* Account-settings failure rig. The browser owns the two transitions: Codex
    stays failed until `gallery:settings-heal`; the gateway read stays pending
@@ -383,32 +386,19 @@ const mcpSecrets = (() => {
   return new Set(listed.filter((entry) => entry.length > 0));
 })();
 
-/** What the plugins page reads beyond the settings reads: the device grants
- *  (one for the plugins frame; the settings frames keep an empty list because
- *  the device-row gate reads the roster without one) and the owner's crafted
- *  tools. Null for every other path. */
+/** What the devices page reads beyond the settings reads: the grants rows —
+ *  one of each state, because the page's whole question is the state per
+ *  workspace. Null for every other path. */
 function pluginsFixture(path: string): Response | null {
   if (path === "/api/user/devices/consents") {
-    return fixtureJson(frame === "plugins"
-      ? [{ agentName: "checkout-fixes", deviceId: "dev-1", policy: "allow", lastMethod: "exec", lastSummary: "bun test" }]
+    return fixtureJson(frame === "devices"
+      ? [
+        { agentName: "checkout-fixes", deviceId: "dev-1", policy: "allow", lastMethod: "exec", lastSummary: "bun test" },
+        { agentName: "landing-page", deviceId: "dev-1", policy: "denied", lastMethod: "exec", lastSummary: null },
+      ]
       : []);
   }
 
-  // The query string rides on `path` for a relative URL, so the match is by prefix.
-  if (path.startsWith("/api/user/experience")) {
-    return fixtureJson([
-      {
-        id: "exp-1", kind: "craft", key: "parse-ledger", title: "parse-ledger", sourceWorkspace: "checkout-fixes",
-        publishedAt: NOW - 2 * 864e5, evidence: "EMA 0.91 over 12 runs",
-        payload: { kind: "craft", description: "Turn a bank CSV export into settlement rows.", params: null, code: "", score: 0.91 },
-      },
-      {
-        id: "exp-2", kind: "craft", key: "triage-inbox", title: "triage-inbox", sourceWorkspace: "email-triage",
-        publishedAt: NOW - 5 * 864e5, evidence: "EMA 0.84 over 9 runs",
-        payload: { kind: "craft", description: "Sort a mailbox into the three piles the owner acts on.", params: null, code: "", score: 0.84 },
-      },
-    ]);
-  }
 
   return null;
 }
@@ -641,16 +631,27 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
     if (incident === "acknowledged") return fixtureJson([]);
     const revoked = incident === "revoked";
 
-    return fixtureJson([{
-      id: "dev-1", label: "Workstation", os: "linux", hostname: "workstation",
-      connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
-      lastIp: "192.0.2.1", lastAgent: "kinu-device", replacedAt: null,
-      revokedAt: revoked ? NOW : null, unstoppedAt: revoked ? NOW : null,
-      sandbox: {
-        tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
-        capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0"],
+    return fixtureJson([
+      {
+        id: "dev-1", label: "Workstation", os: "linux", hostname: "workstation",
+        connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
+        lastIp: "192.0.2.1", lastAgent: "kinu-device", replacedAt: null,
+        revokedAt: revoked ? NOW : null, unstoppedAt: revoked ? NOW : null,
+        sandbox: {
+          tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
+          capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0"],
+        },
       },
-    }]);
+      // The offline half of the roster question the Devices page answers:
+      // only that frame needs a second machine to photograph it.
+      ...(frame === "devices" ? [{
+        id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
+        connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
+        lastIp: "192.0.2.2", lastAgent: "kinu-device", replacedAt: null,
+        revokedAt: null, unstoppedAt: null,
+        sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
+      }] : []),
+    ]);
   }
 
   return null;
@@ -776,7 +777,10 @@ const STOCK_OVERVIEWS = {
   "checkout-fixes": {
     observedAt: NOW - 30e3, activity: "working", decisionsWaiting: 2, hasUpdates: true,
     latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration" },
-    primarySlate: { id: "coupon-board", title: "Coupon board", url: SLATE_GALLERY_URL },
+    // The tile draws this URL live in its iframe — a real fixture page must
+    // answer it. The coupon-board slate IS this gallery frame; pointing the
+    // tile at the dead preview.example.test URL photographed white.
+    primarySlate: { id: "coupon-board", title: "Coupon board", url: "/gallery.html?frame=couponboard" },
   },
   "perf-audit": {
     observedAt: NOW - 30e3, activity: "working", decisionsWaiting: 0, hasUpdates: false,
@@ -1149,7 +1153,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     pendingSteers: [], branchRuns: [],
     // Both gated surfaces have content in the gallery, so the tab-strip frames
     // keep showing them.
-    tabPresence: { releases: true, explorations: true },
+    tabPresence: { releases: true, explorations: true, work: true },
     activePlan: null,
     slates: [],
   },
@@ -1641,6 +1645,9 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     tasks: [],
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
+  // The frame's plan is live, so its presence says the Work lane has content;
+  // without an answer the strip hid Work on first paint.
+  getWorkspaceTabPresence: () => ({ work: true, releases: true, explorations: true }),
   listPendingConsents: () => [],
 }));
 
@@ -4455,6 +4462,44 @@ function SlatePreviewFrame() {
   );
 }
 
+/** The coupon-board slate itself — the app a workspaces tile draws in its
+ *  live frame. Rendered at the tile's own 4x viewport so the scaled-down
+ *  photograph shows a real app, not a reflowed column. */
+function CouponBoardSlate() {
+  const coupons = [
+    { code: "SAVE20", kind: "percent", state: "active", used: 41 },
+    { code: "FREESHIP", kind: "shipping", state: "active", used: 12 },
+    { code: "LEGACY5", kind: null, state: "500s on apply", used: 3 },
+    { code: "WELCOME", kind: "fixed", state: "paused", used: 88 },
+  ];
+
+  return (
+    <div className="p-bg min-h-screen p-8 font-sans">
+      <div className="mx-auto max-w-2xl">
+        <div className="flex items-baseline justify-between">
+          <h1 className="p-display text-3xl p-text">Coupon board</h1>
+          <span className="p-meta p-text-3">4 rules · checkout-fixes</span>
+        </div>
+        <div className="mt-6 space-y-2">
+          {coupons.map((coupon) => (
+            <div key={coupon.code} className="flex items-center justify-between rounded-lg border p-border p-recessed px-4 py-3">
+              <div>
+                <span className="font-mono text-sm font-medium p-text">{coupon.code}</span>
+                <span className="ml-3 p-meta p-text-3">{coupon.kind ?? "no kind"}</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="p-meta p-text-3">{coupon.used} uses</span>
+                <span className={`p-meta ${coupon.state === "500s on apply" ? "p-danger" : coupon.state === "active" ? "p-success" : "p-text-3"}`}>{coupon.state}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <p className="mt-6 p-meta p-text-3">LEGACY5 fails in applyCoupon — kind:null rows from the 0412 migration.</p>
+      </div>
+    </div>
+  );
+}
+
 /* A slate rendered where the owner reads it: inside the transcript, at the
    card's own height, while the conversation stays legible around it. The
    thread ends on the bare `slate://` address the agent typed — the markdown
@@ -4938,7 +4983,7 @@ function WorkFrame() {
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={lane.jobs} onRefreshJobs={() => {}} pendingActions={lane.queue}
-          tabPresence={{ releases: true, explorations: true }}
+          tabPresence={{ releases: true, explorations: true, work: true }}
           rpc={lane.rpc}
         />
       </div>
@@ -5016,7 +5061,7 @@ function WorkEmptyFrame() {
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
-          tabPresence={{ releases: false, explorations: false }}
+          tabPresence={{ releases: false, explorations: false, work: false }}
           rpc={settledEmptyRpc}
         />
       </div>
@@ -6887,6 +6932,7 @@ async function mount() {
     // Chat with ts/bash/json fences — the frame the highlighting test shoots.
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
+    ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
   ]);
 
   const fixture = fixtureFrames.get(frame);
@@ -7032,6 +7078,7 @@ async function mount() {
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "transcript") node = <TranscriptFrame />;
   else if (frame === "slate") node = <SlatePreviewFrame />;
+  else if (frame === "couponboard") node = <CouponBoardSlate />;
   else if (frame === "workslatefallback") node = <SlateFallbackFrame rpc={workRpc} />;
   else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;

@@ -32,6 +32,8 @@ const WorkspacesPage = lazy(() => import("@/pages/WorkspacesPage"));
 
 const PluginsPage = lazy(() => import("@/pages/PluginsPage"));
 
+const DevicesPage = lazy(() => import("@/pages/DevicesPage"));
+
 /** The shipped chrome around a primary-nav page: the rail, then the page. */
 function Chrome({ children }: { children: ReactNode }) {
   return (
@@ -57,6 +59,10 @@ export function WorkspacesFrame() {
 
 export function PluginsFrame() {
   return <Chrome><PluginsPage /></Chrome>;
+}
+
+export function DevicesFrame() {
+  return <Chrome><DevicesPage /></Chrome>;
 }
 
 const AccountPanelParam = v.picklist(ACCOUNT_PANELS);

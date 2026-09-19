@@ -34,8 +34,8 @@ export const LANDING_WORKSPACE = 'checkout-fixes';
 
 /** What the sample workspace has content for. It has no release lane and no
  *  exploration runs, so `surfaceHasContent` leaves Releases and Swarms off the
- *  strip — the same read the product answers per workspace. */
-export const LANDING_TAB_PRESENCE: TabPresence = { releases: false, explorations: false };
+ *  strip — the same read the product answers per workspace. Work is live. */
+export const LANDING_TAB_PRESENCE: TabPresence = { releases: false, explorations: false, work: true };
 
 export const LANDING_SUBORDINATES: readonly SubordinateRosterEntry[] = [
   { name: 'coupon-tester', displayName: 'Coupon tester', role: 'QA', createdBy: 'orchestrator', status: 'working', currentTask: 'Running the checkout regression suite', createdAt: NOW - 36e5, dismissedAt: null },

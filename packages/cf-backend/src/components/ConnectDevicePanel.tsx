@@ -188,8 +188,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
           </div>
         ) : (
           <p data-connect-unconfirmable className="text-xs p-text-3">
-            Your device list is unavailable. Check Account settings → Devices after the command
-            finishes.
+            Your device list is unavailable. Check the Devices page after the command finishes.
           </p>
         )}
         {/* The icon is the only flex item; the prose is one, because a `code`
@@ -199,7 +198,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
           <WarningIcon size={11} className="mt-0.5 shrink-0" />
           <span>
             <code className="font-mono">kinu connect</code> writes the device secrets on that machine.
-            You can close this panel. The machine appears under Account settings → Devices when it
+            You can close this panel. The machine appears on the Devices page when it
             connects.
           </span>
         </p>

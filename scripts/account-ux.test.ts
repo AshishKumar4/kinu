@@ -24,10 +24,10 @@ mkdirSync(SHOTS, { recursive: true });
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
 
-/** The URL the gallery's slate stand-in serves at — `SLATE_GALLERY_URL` in
- *  `packages/cf-backend/src/gallery-slate-fallback.tsx`, which the workspaces
- *  fixture hands the one workspace that has a primary slate. */
-const SLATE_FIXTURE_URL = 'https://6s5-abcdef0123-aaaaaaaaaaaaaaa-gallery.preview.example.test/';
+/** The app the workspaces tile photographs — the coupon-board slate is a
+ *  gallery frame of its own (`?frame=couponboard` in `gallery.tsx`), served
+ *  same-origin so the tile's iframe draws a real page, not a white hold. */
+const SLATE_FIXTURE_URL = '/gallery.html?frame=couponboard';
 
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light', viewport: keyof typeof VIEWPORTS): Promise<Page> {
   const page = await gallery.newPage();
@@ -308,7 +308,7 @@ describe('account panels', () => {
               const links = await home.$$eval('nav[aria-label="Primary"] a', (anchors) =>
                 anchors.map((a) => ({ label: a.textContent?.trim() ?? '', current: a.getAttribute('aria-current') })));
 
-              expect(links.map((link) => link.label)).toEqual(['Home', 'Workspaces', 'Shared', 'Plugins']);
+              expect(links.map((link) => link.label)).toEqual(['Home', 'Workspaces', 'Shared', 'Plugins', 'Devices']);
               expect(links[0]?.current).toBe('page');
               expect(await activeNavRow(home)).toBe('Home');
               // The rail's own furniture is untouched around it: the roster
@@ -404,14 +404,14 @@ describe('account panels', () => {
 
           try {
             await plugins.waitForFunction(
-              () => document.querySelectorAll('[data-plugin]').length >= 6,
+              () => document.querySelectorAll('[data-plugin]').length >= 4,
             );
             const body = await plugins.evaluate(() => document.body.innerText);
 
             // Section eyebrows are uppercased by the CSS role, and innerText
             // reads them as drawn.
-            for (const text of ['MCP SERVERS', 'github', 'auth needed', 'CRAFTED TOOLS', 'parse-ledger', 'from checkout-fixes',
-              'SKILLS', 'audit-implementation', 'built in', 'DEVICE GRANTS', 'Workstation', 'workspace checkout-fixes', 'allowed']) {
+            for (const text of ['MCP SERVERS', 'github', 'auth needed',
+              'SKILLS', 'audit-implementation', 'built in']) {
               expect(body).toContain(text);
             }
 
@@ -427,6 +427,22 @@ describe('account panels', () => {
             expect(await dialogText(plugins)).toContain('Add custom server');
           } finally {
             await plugins.close();
+          }
+
+          const devices = await freshPage(gallery, 'devices', theme, viewport);
+
+          try {
+            const body = await devices.evaluate(() => document.body.innerText);
+
+            // Each machine's link state, then the grant state per workspace.
+            for (const text of ['Workstation', 'connected', 'Owner laptop', 'offline', 'checkout-fixes', 'Denied']) {
+              expect(body).toContain(text);
+            }
+
+            if (viewport === 'desktop') expect(await activeNavRow(devices)).toBe('Devices');
+            shots.push(await shoot(devices, `devices-${viewport}-${theme}`));
+          } finally {
+            await devices.close();
           }
 
           const shared = await freshPage(gallery, 'shared', theme, viewport);
@@ -471,7 +487,7 @@ describe('account panels', () => {
         }
       }
 
-      expect(shots.length).toBe(18);
+      expect(shots.length).toBe(22);
       process.stdout.write(`account-ux nav: ${String(shots.length)} screenshots under ${SHOTS}\n`);
     });
   });

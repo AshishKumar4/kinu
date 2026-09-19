@@ -25,10 +25,11 @@
  * every assertion here reads from the same two frames.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
-import type { Page } from 'puppeteer';
+import type { ElementHandle, Page } from 'puppeteer';
 
 import { diagnosticsSettled, recordDiagnostics, withGallery, type Gallery } from './gallery-harness';
 import { codenameFor, parseJsonArray, parseJsonValue, redactPayload, type JsonValue } from '@kinu.run/core';
+import { PRIMARY_NAV } from '../packages/cf-backend/src/components/nav';
 
 /** One live-tail message, as the browser laid it out. */
 interface TailFrame {
@@ -1397,13 +1398,21 @@ describe('an additional agent, as an ordinary conversation', () => {
       // popup, not a native select: open it, pick the row.
       await page.click('[data-agent-pane] [aria-label="Thinking level"]');
       await page.waitForSelector('[role="option"]');
-      await page.evaluate(() => {
-        const row = [...document.querySelectorAll('[role="option"]')]
-          .find((option) => (option.textContent ?? '').trim() === 'High');
+      // A real pointer press: a synthetic DOM click never registers the pick
+      // on this select — the option commits on the pointer, not on click().
 
-        if (!(row instanceof HTMLElement)) throw new Error('High absent in the thinking-level popup');
-        row.click();
-      });
+      const picked = await page.evaluateHandle(() =>
+        [...document.querySelectorAll('[role="option"]')]
+          .find((option) => (option.textContent ?? '').trim() === 'High'),
+      );
+
+      // SAFETY: the evaluate's return was checked to be a DOM Element — the
+      // SDK's asElement() only declares ElementHandle<Node>; its null-or-element
+      // contract carries the Element shape here.
+      const pickedOption = picked.asElement() as ElementHandle<Element> | null;
+
+      if (!pickedOption) throw new Error('High absent in the thinking-level popup');
+      await pickedOption.click();
       await page.waitForFunction(() => (document.documentElement.dataset.galleryModelCalls ?? '').includes('setReasoningEffort'));
       const calls = await page.evaluate(() => JSON.parse(document.documentElement.dataset.galleryModelCalls ?? '[]'));
       expect(calls).toEqual([{ method: 'setReasoningEffort', args: ['high', 'agent-1'] }]);
@@ -2725,6 +2734,7 @@ test('sidebar rows keep one height and font size on home and workspace routes', 
 
       const rows = await page.$$eval('nav[aria-label="Primary"] a', (anchors) =>
         anchors.map((a) => ({
+          to: new URL(a.href).pathname,
           height: a.getBoundingClientRect().height,
           font: getComputedStyle(a).fontSize,
         })));
@@ -2754,8 +2764,11 @@ test('sidebar rows keep one height and font size on home and workspace routes', 
     const home = await rowsFor('home');
     const shell = await rowsFor('shell');
 
-    expect(home.nav).toHaveLength(4);
-    expect(shell.nav).toHaveLength(4);
+    // The rail carries the public primary routes exactly — the roster, not a
+    // count that says nothing when the set is the thing that matters.
+    for (const rows of [home.nav, shell.nav]) {
+      expect(rows.map((row) => row.to)).toEqual(PRIMARY_NAV.map(({ to }) => to));
+    }
 
     for (const rows of [home.nav, shell.nav]) {
       for (const row of rows) {

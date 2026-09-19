@@ -98,6 +98,7 @@ import {
   drainAssignments,
   // Canonical memory-note write primitive
   appendMemoryNote,
+  parseMemoryNotes,
   type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT,
   type SlateBindingCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
@@ -156,7 +157,7 @@ import {
   type ReleaseStatus, type ReleaseToolDeps,
   // Release execution engine — the driver beneath the governance ledger
   ReleaseEngine, createSandboxReleaseExec,
-  readWorkspaceWork, type WorkspaceWork,
+  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork,
   // Peer-agent teams (the agents tool's team deps contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
@@ -5988,7 +5989,24 @@ export class OrchestratorAgent extends ActorAgent {
     // read: without an owner there is no release lane to have content in.
     const board = this.getOwnerUserId() ? await this.getReleaseBoard(1) : null;
 
+    // The Work tab's own inputs, through the same reads the tab mounts:
+    // the pending queue, the job ledger, plans and tasks across actors, the
+    // changelog, and learnings — one shared predicate says whether ANY of it
+    // exists. A live turn is not content: a workspace streaming with nothing
+    // renderable keeps the tab hidden.
+    const [pendingActions, jobs, workspaceWork, changelog, memoryContent] = await Promise.all([
+      this.listPendingActions(),
+      this.listBackgroundJobs(20),
+      this.listWorkspaceWork(),
+      this.getEvolutionChangelog({ limit: 1 }),
+      this.getMemoryContent(),
+    ]);
+
     return {
+      work: hasWorkspaceWork({
+        work: workspaceWork, pending: pendingActions, jobs,
+        changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''),
+      }),
       releases: (board?.changes.length ?? 0) > 0,
       explorations: listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,
     };

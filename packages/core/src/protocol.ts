@@ -83,6 +83,9 @@ export interface ForkNode {
  * it mounts.
  */
 export interface TabPresence {
+	/** The work lane holds at least one thing — a pending action, a running
+	 *  job, an open task, an unseen self-change, or a turn in flight. */
+	work: boolean;
 	/** The release lane holds at least one change. */
 	releases: boolean;
 	/** At least one exploration run exists in the run list. */

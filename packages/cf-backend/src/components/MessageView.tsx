@@ -13,9 +13,10 @@ import {
   GitBranchIcon, CheckCircleIcon, ClockIcon,
   WarningCircleIcon, ProhibitIcon,
   ClockCounterClockwiseIcon, LightningIcon,
-  SparkleIcon, ArrowBendUpRightIcon, GearSixIcon, EyeIcon,
+  ArrowBendUpRightIcon, GearSixIcon, EyeIcon,
   TerminalWindowIcon, FileTextIcon, UsersThreeIcon, BrainIcon,
   ListChecksIcon, GlobeIcon, ChartLineUpIcon, DotsThreeCircleIcon, DesktopTowerIcon,
+  ThumbsUpIcon, ThumbsDownIcon,
 } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
 import { isToolUIPart, getToolName } from "ai";
@@ -542,26 +543,12 @@ export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<Unavailab
           ? <span>{only.label} is offline</span>
           : devices.length > 1
             ? <span>Your computers are offline</span>
-            : <span>No computer connected <Link to="/user/settings#devices" className="p-accent hover:underline">Connect</Link></span>}
+            : <span>No computer connected <Link to="/devices" className="p-accent hover:underline">Connect</Link></span>}
       </div>
     </div>
   );
 }
 
-/** The workspace opening itself. The owner gave a MISSION in the New workspace
- *  dialog, not a message — so the first thing in the transcript is the agent
- *  being handed its own workspace, not the owner speaking. */
-function WorkspaceCreatedCard({ state }: { state: CardState }) {
-  return (
-    <div className="flex justify-center animate-fade-in py-1">
-      <div className={SYSTEM_PILL}>
-        <SparkleIcon size={13} className="p-accent" weight="fill" />
-        <span>Workspace created. The agent starts its mission.</span>
-        <span className="flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
-      </div>
-    </div>
-  );
-}
 
 /**
  * Every other turn the harness enqueued: the ones with no card of their own —
@@ -641,13 +628,12 @@ function AdvisorCard({ severity, text, state }: {
 export function ProgrammaticTurnCard({ turn, text, state }: {
   turn: ClassifiedProgrammaticTurn; text: string; state: CardState;
 }) {
+  if (turn.kind === "workspace_created") return null;
+
   if (turn.kind === "background_job") {
     return <BackgroundEventCard kind={turn.jobKind} status={turn.status} state={state} />;
   }
 
-  if (turn.kind === "workspace_created") {
-    return <WorkspaceCreatedCard state={state} />;
-  }
 
   if (turn.kind === "deferred_approval") {
     return <DeferredApprovalCard decision={turn.decision} count={turn.count} state={state} />;
@@ -960,20 +946,22 @@ function MessageFeedback({
         type="button"
         onClick={() => toggle('positive')}
         disabled={busy}
-        className={`p-t-control p-1 rounded-sm p-card-hover transition-colors ${
+        className={`flex items-center p-1 rounded-sm p-card-hover transition-colors ${
           current === 'positive' ? 'p-text' : 'p-text-3 hover:p-text focus-visible:p-text'
         }`}
         title="Mark this response helpful. Feeds evolution scoring."
-      >👍</button>
+        aria-label="Mark this response helpful"
+      ><ThumbsUpIcon size={12} weight={current === 'positive' ? 'fill' : 'regular'} /></button>
       <button
         type="button"
         onClick={() => toggle('negative')}
         disabled={busy}
-        className={`p-t-control p-1 rounded-sm p-card-hover transition-colors ${
+        className={`flex items-center p-1 rounded-sm p-card-hover transition-colors ${
           current === 'negative' ? 'p-text' : 'p-text-3 hover:p-text focus-visible:p-text'
         }`}
         title="Mark this response poor. Feeds evolution scoring."
-      >👎</button>
+        aria-label="Mark this response poor"
+      ><ThumbsDownIcon size={12} weight={current === 'negative' ? 'fill' : 'regular'} /></button>
       {failed && <span className="p-t-status p-danger">Could not save. Try again.</span>}
     </div>
   );

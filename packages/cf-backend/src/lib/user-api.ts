@@ -4,8 +4,7 @@
  * is synthesized server-side), so these fetches are bare.
  */
 import {
-  DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES, EXPERIENCE_KINDS,
-  type ExperienceKind,
+  DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
   ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
   type Credential,
   type DeviceSandboxStatus,
@@ -178,19 +177,6 @@ async function api<Schema extends v.GenericSchema, Body>(
 export const getProfile = () => api(UserProfileSchema, 'GET', '/profile');
 
 export const completeOnboarding = () => api(v.object({ onboardedAt: v.number() }), 'POST', '/onboarding/complete');
-
-// ── Experience library ─────────────────────────────────────────────
-/** One published entry as the plugins surface reads it: the payload is loose
- *  because only a craft's description is shown, and every other kind still
- *  has to parse. */
-const ExperienceSummarySchema = v.object({
-  id: v.string(), kind: v.picklist(EXPERIENCE_KINDS), key: v.string(), title: v.string(),
-  sourceWorkspace: v.string(), publishedAt: v.number(), evidence: v.string(),
-  payload: v.looseObject({ kind: v.string(), description: v.optional(v.string()) }),
-});
-
-export const listExperience = (kind: ExperienceKind) =>
-  api(v.array(ExperienceSummarySchema), 'GET', `/experience?kind=${kind}&limit=50`);
 
 export const setDisplayName = (displayName: string) => api(UserProfileSchema, 'PATCH', '/profile', { displayName });
 

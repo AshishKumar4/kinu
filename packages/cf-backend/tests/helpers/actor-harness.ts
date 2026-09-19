@@ -34,7 +34,8 @@ import { createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagno
 import type { UserDO } from '../../src/user/user-do';
 import type { SlateHost } from '../../src/slates/host';
 import {
-  shadowTrialPlan, claimToolEffect, actorReferenceOf, 
+  shadowTrialPlan, claimToolEffect, actorReferenceOf,
+  type ActorHandle, type SqlExecutor,
   type ActorHost, type HostedActor, type SubordinateSeed, type HeadStreamFrame,
 } from '@kinu.run/core';
 import {
@@ -429,6 +430,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  interrupted job leaves behind. The production store, not an INSERT: the
    *  lease epoch and the resume counter are its policy. */
   harnessJobs(): BackgroundJobStore { return this.jobs; }
+  /** The actor's own SQL executor and handle, so a test seeds the same rows a
+   *  real store writes — task lists, plans, the evolution ledgers — through
+   *  the production classes rather than an INSERT that skips their schema. */
+  harnessSql(): SqlExecutor { return this.boundSql; }
+  harnessActor(): ActorHandle { return this.actorHandle(); }
   /** One post-turn evolution lane, started exactly as a completed turn does. */
   harnessSettleEvolution(): void { this.settleEvolutionInBackground(); }
   /** One activation's alarm housekeeping — the entry point that runs the

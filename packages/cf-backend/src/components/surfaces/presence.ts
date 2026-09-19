@@ -9,19 +9,26 @@ import type { SurfaceKind } from "./WorkSurface";
 
 export const SLATE_PREFIX = "slate:";
 
-/** Where selection lands when the surface it was on loses its content. */
-const DEFAULT_SURFACE: SurfaceKind = "Work";
+/** The strip's own order — the sequence a falling-back selection walks. */
+export const SURFACES = ["Work", "Diffs", "Files", "Releases", "Swarms", "Agent", "Environment"] as const;
 
-/** Whether a surface currently has content to show. */
+/** Whether a surface currently has content to show. Diffs answers off the
+ *  mounted tree count the strip already holds — the only gate not carried
+ *  by `TabPresence`. */
 export function surfaceHasContent(
 	surface: SurfaceKind,
 	tabPresence: TabPresence | undefined,
 	mctsTrees: ReadonlyMap<string, ForkNode>,
 	slates: readonly SlateSummary[] | undefined,
+	hasDiffs = false,
 ): boolean {
+	if (surface === "Work") return tabPresence?.work ?? true;
+
 	if (surface === "Releases") return tabPresence?.releases ?? true;
 
 	if (surface === "Swarms") return (tabPresence?.explorations ?? true) || mctsTrees.size > 0;
+
+	if (surface === "Diffs") return hasDiffs;
 
 	if (surface.startsWith(SLATE_PREFIX)) {
 		const id = surface.slice(SLATE_PREFIX.length);
@@ -32,14 +39,28 @@ export function surfaceHasContent(
 	return true;
 }
 
-/** An active gated tab that empties falls back to Work. */
+/** The first surface in strip order that still has content — where an
+ *  emptied selection lands. */
+export function firstVisibleSurface(
+	tabPresence: TabPresence | undefined,
+	mctsTrees: ReadonlyMap<string, ForkNode>,
+	slates: readonly SlateSummary[] | undefined,
+	hasDiffs = false,
+): SurfaceKind {
+	return SURFACES.find((surface) => surfaceHasContent(surface, tabPresence, mctsTrees, slates, hasDiffs)) ?? "Files";
+}
+
+/** An active gated tab that empties falls back to the first visible tab. */
 export function resolveGatedSurface(
 	surface: SurfaceKind,
 	tabPresence: TabPresence | undefined,
 	mctsTrees: ReadonlyMap<string, ForkNode>,
 	slates: readonly SlateSummary[] | undefined,
+	hasDiffs = false,
 ): SurfaceKind {
-	return surfaceHasContent(surface, tabPresence, mctsTrees, slates) ? surface : DEFAULT_SURFACE;
+	return surfaceHasContent(surface, tabPresence, mctsTrees, slates, hasDiffs)
+		? surface
+		: firstVisibleSurface(tabPresence, mctsTrees, slates, hasDiffs);
 }
 
 /** Keeps only reload counters that still name a listed Slate. */

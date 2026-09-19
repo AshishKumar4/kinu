@@ -1015,10 +1015,10 @@ export function useKinu(target?: string | KinuActorAddress) {
   // accent badge on the strip, so the badge can never say something the queue
   // does not show. Host-owned: see the RPC's note on VIEW_DATA_SOURCES.
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
-  // Whether the gated right-pane tabs (Releases, Swarms) have content.
-  // Seeded by the snapshot, refreshed with the live cycle; a fresh workspace
-  // starts with neither tab until its first release change or search run.
-  const [tabPresence, setTabPresence] = useState<TabPresence>({ releases: false, explorations: false });
+  // Whether the gated right-pane tabs have content. Unknown until the first
+  // read lands — an optimistic absence would flip the strip to Files before
+  // the snapshot that names the workspace's real lanes.
+  const [tabPresence, setTabPresence] = useState<TabPresence | undefined>(undefined);
   // Unseen self-changes, kept only for the sidebar roster's dot — the tab badge
   // is the queue's length now.
   const [changelogUnseen, setChangelogUnseen] = useState(0);

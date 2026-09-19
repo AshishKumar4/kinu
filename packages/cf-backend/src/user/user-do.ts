@@ -3305,7 +3305,7 @@ export class UserDO extends Agent<Env> {
     return `${SANDBOX_UNAVAILABLE}: ${this.deviceLabel(deviceId)} cannot run commands — `
       + `its Kinu daemon could not start a sandbox (${cause}), and Kinu never runs a command `
       + `unsandboxed unless the owner asked for that. ${sandboxReasonFix(sandbox.reason)} `
-      + 'The owner can also turn Sandbox off for this device under Account settings → Devices, '
+      + 'The owner can also turn Sandbox off for this device on the Devices page, '
       + 'which runs commands as them with full access to the machine. '
       + 'Reading and writing files on the device still works.';
   }
@@ -3434,7 +3434,7 @@ export class UserDO extends Agent<Env> {
   }
 
 
-  /** The remembered bindings (Account settings → Devices — see and revoke which
+  /** The remembered bindings (the Devices page — see and revoke which
    *  workspaces may use a device). */
   async listDeviceConsents(caller: UserCaller): Promise<Array<{
     agentName: string;
@@ -3460,7 +3460,7 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
-  /** Revoke a workspace's binding on a device (Account settings → Devices).
+  /** Revoke a workspace's binding on a device (the Devices page).
    *  The row is deleted rather than flipped to 'deny', so the next call asks
    *  again instead of reading as a standing refusal — and it takes effect on
    *  that next call, because the chokepoint reads this table every time.

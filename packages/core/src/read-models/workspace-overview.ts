@@ -129,30 +129,33 @@ export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): Workspa
   };
 }
 
-/** What the one chip on a workspace's card says: the label, and the tone the
- *  surface resolves to a token — `accent` needs the owner, `live` is moving,
- *  `danger` is a sealed failure, `muted` is everything quiet. */
+/** What the one chip on a workspace's card says: the label, and the status
+ *  the surface resolves to its tone classes — `needs` waits on the owner,
+ *  `working` is moving, `failed` and `unfinished` are ends and durable
+ *  leftovers, `updated` and `idle` are everything quiet. */
+export type WorkspaceStatus = 'needs' | 'working' | 'failed' | 'unfinished' | 'updated' | 'idle';
+
 export interface WorkspaceHeadline {
   readonly label: string;
-  readonly tone: 'accent' | 'live' | 'danger' | 'muted';
+  readonly status: WorkspaceStatus;
 }
 
 /** The single state a workspace's card states, first match wins: text and
- *  tone together, one rule, so no surface orders them differently. A run only reads as failed when it
+ *  status together, one rule, so no surface orders them differently. A run only reads as failed when it
  *  can speak at all — working and durable leftovers outrank its end, because
  *  a stale verdict beside live work would say two things at once. */
 export function overviewHeadline(o: WorkspaceOverview): WorkspaceHeadline {
-  if (o.decisionsWaiting > 0) return { label: `Needs you · ${o.decisionsWaiting}`, tone: 'accent' };
+  if (o.decisionsWaiting > 0) return { label: `Needs you · ${o.decisionsWaiting}`, status: 'needs' };
 
-  if (o.activity === 'working') return { label: 'Working', tone: 'live' };
+  if (o.activity === 'working') return { label: 'Working', status: 'working' };
 
-  if (o.latestRun?.status === 'error') return { label: 'Last run failed', tone: 'danger' };
+  if (o.latestRun?.status === 'error') return { label: 'Last run failed', status: 'failed' };
 
-  if (o.activity === 'unfinished') return { label: 'Unfinished', tone: 'muted' };
+  if (o.activity === 'unfinished') return { label: 'Unfinished', status: 'unfinished' };
 
-  if (o.hasUpdates) return { label: 'Updated', tone: 'muted' };
+  if (o.hasUpdates) return { label: 'Updated', status: 'updated' };
 
-  return { label: 'Idle', tone: 'muted' };
+  return { label: 'Idle', status: 'idle' };
 }
 
 /** What the workspaces a shell watches add up to: whether any turn is live,
