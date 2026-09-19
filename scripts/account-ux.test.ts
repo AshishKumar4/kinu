@@ -308,7 +308,7 @@ describe('account panels', () => {
               const links = await home.$$eval('nav[aria-label="Primary"] a', (anchors) =>
                 anchors.map((a) => ({ label: a.textContent?.trim() ?? '', current: a.getAttribute('aria-current') })));
 
-              expect(links.map((link) => link.label)).toEqual(['Home', 'Workspaces', 'Shared', 'Plugins']);
+              expect(links.map((link) => link.label)).toEqual(['Home', 'Workspaces', 'Shared', 'Plugins', 'Devices']);
               expect(links[0]?.current).toBe('page');
               expect(await activeNavRow(home)).toBe('Home');
               // The rail's own furniture is untouched around it: the roster
@@ -411,7 +411,7 @@ describe('account panels', () => {
             // Section eyebrows are uppercased by the CSS role, and innerText
             // reads them as drawn.
             for (const text of ['MCP SERVERS', 'github', 'auth needed', 'CRAFTED TOOLS', 'parse-ledger', 'from checkout-fixes',
-              'SKILLS', 'audit-implementation', 'built in', 'DEVICE GRANTS', 'Workstation', 'workspace checkout-fixes', 'allowed']) {
+              'SKILLS', 'audit-implementation', 'built in']) {
               expect(body).toContain(text);
             }
 
@@ -427,6 +427,22 @@ describe('account panels', () => {
             expect(await dialogText(plugins)).toContain('Add custom server');
           } finally {
             await plugins.close();
+          }
+
+          const devices = await freshPage(gallery, 'devices', theme, viewport);
+
+          try {
+            const body = await devices.evaluate(() => document.body.innerText);
+
+            // Each machine's link state, then the grant state per workspace.
+            for (const text of ['Workstation', 'connected', 'Owner laptop', 'offline', 'checkout-fixes', 'denied']) {
+              expect(body).toContain(text);
+            }
+
+            if (viewport === 'desktop') expect(await activeNavRow(devices)).toBe('Devices');
+            shots.push(await shoot(devices, `devices-${viewport}-${theme}`));
+          } finally {
+            await devices.close();
           }
 
           const shared = await freshPage(gallery, 'shared', theme, viewport);

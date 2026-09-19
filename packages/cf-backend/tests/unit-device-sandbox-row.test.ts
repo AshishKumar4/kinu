@@ -18,7 +18,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describeGpuNodes } from '@kinu.run/core';
-import { DeviceRow } from '../src/pages/UserSettingsPage';
+import { DeviceRow } from '../src/components/devices/DeviceRow';
 import { DEVICE_UPDATE_COPY } from '../src/hooks/use-device-roster';
 import { DeviceConsentCard } from '../src/pages/WorkspacePage';
 import { listDevices, type UserDevice } from '../src/lib/user-api';

@@ -1,9 +1,9 @@
 /**
  * Plugins — what this account's agents can reach beyond their built-in tools,
  * in one grid grammar: MCP servers, the tools workspaces crafted and published
- * to the owner's library, the skills every workspace ships with, and the
- * machines the owner linked. Each is a read of its own, failing on its own,
- * so an unreachable MCP plane never blanks the skills beside it.
+ * to the owner's library, and the skills every workspace ships with. Each is
+ * a read of its own, failing on its own, so an unreachable MCP plane never
+ * blanks the skills beside it.
  *
  * Skills a workspace writes for itself live in that workspace's object and
  * are listed there; only the built-in doctrine is account-wide. Crafted tools
@@ -11,14 +11,13 @@
  * library — a tool still private to its workspace is not listed here.
  */
 import { useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import {
-  BookOpenIcon, DesktopTowerIcon, PlugsConnectedIcon, PuzzlePieceIcon, WrenchIcon,
+  BookOpenIcon, PlugsConnectedIcon, PuzzlePieceIcon, WrenchIcon,
 } from "@phosphor-icons/react";
 import { APP_ROUTES, BUILTIN_SKILL_HEADERS } from "@kinu.run/core";
 import {
-  listDeviceConsents, listDevices, listExperience, listMcpServers, listMcpPresets,
+  listExperience, listMcpServers, listMcpPresets,
   type McpServerSummary,
 } from "@/lib/user-api";
 import { useAsyncResource, mapResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
@@ -89,8 +88,6 @@ export default function PluginsPage() {
   const servers = useAsyncResource(listMcpServers, revalidateServers);
   const presets = useAsyncResource(listMcpPresets);
   const crafts = useAsyncResource(loadCrafts);
-  const consents = useAsyncResource(listDeviceConsents);
-  const devices = useAsyncResource(listDevices);
   const [managing, setManaging] = useState(false);
 
   return (
@@ -138,22 +135,6 @@ export default function PluginsPage() {
           </div>
         </section>
 
-        <PluginSection title="Device grants" onRetry={consents.reload} what="the device grants"
-          empty={<>No machine is linked yet. <Link to={`${APP_ROUTES.userSettings}#devices`} className="p-accent">Link one →</Link></>}
-          cards={mapResource(consents.resource, (rows) => rows.map((grant) => {
-            const device = devices.resource.status === "ready"
-              ? devices.resource.value.find((candidate) => candidate.id === grant.deviceId)
-              : undefined;
-
-            return (
-              <PluginCard key={`${grant.deviceId}:${grant.agentName}`} icon={DesktopTowerIcon} kind="device"
-                name={device?.label ?? grant.deviceId} line={`workspace ${grant.agentName}`}
-                status={grant.policy === 'allow'
-                  ? { label: 'allowed', tone: 'success' }
-                  : { label: grant.policy, tone: 'neutral' }} />
-            );
-          }))}
-        />
       </div>
       {managing && <AccountPanelModal panel="mcp" returnTo={APP_ROUTES.plugins} onClose={() => setManaging(false)} />}
     </div>

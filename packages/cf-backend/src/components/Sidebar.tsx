@@ -4,10 +4,11 @@
  *   ┌─────────────────┐
  *   │ ❯ Kinu          │   Newsreader brand lockup
  *   │ + New workspace │
- *   │ ⌂ Home          │   primary nav: the four places an account goes
+ *   │ ⌂ Home          │   primary nav: the five places an account goes
  *   │ ▦ Workspaces    │
  *   │ ⇄ Shared        │
  *   │ ⚙ Plugins       │
+ *   │ ▣ Devices       │
  *   │ WORKSPACES      │
  *   │ ● Jarvis    4h  │
  *   │   ├ Scout       │   nested subordinates of the OPEN workspace
@@ -26,7 +27,7 @@
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
 import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, ShareNetworkIcon, SidebarSimpleIcon,
-  HouseIcon, SquaresFourIcon, PuzzlePieceIcon,
+  HouseIcon, SquaresFourIcon, PuzzlePieceIcon, DesktopTowerIcon,
 } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
 import { Button } from "@cloudflare/kumo";
@@ -77,6 +78,7 @@ export const PRIMARY_NAV = [
   { to: APP_ROUTES.workspaces, label: "Workspaces", Icon: SquaresFourIcon, end: false },
   { to: APP_ROUTES.shared, label: "Shared", Icon: ShareNetworkIcon, end: false },
   { to: APP_ROUTES.plugins, label: "Plugins", Icon: PuzzlePieceIcon, end: false },
+  { to: APP_ROUTES.devices, label: "Devices", Icon: DesktopTowerIcon, end: false },
 ] as const;
 
 // Route families in App.tsx that mount a live useKinu/useAgent socket for

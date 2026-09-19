@@ -27,6 +27,7 @@ export const APP_ROUTES = {
   welcome: '/welcome',
   workspaces: '/workspaces',
   plugins: '/plugins',
+  devices: '/devices',
   userMcp: '/user/settings/mcp',
   workspace: '/workspace/:agentId',
   workspaceAgent: '/workspace/:agentId/agents/:subName',
