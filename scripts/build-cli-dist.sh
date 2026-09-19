@@ -15,13 +15,16 @@ set -euo pipefail
 # on the user's machine, no registry has to be up, and no postinstall script
 # runs there at all.
 #
-# Three things cannot bundle. They travel as files beside cli.js, in the
+# Four things cannot bundle. They travel as files beside cli.js, in the
 # artifact's own node_modules:
 #   - @nimbus-sh/runtime-bash and @nimbus-sh/runtime-cpython hold their blobs
 #     as files and read a manifest.json next to their own module URL.
-#   - @opentui/core reaches its native library through
-#     `import("@opentui/core-${process.platform}-${process.arch}/index.ts")`,
-#     a template the bundler cannot resolve.
+#   - @opentui/core reaches its native library through dynamic per-platform
+#     imports (`@opentui/core-${platform}-${arch}`), externals the artifact
+#     resolves from the staged native package.
+#   - The tree-sitter parser worker is a second entry point bun materializes
+#     beside cli.js as parser.worker-<hash>.js; its web-tree-sitter wasm comes
+#     from the same staged node_modules.
 #
 # That native package is the only per-platform part, so the build publishes two
 # things: one artifact per platform, and the CPython runtime once. Measured
@@ -58,7 +61,10 @@ command -v "$BUN" >/dev/null 2>&1 || { echo "build-cli-dist: bun is required" >&
 runtime_packages="$("$BUN" -e 'console.log(JSON.parse(await Bun.file(process.argv[1]).text()).join("\n"))' "$ROOT/scripts/cli-runtime-packages.json")"
 mapfile -t RUNTIME_PACKAGES <<< "$runtime_packages"
 EXTERNAL_ARGS=()
-for runtime in "${RUNTIME_PACKAGES[@]}"; do EXTERNAL_ARGS+=(--external "$runtime"); done
+for runtime in "${RUNTIME_PACKAGES[@]}"; do EXTERNAL_ARGS+=(--external "$runtime" --external "$runtime/*"); done
+# The platform native packages behind @opentui/core's dynamic imports:
+# every sibling is unreachable on a single-OS install, so none can bundle.
+EXTERNAL_ARGS+=(--external "@opentui/core-*")
 
 MANIFEST="$ROOT/packages/cli/package.json"
 tmp="$(mktemp -d)"
@@ -94,6 +100,12 @@ mkdir -p "$stage"
   "${EXTERNAL_ARGS[@]}" \
   > "$tmp/build.log" || { cat "$tmp/build.log" >&2; echo "build-cli-dist: bun build failed" >&2; exit 1; }
 [ -f "$stage/cli.js" ] || { echo "build-cli-dist: bun build wrote no cli.js" >&2; exit 1; }
+# Bun emits the parser worker itself: opentui's client resolves its worker
+# path through `import("@opentui/core/parser.worker", { with: { type: "file" } })`,
+# which the bundler materializes beside cli.js as parser.worker-<hash>.js —
+# already bundled, still importing its tree-sitter.wasm through
+# `import.meta.resolve("web-tree-sitter/tree-sitter.wasm")`, which the staged
+# node_modules copy answers.
 
 # The artifact roots its own module resolution: cli.js sits beside the
 # node_modules holding what could not bundle, and Bun walks up from the file.

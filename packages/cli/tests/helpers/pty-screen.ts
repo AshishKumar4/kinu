@@ -325,6 +325,10 @@ function installDriver() {
  * developer's own install.
  */
 export function runTuiInPty(entry: string, options: {
+  /** Arguments after the entry — the packaged CLI's subcommand and flags. */
+  readonly args?: readonly string[];
+  /** Working directory for the child — an unpack dir sits outside the repo. */
+  readonly cwd?: string;
   readonly steps: readonly PtyStep[];
   readonly cols?: number;
   readonly rows?: number;
@@ -336,10 +340,10 @@ export function runTuiInPty(entry: string, options: {
   const home = join(driver, '..');
 
   const spec = {
-    cmd: [process.execPath, entry],
+    cmd: [process.execPath, entry, ...(options.args ?? [])],
     cols: options.cols ?? 100,
     rows: options.rows ?? 30,
-    cwd: home,
+    cwd: options.cwd ?? home,
     env: {
       PATH: process.env.PATH ?? '',
       HOME: home,
