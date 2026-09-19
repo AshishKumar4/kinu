@@ -1,6 +1,27 @@
 import { expect, test } from 'bun:test';
 import type { RunEvent } from '../../packages/core/src/index';
-import { firstRunTurnEvents, firstRunTurnSettlement } from './turn-settlement';
+import { firstRunReplyText, firstRunTurnEvents, firstRunTurnSettlement } from './turn-settlement';
+
+test('a later conversation cannot satisfy the first-run reply', () => {
+  const history = [
+    { role: 'assistant', text: 'Earlier answer' },
+    { role: 'user', text: 'MARKER: run the command' },
+    { role: 'assistant', text: 'Starting' },
+    { role: 'tool', text: 'job-1' },
+    { role: 'assistant', text: 'Still working' },
+    { role: 'user', text: 'What happened to job-1?' },
+    { role: 'assistant', text: 'job-1 finished' },
+  ];
+
+  expect(firstRunReplyText(history, 'MARKER')).toBe('Starting\nStill working');
+  expect(firstRunReplyText(history, 'absent')).toBe('');
+  expect(firstRunReplyText([], 'MARKER')).toBe('');
+  expect(firstRunReplyText([
+    { role: 'user', text: 'MARKER' },
+    { role: 'user', text: 'another question' },
+    { role: 'assistant', text: 'unrelated answer' },
+  ], 'MARKER')).toBe('');
+});
 
 const stamp = { timestamp: '2026-09-13T11:22:21.235Z', eventIndex: 0 };
 

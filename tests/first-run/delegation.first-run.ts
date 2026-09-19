@@ -29,10 +29,10 @@
  * does not add one.
  */
 import { afterAll, describe, test } from 'vitest';
-import * as v from 'valibot';
-
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import type { JsonValue, RunEvent } from '../../packages/core/src/index';
+import type { KinuPublicSession } from '../evals/public-session';
+import { observeDelegationHires, observeDelegationRetirement } from './delegation-observation';
+import { firstRunReplyText, firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
@@ -83,55 +83,21 @@ function announce(subgoals: readonly EvalSubgoal[]): readonly EvalSubgoal[] {
 
 afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
-type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
-
-/** The one field every action-shaped tool call carries; anything else is the tool's own business. */
-const ActionArgsSchema = v.looseObject({ action: v.optional(v.string()) });
-
-function actionOf(call: ToolCallEnd): string {
-  const parsed = v.safeParse(ActionArgsSchema, call.args);
-
-  return parsed.success ? (parsed.output.action ?? '') : '';
-}
-
-/** A result as the text a reader greps: a string as-is, anything else as JSON. */
-function textOf(value: JsonValue | undefined): string {
-  if (value === undefined) return '';
-  const text = v.safeParse(v.string(), value);
-
-  return text.success ? text.output : JSON.stringify(value);
-}
-
 function excerpt(value: string, length = 160): string {
   return JSON.stringify(value.slice(0, length));
 }
 
-/** A call answered: closed with no transport error and no refusal outcome. */
-function answered(call: ToolCallEnd): boolean {
-  return call.error === undefined && call.outcome?.success !== false;
-}
+async function promptEvidence(session: KinuPublicSession, prompt: string) {
+  const result = await session.prompt(prompt);
+  const [events, history] = await Promise.all([session.runEvents(), session.history()]);
 
-function describeFailure(call: ToolCallEnd): string {
-  const outcome = call.outcome !== undefined && !call.outcome.success
-    ? ` outcome=${call.outcome.reason ?? 'null'}` : '';
-
-  return `${call.name}#${call.toolCallId}${outcome}`
-    + (call.error === undefined ? '' : ` error=${excerpt(call.error, 200)}`);
-}
-
-/** The hired name, read off the hire result the deployment answered — never off the reply. */
-const HireResultSchema = v.looseObject({ name: v.optional(v.string()), agent: v.optional(v.string()) });
-
-function hiredName(call: ToolCallEnd): string | null {
-  const parsed = v.safeParse(HireResultSchema, call.result);
-
-  if (!parsed.success) return null;
-
-  return parsed.output.name ?? parsed.output.agent ?? null;
-}
-
-function agentsCalls(calls: readonly ToolCallEnd[], action: string): ToolCallEnd[] {
-  return calls.filter((call) => call.name === 'agents' && actionOf(call) === action);
+  return {
+    events: firstRunTurnEvents(events, prompt, {
+      absorbedBy: result.landed === 'mid-turn' ? result.absorbedBy : undefined,
+      splicedAtStep: firstRunSpliceStep(history, prompt),
+    }),
+    reply: firstRunReplyText(history, prompt),
+  };
 }
 
 describe(SUITE, () => {
@@ -146,90 +112,51 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      genesis: false,
       modelCalls: 'expected',
       purpose: 'A lead that has one helper answer one word, shows a second on the roster, and retires it.',
-      // Three live turns on the product's own path, each of which may splice
-      // into the workspace's opening turn and wait for it. Sized from the
-      // first live drive, where the opening turn alone had not closed at ten
-      // minutes: a row that only ever fails on its own budget has measured
-      // nothing about delegation.
       budgetMs: 20 * 60_000,
       async run({ session }) {
         const subgoals: EvalSubgoal[] = [];
 
-        await session.prompt(TASK_ASK);
-        await session.prompt(ROSTER_ASK);
+        const task = await promptEvidence(session, TASK_ASK);
+        const roster = await promptEvidence(session, ROSTER_ASK);
 
-        const calls = (await session.runEvents())
-          .filter((event): event is ToolCallEnd => event.type === 'tool_call_end');
-
-        // A `tool_call_end` row exists only for a call that CLOSED: a hire
-        // the product left open has no row here, so a settled result IS the
-        // settle — there is no "call left open" state this row could miss.
-        const taskHire = agentsCalls(calls, 'hire')
-          .find((call) => answered(call) && call.result !== undefined);
+        const { taskHire, durableName, wordReported, shown } = observeDelegationHires({
+          taskEvents: task.events, rosterEvents: roster.events, reply: task.reply, word: WORD,
+        });
 
         subgoals.push({
           what: 'hire-settles',
           reached: taskHire !== undefined,
           detail: taskHire !== undefined
-            ? `agents#${taskHire.toolCallId} (hire) closed with ${excerpt(textOf(taskHire.result))}`
-            : `no settled hire call: ${agentsCalls(calls, 'hire').map(describeFailure).join('; ') || 'none'}`,
+            ? `agents#${taskHire.toolCallId} (hire) closed with ${excerpt(JSON.stringify(taskHire.result))}`
+            : `no settled task hire in the requested turn's ${String(task.events.length)} events`,
         });
-
-        const runHistory = await session.history();
-        const firstAnswer = runHistory.filter((row) => row.role === 'assistant').at(0)?.text ?? '';
 
         subgoals.push({
           what: 'word-reported',
-          reached: taskHire !== undefined && textOf(taskHire.result).includes(WORD) && firstAnswer.includes(WORD),
+          reached: wordReported,
           detail: taskHire === undefined
             ? 'no settled hire result to read the word off'
-            : `hire result ${textOf(taskHire.result).includes(WORD) ? 'carries' : 'lacks'} ${JSON.stringify(WORD)}; `
-              + `first assistant row ${firstAnswer.includes(WORD) ? 'relays' : 'misses'} it: ${excerpt(firstAnswer, 240)}`,
+            : `hire result ${excerpt(JSON.stringify(taskHire.result))}; reply ${excerpt(task.reply, 240)}`,
         });
 
-        const taskHireName = taskHire === undefined ? null : hiredName(taskHire);
-
-        const durableName = agentsCalls(calls, 'hire')
-          .map(hiredName)
-          .find((candidate) => candidate !== null && candidate !== taskHireName) ?? null;
-
-        const listRows = agentsCalls(calls, 'list').filter(answered);
-
-        // The durable hire is dismissed by name, so the retire prompt names
-        // the row the roster actually showed — never a name the reply guessed.
-        if (durableName !== null) {
-          await session.prompt(
+        const retirement = durableName === null
+          ? { retired: false, dismisses: 0 }
+          : observeDelegationRetirement((await promptEvidence(session,
             `Dismiss the durable helper with your agents tool: action dismiss, agent ${JSON.stringify(durableName)}. `
             + 'Then list the roster (agents action list) and reply with one line: RETIRED.',
-          );
-        }
-
-        const later = (await session.runEvents())
-          .filter((event): event is ToolCallEnd => event.type === 'tool_call_end');
-
-        const dismisses = agentsCalls(later, 'dismiss').filter(answered);
-        const laterRosters = agentsCalls(later, 'list').filter(answered);
-        const firstDismiss = dismisses.at(0);
-        const shown = durableName !== null && listRows.some((call) => textOf(call.result).includes(durableName));
-
-        // `eventIndex` counts within ONE run, so "after the dismiss" is only a
-        // question inside the dismiss's own run: an earlier turn's roster read
-        // can carry a larger index and would otherwise read as the later one.
-        const retired = durableName !== null && firstDismiss !== undefined
-          && laterRosters.some((call) => call.runId === firstDismiss.runId
-            && call.eventIndex > firstDismiss.eventIndex
-            && !textOf(call.result).includes(durableName));
+          )).events, durableName);
 
         subgoals.push({
           what: 'roster-shows-and-retires',
-          reached: durableName !== null && shown && retired,
+          reached: durableName !== null && shown && retirement.retired,
           detail: durableName === null
             ? 'no durable hired name on any settled hire result, so the roster cannot be read for it'
             : `helper ${JSON.stringify(durableName)}: roster ${shown ? 'showed' : 'never showed'} it; `
-              + `${String(dismisses.length)} settled dismiss call(s); a later roster `
-              + `${retired ? 'no longer names' : 'still names or never re-read'} it`,
+              + `${String(retirement.dismisses)} settled dismiss call(s); a later roster `
+              + `${retirement.retired ? 'no longer names' : 'still names or never re-read'} it`,
         });
 
         const systemRows = (await session.history()).filter((row) => row.role === 'system').length;
