@@ -575,6 +575,17 @@ export default defineConfig({
     // default per-file parallelism would have two of them contend for the same
     // runtime and turn a latency assertion into a flake.
     fileParallelism: false,
+    // One runner, one Miniflare, one module cache for the whole row. Under
+    // vitest 4's pool model a fresh runner per file (the default, `isolate:
+    // true`) boots a new Miniflare and re-imports the bundle for every file;
+    // `@cloudflare/vitest-pool-workers` 0.22 has no `singleWorker` any more,
+    // this is its replacement. Measured 2026-09-18 on this box (load 6-8):
+    // the 29-file row went from 343 s (import 119 s, tests 66 s, the rest pool
+    // boots) to 40 s (import 1.4 s), the 13-file long row from 330 s to 178 s,
+    // every test green under both. What this gives up: a file no longer starts
+    // in a fresh isolate, so a suite that leaves a Durable Object name live
+    // sees it from the next file; every suite here mints its own names.
+    isolate: false,
     // No per-test clock: every wait in these suites ends on its condition or on
     // the runtime's own terminal signal, and a hang is killed by the deploy
     // ladder at the gate's deadline, which names the gate. `0` is Vitest's
@@ -589,6 +600,8 @@ export default defineConfig({
     // phase plus ~4.5 s transforming and ~3.7 s building the probe bundles this
     // config compiles. Vitest's default 5,000 ms would fail the first test of
     // both files here, so any finite clock is a bet on the runner's load.
+    // With `isolate: false` above only a row's FIRST file pays that boot;
+    // the bet on load is the same.
     testTimeout: 0,
     hookTimeout: 0,
     // The rejections this layer's probes raise ON PURPOSE, each with its reason,
