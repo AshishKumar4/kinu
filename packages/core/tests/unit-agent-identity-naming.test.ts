@@ -5,7 +5,7 @@ import {
   applyWorkspaceTitle,
   fallbackWorkspaceIdentity,
   parseWorkspaceTitle,
-  planWorkspaceTitle, autoTitleMayReplace, persistAutoTitle,
+  planWorkspaceTitle, autoTitleMayReplace, persistAutoTitle, codenameFor,
   renderSoulMarkdown,
   summarizeSoul,
   mintSubordinateName,
@@ -115,6 +115,22 @@ describe('automatic workspace titling — the decision', () => {
 
   test('a workspace that already carries a generated title is left alone', () => {
     expect(planWorkspaceTitle({ ...slugNamed, displayName: 'OAuth Callback Audit' })).toBe(null);
+  });
+
+  test('an actor born with its codename is titled from its first message; a codename the owner kept is not', () => {
+    // A codename is two words fixed by the slug: the same on every surface,
+    // and never "Untitled". It is still a placeholder — the first message
+    // replaces it — unless the owner claimed it by renaming to it.
+    const codename = codenameFor('task-12qzhx');
+
+    expect(codename).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
+    expect(codenameFor('task-12qzhx')).toBe(codename);
+    expect(codenameFor('task-12qzhy')).not.toBe(codename);
+    expect(planWorkspaceTitle({ slug: 'task-12qzhx', displayName: codename, nameOrigin: 'auto', mission: MISSION })?.provisional)
+      .toBe('Audit the OAuth callback flow');
+    expect(planWorkspaceTitle({ slug: 'task-12qzhx', displayName: codename, nameOrigin: 'user', mission: MISSION })).toBe(null);
+    // Another slug's codename is a real title, not this actor's placeholder.
+    expect(planWorkspaceTitle({ slug: 'task-12qzhx', displayName: codenameFor('task-12qzhy'), nameOrigin: 'auto', mission: MISSION })).toBe(null);
   });
 
   test('a title whose origin nobody recorded is the owner\'s, and is never touched', () => {

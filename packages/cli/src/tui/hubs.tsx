@@ -67,10 +67,10 @@ export function buildAgentHubEntries(input: {
     // The roster's label is the display authority (an untitled agent carries
     // ''); the live entry keeps only role/tier and the running status.
     const row: TuiAgentHubEntry = own
-      ? { ...currentEntry, label: agentDisplayLabel(member.label), workspace, current: true }
+      ? { ...currentEntry, label: agentDisplayLabel(member), workspace, current: true }
       : {
           id: `${member.mode}:${member.name}`,
-          label: agentDisplayLabel(member.label),
+          label: agentDisplayLabel(member),
           kind: 'main',
           status: member.status ?? 'idle',
           workspace,
@@ -79,7 +79,7 @@ export function buildAgentHubEntries(input: {
     const nested = (member.subordinates ?? []).map((subordinate): TuiAgentHubEntry => {
       const base = {
         id: `${member.mode}:${member.name}/${subordinate.id}`,
-        label: agentDisplayLabel(subordinate.label),
+        label: agentDisplayLabel({ name: subordinate.id, label: subordinate.label }),
         kind: 'subordinate',
         status: subordinate.status,
         workspace,

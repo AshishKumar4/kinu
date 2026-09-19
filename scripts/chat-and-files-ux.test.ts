@@ -28,7 +28,7 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
 import { diagnosticsSettled, recordDiagnostics, withGallery, type Gallery } from './gallery-harness';
-import { parseJsonArray, parseJsonValue, redactPayload, type JsonValue } from '@kinu.run/core';
+import { codenameFor, parseJsonArray, parseJsonValue, redactPayload, type JsonValue } from '@kinu.run/core';
 
 /** One live-tail message, as the browser laid it out. */
 interface TailFrame {
@@ -1110,13 +1110,15 @@ describe('an additional agent, as an ordinary conversation', () => {
       expect(await rig.bodyText()).not.toContain(SEED_ROLE);
 
       // One click. No dialog, no role field, no mission field — the click
-      // lands directly in the new agent's conversation, titled provisionally.
-      // 108c6c414: the untitled tab reads "Untitled agent" now; "New agent"
-      // is the create button's label, not the conversation's title.
+      // lands directly in the new agent's conversation, under the codename it
+      // was born with: a real name, never "Untitled". "New agent" is the
+      // create button's label, not the conversation's title.
       await page.click('[aria-label="New agent"]');
-      await page.waitForFunction(() => (
-        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
-      ));
+      await page.waitForFunction(() => {
+        const title = (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').trim();
+
+        return title !== '' && title !== 'Main' && !title.includes('Untitled');
+      });
       const afterCreate = await rig.bodyText();
       expect(afterCreate).not.toContain('Add a subordinate');
       expect(afterCreate).not.toContain('Role');
@@ -1230,8 +1232,8 @@ describe('an additional agent, as an ordinary conversation', () => {
       const { page } = rig;
       await page.click('[aria-label="New agent"]');
       await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/agent-1"]');
-      // 108c6c414: the untitled conversation is "Untitled agent" on the strip.
-      expect(await rig.activeTab()).toContain('Untitled agent');
+      // The new conversation opens under the codename it was born with.
+      expect(await rig.activeTab()).toContain(codenameFor('agent-1'));
       expect(await rig.bodyText()).not.toContain('Add a subordinate');
       expect(await rig.bodyText()).not.toContain(MISSION);
 
@@ -1239,7 +1241,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       await rig.clickTab('Main');
       await page.waitForSelector('[data-agent-pane="checkout-fixes/main"]');
       expect(await rig.draft()).toBe('');
-      await rig.clickTab('Untitled agent');
+      await rig.clickTab(codenameFor('agent-1'));
       await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/agent-1"]');
       expect(await rig.draft()).toBe('thumb-typed draft');
 
@@ -1277,9 +1279,11 @@ describe('an additional agent, as an ordinary conversation', () => {
 
       // The affordance is intact: the next click creates and opens the agent.
       await page.click('[aria-label="New agent"]');
-      await page.waitForFunction(() => (
-        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
-      ));
+      await page.waitForFunction(() => {
+        const title = (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').trim();
+
+        return title !== '' && title !== 'Main' && !title.includes('Untitled');
+      });
       // Exactly one record for exactly one failure — the create that landed
       // added nothing, and nothing was ever unhandled.
       expect(diagnostics).toHaveLength(1);
@@ -1314,9 +1318,11 @@ describe('an additional agent, as an ordinary conversation', () => {
 
       // Retry lands: the banner clears and the new conversation opens.
       await page.click('[aria-label="New agent"]');
-      await page.waitForFunction(() => (
-        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
-      ));
+      await page.waitForFunction(() => {
+        const title = (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').trim();
+
+        return title !== '' && title !== 'Main' && !title.includes('Untitled');
+      });
       // 9593645b0: the banner's spelling, if it wrongly returned.
       expect(await page.evaluate(() => document.body.innerText)).not.toContain('Could not create an agent');
       await page.close();
@@ -1334,10 +1340,11 @@ describe('an additional agent, as an ordinary conversation', () => {
       // One click on the page's own strip: the hook's zero-argument RPC, the
       // navigate, the facet column — all the page's real wiring.
       await page.click('[aria-label="New agent"]');
-      // 108c6c414: the untitled conversation is "Untitled agent".
-      await page.waitForFunction(() => (
-        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
-      ));
+      await page.waitForFunction(() => {
+        const title = (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').trim();
+
+        return title !== '' && title !== 'Main' && !title.includes('Untitled');
+      });
       const body = await page.evaluate(() => document.body.innerText);
       expect(body).not.toContain('Add a subordinate');
       expect(body).not.toContain('Mission');
@@ -1372,9 +1379,11 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.waitForSelector('nav[aria-label="Workspace agents"]');
 
       await page.click('[aria-label="New agent"]');
-      await page.waitForFunction(() => (
-        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
-      ));
+      await page.waitForFunction(() => {
+        const title = (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').trim();
+
+        return title !== '' && title !== 'Main' && !title.includes('Untitled');
+      });
       await page.waitForFunction(() => {
         const input = document.querySelector('[data-agent-pane] input[aria-label="Model"]');
 
@@ -1384,8 +1393,17 @@ describe('an additional agent, as an ordinary conversation', () => {
       const body = await page.evaluate(() => document.body.innerText);
       expect(body).not.toContain('Set for the workspace on the Main tab');
 
-      // The thinking level is the actor's own write too.
-      await page.select('[data-agent-pane] select[aria-label="Thinking level"]', 'high');
+      // The thinking level is the actor's own write too. The picker is a
+      // popup, not a native select: open it, pick the row.
+      await page.click('[data-agent-pane] [aria-label="Thinking level"]');
+      await page.waitForSelector('[role="option"]');
+      await page.evaluate(() => {
+        const row = [...document.querySelectorAll('[role="option"]')]
+          .find((option) => (option.textContent ?? '').trim() === 'High');
+
+        if (!(row instanceof HTMLElement)) throw new Error('High absent in the thinking-level popup');
+        row.click();
+      });
       await page.waitForFunction(() => (document.documentElement.dataset.galleryModelCalls ?? '').includes('setReasoningEffort'));
       const calls = await page.evaluate(() => JSON.parse(document.documentElement.dataset.galleryModelCalls ?? '[]'));
       expect(calls).toEqual([{ method: 'setReasoningEffort', args: ['high', 'agent-1'] }]);

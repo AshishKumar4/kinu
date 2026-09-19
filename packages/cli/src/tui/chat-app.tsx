@@ -759,7 +759,7 @@ function ChatScene({
       if (created.client) {
         await roster.reload();
         await switchWorkspace(
-          { name: created.name, label: agentDisplayLabel(created.displayName), mode: 'cloud' },
+          { name: created.name, label: agentDisplayLabel({ name: created.name, label: created.displayName }), mode: 'cloud' },
           created.client,
         );
 
@@ -767,7 +767,7 @@ function ChatScene({
       }
 
       await roster.reload();
-      await switchWorkspace({ name: created.name, label: agentDisplayLabel(created.displayName), mode: 'local' });
+      await switchWorkspace({ name: created.name, label: agentDisplayLabel({ name: created.name, label: created.displayName }), mode: 'local' });
     } catch (error) {
       addError({ cause: error });
     }

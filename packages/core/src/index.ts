@@ -136,7 +136,7 @@ export {
   planWorkspaceTitle, autoTitleMayReplace, persistAutoTitle,
   resolveWorkspaceTitle,
   suggestWorkspaceTitle,
-  workspaceSlug, workspaceAddressRefusal, isPlaceholderWorkspaceTitle,
+  workspaceSlug, workspaceAddressRefusal, isPlaceholderWorkspaceTitle, codenameFor,
   workspaceTitleFromMission,
   type SuggestedWorkspaceIdentity,
   type WorkspaceTitlePlan,

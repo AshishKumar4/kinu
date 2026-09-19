@@ -25,6 +25,7 @@ import {
 import type { AgentIdentity } from '../vfs/agent-home';
 import { SubordinateRosterStore } from './roster';
 import { requireSubordinateActorName } from '../identity/actor-key';
+import { codenameFor } from '../identity/naming';
 import type { ActorReference } from '../identity/actor-handle';
 import { finishSubordinateBirth, type SubordinateBirth, type SubordinateSeed } from './birth';
 import type { WorkMode } from '../types/turn';
@@ -704,13 +705,13 @@ export function createTeamToolDeps(deps: {
     // Whose title this is, decided by what the caller actually supplied. A
     // typed title is the owner's and final. A role — theirs or the model's —
     // yields the deterministic role name, which nobody chose but which says
-    // something true, so it is `auto` and stands. Nothing said leaves the
-    // title BLANK: there is no honest name yet, and a blank is what the
-    // shared title policy reads as a placeholder it may claim once, from the
-    // first thing the owner actually says to this agent.
+    // something true, so it is `auto` and stands. Nothing said gives the
+    // slug's codename: a real name on every surface from the first frame,
+    // and the one the shared title policy reads as a placeholder it may
+    // claim once, from the first thing the owner actually says to this agent.
     const chosen = optionalText(input.displayName);
     const provisional = ownerCreated && input.role === undefined;
-    const displayName = chosen ?? (provisional ? '' : displayNameForRole(roleLabel));
+    const displayName = chosen ?? (provisional ? codenameFor(name) : displayNameForRole(roleLabel));
     const nameOrigin: 'user' | 'auto' = chosen ? 'user' : 'auto';
 
     const seed: SubordinateSeed = {

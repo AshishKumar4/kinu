@@ -1128,7 +1128,7 @@ export default function WorkspacePage() {
                   key={subName}
                   workspace={agentId}
                   subName={subName}
-                  title={rosterEntry ? agentTitle(rosterEntry.displayName) : subName}
+                  title={rosterEntry ? agentTitle(rosterEntry) : subName}
                 />
               );
             })() : (

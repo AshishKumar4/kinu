@@ -13,6 +13,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { codenameFor } from '@kinu.run/core';
 import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
 const WORKSPACE_MISSION = 'Keep the release train moving.';
@@ -68,20 +69,20 @@ async function displayedName(
 }
 
 describe('an agent the owner added without naming it', () => {
-  test('is born with no title', async () => {
+  test('is born with its codename, on both sides', async () => {
     const { child, parent, name } = await addedAgent({
-      displayName: '', nameOrigin: 'auto',
+      displayName: codenameFor('quiet-harbor-1a4e20'), nameOrigin: 'auto',
     });
 
-    expect(child.actor.stores.config.getDisplayName()).toBe('');
+    expect(child.actor.stores.config.getDisplayName()).toBe(codenameFor(name));
     // The roster row is the one every reader shows, so a title only the actor
     // knows about is a title nobody can see.
-    expect(await displayedName(parent, name)).toBe('');
+    expect(await displayedName(parent, name)).toBe(codenameFor(name));
   });
 
   test('a rename wins on both sides, and a second rename wins again', async () => {
     const { child, parent, name } = await addedAgent({
-      displayName: '', nameOrigin: 'auto',
+      displayName: codenameFor('quiet-harbor-1a4e20'), nameOrigin: 'auto',
     });
 
     await parent.agent.renameSubordinateAgent(name, 'Jarvis');

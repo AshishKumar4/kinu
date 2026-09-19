@@ -338,7 +338,7 @@ function SubordinatesCard({ rpc, workspaceName }: { rpc: Rpc; workspaceName: str
             <div key={sub.name} className="flex items-center gap-2.5 px-4 py-3">
               <span className={`size-1.5 shrink-0 rounded-full ${sub.status === "working" ? "p-dot-success p-dot-pulse" : sub.status === "awaiting_input" ? "p-dot-warning" : "bg-[var(--c-fill)] border p-border"}`} />
               <div className="min-w-0 flex-1">
-                <div className={`truncate p-row-text ${sub.displayName ? "p-text-2" : "italic p-text-3"}`}>{agentTitle(sub.displayName)}</div>
+                <div className="truncate p-row-text p-text-2">{agentTitle(sub)}</div>
                 <div className="truncate p-meta p-text-4">{sub.role}{sub.currentTask ? ` · ${sub.currentTask}` : ""}</div>
               </div>
               <Link

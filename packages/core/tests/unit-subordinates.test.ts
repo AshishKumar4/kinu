@@ -54,6 +54,7 @@ import {
   type AgentConfigStore,
 } from '../src/index';
 import { CODE_IS_REFUSAL, KinuError } from '../src/obs/index';
+import { codenameFor } from '../src/identity/naming';
 import { createMemoryVfs, createTestActors } from '@kinu.run/test-utils';
 import {
   makeSql as makeTagged, makeSqlExec, makeExecRaw, createTestActor, createTestWorkspace,
@@ -565,11 +566,11 @@ describe('team action routing', () => {
     const created = await h.team.create({});
 
     expect(created.subordinate).toEqual({ name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null });
-    expect(created.displayName).toBe('');
+    expect(created.displayName).toBe(codenameFor('researcher-a1b2c3'));
     // The mission is the workspace's, read at create time.
     expect(h.seeds).toEqual([{
       creationId: expect.any(String), name: 'researcher-a1b2c3',
-      displayName: '',
+      displayName: codenameFor('researcher-a1b2c3'),
       nameOrigin: 'auto',
       mission: HARNESS_OWN_MISSION,
       role: 'task',

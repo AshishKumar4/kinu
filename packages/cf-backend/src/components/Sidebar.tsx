@@ -404,10 +404,10 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
                         key={sub.name}
                         to={`/workspace/${a.name}/agents/${sub.name}`}
                         className="flex items-center gap-2 rounded-lg px-2.5 py-[5px] transition-colors hover:bg-[var(--c-elevated)]"
-                        title={agentTitle(sub.displayName)}
+                        title={agentTitle(sub)}
                       >
                         <span className={`size-1.5 shrink-0 rounded-full ${sub.status === "working" ? "p-dot-success p-dot-pulse" : sub.status === "awaiting_input" ? "p-dot-warning" : "bg-[var(--c-fill)] border p-border"}`} />
-                        <span className={`min-w-0 flex-1 truncate p-row-text ${sub.displayName ? "p-text-2" : "italic p-text-3"}`}>{agentTitle(sub.displayName)}</span>
+                        <span className="min-w-0 flex-1 truncate p-row-text p-text-2">{agentTitle(sub)}</span>
                       </NavLink>
                     ))}
                     <button

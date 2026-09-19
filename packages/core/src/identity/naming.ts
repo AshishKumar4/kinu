@@ -242,12 +242,33 @@ export interface WorkspaceTitlePlan {
   mission: string;
 }
 
-/** A title nobody chose: absent, or an echo of the raw slug — what a workspace
- *  created with no purpose shows until its first message titles it. */
+/** FNV-1a over the slug, as eight hex digits: the one input the word tables
+ *  need, for a slug that carries no hex of its own. */
+function slugHex(slug: string): string {
+  let hash = 0x811c9dc5;
+
+  for (const unit of new TextEncoder().encode(slug)) hash = Math.imul(hash ^ unit, 0x01000193) >>> 0;
+
+  return hash.toString(16).padStart(8, '0');
+}
+
+/** The name an actor is born with when nobody named it: two memorable words
+ *  fixed by its slug, so every surface shows the same one and a tab never
+ *  reads "Untitled". A placeholder in the title policy's eyes, which is what
+ *  lets the first message replace it. */
+export function codenameFor(slug: string): string {
+  const { adjective, noun } = memorableWords(slugHex(slug));
+
+  return `${capitalize(adjective)} ${capitalize(noun)}`;
+}
+
+/** A title nobody chose: absent, an echo of the raw slug, or the slug's own
+ *  codename — what an actor created with no purpose shows until its first
+ *  message titles it. */
 export function isPlaceholderWorkspaceTitle(displayName: string | null | undefined, slug: string): boolean {
   const shown = displayName?.trim() ?? '';
 
-  return shown.length === 0 || shown === slug.trim();
+  return shown.length === 0 || shown === slug.trim() || shown === codenameFor(slug);
 }
 
 /**

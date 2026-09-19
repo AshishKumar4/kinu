@@ -42,6 +42,7 @@ import { KinuError, renderCauseChain, toKinuError, type ErrorCode } from '../obs
 import type { SubordinateRosterStore } from './roster';
 import type { SubordinateRuntime } from './support';
 import { finishSubordinateBirth, type SubordinateBirth } from './birth';
+import { codenameFor } from '../identity/naming';
 import {
   TEMPORARY_LIFETIME,
   subordinateBirthContext,
@@ -321,7 +322,7 @@ export function createTemporaryAgentPort(deps: {
       if (deps.roster.get(name)) return failure('denied', 'The generated actor name is already in use.', 'none');
       deps.roster.create({
         name, actorReference: null, deleteRequested: false,
-        birth: { creationId, assignment, seed: { name, displayName: '', nameOrigin: 'auto', role: request.role, mission: task, lifetime: TEMPORARY_LIFETIME } },
+        birth: { creationId, assignment, seed: { name, displayName: codenameFor(name), nameOrigin: 'auto', role: request.role, mission: task, lifetime: TEMPORARY_LIFETIME } },
         createdBy: 'orchestrator', status: 'working', currentTask: task, createdAt: startedAt,
         dismissedAt: null, lifetime: TEMPORARY_LIFETIME, taskEventId: null,
       });

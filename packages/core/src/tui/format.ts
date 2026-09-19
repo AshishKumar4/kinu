@@ -1,3 +1,5 @@
+import { codenameFor } from '../identity/naming';
+
 export function clipText(value: string, max: number): string {
   if (max <= 0) return '';
 
@@ -8,12 +10,10 @@ export function clipText(value: string, max: number): string {
   return `${value.slice(0, max - 1)}…`;
 }
 
-/** What an agent with no name yet is called everywhere the TUI renders one.
- *  Blank means created-but-untitled: a one-click agent names itself from its
- *  first message, and until then every surface says this instead of ''. The
- *  word is the web's ("Untitled workspace", SubordinateTabs.tsx). */
-const NEW_AGENT_LABEL = 'Untitled agent';
-
-export function agentDisplayLabel(label: string): string {
-  return label.trim() === '' ? NEW_AGENT_LABEL : label;
+/** An agent's shown name everywhere the TUI renders one. An agent is born
+ *  with its slug's codename, so a blank label is a row from before codenames
+ *  and shows the pair it would have been born with (the web's rule too,
+ *  `agentTitle` in SubordinateTabs.tsx). */
+export function agentDisplayLabel(entry: { name: string; label: string }): string {
+  return entry.label.trim() || codenameFor(entry.name);
 }

@@ -835,14 +835,14 @@ function NavigatorRow(props: {
           {marker}
           <span fg={colors.text.muted}>{row.nested ? '  ' : ''}</span>
           <span fg={agent.status === 'running' ? colors.intent.accent : colors.text.muted}>{agent.status === 'running' ? TUI_MARKS.activity.running : TUI_MARKS.activity.idle} </span>
-          <span fg={props.selected || props.active ? colors.text.strong : colors.text.primary}>{clipText(agentDisplayLabel(agent.label), 16)}</span>
+          <span fg={props.selected || props.active ? colors.text.strong : colors.text.primary}>{clipText(agentDisplayLabel(agent), 16)}</span>
         </text>
       </box>
       {agent.subordinates?.map((subordinate) => (
         <text key={subordinate.id}>
           <span fg={colors.border.strong}>{row.nested ? '    └ ' : '  └ '}</span>
           <span fg={subordinate.status === 'running' ? colors.intent.success : colors.text.muted}>
-            {clipText(subordinate.roleId === undefined ? agentDisplayLabel(subordinate.label) : `${agentDisplayLabel(subordinate.label)} · ${subordinate.roleId}`, 18)}
+            {clipText(subordinate.roleId === undefined ? agentDisplayLabel({ name: subordinate.id, label: subordinate.label }) : `${agentDisplayLabel({ name: subordinate.id, label: subordinate.label })} · ${subordinate.roleId}`, 18)}
           </span>
         </text>
       ))}

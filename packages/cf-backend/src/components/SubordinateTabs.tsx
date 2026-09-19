@@ -6,27 +6,22 @@ import { tabCls, tabStripH } from "./ui/form";
 import { InlineRenameTitle } from "./WorkspaceBar";
 import { HouseIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
+import { codenameFor } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
 import { diagnostics, toKinuError, renderThrownChain } from "@kinu.run/core/obs";
-
-/** What an agent with no name yet is called everywhere one renders. "Untitled"
- *  rather than "New": an agent nobody has named is still untitled a month
- *  later. */
-const UNTITLED_AGENT_TITLE = "Untitled agent";
 
 /* A workspace's title is answered in core — `workspaceDisplayTitle` in
  * read-models/workspace-title — because the slug stored as a title is the
  * defect this file's callers all share; there is no local copy of the rule. */
 
-/** The plus button's label. An ACTION, not the untitled state above it — the
- *  two read alike, which is exactly why they are separate constants. */
+/** The plus button's label: an ACTION, never a name. */
 const ADD_AGENT_LABEL = "New agent";
 
-/** A roster entry's shown name. Blank means created-but-untitled: the
- *  first-message titler (or the owner's rename) fills it in, and until then
- *  every surface says the same thing instead of an empty string. */
-export function agentTitle(displayName: string): string {
-  return displayName.trim() === "" ? UNTITLED_AGENT_TITLE : displayName;
+/** A roster entry's shown name. An agent is born with its slug's codename,
+ *  so a blank here is a row from before codenames and shows the same word
+ *  pair it would have been born with. */
+export function agentTitle(entry: Pick<SubordinateRosterEntry, "name" | "displayName">): string {
+  return entry.displayName.trim() || codenameFor(entry.name);
 }
 
 interface SubordinateTabsProps {
@@ -94,7 +89,7 @@ export function SubordinateTabs({
           </Link>
           {subordinates.map((subordinate) => {
             const active = activeName === subordinate.name;
-            const title = agentTitle(subordinate.displayName);
+            const title = agentTitle(subordinate);
 
             return (
               <div key={subordinate.name} data-agent-tab={subordinate.name} className="group/tab relative shrink-0">
@@ -182,7 +177,7 @@ export function SubordinateTabs({
 
       {dismissTarget && dismissTarget.createdBy !== "user" && (
         <Modal
-          title={`Dismiss ${agentTitle(dismissTarget.displayName)}?`}
+          title={`Dismiss ${agentTitle(dismissTarget)}?`}
           icon={<TrashIcon size={18} className="p-danger" />}
           onClose={() => setDismissTarget(null)}
           busy={dismissing}

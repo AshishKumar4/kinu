@@ -122,7 +122,7 @@ import {
   TrashIcon, BrainIcon,
 } from "@phosphor-icons/react";
 import "./index.css";
-import { KINU_MARK, MARK_IDS, mark } from "@kinu.run/core";
+import { KINU_MARK, MARK_IDS, mark, codenameFor } from "@kinu.run/core";
 import { mcpPresetById } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
@@ -1696,7 +1696,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
     const name = `agent-${++gallerySubSeq}`;
 
     const entry = {
-      name, displayName: "", role: "agent", createdBy: "user",
+      name, displayName: codenameFor(name), role: "agent", createdBy: "user",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     };
 

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import type { AgentClient, AgentClientStatus } from '../src/agent-client';
 import type { AgentModelMenu } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
-import { asFetchFunction } from '@kinu.run/core';
+import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
 import { TURN, cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
@@ -531,12 +531,12 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     expect(screen.frame()).not.toContain('Role:');
     expect(screen.frame()).not.toContain('Mission:');
 
-    // Reopened, the hub lists the workspace's members with the untitled peer
-    // as "Untitled agent" — the current, open conversation.
+    // Reopened, the hub lists the workspace's members with the unnamed peer
+    // under its codename — the current, open conversation.
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the refreshed hub roster', () => screen.frame().includes('Untitled agent'));
+    await screen.waitFor('the refreshed hub roster', () => screen.frame().includes(codenameFor('agent-1')));
     expect(screen.frame()).toContain('Checkout · main');
-    expect(screen.frame()).toContain('Untitled agent · main');
+    expect(screen.frame()).toContain(`${codenameFor('agent-1')} · main`);
     expect(screen.frame()).toContain('· open');
     screen.mockInput.pressEscape();
   });
