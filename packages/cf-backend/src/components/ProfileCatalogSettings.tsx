@@ -26,6 +26,7 @@ import {
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { getProfileCatalog, listAvailableModels, updateProfileCatalog, type ModelMenu } from '../lib/user-api';
 import { ModelPicker } from './ModelPicker';
+import { BrandMark, providerBrand } from './ui/BrandMark';
 import { Card, Field, inputCls, tabCls } from './ui/form';
 import { FilledButton } from './ui/FilledButton';
 
@@ -244,21 +245,31 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                 const resolved = assignment ?? draft.tiers.default;
                 const builtin = TIER_IDS.some((id) => id === tierId);
 
+                const entry = menu.models.find((model) => model.spec === resolved.model);
+
                 // The levels are the MODEL's, read off its menu entry: a model
                 // that declares xhigh offers it, one that declares only low and
                 // high offers no medium (#9).
                 const efforts = offeredReasoningEfforts(
-                  menu.models.find((model) => model.spec === resolved.model)?.reasoningEfforts,
+                  entry?.reasoningEfforts,
                   assignment?.reasoningEffort,
                 );
+
+                const brand = providerBrand(entry?.provider ?? '');
 
                 return (
                   <div key={tierId} className="grid gap-x-3 gap-y-2 border-t p-border py-3 first:border-t-0 first:pt-0 md:grid-cols-[8rem_minmax(0,1fr)_9rem] md:items-center">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="truncate font-mono text-xs p-text">{tierId}</div>
-                        {assignment === undefined && <div className="p-meta p-text-3">uses default</div>}
-                        {tierId === 'default' && <div className="p-meta p-text-3">account default</div>}
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        {/* The mark belongs to the model the row names — the
+                            resolved assignment — so it sits beside the tier
+                            it serves, where a picker cell cannot hold it. */}
+                        {brand !== undefined && <BrandMark brand={brand} size={13} bare />}
+                        <div className="min-w-0">
+                          <div className="truncate font-mono text-xs p-text">{tierId}</div>
+                          {assignment === undefined && <div className="p-meta p-text-3">uses default</div>}
+                          {tierId === 'default' && <div className="p-meta p-text-3">account default</div>}
+                        </div>
                       </div>
                       {!builtin && (
                         <Button variant="ghost" size="sm"
