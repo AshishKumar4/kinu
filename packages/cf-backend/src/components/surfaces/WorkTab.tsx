@@ -358,7 +358,7 @@ function NeedsYou({ pendingActions, rpc, onDecided, onOpenSurface, onOpenReview 
   return (
     <div className="rounded-lg border border-[rgba(224,164,88,.32)] bg-[rgba(224,164,88,.06)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
       <Section id="work-needs-you" title="Needs you"
-        icon={<WarningCircleIcon size={14} className="p-accent" />}
+        icon={<WarningCircleIcon size={14} className="p-warning" />}
         badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
         <div className="divide-y divide-dashed divide-[var(--c-dash)]">
           {parkedCommands.length > 0 && (
@@ -681,7 +681,7 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
   return (
     <div className="py-1 space-y-2">
       <div className="flex items-start gap-2">
-        <ShieldWarningIcon size={14} className="p-accent shrink-0 mt-0.5" />
+        <ShieldWarningIcon size={14} className="p-warning shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1">
           <div className="p-row-text p-text">
             {actions.length} command{actions.length === 1 ? "" : "s"} waiting on your approval
@@ -759,7 +759,7 @@ function PendingRow(
     </div>
   );
 
-  const icon = <Icon size={14} className="mt-0.5 shrink-0 p-accent" />;
+  const icon = <Icon size={14} className="mt-0.5 shrink-0 p-warning" />;
 
   if (onOpen === undefined && home.surface === null) {
     return <div className="grid grid-cols-[14px_minmax(0,1fr)] items-start gap-2 py-2">{icon}{content}</div>;
