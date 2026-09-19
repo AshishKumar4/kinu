@@ -31,6 +31,14 @@ async function settle(harness: ActorHarness<HarnessOrchestratorAgent>, n: number
   await joinHarnessFibers();
 }
 
+/** What the world model holds, off the durable table the compute writes and
+ *  the "Learned N things" card reads. */
+function facts(harness: ActorHarness<HarnessOrchestratorAgent>): { key: string; value: string }[] {
+  return harness.db.prepare<{ key: string; value: string }, []>(
+    'SELECT key, value_json AS value FROM agent_facts ORDER BY key',
+  ).all();
+}
+
 /** A tab's socket, as the actor's own hooks see one: an id and no actor tag. */
 function tab(id: string): Connection {
   const partial: Partial<Connection> = {};
@@ -47,13 +55,13 @@ afterEach(() => { setSystemTime(); });
 
 describe('the turn-count trigger', () => {
   test('a fresh workspace\'s first turn runs no model call, the third runs one over all three', async () => {
-    const harness = orchestratorHarness();
-    const prompts = harness.agent.harnessScriptSleepTimeModel(ONE_FACT);
+    const harness = orchestratorHarness(undefined, undefined, undefined, { sleepTimeModel: ONE_FACT });
+    const prompts = harness.sleepTimePrompts;
 
     await settle(harness, 1);
     expect(prompts).toHaveLength(0);
-    // And nothing was learned: the card that reads the fact store has nothing to show.
-    expect(harness.agent.harnessFacts().all()).toHaveLength(0);
+    // And nothing was learned: the store the "Learned N things" card reads is empty.
+    expect(facts(harness)).toEqual([]);
 
     await settle(harness, 2);
     expect(prompts).toHaveLength(0);
@@ -64,7 +72,7 @@ describe('the turn-count trigger', () => {
 
     for (const turn of ['ask-1', 'ask-2', 'ask-3']) expect(prompt).toContain(turn);
     expect(prompt.indexOf('ask-1')).toBeLessThan(prompt.indexOf('ask-3'));
-    expect(harness.agent.harnessFacts().recall('user.editor')?.value).toBe('helix');
+    expect(facts(harness)).toEqual([{ key: 'user.editor', value: '"helix"' }]);
 
     // The fourth turn is one turn past a run: nothing.
     await settle(harness, 4);
@@ -72,8 +80,8 @@ describe('the turn-count trigger', () => {
   });
 
   test('the next run reads only the turns since the last one', async () => {
-    const harness = orchestratorHarness();
-    const prompts = harness.agent.harnessScriptSleepTimeModel(EMPTY);
+    const harness = orchestratorHarness(undefined, undefined, undefined, { sleepTimeModel: EMPTY });
+    const prompts = harness.sleepTimePrompts;
 
     for (let n = 1; n <= 6; n++) await settle(harness, n);
     expect(prompts).toHaveLength(2);
@@ -87,8 +95,8 @@ describe('the turn-count trigger', () => {
 
 describe('the idle trigger', () => {
   test('a turn left alone for the idle interval is read on the wake, and only once', async () => {
-    const harness = orchestratorHarness();
-    const prompts = harness.agent.harnessScriptSleepTimeModel(EMPTY);
+    const harness = orchestratorHarness(undefined, undefined, undefined, { sleepTimeModel: EMPTY });
+    const prompts = harness.sleepTimePrompts;
     await settle(harness, 1);
     await settle(harness, 2);
     expect(prompts).toHaveLength(0);
@@ -116,8 +124,8 @@ describe('the idle trigger', () => {
   });
 
   test('a first turn never arms the idle wake', async () => {
-    const harness = orchestratorHarness();
-    const prompts = harness.agent.harnessScriptSleepTimeModel(EMPTY);
+    const harness = orchestratorHarness(undefined, undefined, undefined, { sleepTimeModel: EMPTY });
+    const prompts = harness.sleepTimePrompts;
     await settle(harness, 1);
 
     setSystemTime(new Date(Date.now() + SLEEP_TIME_CADENCE.idleMs * 2));
@@ -128,8 +136,8 @@ describe('the idle trigger', () => {
 
 describe('the closed-tab trigger', () => {
   test('the last tab closing runs the pending turns after the grace', async () => {
-    const harness = orchestratorHarness();
-    const prompts = harness.agent.harnessScriptSleepTimeModel(EMPTY);
+    const harness = orchestratorHarness(undefined, undefined, undefined, { sleepTimeModel: EMPTY });
+    const prompts = harness.sleepTimePrompts;
     await settle(harness, 1);
     await settle(harness, 2);
 
@@ -145,8 +153,8 @@ describe('the closed-tab trigger', () => {
   });
 
   test('a reconnect inside the grace runs nothing', async () => {
-    const harness = orchestratorHarness();
-    const prompts = harness.agent.harnessScriptSleepTimeModel(EMPTY);
+    const harness = orchestratorHarness(undefined, undefined, undefined, { sleepTimeModel: EMPTY });
+    const prompts = harness.sleepTimePrompts;
     await settle(harness, 1);
     await settle(harness, 2);
 
@@ -160,8 +168,8 @@ describe('the closed-tab trigger', () => {
   });
 
   test('a tab closing with nothing unprocessed arms nothing', async () => {
-    const harness = orchestratorHarness();
-    const prompts = harness.agent.harnessScriptSleepTimeModel(EMPTY);
+    const harness = orchestratorHarness(undefined, undefined, undefined, { sleepTimeModel: EMPTY });
+    const prompts = harness.sleepTimePrompts;
     await settle(harness, 1);
 
     await harness.agent.onClose(tab('t1'), 1000, 'gone', true);
