@@ -4,6 +4,7 @@ import type { EvalObservation } from '@kinu.run/test-utils';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
+import { firstRunReplyText } from './turn-settlement';
 
 const SUITE = 'First-run · background-settle';
 
@@ -45,6 +46,9 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      // No genesis turn: the detach this row measures is its own prompt's,
+      // and a reply spliced into a genesis turn under way is that turn's.
+      genesis: false,
       purpose: 'Run a slow command on the container, let it settle out of turn, and report what it printed.',
       modelCalls: 'expected',
       budgetMs: 10 * 60_000,
@@ -55,7 +59,12 @@ describe(SUITE, () => {
           + 'When it has finished, tell me the marker it printed.',
         );
 
-        const replyText = first.landed === 'turn' ? first.text : '';
+        // The answer to THIS prompt, wherever it landed: a send that spliced
+        // into the genesis turn has no turn result of its own, and its reply
+        // is on the transcript. Read now, before the wake adds its own rows.
+        const replyText = first.landed === 'turn'
+          ? first.text
+          : firstRunReplyText(await session.history(), MARKER);
 
         // The handle the detach left behind: `result` carries the job id the
         // wake run's opening message will name. No handle means the call ran
@@ -120,9 +129,9 @@ describe(SUITE, () => {
         return [
           {
             what: 'detach-announced',
-            reached: first.landed === 'turn' && jobId !== undefined
+            reached: jobId !== undefined
               && (/bgjob-|background/i.test(replyText) || replyText.includes(jobId)),
-            detail: `first reply ${first.landed === 'turn' ? 'ended its turn' : 'landed mid-turn'}; `
+            detail: `first reply ${first.landed === 'turn' ? 'ended its turn' : 'spliced into the open turn'}; `
               + `handle jobId=${String(jobId)}; reply=${JSON.stringify(replyText.slice(0, 300))}`,
           },
           {

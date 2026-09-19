@@ -1,9 +1,10 @@
 /**
  * A blueprint published from a slate carries no mapped bindings; a second
  * workspace imports it, its bindings read as unmapped in the read model, and
- * the forked slate serves once read. The map-to-own-MCP step stays named
- * below and reads blocked-by-product while the deployed MCP roster refuses
- * on its missing preset column.
+ * the forked slate serves once read. Mapping the fork's `gh` binding to a
+ * server of the importer's own needs a connected MCP server, which the eval
+ * identity has none of (the presets are OAuth logins), so the last step
+ * proves the roster the mapping would read from answers, not the mapping.
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
@@ -121,10 +122,13 @@ END`));
             reached: hello.success,
             detail: JSON.stringify({ hello: hello.success ? hello.output : null, problem: problem.slice(0, 160) }),
           });
+          const mcpRosterText = await mcpRoster.text();
+          const mcpRosterRows = v.safeParse(v.array(v.unknown()), JSON.parse(mcpRosterText));
+
           goals.push({
-            what: 'map-to-own-mcp-blocked-by-product',
-            reached: mcpRoster.status !== 200,
-            detail: `GET /api/user/mcp/servers answered ${String(mcpRoster.status)}: ${(await mcpRoster.text()).slice(0, 160)}`,
+            what: 'own-mcp-roster-answers',
+            reached: mcpRoster.status === 200 && mcpRosterRows.success,
+            detail: `GET /api/user/mcp/servers answered ${String(mcpRoster.status)}: ${mcpRosterText.slice(0, 160)}`,
           });
         } finally {
           await forked.teardown();

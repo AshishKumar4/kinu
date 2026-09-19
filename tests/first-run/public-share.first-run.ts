@@ -6,7 +6,7 @@
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
-import { callSharedSlate, type EvalObservation, type SlateViewerAnswer } from '@kinu.run/test-utils';
+import { callSharedSlate, consentToShare, type EvalObservation, type SlateViewerAnswer } from '@kinu.run/test-utils';
 import { JsonValueSchema, LiveShareCreatedSchema, type JsonValue } from '@kinu.run/core';
 import { FIRST_RUN_DEFECTS, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { operatorFirstRunPlan } from './operator-session';
@@ -29,9 +29,10 @@ const SLATE = 'public-share';
 
 afterAll(() => publishFirstRunRecord(SUITE, undefined, [CASE], observations));
 
-/** The visitor's Cap'n Web batch against the share origin, parsed as JSON. */
-function viewerCall(url: string, method: 'probe' | 'mutate'): Promise<SlateViewerAnswer<JsonValue>> {
-  return callSharedSlate(url, method, JsonValueSchema);
+/** The visitor's Cap'n Web batch against the share origin, parsed as JSON,
+ *  carrying the consent the credentialed share asks for first. */
+function viewerCall(url: string, method: 'probe' | 'mutate', cookie: string): Promise<SlateViewerAnswer<JsonValue>> {
+  return callSharedSlate(url, method, JsonValueSchema, cookie);
 }
 
 describe(SUITE, () => {
@@ -66,11 +67,13 @@ END`]));
         let mutate: SlateViewerAnswer<JsonValue> | null = null;
 
         if (url !== null) {
-          // Signed out: no cookie, no bearer, the bare share origin.
-          const response = await fetch(url);
+          // Signed out: no identity, no bearer — only the consent the share
+          // asks every viewer for.
+          const cookie = await consentToShare(url);
+          const response = await fetch(url, { headers: { cookie } });
           served = { status: response.status, body: (await response.text()).slice(0, 200) };
-          probe = await viewerCall(url, 'probe');
-          mutate = await viewerCall(url, 'mutate');
+          probe = await viewerCall(url, 'probe', cookie);
+          mutate = await viewerCall(url, 'mutate', cookie);
         }
 
         return [

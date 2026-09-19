@@ -8,7 +8,7 @@
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
-import { callSharedSlate, type EvalObservation, type EvalSubgoal, type SlateViewerAnswer } from '@kinu.run/test-utils';
+import { callSharedSlate, consentToShare, type EvalObservation, type EvalSubgoal, type SlateViewerAnswer } from '@kinu.run/test-utils';
 import { JsonValueSchema, LiveShareCreatedSchema, ViewerRequestRecordSchema, type JsonValue } from '@kinu.run/core';
 import { ERROR_CODES } from '@kinu.run/core/obs';
 import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
@@ -85,10 +85,14 @@ END`));
         let controlUrl: string | null = null;
 
         if (url !== null) {
-          const response = await fetch(url);
+          // Both probe slates reach the owner's workspace, so the share fronts
+          // them with its consent page; the viewer presses Continue once and
+          // carries the cookie, as a person would.
+          const cookie = await consentToShare(url);
+          const response = await fetch(url, { headers: { cookie } });
           served = { status: response.status, body: (await response.text()).slice(0, 200) };
-          probe = await callSharedSlate(url, 'probe', JsonValueSchema);
-          mutate = await callSharedSlate(url, 'mutate', JsonValueSchema);
+          probe = await callSharedSlate(url, 'probe', JsonValueSchema, cookie);
+          mutate = await callSharedSlate(url, 'mutate', JsonValueSchema, cookie);
         }
 
         const controlShared = await session.slateOp({ op: 'share', id: CONTROL_SLATE, visibility: 'public', approved: [] });
@@ -96,7 +100,7 @@ END`));
         const controlCreated = controlAnswered.success ? v.safeParse(LiveShareCreatedSchema, controlAnswered.output.value) : null;
         controlUrl = controlCreated?.success === true ? controlCreated.output.url : null;
 
-        if (controlUrl !== null) ctrl = await callSharedSlate(controlUrl, 'ctrl', JsonValueSchema);
+        if (controlUrl !== null) ctrl = await callSharedSlate(controlUrl, 'ctrl', JsonValueSchema, await consentToShare(controlUrl));
 
         const mark = v.parse(Exec, await session.execute('workspace', `cat ${MARK} 2>&1 || echo CUTSHARE-NO-MARK`));
         const markText = mark.stdout ?? mark.error ?? '';

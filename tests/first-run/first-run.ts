@@ -229,7 +229,7 @@ export const FIRST_RUN_DEFECTS = {
     found: 'A blueprint published from a slate carried no mapped bindings; a second workspace imported it with bindings unmapped in the read model, and mapping one to its own MCP server made the slate serve.',
     missedBecause: 'Unit proofs cover publish and admit in isolation; nothing drove the app-host publish, public read, fork, and forker-side serve for the same bytes on the deployed product.',
     provedRedAt: null,
-    redDirection: 'Green requires publish to answer inspection plus link, the public blueprint read to name both bindings credentialed, the fork to answer two requirements with an unmapped graph problem, and hello() to answer. Blocked on live while the MCP roster refuses on its missing preset column.',
+    redDirection: 'Green requires publish to answer inspection plus link, the public blueprint read to name both bindings credentialed, the fork to answer two requirements with an unmapped graph problem, and hello() to answer, and the importer\'s own MCP roster to answer a list the mapping would read from.',
   },
   'preview-address': {
     id: 'preview-address',

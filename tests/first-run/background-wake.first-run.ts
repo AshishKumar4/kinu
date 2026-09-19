@@ -51,6 +51,11 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      // No genesis turn: the row's prompt must open its OWN run — the wake
+      // it measures is that run's, and a send that spliced into a genesis
+      // turn already under way streams under that turn's request id, which
+      // is a chunk this row would wait on until its budget ended.
+      genesis: false,
       purpose: 'Run three commands in order, one call each, and report what each printed.',
       modelCalls: 'expected',
       budgetMs: 10 * 60_000,
@@ -101,6 +106,9 @@ describe(SUITE, () => {
           }
         }
 
+        // The socket the case dropped on purpose comes back for the reads the
+        // harness makes after this returns: spend is a socket RPC.
+        await session.connect();
         const events = await session.runEvents();
         const starts = events.filter((event) => event.type === 'run_start' && event.userMessage?.includes(STEPS[0]) === true);
         const ends = events.filter((event) => event.type === 'run_end' && starts.some((start) => start.runId === event.runId));
