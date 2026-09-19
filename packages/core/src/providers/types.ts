@@ -192,6 +192,8 @@ export interface ProviderWaitInfo {
 
 export interface ProviderDeps {
   env: ProviderEnv;
+  /** Stable conversation identity for provider routing and prompt caching. */
+  sessionAffinity?: string;
   /** Returns auth headers + baseURL for `key`, or null if not configured. */
   getAuth: AuthResolver;
   /** Synchronous-friendly "is there a credential for this key" check used by

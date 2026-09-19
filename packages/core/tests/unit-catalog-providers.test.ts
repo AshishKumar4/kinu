@@ -2,7 +2,7 @@
 // `<id>.bearer` key resolves through the openai-compat wire path, while
 // bespoke (statically registered) providers stay authoritative for their ids.
 import { describe, test, expect } from 'bun:test';
-import { generateText } from 'ai';
+import { generateText, jsonSchema, streamText, tool } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
   createProviderRegistry,
@@ -14,7 +14,8 @@ import {
   type ProviderDeps, type AuthResolution, type ModelProvider,
 } from '../src/index';
 import { describeProviderError } from '../src/providers/util';
-import { createMockFetch, CHAT_COMPLETION_BODY } from '@kinu.run/test-utils';
+import { getModelsDevModelEndpoint } from '../src/providers/models-dev';
+import { createMockFetch, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
 
 const CATALOG = {
   groq: {
@@ -104,6 +105,47 @@ async function call(model: Parameters<typeof generateText>[0]['model']): Promise
 }
 
 describe('models.dev provider metadata', () => {
+  test('a model SDK override does not remove its provider endpoint', async () => {
+    const mock = createMockFetch([{ match: 'models.dev/api.json', respond: { body: {
+      mixed: {
+        id: 'mixed', npm: '@ai-sdk/openai-compatible', api: 'https://mixed.test/v1',
+        models: {
+          messages: { id: 'messages', provider: { npm: '@ai-sdk/anthropic' } },
+          generated: { id: 'generated', provider: { npm: '@ai-sdk/google' } },
+        },
+      },
+    } } }]);
+
+    for (const model of ['messages', 'generated']) {
+      expect(await getModelsDevModelEndpoint('mixed', model, { fetch: mock.fetch })).toEqual({
+        baseURL: 'https://mixed.test/v1', protocol: 'chat-completions',
+      });
+    }
+  });
+
+  test('nullable effort values from another provider do not discard the catalog', async () => {
+    // models.dev sarvam/sarvam-105b, measured 2026-09-19: null is a declared
+    // effort value. The menu exposes only Kinu's recognized string levels.
+    const mock = createMockFetch([{ match: 'models.dev/api.json', respond: { status: 200, body: {
+      ...CATALOG,
+      sarvam: {
+        id: 'sarvam', npm: '@ai-sdk/openai-compatible', api: 'https://sarvam.test/v1',
+        models: { 'sarvam-105b': {
+          id: 'sarvam-105b', tool_call: true,
+          reasoning_options: [{ type: 'effort', values: [null, 'low', 'medium', 'high'] }],
+        } },
+      },
+    } } }]);
+
+    const source = createModelsDevCatalogSource();
+    const sarvam = source.get('sarvam');
+
+    if (sarvam === undefined) throw new Error('Catalog provider was not registered');
+    const deps = makeDeps({ 'sarvam.bearer': { headers: {} } }, mock.fetch);
+    expect(await getModelsDevProvider('groq', deps)).toMatchObject({ id: 'groq', api: 'https://api.groq.com/openai/v1' });
+    expect((await sarvam.listModels(deps))[0]?.reasoningEfforts).toEqual(['low', 'medium', 'high']);
+  });
+
   test('getModelsDevProvider returns id/name/doc/env/npm/api', async () => {
     const mock = catalogMock();
     const info = await getModelsDevProvider('groq', { fetch: mock.fetch });
@@ -178,6 +220,108 @@ describe('registry with dynamic catalog source', () => {
 
     return registry;
   }
+
+  test('a model SDK override selects Responses while its sibling stays on Chat Completions', async () => {
+    // models.dev, 2026-09-19: opencode's Muse entries override the provider's
+    // openai-compatible SDK with @ai-sdk/openai, whose default is Responses.
+    const mock = createMockFetch([
+      { match: 'models.dev/api.json', respond: { status: 200, body: {
+        mixed: {
+          id: 'mixed', npm: '@ai-sdk/openai-compatible', api: 'https://mixed.test/v1',
+          models: {
+            response: { id: 'response', tool_call: true, provider: { npm: '@ai-sdk/openai', api: 'https://responses.test/v1' } },
+            chat: { id: 'chat', tool_call: true },
+          },
+        },
+      } } },
+      { match: 'responses.test', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
+      { match: 'mixed.test', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
+    ]);
+
+    const deps = makeDeps({ 'mixed.bearer': { headers: { Authorization: 'Bearer first-key' } } }, mock.fetch);
+    const registry = makeRegistry();
+    const responseModel = registry.resolve('mixed/response', deps);
+
+    await call(responseModel);
+    await call(registry.resolve('mixed/chat', deps));
+    deps.getAuth = async () => ({ headers: { Authorization: 'Bearer rotated-key' }, baseURL: 'https://responses.test/custom' });
+    await call(responseModel);
+
+    const requests = mock.requests.filter((request) => !request.url.includes('models.dev'));
+    expect(requests.map((request) => request.url)).toEqual([
+      'https://responses.test/v1/responses', 'https://mixed.test/v1/chat/completions', 'https://responses.test/custom/responses',
+    ]);
+    expect(requests.map((request) => request.headers.authorization)).toEqual([
+      'Bearer first-key', 'Bearer first-key', 'Bearer rotated-key',
+    ]);
+    expect(JSON.parse(requests[0]?.body ?? '{}')).toMatchObject({ model: 'response', input: expect.any(Array) });
+    expect(JSON.parse(requests[1]?.body ?? '{}')).toMatchObject({ model: 'chat', messages: expect.any(Array) });
+  });
+
+  test('provider SDK defaults select Responses and an explicit model override selects Chat Completions', async () => {
+    const mock = createMockFetch([
+      { match: 'models.dev/api.json', respond: { status: 200, body: {
+        responses: {
+          id: 'responses', npm: '@ai-sdk/openai', api: 'https://responses.test/v1',
+          models: {
+            default: { id: 'default', tool_call: true },
+            chat: { id: 'chat', tool_call: true, provider: { npm: '@ai-sdk/openai-compatible' } },
+          },
+        },
+      } } },
+      { match: 'https://responses.test/v1/responses', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
+      { match: 'https://responses.test/v1/chat/completions', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
+    ]);
+
+    const deps = makeDeps({ 'responses.bearer': { headers: { Authorization: 'Bearer key' } } }, mock.fetch);
+    const registry = makeRegistry();
+
+    await call(registry.resolve('responses/default', deps));
+    await call(registry.resolve('responses/chat', deps));
+    expect(mock.requests.filter((request) => !request.url.includes('models.dev')).map((request) => request.url)).toEqual([
+      'https://responses.test/v1/responses', 'https://responses.test/v1/chat/completions',
+    ]);
+  });
+
+  test('a Responses catalog model preserves streaming text and native tool calls', async () => {
+    const chunks = [
+      { type: 'response.created', response: OPENAI_RESPONSES_BODY },
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'message', id: 'msg_mock' } },
+      { type: 'response.output_text.delta', item_id: 'msg_mock', delta: 'ok' },
+      { type: 'response.output_item.done', output_index: 0, item: { type: 'message', id: 'msg_mock' } },
+      { type: 'response.completed', response: OPENAI_RESPONSES_BODY },
+    ];
+
+    const mock = createMockFetch([
+      { match: 'models.dev/api.json', respond: { status: 200, body: {
+        responses: {
+          id: 'responses', npm: '@ai-sdk/openai', api: 'https://response-stream.test/v1',
+          models: { test: { id: 'test', tool_call: true } },
+        },
+      } } },
+      { match: '/v1/responses', respond: (request) => JSON.parse(request.body ?? '{}').stream === true
+        ? { headers: { 'content-type': 'text/event-stream' }, body: chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('') }
+        : { body: { ...OPENAI_RESPONSES_BODY, output: [{
+          type: 'function_call', id: 'fc_echo', call_id: 'call_echo', name: 'echo', arguments: '{"value":"hello"}',
+        }] } },
+      },
+    ]);
+
+    const deps = makeDeps({ 'responses.bearer': { headers: { Authorization: 'Bearer key' } } }, mock.fetch);
+    const model = makeRegistry().resolve('responses/test', deps);
+    const streamed = streamText({ model, prompt: 'hello' });
+
+    expect(await streamed.text).toBe('ok');
+    expect(await streamed.usage).toMatchObject({ inputTokens: 1, outputTokens: 1 });
+
+    const generated = await generateText({ model, prompt: 'Call echo.', tools: {
+      echo: tool({ inputSchema: jsonSchema<{ value: string }>({
+        type: 'object', properties: { value: { type: 'string' } }, required: ['value'],
+      }) }),
+    } });
+
+    expect(generated.toolCalls).toMatchObject([{ toolCallId: 'call_echo', toolName: 'echo', input: { value: 'hello' } }]);
+  });
 
   test('a non-whitelisted catalog provider with a stored key resolves through openai-compat', async () => {
     const mock = catalogMock([

@@ -1,12 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, usageTotal,
+  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, KINU_USER_AGENT, usageTotal,
 } from '@kinu.run/core';
 import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport } from '@kinu.run/core';
 import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver';
 import { asFetchFunction } from '@kinu.run/core';
 import * as v from 'valibot';
+import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
 
 describe('createLocalModelResolver', () => {
   /**
@@ -314,6 +315,31 @@ function cloudMenuFetch(origin = CLOUD_ORIGIN): typeof fetch {
 }
 
 describe('createLocalModelResolver — signed in (cloud proxy)', () => {
+  test('OpenCode Go preserves conversation identity and Responses through the credential proxy', async () => {
+    const mock = createMockFetch([
+      { match: 'models.dev/api.json', respond: { body: OPENCODE_GO_CATALOG } },
+      { match: '/api/user/ai/proxy/credentials', respond: { body: {
+        credentials: [{ key: 'opencode-go.bearer', baseURL: 'https://opencode.ai/zen/go/v1' }],
+      } } },
+      { match: '/api/cli/models', respond: { body: { models: [], failures: [] } } },
+      { match: '/api/user/ai/proxy/forward', respond: { body: OPENAI_RESPONSES_BODY } },
+    ]);
+
+    const resolver = createLocalModelResolver({
+      llm: proxyLLMConfig(), cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
+      fetch: mock.fetch, sessionAffinity: 'kinu-local-conversation',
+    });
+
+    await resolver.listModels();
+    await generateText({ model: resolver.resolveModel('opencode-go/muse-spark-1.3-contributor'), prompt: 'hello' });
+    const call = mock.requests.find((request) => request.url.endsWith('/api/user/ai/proxy/forward'));
+
+    expect(call?.headers['x-kinu-proxy-target']).toBe('https://opencode.ai/zen/go/v1/responses');
+    expect(call?.headers['x-opencode-session']).toBe('kinu-local-conversation');
+    expect(call?.headers['user-agent']).toBe(KINU_USER_AGENT);
+    expect(call?.headers.authorization).toBe(`Bearer ${CLOUD_TOKEN}`);
+  });
+
   test('shares menu row admission, capability union and provider failure preservation', async () => {
     const resolver = createLocalModelResolver({
       llm: proxyLLMConfig(),

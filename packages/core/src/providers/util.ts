@@ -23,13 +23,6 @@ export interface AuthedFetchOptions {
   missingCredentialError: string;
   /** Reject (401) when the credential lacks a baseURL (openai-compat). */
   requireBaseURL?: boolean;
-  /** Async fallback for `auth.baseURL` (catalog providers source their
-   *  endpoint from models.dev, not the credential). A credential-supplied
-   *  baseURL still wins. Resolving to null rejects the request (401) with
-   *  `missingBaseURLError`. */
-  resolveBaseURL?: () => Promise<string | null>;
-  /** Error text when `resolveBaseURL` comes up empty. */
-  missingBaseURLError?: string;
   /** Adjust headers and/or return a replacement URL after auth injection. */
   mutate?: (ctx: { url: string; headers: Headers; auth: AuthResolution }) => string | void;
 }
@@ -95,20 +88,7 @@ export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions):
       );
     }
 
-    let auth = resolved;
-
-    if (!auth.baseURL && opts.resolveBaseURL) {
-      const baseURL = await opts.resolveBaseURL();
-
-      if (!baseURL) {
-        return new Response(
-          JSON.stringify({ error: opts.missingBaseURLError ?? opts.missingCredentialError }),
-          { status: 401, headers: { 'Content-Type': 'application/json' } },
-        );
-      }
-
-      auth = { ...auth, baseURL };
-    }
+    const auth = resolved;
 
     const headers = copyHeaders(init?.headers);
 

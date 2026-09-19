@@ -96,7 +96,7 @@ export class OwnedModelServices {
       env: this.options.env,
       userDO: userDOStub ? { stub: userDOStub, caller: this.options.getUserCaller } : null,
       appTitle: this.options.appTitle,
-      workersAI: { sessionAffinity: this.affinityKey },
+      sessionAffinity: this.affinityKey,
       onProviderWait: this.options.onProviderWait,
     });
 

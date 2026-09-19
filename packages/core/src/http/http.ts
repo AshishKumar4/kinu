@@ -189,52 +189,6 @@ export function fileResponseHeaders(path: string, download: boolean): Headers {
   return headers;
 }
 
-/**
- * How Kinu identifies itself on traffic it originates.
- *
- * One token, and no version in it. A version here is a second place a release
- * has to remember to edit, and the first time somebody forgets, the string
- * says something false about the build that sent it. RFC 9110 §10.1.5 allows a
- * bare product token with a comment, so the URL carries the detail a server
- * operator actually wants: somewhere to write to.
- */
-export const KINU_USER_AGENT = 'Kinu (+https://kinu.run)';
-
-/**
- * RFC 9110 §5.5 field-value characters, minus the obs-text range nothing here
- * produces: printable US-ASCII and nothing else. A caller's `User-Agent` is
- * agent-chosen text, so it is admitted as a suffix only when it is already a
- * legal field value — anything with a control character is dropped whole
- * rather than repaired, because a repaired identity is a different identity.
- */
-const PRINTABLE_FIELD_VALUE = /^[\x20-\x7E]+$/;
-
-/**
- * Kinu's identity first, then the caller's own, when it has one.
- *
- * KINU FIRST is the whole point: RFC 9110 §10.1.5 reads a `User-Agent` as
- * product tokens in decreasing significance, so a receiving operator that
- * looks at one token sees Kinu, and rate-limiting or blocking us never depends
- * on whatever a container's HTTP client calls itself. The caller's tokens are
- * kept after it because `curl/8.5.0` and `python-requests/2.32` are the
- * detail that makes a support conversation short.
- *
- * No length bound is invented here. The suffix arrived as an HTTP header on an
- * intercepted request, so the runtime's own header limit already bounded it,
- * and the same bytes reach the same upstream whether or not this token is
- * prepended.
- */
-export function kinuUserAgent(callerUserAgent: string | null): string {
-  const caller = callerUserAgent?.trim() ?? '';
-
-  if (!caller || !PRINTABLE_FIELD_VALUE.test(caller)) return KINU_USER_AGENT;
-
-  // A request that already went through this policy — a second interception
-  // hop — must not stack the token again.
-  if (caller.startsWith(KINU_USER_AGENT)) return caller;
-
-  return `${KINU_USER_AGENT} ${caller}`;
-}
 
 /**
  * Rebuild an inbound request for an upstream, KEEPING ITS TRANSFER FRAMING.
