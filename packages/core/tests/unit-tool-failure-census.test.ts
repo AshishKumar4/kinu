@@ -509,6 +509,8 @@ const PART_BY_CODE = {
   bad_input: 'refused',
   denied: 'refused',
   unsupported: 'refused',
+  // A bound the caller hit before the work ran — declined, like denied.
+  budget: 'refused',
   // The environment the call addressed is not there. A platform gap: Kinu never
   // provisioned it, so it is neither a defect nor the work.
   unavailable: 'runtimeMissing',

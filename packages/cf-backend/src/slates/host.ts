@@ -9,13 +9,18 @@ import {
 } from '@kinu.run/core/slates';
 import { SlateLiveShareStore, initSlateLiveShareTables, WorkspaceLiveShares } from '@kinu.run/core/slates';
 import {
+  credentialedBindings, ingressAdmitted,
   parseSlateProject, routeSlateStorageCall, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
   SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, issuedSlateInvocation,
   routeViewerBindingCall, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
+  escapeHtml, publicPage, UsageSchema, usageTotal,
+  SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel, VIEWER_EXCHANGE_PATH,
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
   type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
   type SlateBindingCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim, type WorkspaceOverviewSlate,
+  type MissionGovernor,
 } from '@kinu.run/core';
+import type { KvStore } from '@kinu.run/agent-utils';
 import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
@@ -41,6 +46,15 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   catalog(): Promise<SlateBindingCatalog>;
   /** The public URL a share handle serves, or null where no share host is wired. */
   shareUrl(handle: string): Promise<string | null>;
+  /** AUTH_KV, for the per-viewer request bound on the share rail. Absent
+   *  means no rate bound — the same answer AUTH_KV's absence gives the edge
+   *  rails `ingressAdmitted` already serves. */
+  kv?: KvStore;
+  /** The workspace's mission governor — the per-share per-day spend bound
+   *  debits its `share:<id>:<day>` label here. Absent means no spend bound. */
+  budget?(): MissionGovernor;
+  /** Who the consent page says is sharing, before it names the slate. */
+  ownerTitle?(): Promise<string>;
 }
 
 /** What a viewer request admitted under a share carries through its life:
@@ -226,6 +240,24 @@ export class SlateHost {
 
     const subject = input.claim.userId === null ? `source:${input.claim.source}` : `user:${input.claim.userId}`;
 
+    // S2: the per-viewer request bound, counted on every request the share
+    // admits — one viewer past it is one viewer refused, never the share
+    // paused. No KV is the same answer it gives the edge: unbounded.
+    if (this.deps.kv !== undefined && !await ingressAdmitted(this.deps.kv, 'slate-share', `${share.id}:${subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) {
+      return new Response('Too many requests', { status: 429, headers: { 'cache-control': 'no-store' } });
+    }
+
+    // D3: a viewer who never saw the consent page sees it before anything of
+    // the owner's runs — named viewers too: a ticket cookie names an account,
+    // it never signed the disclaimer. A slate that reaches nothing of the
+    // owner's has nothing to disclose, and a project that cannot be read
+    // keeps today's failure mode rather than hiding it behind a page.
+    if (!input.claim.consented) {
+      const page = await this.consentPage(share);
+
+      if (page !== null) return page;
+    }
+
     const viewer: SlateViewer = {
       share: share.id,
       subject,
@@ -248,6 +280,75 @@ export class SlateHost {
       record: (call) => { this.live.recordCall(viewer.request, call); },
       settle: (outcome) => { this.live.settleRequest(viewer.request, outcome); },
     };
+  }
+  /**
+   * The consent page a credentialed share answers until the viewer's cookie
+   *   is the consent-minted one: who is sharing, what the slate reaches, and
+   *   the button whose GET the edge mints that cookie on. `null` when the
+   *   slate reaches nothing of the owner's — nothing to disclose.
+   */
+  private async consentPage(share: LiveShareRecord): Promise<Response | null> {
+    const project = await this.project(CRED_SESSION_USER, share.slate);
+    const credentialed = credentialedBindings(project);
+
+    if (credentialed.length === 0) return null;
+
+    const owner = (await this.deps.ownerTitle?.()) ?? this.deps.workspace;
+    const title = project.slate.title ?? project.name ?? share.slate;
+    const bindings = credentialed.map((binding) => `<li>${escapeHtml(`${binding.name} (${binding.target})`)}</li>`).join('');
+
+    const html = publicPage({
+      title: `${owner} shared ${title}`,
+      body: `<main><section class="section">
+<h1>${escapeHtml(owner)} shared ${escapeHtml(title)}</h1>
+<p class="dim">This slate runs in ${escapeHtml(owner)}'s workspace and calls these connections with their credentials:</p>
+<ul>${bindings}</ul>
+<p class="dim">What you do here runs as ${escapeHtml(owner)} and is logged for them.</p>
+<a class="btn solid" href="${VIEWER_EXCHANGE_PATH}?consent=1">Continue</a>
+</section></main>`,
+    });
+
+    return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+  }
+
+  /** Whether the share's per-day spend bound is already spent. A read of the
+   *   ledger's own row — never `guard`, which stamps exhaustion and fires the
+   *   once-per-label event the viewer's own call is for. */
+  private sharePaused(share: LiveShareRecord): boolean {
+    const governor = this.deps.budget?.();
+
+    if (governor === undefined) return false;
+
+    return governor.snapshot(shareSpendLabel(share.id)).some((row) => row.exhausted);
+  }
+
+  /**
+   * The share's per-day spend bound, as the mission ledger keeps it: the
+   *   label is the share's row and the UTC day, so the bound renews at
+   *   midnight without a rollover job. `debit` records the call and whatever
+   *   usage the route reported; a route that reports none debits the call
+   *   alone. Declared here and unparented — a share's bound is its own, not a
+   *   child of whichever turn happened to declare first.
+   */
+  private shareGovernor(share: LiveShareRecord): MissionGovernor | undefined {
+    const governor = this.deps.budget?.();
+
+    if (governor === undefined) return undefined;
+    governor.declare(shareSpendLabel(share.id), { usd: SHARE_SPEND_CAP_USD_PER_DAY }, { parent: '' });
+
+    return governor;
+  }
+
+  private debitShare(share: LiveShareRecord, value: JsonValue): void {
+    const governor = this.shareGovernor(share);
+
+    if (governor === undefined) return;
+    const usage = v.safeParse(v.object({ usage: v.optional(UsageSchema) }), value);
+
+    governor.debit(usage.success && usage.output.usage !== undefined ? usageTotal(usage.output.usage) ?? 0 : 0, {
+      labels: [shareSpendLabel(share.id)], calls: 1,
+      usage: usage.success ? usage.output.usage : undefined,
+    });
   }
 
   /**
@@ -349,6 +450,18 @@ export class SlateHost {
    *  on the running slate's row. */
   shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
     return this.blueprintAnswer('sharing slate ' + share, () => this.live.addUsers(share, users));
+  }
+
+  /** Whether the share's `users` list names this account — the live-fork
+   *  admission test the app host's fork route runs through the owner object. */
+  liveShareAdmitsUser(share: string, userId: string): boolean {
+    return this.live.hasUser(share, userId);
+  }
+
+  /** The skeleton bundle a live-share fork carries — the running slate's own
+   *  export, checked only by the caller above this method. */
+  liveShareBundle(record: LiveShareRecord): Promise<SlateAnswer<BlueprintBundle>> {
+    return this.blueprintAnswer(`exporting live share ${record.id}`, (blueprints) => blueprints.liveBundle(record.slate));
   }
 
   /** The live share as the app host returns it: the record plus its URL. */
@@ -454,10 +567,10 @@ export class SlateHost {
 
             case 'shares': return { ok: true, value: projectJsonValue({ value: blueprints.list() }) };
             case 'share': {
-              return { ok: true, value: projectJsonValue({ value: await (await this.liveShares()).share(operation.id, operation.visibility, operation.approved) }) };
+              return { ok: true, value: projectJsonValue({ value: await (await this.liveShares()).share(operation.id, operation.visibility, operation.approved, operation.fork) }) };
             }
 
-            case 'liveShares': return { ok: true, value: projectJsonValue({ value: this.live.list() }) };
+            case 'liveShares': return { ok: true, value: projectJsonValue({ value: this.live.list().map((row) => ({ ...row, paused: this.sharePaused(row) })) }) };
             case 'viewerRequests': return { ok: true, value: projectJsonValue({ value: this.live.requests(operation.share) }) };
           }
         }
@@ -703,11 +816,23 @@ export class SlateHost {
         }
 
         const viewer = issued.viewer;
+
+        // S2: the share's per-day spend bound. A spent bound refuses the call
+        // as 'budget' — the audit row takes the refusal like any other, and
+        // the bound renews when the day in the label rolls over.
+        const share = this.live.live(caller.share);
+        const governor = this.deps.budget?.();
+
+        if (governor !== undefined && governor.guard('model_call', [shareSpendLabel(share.id)]) !== null) {
+          this.live.recordCall(viewer.request, { slate: id, binding: name, member: parsed.output.member, effect: 'mutate', ok: false });
+          throw new KinuError('budget', 'This share is paused for today');
+        }
+
         const project = await this.project(caller.cred, id);
         let call;
 
         try {
-          call = routeViewerBindingCall({ id, project, name, request: parsed.output, chain, viewer, grant: this.live.live(caller.share).grant });
+          call = routeViewerBindingCall({ id, project, name, request: parsed.output, chain, viewer, grant: share.grant });
         } catch (cause) {
           this.live.recordCall(viewer.request, { slate: id, binding: name, member: parsed.output.member, effect: 'mutate', ok: false });
           throw cause;
@@ -723,6 +848,8 @@ export class SlateHost {
         }
 
         this.live.recordCall(viewer.request, { slate: id, binding: name, member: call.member, effect: call.effect, ok: result.ok });
+
+        if (result.ok) this.debitShare(share, result.value);
 
         return result;
       }

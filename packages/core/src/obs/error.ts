@@ -52,6 +52,9 @@ import { classify, errnoCode } from './expected-failure';
  *               working.
  *   unsupported the environment cannot do this AT ALL. A declared-capability
  *               gap, decided from what the environment says about itself.
+ *   budget      a declared bound was already spent: the operation is admissible
+ *               in every other respect, and nothing about retrying changes the
+ *               answer until the bound renews. Like `denied`, a refusal.
  *   unavailable it could do this, and right now it is not reachable: not
  *               provisioned yet, disconnected, cold. Distinct from
  *               `unsupported` because one is permanent and the other is a retry,
@@ -74,6 +77,7 @@ export const ERROR_CODES = [
   'bad_input',
   'denied',
   'unsupported',
+  'budget',
   'unavailable',
   'missing',
   'timeout',
@@ -101,7 +105,7 @@ export const CODE_IS_REFUSAL = {
   bad_input: true,
   denied: true,
   unsupported: true,
-  // None of the rest is a decision anything made.
+  budget: true,
   unavailable: false,
   missing: false,
   timeout: false,
@@ -138,6 +142,8 @@ export const CODE_WORK_DID_NOT_START = {
   unsupported: true,
   /** Nothing was there to receive the work — no device attached, no binding. */
   unavailable: true,
+  /** The bound refused before dispatch; nothing started. */
+  budget: true,
   /** A named thing was absent, and work can discover that after it starts. */
   missing: false,
   /** A deadline passed. The work may still be running. */

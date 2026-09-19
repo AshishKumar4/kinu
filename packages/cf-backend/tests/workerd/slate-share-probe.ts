@@ -15,10 +15,14 @@ import { newWebSocketRpcSession } from 'capnweb';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
+import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
+import { workspaceGenerationStorage } from '@kinu.run/core/workspace';
+import { adoptGeneration, generation } from '@nimbus-sh/fabric/generation.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { probeFacetManager } from './facet-manager';
 import {
-  initWorkspaceSchema, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SqlExec, type SqlExecutor,
+  bindActorHandle, initWorkspaceSchema, MissionGovernor,
+  type JsonValue, type ShareViewerClaim, type SlateCallResult, type SqlExec, type SqlExecutor,
 } from '@kinu.run/core';
 import { initSlateLiveShareTables } from '@kinu.run/core/slates';
 import { SlateHost } from '../../src/slates/host';
@@ -65,6 +69,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly processes = new SessionProcessSupervisor();
   private readonly ports = new PortRegistry();
   private readonly host: SlateHost;
+  private _budget: MissionGovernor | undefined;
+  private readonly gen: Parameters<typeof adoptGeneration>[0];
   /** The `x-slate-call` of the most recent forwarded request — the socket's
    *  invocation for the replay check, kept because nothing else surfaces it. */
   private lastCall: string | null = null;
@@ -92,6 +98,11 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
     initWorkspaceSchema({ execRaw: (ddl: string) => ctx.storage.sql.exec(ddl), sql, exec });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
+    // The supervisor's pids are generation-scoped, exactly as a hosted
+    // workspace's are: each boot of this object adopts the persisted counter's
+    // next generation, so a slate process re-spawned after an eviction is
+    // never handed a pid the filesystem still holds an append writer for.
+    this.gen = workspaceGenerationStorage(ctx.storage.sql);
     const facets = probeFacetManager({ ctx, env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs });
 
     this.host = new SlateHost({
@@ -117,12 +128,25 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       },
       catalog: async () => ({ ...CATALOG, slates: await this.host.projects(ROOT_SLATE_CALLER) }),
       shareUrl: async (handle) => `https://${handle}.share.test/`,
+      // The probe has no AUTH_KV binding — no request bound, the same answer
+      // the edge gives on a deployment without it. The spend bound is real:
+      // a governor over this object's own SQLite, acting as the root actor.
+      budget: () => this._budget ??= new MissionGovernor({
+        storage: { sql, execRaw: (ddl: string) => ctx.storage.sql.exec(ddl) },
+        actor: bindActorHandle(sql, {
+          actorId: 'main', workspaceId: ctx.id.name ?? ctx.id.toString(),
+          parentActorId: null, name: 'main', storageKey: 'main',
+        }, () => {}),
+      }),
+      ownerTitle: async () => ctx.id.name ?? ctx.id.toString(),
     });
   }
 
   /** The authored slate: `probe` spends the granted read member, `mutate`
    *  spends the member the grant does not name, `fetch` answers plainly. */
   async start(): Promise<void> {
+    await adoptGeneration(this.gen);
+    this.processes.setPidBase(generation(this.gen) * PID_GEN_STRIDE);
     const root = '/home/user/slates/board';
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir(root, { recursive: true });
@@ -152,9 +176,13 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
   /** GET / through the real route: admission, the boot, the port hop. */
   async viewerFetch(handle: string, claim: ShareViewerClaim): Promise<{ status: number; body: string }> {
-    const response = await this.host.routeShare(handle, claim, new Request('https://share.invalid/'), '/');
+    try {
+      const response = await this.host.routeShare(handle, claim, new Request('https://share.invalid/'), '/');
 
-    return { status: response.status, body: await response.text() };
+      return { status: response.status, body: await response.text() };
+    } catch (cause) {
+      return { status: 500, body: 'THROWN: ' + renderThrownChain({ cause }) };
+    }
   }
 
   /** A Cap'n Web batch through `routeShare` — the transport's POST path. The

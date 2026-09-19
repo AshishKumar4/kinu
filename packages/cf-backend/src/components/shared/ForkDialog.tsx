@@ -15,7 +15,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
 import { listWorkspaces, type WorkspaceEntry } from "@/lib/user-api";
 import { createWorkspaceFromMission } from "@/lib/create-workspace";
-import { forkBlueprint } from "@/lib/shared-api";
+import { forkBlueprint, forkLiveShare } from "@/lib/shared-api";
 
 const NEW_WORKSPACE = "\u0000new";
 
@@ -24,8 +24,10 @@ function forkedSlatePath(workspace: string, slate: string): string {
   return `/workspace/${encodeURIComponent(workspace)}?slate=${encodeURIComponent(slate)}&unmapped=1`;
 }
 
-export function ForkDialog({ blueprint, title, onClose, workspaces }: {
-  blueprint: string;
+export function ForkDialog({ blueprint, live, title, onClose, workspaces }: {
+  /** A blueprint id, OR a live share's `{ share, workspace }` — never both. */
+  blueprint?: string;
+  live?: { share: string; workspace: string };
   title: string;
   onClose: () => void;
   /** A fixture roster; absent, the dialog reads the account's own. */
@@ -59,13 +61,17 @@ export function ForkDialog({ blueprint, title, onClose, workspaces }: {
 
     try {
       const workspace = target === NEW_WORKSPACE ? (await createWorkspaceFromMission(mission)).name : target;
-      const fork = await forkBlueprint({ blueprint, workspace });
+
+      const fork = blueprint !== undefined
+        ? await forkBlueprint({ blueprint, workspace })
+        : await forkLiveShare({ live: live?.share ?? '', ownerWorkspace: live?.workspace ?? '', workspace });
+
       await navigate(forkedSlatePath(fork.workspace, fork.slate));
     } catch (cause) {
       setErr(renderThrownChain({ cause }));
       setBusy(false);
     }
-  }, [busy, target, mission, blueprint, navigate]);
+  }, [busy, target, mission, blueprint, live, navigate]);
 
   return (
     <Modal
