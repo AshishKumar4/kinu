@@ -92,7 +92,7 @@ export function SubordinateTabs({
           column, and anything within it scrolls away with the tabs. They carry
           the same bottom rule so the two still read as one line. */}
       <div className={`flex shrink-0 items-stretch ${tabStripH}`}>
-        <nav aria-label="Workspace agents" className={`p-tabstrip flex min-w-0 flex-1 items-center border-b p-border px-2 ${tabStripH}`}>
+        <nav aria-label="Workspace agents" className={`p-tabstrip flex min-w-0 flex-1 items-center gap-2 border-b p-border px-2 ${tabStripH}`}>
           <Link
             to={mainPath}
             data-agent-tab="main"
@@ -125,7 +125,7 @@ export function SubordinateTabs({
                   <Link
                     to={`${mainPath}/agents/${subordinate.name}`}
                     title={subordinate.currentTask ?? title}
-                    className={`${tabCls} h-full max-w-52 pl-3 pr-8`}
+                    className={`${tabCls} h-full max-w-52 pl-3 pr-8 p-text-3`}
                   >
                     {subordinate.displayName.trim() === "" && <UnnamedMark />}
                     <span className={`truncate ${subordinate.displayName ? "" : "italic p-text-3"}`}>{title}</span>
@@ -180,7 +180,7 @@ export function SubordinateTabs({
               }
             }}
             disabled={creating}
-            className="p-btn-ghost my-1 ml-1 flex size-7 shrink-0 self-center items-center justify-center disabled:opacity-50"
+            className="p-btn-ghost my-1 ml-2 flex size-7 shrink-0 self-center items-center justify-center disabled:opacity-50"
             title={ADD_AGENT_LABEL}
             aria-label={ADD_AGENT_LABEL}
           >
