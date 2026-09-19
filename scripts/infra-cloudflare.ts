@@ -264,36 +264,22 @@ export function container(name: string, image: string): Observation {
 }
 
 /**
- * R2 buckets. `wrangler r2 bucket list` is the one list command in this family
- * with no `--json` flag in wrangler 4.97, so its field-per-line output is read
- * instead — verified against the live account: each bucket is a `name:` line
- * followed by a `creation_date:` line.
+ * R2 buckets, one `wrangler r2 bucket info <name>` each. NOT `r2 bucket list`:
+ * that command answers the first page only (20 buckets, measured 2026-09-19 on
+ * an account holding 27), so a declared bucket past the page read as ABSENT
+ * for months and provision would have tried to re-create three that existed.
+ * `info` is exact: the bucket's own row, or the API's "does not exist"
+ * (code 10006); any other failure is `unknown`.
  */
-let r2Cache: { readonly names: readonly string[] } | { readonly failure: string } | undefined;
-
 export function r2(name: string): Observation {
-  if (r2Cache === undefined) {
-    const run = wrangler(['r2', 'bucket', 'list']);
-    r2Cache = run.ok
-      ? {
-        names: run.stdout.split('\n')
-          .map((line) => /^name:\s+(\S+)$/u.exec(line.trim())?.[1])
-          .filter((found): found is string => found !== undefined),
-      }
-      : { failure: `\`wrangler r2 bucket list\` failed: ${why(run)}` };
-  }
+  const run = wrangler(['r2', 'bucket', 'info', name]);
 
-  if ('failure' in r2Cache) return unknown(r2Cache.failure);
+  if (run.ok) return present(name);
+  const failure = `${run.stderr}\n${run.stdout}`;
 
-  // A parse that found nothing at all is not "the account has no buckets" — it
-  // is a format this reader no longer understands, and saying "absent" there
-  // would make provision create a bucket that already exists.
-  if (r2Cache.names.length === 0) {
-    return unknown('`wrangler r2 bucket list` succeeded and no `name:` line was recognised — '
-      + 'its output format changed');
-  }
+  if (failure.includes('[code: 10006]')) return absent;
 
-  return r2Cache.names.includes(name) ? present(name) : absent;
+  return unknown(`\`wrangler r2 bucket info ${name}\` failed: ${why(run)}`);
 }
 
 /* ── The deployed Worker ──────────────────────────────────────────────── */
