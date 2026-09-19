@@ -133,6 +133,10 @@ interface BackgroundHandle {
 declare global {
   interface Window {
     __kinuAppBackground?: BackgroundHandle;
+    /** Set before the shell mounts: the picture starts frozen at its seed
+     *  (`AppBackground.tsx`), so a readback is a pure function of the test's
+     *  own steps. */
+    __kinuGalleryFrozen?: true;
   }
 }
 
@@ -474,35 +478,49 @@ describe('the living background', () => {
     await withGallery(async (gallery) => {
       const page = await gallery.browser.newPage();
       await page.evaluateOnNewDocument((mode: string) => localStorage.setItem('theme', mode), 'light');
+      // Frozen from its seed: not one rAF frame runs before the test's own
+      // steps, so the picture the pointer lands on is a pure function of
+      // them. Measured before this (2026-09-18): the hold's lift depends on
+      // the nearest node's distance, which the frames run between mount and
+      // the freeze decided, and under the deploy wave's load that count was
+      // whatever the wall clock allowed — the same test read 1.26 to 1.41
+      // against a 1.3 bar.
+      await page.evaluateOnNewDocument(() => { window.__kinuGalleryFrozen = true; });
       await page.setViewport({ width: 1440, height: 900 });
       await page.goto(`${gallery.origin}/gallery.html?frame=app&path=${encodeURIComponent('/')}`, { waitUntil: 'networkidle0' });
 
       try {
+        // The keep-out boxes the picture is fitted around are the page's text
+        // runs; a web font that lands after the fit moves them, and the
+        // frozen picture would be refitted under a later shot. Fonts first.
+        await page.evaluate(() => document.fonts.ready);
         await liveBackground(page);
 
         for (const name of DISPLAYED) await setOverview(page, name, idleBody());
-        await waitForMode(page, 'idle');
+        // The tissue reaches its mode over frames, stepped here since none run
+        // on their own; then the four seconds of settling the live picture
+        // gets before a pointer arrives, as 240 frames at 60 fps.
+        await page.waitForFunction(() => {
+          const handle = window.__kinuAppBackground;
+
+          for (let i = 0; i < 30 && handle?.mode() !== 'idle'; i += 1) handle?.advance?.(1 / 60);
+
+          return handle?.mode() === 'idle';
+        });
+        await page.evaluate(() => {
+          for (let i = 0; i < 240; i += 1) window.__kinuAppBackground?.advance?.(1 / 60);
+        });
 
         // Absolute presence in the pointer's disc, each live shot against
         // the same hidden-host ground, gated on the hold itself: the shot.
-        // The rAF loop would race the readback, so the measured window runs
-        // frozen — the test's own advances are the only steps the picture
-        // takes, and the pixels are a pure function of them. That includes
-        // the settling before the pointer arrives: four seconds of wall clock
-        // under the deploy wave's load is fewer frames than four seconds on a
-        // quiet box, and the hold's lift depends on the settled picture, so
-        // the settling is stepped too (240 frames, the four seconds at 60 fps).
+        // The rAF loop never runs here — the test's own advances are the
+        // only steps the picture takes, and the pixels are a pure function
+        // of them.
         const disc = { x: 0.94, y: 0.2, r: 0.06 };
 
         // The gallery attaches the stepping controls; a page without them is
         // not the gallery, and this readback has no picture to hold still.
         expect(await page.evaluate(() => window.__kinuAppBackground?.freeze !== undefined)).toBe(true);
-        await page.evaluate(() => {
-          const handle = window.__kinuAppBackground;
-          handle?.freeze?.();
-
-          for (let i = 0; i < 240; i += 1) handle?.advance?.(1 / 60);
-        });
 
         const quiet = await page.screenshot({ captureBeyondViewport: false });
         const quietHold = await page.evaluate(() => window.__kinuAppBackground?.pointer() ?? 0);
@@ -535,7 +553,8 @@ describe('the living background', () => {
         // picture had before the pointer arrived, and above zero — so the
         // ratio below compares two live holds, never two zeros. Not a fixed
         // level: how high thirty steps lift it depends on the nearest node's
-        // distance, which the seeded picture's state at freeze decides.
+        // distance, which the seeded picture's state decides — and that state
+        // is the same on every run now (frozen from the seed, fonts landed).
         expect(cardHold).toBeGreaterThan(quietHold);
         expect(cardHold).toBeGreaterThan(0);
         expect(crossHold).toBeGreaterThanOrEqual(cardHold * 0.9);
