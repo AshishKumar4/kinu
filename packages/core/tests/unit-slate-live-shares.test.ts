@@ -153,7 +153,9 @@ test('WorkspaceLiveShares cuts the grant the dialog approved and opens at the ho
 
     const created = await live.share('issues', 'users', [{ slate: 'issues', binding: 'FILES', member: 'writeFile' }]);
     expect(created.share.handle).toMatch(/^[a-f0-9]{10}$/);
-    expect(created.share.grant).toEqual(cutShareGrant(expected, [{ slate: 'issues', binding: 'FILES', member: 'writeFile' }]));
+    // The grant the dialog cut, plus the fork permission it defaults to: a
+    // share is forkable unless the owner said otherwise.
+    expect(created.share.grant).toEqual({ ...cutShareGrant(expected, [{ slate: 'issues', binding: 'FILES', member: 'writeFile' }]), fork: true });
     expect(created.url).toBe(`https://${created.share.handle}-token0-ws.kinu.run`);
 
     expect(live.list().map((share) => share.id)).toEqual([created.share.id]);
