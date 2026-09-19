@@ -1078,7 +1078,7 @@ describe('an additional agent, as an ordinary conversation', () => {
         (el) => (el.textContent ?? '').trim(),
       ),
       clickTab: async (label: string) => {
-        for (const link of await page.$$('nav[aria-label="Workspace agents"] a')) {
+        for (const link of await page.$$('nav[aria-label="Workspace agents"] [data-agent-tab] a')) {
           const text = await link.evaluate((el) => el.textContent ?? '');
 
           if (text.includes(label)) {
