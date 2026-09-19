@@ -31,9 +31,10 @@ import {
   restoreWorkspaceArchive, type ArchivePage, type HostedActor,
 } from '@kinu.run/core';
 import {
-  databasesOpened, fixtureProfile, harnessSql, hostedWorkspace, resetDatabases,
+  databasesOpened, fixtureProfile, hostedWorkspace, resetDatabases,
   type HostedWorkspaceFixture,
 } from './helpers/hosted-workspace';
+import { sqlOver } from '@kinu.run/test-utils';
 
 /** One scripted turn on one actor: admit it, name its outcome, release it. The
  *  smallest thing that leaves a durable claim, which is what every assertion
@@ -170,17 +171,17 @@ describe('one SQLite for every logical actor', () => {
       const before = fixture.sql<{ n: number }>`
         SELECT COUNT(*) AS n FROM actor_messages WHERE actor_id = ${actor.handle.actorId}`[0]?.n ?? 0;
 
-      const after = harnessSql(restored)<{ n: number }>`
+      const after = sqlOver(restored)<{ n: number }>`
         SELECT COUNT(*) AS n FROM actor_messages WHERE actor_id = ${actor.handle.actorId}`[0]?.n ?? 0;
 
       expect(after).toBe(before);
 
-      const claims = harnessSql(restored)<{ turn_id: string }>`
+      const claims = sqlOver(restored)<{ turn_id: string }>`
         SELECT turn_id FROM actor_turn_claims WHERE actor_id = ${actor.handle.actorId}`;
 
       expect(claims.map((row) => row.turn_id)).toEqual([`turn-${actor.record.name}`]);
 
-      const versions = harnessSql(restored)<{ n: number }>`
+      const versions = sqlOver(restored)<{ n: number }>`
         SELECT COUNT(*) AS n FROM scaffold_versions WHERE actor_id = ${actor.handle.actorId}`[0]?.n ?? 0;
 
       expect(versions).toBeGreaterThan(0);

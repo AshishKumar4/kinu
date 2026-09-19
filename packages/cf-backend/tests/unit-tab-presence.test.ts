@@ -19,7 +19,8 @@ import {
   resolveGatedSurface,
   surfaceHasContent,
 } from '../src/components/surfaces/presence';
-import { appendMemoryNote, PlanReviewStore, TaskListStore } from '@kinu.run/core';
+import { appendMemoryNote, BackgroundJobStore, openWorkspaceMainActor, PlanReviewStore, TaskListStore } from '@kinu.run/core';
+import { sqlOver } from '@kinu.run/test-utils';
 import { orchestratorHarness } from './helpers/actor-harness';
 
 
@@ -175,10 +176,10 @@ describe('the presence read over real ledgers', () => {
   });
 
   test('a completed task still counts — settled history is content', async () => {
-    const { agent } = orchestratorHarness();
+    const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-
-    const tasks = new TaskListStore(agent.harnessSql(), agent.harnessActor(), (write) => write());
+    const sql = sqlOver(db);
+    const tasks = new TaskListStore(sql, openWorkspaceMainActor(sql), (write) => write());
     const [task] = tasks.add(['done already'], null, 1).added;
 
     if (!task) throw new Error('The fixture task was not created');
@@ -188,10 +189,10 @@ describe('the presence read over real ledgers', () => {
   });
 
   test('a plan with zero tasks counts — the plan IS the content', async () => {
-    const { agent } = orchestratorHarness();
+    const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-
-    const plans = new PlanReviewStore(agent.harnessSql(), agent.harnessActor());
+    const sql = sqlOver(db);
+    const plans = new PlanReviewStore(sql, openWorkspaceMainActor(sql));
     const submitted = plans.submit('default', [{ start: 1, content: '# Empty plan' }]);
 
     if (!submitted.ok) throw new Error(submitted.error);
@@ -200,25 +201,27 @@ describe('the presence read over real ledgers', () => {
   });
 
   test('a settled job counts — its record is in the journal the tab draws', async () => {
-    const { agent } = orchestratorHarness();
+    const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-
-    agent.harnessJobs().create({
+    const sql = sqlOver(db);
+    const jobs = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
+    jobs.create({
       id: 'bgjob-settled', kind: 'search', workMode: 'build',
       input: JSON.stringify({ task: 'ran' }), now: Date.now(), label: 'ran',
     });
-    agent.harnessJobs().settle('bgjob-settled', 0, 'done', Date.now());
+    jobs.settle('bgjob-settled', 0, 'done', Date.now());
 
     expect((await agent.getWorkspaceTabPresence()).work).toBe(true);
   });
 
   test('a changelog entry counts even once seen', async () => {
-    const { agent } = orchestratorHarness();
+    const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-
-    void agent.harnessSql()`INSERT OR REPLACE INTO scaffold_versions
+    const sql = sqlOver(db);
+    const actor = openWorkspaceMainActor(sql);
+    void sql`INSERT OR REPLACE INTO scaffold_versions
       (actor_id, version, written_at, rationale, status)
-      VALUES (${agent.harnessActor().actorId}, 1, ${Date.now()}, 'a landed change', 'current')`;
+      VALUES (${actor.actorId}, 1, ${Date.now()}, 'a landed change', 'current')`;
     await agent.markChangelogSeen();
 
     expect((await agent.getWorkspaceTabPresence()).work).toBe(true);

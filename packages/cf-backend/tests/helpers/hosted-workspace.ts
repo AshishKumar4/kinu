@@ -44,27 +44,6 @@ export function resetDatabases(): void {
   opened.length = 0;
 }
 
-/**
- * The two executor shapes the stack takes over ONE `bun:sqlite` handle, from
- * the constructors that already own them.
- *
- * Both are needed and they are genuinely different protocols: the stores take a
- * tagged template (`SqlExecutor`), while the event log, the archive reader and
- * the restorer compose the statements they run and take the positional
- * `SqlExec`. Same database either way — which is the only property these
- * fixtures exist to hold.
- *
- * Named re-exports of core's test helpers rather than wrappers, so a caller
- * reads the same two functions the rest of the repo does. `makeSqlExec`
- * performs the Durable Object BLOB normalization (the platform answers an
- * ArrayBuffer, `bun:sqlite` a Uint8Array) and `sqlOver` is the tag every
- * actor-backed suite already binds through. A private re-derivation here would
- * be a second answer to a question core's test helpers answer, and the file's
- * single largest source of type assertions.
- */
-export const harnessExec: (db: Database) => SqlExec = makeSqlExec;
-
-export const harnessSql: (db: Database) => SqlExecutor = sqlOver;
 
 export interface HostedWorkspaceFixture {
   readonly db: Database;
@@ -140,9 +119,9 @@ export async function hostedWorkspace(
 ): Promise<HostedWorkspaceFixture> {
   const db = new Database(':memory:');
   opened.push(db);
-  const sql = harnessSql(db);
+  const sql = sqlOver(db);
   const workspaceId = 'harness-workspace';
-  const exec = harnessExec(db);
+  const exec = makeSqlExec(db);
   initWorkspaceSchema({ execRaw: makeExecRaw(db), sql, exec });
   db.exec(`INSERT INTO workspace_identity (id, name, created_at, owner_user_id)
     VALUES ('${workspaceId}', 'harness', ${String(Date.now())}, 'harness-owner')`);
