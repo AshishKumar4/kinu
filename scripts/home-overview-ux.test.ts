@@ -143,7 +143,7 @@ describe('the home workspace cards', () => {
         // the live turn beside it, and its count rides the label.
         const coupon = cardNamed(list, 'Checkout coupon bug');
         expect(coupon.chip).toBe('Needs you · 2');
-        expect(coupon.chipClass).toContain('p-accent');
+        expect(coupon.chipClass).toContain('p-warning');
         expect(coupon.task).toBe('Investigate intermittent checkout failures in the coupon migration');
 
         expect(cardNamed(list, 'Perf audit — landing').chip).toBe('Working');

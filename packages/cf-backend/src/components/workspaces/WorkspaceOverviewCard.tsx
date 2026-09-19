@@ -14,24 +14,15 @@
  * the tile's slate picture hangs off that same wrapper.
  */
 import { Link } from "react-router-dom";
-import { overviewHeadline, shortAge, timeAgo, workspaceDisplayTitle, type WorkspaceHeadline, type WorkspaceOverview } from "@kinu.run/core";
+import { overviewHeadline, shortAge, timeAgo, workspaceDisplayTitle, type WorkspaceOverview } from "@kinu.run/core";
 import { lastValue } from "@/hooks/use-async-resource";
 import { useWorkspaceOverview } from "@/hooks/use-workspace-overviews";
 import type { WorkspaceEntry } from "@/lib/user-api";
+import { workspaceStatusTone } from "@/components/workspaces/status-tone";
 
-/** The headline's tone words resolved to this surface's tokens. `live` is the
- *  pulsing accent dot, not accent text — one accent element per card — so the
- *  word itself stays plain. `muted` is the quiet register; a stale answer
- *  dims whatever tone it held to the quietest one. */
-const TONE_CLS = {
-  accent: "p-accent",
-  live: "p-text",
-  danger: "p-danger",
-  muted: "p-text-3",
-} satisfies Record<WorkspaceHeadline["tone"], string>;
-
-/** The card's one chip: the shared headline, dimmed when its answer is old,
- *  `…` while it loads, `unavailable` when there is nothing to say from. */
+/** The card's one chip: the shared headline's status as a dot and a coloured
+ *  word, dimmed when its answer is old, `…` while it loads, `unavailable`
+ *  when there is nothing to say from. */
 function StatusChip({ overview, stale, loading, unavailable }: {
   overview: WorkspaceOverview | null;
   stale: boolean;
@@ -40,14 +31,18 @@ function StatusChip({ overview, stale, loading, unavailable }: {
 }) {
   if (loading) return <span data-overview-chip className="p-t-status p-text-4">…</span>;
 
-  if (unavailable) return <span data-overview-chip className="p-t-status p-text-4">unavailable</span>;
+  if (unavailable || overview === null) {
+    return <span data-overview-chip className="p-t-status p-text-4">unavailable</span>;
+  }
 
-  const headline = overviewHeadline(overview!);
+  const headline = overviewHeadline(overview);
+  const tone = workspaceStatusTone(headline.status);
 
   return (
     <span data-overview-chip
-      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full p-fill px-2 py-0.5 p-t-status ${stale ? "p-text-4" : TONE_CLS[headline.tone]}`}>
-      {headline.tone === "live" && !stale && <span aria-hidden="true" className="p-dot-accent p-dot-pulse h-1.5 w-1.5 rounded-full" />}
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap p-t-status ${stale ? "p-text-4" : tone.text}`}>
+      <span aria-hidden="true"
+        className={`size-1.5 rounded-full ${stale ? "p-dot-neutral" : tone.dot}`} />
       {headline.label}
     </span>
   );
