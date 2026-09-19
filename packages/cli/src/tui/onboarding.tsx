@@ -4,6 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 
 import { renderThrownChain } from '@kinu.run/core/obs';
 
+import type {
+  ProviderConnectId,
+  ProviderConnectOutcome,
+  ProviderConnectPort,
+  ProviderConnectionState,
+} from '../commands/provider-connect';
 import {
   KEYMAP_PRESET_IDS,
   createKeyDispatcher,
@@ -28,10 +34,6 @@ export interface OnboardingReadiness {
   readonly keymapSelected: boolean;
   readonly workspaceCount: number;
   readonly skippedSteps: readonly OnboardingStepId[];
-  readonly connectionProgress?: {
-    readonly phase: 'starting' | 'waiting' | 'approved' | 'failed';
-    readonly label: string;
-  };
 }
 
 export interface OnboardingRoleChoice {
@@ -48,8 +50,10 @@ export interface OnboardingWorkspaceInput {
 export interface TuiOnboardingOperations {
   readReadiness(): OnboardingReadiness | Promise<OnboardingReadiness>;
   chooseLocation(location: WorkspaceLocationChoice): void | Promise<void>;
-  connectAccount(): void | Promise<void>;
-  connectProvider(): void | Promise<void>;
+  listProviders(): Promise<readonly ProviderConnectionState[]>;
+  /** Runs the provider's own credential flow against the step's port: the
+   *  step reports its progress and answers its questions. */
+  connectProvider(id: ProviderConnectId, port: ProviderConnectPort): Promise<ProviderConnectOutcome>;
   configureTiers(): void | Promise<void>;
   selectTheme(selection: ThemeSelection): void | Promise<void>;
   selectKeymap(presetId: KeymapPresetId): void | Promise<void>;
@@ -63,6 +67,8 @@ const THEME_GROUP_LABELS: Readonly<Record<ThemeAppearance, string>> = Object.fre
   light: 'Light',
   dark: 'Dark',
 });
+
+type ProviderQuestion = Parameters<ProviderConnectPort['ask']>[0];
 
 interface ThemeChoiceRow {
   readonly appearance: ThemeAppearance;
@@ -127,6 +133,12 @@ export function GuidedOnboarding(props: {
   const [roleIndex, setRoleIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [providers, setProviders] = useState<readonly ProviderConnectionState[]>([]);
+  const [progress, setProgress] = useState<readonly string[]>([]);
+  const [outcome, setOutcome] = useState<ProviderConnectOutcome | null>(null);
+  const [question, setQuestion] = useState<ProviderQuestion | null>(null);
+  const [answer, setAnswer] = useState('');
+  const answerRef = useRef<((value: string) => void) | null>(null);
   const missionRef = useRef<TextareaRenderable | null>(null);
   const derived = readiness === null ? null : deriveOnboardingState(readiness);
   const activeStep = derived?.activeStep ?? null;
@@ -152,6 +164,44 @@ export function GuidedOnboarding(props: {
     setSelectedIndex(0);
   }, [activeStep]);
 
+  const loadProviders = useCallback(async () => {
+    setProviders(await props.operations.listProviders());
+  }, [props.operations]);
+
+  useEffect(() => {
+    if (activeStep !== 'connection') return;
+    startTransition(async () => {
+      try {
+        await loadProviders();
+      } catch (cause) {
+        setError(renderThrownChain({ cause }));
+      }
+    });
+  }, [activeStep, loadProviders, startTransition]);
+
+  /**
+   * What a provider flow writes to and reads from while it runs. The secret
+   * never reaches a renderable: the step holds the typed answer and paints
+   * dots, and the flow receives it only when Enter resolves the question.
+   */
+  const port = useMemo<ProviderConnectPort>(() => ({
+    report: (line) => setProgress((lines) => [...lines, line]),
+    ask: (request) => {
+      const { promise, resolve } = Promise.withResolvers<string>();
+      setQuestion(request);
+      setAnswer('');
+
+      answerRef.current = (value) => {
+        answerRef.current = null;
+        setQuestion(null);
+        setAnswer('');
+        resolve(value);
+      };
+
+      return promise;
+    },
+  }), []);
+
   const run = useCallback((operation: () => void | Promise<void>) => {
     if (busy) return;
     startTransition(async () => {
@@ -168,6 +218,26 @@ export function GuidedOnboarding(props: {
       }
     });
   }, [busy, refresh, startTransition]);
+
+  const settled = useCallback(() => setBusy(false), []);
+
+  const failed = useCallback((cause: Error) => {
+    setError(renderThrownChain({ cause }));
+    setBusy(false);
+  }, []);
+
+  /**
+   * The connect flow runs OUTSIDE `startTransition`: it stops on a question
+   * and waits for the person's keystrokes, and React holds every update made
+   * inside an async transition until that transition settles — which would
+   * paint the prompt only after the answer it is asking for.
+   */
+  const runConnect = useCallback((operation: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    void operation().then(refresh).then(settled, failed);
+  }, [busy, failed, refresh, settled]);
 
   const { registry } = useTuiTheme();
 
@@ -186,13 +256,15 @@ export function GuidedOnboarding(props: {
 
   const choices = activeStep === 'location'
     ? (['cloud', 'local', 'both'] as const)
-    : activeStep === 'theme'
-      ? themeChoices.map((choice) => choice.label)
-      : activeStep === 'keymap'
-        ? KEYMAP_PRESET_IDS
-        : activeStep === 'workspace'
-          ? props.roles.map((role) => role.id)
-          : [];
+    : activeStep === 'connection'
+      ? providers.map((state) => state.descriptor.id)
+      : activeStep === 'theme'
+        ? themeChoices.map((choice) => choice.label)
+        : activeStep === 'keymap'
+          ? KEYMAP_PRESET_IDS
+          : activeStep === 'workspace'
+            ? props.roles.map((role) => role.id)
+            : [];
 
   const activate = useCallback(() => {
     if (readiness === null || activeStep === null) return;
@@ -207,14 +279,20 @@ export function GuidedOnboarding(props: {
         return;
       }
 
-      case 'connection':
-        if ((readiness.location === 'cloud' || readiness.location === 'both') && !readiness.accountConnected) {
-          run(props.operations.connectAccount);
-        } else if ((readiness.location === 'local' || readiness.location === 'both') && !readiness.providerConnected) {
-          run(props.operations.connectProvider);
-        }
+      case 'connection': {
+        const provider = providers[selectedIndex];
+
+        if (provider === undefined) return;
+        setProgress([]);
+        setOutcome(null);
+        runConnect(async () => {
+          setOutcome(await props.operations.connectProvider(provider.descriptor.id, port));
+          await loadProviders();
+        });
 
         return;
+      }
+
       case 'tiers':
         run(props.operations.configureTiers);
 
@@ -244,9 +322,39 @@ export function GuidedOnboarding(props: {
         return;
       }
     }
-  }, [activeStep, choices, mission, props.operations, props.roles, readiness, roleIndex, run, selectedIndex, themeChoices]);
+  }, [activeStep, choices, loadProviders, mission, port, props.operations, props.roles, providers, readiness, roleIndex, run, runConnect, selectedIndex, themeChoices]);
 
   useKeyboard((event) => {
+    if (question !== null) {
+      event.preventDefault();
+
+      if (event.name === 'return' || event.name === 'enter') {
+        answerRef.current?.(answer === '' ? question.fallback ?? '' : answer);
+
+        return;
+      }
+
+      // Escape answers nothing, which every flow reads as "no credential" and
+      // reports as blocked — the step stays where it is.
+      if (event.name === 'escape') {
+        answerRef.current?.('');
+
+        return;
+      }
+
+      if (event.name === 'backspace') {
+        setAnswer((current) => current.slice(0, -1));
+
+        return;
+      }
+
+      if (!event.ctrl && !event.meta && event.sequence.length === 1 && event.sequence >= ' ') {
+        setAnswer((current) => current + event.sequence);
+      }
+
+      return;
+    }
+
     const result = dispatcher.feed(event, ['home']);
 
     if (result.pending) {
@@ -326,10 +434,31 @@ export function GuidedOnboarding(props: {
         )}
         {activeStep === 'connection' && (
           <>
-            <text><strong fg={colors.text.strong}>Connect the required account or provider</strong></text>
+            <text><strong fg={colors.text.strong}>Connect a provider</strong></text>
             <ReadinessRow label="Kinu account" ready={readiness.accountConnected} />
             <ReadinessRow label="Local provider" ready={readiness.providerConnected} />
-            {readiness.connectionProgress !== undefined && <text><span fg={colors.intent.info}>{readiness.connectionProgress.label}</span></text>}
+            <box flexDirection="column" style={{ marginTop: 1 }}>
+              {providers.map((state, index) => (
+                <ProviderRow key={state.descriptor.id} state={state} selected={index === selectedIndex} />
+              ))}
+            </box>
+            {progress.map((line, index) => (
+              <text key={`${String(index)}-${line}`}><span fg={colors.intent.info}>{line}</span></text>
+            ))}
+            {question !== null && (
+              <text>
+                <span fg={colors.text.muted}>{question.label}: </span>
+                <span fg={colors.text.strong}>{question.secret === true ? '•'.repeat(answer.length) : answer}</span>
+                <span fg={colors.intent.accent}>▌</span>
+              </text>
+            )}
+            {outcome !== null && (
+              <text>
+                <span fg={outcome.kind === 'connected' ? colors.intent.success : colors.intent.warning}>
+                  {outcome.kind === 'connected' ? outcome.summary : `${outcome.reason} ${outcome.hint}`}
+                </span>
+              </text>
+            )}
           </>
         )}
         {activeStep === 'tiers' && (
@@ -405,6 +534,20 @@ function ChoiceRow(props: { readonly label: string; readonly selected: boolean }
     <text>
       <span fg={props.selected ? colors.intent.accent : colors.text.muted}>{props.selected ? '› ' : '  '}</span>
       <span fg={props.selected ? colors.text.strong : colors.text.primary}>{props.label}</span>
+    </text>
+  );
+}
+
+function ProviderRow(props: { readonly state: ProviderConnectionState; readonly selected: boolean }) {
+  const { colors } = useTuiTheme();
+  const { descriptor, connected, detail } = props.state;
+
+  return (
+    <text>
+      <span fg={props.selected ? colors.intent.accent : colors.text.muted}>{props.selected ? '› ' : '  '}</span>
+      <span fg={connected ? colors.intent.success : colors.text.muted}>{connected ? '✓ ' : '○ '}</span>
+      <span fg={props.selected ? colors.text.strong : colors.text.primary}>{descriptor.label}</span>
+      <span fg={colors.text.muted}> · {connected ? detail : 'not connected'}</span>
     </text>
   );
 }

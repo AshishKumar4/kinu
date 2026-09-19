@@ -20,26 +20,25 @@ function storedConfig(home: string): JsonObject {
   return parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8'));
 }
 
-/** The real command module, run in a child process so KINU_HOME is read
- *  fresh and nothing touches the developer's own ~/.kinu. */
+/** The real connect flow, run in a child process so KINU_HOME is read fresh
+ *  and nothing touches the developer's own ~/.kinu. The port stands in for a
+ *  surface: it answers the questions the flow asks and reports nowhere. */
 async function runStore(home: string, opts: { local: boolean; origin?: string; endpoint?: string }) {
+  // An endpoint only belongs to the OpenAI-compatible flow; every other
+  // provider's key has no address of its own.
+  const provider = opts.endpoint === undefined ? 'openrouter' : 'openai-compatible';
+
+  const answers = opts.endpoint === undefined
+    ? ['sk-or-secret', 'anthropic/claude-x']
+    : [opts.endpoint, 'sk-or-secret', 'gpt-oss:20b'];
+
   const runner = `
-    const { storeProviderSecret } = await import('./packages/cli/src/commands/setup.ts');
-    const { loadConfigFile, updateConfigFile } = await import('./packages/cli/src/config.ts');
+    const { connectProvider } = await import('./packages/cli/src/commands/provider-connect.ts');
+    const answers = ${JSON.stringify(answers)};
+    const port = { report: () => {}, ask: async () => answers.shift() ?? '' };
     try {
-      const where = await storeProviderSecret({
-        local: ${opts.local},
-        credKey: 'openrouter.bearer',
-        credential: { kind: 'bearer', token: 'sk-or-secret' },
-        storeLocally: () => {
-          const config = loadConfigFile();
-          updateConfigFile(() => ({ ...config, providers: { ...(config.providers ?? {}), openrouter: { apiKey: 'sk-or-secret' } } }));
-        },
-        clearLocally: () => updateConfigFile((config) => { delete config.providers?.openrouter; }),
-        model: 'openrouter/anthropic/claude-x',
-        ${opts.endpoint === undefined ? '' : `endpoint: ${JSON.stringify(opts.endpoint)},`}
-      });
-      console.log('WHERE:' + where);
+      const outcome = await connectProvider(${JSON.stringify(provider)}, port, { local: ${opts.local} });
+      console.log('WHERE:' + (outcome.summary.includes('your Kinu account') ? 'account' : 'local'));
     } catch (e) {
       console.log('THREW:' + e.message);
     }

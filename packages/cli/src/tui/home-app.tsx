@@ -15,7 +15,7 @@ import {
   listKnownAgents, listSidebarAgents, syncCloudAgentRefs, type CloudRefCollision,
 } from '../agent-list';
 import { listCloudAvailableModels } from '../cloud-api';
-import { authenticateCli } from '../commands/auth';
+import { connectProvider, readProviderConnections } from '../commands/provider-connect';
 import {
   loadConfigFile,
   resolveCloudOrigin,
@@ -761,16 +761,11 @@ function createDefaultOnboarding(
       };
     },
     chooseLocation() {},
-    async connectAccount() {
-      await authenticateCli({ origin: opts.origin });
+    async listProviders() {
+      return (await readProviderConnections()).states;
     },
-    async connectProvider() {
-      const location = preferences.read().onboardingLocation;
-
-      if ((location === 'cloud' || location === 'both') && isCloudAuthConfigured()) return;
-
-      if (isLocalModelConfigured()) return;
-      throw new Error('No local provider is connected. Sign in with kinu auth, or run kinu provider connect codex.');
+    async connectProvider(id, port) {
+      return await connectProvider(id, port, opts.origin === undefined ? {} : { origin: opts.origin });
     },
     async configureTiers() {
       await loadActiveProfile();
