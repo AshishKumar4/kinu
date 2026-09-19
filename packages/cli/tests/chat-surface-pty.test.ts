@@ -9,19 +9,14 @@
 import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 
-import { BUILTIN_TUI_THEMES, DEFAULT_TUI_THEME_SELECTION } from '../src/tui/theme';
+import { BUILTIN_TUI_THEMES, createThemeRegistry, DEFAULT_TUI_THEME_SELECTION } from '../src/tui/theme';
 import { inkBefore, runTuiInPty } from './helpers/pty-screen';
 
 const entry = resolve(import.meta.dir, 'fixtures/pty-chat.tsx');
 
 describe('the chat surface on a real terminal, fresh install', () => {
   test('the default theme paints the canvas and writes assistant prose in ink', () => {
-    const selection = DEFAULT_TUI_THEME_SELECTION;
-
-    if (selection.mode !== 'theme') throw new Error('the default selection opens on light');
-    const light = BUILTIN_TUI_THEMES.find((theme) => theme.id === selection.themeId);
-
-    if (light === undefined) throw new Error(`missing default theme ${selection.themeId}`);
+    const light = createThemeRegistry(BUILTIN_TUI_THEMES).get(DEFAULT_TUI_THEME_SELECTION.themeId);
 
     const run = runTuiInPty(entry, {
       steps: [

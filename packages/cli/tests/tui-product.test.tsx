@@ -17,7 +17,6 @@ import {
 } from '../src/tui/actions';
 import {
   BUILTIN_TUI_THEMES,
-  DEFAULT_TUI_THEME_SELECTION,
   TuiThemeProvider,
   createThemeRegistry,
   parseCustomTheme,
@@ -261,7 +260,7 @@ describe('adaptive TUI shell', () => {
  *  reads it — through `useTuiTheme` under a mounted provider, so the real
  *  resolution runs. */
 async function renderedThemeId(
-  selection: ThemeSelection = DEFAULT_TUI_THEME_SELECTION,
+  selection?: ThemeSelection,
 ): Promise<string> {
   const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
     width: 40,
@@ -291,7 +290,7 @@ async function renderedThemeId(
       await Bun.sleep(5);
     }
 
-    throw new Error(`the theme probe never painted ${selection.themeId}`);
+    throw new Error('The theme provider did not render its selection');
   } finally {
     flushSync(() => { root.unmount(); });
     renderer.destroy();

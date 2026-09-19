@@ -6933,6 +6933,7 @@ async function mount() {
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
     ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["couponboard", { node: <CouponBoardSlate />, entries: ["/"] }],
   ]);
 
   const fixture = fixtureFrames.get(frame);
@@ -7078,7 +7079,6 @@ async function mount() {
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "transcript") node = <TranscriptFrame />;
   else if (frame === "slate") node = <SlatePreviewFrame />;
-  else if (frame === "couponboard") node = <CouponBoardSlate />;
   else if (frame === "workslatefallback") node = <SlateFallbackFrame rpc={workRpc} />;
   else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;

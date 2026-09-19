@@ -63,7 +63,7 @@
     },
     {
       "key": "packages/cli/src/commands/setup.ts#setupCommand",
-      "complexity": 48
+      "complexity": 18
     },
     {
       "key": "scripts/literature-citations.ts#auditProse",
