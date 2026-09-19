@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initSlateLiveShareTables, SlateLiveShareStore } from '../src/slates/live-shares';
 import { WorkspaceLiveShares, type WorkspaceLiveSharesDeps } from '../src/slates/live-sharing';
-import { cutShareGrant, slateCapabilityGraph, type SlateBindingCatalog } from '../src/slates/capability-graph';
+import { grantAdmits, slateCapabilityGraph, type SlateBindingCatalog } from '../src/slates/capability-graph';
 import { parseSlateProject } from '../src/slates/project';
 import { makeExecRaw, makeSqlExec } from './helpers';
 import type { ShareGrant } from '../src/slates/sharing';
@@ -153,9 +153,12 @@ test('WorkspaceLiveShares cuts the grant the dialog approved and opens at the ho
 
     const created = await live.share('issues', 'users', [{ slate: 'issues', binding: 'FILES', member: 'writeFile' }]);
     expect(created.share.handle).toMatch(/^[a-f0-9]{10}$/);
-    // The grant the dialog cut, plus the fork permission it defaults to: a
-    // share is forkable unless the owner said otherwise.
-    expect(created.share.grant).toEqual({ ...cutShareGrant(expected, [{ slate: 'issues', binding: 'FILES', member: 'writeFile' }]), fork: true });
+    // The grant the dialog cut: every read member with no click, the approved
+    // mutation, nothing the slate never bound. Forkable unless the owner said so.
+    expect(grantAdmits(created.share.grant, 'issues', 'FILES', 'writeFile')?.effect).toBe('mutate');
+    expect(grantAdmits(created.share.grant, 'issues', 'FILES', 'readFile')?.effect).toBe('read');
+    expect(grantAdmits(created.share.grant, 'issues', 'FILES', 'exec')).toBeNull();
+    expect(created.share.grant.fork).toBe(true);
     expect(created.url).toBe(`https://${created.share.handle}-token0-ws.kinu.run`);
 
     expect(live.list().map((share) => share.id)).toEqual([created.share.id]);
