@@ -86,13 +86,16 @@ const ClickScripts = {
     create.click();
   })()`,
   lastAgentTab: `(() => {
-    const tabs = [...document.querySelectorAll('nav[aria-label="Workspace agents"] a')];
+    // Tabs by their own hook, not by element: the OPEN tab is a div (it hosts
+    // the rename editor), so counting links saw one fewer tab than exists and
+    // this row's wait never finished.
+    const tabs = [...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')];
     const target = tabs.pop();
     if (target === undefined) throw new Error('no agent tab to open');
-    target.click();
+    (target.querySelector('a') ?? target).click();
   })()`,
   mainTab: `(() => {
-    const first = [...document.querySelectorAll('nav[aria-label="Workspace agents"] a')][0];
+    const first = [...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')][0];
     if (first === undefined) throw new Error('no Main tab to return to');
     first.click();
   })()`,
@@ -307,8 +310,10 @@ const CHAT_COMPOSER_LIVE = `[...document.querySelectorAll('#chat textarea')].som
 /** Which tab of the agent strip is current, by index: 0 is Main, the
  *  subordinates follow in roster order, -1 while none is marked. */
 const ACTIVE_TAB_INDEX = `(() => {
-  const tabs = [...document.querySelectorAll('nav[aria-label="Workspace agents"] a')];
-  return tabs.findIndex((tab) => tab.getAttribute('aria-current') === 'page');
+  const tabs = [...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')];
+  // The mark sits ON the Main link and INSIDE an open agent tab (whose own
+  // element is the rename host), so both shapes answer here.
+  return tabs.findIndex((tab) => tab.matches('[aria-current="page"]') || tab.querySelector('[aria-current="page"]') !== null);
 })()`;
 
 /** Where a send landed: the path, the current tab's index, and whether the chat
@@ -335,7 +340,7 @@ async function sendInChat(page: Page, text: string): Promise<SendSite> {
   await page.keyboard.type(text);
 
   const site = v.parse(SendSiteSchema, await page.evaluate(`(() => {
-    const tabs = [...document.querySelectorAll('nav[aria-label="Workspace agents"] a')];
+    const tabs = [...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')];
     const send = [...document.querySelectorAll('#chat button')]
       .find((el) => el.getClientRects().length > 0
         && /send$|steer the running turn/iu.test((el.getAttribute('aria-label') ?? '').trim()));
@@ -516,7 +521,7 @@ async function measurePanel(newPage: LiveApp['newPage'], origin: string): Promis
 
   await page.evaluate(ClickScripts.newAgent);
   await page.waitForFunction(
-    `[...document.querySelectorAll('nav[aria-label="Workspace agents"] a')].length > 1`,
+    `[...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')].length > 1`,
     { polling: 100 },
   );
   await page.evaluate(ClickScripts.lastAgentTab);
@@ -717,10 +722,13 @@ async function measureControls(newPage: LiveApp['newPage'], origin: string): Pro
 
   await shoot(page, 'b8-opened');
 
-  // Shut it with the column's own control, so the reopen below faces the
-  // defect's own situation: a panel the reader collapsed.
+  // Shut it with the reader's own control, so the reopen below faces the
+  // defect's own situation: a panel the reader collapsed. The control is NOT
+  // inside the column any more — the owner asked for a panel button in the
+  // tab strip instead of a handle on the column's edge (2026-09-18), so this
+  // probe presses it wherever it is, and only the effect is pinned.
   const shut = await pressUntil(page, {
-    names: SHUT_NAMES, read: INSPECTOR_WIDTH, within: '#inspector',
+    names: SHUT_NAMES, read: INSPECTOR_WIDTH, outside: '#inspector',
     reached: (width) => width <= INSPECTOR_SHUT_PX,
   });
 
@@ -802,7 +810,7 @@ async function measureStampedCard(newPage: LiveApp['newPage'], origin: string): 
 
   await page.evaluate(ClickScripts.newAgent);
   await page.waitForFunction(
-    `[...document.querySelectorAll('nav[aria-label="Workspace agents"] a')].length > 1`,
+    `[...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')].length > 1`,
     { polling: 100 },
   );
   await page.evaluate(ClickScripts.lastAgentTab);
@@ -1020,7 +1028,7 @@ describe("the tab strip's rule is continuous and the active underline sits on it
 });
 
 describe('a collapsed right panel can be reopened and the left rail can be collapsed', () => {
-  test("the column's own control shuts it", () => {
+  test("the reader's own control shuts it", () => {
     const controls = verdictOf(observed.controls, 'controls');
 
     expect(controls.inspectorWidthOpened).toBeGreaterThan(INSPECTOR_SHUT_PX);

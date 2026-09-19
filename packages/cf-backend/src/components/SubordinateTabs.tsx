@@ -85,6 +85,7 @@ export function SubordinateTabs({
         <nav aria-label="Workspace agents" className={`p-tabstrip flex min-w-0 flex-1 items-center border-b p-border px-2 ${tabStripH}`}>
           <Link
             to={mainPath}
+            data-agent-tab="main"
             aria-current={!activeName ? "page" : undefined}
             className={`${tabCls} px-3 ${!activeName ? "p-tab-active font-medium" : ""}`}
           >
@@ -96,7 +97,7 @@ export function SubordinateTabs({
             const title = agentTitle(subordinate.displayName);
 
             return (
-              <div key={subordinate.name} className="group/tab relative shrink-0">
+              <div key={subordinate.name} data-agent-tab={subordinate.name} className="group/tab relative shrink-0">
                 {active ? (
                   // The open tab is not a link anywhere; it is where the agent is renamed.
                   <div aria-current="page" className={`${tabCls} p-tab-active h-full max-w-64 pl-3 pr-8 font-medium`}>
