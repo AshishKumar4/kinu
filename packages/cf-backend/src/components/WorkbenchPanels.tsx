@@ -126,7 +126,14 @@ export function WorkbenchPanels({ workspace, scope, contents, chat, inspector }:
         <button type="button" onClick={() => setMobilePane("chat")} aria-pressed={mobilePane === "chat"}
           className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === "chat" ? "p-accent-subtle p-accent" : "p-text-3"}`}>Chat</button>
         <button type="button" onClick={() => setMobilePane("workspace")} aria-pressed={mobilePane === "workspace"}
-          className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === "workspace" ? "p-accent-subtle p-accent" : "p-text-3"}`}>Workspace{waiting > 0 ? ` · ${String(waiting)}` : ""}</button>
+          className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs ${mobilePane === "workspace" ? "p-accent-subtle p-accent" : "p-text-3"}`}>
+          Workspace
+          {waiting > 0 && (
+            /* The count is a badge on the tab — a number on its own ground —
+               not a `· N` suffix mid-word. */
+            <span className="flex size-4 items-center justify-center rounded-full bg-[var(--c-accent)] text-[10px] font-semibold leading-none text-[var(--c-accent-on)]">{waiting}</span>
+          )}
+        </button>
       </div>
       <PanelGroup key={desktopPanels ? "desktop" : mobilePane} className="relative flex-1" resizeTargetMinimumSize={{ coarse: 20, fine: 10 }} {...layout.groupProps}>
         <Panel
