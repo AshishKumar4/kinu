@@ -90,7 +90,6 @@ END`));
 
         const forked = await plan.open({ subject: 'fork', purpose: 'Disposable blueprint fork target; no model task.', genesis: false });
         let mcpId: string | null = null;
-        let cleanupError: string | undefined;
 
         try {
           const forkResponse = await fetch(`${plan.origin}/api/shared/fork`, {
@@ -168,18 +167,15 @@ END`));
             detail: JSON.stringify({ server: mcpName, problem: mapped?.problem, called: docs.success, answered: answer.success }),
           });
         } finally {
-          try {
-            await forked.teardown();
-          } finally {
-            if (mcpId !== null) {
-              const removed = await fetch(`${plan.origin}/api/user/mcp/servers/${encodeURIComponent(mcpId)}`, { method: 'DELETE', headers });
-
-              if (!removed.ok) cleanupError = `Remove fork MCP answered ${String(removed.status)}`;
-            }
-          }
+          await Promise.all([
+            forked.teardown(),
+            mcpId === null ? Promise.resolve() : fetch(
+              `${plan.origin}/api/user/mcp/servers/${encodeURIComponent(mcpId)}`, { method: 'DELETE', headers },
+            ).then((removed) => {
+              if (!removed.ok) throw new Error(`Remove fork MCP answered ${String(removed.status)}`);
+            }),
+          ]);
         }
-
-        if (cleanupError !== undefined) throw new Error(cleanupError);
 
         return goals;
       },

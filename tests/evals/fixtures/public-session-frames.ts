@@ -139,12 +139,14 @@ export function chatChunkFrame(input: {
 export function chatTerminalFrame(input: {
   readonly requestId: string;
   readonly replay?: boolean;
+  readonly landed?: 'mid-turn' | 'turn';
 }): string {
   return JSON.stringify({
     type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE,
     id: input.requestId,
     body: '',
     done: true,
+    landed: input.landed,
     replay: input.replay === true ? true : undefined,
   });
 }

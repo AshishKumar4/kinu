@@ -1174,31 +1174,23 @@ export class KinuPublicSession {
     return { requestId, settled };
   }
 
-  /**
-   * Poll the run log until the run that absorbed a mid-turn send has closed.
-   *
-   * `landedAt` names the landing instant; the absorbing run is the one open
-   * then (see {@link absorbingRunId}). The run is found on the FIRST read —
-   * its `run_start` precedes the landing by definition — but its `run_end`
-   * trails the done frame, so the loop waits on that rather than on finding
-   * it. `null` rather than a hang when the log shows nothing the landing
-   * could belong to.
-   */
+  /** Follow the absorbing run to its terminal event. A stream rollover is not
+   * completion; followRun resumes it from the last recorded event. */
   private async awaitAbsorbingRunEnd(landedAt: string | null): Promise<string | null> {
-    const deadline = Date.now() + 300_000;
+    const events = await this.runEvents();
+    const runId = absorbingRunId(events, landedAt ?? new Date().toISOString());
 
-    for (;;) {
-      const events = await this.runEvents();
-      const runId = absorbingRunId(events, landedAt ?? new Date().toISOString());
+    if (runId === null) return null;
+    const own = events.filter((event) => event.runId === runId);
 
-      if (runId === null) return null;
+    if (own.some((event) => event.type === 'run_end')) return runId;
+    const cursor = own.reduce((last, event) => Math.max(last, event.eventIndex), 0);
 
-      if (events.some((event) => event.runId === runId && event.type === 'run_end')) return runId;
-
-      if (Date.now() >= deadline) return null;
-
-      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    for await (const event of this.followRun(runId, cursor)) {
+      if (event.type === 'run_end') break;
     }
+
+    return runId;
   }
 
   /** One user turn, awaited to settle. Every ledger row a suite reads is written
