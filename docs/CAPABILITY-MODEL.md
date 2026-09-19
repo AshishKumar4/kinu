@@ -1,7 +1,14 @@
 # Capability model
 
-A plan, written 2026-09-13 against `81314a551`. Nothing here is built. Every
-claim about today names its source file.
+A plan, written 2026-09-13 against `81314a551`. As of 2026-09-18 the record
+types below are adopted and the seam they describe is implemented — the
+"nothing here is built" header this document opened with is stale. What is
+built differs from the plan's agent-core `Grant` records: the live model is
+per-member/effect grants cut by `cutShareGrant`
+(`packages/core/src/slates/capability-graph.ts`), checked per call by
+`grantAdmits` (`packages/core/src/slates/bindings.ts`), with the viewer bounds
+and consent page in §3–§4 implemented in `packages/cf-backend/src/slates/host.ts`
+and `packages/cf-backend/src/slate-share-route.ts`.
 
 ## 1. Decision
 
@@ -60,22 +67,24 @@ Impact is derived per route:
 
 An operation with no declared impact is refused, not defaulted.
 
-## 3. Grants
+## 3. Grants, as built
 
-A live share stores one `Grant` per share: a `CapabilitySpec` over the slate's
-declared bindings, restricted to the impacts the owner approved. Public and
-named-user shares default to `observe` only. Any impact above `observe`
-requires an explicit owner approval. The prompt lists the exact bindings,
-operations and impacts being granted and the concrete risk — which server, and
-what it can change or send. Owner preview holds the owner's full authority.
+A live share stores a member/effect grant per binding — `ShareGrant`
+(`packages/core/src/slates/sharing.ts`), cut by `cutShareGrant`
+(`packages/core/src/slates/capability-graph.ts`) from the slate's declared
+bindings restricted to the members the owner approved. `observe`-effect
+members admit on the grant alone; anything above — `mutate`, `send`,
+`delegate` — requires an explicit owner approval on the row, and the consent
+page precedes any viewer on a share whose slate reaches credentialed bindings
+(`credentialedBindings`, `packages/core/src/slates/project.ts`). The prompt lists the
+exact bindings and members granted and the concrete risk. Owner preview holds
+the owner's full authority.
 
-The shared execution capability is the intersection of the saved `Grant` and
-the owner's current authority, re-read on every request. Revocation is a
-`Grant` `state` change. Approval reuses
-`packages/core/src/safety/approval-gate.ts` and the workspace-capability tables
-(`initWorkspaceCapabilityTables`,
-`packages/core/src/safety/workspace-capability.ts:276`), extended — never a
-parallel table.
+The shared execution capability is the grant re-read per request — the share
+row on every admission and every `bindingCall` (`host.ts` `admitViewerRequest`,
+`bindingCall`), so revocation is a row state change the next request sees
+(S6). Approval reuses `packages/core/src/safety/approval-gate.ts` and the
+workspace-capability tables, extended — never a parallel table.
 
 ## 4. Capability flow as a DAG
 
@@ -84,7 +93,7 @@ Edges are `Grant.attenuationOf` — a forest in agent-core — plus Kinu's
 `SlateCallerHop` chains (`packages/cf-backend/src/slates/bindings.ts:11-19`),
 which record which slate invoked which binding for whom. The DAG is a read
 model built from `slate_shares`, `slate_live_shares`, the grants, and the
-invocation records `docs/SLATE-SHARING.md` planned and the tree now implements
+invocation records `docs/SLATE-SHARING.md` names and the tree implements
 (`slate_viewer_requests`, `packages/core/src/slates/live-shares.ts:31`;
 `docs/SLATE-SHARING.md:229`). It renders in the sharing UI as "what this share
 can reach and through what". No new event stream.

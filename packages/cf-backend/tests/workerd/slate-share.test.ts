@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { abortAllDurableObjects } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
 import { LiveShareRecordSchema, ViewerRequestRecordSchema } from '@kinu.run/core';
@@ -14,7 +15,7 @@ const ShareCreated = v.object({ share: LiveShareRecordSchema, url: v.nullable(v.
 
 const Requests = v.object({ ok: v.literal(true), value: v.array(ViewerRequestRecordSchema) });
 
-const CLAIM = { userId: null, source: 'vitest' };
+const CLAIM = { userId: null, source: 'vitest', consented: true };
 
 it('a public share serves the slate, admits the granted member, refuses the rest and audits all of it', async () => {
   const probe = subject('live-share');
@@ -69,4 +70,20 @@ it('a revoked share refuses the route and stops the process it carried', async (
 
   expect((await probe.viewerFetch(created.share.handle, CLAIM)).status).toBe(404);
   expect(await probe.stopped()).toBe(true);
+});
+
+
+it('a shared slate still serves after the object that ran it is evicted', async () => {
+  // S6's durability leg: the share row and the slate's source live in the
+  // object's own storage, so a cold request re-reads both and re-boots the
+  // slate rather than answering 404.
+  const probe = () => subject('live-evict');
+  await probe().start();
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe().share()).value);
+
+  expect(await probe().viewerFetch(created.share.handle, CLAIM)).toEqual({ status: 200, body: 'share-ok' });
+
+  await abortAllDurableObjects();
+
+  expect(await probe().viewerFetch(created.share.handle, CLAIM)).toEqual({ status: 200, body: 'share-ok' });
 });

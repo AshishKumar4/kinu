@@ -61,6 +61,7 @@ export const SlateOperationSchema = v.variant('op', [
     op: v.literal('share'), id: SlateDirectoryName,
     visibility: LiveShareVisibilitySchema,
     approved: v.array(v.strictObject({ slate: v.string(), binding: v.string(), member: v.string() })),
+    fork: v.optional(v.boolean()),
   }),
   v.strictObject({ op: v.literal('liveShares') }),
   v.strictObject({ op: v.literal('viewerRequests'), share: ShareId }),

@@ -47,11 +47,17 @@ const PublishedLink = v.object({ id: v.string(), share: v.string(), users: v.arr
 /** What publishing answered: the signed link and who was named. */
 export type Published = v.InferOutput<typeof PublishedLink>;
 
-export function publishBlueprint(input: { workspace: string; slate: string; version: string; include?: string[]; emails?: string[] }): Promise<Published> {
+export function publishBlueprint(input: { workspace: string; slate: string; version: string; include?: string[]; emails?: string[]; public?: boolean }): Promise<Published> {
   return api(PublishedLink, 'POST', '/api/shared/publish', input);
 }
 
 export function forkBlueprint(input: { blueprint: string; workspace: string }): Promise<BlueprintFork> {
+  return api(BlueprintForkSchema, 'POST', '/api/shared/fork', input);
+}
+
+/** Fork a LIVE share: the running slate's skeleton, admitted the same as a
+ *  blueprint's — `ownerWorkspace` names where it runs, `live` its share row. */
+export function forkLiveShare(input: { live: string; ownerWorkspace: string; workspace: string }): Promise<BlueprintFork> {
   return api(BlueprintForkSchema, 'POST', '/api/shared/fork', input);
 }
 
@@ -73,6 +79,7 @@ export async function signedInEmail(): Promise<string | null> {
 export function shareLive(input: {
   workspace: string; slate: string; visibility: LiveShareVisibility; emails?: string[];
   approved: { slate: string; binding: string; member: string }[];
+  fork?: boolean;
 }): Promise<LiveShareCreated> {
   return api(LiveShareCreatedSchema, 'POST', '/api/shared/live', input);
 }

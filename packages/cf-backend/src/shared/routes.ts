@@ -89,9 +89,16 @@ const PublishBody = v.object({
   version: v.string(),
   include: v.optional(v.array(v.string())),
   emails: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
+  public: v.optional(v.boolean()),
 });
 
-const ForkBody = v.object({ blueprint: v.string(), workspace: v.string() });
+const ForkBody = v.union([
+  v.strictObject({ blueprint: v.string(), workspace: v.string() }),
+  /** A live share fork names the share row and the owner's workspace: the
+   *  bundle it carries is the running slate's skeleton, asked of the owner's
+   *  object under the forker's account. */
+  v.strictObject({ live: v.string(), ownerWorkspace: v.string(), workspace: v.string() }),
+]);
 
 /** The signed-in half. */
 export async function handleSharedRequest(request: Request, env: Env, identity: AuthIdentity): Promise<Response | null> {
@@ -235,7 +242,7 @@ async function publicRow(env: Env, entry: PublicShareRow): Promise<SharedRow | n
   if (entry.kind === 'live') {
     const live = await object.readLiveShare(entry.shareId);
 
-    if (!live.ok || live.value.record.visibility !== 'public') return null;
+    if (!live.ok || live.value.record.visibility !== 'public' || live.value.record.grant.fork === false) return null;
 
     return {
       id: entry.shareId, kind: 'live', share: entry.shareId, title: live.value.title, description: live.value.description,
@@ -294,21 +301,29 @@ async function publish(request: Request, env: Env, identity: AuthIdentity, owner
     }
   }
 
+  if (body.public === true) {
+    await indexPublicShare(env, {
+      ownerUserId: identity.userId, ownerEmail: identity.email, workspace: body.workspace, shareId: share.id,
+      kind: 'blueprint', title: inspection.title, createdAt: share.createdAt,
+    });
+  }
+
   return json({ id, share: share.id, users, published: published.value }, { status: 201 });
 }
 
 async function fork(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
   const body = await safeJson(request, ForkBody);
 
-  if (!body) return err(400, 'Body must be { blueprint, workspace }');
-  const address = await verifiedBlueprintAddress(env, body.blueprint);
+  if (!body) return err(400, 'Body must be { blueprint, workspace } or { live, ownerWorkspace, workspace }');
 
-  if (address === null) return err(404, NOT_FOUND);
   // The target is proven mine before the owner's object is asked for bytes.
   const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
 
   if (!claim.ok) return err(claim.status, claim.error);
-  const bundle = await workspaceOwner(env, address.workspace).blueprintBundle(address.share);
+
+  const bundle = 'blueprint' in body
+    ? await blueprintBundle(env, body.blueprint)
+    : await workspaceOwner(env, body.ownerWorkspace).liveShareBundle(body.live, identity.userId);
 
   if (!bundle.ok) return err(404, NOT_FOUND);
   const admitted = await workspaceOwner(env, body.workspace).admitBlueprint(bundle.value);
@@ -319,12 +334,23 @@ async function fork(request: Request, env: Env, identity: AuthIdentity): Promise
   return json(result, { status: 201 });
 }
 
+/** A blueprint's bundle, or the absent answer a bad address and a revoked row share. */
+async function blueprintBundle(env: Env, id: string) {
+  const address = await verifiedBlueprintAddress(env, id);
+
+  if (address === null) return { ok: false as const, reason: 'missing' as const, error: NOT_FOUND };
+
+  return workspaceOwner(env, address.workspace).blueprintBundle(address.share);
+}
+
 const LiveShareBody = v.object({
   workspace: v.string(),
   slate: v.string(),
   visibility: v.picklist(['users', 'public']),
   emails: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
   approved: v.optional(v.array(v.strictObject({ slate: v.string(), binding: v.string(), member: v.string() }))),
+  /** Whether viewers may copy the slate's skeleton into a workspace of theirs. */
+  fork: v.optional(v.boolean()),
 });
 
 const LiveIdBody = v.object({ workspace: v.string(), share: v.string() });
@@ -334,7 +360,7 @@ const LiveIdBody = v.object({ workspace: v.string(), share: v.string() });
 async function shareLive(request: Request, env: Env, identity: AuthIdentity, owner: UserCaller): Promise<Response> {
   const body = await safeJson(request, LiveShareBody);
 
-  if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, approved? }');
+  if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, approved?, fork? }');
   const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
 
   if (!claim.ok) return err(claim.status, claim.error);
@@ -342,7 +368,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity, own
   const owned = workspaceOwner(env, body.workspace);
 
   const created = await owned.slateAs(ROOT_SLATE_CALLER, {
-    op: 'share', id: body.slate, visibility: body.visibility, approved: body.approved ?? [],
+    op: 'share', id: body.slate, visibility: body.visibility, approved: body.approved ?? [], fork: body.fork,
   });
 
   if (!created.ok) return err(created.reason === 'bad_input' ? 400 : created.reason === 'missing' ? 404 : 409, created.error);

@@ -215,13 +215,12 @@ function ShareCard({ row, onFork }: { row: SharedRow; onFork: (row: SharedRow) =
             <LinkIcon size={11} />{row.bindings}
           </span>
         </div>
-        <div className="mt-2 flex justify-end">
-          {row.kind === "live" ? <OpenLive row={row} /> : (
-            <button type="button" onClick={() => onFork(row)}
-              className="p-btn-quiet inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs">
-              <GitBranchIcon size={13} /> Fork
-            </button>
-          )}
+        <div className="mt-2 flex items-center justify-end gap-1">
+          {row.kind === "live" && <OpenLive row={row} />}
+          <button type="button" onClick={() => onFork(row)} disabled={row.kind === 'live' && row.workspace === undefined}
+            className="p-btn-quiet inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs">
+            <GitBranchIcon size={13} /> Fork
+          </button>
         </div>
       </div>
     </li>
@@ -318,7 +317,11 @@ export default function SharedPage({ fixture, workspaces }: {
           )
         )}
       </div>
-      {forking !== null && <ForkDialog blueprint={forking.id} title={forking.title} onClose={() => setForking(null)} workspaces={workspaces} />}
+      {forking !== null && (
+        forking.kind === "live"
+          ? <ForkDialog live={{ share: forking.share, workspace: forking.workspace ?? '' }} title={forking.title} onClose={() => setForking(null)} workspaces={workspaces} />
+          : <ForkDialog blueprint={forking.id} title={forking.title} onClose={() => setForking(null)} workspaces={workspaces} />
+      )}
     </div>
   );
 }

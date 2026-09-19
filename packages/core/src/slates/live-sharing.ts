@@ -43,13 +43,15 @@ export class WorkspaceLiveShares {
     return v.parse(SlateCapabilityGraphSchema, slateCapabilityGraph({ slate, workspace: this.deps.workspace, catalog: await this.deps.catalog() }));
   }
 
-  /** Cut the grant the dialog approved and open the share it admits. */
+  /** Cut the grant the dialog approved and open the share it admits. `fork`
+   *  carries the owner's choice on whether viewers may copy the skeleton. */
   async share(
     slate: string,
     visibility: LiveShareVisibility,
     approved: readonly { slate: string; binding: string; member: string }[],
+    fork = true,
   ): Promise<LiveShareCreated> {
-    const grant = cutShareGrant(await this.graph(slate), approved);
+    const grant = { ...cutShareGrant(await this.graph(slate), approved), fork };
     const handle = shareHandle();
     const share = this.deps.shares.add({ id: nanoid(), slate, visibility, handle, grant });
 
