@@ -450,8 +450,13 @@ describe('the living background', () => {
             // Re-based 2026-09-16 on light's own baseline (rim-before
             // 0.00139): twice presence is 0.00278; the floor keeps a
             // 2% allowance for tissue state (reads 0.00277-0.00280).
+            // The ceiling was re-based 2026-09-18: the home's recent list
+            // became 56 px lines and stopped covering the bottom rim band,
+            // so the same picture reads 0.00349-0.00357 (four runs, load 4-8);
+            // the ceiling keeps the 25% headroom the 2026-09-16 one had over
+            // its reading.
             expect(deltas.rim).toBeGreaterThanOrEqual(0.00272);
-            expect(deltas.rim).toBeLessThanOrEqual(0.00348);
+            expect(deltas.rim).toBeLessThanOrEqual(0.00440);
           } else {
             expect(deltas.rim).toBeLessThanOrEqual(0.0009);
             expect(deltas.centre).toBeLessThanOrEqual(0.0009);
@@ -477,19 +482,27 @@ describe('the living background', () => {
 
         for (const name of DISPLAYED) await setOverview(page, name, idleBody());
         await waitForMode(page, 'idle');
-        await pause(4000);
 
         // Absolute presence in the pointer's disc, each live shot against
         // the same hidden-host ground, gated on the hold itself: the shot.
         // The rAF loop would race the readback, so the measured window runs
         // frozen — the test's own advances are the only steps the picture
-        // takes, and the pixels are a pure function of them.
+        // takes, and the pixels are a pure function of them. That includes
+        // the settling before the pointer arrives: four seconds of wall clock
+        // under the deploy wave's load is fewer frames than four seconds on a
+        // quiet box, and the hold's lift depends on the settled picture, so
+        // the settling is stepped too (240 frames, the four seconds at 60 fps).
         const disc = { x: 0.94, y: 0.2, r: 0.06 };
 
         // The gallery attaches the stepping controls; a page without them is
         // not the gallery, and this readback has no picture to hold still.
         expect(await page.evaluate(() => window.__kinuAppBackground?.freeze !== undefined)).toBe(true);
-        await page.evaluate(() => window.__kinuAppBackground?.freeze?.());
+        await page.evaluate(() => {
+          const handle = window.__kinuAppBackground;
+          handle?.freeze?.();
+
+          for (let i = 0; i < 240; i += 1) handle?.advance?.(1 / 60);
+        });
 
         const quiet = await page.screenshot({ captureBeyondViewport: false });
         const quietHold = await page.evaluate(() => window.__kinuAppBackground?.pointer() ?? 0);
