@@ -16,6 +16,7 @@ import {
   SparkleIcon, ArrowBendUpRightIcon, GearSixIcon, EyeIcon,
   TerminalWindowIcon, FileTextIcon, UsersThreeIcon, BrainIcon,
   ListChecksIcon, GlobeIcon, ChartLineUpIcon, DotsThreeCircleIcon, DesktopTowerIcon,
+  ThumbsUpIcon, ThumbsDownIcon,
 } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
 import { isToolUIPart, getToolName } from "ai";
@@ -960,20 +961,22 @@ function MessageFeedback({
         type="button"
         onClick={() => toggle('positive')}
         disabled={busy}
-        className={`p-t-control p-1 rounded-sm p-card-hover transition-colors ${
+        className={`flex items-center p-1 rounded-sm p-card-hover transition-colors ${
           current === 'positive' ? 'p-text' : 'p-text-3 hover:p-text focus-visible:p-text'
         }`}
         title="Mark this response helpful. Feeds evolution scoring."
-      >👍</button>
+        aria-label="Mark this response helpful"
+      ><ThumbsUpIcon size={12} weight={current === 'positive' ? 'fill' : 'regular'} /></button>
       <button
         type="button"
         onClick={() => toggle('negative')}
         disabled={busy}
-        className={`p-t-control p-1 rounded-sm p-card-hover transition-colors ${
+        className={`flex items-center p-1 rounded-sm p-card-hover transition-colors ${
           current === 'negative' ? 'p-text' : 'p-text-3 hover:p-text focus-visible:p-text'
         }`}
         title="Mark this response poor. Feeds evolution scoring."
-      >👎</button>
+        aria-label="Mark this response poor"
+      ><ThumbsDownIcon size={12} weight={current === 'negative' ? 'fill' : 'regular'} /></button>
       {failed && <span className="p-t-status p-danger">Could not save. Try again.</span>}
     </div>
   );
