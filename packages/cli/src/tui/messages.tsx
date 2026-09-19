@@ -146,18 +146,22 @@ function renderList(
   const probe = context.defaultRender();
 
   if (probe === null) return null;
-  const list = new BoxRenderable(probe.ctx, { width: '100%', flexDirection: 'column' });
+  const ctx = probe.ctx;
+  probe.destroyRecursively();
+
+  const list = new BoxRenderable(ctx, { width: '100%', flexDirection: 'column' });
   const first = token.start === '' ? 1 : token.start;
 
   token.items.forEach((item, index) => {
-    const row = new BoxRenderable(probe.ctx, { width: '100%', flexDirection: 'row' });
+    const row = new BoxRenderable(ctx, { width: '100%', flexDirection: 'row' });
     const marker = token.ordered ? `${String(first + index)}. ` : item.task ? (item.checked ? '☑ ' : '☐ ') : '• ';
-    row.add(new TextRenderable(probe.ctx, { content: marker, fg: colors.intent.accent }));
-    row.add(new MarkdownRenderable(probe.ctx, {
+    row.add(new TextRenderable(ctx, { content: marker, fg: colors.intent.accent }));
+    row.add(new MarkdownRenderable(ctx, {
       content: item.text,
       syntaxStyle: context.syntaxStyle,
       conceal: context.conceal,
       concealCode: context.concealCode,
+      treeSitterClient: context.treeSitterClient,
       fg: colors.text.strong,
       renderNode,
       flexGrow: 1,
