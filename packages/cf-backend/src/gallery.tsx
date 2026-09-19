@@ -386,10 +386,9 @@ const mcpSecrets = (() => {
   return new Set(listed.filter((entry) => entry.length > 0));
 })();
 
-/** What the plugins and devices pages read beyond the settings reads: the
- *  grants rows (the devices frame gets one of each state — the page's whole
- *  question is the state per workspace) and the owner's crafted tools. Null
- *  for every other path. */
+/** What the devices page reads beyond the settings reads: the grants rows —
+ *  one of each state, because the page's whole question is the state per
+ *  workspace. Null for every other path. */
 function pluginsFixture(path: string): Response | null {
   if (path === "/api/user/devices/consents") {
     return fixtureJson(frame === "devices"
@@ -400,21 +399,6 @@ function pluginsFixture(path: string): Response | null {
       : []);
   }
 
-  // The query string rides on `path` for a relative URL, so the match is by prefix.
-  if (path.startsWith("/api/user/experience")) {
-    return fixtureJson([
-      {
-        id: "exp-1", kind: "craft", key: "parse-ledger", title: "parse-ledger", sourceWorkspace: "checkout-fixes",
-        publishedAt: NOW - 2 * 864e5, evidence: "EMA 0.91 over 12 runs",
-        payload: { kind: "craft", description: "Turn a bank CSV export into settlement rows.", params: null, code: "", score: 0.91 },
-      },
-      {
-        id: "exp-2", kind: "craft", key: "triage-inbox", title: "triage-inbox", sourceWorkspace: "email-triage",
-        publishedAt: NOW - 5 * 864e5, evidence: "EMA 0.84 over 9 runs",
-        payload: { kind: "craft", description: "Sort a mailbox into the three piles the owner acts on.", params: null, code: "", score: 0.84 },
-      },
-    ]);
-  }
 
   return null;
 }

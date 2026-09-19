@@ -20,13 +20,11 @@ const DOT_BY_TONE = {
 } satisfies Record<PluginTone, string>;
 
 /** The icon well's colour, by the kind of thing the card is. */
-export type PluginKind = 'server' | 'tool' | 'skill' | 'device';
+export type PluginKind = 'server' | 'skill';
 
 const WELL_BY_KIND = {
   server: 'bg-[#3b82f6]/15 text-[#60a5fa]',
-  tool: 'p-accent-subtle p-accent',
   skill: 'bg-[#22c55e]/15 text-[#4ade80]',
-  device: 'bg-[#a855f7]/15 text-[#c084fc]',
 } satisfies Record<PluginKind, string>;
 
 export function PluginCard({ icon: Icon, kind, name, line, status }: {

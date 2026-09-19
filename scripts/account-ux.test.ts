@@ -404,13 +404,13 @@ describe('account panels', () => {
 
           try {
             await plugins.waitForFunction(
-              () => document.querySelectorAll('[data-plugin]').length >= 6,
+              () => document.querySelectorAll('[data-plugin]').length >= 4,
             );
             const body = await plugins.evaluate(() => document.body.innerText);
 
             // Section eyebrows are uppercased by the CSS role, and innerText
             // reads them as drawn.
-            for (const text of ['MCP SERVERS', 'github', 'auth needed', 'CRAFTED TOOLS', 'parse-ledger', 'from checkout-fixes',
+            for (const text of ['MCP SERVERS', 'github', 'auth needed',
               'SKILLS', 'audit-implementation', 'built in']) {
               expect(body).toContain(text);
             }

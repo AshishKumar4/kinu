@@ -1,23 +1,20 @@
 /**
  * Plugins — what this account's agents can reach beyond their built-in tools,
- * in one grid grammar: MCP servers, the tools workspaces crafted and published
- * to the owner's library, and the skills every workspace ships with. Each is
- * a read of its own, failing on its own, so an unreachable MCP plane never
- * blanks the skills beside it.
+ * in one grid grammar: MCP servers and the skills every workspace ships with.
+ * Each is a read of its own, failing on its own, so an unreachable MCP plane
+ * never blanks the skills beside it.
  *
  * Skills a workspace writes for itself live in that workspace's object and
- * are listed there; only the built-in doctrine is account-wide. Crafted tools
- * reach the account only once a workspace publishes them to the experience
- * library — a tool still private to its workspace is not listed here.
+ * are listed there; only the built-in doctrine is account-wide.
  */
 import { useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import {
-  BookOpenIcon, PlugsConnectedIcon, PuzzlePieceIcon, WrenchIcon,
+  BookOpenIcon, PlugsConnectedIcon, PuzzlePieceIcon,
 } from "@phosphor-icons/react";
 import { APP_ROUTES, BUILTIN_SKILL_HEADERS } from "@kinu.run/core";
 import {
-  listExperience, listMcpServers, listMcpPresets,
+  listMcpServers, listMcpPresets,
   type McpServerSummary,
 } from "@/lib/user-api";
 import { useAsyncResource, mapResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
@@ -25,8 +22,6 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { PluginCard, type PluginStatus } from "@/components/plugins/PluginCard";
 import { McpPresetCards } from "@/components/plugins/McpPresetCards";
 import { AccountPanelModal } from "@/components/account/AccountPanelModal";
-
-const loadCrafts = () => listExperience('craft');
 
 /** While a preset sign-in is open in another tab the user returns to this
  *  page mid-flow, so the server list re-reads itself until every connection
@@ -87,7 +82,6 @@ function PluginSection({ title, cards, onRetry, what, action, note, empty }: {
 export default function PluginsPage() {
   const servers = useAsyncResource(listMcpServers, revalidateServers);
   const presets = useAsyncResource(listMcpPresets);
-  const crafts = useAsyncResource(loadCrafts);
   const [managing, setManaging] = useState(false);
 
   return (
@@ -112,15 +106,6 @@ export default function PluginsPage() {
                 status={serverStatus(server.status)} />
             )),
           ])}
-        />
-
-        <PluginSection title="Crafted tools" onRetry={crafts.reload} what="your crafted tools"
-          empty="No workspace has published a tool to your library yet."
-          cards={mapResource(crafts.resource, (rows) => rows.map((entry) => (
-            <PluginCard key={entry.id} icon={WrenchIcon} kind="tool" name={entry.title}
-              line={entry.payload.description ?? entry.evidence}
-              status={{ label: `from ${entry.sourceWorkspace}`, tone: 'neutral' }} />
-          )))}
         />
 
         <section aria-label="Skills" className="space-y-3">
