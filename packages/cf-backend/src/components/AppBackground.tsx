@@ -82,6 +82,10 @@ declare global {
     __kinuAppBackground?: AppBackgroundHandle & Partial<AppBackgroundStepping>;
     /** Set by the gallery's own page script, never by the shipped app. */
     __kinuGalleryStepping?: true;
+    /** Set by a gallery TEST before the shell mounts: the picture starts
+     *  frozen at its seed, so a readback is a pure function of the test's
+     *  own `advance` steps and not of the wall clock before the freeze. */
+    __kinuGalleryFrozen?: true;
   }
 }
 
@@ -147,6 +151,7 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
       rebind: (_art, aspect) => mat(aspect, 'canvas'),
       still: { seconds: STILL_SECONDS, step: STILL_STEP },
       holdStill: () => !wide,
+      startFrozen: () => window.__kinuGalleryStepping === true && window.__kinuGalleryFrozen === true,
       resolution: RESOLUTION,
       fit: (art) => art.setKeepOut(keepOut()),
       shown: (_frame, canvas) => {

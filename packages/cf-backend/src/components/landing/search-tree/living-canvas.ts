@@ -40,6 +40,11 @@ export interface LivingCanvasSpec<Frame extends ArtFrame, Art extends LivingArt<
   readonly still: { readonly seconds: number; readonly step: number };
   /** Hold still whatever the motion preference says — a phone, say. Read on every start. */
   readonly holdStill?: () => boolean;
+  /** Start frozen: the picture is made and shown once at its seed, and the
+   *  rAF loop never steps it — only `advance` does. Read when the renderer
+   *  is picked. A measured readback that must be a pure function of its own
+   *  steps starts here; the shipped app never sets it. */
+  readonly startFrozen?: () => boolean;
   /** Physical pixels per CSS pixel as a share of the device's own; under 1 the picture draws soft. */
   readonly resolution: number;
   /** The box changed, or the picture is new: what it must know about the host. */
@@ -249,6 +254,13 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
       next.dataset.renderer = picked.kind;
       picked.onFault?.(onGpuFault);
       fit();
+
+      if (spec.startFrozen?.() === true) {
+        show(art, false);
+
+        return;
+      }
+
       playback.sync();
     }).catch(startFailed);
   };
