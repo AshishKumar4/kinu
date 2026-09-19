@@ -6,7 +6,7 @@
  * context-window and capability badges.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Badge, Combobox } from "@cloudflare/kumo";
+import { Badge, Combobox, Select } from "@cloudflare/kumo";
 import { ArrowsClockwiseIcon, BrainIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { formatContextWindow, isReasoningEffort, offeredReasoningEfforts, type ReasoningEffort } from "@kinu.run/core";
 import {
@@ -128,8 +128,16 @@ export function ModelPicker({
  * earns the empty-state CTA — flashing it during load or on a flaky request
  * sent connected users through a full OAuth prompt=login.
  */
+/** The empty string is the "model default" row: no level sent, the provider
+ *  decides. A real level is its own spelling. */
+const DEFAULT_EFFORT = "";
+
+const effortLabel = (effort: ReasoningEffort | typeof DEFAULT_EFFORT): string =>
+  effort === DEFAULT_EFFORT ? "Default" : effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1);
+
 /** The thinking level beside the model: the levels this model declares, or
- *  nothing when it declares none. Tucked to an icon and a word. */
+ *  nothing when it declares none — a model that takes no level shows no
+ *  control. The same popup family as the model picker beside it. */
 function EffortPicker({ options, value, onChange, disabled }: {
   options: readonly ReasoningEffort[];
   value: ReasoningEffort | null;
@@ -139,19 +147,23 @@ function EffortPicker({ options, value, onChange, disabled }: {
   if (options.length === 0) return null;
 
   return (
-    <label className="inline-flex shrink-0 items-center gap-1 rounded-md px-1 py-0.5 p-t-status p-text-3 hover:p-text-2 focus-within:p-text-2" title="Thinking level">
-      <BrainIcon size={12} aria-hidden="true" />
-      <select
-        aria-label="Thinking level"
-        className="max-w-20 cursor-pointer appearance-none bg-transparent p-t-status outline-none"
-        value={value ?? ""}
-        disabled={disabled}
-        onChange={(event) => { const effort = event.target.value; onChange(isReasoningEffort(effort) ? effort : null); }}
-      >
-        <option value="">default</option>
-        {options.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
-      </select>
-    </label>
+    <Select
+      aria-label="Thinking level"
+      size="xs"
+      className="shrink-0"
+      value={value ?? DEFAULT_EFFORT}
+      disabled={disabled}
+      onValueChange={(next) => { onChange(isReasoningEffort(next) ? next : null); }}
+      renderValue={(picked) => (
+        <span className="inline-flex items-center gap-1">
+          <BrainIcon size={12} aria-hidden="true" />
+          {effortLabel(isReasoningEffort(picked) ? picked : DEFAULT_EFFORT)}
+        </span>
+      )}
+    >
+      <Select.Option value={DEFAULT_EFFORT}>{effortLabel(DEFAULT_EFFORT)}</Select.Option>
+      {options.map((effort) => <Select.Option key={effort} value={effort}>{effortLabel(effort)}</Select.Option>)}
+    </Select>
   );
 }
 

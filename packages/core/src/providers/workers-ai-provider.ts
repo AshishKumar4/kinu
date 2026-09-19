@@ -9,7 +9,7 @@ import { DEFAULT_WORKERS_AI_MODEL_ID } from './workers-ai';
 import { listModelsDevProviderModels } from './models-dev';
 import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
 import { createDirectWorkersAIFetch } from './direct-workers-ai-fetch';
-import { WORKERS_AI_FALLBACK_MODEL_CATALOG, WORKERS_AI_PREFERRED_MODEL_IDS, WORKERS_AI_REASONING_EFFORTS } from './workers-ai-catalog';
+import { WORKERS_AI_FALLBACK_MODEL_CATALOG, WORKERS_AI_PREFERRED_MODEL_IDS } from './workers-ai-catalog';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
 
 export interface WorkersAIOptions {
@@ -35,7 +35,6 @@ export function createWorkersAIProvider(
     listModels: (deps): Promise<ModelInfo[]> => listModelsDevProviderModels('cloudflare-workers-ai', deps, {
       fallback: WORKERS_AI_FALLBACK_MODEL_CATALOG,
       preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
-      reasoningEfforts: WORKERS_AI_REASONING_EFFORTS,
     }),
     createModel(modelId, deps): LanguageModel {
       const requestHeaders = opts.sessionAffinity ? { 'x-session-affinity': opts.sessionAffinity } : undefined;

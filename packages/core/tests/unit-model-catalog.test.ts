@@ -40,6 +40,7 @@ describe('provider model catalogs', () => {
               name: 'GPT-5.5',
               tool_call: true,
               reasoning: true,
+              reasoning_options: [{ type: 'effort', values: ['none', 'low', 'medium', 'high', 'xhigh'] }],
               modalities: { input: ['text', 'image'] },
               limit: { context: 1_050_000 },
             },
@@ -71,23 +72,24 @@ describe('provider model catalogs', () => {
       capabilities: ['streaming', 'tools', 'reasoning', 'vision'],
       contextWindow: 1_050_000,
       inputModalities: ['text', 'image'],
-      // models.dev says only that it reasons; the levels are the provider's
-      // own documented table for this id, xhigh included.
       reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh'],
     }]);
   });
 
-  test('a model the provider table does not name gets the Chat Completions three, or none', async () => {
-    // The models.dev flag is a boolean, so a reasoning model with no
-    // documented table takes the three levels every OpenAI-compatible
-    // endpoint accepts, and a non-reasoning model takes none at all.
+  test('the levels are the effort row models.dev records; a toggle, a budget or nothing offers none', async () => {
+    // A model that reasons through a toggle or a token budget takes no effort
+    // level, and the selector used to offer it three anyway. Only an `effort`
+    // row names levels, in the provider's order, and a spelling this build
+    // does not know drops without emptying the rest.
     const provider = createOpenAIProvider();
 
     const fetchFn = fetchStub(async () => Response.json({
       openai: {
         models: {
-          'gpt-next': { id: 'gpt-next', tool_call: true, reasoning: true },
-          'gpt-plain': { id: 'gpt-plain', tool_call: true, reasoning: false },
+          'gpt-next': { id: 'gpt-next', tool_call: true, reasoning: true, reasoning_options: [{ type: 'effort', values: ['high', 'ultra', 'low'] }] },
+          'gpt-toggle': { id: 'gpt-toggle', tool_call: true, reasoning: true, reasoning_options: [{ type: 'toggle' }, { type: 'budget_tokens', min: 1024 }] },
+          'gpt-bare': { id: 'gpt-bare', tool_call: true, reasoning: true },
+          'gpt-plain': { id: 'gpt-plain', tool_call: true, reasoning: false, reasoning_options: [] },
         },
       },
     }));
@@ -96,7 +98,9 @@ describe('provider model catalogs', () => {
       [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } },
     }, fetchFn))).map((model) => [model.id, model]));
 
-    expect(byId.get('gpt-next')?.reasoningEfforts).toEqual(['low', 'medium', 'high']);
+    expect(byId.get('gpt-next')?.reasoningEfforts).toEqual(['high', 'low']);
+    expect(byId.get('gpt-toggle')?.reasoningEfforts).toEqual([]);
+    expect(byId.get('gpt-bare')?.reasoningEfforts).toEqual([]);
     expect(byId.get('gpt-plain')?.reasoningEfforts).toEqual([]);
   });
 

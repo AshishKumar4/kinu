@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { cloneModelInfos, nonEmptyString, positiveInteger } from './util';
 import { diagnostics, renderThrownChain } from '../obs/index';
-import { reasoningEffortsFor, type ReasoningEffort } from './reasoning-effort';
+import { knownReasoningEfforts } from './reasoning-effort';
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
 
@@ -40,6 +40,10 @@ interface ModelsDevModel {
   name?: string;
   tool_call?: boolean;
   reasoning?: boolean;
+  /** How a model's reasoning is steered, per models.dev: an `effort` row names
+   *  the levels the provider accepts; `toggle` and `budget_tokens` rows are not
+   *  levels. Absent or empty means the model takes no effort. */
+  reasoning_options?: ModelsDevReasoningOption[];
   status?: string;
   limit?: {
     context?: number;
@@ -58,6 +62,11 @@ interface ModelsDevModel {
   };
 }
 
+interface ModelsDevReasoningOption {
+  type?: string;
+  values?: string[];
+}
+
 interface ModelsDevCache {
   at: number;
   fetchFn: typeof fetch;
@@ -69,6 +78,10 @@ const ModelsDevModelSchema = v.object({
   name: v.optional(v.string()),
   tool_call: v.optional(v.boolean()),
   reasoning: v.optional(v.boolean()),
+  reasoning_options: v.optional(v.array(v.object({
+    type: v.optional(v.string()),
+    values: v.optional(v.array(v.string())),
+  }))),
   status: v.optional(v.string()),
   limit: v.optional(v.object({
     context: v.optional(v.number()),
@@ -105,12 +118,6 @@ export interface ModelsDevListOptions {
   preferredIds?: readonly string[];
   ttlMs?: number;
   toolCallOnly?: boolean;
-  /** The effort levels a provider documents PER MODEL, keyed by model id.
-   *  models.dev says only whether a model reasons, never which levels it
-   *  takes, so a bespoke provider passes its own documented table here and
-   *  a model without a row falls back to the Chat Completions three when it
-   *  reasons, none when it does not. */
-  reasoningEfforts?: Readonly<Record<string, readonly ReasoningEffort[]>>;
 }
 
 export async function listModelsDevProviderModels(
@@ -128,7 +135,7 @@ export async function listModelsDevProviderModels(
     const out: ModelInfo[] = [];
 
     for (const [key, model] of Object.entries(models)) {
-      const info = modelInfoFromModelsDev(key, model, opts.toolCallOnly ?? true, opts.reasoningEfforts);
+      const info = modelInfoFromModelsDev(key, model, opts.toolCallOnly ?? true);
 
       if (info) out.push(info);
     }
@@ -242,7 +249,6 @@ function modelInfoFromModelsDev(
   key: string,
   model: ModelsDevModel,
   toolCallOnly: boolean,
-  declaredEfforts: Readonly<Record<string, readonly ReasoningEffort[]>> | undefined,
 ): ModelInfo | null {
   if (model.status === 'deprecated') return null;
 
@@ -262,7 +268,12 @@ function modelInfoFromModelsDev(
 
   const cost = pricingFromModelsDev(model.cost);
 
-  const reasoningEfforts = reasoningEffortsFor(id, model.reasoning === true, declaredEfforts);
+  // The provider's own levels for this model, as models.dev records them.
+  // Unknown spellings drop rather than fail, so a vendor adding a level
+  // tomorrow does not empty today's menu.
+  const reasoningEfforts = knownReasoningEfforts(
+    model.reasoning_options?.find((option) => option.type === 'effort')?.values ?? [],
+  );
 
   return {
     id,

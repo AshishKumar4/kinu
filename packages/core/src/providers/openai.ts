@@ -21,43 +21,15 @@ export const OPENAI_DEFAULT_MODEL = 'gpt-5.5';
 /** The small tier the evolution engine's mechanical calls run on. */
 export const OPENAI_FAST_MODEL = 'gpt-5.4-mini';
 
-/** `reasoning.effort` per model, as each model page's "supports" sentence
- *  lists it (read 2026-09-11): https://developers.openai.com/api/docs/models/<id>.
- *  Keyed by model name; a dated snapshot resolves through `modelFamilyId`.
- *  A reasoning model whose page states no list (the o-series, gpt-5-mini,
- *  gpt-5-nano) takes the API reference's low|medium|high, which is the
- *  resolver's default. Shared with the Codex provider, which serves the same
- *  models over the ChatGPT login. */
-const GPT56: readonly ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
-
-const GPT54: readonly ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh'];
-
-const PRO: readonly ReasoningEffort[] = ['medium', 'high', 'xhigh'];
-
-export const OPENAI_REASONING_EFFORTS = {
-  'gpt-6-astra':    ['low', 'medium', 'high', 'xhigh', 'max'],
-  'gpt-5.6':        GPT56,
-  'gpt-5.6-sol':    GPT56,
-  'gpt-5.6-luna':   GPT56,
-  'gpt-5.6-terra':  GPT56,
-  'gpt-5.5':        GPT54,
-  'gpt-5.5-pro':    PRO,
-  'gpt-5.4':        GPT54,
-  'gpt-5.4-mini':   GPT54,
-  'gpt-5.4-nano':   GPT54,
-  'gpt-5.4-pro':    PRO,
-  'gpt-5.3-codex':  ['low', 'medium', 'high', 'xhigh'],
-  'gpt-5.2':        GPT54,
-  'gpt-5.2-pro':    PRO,
-  'gpt-5.1':        ['none', 'low', 'medium', 'high'],
-  'gpt-5':          ['minimal', 'low', 'medium', 'high'],
-  'gpt-5-pro':      ['high'],
-} satisfies Record<string, readonly ReasoningEffort[]>;
+/** Levels per model from the model pages (read 2026-09-11), for the offline
+ *  lists here and in codex.ts; the live lists read models.dev:
+ *  https://developers.openai.com/api/docs/models/<id> */
+export const GPT54_EFFORTS: readonly ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh'];
 
 const FALLBACK_MODELS: ModelInfo[] = [
-  { id: OPENAI_DEFAULT_MODEL, label: 'GPT-5.5', capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: OPENAI_REASONING_EFFORTS['gpt-5.5'] },
-  { id: 'gpt-5.4',    label: 'GPT-5.4',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: OPENAI_REASONING_EFFORTS['gpt-5.4'] },
-  { id: 'gpt-5',      label: 'GPT-5',      capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 400_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: OPENAI_REASONING_EFFORTS['gpt-5'] },
+  { id: OPENAI_DEFAULT_MODEL, label: 'GPT-5.5', capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: GPT54_EFFORTS },
+  { id: 'gpt-5.4',    label: 'GPT-5.4',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: GPT54_EFFORTS },
+  { id: 'gpt-5',      label: 'GPT-5',      capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 400_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: ['minimal', 'low', 'medium', 'high'] },
 ];
 
 const PREFERRED_MODEL_IDS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.5-pro', 'gpt-5.4-pro', 'gpt-5', 'gpt-5.4-mini'];
@@ -80,7 +52,6 @@ export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
     listModels: (deps) => listModelsDevProviderModels('openai', deps, {
       fallback: FALLBACK_MODELS,
       preferredIds: PREFERRED_MODEL_IDS,
-      reasoningEfforts: OPENAI_REASONING_EFFORTS,
     }),
     createModel(modelId, deps): LanguageModel {
       const customFetch = createAuthedFetch(deps, {

@@ -18,25 +18,10 @@ export const WORKERS_AI_PREFERRED_MODEL_IDS = [
   '@cf/google/gemma-4-26b-a4b-it',
 ];
 
-/** `reasoning_effort` per model, as each model page's request schema lists
- *  it (read 2026-09-10): https://developers.cloudflare.com/workers-ai/models/<name>/.
- *  glm-5.3, deepseek-v4-pro-0813, kimi-k2.6 and nemotron-3-120b-a12b each
- *  declare `enum: low, medium, high`. gpt-oss takes the same three through its
- *  Responses surface (`reasoning: { effort }`), per
- *  https://developers.cloudflare.com/workers-ai/models/gpt-oss-120b/ and the
- *  model card at https://github.com/openai/gpt-oss. llama-4-scout does not
- *  reason and takes none. */
+/** `reasoning_effort` per model page (read 2026-09-10), for the offline list
+ *  only; the live list reads models.dev. llama-4-scout does not reason.
+ *  https://developers.cloudflare.com/workers-ai/models/<name>/ */
 const LOW_MEDIUM_HIGH: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
-
-export const WORKERS_AI_REASONING_EFFORTS = {
-  [DEFAULT_WORKERS_AI_MODEL_ID]:                   LOW_MEDIUM_HIGH,
-  '@cf/deepseek-ai/deepseek-v4-pro-0813':          LOW_MEDIUM_HIGH,
-  '@cf/moonshotai/kimi-k2.6':                      LOW_MEDIUM_HIGH,
-  '@cf/nvidia/nemotron-3-120b-a12b':               LOW_MEDIUM_HIGH,
-  '@cf/openai/gpt-oss-120b':                       LOW_MEDIUM_HIGH,
-  '@cf/openai/gpt-oss-20b':                        LOW_MEDIUM_HIGH,
-  '@cf/meta/llama-4-scout-17b-16e-instruct':       [],
-} satisfies Record<string, readonly ReasoningEffort[]>;
 
 export const WORKERS_AI_FALLBACK_MODEL_CATALOG: ModelInfo[] = [
   // Label/window per developers.cloudflare.com/workers-ai/models/glm-5.3 (read 2026-08-31).

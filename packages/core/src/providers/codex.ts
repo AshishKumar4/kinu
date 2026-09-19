@@ -23,7 +23,7 @@ import * as v from 'valibot';
 import { CodexOAuthTokenError } from './codex-oauth';
 import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
 import { classify, diagnostics, KinuError, renderThrownChain } from '../obs/index';
-import { OPENAI_REASONING_EFFORTS } from './openai';
+import { GPT54_EFFORTS } from './openai';
 import { knownReasoningEfforts } from './reasoning-effort';
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
@@ -41,13 +41,13 @@ export const CODEX_FAST_MODEL = 'gpt-5.4-mini';
 const CODEX_DEAD_LOGIN =
   'Your ChatGPT login is no longer valid. Reconnect ChatGPT in User settings, or run `kinu setup` on this machine.';
 
-/** Offline list. Levels come from the OpenAI model pages (`OPENAI_REASONING_EFFORTS`);
+/** Offline list. Levels come from the OpenAI model pages (`GPT54_EFFORTS`, openai.ts);
  *  the live `/models` listing carries each model's own `supported_reasoning_levels`. */
 const FALLBACK_MODELS: ModelInfo[] = [
-  { id: CODEX_DEFAULT_MODEL, label: 'GPT-5.5 (Codex)',    capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000, reasoningEfforts: OPENAI_REASONING_EFFORTS['gpt-5.5'] },
-  { id: 'gpt-5.4',       label: 'GPT-5.4 (Codex)',       capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000, reasoningEfforts: OPENAI_REASONING_EFFORTS['gpt-5.4'] },
-  { id: 'gpt-5.4-mini',  label: 'GPT-5.4 mini (Codex)',  capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000, reasoningEfforts: OPENAI_REASONING_EFFORTS['gpt-5.4-mini'] },
-  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex',         capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 272_000, reasoningEfforts: OPENAI_REASONING_EFFORTS['gpt-5.3-codex'] },
+  { id: CODEX_DEFAULT_MODEL, label: 'GPT-5.5 (Codex)',    capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000, reasoningEfforts: GPT54_EFFORTS },
+  { id: 'gpt-5.4',       label: 'GPT-5.4 (Codex)',       capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000, reasoningEfforts: GPT54_EFFORTS },
+  { id: 'gpt-5.4-mini',  label: 'GPT-5.4 mini (Codex)',  capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000, reasoningEfforts: GPT54_EFFORTS },
+  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex',         capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 272_000, reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] },
   { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark', capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 128_000 },
 ];
 
