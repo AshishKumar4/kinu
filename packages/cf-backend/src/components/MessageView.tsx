@@ -13,7 +13,7 @@ import {
   GitBranchIcon, CheckCircleIcon, ClockIcon,
   WarningCircleIcon, ProhibitIcon,
   ClockCounterClockwiseIcon, LightningIcon,
-  SparkleIcon, ArrowBendUpRightIcon, GearSixIcon, EyeIcon,
+  ArrowBendUpRightIcon, GearSixIcon, EyeIcon,
   TerminalWindowIcon, FileTextIcon, UsersThreeIcon, BrainIcon,
   ListChecksIcon, GlobeIcon, ChartLineUpIcon, DotsThreeCircleIcon, DesktopTowerIcon,
   ThumbsUpIcon, ThumbsDownIcon,
@@ -549,20 +549,6 @@ export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<Unavailab
   );
 }
 
-/** The workspace opening itself. The owner gave a MISSION in the New workspace
- *  dialog, not a message — so the first thing in the transcript is the agent
- *  being handed its own workspace, not the owner speaking. */
-function WorkspaceCreatedCard({ state }: { state: CardState }) {
-  return (
-    <div className="flex justify-center animate-fade-in py-1">
-      <div className={SYSTEM_PILL}>
-        <SparkleIcon size={13} className="p-accent" weight="fill" />
-        <span>Workspace created. The agent starts its mission.</span>
-        <span className="flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
-      </div>
-    </div>
-  );
-}
 
 /**
  * Every other turn the harness enqueued: the ones with no card of their own —
@@ -646,9 +632,6 @@ export function ProgrammaticTurnCard({ turn, text, state }: {
     return <BackgroundEventCard kind={turn.jobKind} status={turn.status} state={state} />;
   }
 
-  if (turn.kind === "workspace_created") {
-    return <WorkspaceCreatedCard state={state} />;
-  }
 
   if (turn.kind === "deferred_approval") {
     return <DeferredApprovalCard decision={turn.decision} count={turn.count} state={state} />;

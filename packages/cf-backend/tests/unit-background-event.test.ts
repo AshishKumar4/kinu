@@ -80,7 +80,7 @@ describe('programmatic turn provenance', () => {
     const genesis = workspaceGenesisSignal('Audit the OAuth callback flow.');
     expect(genesis).not.toBeNull();
     expect(classifyProgrammaticTurn({ kinuEvent: genesis!.kind, signalId: 'sig-1' }))
-      .toEqual({ kind: 'workspace_created' });
+      .toEqual({ kind: 'system_event', event: 'workspace_created' });
     expect(genesis!.kind).toBe(WORKSPACE_CREATED_EVENT);
   });
 });

@@ -35,7 +35,6 @@ import * as v from 'valibot';
  *  the rest: harness-authored, with no card of its own. */
 export type ClassifiedProgrammaticTurn =
   | { kind: "event_drain" }
-  | { kind: "workspace_created" }
   | { kind: "background_job"; jobKind: string; status: string }
   | { kind: "deferred_approval"; decision: string; count: number }
   | { kind: "advisor"; severity: AdvisorSeverity }
@@ -79,10 +78,9 @@ const SignalCardEventSchema = v.variant('state', [
  * as something the owner typed would be the same misattribution the other
  * cards exist to prevent.
  *
- * `workspace_created` is the workspace's own first turn. The owner typed a
- * MISSION in the New workspace dialog, not a message — the mission is the soul
- * and reaches the agent through the system prompt. What lands in the transcript
- * is the harness telling the agent it is open, so it wears a card too.
+ * `workspace_created` reaches here through the default arm: the workspace's
+ *  first turn is the harness telling the agent it is open, so it wears the
+ *  system-event card, not a dedicated pill.
  *
  * The advisor's note gets its own card because its severity is the one thing
  * a reader needs at a glance, and the `system_event` fold would hide it.
@@ -97,8 +95,6 @@ export function classifyProgrammaticTurn<Metadata>(
   switch (turn.kinuEvent) {
     case "event_drain":
       return { kind: "event_drain" };
-    case "workspace_created":
-      return { kind: "workspace_created" };
     case "background_job":
       return {
         kind: "background_job",
