@@ -20,7 +20,7 @@ import type {
 // Deliberately the dist artifact, by path: Bun's exports condition resolves
 // `src`, so a test that imported the package name would never load what a
 // bundled Worker loads.
-import { SqliteVFS } from '../../../node_modules/@nimbus-sh/core/dist/vfs/sqlite-vfs.js';
+import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
 

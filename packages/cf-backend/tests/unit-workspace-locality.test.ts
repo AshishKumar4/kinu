@@ -24,7 +24,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createHostedWorkspace, type HostedWorkspace } from '../src/workspace-host';
-import { deriveResidentOwner } from '../../../node_modules/@nimbus-sh/worker/dist/facets/resident-identity.js';
+import { deriveResidentOwner } from '@nimbus-sh/worker/resident-identity';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { sqlOver } from '@kinu.run/test-utils';
 import type { JsonValue } from '@kinu.run/core';

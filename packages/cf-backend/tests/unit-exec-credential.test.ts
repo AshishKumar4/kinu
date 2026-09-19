@@ -22,7 +22,7 @@ import {
   rpcStartProcess,
   type ProgrammaticExecOptions,
   type ProgrammaticHost,
-} from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+} from '@nimbus-sh/worker/programmatic';
 import { programmaticHostOver } from './helpers/programmatic-host';
 
 const databases: Database[] = [];

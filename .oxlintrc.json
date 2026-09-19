@@ -11,6 +11,12 @@
   },
   "rules": {
     "import/no-cycle": "error",
+    "no-restricted-imports": ["error", {
+      "patterns": [{
+        "group": ["**/node_modules/**"],
+        "message": "A dependency is used through its export map. If the package exports no subpath for what you need, patch its package.json under patches/ (bun patchedDependencies) and say so there; never reach through the installed tree."
+      }]
+    }],
     "typescript/no-explicit-any": "error",
     "typescript/ban-ts-comment": ["error", {
       "ts-expect-error": true,

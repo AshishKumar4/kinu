@@ -184,7 +184,7 @@ export { DeployRunDO } from "./deploy/deploy-do";
 // facet manager Kinu leaves null. The HMR binding resolves in cirrus-real.js.
 // A missing export is an absent property, so removing one breaks only a path
 // that reads it.
-export { SupervisorRPC } from "../../../node_modules/@nimbus-sh/worker/dist/session/supervisor-rpc.js";
+export { SupervisorRPC } from "@nimbus-sh/worker/supervisor-rpc";
 
 /** The SPA and every other static asset, under the app's document policy. */
 async function serveApp(request: Request, env: Env): Promise<Response> {

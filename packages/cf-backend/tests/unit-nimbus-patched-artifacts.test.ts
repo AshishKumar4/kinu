@@ -8,7 +8,7 @@ import type {
 } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { _rpcWriteProtectedRootFile } from '../../../node_modules/@nimbus-sh/worker/dist/session/rpc.js';
+import { _rpcWriteProtectedRootFile } from '@nimbus-sh/worker/rpc';
 
 const repositoryRoot = join(import.meta.dir, '../../..');
 

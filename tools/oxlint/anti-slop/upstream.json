@@ -75,6 +75,9 @@
     "no-copy-rpc-stub.gate.test.ts": {
       "kinuOnly": true
     },
+    "no-deep-import.gate.test.ts": {
+      "kinuOnly": true
+    },
     "no-elapsed-deadline.gate.test.ts": {
       "kinuOnly": true
     },

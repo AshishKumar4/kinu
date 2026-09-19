@@ -41,7 +41,7 @@ import {
   ensureProgrammaticReady,
   rpcExec,
   type ProgrammaticHost,
-} from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+} from '@nimbus-sh/worker/programmatic';
 import { credentialedSessionBox, programmaticHostOver } from './helpers/programmatic-host';
 import { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
