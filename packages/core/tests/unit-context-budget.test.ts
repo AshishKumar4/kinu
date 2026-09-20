@@ -1,52 +1,22 @@
-// The turn's context budget — the cumulative cap that makes RLMEnv's
-// "the root sees a bounded slice of output" mechanical rather than advisory,
-// and the M1 trip counters that say how often real traffic crosses it.
-// Behavior contract only: cap arithmetic, counter accounting, spill-address
-// recognition, and the per-turn reset.
+// The turn's context budget — the per-turn ledger of bulk that crossed into
+// the root's stream, and the M1 trip counters that say how often real traffic
+// crosses the thresholds at all. Behavior contract only: counter accounting,
+// spill-address recognition, and the per-turn reset.
 
 import { describe, expect, test } from 'bun:test';
 import {
   TurnContextBudget,
   citesSpillAddress,
   SPILL_DIRS,
-  DEFAULT_TURN_ADMIT_BUDGET_CHARS,
-  TIGHTENED_RESULT_MAX_CHARS,
 } from '../src/context-budget';
 
 describe('TurnContextBudget', () => {
-  test('the per-result cap is the configured one until the turn spends its admit budget', () => {
-    const budget = new TurnContextBudget(1_000, 100);
-    expect(budget.capFor(400)).toBe(400);
-    budget.admit(400);
-    expect(budget.capFor(400)).toBe(400);
-    budget.admit(599);
-    expect(budget.capFor(400)).toBe(400); // 999 < 1000 — still full fidelity
-    budget.admit(1);
-    expect(budget.capFor(400)).toBe(100); // spent → the floor
-  });
-
-  test('the floor never widens a caller that asked for something tighter', () => {
-    const budget = new TurnContextBudget(10, 8_000);
-    budget.admit(10);
-    expect(budget.capFor(500)).toBe(500);
-  });
-
-  test('the defaults are three full-size results before the RLMEnv-style floor', () => {
-    const budget = new TurnContextBudget();
-    expect(DEFAULT_TURN_ADMIT_BUDGET_CHARS).toBe(120_000);
-    expect(TIGHTENED_RESULT_MAX_CHARS).toBe(8_000);
-    budget.admit(DEFAULT_TURN_ADMIT_BUDGET_CHARS - 1);
-    expect(budget.capFor(40_000)).toBe(40_000);
-    budget.admit(1);
-    expect(budget.capFor(40_000)).toBe(TIGHTENED_RESULT_MAX_CHARS);
-  });
-
   test('the snapshot counts admissions, omissions, per-producer trips, references and follow-ups', () => {
     const budget = new TurnContextBudget();
     expect(budget.active).toBe(false);
     budget.admit(120);
     budget.recordSpill({ producer: 'shell', omitted: 900, referenced: true });
-    budget.recordSpill({ producer: 'shell', omitted: 100, referenced: false, tightened: true });
+    budget.recordSpill({ producer: 'shell', omitted: 100, referenced: false });
     budget.recordSpill({ producer: 'pasted_text', omitted: 50, referenced: true });
     budget.noteFollowUp();
 
@@ -56,21 +26,29 @@ describe('TurnContextBudget', () => {
       omittedChars: 1_050,
       trips: { shell: 2, pasted_text: 1 },
       referenced: 2,
-      tightened: 1,
       followUps: 1,
     });
   });
 
-  test('reset clears the turn — a fresh turn starts at full fidelity', () => {
-    const budget = new TurnContextBudget(100, 10);
+  test('a turn that only admitted small results is inactive in nothing but its spill counters', () => {
+    // `active` gates the durable row: a turn that ingested tool output wrote
+    // no spill, and dropping its admitted chars would lose the denominator
+    // every spill rate is measured against.
+    const budget = new TurnContextBudget();
+    budget.admit(40);
+    expect(budget.active).toBe(true);
+    expect(budget.snapshot()).toMatchObject({ admittedChars: 40, omittedChars: 0, trips: {} });
+  });
+
+  test('reset clears the turn', () => {
+    const budget = new TurnContextBudget();
     budget.admit(500);
     budget.recordSpill({ producer: 'web_fetch', omitted: 1, referenced: true });
     budget.noteFollowUp();
     budget.reset();
     expect(budget.active).toBe(false);
-    expect(budget.capFor(40_000)).toBe(40_000);
     expect(budget.snapshot()).toEqual({
-      admittedChars: 0, omittedChars: 0, trips: {}, referenced: 0, tightened: 0, followUps: 0,
+      admittedChars: 0, omittedChars: 0, trips: {}, referenced: 0, followUps: 0,
     });
   });
 });

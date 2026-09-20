@@ -548,8 +548,6 @@ export {
   TurnContextBudget,
   citesSpillAddress,
   SPILL_DIRS,
-  DEFAULT_TURN_ADMIT_BUDGET_CHARS,
-  TIGHTENED_RESULT_MAX_CHARS,
   type BulkProducer,
   type ContextBudgetSnapshot,
   type SpillTrip,
@@ -1853,7 +1851,7 @@ export { CraftCycle } from './orchestrator/craft-cycle';
 export {
   CompletionGate, observeCompletionState, completionGateText,
   COMPLETION_GATE_EVENT, COMPLETION_GATE_HEADER, COMPLETION_PROBE_COMMANDS,
-  COMPLETION_OBSERVATION_MAX_CHARS, COMPLETION_TASK_ECHO_MAX_CHARS,
+  COMPLETION_TASK_ECHO_MAX_CHARS,
   type TurnCompletionFacts,
 } from './orchestrator/completion-gate';
 

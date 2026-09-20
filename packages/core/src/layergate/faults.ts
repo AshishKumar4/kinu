@@ -19,6 +19,7 @@ import type { ModelMessage } from 'ai';
 import type { PrepareStepContext } from '../extension';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
 import { StepInjections, type RecordedInjection } from '../prompting/step-injections';
+import { DEFAULT_TOOL_RESULT_MAX_CHARS } from '../tools/clamp';
 import { LAYERS, type Layer } from './layers';
 import { observePipeline, scoreAgainstBaseline } from './gate';
 import type { PipelineSubjects } from './subjects';
@@ -144,12 +145,12 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     id: 'context-budget/policy-regresses',
     layer: 'context-budget',
     patches: ['contextWindowForModel', 'clampToolResult'],
-    models: 'the window table rots back to the default and the clamp head/tail split shifts',
+    models: 'the window table rots back to the default, and the clamp charges its marker on top of the cap instead of inside it',
     inject: (s) => ({
       ...s,
       contextWindowForModel: () => 128_000,
       clampToolResult: async (text, opts = {}) => {
-        const maxChars = opts.maxChars ?? 40_000;
+        const maxChars = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
 
         if (text.length <= maxChars) return text;
         const headLen = Math.floor(maxChars * 0.5);

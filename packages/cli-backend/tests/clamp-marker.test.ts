@@ -1,8 +1,8 @@
 /**
  * Clamp-marker honesty on the LOCAL backend. The clamp offloads full outputs
- * to the workspace filesystem, and the marker's advertised remedy is
- * workspace.readFile (eval, same VFS on every backend) — the one path that
- * restores the bytes whichever plane the session is bound to.
+ * to the workspace filesystem, and the marker's advertised remedy is a ranged
+ * read of the path it names — the one path that restores the bytes whichever
+ * plane the session is bound to.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -23,7 +23,7 @@ function localRuntime() {
 }
 
 describe('clamped run output on the local backend', () => {
-  test('the marker remedy round-trips: workspace.readFile restores what the host shell cannot see', async () => {
+  test('the marker remedy round-trips: a ranged read restores what the host shell cannot see', async () => {
     const rt = localRuntime();
     const tools = buildBuiltinTools({ rt });
     const run = toolExecute<{ command: string; runtime?: string }, string>(tools.shell);
@@ -34,14 +34,12 @@ describe('clamped run output on the local backend', () => {
       command: `awk 'BEGIN { for (i = 0; i < 9000; i++) print "padding log line", i; print "FINAL-ERROR-LINE" }'`,
     });
 
-    expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS + 300);
-    expect(clamped).toContain('chars omitted');
+    expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
+    expect(clamped).toContain('[truncated;');
     expect(clamped).toContain('FINAL-ERROR-LINE');
-    // The marker advertises only the remedy that works here.
-    expect(clamped).toContain('workspace.readFile inside eval');
     expect(clamped).not.toContain('runtime "workspace"');
 
-    const path = /full output saved to (\S+) —/.exec(clamped)?.[1];
+    const path = /full result at (\S+)\]/.exec(clamped)?.[1];
     expect(path).toBeTruthy();
 
     // Following the marker's own instruction: the eval workspace

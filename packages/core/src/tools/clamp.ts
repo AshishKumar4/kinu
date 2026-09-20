@@ -8,6 +8,11 @@
  * — the marker tells the model exactly where to read the rest (the Claude
  * Code / Manus drop-content-keep-the-path pattern).
  *
+ * The budget is what the MODEL receives, not what the clamp kept: the marker
+ * and anything the caller prepends (`reserveChars`) are priced inside the cap,
+ * because a result that arrives at cap + marker + header is over budget by
+ * exactly the length of its own excuse.
+ *
  * Applied inside `buildBuiltinTools` (run + eval), so both backends
  * share one budget policy.
  */
@@ -16,6 +21,8 @@ import type { ToolSet } from 'ai';
 import * as v from 'valibot';
 import type { VFS } from '../types/primitives';
 import { nanoid } from '../utils/nanoid';
+import { admissionBytes } from '../llm';
+import { headEnd, tailStart } from '../utils/text';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
 import { assertJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
 import { diagnostics, renderThrownChain } from '../obs/index';
@@ -24,11 +31,21 @@ import { successfulToolOutcome } from './outcome';
 /** Workspace VFS directory full outputs are offloaded to. */
 export const TOOL_OUTPUT_DIR = SPILL_DIRS.toolOutput;
 
-export const DEFAULT_TOOL_RESULT_MAX_CHARS = 40_000;
+/** What one tool result may cost the model, in ESTIMATED tokens: `estimateTokens`'
+ *  blunt chars-per-token, not a tokenizer and not any provider's count. */
+const DEFAULT_TOOL_RESULT_MAX_TOKENS = 2_000;
+
+/** The same budget in characters, which is the unit the clamp measures in.
+ *  Derived through `admissionBytes` — the one inverse of `estimateTokens` — so
+ *  the token budget and the char cap cannot drift apart. */
+export const DEFAULT_TOOL_RESULT_MAX_CHARS = admissionBytes(DEFAULT_TOOL_RESULT_MAX_TOKENS);
 
 /** Head/tail split of the kept budget — the start of an output (command echo,
  *  headers) and its end (errors, summaries) carry the most signal. */
 const HEAD_FRACTION = 0.7;
+
+/** The two blank lines that fence the marker between head and tail. */
+const MARKER_FENCE_CHARS = 4;
 
 export interface ClampToolResultOptions {
   maxChars?: number;
@@ -41,6 +58,57 @@ export interface ClampToolResultOptions {
   budget?: TurnContextBudget;
   /** Which producer this result came from — the counter's breakdown key. */
   producer?: BulkProducer;
+  /** Chars the caller prepends to whatever this returns — a shell steer, a
+   *  fetched page's header. Held out of the cap and counted as admitted, so
+   *  the budget prices what the model actually receives rather than the part
+   *  that happened to go through the clamp. */
+  reserveChars?: number;
+}
+
+/** The cap this result clamps to, and the prefix held out of it. */
+interface ResultBudget {
+  /** Chars the clamped text itself may occupy, marker included. */
+  readonly maxChars: number;
+  /** Chars the caller will prepend, already held out of `maxChars`. */
+  readonly reserve: number;
+}
+
+function resultBudget(opts: ClampToolResultOptions): ResultBudget {
+  const configured = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
+  const reserve = Math.max(0, opts.reserveChars ?? 0);
+
+  return { maxChars: Math.max(0, configured - reserve), reserve };
+}
+
+/** Save the full text where the marker can promise it. Returns the path the
+ *  bytes actually landed at, or null — a promise is only made after the write
+ *  resolves, and a failed offload stays visible rather than silently becoming
+ *  a path that reads back empty. */
+async function offload(vfs: VFS, text: string): Promise<string | null> {
+  const path = `${TOOL_OUTPUT_DIR}/${nanoid(10)}.log`;
+
+  try {
+    await vfs.mkdir(TOOL_OUTPUT_DIR, { recursive: true });
+    await vfs.writeFile(path, text);
+  } catch (error) {
+    diagnostics.event('clamp.offload_failed', { error: renderThrownChain({ cause: error }) });
+
+    return null;
+  }
+
+  // The path as written, not rooted: relative paths resolve at the workspace
+  // root for every surface that reads them, and a leading slash would name the
+  // filesystem's real root instead.
+  return path;
+}
+
+/** What a clamped result says about itself. Short on purpose — it is charged
+ *  against the same cap as the output it replaces, and the only thing it has
+ *  to carry is where the rest is. */
+function truncationMarker(savedPath: string | null): string {
+  return savedPath === null
+    ? '[truncated; the full result was not saved — rerun with a filter (grep/head/tail)]'
+    : `[truncated; use ranged reads to read the full result at ${savedPath}]`;
 }
 
 /** Clamp one oversize tool result, offloading the full text to the VFS. */
@@ -48,64 +116,37 @@ export async function clampToolResult(
   text: string,
   opts: ClampToolResultOptions = {},
 ): Promise<string> {
-  const configured = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
-  const maxChars = opts.budget?.capFor(configured) ?? configured;
+  const { maxChars, reserve } = resultBudget(opts);
 
   if (text.length <= maxChars) {
-    opts.budget?.admit(text.length);
+    opts.budget?.admit(text.length + reserve);
 
     return text;
   }
 
-  let savedPath: string | null = null;
+  // The marker promises a path only once the bytes are at it, and its own
+  // length is known before the head and tail are cut, because they are what
+  // it leaves behind.
+  const savedPath = opts.vfs ? await offload(opts.vfs, text) : null;
+  const marker = truncationMarker(savedPath);
+  const room = maxChars - marker.length - MARKER_FENCE_CHARS;
+  const headLen = room > 0 ? headEnd(text, Math.floor(room * HEAD_FRACTION)) : 0;
+  const tailLen = room > 0 ? room - headLen : 0;
 
-  if (opts.vfs) {
-    const path = `${TOOL_OUTPUT_DIR}/${nanoid(10)}.log`;
+  // A cap with no room for even a fence is answered by the marker alone: the
+  // recovery path is the one part that is never worth truncating.
+  const clamped = room > 0
+    ? `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(tailStart(text, tailLen))}`
+    : marker;
 
-    try {
-      await opts.vfs.mkdir(TOOL_OUTPUT_DIR, { recursive: true });
-      await opts.vfs.writeFile(path, text);
-      // The path as written, not rooted: relative paths resolve at the
-      // workspace root for every surface that reads them, and a leading slash
-      // would name the filesystem's real root instead.
-      savedPath = path;
-    } catch (error) {
-      diagnostics.event('clamp.offload_failed', { error: renderThrownChain({ cause: error }) });
-      savedPath = null;
-    }
-  }
-
-  const headLen = Math.floor(maxChars * HEAD_FRACTION);
-  const tailLen = maxChars - headLen;
   const omitted = text.length - headLen - tailLen;
-  // Why this result came back shorter than the last one. The cap explanation
-  // belongs at the trip, where it is actionable, rather than in a Delegation
-  // section roughly 3,000 tokens ahead of that point. Turns that never trip
-  // the cap carry no explanation.
-  const tightened = maxChars < configured;
-
-  const reason = tightened
-    ? ' This turn has already admitted enough tool output that the cap tightened for the rest of it — hand the bulk to a search or a subordinate rather than pulling more of it in here.'
-    : '';
-
-  // The marker promises workspace.readFile, which reads the same filesystem
-  // the shell tool's `workspace` shell runs over on every backend — so the
-  // model can also grep the file it names.
-  const marker = savedPath
-    ? `[output truncated: ${omitted} chars omitted; full output saved to ${savedPath} — ` +
-      'read or filter it with workspace.readFile inside eval ' +
-      `(oversize: name the path in a lifetime:"task" agents hire so that agent reads it, or range-read it), or rerun with a filter]${reason}`
-    : `[output truncated: ${omitted} chars omitted; rerun with a filter (grep/head/tail) to see the rest]${reason}`;
-
-  const clamped = `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(-tailLen)}`;
 
   if (opts.budget) {
-    opts.budget.admit(clamped.length);
+    opts.budget.admit(clamped.length + reserve);
     opts.budget.recordSpill({
       producer: opts.producer ?? 'eval',
       omitted,
       referenced: savedPath !== null,
-      tightened,
     });
   }
 
@@ -126,10 +167,11 @@ export async function clampSerializedToolResult(
 
   if (text.success) return clampToolResult(text.output, opts);
   const serialized = JSON.stringify(output);
-  const configured = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
+  const { maxChars, reserve } = resultBudget(opts);
 
-  if (serialized.length <= (opts.budget?.capFor(configured) ?? configured)) {
-    opts.budget?.admit(serialized.length);
+  if (serialized.length <= maxChars) {
+    // The model pays for the serialization, not for the object graph.
+    opts.budget?.admit(serialized.length + reserve);
 
     return output;
   }

@@ -1,28 +1,27 @@
 /**
  * The turn's context budget — one per-turn ledger of every bulk payload that
- * crosses into the root's token stream, and the cap that tightens as the turn
- * gets heavy.
+ * crosses into the root's token stream.
  *
- * Kinu's spill producers each honour the reference-plus-digest invariant
- * on their own (clamped tool results, spilled attachments, event content),
- * but each one only knows about ITSELF: eight 39k-char tool results sail
- * through a 40k per-result cap and land ~78k tokens of bulk in one turn's
- * durable history. RLMEnv's answer is mechanical rather than advisory — the
- * root sees at most a fixed slice of REPL output per iteration — and this is
- * that rule at the seam Kinu already owns: once a turn has admitted
- * {@link DEFAULT_TURN_ADMIT_BUDGET_CHARS} of tool-result text, the per-result
- * cap for the REMAINDER of the turn drops to {@link TIGHTENED_RESULT_MAX_CHARS}.
- * Full text is still spilled, the marker recipe is unchanged, so nothing is
- * lost — the root just stops paying for it inline.
+ * Kinu's spill producers each honour the reference-plus-digest invariant on
+ * their own (clamped tool results, spilled attachments, event content), but
+ * each one only knows about ITSELF. This is where a turn's bulk is added up:
+ * every producer records what the root ingested and what it withheld, and the
+ * turn's settle spine writes one durable `context_budget` run event, so "how
+ * often does the real workload cross the bulk thresholds at all" is a query
+ * rather than a guess.
  *
- * The same object is the M1 trip counter: every producer records its spills
- * here and the turn's settle spine writes one durable `context_budget` run
- * event, so "how often does the real workload cross the bulk thresholds at
- * all" is a query rather than a guess.
+ * It is a LEDGER, not a governor. The per-result cap is
+ * `DEFAULT_TOOL_RESULT_MAX_CHARS` (tools/clamp.ts) and nothing here
+ * moves it. A turn-cumulative second cap lived here until 2026-09-20: it
+ * dropped the per-result cap to an 8,000-char floor after 120,000 chars had
+ * been admitted, which was a real constraint while the per-result cap was
+ * 40,000 chars. The shared cap is now 2,000 estimated tokens — 8,000 chars,
+ * the floor itself — so every production caller's `capFor` was the identity
+ * and the `tightened` counter could no longer be reached. Restoring it means
+ * restoring a floor BELOW the shared cap, which is a policy change with its
+ * own measurement, not a mechanism to keep warm.
  *
- * Deterministic by construction: the cap for result N is a pure function of
- * the sizes of results 1..N-1, so a replayed turn clamps identically. Owned
- * per turn by the TurnAccumulator (reset with the rest of the turn's
+ * Owned per turn by the TurnAccumulator (reset with the rest of the turn's
  * accounting), and by construction per ROOT — a node or a subordinate builds
  * its own tools and therefore budgets its own turns, which is correct: a node
  * is its own root.
@@ -58,19 +57,6 @@ export type BulkProducer =
   | 'attachment'
   | 'pasted_text';
 
-/**
- * Cumulative tool-result chars a turn may admit at the full per-result cap.
- * Three full-size results — enough for the navigation reads that open a turn
- * at full fidelity, after which the turn is heavy and delegation is the right
- * move. A pre-registration, not a derivation: docs/CONTEXT-BUDGET.md records
- * the thresholds that keep or revert it.
- */
-export const DEFAULT_TURN_ADMIT_BUDGET_CHARS = 120_000;
-
-/** The per-result cap once the turn's admit budget is spent — RLMEnv's 8k
- *  visible-output floor. */
-export const TIGHTENED_RESULT_MAX_CHARS = 8_000;
-
 /** What one turn did to its context budget. Absent counters are zero. */
 export interface ContextBudgetSnapshot {
   /** Tool-result chars admitted into this turn's context (post-clamp). */
@@ -82,8 +68,6 @@ export interface ContextBudgetSnapshot {
   trips: Partial<Record<BulkProducer, number>>;
   /** Trips that carried a resolvable reference (the spill write landed). */
   referenced: number;
-  /** Trips clamped at the tightened floor because the admit budget was spent. */
-  tightened: number;
   /** Tool calls this turn that cited a spill address — the recipe being used. */
   followUps: number;
 }
@@ -94,8 +78,6 @@ export interface SpillTrip {
   omitted: number;
   /** True when the full payload landed somewhere the agent can read back. */
   referenced: boolean;
-  /** True when the per-result cap was the tightened floor, not the configured one. */
-  tightened?: boolean;
 }
 
 export class TurnContextBudget {
@@ -103,15 +85,7 @@ export class TurnContextBudget {
   private omitted = 0;
   private readonly tripsByProducer = new Map<BulkProducer, number>();
   private referenced = 0;
-  private tightened = 0;
   private followUps = 0;
-
-  constructor(
-    /** Cumulative admitted chars before the per-result cap tightens. */
-    private readonly admitBudget: number = DEFAULT_TURN_ADMIT_BUDGET_CHARS,
-    /** The tightened per-result cap. */
-    private readonly floor: number = TIGHTENED_RESULT_MAX_CHARS,
-  ) {}
 
   /** Clear for a new turn. */
   reset(): void {
@@ -119,17 +93,7 @@ export class TurnContextBudget {
     this.omitted = 0;
     this.tripsByProducer.clear();
     this.referenced = 0;
-    this.tightened = 0;
     this.followUps = 0;
-  }
-
-  /**
-   * The per-result cap for the NEXT tool result: the configured cap until this
-   * turn has admitted its budget, the floor after. Never above the configured
-   * cap — a caller that asked for a tighter budget keeps it.
-   */
-  capFor(configuredMax: number): number {
-    return this.admitted >= this.admitBudget ? Math.min(this.floor, configuredMax) : configuredMax;
   }
 
   /** Count chars entering the root's context from a tool result. */
@@ -143,8 +107,6 @@ export class TurnContextBudget {
     this.tripsByProducer.set(trip.producer, (this.tripsByProducer.get(trip.producer) ?? 0) + 1);
 
     if (trip.referenced) this.referenced++;
-
-    if (trip.tightened) this.tightened++;
   }
 
   /** The agent went back to a spill address — the recipe worked. */
@@ -162,7 +124,6 @@ export class TurnContextBudget {
       omittedChars: this.omitted,
       trips,
       referenced: this.referenced,
-      tightened: this.tightened,
       followUps: this.followUps,
     };
   }
