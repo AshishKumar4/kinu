@@ -280,12 +280,12 @@ export const FAULTS: readonly Fault[] = Object.freeze([
   {
     id: 'file-plane/edits-land-blind',
     layer: 'file-plane',
-    patches: ['applyFileEdits', 'readFileSlice'],
+    patches: ['applyFileEdits', 'formatFileSlice'],
     models: 'the plane goes quiet: a repeated anchor lands on its first occurrence, and a capped read stops naming the offset that continues it',
     inject: (s) => ({
       ...s,
-      readFileSlice: (content, opts) => {
-        const slice = s.readFileSlice(content, opts);
+      formatFileSlice: (range, opts) => {
+        const slice = s.formatFileSlice(range, opts);
 
         return { ...slice, output: slice.output.replace(/\n\n\[[^\]]*\]$/, '') };
       },

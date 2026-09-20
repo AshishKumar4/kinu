@@ -34,6 +34,7 @@ import { TurnFileLedger } from '../src/tools/file-ledger';
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
 import { isVfsError } from '../src/vfs/errno';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
+import { bytesToBase64 } from '../src/utils/base64';
 import type { VFS } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
@@ -159,6 +160,23 @@ function container(fs: ContainerFs): SandboxHandle {
 
 			if (command.startsWith('test -e')) {
 				return { exitCode: 0, stdout: fs.files.has(target) || fs.dirs.has(target) ? 'true' : 'false' };
+			}
+
+			// The container's ranged read, which the adapter spells as `dd`. A
+			// double that answered it with empty output would report every file
+			// as empty to a caller reading it in windows.
+			const window = /\bdd if='[^']*' bs=1 skip=(\d+) count=(\d+)/.exec(command);
+
+			if (window) {
+				const bytes = fs.files.get(target);
+
+				if (!bytes) {
+					return { exitCode: 1, stdout: '', stderr: `dd: failed to open '${target}': No such file or directory` };
+				}
+
+				const from = Number(window[1]);
+
+				return { exitCode: 0, stdout: bytesToBase64(bytes.subarray(from, from + Number(window[2]))) };
 			}
 
 			return { exitCode: 0, stdout: '' };

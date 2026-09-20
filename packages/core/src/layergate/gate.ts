@@ -13,7 +13,7 @@
  * measures it.
  */
 
-import { fnv1a64 } from '../prompting/volatile-context';
+import { fnv1a64 } from '../utils/fnv1a';
 import { stableStringify } from '../safety/argument-digest';
 import { parseJsonValue } from '../utils/json';
 import { LAYERS, type Layer, type LayerObservation } from './layers';

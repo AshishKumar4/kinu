@@ -32,7 +32,7 @@
  * ledger, which is correct: a node reads its own files.
  */
 
-import { fnv1a64 } from '../prompting/volatile-context';
+import { fnv1a64 } from '../utils/fnv1a';
 import type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
 import { countSharedWrite, newWriteAuthor } from './msg-counters';
 
@@ -99,16 +99,29 @@ export class TurnFileLedger {
    *  wrote the file and therefore authored every line. */
   observeWhole(path: string, content: string): void {
     const total = lineCount(content);
-    this.record(path, content, total, total);
+
+    this.record(path, fnv1a64(content), total, total);
   }
 
-  /** The model has seen lines [first, last] of a `total`-line file. Coverage
-   *  extends only when the range continues the prefix already read, which is
-   *  what paging with the offset the read handed back does. */
-  observeRange(path: string, content: string, first: number, last: number, total: number): void {
-    const existing = this.seen.get(fnv1a64(content));
+  /**
+   * The model has seen lines [first, last] of a `total`-line file. Coverage
+   * extends only when the range continues the prefix already read, which is
+   * what paging with the offset the read handed back does.
+   *
+   * Takes the FINGERPRINT rather than the content, because the read that
+   * produces it never holds the content: it scans the file through the plane's
+   * ranged read and keeps only the window it was asked for
+   * (tools/file-scan.ts). `fingerprint` MUST be `fnv1a64` of the file's whole
+   * text, which is what every other entry point here keys on. A digest of the
+   * window alone — or anything derived from size or mtime — would authorize an
+   * edit against bytes nobody looked at, which is the one thing this ledger
+   * exists to refuse.
+   */
+  observeRange(path: string, fingerprint: string, first: number, last: number, total: number): void {
+    const existing = this.seen.get(fingerprint);
     const covered = existing?.coveredTo ?? 0;
-    this.record(path, content, first <= covered + 1 ? Math.max(covered, last) : covered, total);
+
+    this.record(path, fingerprint, first <= covered + 1 ? Math.max(covered, last) : covered, total);
   }
 
   /** An edit landed: what the model knew about the old content it knows about
@@ -121,11 +134,11 @@ export class TurnFileLedger {
       ? total
       : Math.min(previous?.coveredTo ?? 0, total);
 
-    this.record(path, after, covered, total);
+    this.record(path, fnv1a64(after), covered, total);
   }
 
-  private record(path: string, content: string, coveredTo: number, total: number): void {
-    this.seen.set(fnv1a64(content), { coveredTo, total });
+  private record(path: string, fingerprint: string, coveredTo: number, total: number): void {
+    this.seen.set(fingerprint, { coveredTo, total });
     this.seenPaths.add(path);
   }
 

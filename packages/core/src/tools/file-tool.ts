@@ -26,7 +26,8 @@ import { memoryIndexPath } from '../memory/note';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, FILE_TOOL_ACTIONS, unknownActionError, type FileToolAction,
 } from './registry';
-import { applyFileEdits, readFileSlice, BOM, FILE_REFUSAL_REASONS, FileRefusalError, type FileEdit } from './file-edit';
+import { applyFileEdits, formatFileSlice, FILE_REFUSAL_REASONS, FileRefusalError, type FileEdit } from './file-edit';
+import { readFileText, scanFileWindow, type ScannedFile } from './file-scan';
 import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from './file-ledger';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS, clampSerializedToolResult } from './clamp';
 import type { JsonValue } from '../utils/json';
@@ -169,17 +170,6 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
   const searchLines = (content: string, query: string): { line: number; text: string }[] =>
     content.split('\n').flatMap((text, index) => text.includes(query) ? [{ line: index + 1, text }] : []);
 
-  /** Text of a file. A VFS is free to answer `{encoding:'utf8'}` with bytes;
-   *  decoding beats an unchecked cast that would throw out of `execute`. */
-  const readText = async (path: string): Promise<string> => {
-    const raw = await vfs.readFile(path, { encoding: 'utf8' });
-    const text = v.safeParse(v.string(), raw);
-
-    return text.success
-      ? text.output
-      : new TextDecoder().decode(v.parse(v.instance(Uint8Array), raw));
-  };
-
   /** The one write path. `observe` runs the moment the bytes land — a later
    *  step failing must not leave the ledger denying content already on disk —
    *  and differs only in what the caller now knows: a `write` authored the whole
@@ -265,30 +255,29 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
         if (!query.success) return failure('bad_input', 'file search requires a non-empty literal query');
 
-        return inspect('search', path, async () => ({ path, matches: searchLines(await readText(path), query.output) }));
+        return inspect('search', path, async () => ({ path, matches: searchLines(await readFileText(vfs, path), query.output) }));
       }
 
       case 'read': {
-        let content: string;
+        const maxChars = DEFAULT_TOOL_RESULT_MAX_CHARS;
+        let scanned: ScannedFile;
 
+        // RETAINED MEMORY, not I/O: the scan reads every byte, because the
+        // ledger keys on the fingerprint of the WHOLE content, and keeps only
+        // this window and the running hash. A read that authorized an edit
+        // from the lines it happened to show would be a cheaper gate, not
+        // the same one.
         try {
-          content = await readText(path);
+          scanned = await scanFileWindow(vfs, path, { offset: args.offset, limit: args.limit, maxChars });
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'read', path);
 
           return failure(vfsFail.reason, vfsFail.error);
         }
 
-        // The BOM is stripped from what the model is SHOWN, not from the file:
-        // it is invisible, so a model copying the first line back as old_text
-        // would carry it and never match, with no way to see why.
-        const shown = content.startsWith(BOM) ? content.slice(1) : content;
+        const slice = formatFileSlice(scanned.window, { path, limit: args.limit, maxChars });
 
-        const slice = readFileSlice(shown, {
-          path, offset: args.offset, limit: args.limit, maxChars: DEFAULT_TOOL_RESULT_MAX_CHARS,
-        });
-
-        ledger.observeRange(path, content, slice.first, slice.last, slice.total);
+        ledger.observeRange(path, scanned.fingerprint, slice.first, slice.last, slice.total);
         budget.admit(slice.output.length);
 
         if (slice.omitted > 0) {
@@ -305,7 +294,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         let existing: string | null = null;
 
         try {
-          existing = await readText(path);
+          existing = await readFileText(vfs, path);
         } catch (err) {
           if (!isVfsError(err) || err.code !== 'ENOENT') {
             const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
@@ -357,7 +346,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         let current: string;
 
         try {
-          current = await readText(path);
+          current = await readFileText(vfs, path);
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
           ledger.recordEdit(path, vfsFail.reason);

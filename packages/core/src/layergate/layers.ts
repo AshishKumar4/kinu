@@ -1371,7 +1371,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     owns: 'the exact-match file editor and the honest read behind the `file` tool (core tools/file-edit.ts) — ' +
       'an edit lands exactly once or not at all, and no read is ever clipped without saying how to continue it; ' +
       'and the mount table that extends that one plane with /pc and /sandbox (vfs/mounts.ts)',
-    subjects: ['applyFileEdits', 'readFileSlice', 'withMountTable'],
+    subjects: ['applyFileEdits', 'scanFileWindow', 'formatFileSlice', 'withMountTable'],
     probes: [
       {
         id: 'file-plane/anchor-must-be-unique',
@@ -1408,24 +1408,69 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'file-plane/no-silent-truncation',
-        asserts: 'a capped or limited read names the offset that continues it and still fits its cap; an oversize line names its recipe',
-        observe: (s) => {
-          const file = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join('\n');
-          // Long enough that a 140-char cap actually truncates it: the short
-          // fixture fits whole once the marker is inside the cap, and a
-          // "capped" case that is not capped asserts nothing.
-          const wide = Array.from({ length: 8 }, (_, i) => `line ${i + 1} ${'.'.repeat(20)}`).join('\n');
+        asserts: 'a capped or limited read names the offset that continues it and still fits its cap; an oversize line names its recipe; and the file is never made resident to say so',
+        observe: async (s) => {
+          // Long enough that the 140-char cap below genuinely stops it: a
+          // fixture that fits its own cap observes the uncapped shape and
+          // pins nothing about truncation.
+          const file = Array.from({ length: 8 }, (_, i) => `line ${i + 1} ${'.'.repeat(30)}`).join('\n');
+          // A path longer than the whole budget, which the marker cannot
+          // spell and still fit.
+          const deep = `/${'deep-directory-name/'.repeat(12)}file.ts`;
+
+          /** Seven bytes per ranged read, so every case below crosses chunk
+           *  boundaries the way a real plane does, and `readFile` throws
+           *  because a bounded read that fetches the whole file to describe a
+           *  window of it has failed whatever its output says. */
+          const plane = (content: string) => {
+            const bytes = new TextEncoder().encode(content);
+
+            return {
+              readFile: () => { throw new Error('a bounded read must not fetch the whole file'); },
+              readRange: async (_path: string, at: number, length: number) => bytes.subarray(at, at + Math.min(length, 7)),
+              writeFile: async () => {},
+              readdir: async () => [],
+              stat: async () => ({ size: bytes.byteLength, mtimeMs: 0, isDir: false }),
+              unlink: async () => {},
+              mkdir: async () => {},
+              exists: async () => true,
+            };
+          };
+
+          const read = async (content: string, opts: { offset?: number; limit?: number; maxChars: number; path?: string }) => {
+            const path = opts.path ?? '/f';
+            const scanned = await s.scanFileWindow(plane(content), path, opts);
+            const slice = s.formatFileSlice(scanned.window, { path, limit: opts.limit, maxChars: opts.maxChars });
+
+            // The cap covers the whole string the model receives, marker
+            // included — the reason the marker's length is reserved before the
+            // lines are chosen rather than charged on top of them.
+            return { ...slice, fitsCap: slice.output.length <= opts.maxChars };
+          };
 
           return [
-            ['whole', s.readFileSlice(file, { path: '/f', maxChars: 1000 })],
-            ['capped', s.readFileSlice(wide, { path: '/f', maxChars: 140 })],
-            ['limited', s.readFileSlice(file, { path: '/f', limit: 3, maxChars: 1000 })],
-            ['limit-reaches-end', s.readFileSlice(file, { path: '/f', offset: 7, limit: 5, maxChars: 1000 })],
-            ['past-end', s.readFileSlice(file, { path: '/f', offset: 99, maxChars: 1000 })],
-            ['one-huge-line', s.readFileSlice('z'.repeat(300), { path: '/f', maxChars: 140 })],
-            ['trailing-newline', s.readFileSlice('a\nb\n', { path: '/f', limit: 2, maxChars: 1000 })],
-            ['empty-file', s.readFileSlice('', { path: '/f', maxChars: 1000 })],
-            ['sub-line-limit', s.readFileSlice(file, { path: '/f', limit: 0.5, maxChars: 1000 })],
+            ['whole', await read(file, { maxChars: 1000 })],
+            ['capped', await read(file, { maxChars: 140 })],
+            ['limited', await read(file, { limit: 3, maxChars: 1000 })],
+            ['limit-reaches-end', await read(file, { offset: 7, limit: 5, maxChars: 1000 })],
+            ['past-end', await read(file, { offset: 99, maxChars: 1000 })],
+            ['one-huge-line', await read('z'.repeat(300), { maxChars: 140 })],
+            ['trailing-newline', await read('a\nb\n', { limit: 2, maxChars: 1000 })],
+            ['empty-file', await read('', { maxChars: 1000 })],
+            ['sub-line-limit', await read(file, { limit: 0.5, maxChars: 1000 })],
+            // The newline that joins two lines is charged to the second, so a
+            // leading blank line does not make the next one free.
+            ['leading-blank-line', await read(`\n${file}`, { maxChars: 140 })],
+            // A path that cannot fit the cap is dropped from the marker; the
+            // offset that continues the read never is.
+            ['long-path-capped', await read(file, { maxChars: 140, path: deep })],
+            ['long-path-empty', await read('', { maxChars: 140, path: deep })],
+            ['long-path-huge-line', await read('z'.repeat(300), { maxChars: 140, path: deep })],
+            ['long-path-past-end', await read(file, { offset: 99, maxChars: 140, path: deep })],
+            // What the formatter must never infer: the counts describe the
+            // whole range, while `lines` is only the head that survived.
+            ['scanned-window-keeps-original-counts',
+              (await s.scanFileWindow(plane(file), '/f', { maxChars: 140 })).window],
           ];
         },
       },

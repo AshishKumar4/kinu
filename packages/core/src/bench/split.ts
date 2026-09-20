@@ -16,7 +16,7 @@
 //      agent under evaluation cannot read any task definition, dev or sealed.
 //   5. Every evaluation appends to an append-only ledger; the report prints the
 //      ordinal, so repeated peeking at the held-out set is countable.
-import { fnv1a64 } from '../prompting/volatile-context';
+import { fnv1a64 } from '../utils/fnv1a';
 import { pairedBinaryComparison, unitHash } from './stats';
 import type { BootstrapOptions, PairedBinaryStats, PairedOutcome } from './stats';
 import type { BenchTask } from './types';

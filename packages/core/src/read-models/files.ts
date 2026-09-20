@@ -15,8 +15,9 @@
 
 import { normalizePath } from '@kinu.run/agent-utils';
 import {
-  MOUNT_EXECUTORS, carryFileWithVfsOps, listWithVfsOps, readBoundedWithVfsOps,
-  partialTreeRemovalMessage, removeTreeWithVfsOps, type VfsNativeMutations,
+  MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, carryFileWithVfsOps, listWithVfsOps,
+  readBoundedWithVfsOps, partialTreeRemovalMessage, removeTreeWithVfsOps,
+  type VfsNativeMutations,
 } from '../vfs/mounts';
 import { isVfsError } from '../vfs/errno';
 import { inlineFileType } from './file-types';
@@ -106,17 +107,6 @@ export type ExecutorWriteResult =
 const CONDITIONAL_WRITE_UNSUPPORTED =
   'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.';
 
-/**
- * Byte bound for the file viewer's text preview — past this the content is
- * carried truncated.
- *
- * A `response` bound in the platform catalog's terms, and the READ bound as
- * well: `readExecutorFile` asks the plane for this many bytes and decodes only
- * those. Applied after the whole file is already a resident JavaScript string,
- * it would protect only the wire — previewing a large file would cost the file
- * plus a clipped copy of it.
- */
-const MAX_VIEWABLE_BYTES = 512 * 1024;
 
 import { FILE_CHUNK_BYTES } from '../types/read-models';
 
@@ -463,7 +453,11 @@ export async function readExecutorFile(
       return { error: `${inlineType} is not text — this file is shown and downloaded as bytes` };
     }
 
-    const window = stat === null ? MAX_VIEWABLE_BYTES : Math.min(stat.size, MAX_VIEWABLE_BYTES);
+    // The viewer's preview bound is also its READ bound: the plane is asked
+    // for this many bytes and only those are decoded. Applied after the whole
+    // file is already a resident string it would protect only the wire, and
+    // previewing a large file would cost the file plus a clipped copy of it.
+    const window = stat === null ? RESIDENT_TEXT_MAX_BYTES : Math.min(stat.size, RESIDENT_TEXT_MAX_BYTES);
     const bytes = await readBoundedWithVfsOps(vfs, path, window, stat?.size ?? null);
 
     if (bytes.includes(0)) return { error: 'binary file — not previewable' };

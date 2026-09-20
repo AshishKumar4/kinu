@@ -34,7 +34,6 @@
   "packages/core/src/tools/builtins.ts -> packages/core/src/delegation/report-tool.ts (value)",
   "packages/core/src/tools/builtins.ts -> packages/core/src/heads/types.ts (value)",
   "packages/core/src/tools/builtins.ts -> packages/core/src/tasks/store.ts (value)",
-  "packages/core/src/tools/file-ledger.ts -> packages/core/src/prompting/volatile-context.ts (value)",
   "packages/core/src/tools/mcp-error.ts -> packages/core/src/prompts/evidence-window.ts (value)",
   "packages/core/src/tools/mcp-surface.ts -> packages/core/src/prompting/step-prune.ts (value)",
   "packages/core/src/tools/release-tool.ts -> packages/core/src/release/index.ts (value)",

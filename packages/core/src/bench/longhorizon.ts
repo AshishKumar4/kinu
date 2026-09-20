@@ -30,7 +30,7 @@
 // seed by the same code, so there is no key on disk to find, and the spec never
 // enters the sandbox.
 
-import { fnv1a64 } from '../prompting/volatile-context';
+import { fnv1a64 } from '../utils/fnv1a';
 import { parseJsonValue } from '../utils/json';
 import { unitHash } from './stats';
 import * as v from 'valibot';

@@ -306,19 +306,34 @@ export interface SliceWindow {
  * returns, and a line-number gutter is the most reliable way to make it copy
  * something that is not in the file.
  */
-function formatFileSlice(
+export function formatFileSlice(
   range: SliceWindow,
   opts: { path: string; limit?: number | undefined; maxChars: number },
 ): FileSlice {
   const { first, total, requestedLines, requestedChars } = range;
 
+  /**
+   * The marker the cap can afford: the one that names the file wherever it
+   * fits, and a path-free one where the path alone would crowd out the read
+   * it is describing. A deep enough path is longer than the whole budget, and
+   * a marker that overran the cap to spell it would break the one promise the
+   * cap makes. The caller knows which file it asked for; what it cannot
+   * reconstruct is the offset to continue from, so that is what never goes.
+   */
+  const affordable = (named: string, plain: string): string =>
+    named.length <= opts.maxChars ? named : plain;
+
   if (total === 0) {
-    return { output: `[${opts.path} is empty]`, omitted: 0, first: 1, last: 0, total: 0 };
+    return { output: affordable(`[${opts.path} is empty]`, '[this file is empty]'), omitted: 0, first: 1, last: 0, total: 0 };
   }
 
   if (first > total) {
+    const lines = `${total} line${total === 1 ? '' : 's'}`;
+
     return {
-      output: `[${opts.path} has ${total} line${total === 1 ? '' : 's'}; offset=${first} is past the end]`,
+      output: affordable(
+        `[${opts.path} has ${lines}; offset=${first} is past the end]`,
+        `[this file has ${lines}; offset=${first} is past the end]`),
       omitted: 0, first, last: first - 1, total,
     };
   }
@@ -337,9 +352,13 @@ function formatFileSlice(
   // budget. Its length is reserved at its worst case — the furthest line the
   // range could reach, and the longer of the two reasons — because the
   // reservation is what decides how far it actually reaches.
-  const continuation = (last: number, reason: string): string =>
-    `\n\n[showing lines ${first}-${last} of ${total} in ${opts.path} — ` +
-    `${reason} stopped it; continue with action=read offset=${last + 1}]`;
+  const continuation = (last: number, reason: string): string => {
+    const tail = `${reason} stopped it; continue with action=read offset=${last + 1}]`;
+
+    return affordable(
+      `\n\n[showing lines ${first}-${last} of ${total} in ${opts.path} — ${tail}`,
+      `\n\n[showing lines ${first}-${last} of ${total} — ${tail}`);
+  };
 
   const capReason = `the ${opts.maxChars}-char cap`;
   // A limit is a count of lines, so anything under one line is one line. Left
@@ -371,9 +390,11 @@ function formatFileSlice(
     // eval recipe every other oversize payload in Kinu uses.
     const line = range.lines[0] ?? '';
 
-    const refusal =
-      `\n\n[line ${first} of ${opts.path} is ${range.firstLineChars} chars and does not fit ` +
-      `the ${opts.maxChars}-char cap; read or slice it with workspace.readFile inside eval]`;
+    const tail =
+      `is ${range.firstLineChars} chars and does not fit the ${opts.maxChars}-char cap; ` +
+      'read or slice it with workspace.readFile inside eval]';
+
+    const refusal = affordable(`\n\n[line ${first} of ${opts.path} ${tail}`, `\n\n[line ${first} ${tail}`);
 
     const shown = line.slice(0, headEnd(line, Math.max(0, opts.maxChars - refusal.length)));
 
@@ -388,40 +409,4 @@ function formatFileSlice(
     omitted: requestedChars - shown.length,
     first, last, total,
   };
-}
-
-/** A file with no displayable text — the one window a whole-string read can
- *  build without splitting anything. */
-const EMPTY_WINDOW: SliceWindow = {
-  first: 1, total: 0, trailingNewline: false, lines: [],
-  requestedLines: 0, requestedChars: 0, firstLineChars: 0,
-};
-
-/** The requested line range of a whole string, rendered by {@link formatFileSlice}. */
-export function readFileSlice(
-  content: string,
-  opts: { path: string; offset?: number | undefined; limit?: number | undefined; maxChars: number },
-): FileSlice {
-  const first = Math.max(1, Math.floor(opts.offset ?? 1));
-  const limit = opts.limit != null ? Math.max(1, Math.floor(opts.limit)) : undefined;
-
-  if (content.length === 0) {
-    return formatFileSlice(EMPTY_WINDOW, { path: opts.path, maxChars: opts.maxChars });
-  }
-
-  // A trailing newline ENDS the last line; splitting alone would report a
-  // phantom empty line after it, and hand back an offset that reads as "".
-  const split = content.split('\n');
-  const trailingNewline = split.length > 1 && split[split.length - 1] === '';
-  const lines = trailingNewline ? split.slice(0, -1) : split;
-  const total = lines.length;
-  const requested = lines.slice(first - 1, limit != null ? Math.min(total, first + limit - 1) : total);
-
-  return formatFileSlice({
-    first, total, trailingNewline,
-    lines: requested,
-    requestedLines: requested.length,
-    requestedChars: requested.join('\n').length,
-    firstLineChars: requested[0]?.length ?? 0,
-  }, { path: opts.path, limit: opts.limit, maxChars: opts.maxChars });
 }

@@ -4,7 +4,7 @@
 // gain (Tier 3). Both are built from machine-computed outcomes and both are
 // designed to be able to say "nothing here" — a harness that can only produce
 // good news measures nothing.
-import { fnv1a64 } from '../prompting/volatile-context';
+import { fnv1a64 } from '../utils/fnv1a';
 import { computeGain, fmtPp, pairedBinaryComparison } from './stats';
 import type { BootstrapOptions, GainStats, PairedBinaryStats, PairedOutcome } from './stats';
 import type { SealedScorecard } from './split';

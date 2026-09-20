@@ -938,7 +938,6 @@ export {
   DynamicContextLedger,
   agentDynamicContext,
   executorAvailabilityLabel,
-  fnv1a64,
   searchDelegates,
   observeSystemPromptHash,
   renderDynamicContextBlock,
@@ -1704,6 +1703,8 @@ export {
 } from './safety/egress-destination';
 
 // Utils
+export { fnv1a64, Fnv1a64 } from './utils/fnv1a';
+
 export { nanoid } from './utils/nanoid';
 
 // An abort's reason as an Error, so a cancelled run is attributable to whoever

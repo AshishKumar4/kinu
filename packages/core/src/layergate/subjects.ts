@@ -37,7 +37,8 @@ import {
 } from '../prompting/cache-breakpoints';
 import { contextWindowForModel } from '../context-window';
 import { clampSerializedToolResult, clampToolResult } from '../tools/clamp';
-import { applyFileEdits, readFileSlice } from '../tools/file-edit';
+import { applyFileEdits, formatFileSlice } from '../tools/file-edit';
+import { scanFileWindow } from '../tools/file-scan';
 import { withMountTable } from '../vfs/mounts';
 import { classifyTurnFailure, planOverflowRecovery } from '../turn-failure';
 import {
@@ -162,7 +163,8 @@ export interface PipelineSubjects {
 
   // ── file plane ──
   readonly applyFileEdits: typeof applyFileEdits;
-  readonly readFileSlice: typeof readFileSlice;
+  readonly scanFileWindow: typeof scanFileWindow;
+  readonly formatFileSlice: typeof formatFileSlice;
   readonly withMountTable: typeof withMountTable;
 
   // ── execution signal ──
@@ -244,7 +246,8 @@ export const SUBJECT_SOURCE = {
   renderToolSchemaDescription: 'tools/registry.ts',
 
   applyFileEdits: 'tools/file-edit.ts',
-  readFileSlice: 'tools/file-edit.ts',
+  scanFileWindow: 'tools/file-scan.ts',
+  formatFileSlice: 'tools/file-edit.ts',
   withMountTable: 'vfs/mounts.ts',
 
   devicePresence: 'execution/device-status.ts',
@@ -327,7 +330,8 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     renderToolSchemaDescription,
 
     applyFileEdits,
-    readFileSlice,
+    scanFileWindow,
+    formatFileSlice,
     withMountTable,
 
     devicePresence,
