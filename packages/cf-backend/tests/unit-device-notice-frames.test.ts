@@ -14,6 +14,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { DeviceOfflineRow } from '../src/components/MessageView';
+import { APP_ROUTES } from '@kinu.run/core';
 
 /** What a reader sees: the markup with its entity escapes resolved, so every
  *  assertion below can quote the product's own words. */
@@ -53,7 +54,7 @@ describe('device notice socket frames', () => {
     const html = renderRow([]);
 
     expect(html).toContain('No computer connected');
-    expect(html).toContain('/user/settings#devices');
+    expect(html).toContain(`href="${APP_ROUTES.devices}"`);
     // `>Connect<` is the anchor's own text — a bare 'Connect' could hide in a
     // class or attribute and pass while the link's word was something else.
     expect(html).toContain('>Connect<');

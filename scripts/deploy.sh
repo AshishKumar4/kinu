@@ -474,11 +474,11 @@ flush_gates() {
 
     finished=""
     wait -n -p finished; status=$?
-    if [ -z "$finished" ] || [ -z "${gate_of_pid[$finished]:-}" ]; then
+    if [ -z "${finished:-}" ] || [ -z "${gate_of_pid[$finished]:-}" ]; then
       # `wait` came back without naming a child of this wave, so the status
       # cannot be attributed to a gate. Stop rather than credit it to one.
       echo -e "${RED}❌ a gate wait returned no child of this wave (status $status).${NC}"
-      rm -rf "$dir"
+      echo "Gate logs retained at $dir" >&2
       exit 1
     fi
     index="${gate_of_pid[$finished]}"

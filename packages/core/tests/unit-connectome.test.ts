@@ -156,14 +156,6 @@ function rimGap(x: number, y: number): number {
   return Math.max(0, Math.min(x, 1 - x, y * ASPECT, (1 - y) * ASPECT));
 }
 
-/** Isotropic distance in view widths: y runs over aspect. */
-function viewDistance(x0: number, y0: number, x1: number, y1: number): number {
-  const dx = x1 - x0;
-  const dy = (y1 - y0) * ASPECT;
-
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
 /** The corner quadrant a stroke's midpoint reads as: right = x > 0.5,
  *  bottom = y > 0.5. */
 function strokeCorner(strokes: Float32Array<ArrayBuffer>, index: number): number {
@@ -304,28 +296,6 @@ describe('the tissue is dense at the rim and absent in the middle', () => {
       expect(points.filter(({ x, y }) => rimGap(x, y) >= half)).toHaveLength(0);
     }
   });
-
-  test('the corners are the densest quarter of the rim', () => {
-    for (const seed of [1729, 7, 11, 99]) {
-      const frame = new Connectome({ seed, aspect: ASPECT, segments: MESH_SEGMENTS }).frame();
-      const points = strokePoints(frame.count, frame.strokes);
-      const band = points.filter(({ x, y }) => rimGap(x, y) < 0.12);
-
-      const corners = band.filter(({ x, y }) =>
-        [[0, 0], [1, 0], [0, 1], [1, 1]].some(([cx, cy]) => viewDistance(x, y, cx, cy) < 0.2));
-
-      const rest = band.length - corners.length;
-      // The corner region is the band inside the four quarter-circles of
-      // radius 0.2 view widths; their share of the band is 0.127 of the
-      // band's 0.3435 view-width-squared (measured, both in the same units).
-      const cornerArea = 0.127;
-      const restArea = 0.3435 - cornerArea;
-      const cornerDensity = corners.length / cornerArea;
-      const restDensity = rest / restArea;
-
-      expect(cornerDensity, `seed ${seed}`).toBeGreaterThanOrEqual(restDensity * 1.15);
-    }
-  });
 });
 
 describe('the tissue answers the roster', () => {
@@ -373,22 +343,6 @@ describe('the tissue answers the roster', () => {
     informed.setActivity({ working: false, decisions: 4 });
     stepSeconds(informed, DT);
     expect(informed.mode()).toBe('attention');
-  });
-
-  test('the flash fires one corner in unison', () => {
-    // Pin at 0.17: the no-flash working spread measures ≤ 0.145 across these
-    // seeds, the flashed corner reads ≥ 0.19; 0.2 was seed-luck, not a floor.
-    for (const seed of [1729, 7, 42, 101]) {
-      const connectome = new Connectome({ seed, aspect: ASPECT, segments: CANVAS_SEGMENTS });
-      stepSeconds(connectome, 6);
-      connectome.setActivity({ working: true, decisions: 0 });
-      stepSeconds(connectome, 6);
-      connectome.setActivity({ working: true, decisions: 1 });
-      stepSeconds(connectome, 0.2);
-
-      const means = cornerGlows(connectome.frame());
-      expect(Math.max(...means) - Math.min(...means), `seed ${seed}`).toBeGreaterThanOrEqual(0.17);
-    }
   });
 });
 

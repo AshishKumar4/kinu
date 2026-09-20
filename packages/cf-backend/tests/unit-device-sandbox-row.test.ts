@@ -138,7 +138,7 @@ describe('the bind card asks one question and offers one binding', () => {
     }
 
     expect(html).toContain("Commands use ashish-device's Sandbox setting");
-    expect(html).toContain('Account settings → Devices');
+    expect(html).toContain('Revoke access on the Devices page');
   });
 });
 

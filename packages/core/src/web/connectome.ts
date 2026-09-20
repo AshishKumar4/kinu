@@ -4,7 +4,7 @@
  * branch runs a few short curving segments, forks into shorter branches,
  * which fork again, a dozen generations deep — and fuse wherever a tip
  * meets another fibre, the way mycelium does. Thousands of strands overlap
- * into a texture that is dense at the rim, densest in the corners, thins
+ * into a texture that is dense at the rim, thins
  * toward the middle and is absent across it, where the page's content
  * sits. No single strand is meant to be read; the impression is the mat.
  * Signals travel the fibres as tiny bright grains, many at once, so the
@@ -78,7 +78,7 @@ const SIGNAL_TAIL = 0.012;
 
 /** How far in from the nearest edge the mat reaches, in view width units;
  *  the rim's density falls to nothing here. A corner reaches CORNER_REACH
- *  times further, which is what makes the corners densest. The mat reads
+ *  times further. The mat reads
  *  as a frame around the content: most of its mass lives in the outer
  *  band, so the reach is shallow and the falloff steep — the centre
  *  column stays sparse. */

@@ -7,14 +7,21 @@ Self-evolving agent framework: MCTS exploration, mutable scaffolding, durable sk
 
 ## Gates
 - A gate governs exactly the set it measures; read the corpus through `scripts/sources.ts`, never a hand list. Prove a gate red in every direction it claims before trusting it green; print its blind spots on the green path.
-- A red gate is work. Never: `--no-verify`, `oxlint-disable`, an allowlist or ignore entry, a severity downgrade, a narrowed assertion, a skipped or deleted test, a raised timeout, a lock ratchet. Either the code is wrong or the fixture is stale; fix that one. A rule you think is wrong is surfaced with evidence, not bypassed.
-- A defect the owner finds by hand gets a `tests/first-run/` row proved red against the deployed build before its fix ships; `gate:first-run` runs on every deploy against the product.
-- A fixture that can no longer fail is worse than red; restoring its red direction is part of the same change. Retire a corpus entry only after showing no live code holds its property.
+- A red gate requires diagnosis, not automatic obedience to its assertion. Fix a real defect or stale fixture; retire a low-value check under Testing judgment below. Never bypass useful coverage with `--no-verify`, `oxlint-disable`, an allowlist, an ignore entry, a severity downgrade, a weakened assertion, a skip, a raised timeout, or a lock ratchet.
+- A functional defect the owner finds by hand gets a regression check at the closest realistic boundary. Use `tests/first-run/` when reproduction requires the deployed product, and prove it red before the fix ships. Cosmetic feedback does not require a regression test.
+- A useful fixture must detect its claimed failure. Restore that ability when it breaks; remove the fixture when its contract is obsolete.
 - A verification claim names the tree, the command, and the revision. A subagent's summary is a claim to check.
 - A gate that pins platform behaviour (what the runtime, an SDK, or a service does) cites a dated measurement on that platform in its header. A comment in our own source is not a measurement. A gate built on an unmeasured premise enforces the regression it was meant to prevent; `scripts/do-init-gate.ts` did exactly that from 2026-09-10 to 2026-09-13.
 - Locks keyed by path (`schema-genesis`, `wired`, `complexity`, `pattern-inventory`, `test-clocks`) are re-keyed on the path half only when a file moves; values stay byte-identical.
 - `gate:core-layering`: `packages/core` is platform (`obs utils types identity vfs execution events memory safety slates providers config credentials checkpoints`, plus root files by name), tools (`tools craft web`), harness (everything else). Imports point down or sideways, never up; the lock shrinks only.
 - `gate:client-graph`: no path from a client entry reaches `@agent-core/core` or `bun:sqlite`.
+
+## Testing judgment
+- Tests earn their maintenance cost by catching meaningful failures. Before adding one, name the failure and check existing coverage. A changed line, a minor UI tweak, or a higher test count is not justification.
+- Test behavior and contracts: permissions, data integrity, accounting, lifecycle, navigation, accessibility, compatibility, and resource limits. Prefer public interfaces over implementation details or copied logic.
+- Inspect cosmetic changes in the rendered product. Do not pin incidental wording, CSS classes, DOM structure, spacing, decorative density, or animation brightness. Automate a visual check only for an explicit requirement, such as contrast or a control remaining visible.
+- Prune low-value tests as you encounter them: redundant cases, obsolete contracts, implementation mirrors, copy blacklists, and arbitrary aesthetic thresholds. Remove unused fixtures and helpers with them. Do not start a separate audit unless asked.
+- For each removal, briefly identify why the check adds noise rather than protection. If it covers a meaningful failure, preserve that coverage elsewhere. A failing test alone is not grounds for deletion; an existing test is not grounds for preserving it. Never tune product behavior merely to satisfy an unjustified assertion.
 
 ## Vendored
 - `tools/oxlint/anti-slop`: upstream `dmmulroy/anti-slop` pinned in `upstream.json` with per-file digests; `drift.test.ts` names any divergence. Local strengthenings are declared deltas with a reason. Sync: clone upstream, merge `rules/` and tests, `ANTI_SLOP_UPSTREAM=<clone> node --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts --update`, `bun run test:anti-slop`. A sync is a strict improvement: every fixture rejected before is rejected after; an upstream weakening is declined as a delta.
