@@ -12,6 +12,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ## [Unreleased]
 
+### Changed
+
+- Hosted actors now use the Agents platform directly, without Think's duplicate session, workspace, inference queue or recovery boot. The shared Kinu chat loop retains the existing browser/CLI protocol and initializes the root transcript through the public session provider. Accepted sends and unfinished workspace work keep the sandbox protected across eviction.
+
 ### Added
 
 - **One workspace database holds every agent in the workspace, and every kind of agent is a full agent in it.** A hired subordinate, a temporary helper, a reasoning head and a search node no longer own private databases or private agent objects: each is a logical actor of the workspace it belongs to, with its own conversation, task list, claims, approvals, background jobs, signals, role and promoted program, all in the workspace's one store and none of them able to read or overwrite another's rows — including when two of them use the same turn id. The root owns every actor's lifetime; a client that disconnects no longer cancels hosted work, and work that was admitted before an eviction is rebuilt from the durable rows rather than from a timer that did not survive. Reading a retained agent starts nothing, and retiring one still refuses a stale alias or a stale claim epoch and cleans up consistently.
