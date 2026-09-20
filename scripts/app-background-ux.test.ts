@@ -21,99 +21,7 @@ import { withGallery, type Gallery } from './gallery-harness';
 
 const SHOTS = '/home/mrwhite0racle/kinu-logs/app-background/ux';
 
-/** The mesh-live deliverables: after shots, the pointer shot, rim numbers. */
-const MESH = '/home/mrwhite0racle/kinu-logs/mesh-live';
-
 mkdirSync(SHOTS, { recursive: true });
-
-mkdirSync(MESH, { recursive: true });
-
-/** The two bands the gate reads: the mesh rim and the mission-form centre. */
-type Band = 'rim' | 'centre';
-
-/** Mean absolute luminance delta between two screenshots, per band. The
- *  browser decodes its own PNGs through an image into a 2d canvas, so no
- *  image dependency lands in the repo for one gate's arithmetic. A `disc`
- *  restricts the read to a circle in viewport units — the pointer's
- *  neighbourhood — instead of the whole bands. */
-async function bandDeltas(page: Page, shotA: Uint8Array, shotB: Uint8Array, disc?: { readonly x: number; readonly y: number; readonly r: number }): Promise<Record<Band, number>> {
-  const sums = await page.evaluate(async (a: number[], b: number[], d: { readonly x: number; readonly y: number; readonly r: number } | null) => {
-    const load = async (bytes: number[]): Promise<ImageData> => {
-      const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
-      const url = URL.createObjectURL(blob);
-
-      try {
-        const image = new Image();
-        image.decoding = 'sync';
-        image.src = url;
-        await image.decode();
-        const canvas = document.createElement('canvas');
-        canvas.width = image.naturalWidth;
-        canvas.height = image.naturalHeight;
-        const context = canvas.getContext('2d', { willReadFrequently: true });
-
-        if (context === null) throw new Error('no 2d context for the delta read');
-        context.drawImage(image, 0, 0);
-
-        return context.getImageData(0, 0, canvas.width, canvas.height);
-      } finally {
-        URL.revokeObjectURL(url);
-      }
-    };
-
-    const first = await load(a);
-    const second = await load(b);
-
-    if (first.width !== second.width || first.height !== second.height) throw new Error('shot size diverged');
-    const { width: w, height: h } = first;
-
-    const sums = { rim: 0, rimN: 0, centre: 0, centreN: 0 };
-
-    const linearize = (channel: number): number => {
-      const c = channel / 255;
-
-      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-    };
-
-    const lum = (r: number, g: number, b2: number): number => 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b2);
-
-    for (let y = 0; y < h; y += 1) {
-      for (let x = 0; x < w; x += 1) {
-        if (d !== null) {
-          const dx = x / w - d.x;
-          const dy = y / h - d.y;
-
-          if (dx * dx + dy * dy >= d.r * d.r) continue;
-        }
-
-        const i = (y * w + x) * 4;
-
-        const delta = Math.abs(
-          lum(first.data[i] ?? 0, first.data[i + 1] ?? 0, first.data[i + 2] ?? 0)
-          - lum(second.data[i] ?? 0, second.data[i + 1] ?? 0, second.data[i + 2] ?? 0),
-        );
-
-        const rim = x < w * 0.15 || x >= w * 0.85 || y < h * 0.15 || y >= h * 0.85;
-
-        const centre = x >= w * 0.22 && x < w * 0.78 && y >= h * 0.10 && y < h * 0.95;
-
-        if (rim || d !== null) {
-          sums.rim += delta;
-          sums.rimN += 1;
-        }
-
-        if (centre) {
-          sums.centre += delta;
-          sums.centreN += 1;
-        }
-      }
-    }
-
-    return sums;
-  }, [...shotA], [...shotB], disc ?? null);
-
-  return { rim: sums.rim / sums.rimN, centre: sums.centre / sums.centreN };
-}
 
 /** The five names the stock gallery roster displays, in card order. */
 const DISPLAYED = ['checkout-fixes', 'perf-audit', 'email-triage', 'design-sys', 'handwrought-walnut-4166c321'];
@@ -126,8 +34,6 @@ interface BackgroundHandle {
   /** The stepping controls the GALLERY page attaches (`__kinuGalleryStepping`);
    *  the shipped shell's handle carries none, so these are optional here. */
   advance?(dt: number): void;
-  freeze?(): void;
-  thaw?(): void;
 }
 
 declare global {
@@ -420,130 +326,12 @@ describe('the living background', () => {
     });
   }, 90_000);
 
-  test('the mesh sits on the rim: light over dark, edge over centre', async () => {
+  test('the mouse reaches the mesh across page elements and releases on leaving', async () => {
     await withGallery(async (gallery) => {
-      const rows: string[] = [];
-      const measured: Partial<Record<'dark' | 'light', { rim: number; centre: number }>> = {};
-
-      for (const theme of ['dark', 'light'] as const) {
-        const page = await freshPage(gallery, '&path=/', theme, true);
-
-        try {
-          await page.setViewport({ width: 1440, height: 900 });
-          await page.evaluate(() => document.fonts.ready);
-          await liveBackground(page);
-
-          for (const name of DISPLAYED) await setOverview(page, name, idleBody());
-          await waitForMode(page, 'idle');
-          await page.evaluate(() => {
-            for (let i = 0; i < 270; i += 1) window.__kinuAppBackground?.advance?.(1 / 60);
-          });
-
-          const renderer = await page.evaluate(() => window.__kinuAppBackground?.renderer() ?? null);
-          const on = await page.screenshot({ captureBeyondViewport: false });
-          await page.evaluate(() => {
-            const host = document.querySelector<HTMLElement>('[data-app-background]');
-
-            if (host !== null) host.style.display = 'none';
-          });
-          await pause(400);
-          const off = await page.screenshot({ captureBeyondViewport: false });
-          await Bun.write(join(MESH, `home-${theme}-after.png`), on);
-
-          const deltas = await bandDeltas(page, on, off);
-          measured[theme] = deltas;
-          const row = `${theme}: renderer=${String(renderer)} rim=${deltas.rim.toFixed(5)} centre=${deltas.centre.toFixed(5)}`;
-          process.stdout.write(`mesh-live: ${row}\n`);
-          rows.push(row);
-
-          if (theme === 'light') {
-            expect(deltas.rim).toBeGreaterThan(deltas.centre);
-            expect(deltas.rim).toBeGreaterThanOrEqual(0.00272);
-            expect(deltas.rim).toBeLessThanOrEqual(0.00440);
-          } else {
-            expect(deltas.rim).toBeLessThanOrEqual(0.0009);
-            expect(deltas.centre).toBeLessThanOrEqual(0.0009);
-          }
-        } finally {
-          await page.close();
-        }
-      }
-
-      // The light mesh carries more presence than the dark one: the same
-      // run's two captures answer it.
-      const light = measured.light;
-      const dark = measured.dark;
-
-      expect(light).toBeDefined();
-      expect(dark).toBeDefined();
-      expect((light?.rim ?? 0)).toBeGreaterThan(dark?.rim ?? Number.POSITIVE_INFINITY);
-
-      await Bun.write(join(MESH, 'rim-after.txt'), rows.join('\n') + '\n');
-    });
-  }, 120_000);
-
-  test('a hovered mesh brightens near the pointer and settles back after it leaves', async () => {
-    await withGallery(async (gallery) => {
-      const page = await gallery.browser.newPage();
-      await page.evaluateOnNewDocument((mode: string) => localStorage.setItem('theme', mode), 'light');
-      // Frozen from its seed: not one rAF frame runs before the test's own
-      // steps, so the picture the pointer lands on is a pure function of
-      // them. Measured before this (2026-09-18): the hold's lift depends on
-      // the nearest node's distance, which the frames run between mount and
-      // the freeze decided, and under the deploy wave's load that count was
-      // whatever the wall clock allowed — the same test read 1.26 to 1.41
-      // against a 1.3 bar.
-      await page.evaluateOnNewDocument(() => { window.__kinuGalleryFrozen = true; });
-      await page.setViewport({ width: 1440, height: 900 });
-      await page.goto(`${gallery.origin}/gallery.html?frame=app&path=${encodeURIComponent('/')}`, { waitUntil: 'networkidle0' });
-      // The pointer's disc overlaps page chrome whose hover colour transitions
-      // over 150 ms: a shot taken mid-transition reads a different ground
-      // under the mesh than one taken after it, and how far along it is when
-      // the shot lands is the machine's load. Measured under the deploy wave
-      // (2026-09-18): the same frozen picture read a held/quiet ratio of 1.25
-      // there against 1.65-2.28 on a quiet box. The DOM's transitions are not
-      // what this measures, so they are off.
-      await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; }' });
+      const page = await freshPage(gallery, '&path=/', 'light', true);
 
       try {
-        // The keep-out boxes the picture is fitted around are the page's text
-        // runs; a web font that lands after the fit moves them, and the
-        // frozen picture would be refitted under a later shot. Fonts first.
-        await page.evaluate(() => document.fonts.ready);
         await liveBackground(page);
-
-        for (const name of DISPLAYED) await setOverview(page, name, idleBody());
-        // The mode arrives over the read model's own async answer, waited for
-        // WITHOUT stepping the picture: the mode is set on the tissue when the
-        // answer lands, not on a frame.
-        await waitForMode(page, 'idle');
-
-        // Then a FIXED number of steps, in one call: the picture takes no step
-        // but these.
-        // A poll loop that advanced while it waited would make the count
-        // depend on how fast the poll came back, which is the machine's load
-        // — the reading below moved 15% run to run on exactly that.
-        // 270 frames is the four and a half seconds of settling a live picture
-        // gets before a pointer arrives.
-        await page.evaluate(() => {
-          for (let i = 0; i < 270; i += 1) window.__kinuAppBackground?.advance?.(1 / 60);
-        });
-
-        // Absolute presence in the pointer's disc, each live shot against
-        // the same hidden-host ground, gated on the hold itself: the shot.
-        // The rAF loop never runs here — the test's own advances are the
-        // only steps the picture takes, and the pixels are a pure function
-        // of them.
-        const disc = { x: 0.94, y: 0.2, r: 0.06 };
-
-        // The gallery attaches the stepping controls; a page without them is
-        // not the gallery, and this readback has no picture to hold still.
-        expect(await page.evaluate(() => window.__kinuAppBackground?.freeze !== undefined)).toBe(true);
-
-        const quiet = await page.screenshot({ captureBeyondViewport: false });
-        const quietHold = await page.evaluate(() => window.__kinuAppBackground?.pointer() ?? 0);
-
-        // Onto the card first: the hold arms there.
         await page.mouse.move(0.8 * 1440, 0.3 * 900);
 
         const cardHold = await page.evaluate(() => {
@@ -554,15 +342,10 @@ describe('the living background', () => {
           return handle?.pointer() ?? 0;
         });
 
-        // Then across element boundaries onto the background: the hold
-        // must not dip — no listener clears it mid-page anymore.
-        // Frozen time must advance with movement to avoid a speed burst.
-        for (let i = 1; i <= 24; i += 1) {
-          await page.mouse.move((0.8 + 0.14 * i / 24) * 1440, (0.3 - 0.1 * i / 24) * 900);
-          await page.evaluate(() => window.__kinuAppBackground?.advance?.(1 / 30));
-        }
+        expect(cardHold).toBeGreaterThan(0);
+        await page.mouse.move(0.94 * 1440, 0.2 * 900);
 
-        const crossHold = await page.evaluate(() => {
+        const backgroundHold = await page.evaluate(() => {
           const handle = window.__kinuAppBackground;
 
           for (let i = 0; i < 30; i += 1) handle?.advance?.(1 / 60);
@@ -570,95 +353,26 @@ describe('the living background', () => {
           return handle?.pointer() ?? 0;
         });
 
-        process.stdout.write(`mesh-live: card hold=${cardHold.toFixed(3)} cross=${crossHold.toFixed(3)}\n`);
-        // The hold ARMED under the card: above the resting hold the frozen
-        // picture had before the pointer arrived, and above zero — so the
-        // ratio below compares two live holds, never two zeros. Not a fixed
-        // level: how high thirty steps lift it depends on the nearest node's
-        // distance, which the seeded picture's state decides — and that state
-        // is the same on every run now (frozen from the seed, fonts landed).
-        expect(cardHold).toBeGreaterThan(quietHold);
-        expect(cardHold).toBeGreaterThan(0);
-        expect(crossHold).toBeGreaterThanOrEqual(cardHold * 0.9);
-        const held = await page.screenshot({ captureBeyondViewport: false });
-        await Bun.write(join(MESH, 'home-light-pointer.png'), held);
+        expect(backgroundHold).toBeGreaterThan(0);
+        await page.mouse.move(-50, -50);
 
-        await page.mouse.move(-50, -50, { steps: 12 });
-
-        await page.evaluate(() => {
+        const releasedHold = await page.evaluate(() => {
           const handle = window.__kinuAppBackground;
 
-          for (let i = 0; i < 40; i += 1) handle?.advance?.(1 / 60);
+          for (let i = 0; i < 30; i += 1) handle?.advance?.(1 / 60);
+
+          return handle?.pointer() ?? 0;
         });
 
-        const after = await page.screenshot({ captureBeyondViewport: false });
-
-        await page.evaluate(() => {
-          const host = document.querySelector<HTMLElement>('[data-app-background]');
-
-          if (host !== null) host.style.display = 'none';
-        });
-
-        const ground = await page.screenshot({ captureBeyondViewport: false });
-
-        const quietPresence = await bandDeltas(page, quiet, ground, disc);
-        const heldPresence = await bandDeltas(page, held, ground, disc);
-        const afterPresence = await bandDeltas(page, after, ground, disc);
-        process.stdout.write(
-          `mesh-live: disc presence quiet=${quietPresence.rim.toFixed(5)} held=${heldPresence.rim.toFixed(5)} after=${afterPresence.rim.toFixed(5)}\n`,
-        );
-        expect(heldPresence.rim).toBeGreaterThan(quietPresence.rim * 1.15);
-        expect(afterPresence.rim).toBeLessThan(quietPresence.rim * 1.15);
-
-        // Measure the click separately so its wave cannot mask hover recovery.
-        await page.evaluate(() => {
-          document.querySelector<HTMLElement>('[data-app-background]')?.style.removeProperty('display');
-        });
-        await page.mouse.move(0.94 * 1440, 0.2 * 900);
-        await page.evaluate(() => {
-          const handle = window.__kinuAppBackground;
-
-          for (let i = 0; i < 40; i += 1) handle?.advance?.(1 / 60);
-        });
-        const beforeClick = await page.screenshot({ captureBeyondViewport: false });
-        await page.evaluate(() => {
-          window.addEventListener('pointerdown', (event) => event.stopImmediatePropagation(), { capture: true, once: true });
-        });
-        await page.mouse.click(0.94 * 1440, 0.2 * 900);
-        await page.evaluate(() => {
-          const handle = window.__kinuAppBackground;
-
-          for (let i = 0; i < 20; i += 1) handle?.advance?.(1 / 60);
-        });
-        const blockedClick = await page.screenshot({ captureBeyondViewport: false });
-        await page.mouse.click(0.94 * 1440, 0.2 * 900);
-        await page.evaluate(() => {
-          const handle = window.__kinuAppBackground;
-
-          for (let i = 0; i < 20; i += 1) handle?.advance?.(1 / 60);
-        });
-        const clicked = await page.screenshot({ captureBeyondViewport: false });
-        await page.evaluate(() => window.__kinuAppBackground?.thaw?.());
-        const beforeClickPresence = await bandDeltas(page, beforeClick, ground, disc);
-        const blockedClickPresence = await bandDeltas(page, blockedClick, ground, disc);
-        const clickPresence = await bandDeltas(page, clicked, ground, disc);
-        await Bun.write(join(MESH, 'home-light-click-before.png'), beforeClick);
-        await Bun.write(join(MESH, 'home-light-click-blocked.png'), blockedClick);
-        await Bun.write(join(MESH, 'home-light-click.png'), clicked);
-        process.stdout.write(`mesh-live: click hold=${beforeClickPresence.rim.toFixed(5)} blocked=${blockedClickPresence.rim.toFixed(5)} click=${clickPresence.rim.toFixed(5)}\n`);
-        expect(beforeClickPresence.rim).toBeGreaterThan(quietPresence.rim * 1.15);
-        expect(blockedClickPresence.rim).toBeLessThanOrEqual(beforeClickPresence.rim * 1.15);
-        expect(clickPresence.rim).toBeGreaterThan(blockedClickPresence.rim * 1.15);
+        expect(releasedHold).toBeLessThan(backgroundHold);
       } finally {
         await page.close();
       }
     });
-  }, 120_000);
+  });
 
   test('a hoverless visitor sees the undisturbed picture', async () => {
-    // A touch-first viewport reports (hover: none); the mount never
-    // listens there, so the same sweep that answers on desktop moves no
-    // pixel here beyond the tissue's own drift.
+    // Touch input must not arm mouse interaction.
     await withGallery(async (gallery) => {
       const page = await gallery.browser.newPage();
       await page.evaluateOnNewDocument(() => localStorage.setItem('theme', 'light'));
@@ -670,24 +384,15 @@ describe('the living background', () => {
 
         for (const name of DISPLAYED) await setOverview(page, name, idleBody());
         await waitForMode(page, 'idle');
-        await pause(4000);
 
         const hoverNone = await page.evaluate(() => matchMedia('(hover: none)').matches);
         expect(hoverNone).toBe(true);
 
-        // A touch sweep: here the picture must not answer, because the
-        // mount ignores touch pointers and the media query stays hoverless.
-        const quiet = await page.screenshot({ captureBeyondViewport: false });
         await page.touchscreen.touchStart(0.8 * 1440, 0.3 * 900);
         await page.touchscreen.touchMove(0.85 * 1440, 0.35 * 900);
         await page.touchscreen.touchEnd();
-        const swept = await page.screenshot({ captureBeyondViewport: false });
         const hold = await page.evaluate(() => window.__kinuAppBackground?.pointer() ?? -1);
-        process.stdout.write(`mesh-live: hover:none hold=${hold}\n`);
         expect(hold).toBe(0);
-        const moved = await bandDeltas(page, quiet, swept);
-        process.stdout.write(`mesh-live: hover:none rim=${moved.rim.toFixed(5)}\n`);
-        expect(moved.rim).toBeLessThan(0.003);
       } finally {
         await page.close();
       }

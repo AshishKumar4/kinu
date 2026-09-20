@@ -210,7 +210,7 @@
     "scripts/app-background-ux.test.ts": {
       "timeout-option": 3,
       "sleep": 1,
-      "test-timeout": 9
+      "test-timeout": 7
     },
     "scripts/bench.test.ts": {
       "sleep": 2
