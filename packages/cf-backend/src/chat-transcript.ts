@@ -56,9 +56,8 @@ export class AssistantMessagesTranscript implements TranscriptStore {
     private readonly actor: ActorReference,
   ) {
     this.provider = new AgentSessionProvider(agent, ROOT_SESSION_ID);
-    // The table exists from the store's first breath, as it did from Think's
-    // session boot: the provider declares its DDL on first use, and the
-    // operator check below reads the table before any turn has written it.
+    // Initialize vendor-owned DDL before any direct transcript reader runs.
+    // This does not hydrate a second session or an in-memory history cache.
     this.provider.getLatestLeaf();
   }
 

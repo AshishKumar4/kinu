@@ -5706,10 +5706,8 @@ export class UserDO extends Agent<Env> {
    * surface, and the reason says WHY and WHEN they arrive. Without it the model
    * plans as if a capability the user gave it does not exist and cannot explain
    * why. The absence is a DEFERRAL, not a verdict: a tool set is fixed when a
-   * turn opens — the AI SDK's `prepareStep` result carries `activeTools` but no
-   * `tools` (`ai@6/dist/index.d.ts:986-1023`) and Think hands `streamText` one
-   * tool object for the whole turn (`@cloudflare/think/dist/think.js:2707,2728`)
-   * — so a connection that completes mid-turn is installed by the NEXT turn's
+   * turn opens: the chat driver hands streamText one tool object for the turn.
+   * A connection that completes mid-turn is installed by the next turn's
    * read of this surface. No state carries it: the live connection is the state,
    * and the orchestrator's cache invalidates on this surface's content hash.
    */

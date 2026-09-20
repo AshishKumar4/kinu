@@ -268,7 +268,7 @@ export {
 // Configuration
 export { DEFAULT_CONFIG } from './config';
 
-export { UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS } from './chat';
+export { UNBOUNDED_STEPS } from './chat';
 
 // Typed accessors over the `actor_config` key/value table — collapses ~23
 // raw-SQL sites into a deep module with known-key getters/setters.

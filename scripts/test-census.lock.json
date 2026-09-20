@@ -430,14 +430,6 @@
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-session-store-guard.test.ts :: a fresh workspace wakes with the table and no rows yet :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-session-store-guard.test.ts :: the store the guard reads is the one every turn writes :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
       "key": "private_reach :: packages/cf-backend/tests/unit-slate-composition.test.ts :: source capture does not retain a previous caller supplementary group :: harness bridge to a non-public member",
       "count": 1
     },

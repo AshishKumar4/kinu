@@ -241,27 +241,13 @@ export function mockAgentsSdk(): void {
         )`);
       }
 
-      /**
-       * The connection handlers the vendor base declares as no-ops
-       * (`partyserver/dist/index.js:894-916`, `Server.onConnect` through
-       * `Server.onRequest`). Think's own `onStart` binds all four in
-       * `_setupProtocolHandlers` (`@cloudflare/think/dist/think.js:6099`) before
-       * it reaches the subclass's `onStart`, so a stand-in without them cannot
-       * bring a Think subclass up at all. `agent.onStart()` rejected on
-       * `this.onConnect.bind`, and a suite that called it on a facet read the
-       * unhandled rejection as an activation. No socket reaches these under bun,
-       * so the bodies are the vendor's own. They do nothing, and a request gets
-       * the vendor's 404.
-       */
+      /** Platform hooks wrapped by ActorAgent's authenticated chat transport. */
       onConnect(_connection: Connection, _ctx: ConnectionContext): void {}
       onMessage(_connection: Connection, _message: WSMessage): void {}
       onClose(_connection: Connection, _code: number, _reason: string, _wasClean: boolean): void {}
       onRequest(_request: Request): Response {
         return new Response('Not implemented', { status: 404 });
       }
-      /** No sub-agent facet exists under bun: every socket is this agent's
-       *  own, so the chat side of the connection gate always runs. */
-      protected _cf_requestTargetsSubAgent(_request: Request): boolean { return false; }
 
       /** The SDK's DO heartbeat. Production uses it for work that outlives the
        *  call that started it (the drain timer, the genesis turn), so the stand-in
@@ -334,25 +320,6 @@ export function mockAgentsSdk(): void {
 
         return sql;
       }
-
-      /** The vendor base's tracing seam: every startup and submission-drain
-       *  bracket goes through it, so a stand-in without it fails every drain.
-       *  There is no tracer here — the span is the body — but `shell` still gets
-       *  an attribute-writer, because think stamps turn outcomes through it. */
-      _withAgentSpan<Result>(
-        _operation: string,
-        _storagePhase: string,
-        _attributes: Record<string, string | number | boolean>,
-        run: (update: (patch: Record<string, string | number | boolean>) => void) => Promise<Result>,
-      ): Promise<Result> {
-        return run(() => {});
-      }
-
-      /** The vendor base's observability emit; think brackets submissions and
-       *  rpc with it, so a stand-in without it fails every durable submission.
-       *  There is no observability sink here — the event is dropped, exactly
-       *  as the vendor's own no-sink path drops one. */
-      _emit(_type: string, _payload: Record<string, string | number | boolean> = {}): void {}
 
       /** The recovery hook. The vendor's base declares none and a subclass
        *  overrides it as a prototype method — so this stand-in declares a
@@ -755,19 +722,6 @@ export function mockAgentsSdk(): void {
     },
     /** The real decorator only attaches RPC metadata. */
     callable: () => <Method>(method: Method): Method => method,
-    // Named imports @cloudflare/think binds at module load. bun resolves the
-    // whole import list eagerly, so a missing name is a load-time SyntaxError
-    // for any test that reaches an ActorAgent subclass.
-    getCurrentAgent: () => ({ agent: undefined, connection: undefined, request: undefined }),
-    __DO_NOT_USE_WILL_BREAK__agentContext: {
-      getStore: <Store>(): Store | undefined => undefined,
-      run: <Store, Result>(_store: Store, fn: () => Result): Result => fn(),
-    },
-    // The vendor's signature is (body, options) — think passes the turn body
-    // FIRST, so a stale (scope, fn) mock calls the body object as a function.
-    __DO_NOT_USE_WILL_BREAK__withInvocationScope: <Result>(body: () => Result): Result => body(),
-    isDurableObjectMemoryLimitReset: () => false,
-    isPlatformTransientError: () => false,
     getAgentByName: async (namespace: DurableObjectNamespace, name: string) =>
       namespace.get(namespace.idFromName(name)),
     /** The Worker entry's transport for `/agents/*`. Returning undefined is the

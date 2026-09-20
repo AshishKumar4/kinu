@@ -269,7 +269,7 @@ describe('the UserDO RPC surface cannot drift from the class', () => {
 // wire.
 //
 // `OrchestratorAgent` cannot be constructed under bun — its base chain reaches
-// `cloudflare:*` through `@cloudflare/think` and `@cloudflare/sandbox`. Its
+// cloudflare:* through agents and @cloudflare/sandbox. Its
 // surface is plain data though, and the class sources are readable, so the same
 // two questions get answered: does every class seal itself, and does its
 // surface hold only what the class actually declares?
@@ -352,7 +352,7 @@ describe('every Durable Object that holds something worth stealing is sealed', (
 
     const classes = readdirSync(SRC, { recursive: true, encoding: 'utf8' })
       .filter((f) => f.endsWith('.ts'))
-      .flatMap((f) => [...source(f).matchAll(/^export (?:abstract )?class ([A-Za-z0-9_$]+) extends (Agent<|ActorAgent|Think<|Sandbox<|Devbox<)/gm)]
+      .flatMap((f) => [...source(f).matchAll(/^export (?:abstract )?class ([A-Za-z0-9_$]+) extends (Agent<|ActorAgent|Sandbox<|Devbox<)/gm)]
         .map((m) => m[1]));
 
     expect(classes.filter((name) => !known.has(name))).toEqual([]);

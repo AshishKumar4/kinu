@@ -313,25 +313,18 @@ describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
   });
 
   test('every name the vendored init chain awaits is held to the same rule', () => {
-    // `_handleInternalFiberRecovery` is the framework's own half of the same
-    // hook, and `onChatRecovery` is invoked from it while the gate is held. No
-    // Kinu class overrides either today, which is exactly why the names are
-    // pinned: the first one that does must not arrive ungoverned.
-    const internal = `export class ActorAgent extends Think {
+    const internal = `export class ActorAgent extends Agent {
       override async _handleInternalFiberRecovery(ctx: FiberRecoveryContext): Promise<boolean> {
         await this.replayChatTurn(ctx);
         return true;
-      }
-      override async onChatRecovery(ctx: ChatRecoveryContext): Promise<void> {
-        await this.resumeStream(ctx);
       }
     }`;
 
     const found = auditFile('actor-agent.ts', internal);
     expect(found.inspected.map((i) => `${i.member}:${i.hook}`)).toEqual([
-      '_handleInternalFiberRecovery:recovery', 'onChatRecovery:recovery',
+      '_handleInternalFiberRecovery:recovery',
     ]);
-    expect(found.violations.filter((v) => v.reason.includes('async'))).toHaveLength(2);
+    expect(found.violations.filter((v) => v.reason.includes('async'))).toHaveLength(1);
   });
 
   test('the classifier itself may not be async — that is the replacement bound', () => {

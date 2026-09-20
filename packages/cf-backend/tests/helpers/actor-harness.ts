@@ -16,7 +16,6 @@
 import { Database } from 'bun:sqlite';
 import { makeSqlExec } from '../../../core/tests/helpers';
 import type { AgentContext, Connection, FiberRecoveryContext, FiberRecoveryResult, WSMessage } from 'agents';
-import { AgentSessionProvider } from 'agents/experimental/memory/session';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
@@ -358,18 +357,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    * A further activation, through the ACTOR's own `onStart` — the sweep, the
    * wake reconcile, the stale-delivery unbind, exactly as the platform calls
    * them on a cold start.
-   *
-   * `agent.onStart()` is the vendor chat base's wrapper around this one. It
-   * boots Think's session and transcript first and reaches the actor's
-   * `onStart` after that, the activation the SDK runs before a facet's first
-   * `@callable`. This bridge is the actor half
-   * alone, for the suites that assert a sweep or a reconcile and nothing of
-   * Think's, the same reach `ensureActorSchema` takes below.
    */
   activateActor(): Promise<void> { return Promise.resolve(super.onStart()); }
-  /** The installed chat protocol gate, for suites that speak the hook's own
-   *  frames: Think ran its `onStart` above and reached this actor's, which
-   *  installed the gate over `onMessage`. */
+  /** The installed gate, for suites that speak the client's chat protocol. */
   harnessChatGate(): (connection: Connection, message: WSMessage) => Promise<void> {
     const gate = this.onMessage.bind(this);
 
@@ -2045,36 +2035,12 @@ function instantiate<T extends object>(
  * deliberately dropped: a failed boot classifies inside `onStart` and never
  * throws, and suites that need the BOOTED workspace await the memoized session
  * through ordinary operations.
- *
- * First, the one thing of Think's the actor's half reads: the session the
- * vendor hydrated before reaching it (`@cloudflare/think` 0.17.0 `think.js`
- * `startThink`, read 2026-09-15: `Session.create(this)` — the empty session
- * id — then the `transcript-hydration` step, whose first read declares the
- * provider's DDL, and `_onStart` after both). The wake guard asks whether that
- * declaration left the table Kinu's readers name, so a construction that
- * skipped it would refuse every fresh workspace; {@link wakeOverMovedTranscript}
- * is the one that skips it on purpose.
  */
 function ensureActorSchema(agent: InstanceType<typeof OrchestratorAgent>): void {
-  new AgentSessionProvider(agent, '').getLatestLeaf();
   const gate: unknown = OrchestratorAgent.prototype.onStart.call(agent);
   void gate;
 }
 
-/**
- * The activation a REPLATFORMED SDK gives storage the last one wrote: Think's
- * hydration declares its transcript under `cf_agents_session_*`
- * (the Agents SDK's `brisk-chats-branch` changeset) and no `assistant_messages`,
- * then the actor's `onStart` runs over that. Under the installed SDK the only
- * way to reach that state is to run the actor's half without the vendor's
- * declaration, which is what this does; the actor's own `onStart` promise is
- * returned rather than dropped, because the refusal it carries is the point.
- */
-export function wakeOverMovedTranscript(db: Database): Promise<void> {
-  const { agent } = instantiate(HarnessOrchestratorAgent, db);
-
-  return Promise.resolve(OrchestratorAgent.prototype.onStart.call(agent));
-}
 
 /** A real OrchestratorAgent with a claimed owner, schema ensured.
  *

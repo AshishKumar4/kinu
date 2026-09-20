@@ -7,11 +7,10 @@
 // not the bare global `Env`.
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type {
-  AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, SocketDO, SteerProbeDO, StreamLifecycleDO, TransactionDO,
+  AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, SocketDO, StreamLifecycleDO, TransactionDO,
 } from './worker';
 import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { HireObservation } from './hire-shapes';
-import type { CappedTurnProbeDO, UnboundedTurnProbeDO } from './step-cap-probe';
 import type { SpendProbeDO } from './spend-probe';
 import type { TerminalEffectProbeDO } from './terminal-effect-probe';
 import type { DbCapabilityProbeDO } from './db-capability-probe';
@@ -245,11 +244,8 @@ declare global {
       SOCKET: DurableObjectNamespace<SocketDO>;
       ALARMED: DurableObjectNamespace<AlarmDO>;
       CACHE_WARM_PROBE: DurableObjectNamespace<CacheWarmProbeDO>;
-      STEER_PROBE: DurableObjectNamespace<SteerProbeDO>;
       EVICTION_PROBE: DurableObjectNamespace<EvictionProbeDO>;
       WITNESS: DurableObjectNamespace<WitnessDO>;
-      CAPPED_TURN_PROBE: DurableObjectNamespace<CappedTurnProbeDO>;
-      UNBOUNDED_TURN_PROBE: DurableObjectNamespace<UnboundedTurnProbeDO>;
       SPEND_PROBE: DurableObjectNamespace<SpendProbeDO>;
       TERMINAL_EFFECT_PROBE: DurableObjectNamespace<TerminalEffectProbeDO>;
       DB_CAPABILITY_PROBE: DurableObjectNamespace<DbCapabilityProbeDO>;

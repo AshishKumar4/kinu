@@ -17,11 +17,12 @@
  */
 import { describe, expect, test } from 'bun:test';
 import {
-  BACKGROUND_FIBER_PREFIX, ChatSession, SEARCH_FIBER_NAME,
+  BACKGROUND_FIBER_PREFIX, ChatSession, PendingSendStore, SEARCH_FIBER_NAME,
   type AdvisorRecoverySnapshot, type AgentSignal, type EnqueueTurnResult, type JsonValue, type ProgrammaticTurn,
 } from '@kinu.run/core';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { makeSql } from '../../core/tests/helpers';
 import {
   SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
 } from '../src/sandbox-lifecycle';
@@ -603,6 +604,16 @@ describe('a sandbox lifecycle failure', () => {
 describe('whether the container may be disturbed', () => {
   test('idle means idle', async () => {
     const { agent } = orchestratorHarness();
+    expect(await agent.hasSandboxBackgroundWork()).toBe(false);
+  });
+
+  test('an admitted send protects the container until its reservation retires', async () => {
+    const { agent, db } = orchestratorHarness();
+    const sends = new PendingSendStore(makeSql(db), agent.observeRuntime().actor.actorId);
+    sends.reserve({ id: 'accepted-before-reset', turnId: null, mode: 'build', text: 'inspect the container' });
+
+    expect(await agent.hasSandboxBackgroundWork()).toBe(true);
+    sends.retire(['accepted-before-reset']);
     expect(await agent.hasSandboxBackgroundWork()).toBe(false);
   });
 

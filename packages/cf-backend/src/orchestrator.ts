@@ -703,8 +703,7 @@ export class OrchestratorAgent extends ActorAgent {
    * The actor's OWN event log is the durable queue, so admission is a write
    * plus a drain on that actor's orchestration rather than a message pushed
    * into this object's transcript. That is the whole difference from the root's
-   * own `enqueueTurn`, which goes through Think's message store because the
-   * root's turns ARE that transcript.
+   * own enqueueTurn, which uses the root's ChatSession and transcript.
    *
    * The mode comes off the turn's own metadata through core's one reader, which
    * answers `build` for a turn that named none. Hardcoding `build` here was the
@@ -2111,7 +2110,7 @@ export class OrchestratorAgent extends ActorAgent {
         replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
         // The promotion gate's evidence is gathered on the cadence lane rather
         // than on the turn: a DO under keepAlive can afford a candidate
-        // rollout, Think's TurnQueue cannot.
+        // rollout without blocking the chat queue.
         ...this.shadowTrialPorts,
       });
       // Mission Inbox: the session-end changelog digest also goes to the
@@ -3599,7 +3598,7 @@ export class OrchestratorAgent extends ActorAgent {
   async onStart(): Promise<void> {
     this.installClientMessageGate();
     this.ensureSchema();
-    this.assertSessionStore();
+    this.resumeChatTranscript();
     // EVERY budgeted sweep this actor owns, through the seam the alarm frame
     // runs — one list, not a hand-folded copy of it, so a sweep added to the
     // seam cannot be missing from the gate. They run inside `Agent.alarm()`'s
@@ -3667,11 +3666,8 @@ export class OrchestratorAgent extends ActorAgent {
     // reclaims under a fresh lease and a job this isolate is already driving
     // is skipped.
     //
-    // Detached, not awaited: the journal writes are synchronous and land in this
-    // method's own frame, but TELLING the agent goes through the signal seam,
-    // which queues a turn via `Think.saveMessages` and resolves only when that
-    // turn ENDS. Awaiting a whole agent turn inside the init gate is the 30s
-    // object reset.
+    // Telling the agent goes through the signal seam and can run a turn.
+    // Awaiting that work inside the init gate can reset the object.
     // Fork-journal recovery is turn-capable — the signal seam queues a turn —
     // so it runs under the terminal wake's alarm frame (`maintenanceWork`),
     // and the delivery reconcile above is what arms that wake: its existence
@@ -3766,8 +3762,7 @@ export class OrchestratorAgent extends ActorAgent {
       const rootActorId = this.actorHandle().actorId;
       const rootIsLive = () => this._inFlight;
 
-      // Think owns the foreground root, not the host's logical ActorSession.
-      // Core reads liveness through the actual driver, including after awaits.
+      // Read root liveness from its chat driver, including after awaits.
       const recovered = await recoverActorTurns({
         resumable: (limit) => host.resumable(limit),
         acquire: async (reference) => {
@@ -3815,9 +3810,7 @@ export class OrchestratorAgent extends ActorAgent {
       await reconcileInterruptedForks({
         now: this.activationStartedAt,
         journal: this.headJournal,
-        // NON-AWAITING: the notice's enqueue is durable the moment it lands
-        // (`Think.saveMessages`), and the delivered promise resolves only when
-        // the QUEUED TURN ends — freight this alarm frame must not carry. The
+        // The notice's queueing promise belongs outside this alarm frame. The
         // wait is owned, so a failure still classifies and the harness join
         // still sees it.
         inbox: {
@@ -5809,10 +5802,7 @@ export class OrchestratorAgent extends ActorAgent {
    * Creation calls it once, last, so the mission, model and reasoning effort the
    * turn runs under are already durable.
    *
-   * Returns as soon as the turn is queued. Think's `saveMessages` — which
-   * `BackendHost.enqueueTurn` awaits — resolves only when the turn ENDS, so
-   * awaiting it here would hold the create request open for the whole turn and
-   * the New workspace dialog would sit there. The agents-SDK heartbeat holds
+   * Returns as soon as the turn is queued. The agents-SDK heartbeat holds
    * the DO instead, exactly as the drain timer does.
    */
   async beginGenesisTurn(): Promise<{ started: boolean }> {
@@ -6608,7 +6598,7 @@ export class OrchestratorAgent extends ActorAgent {
     if (this.forkReceiver?.transferId === transferId) return this.forkReceiver.receiver;
 
     // No targetAuthority here: the begin frame declares it, and the writer's
-    // own inference — the pane table every booted Think leaves behind — is the
+    // own inference from the provider-backed pane table is the
     // right answer for an activation that resumes mid-transfer and never sees
     // its transfer's begin.
     const writer = new ForkTargetWriter(this.boundSql, this.rt.storage.vfs, {
@@ -6834,9 +6824,8 @@ export class OrchestratorAgent extends ActorAgent {
 
     // The prompt-section lane is the ONE automatic lane. A scaffold GEPA pass
     // sharing this tick would optimise `scaffold/agent.js`, which the chat turn
-    // does not run: the turn is Think's loop over `getSystemPrompt` / `getTools`
-    // / `beforeTurn`, and `runScaffold` is reached only by the MCP one-shot, the
-    // shadow trials and GEPA's own rollouts. Every 25 turns it would spend
+    // does not run: ActorSession owns the chat loop. runScaffold serves the
+    // MCP one-shot, shadow trials and GEPA rollouts. Every 25 turns it would spend
     // rollouts and judge calls improving an artifact no user ever saw answer them
     // (measured 2026-09-03 by grepping `runScaffold(` callers). The manual
     // `runScaffoldGepaOptimization` RPC is where the scaffold tooling asks for

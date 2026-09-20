@@ -2,22 +2,16 @@
  * ActorAgent is the actor-agnostic substrate beneath every full-loop Kinu
  * actor on the Cloudflare backend.
  *
- * OrchestratorAgent (the top-level workspace DO) and any future facet actor
- * (there is one: the workspace root) are Think subclasses
- * that differ only in the profile members below: identity bootstrap
- * (getOwnerUserId), exec-plane keying (workspaceName), tool surface
- * (actorToolDeps / extraCodemodeProviders), evolution engine, and owner
- * notification. Everything else lives here, once: the CF runtime assembly,
- * the BackendHost, the shared AgentOrchestrator, ExtensionHost + compaction,
- * the dynamic ledger, prompt/model/tool caches, and the Think hook bridge
- * (beforeTurn / beforeStep / tool hooks).
+ * The workspace root extends the Agents platform for SQL, sockets, schedules
+ * and fibers. ActorSession and ChatSession own inference and recovery. This
+ * adapter supplies identity, executors, model/tool assembly and owner services.
  *
  * Tool gating is structural: an actor whose profile wires no `team` deps has
  * no hiring actions on its `agents` tool. No flags.
  */
 
 import {
-  callable,
+  Agent, callable,
   type AgentContext, type Connection, type ConnectionContext,
   type FiberRecoveryContext, type FiberRecoveryResult,
   type WSMessage,
@@ -55,7 +49,6 @@ import {
   createCompactionStateStore, createModelSummarizer, COMPACTION_PRESETS,
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@kinu.run/compaction";
-import { Think } from "@cloudflare/think";
 import { generateText, convertToModelMessages } from "ai";
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage, UIMessageChunk } from "ai";
 import {
@@ -78,7 +71,7 @@ import {
   // Continual refinement — the lane's deps come from four seams this class
   // already owns; nothing about it is Cloudflare-shaped.
   advanceRefinementLane, refinementDebtRequest, type RefinementDeps,
-  type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS,
+  type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS,
   advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn, ADVISOR_LANE_FIBER,
   type AdvisorRecoverySnapshot, type AdvisorDisposition,
   advisorWorkspaceGuidance,
@@ -209,7 +202,7 @@ import {
   type InstructionSourceRow, type InstructionSourceView,
   stepContextLimit,
   reasoningEffortOptions,
-  uiMessageText, tableExists,
+  uiMessageText,
   // memory.* / tasks.* — codemode projections of the same-named native tools
   JsonObjectSchema, JsonValueSchema, changeActiveRole,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
@@ -669,7 +662,7 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
   return { providers, native };
 }
 
-export abstract class ActorAgent extends Think<Env> {
+export abstract class ActorAgent extends Agent<Env> {
   // ── The actor profile — what a concrete actor class supplies ─────────
   // The rest of this class is actor-agnostic; these members are the whole
   // difference between actor kinds (orchestrator vs a future facet actor).
@@ -1437,12 +1430,6 @@ export abstract class ActorAgent extends Think<Env> {
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
-    // Set on the INSTANCE as well as on each turn's `TurnConfig` (see
-    // `beforeTurn`) because the resolution is `config.maxSteps ?? this.maxSteps`:
-    // the per-turn value is what production reads, and this is what any Think
-    // inference path that does not run through our `beforeTurn` reads. One
-    // constant, applied at both seams Think resolves through.
-    this.maxSteps = UNBOUNDED_MAX_STEPS;
     // Before any read or write of it can happen — see initCapabilitySchema.
     this.initCapabilitySchema();
     // A Durable Object is a DIFFERENT ISOLATE from the Worker that routes to it,
@@ -1459,22 +1446,7 @@ export abstract class ActorAgent extends Think<Env> {
     // its workspace says so, as a `workspace` field; the rest are honestly
     // unattributed. See `analytics/install.ts`.
     installAnalyticsDiagnostics(this.env);
-    // The vendor base's connection hooks, captured before Think's `onStart`
-    // rebinds them around its own chat handshake: Think's connect serves its
-    // in-memory message cache, which this backend no longer keeps fresh —
-    // the transcript store writes straight through the SDK provider — so the
-    // gate below reaches the base directly and the transport serves the
-    // durable rows. Captured here because the base installs its own wrappers
-    // in ITS constructor, which ran before this line.
-    this.baseOnConnect = this.onConnect;
-    this.baseOnClose = this.onClose;
   }
-  /** The vendor base's connection hooks, before Think's `onStart` rebinds
-   *  them: see the constructor. Null until it runs, which is before any
-   *  socket arrives. */
-  private baseOnConnect: ActorAgent['onConnect'] | null = null;
-  private baseOnClose: ActorAgent['onClose'] | null = null;
-  /** Think installs protocol dispatch before the actor onStart callback. */
   protected installClientMessageGate(): void {
     const dispatchMessage = this.onMessage;
     this.onMessage = async (connection, message) => {
@@ -1533,28 +1505,20 @@ export abstract class ActorAgent extends Think<Env> {
       return await dispatchMessage.call(this, connection, message);
     };
 
-    // The connect and close the transport was built for: a socket that opens
-    // mid-turn is told what is resuming and reads the transcript as it is
-    // NOW — the loop's durable rows, not the vendor cache Think's own
-    // handshake would serve. Reached past Think's wrappers (see the
-    // constructor): a chat connection never sees Think's handshake, a
-    // sub-agent connection never sees ours.
-    const baseOnConnect = this.baseOnConnect;
-    const baseOnClose = this.baseOnClose;
+    const baseOnConnect = this.onConnect;
+    const baseOnClose = this.onClose;
 
     this.onConnect = async (connection, ctx) => {
       if (await this.refuseRevokedSocketAuthority(connection, '')) return;
       this.connectionOpened();
 
-      if (this._cf_requestTargetsSubAgent(ctx.request)) return await baseOnConnect?.call(this, connection, ctx);
-
-      await baseOnConnect?.call(this, connection, ctx);
+      await baseOnConnect.call(this, connection, ctx);
       this.chatRoomFor(connection)?.onConnect(connection);
     };
 
     this.onClose = async (connection, code, reason, wasClean) => {
       this.chatRoomFor(connection)?.onClose(connection);
-      await baseOnClose?.call(this, connection, code, reason, wasClean);
+      await baseOnClose.call(this, connection, code, reason, wasClean);
 
       // The closing socket is no longer open, so the manager's iterator does
       // not yield it; its id is excluded anyway, because the answer must not
@@ -1564,9 +1528,7 @@ export abstract class ActorAgent extends Think<Env> {
       this.lastConnectionClosed();
     };
 
-    // The transcript seed the hook fetches: Think's route serves its
-    // in-memory cache, stale since the store moved beneath it, so the gate
-    // answers this one path from the durable rows instead.
+    // The client seeds each room from its durable transcript.
     const dispatchRequest = this.onRequest;
 
 
@@ -1683,10 +1645,8 @@ export abstract class ActorAgent extends Think<Env> {
         // a SECOND announcement of one answer without dropping the first
         // when the cut came before it.
         //
-        // The CONVERSION runs here, not at the hook. It is the only await between
-        // the answer Think has already persisted and the claim that makes the
-        // answer's effects recoverable, and an eviction inside it left a durable
-        // answer no recovery could find anything owed for.
+        // Convert inside the durable effect: an eviction during conversion
+        // must leave an owed announcement, not an untracked persisted answer.
         run: async ({ text, message }) => {
           // A REFUSAL, not a retry. The stored message is fixed, so a part tree
           // the converter rejects will not start parsing on a later attempt, and
@@ -1825,11 +1785,6 @@ export abstract class ActorAgent extends Think<Env> {
    * chat recovery had replayed it, and the external call ran a second time.
    * `durableTurnId` cannot be the witness on its own either — it deliberately
    * outlives its turn, so it would hold every turn's claims for good.
-   *
-   * Think's own recovery roster is the honest witness, because a row there is
-   * exactly "a response that started and has not finished". The response being
-   * closed is excluded: the close can reach `end()` before Think's fiber
-   * returns, and the question is whether somebody ELSE may still run.
    */
   private turnMayStillRun(turnId: string): boolean {
     if (this._inFlight && this.durableTurnId() === turnId) return true;
@@ -2913,7 +2868,7 @@ export abstract class ActorAgent extends Think<Env> {
    * Settle the evolution this turn dispatched, inside a DURABLE fiber — the cf
    * peer of the CLI's `await orch.settleEvolution()` before process exit.
    *
-   * Evolution is deliberately detached so it never blocks Think's TurnQueue,
+   * Evolution is detached so it never blocks the chat queue,
    * but its LLM calls (outcome classification, reflection, session reflection)
    * take 5-30s and outlive the request that woke the DO.
    *
@@ -2983,7 +2938,7 @@ export abstract class ActorAgent extends Think<Env> {
    * on a clock — the trigger is the settle that just happened.
    *
    * DETACHED, on a durable fiber, for the reason the evolution lane is: this
-   * runs inside Think's TurnQueue and awaiting a third-party connect here would
+   * runs while the chat queue settles and awaiting a third-party connect would
    * hold the next message behind it. A failure is named and dropped; the next
    * settled turn warms again, so the retry needs no record. One autonomous or
    * post-eviction turn may honestly lack MCP tools and says so on its surface.
@@ -3303,9 +3258,7 @@ export abstract class ActorAgent extends Think<Env> {
     return createScaffoldHistory(() => this.actorSession.history);
   }
 
-  // The BackendHost the core orchestrator runs against. broadcast → DO fan-out;
-  // enqueueTurn → Think.saveMessages (TurnQueue-serialized programmatic turn) —
-  // the queued half of signal delivery, reached only through the core seam.
+  // Platform fan-out and wake ownership around core's serialized chat loop.
   private _host: BackendHost | null = null;
   private readonly _drainTimerTasks = new Map<string, AsyncTaskOwner>();
   protected get host(): BackendHost {
@@ -3954,9 +3907,8 @@ export abstract class ActorAgent extends Think<Env> {
    * the others cannot:
    *   • detached tool calls  — `background_jobs` rows still `running`, which is
    *     the only record of work whose executor may be in another activation;
-   *   • queued turns         — Think submissions `pending`/`running`, i.e. turns
-   *     admitted but not yet answered, including the ones a wake queued while
-   *     nothing was connected;
+   *   • admitted work       — open turns, pending sends and hosted claims the
+   *     workspace's durable wake must finish, even with no connected client;
    *   • managed fibers       — anything durably accepted through the fiber
    *     ledger and not yet settled, `interrupted` included: an interrupted row
    *     is work a recovery is about to re-drive, not work that has stopped;
@@ -3972,9 +3924,8 @@ export abstract class ActorAgent extends Think<Env> {
     if (this._inFlight) return true;
 
     if (this.jobs.countRunningInWorkspace() > 0) return true;
-    const submissions = await this.listSubmissions({ status: ['pending', 'running'] });
 
-    if (submissions.length > 0) return true;
+    if (this.owedUntimedWork()) return true;
     const fibers = await this.listFibers({ status: ['pending', 'running', 'interrupted'] });
 
     if (fibers.length > 0) return true;
@@ -4284,13 +4235,7 @@ export abstract class ActorAgent extends Think<Env> {
     return this.engine.enabled && this.turnWorkMode() !== 'plan';
   }
 
-  /** The public extension seam on the cloud backend — the SAME ExtensionHost
-   *  contract `runChat` drives on the CLI, bridged onto Think's subclass
-   *  hooks: beforeTurn → onTurnStart + transformContext, beforeStep → the
-   *  shared step pipeline (composePrepareStep), beforeToolCall/afterToolCall
-   *  → onToolCall/onToolResult, onChatResponse → onTurnEnd. Persistent for
-   *  the DO activation. The default compaction extension registers here at
-   *  construction (registerCompactionExtension). */
+  /** The shared extension host for this activation's core chat driver. */
   protected readonly extensions = new ExtensionHost();
 
   /** Dynamic-context blocks for this DO activation (core volatile-context.ts),
@@ -4310,20 +4255,8 @@ export abstract class ActorAgent extends Think<Env> {
    *  REPL) is one. */
   protected _turnContinuity: TurnContinuity = 'conversation';
 
-  // The prepared streamText opts of the LAST live chat inference, stashed at
-  // the end of beforeTurn — Think 0.8's one turn-assembly hook on the live
-  // inference path (the effective TurnConfig: final system/messages/tools/
-  // model; Think then only wraps tool execute and re-applies the same values,
-  // so a replay of these opts is the same request modulo per-step cache
-  // markers, which are inert decoration). The shadow eval replays these for
-  // the pending scaffold's host.defaultInference so the A/B measures the
-  // scaffold delta, not a context handicap: the live answer sees the whole
-  // conversation while a task-only reconstruction sees only the task
-  // text — structurally tie-prone. Also the task source for the evolved-
-  // scaffold inference transform. In-memory only: turns are serialized on
-  // the TurnQueue and the shadow eval captures the reference synchronously
-  // in the same onChatResponse, so it cannot be overwritten by a later turn;
-  // after a DO restart the shadow falls back to the task-only reconstruction.
+  // The live turn's program and cancellation, captured for shadow evaluation.
+  // ChatSession serializes turns; a cold activation reconstructs its program.
   private _turnProgram: { readonly program: ActorTurnProgram; readonly signal: AbortSignal | undefined } | null = null;
   /** The signal of the turn running right now, or undefined between turns.
    *  Read per call, never captured: a long-lived collaborator built once (the
@@ -5341,10 +5274,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected onWorkCancelled(_outcome: Omit<CancelWorkOutcome, 'ok'>): void {}
 
-  // ── Think lifecycle overrides ──────────────────────────────────
-
-  /** Think asks for a model before beforeTurn. The prior resolved profile is
-   * a warm hint; beforeTurn always overrides this turn with its fresh profile. */
+  /** Resolve the current profile's model for auxiliary calls and compaction. */
   getModel(): LanguageModel {
     this.actorHandle();
     const spec = this.operationProfile()?.profile.tier.model ?? this.getStoredModelId();
@@ -5554,16 +5484,6 @@ export abstract class ActorAgent extends Think<Env> {
     }, mission);
   }
 
-  /**
-   * Think's fallback system prompt. Never the prompt a turn runs on: Think
-   * reads it before `beforeTurn` and keeps it only when the turn config
-   * carries no `system` (`think.js` `_prepareTurn`), and `beforeTurn` below
-   * always returns one. The soul is the honest answer for the one path that
-   * can still read it.
-   */
-  getSystemPrompt(): string {
-    return this.getSoulText();
-  }
 
   /**
    * Compute a lightweight cache key from CraftStore + quality state. Quality
@@ -5758,54 +5678,10 @@ export abstract class ActorAgent extends Think<Env> {
    * a whole wave one claim ledger and one loop pointer.
    */
 
-  /**
-   * The SDK's transcript store, asserted present at wake.
-   *
-   * Think's own `onStart` hydrates its session before it reaches this actor's
-   * (`@cloudflare/think` 0.17.0 `think.js` `startThink`: the
-   * `transcript-hydration` step runs `_syncMessages`, whose first session read
-   * declares the provider's DDL, and `_onStart` — the subclass's — is awaited
-   * after it; read 2026-09-15). So by the time this runs, the vendor has
-   * declared whatever table it keeps the transcript in, and the question is
-   * whether that table is the one Kinu's readers name. Every conversational
-   * reader in core answers from `assistant_messages` where it exists and
-   * falls to plain `actor_messages` where it does not
-   * (`identity/conversation-store.ts` `hasPaneStore`): right for a local
-   * workspace, and silently WRONG for a hosted workspace whose SDK has moved
-   * the transcript. The Agents SDK's `brisk-chats-branch` changeset lifts
-   * `assistant_messages`, `assistant_compactions` and `assistant_config` into
-   * `cf_agents_session_*` and drops them, after which the fork cut, the
-   * archive export, conversation search, the eval split and
-   * {@link readInheritedContext} would each read an empty default chat and
-   * report a conversation of zero messages.
-   *
-   * Asked BEFORE this actor's own store is built, with `tableExists` and never
-   * by catching. The store's provider is the same vendor provider, so building
-   * it first would declare the table this guard then finds — under every SDK,
-   * including the one that moved it — and the guard would never fire.
-   */
-  protected assertSessionStore(): void {
-    if (tableExists(this.boundSql, 'assistant_messages')) {
-      this.resumeChatTranscript();
-
-      return;
-    }
-
-    throw new Error(
-      'The transcript store booted but the workspace database has no `assistant_messages` table: '
-      + 'the SDK stores the transcript somewhere Kinu\'s conversational readers '
-      + '(fork, archive, search, eval split, inherited context) do not read. Refusing to wake, '
-      + 'because every one of them would otherwise answer with an empty conversation. '
-      + 'This is the Agents SDK session replatform (changeset `brisk-chats-branch`, '
-      + '`cf_agents_session_*`); the readers must move with it before this version ships.',
-    );
-  }
 
   /**
    * ONE actor's recent conversation, handed to each spawned head so it sees the
-   * full context. Capped to the last N messages to bound head LLM context over
-   * long sessions (Think Session already compacts the table at the
-   * orchestrator level; this is a second safety net for head spawns).
+   * full context. Capped to the last N messages for head-spawn context.
    *
    * WHOSE conversation is an argument, defaulting to this object's own actor.
    * The transcript table is `actor_id`-scoped, and a HOSTED actor hiring a
@@ -5814,12 +5690,8 @@ export abstract class ActorAgent extends Think<Env> {
    * was never party to.
    */
   protected readInheritedContext(actor: ActorHandle = this.actorHandle()): SerializedMessage[] {
-    // The agents SDK's session provider creates assistant_messages on its first
-    // session read — Think's boot on a hosted activation, so an agent whose
-    // Think never booted (the bun harness) has none. Asked directly:
-    // catching instead made "no conversation yet" indistinguishable from a read
-    // that blew up, and a head handed [] reports "I found nothing" rather than
-    // "I could not see the parent" — the defect owners actually hit.
+    // Only the root uses the provider-backed pane store. Read failures must
+    // propagate rather than masquerading as an empty conversation.
     if (!usesPaneStore(this.boundSql, actor)) return [];
 
     type Row = { id: string; role: string; content: string; created_at: string };
@@ -6001,14 +5873,6 @@ export abstract class ActorAgent extends Think<Env> {
     return this.modelCatalog.acceptedMedia();
   }
 
-  // ── Think lifecycle hooks ──────────────────────────────────────
-
-  // Tools the model is allowed to call. Think merges workspace tools (read, write,
-  // edit, list, find, grep, delete) with ours, bloating the request by ~2800 tokens.
-  // activeTools restricts the model to the built-in tools + session context tools,
-  // preventing Think's workspace tools from being sent in the request payload.
-  // BUILTIN_TOOLS is sourced from @kinu.run/core/tools/registry (single truth).
-
   /**
    * The turn-local message tail: the unapproved instruction files, then the
    * volatile turn-local block — the order they ride ahead of the turn in.
@@ -6061,8 +5925,7 @@ export abstract class ActorAgent extends Think<Env> {
    * The loop has opened the turn (the run row, the lease); this backend
    * supplies what only it knows — the owner-side reads, the profile, the
    * skills and MCP tools, the prompt, the model, the tools — and places the
-   * turn's input on the actor's working history. Everything after the reads is
-   * `assembleTurn`, unchanged from the turn Think used to run.
+   * turn's input on the actor's working history through the shared assembly path.
    */
   protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
     this._turnItem = item;
@@ -6387,10 +6250,8 @@ export abstract class ActorAgent extends Think<Env> {
       this.rt.executionRouter?.getProvider('sandbox'),
     );
 
-    // The per-turn system prompt is ALWAYS assembled here (TurnConfig.system
-    // overrides) — Think calls getSystemPrompt() BEFORE beforeTurn, so only
-    // this path can reflect the turn's active skills and MCP tools. It is the
-    // byte-stable cache prefix: it changes only on real agent events (soul,
+    // Assemble after resolving this turn's active skills and MCP tools.
+    // The byte-stable cache prefix changes only on real agent events (soul,
     // model, skill set, tool surface, AGENTS.md). System state — facts, the
     // live executor status — rides the dynamic ledger's frozen blocks, and
     // turn-local state — the device notice, activation reasons — rides one
@@ -6404,10 +6265,7 @@ export abstract class ActorAgent extends Think<Env> {
       executors: execs,
       availableTools: promptActiveTools,
       agentsActions: resolvedAgentActions,
-      // The temporary rung is wired wherever this actor holds team deps, and
-      // the ladder's middle rung has to be advertised on the ONE authoritative
-      // prompt (this object; TurnConfig.system overrides getSystemPrompt's
-      // cached base) or no shipped turn ever mentions it.
+      // Advertise the temporary rung only when this actor can execute it.
       temporaryAsk: turnActorDeps.team?.temporary !== undefined,
       externalTools: mcpToolNames.filter(toolAllowed)
         .map((name) => ({ name, source: 'mcp' as const })),
@@ -6630,7 +6488,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  — a signal's `kinuEvent` / `signalId` / mission labels, the composer's
    *  mode, or nothing at all for a chat turn the operator typed. With no turn
    *  running, the newest user row's: the idle reads (the tool listing) narrow
-   *  their mode off the last message, as they did off Think's cache. */
+   *  their mode off the last durable user message. */
   protected turnUserMetadata(): JsonObject | undefined {
     // The item is the turn's for as long as the loop holds the turn — through
     // its settle — and a finished turn's item names nothing any more. Read off

@@ -21,8 +21,7 @@
  */
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
 import type { SessionMessage } from 'agents/experimental/memory/session';
-import type { ChatResponseResult, TurnConfig } from '@cloudflare/think';
-import type { JsonObject } from '@kinu.run/core';
+import type { ChatOptions, JsonObject } from '@kinu.run/core';
 
 /** What the loop was about to send the model for one admitted turn. */
 export interface PreparedRequest {
@@ -37,7 +36,7 @@ export interface PreparedRequest {
   readonly model: LanguageModel | string | undefined;
   readonly tools: ToolSet;
   readonly activeTools: readonly string[] | undefined;
-  readonly providerOptions: TurnConfig['providerOptions'];
+  readonly providerOptions: ChatOptions['providerOptions'];
 }
 
 /** The answer a turn settles with, as the suite scripts it. */
@@ -45,7 +44,7 @@ export interface ScriptedAnswer {
   readonly messageId: string;
   readonly text?: string;
   readonly parts?: UIMessage['parts'];
-  readonly status?: ChatResponseResult['status'];
+  readonly status?: RanTurn['status'];
   readonly error?: string;
   readonly requestId?: string;
   readonly continuation?: boolean;

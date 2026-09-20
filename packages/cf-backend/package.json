@@ -20,7 +20,6 @@
     "@cloudflare/containers": "0.3.7",
     "@cloudflare/kumo": "^1.18.0",
     "@cloudflare/sandbox": "0.12.8",
-    "@cloudflare/think": "^0.17.0",
     "@kinu.run/agent-utils": "workspace:*",
     "@kinu.run/compaction": "workspace:*",
     "@kinu.run/core": "workspace:*",

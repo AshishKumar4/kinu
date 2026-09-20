@@ -15,16 +15,9 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 
-// The one production class hosted here — see steer-probe.ts for the charter exception.
-export { SteerProbeDO } from './steer-probe';
-
-// The eviction probes — the same charter exception, for the recovery machinery.
 export { EvictionProbeDO, WitnessDO } from './eviction-probe';
 
 export { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
-
-// The step-cap probes — the same charter exception, for the turn loop's bound.
-export { CappedTurnProbeDO, UnboundedTurnProbeDO } from './step-cap-probe';
 
 // The spend aggregate — the same charter exception, for the one production read
 // whose method is platform SQLite features (`WITH`, `json_extract`).

@@ -1,5 +1,5 @@
 /**
- * CF runtime adapter — bridges Think's DO context to core's AgentRuntime.
+ * CF runtime adapter — bridges the Agents DO context to core's AgentRuntime.
  *
  * ONE DURABLE OBJECT PER WORKSPACE. Everything a workspace stores is in the
  * owning actor's own `ctx.storage.sql`:
@@ -418,7 +418,7 @@ export interface CFRuntimeHooks {
 }
 
 /**
- * Build a full AgentRuntime from a Think agent's DO context.
+ * Build a full AgentRuntime from the workspace's DO context.
  */
 export function createCFRuntime(
   agent: AgentHost,

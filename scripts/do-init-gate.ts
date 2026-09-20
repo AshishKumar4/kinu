@@ -38,12 +38,9 @@ const START_DEADLINE = 'runRestoreStep';
  *     same hook, wrapped in `_withFiberRecoveryTimeout`. Governed anyway,
  *     because a timeout is not a bound: it abandons the work and leaves the gate
  *     held for however long the timeout is.
- *   • `onChatRecovery` — `@cloudflare/think/dist/think.js:7824`, invoked from
- *     that internal handler while the gate is held. No Kinu class overrides it
- *     today; the name is here so the first one that does is governed.
  */
 const RECOVERY_HOOKS: readonly string[] = [
-  'onFiberRecovered', '_handleInternalFiberRecovery', 'onChatRecovery',
+  'onFiberRecovered', '_handleInternalFiberRecovery',
 ];
 
 /**
@@ -893,7 +890,7 @@ if (import.meta.main) {
       + '\n  discipline (hand every re-drive to a detached durable carrier, never join one) is'
       + ' held by packages/cf-backend/tests/unit-eviction-durability.test.ts, not here;'
       + `\n  recovery hooks outside \`RECOVERY_HOOKS\` — the set is pinned from the vendored`
-      + ' agents/think chains, so a vendor bump that awaits a NEW subclass hook in the gate'
+      + ' Agent lifecycle chain, so a vendor bump that awaits a NEW subclass hook in the gate'
       + '\n  is ungoverned until the name is added here'
       + `;\n  what an onStart-spawned call REACHES beyond the ${String(MODEL_SINKS.length)} pinned`
       + ' `MODEL_SINKS` names: the rule is by NAME, so a helper spawned there that reaches a'

@@ -1,8 +1,8 @@
 /**
  * LocalAgentSession — the local backend's realization of the Kinu agent loop.
  *
- * The cf-backend runs the agent inside a @cloudflare/think Durable Object; this
- * is its peer for a local Bun process. It owns the SAME core orchestration
+ * The cf-backend runs the shared agent loop inside an Agents Durable Object;
+ * this is its peer for a local Bun process. It owns the same core orchestration
  * (AgentOrchestrator: per-turn accounting, session-evolution cadence, the
  * event→turn reactor) plus background jobs over a durable local fiber — and
  * implements the BackendHost seam so all of that is wired identically to the DO.
