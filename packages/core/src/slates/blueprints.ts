@@ -15,7 +15,6 @@
  * nothing else. Admission writes records and files and starts no process.
  */
 import { CompatRange, ContentRef } from '@agent-core/core';
-import { MediaHint } from '@agent-core/core/content';
 import { BindingName, BindingRequirement, FacetPackageId } from '@agent-core/core/facets';
 import { SlateId, SlatePublicationId, SlateSkeleton, SlateVersionId } from '@agent-core/core/slates';
 import * as v from 'valibot';
@@ -23,7 +22,7 @@ import { KinuError } from '../obs/error';
 import { secretSightings, type SecretSighting } from '../safety/secret-patterns';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { nanoid } from '../utils/nanoid';
-import type { SqliteSlateContentStore } from './content';
+import type { WorkspaceSlateContentStore } from './content';
 import { credentialedBindings, describeBindings, parseSlateProject, type SlateBindingDeclaration, type SlateProject } from './project';
 import type { WorkspaceSlates } from './runtime';
 import { type NewSlateShare, type ShareUser, type SlateShareStore } from './shares';
@@ -40,9 +39,7 @@ const TreeEntry = v.variant('kind', [
   v.object({ path: TreePath, kind: v.literal('symlink'), target: v.string() }),
 ]);
 
-/** The shape `SlateFiles.capture` serialises. Read here rather than through
- *  `SlateFiles` because a blueprint never touches the VFS: it reads and writes
- *  content-store bytes only. */
+/** The retained manifest shape; blueprint operations never read live source. */
 const Tree = v.object({ mode: v.number(), entries: v.array(TreeEntry) });
 
 type Tree = v.InferOutput<typeof Tree>;
@@ -118,7 +115,7 @@ export interface BlueprintReading {
 
 export interface WorkspaceBlueprintsDeps {
   readonly slates: WorkspaceSlates;
-  readonly content: SqliteSlateContentStore;
+  readonly content: WorkspaceSlateContentStore;
   readonly shares: SlateShareStore;
 }
 
@@ -267,7 +264,7 @@ export class WorkspaceBlueprints {
       if (retained.ref.value !== entry.content) throw new KinuError('bad_input', `The bytes for ${entry.path} are not the bytes the blueprint names`);
     }
 
-    const source = this.deps.content.retain(new TextEncoder().encode(bundle.tree), new MediaHint('application/json')).ref;
+    const source = this.deps.content.retain(new TextEncoder().encode(bundle.tree)).ref;
     const project = this.project(tree);
     const admitted = await this.deps.slates.instantiate(skeleton, source);
 
@@ -285,7 +282,7 @@ export class WorkspaceBlueprints {
   }
 
   private retainTree(tree: Tree): ContentRef {
-    return this.deps.content.retain(new TextEncoder().encode(JSON.stringify(tree)), new MediaHint('application/json')).ref;
+    return this.deps.content.retain(new TextEncoder().encode(JSON.stringify(tree))).ref;
   }
 
   private project(tree: Tree): SlateProject {

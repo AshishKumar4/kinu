@@ -1,12 +1,14 @@
 import { expect, test } from 'bun:test';
 import { WorkspaceId } from '@agent-core/core';
 import { SlateId } from '@agent-core/core/slates';
-import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SlateFiles, slateDirectory } from '../src/slates/files';
-import { SqliteSlateContentStore } from '../src/slates/content';
+import { WorkspaceSlateContentStore } from '../src/slates/content';
 import { SqliteSlateStore } from '../src/slates/store';
 import { WorkspaceSlates } from '../src/slates/runtime';
 import { createTestWorkspace, createWorkspaceBundle, makeSqlExec } from './helpers';
+import { Database } from 'bun:sqlite';
+import { archiveSqlFromDatabase, writeWorkspaceArchive, restoreWorkspaceArchive } from '../src/identity/archive';
 
 test('Slate source operations require Nimbus atomic-embedding rollback coherence', async () => {
   const ws = createTestWorkspace();
@@ -15,7 +17,7 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
     const session = await createWorkspaceBundle(ws.db).session();
     const vfs = session.vfs.as(CRED_SESSION_USER);
     const store = new SqliteSlateStore(makeSqlExec(ws.db), (body) => ws.db.transaction(body)());
-    const content = new SqliteSlateContentStore(makeSqlExec(ws.db), (body) => ws.db.transaction(body)());
+    const content = new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL));
     let allowed = true;
     const sourceWriteFailure = new Error('source write failed');
     let failWrite = false;
@@ -27,7 +29,7 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
 
         if (failWrite && args[0].endsWith('/server.js')) throw sourceWriteFailure;
       },
-    }, content);
+    }, content, (body) => session.vfs.withTransaction(body));
 
     const slates = new WorkspaceSlates({
       workspaceId: new WorkspaceId('workspace'), store, files,
@@ -57,6 +59,25 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
     await slates.restore(id, first.id);
     expect(vfs.readFileString(`${directory}/server.js`)).toBe('first version');
     expect(store.getVersion(second.id)?.source.value).toBe(second.source.value);
+    const archive = await writeWorkspaceArchive(archiveSqlFromDatabase(ws.db), { workspace: 'workspace', source: 'cloud' });
+    const restored = new Database(':memory:');
+
+    try {
+      await restoreWorkspaceArchive(archiveSqlFromDatabase(restored), archive);
+      const restoredSession = await createWorkspaceBundle(restored).session();
+      const restoredContent = new WorkspaceSlateContentStore(restoredSession.vfs.as(CRED_KERNEL));
+
+      const restoredFiles = new SlateFiles(restoredSession.vfs.as(CRED_SESSION_USER), restoredContent,
+        (body) => restoredSession.vfs.withTransaction(body));
+
+      restoredSession.vfs.withTransaction(() => restoredFiles.restore(id, second.source));
+      expect(restoredSession.vfs.as(CRED_SESSION_USER).readFileString(directory + '/server.js')).toBe('second version');
+      restoredSession.vfs.withTransaction(() => restoredFiles.restore(id, first.source));
+      expect(restoredSession.vfs.as(CRED_SESSION_USER).readFileString(directory + '/server.js')).toBe('first version');
+    } finally {
+      restored.close();
+    }
+
     failWrite = true;
     await expect(slates.restore(id, second.id)).rejects.toHaveProperty('cause', sourceWriteFailure);
     expect(vfs.readFileString(`${directory}/server.js`)).toBe('first version');
@@ -65,6 +86,16 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
     allowed = false;
     await expect(slates.restore(id, second.id)).rejects.toThrow('turn no longer owns mutation');
     expect(vfs.readFileString(`${directory}/server.js`)).toBe('first version');
+    expect(store.getSlate(id)?.source.value).toBe(first.source.value);
+    allowed = true;
+    const tree = files.readTree(second.source);
+    const file = tree.entries.find((entry) => entry.kind === 'file' && entry.path === 'server.js');
+
+    if (file?.kind !== 'file') throw new Error('version has no server.js');
+    const retainedPath = '/etc/kinu-slate-content/' + file.content.slice('sha256:'.length);
+    session.vfs.as(CRED_KERNEL).unlink(retainedPath);
+    await expect(slates.restore(id, second.id)).rejects.toThrow();
+    expect(vfs.readFileString(directory + '/server.js')).toBe('first version');
     expect(store.getSlate(id)?.source.value).toBe(first.source.value);
   } finally {
     ws.db.close();

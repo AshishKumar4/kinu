@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
 import { SlateId } from '@agent-core/core/slates';
-import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SlateFiles, slateDirectory } from '../src/slates/files';
-import { SqliteSlateContentStore } from '../src/slates/content';
-import { createTestWorkspace, createWorkspaceBundle, makeSqlExec } from './helpers';
+import { WorkspaceSlateContentStore } from '../src/slates/content';
+import { createTestWorkspace, createWorkspaceBundle } from './helpers';
 
 test('a Slate tree restores binaries, executable modes, symlinks and empty directories', async () => {
   const ws = createTestWorkspace();
@@ -11,8 +11,8 @@ test('a Slate tree restores binaries, executable modes, symlinks and empty direc
   try {
     const session = await createWorkspaceBundle(ws.db).session();
     const vfs = session.vfs.as(CRED_SESSION_USER);
-    const content = new SqliteSlateContentStore(makeSqlExec(ws.db), (body) => ws.db.transaction(body)());
-    const files = new SlateFiles(vfs, content);
+    const content = new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL));
+    const files = new SlateFiles(vfs, content, (body) => session.vfs.withTransaction(body));
     const id = new SlateId('notes');
     const directory = slateDirectory(id);
     vfs.mkdir(`${directory}/empty`, { recursive: true });
@@ -37,9 +37,6 @@ test('a Slate tree restores binaries, executable modes, symlinks and empty direc
     files.restore(fork, version);
     vfs.writeFile(`${slateDirectory(fork)}/run`, 'fork changes');
     expect(vfs.readFile(`${directory}/run`)).toEqual(new Uint8Array([0, 255, 3]));
-    const materialized = files.materialize(version);
-    expect(vfs.readFileString(`${materialized}/protected/config`)).toBe('read-only source');
-    expect(vfs.stat(`${materialized}/protected`).mode & 0o777).toBe(0o555);
   } finally {
     ws.db.close();
   }

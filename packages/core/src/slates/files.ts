@@ -1,12 +1,9 @@
 import { ContentRef } from '@agent-core/core';
-import { MediaHint } from '@agent-core/core/content';
 import type { SlateId } from '@agent-core/core/slates';
-import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import * as v from 'valibot';
 import { workspacePath } from '../vfs/workspace-path';
 import { SlateDirectoryName } from './rpc';
-import type { SqliteSlateContentStore } from './content';
-import { nanoid } from '../utils/nanoid';
+import type { WorkspaceSlateContentStore } from './content';
 import { KinuError } from '../obs/error';
 
 export { SlateDirectoryName };
@@ -31,8 +28,28 @@ export function slateDirectory(id: SlateId): string {
   return workspacePath('slates/' + name.output);
 }
 
+/** Synchronous because source and metadata share one host transaction. */
+export interface SlateFileTree {
+  exists(path: string): boolean;
+  stat(path: string): { mode: number };
+  lstat(path: string): { type: string; mode: number };
+  readdir(path: string): { name: string; type: string }[];
+  readlink(path: string): string;
+  readFileUncached(path: string): Uint8Array;
+  mkdir(path: string, options?: { recursive?: boolean; mode?: number }): void;
+  writeFile(path: string, content: Uint8Array, options?: { mode?: number }): void;
+  symlink(target: string, path: string): void;
+  chmod(path: string, mode: number): void;
+  removeRecursive(path: string): number;
+}
+
 export class SlateFiles {
-  constructor(private readonly vfs: CredentialedVfs, private readonly content: SqliteSlateContentStore) {}
+  constructor(
+    private readonly vfs: SlateFileTree,
+    private readonly content: WorkspaceSlateContentStore,
+    /** Owns the outermost shared VFS/metadata transaction; never nest or await. */
+    readonly transaction: <Result>(body: () => Result) => Result,
+  ) {}
 
   capture(id: SlateId): ContentRef {
     const root = slateDirectory(id);
@@ -59,19 +76,13 @@ export class SlateFiles {
 
     walk(root, '');
 
-    return this.content.retain(new TextEncoder().encode(JSON.stringify({ mode: this.vfs.stat(root).mode & 0o7777, entries })), new MediaHint('application/json')).ref;
+    return this.content.retain(new TextEncoder().encode(JSON.stringify({ mode: this.vfs.stat(root).mode & 0o7777, entries }))).ref;
   }
 
   readTree(source: ContentRef) {
     return v.parse(Tree, JSON.parse(new TextDecoder().decode(this.content.read(source))));
   }
 
-  materialize(source: ContentRef): string {
-    const root = workspacePath(`.slate-sources/${nanoid()}`);
-    this.writeTree(root, source);
-
-    return root;
-  }
 
   restore(id: SlateId, source: ContentRef): void {
     this.writeTree(slateDirectory(id), source);

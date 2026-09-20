@@ -2,9 +2,9 @@ import { exports } from 'cloudflare:workers';
 import { WorkspaceId } from '@agent-core/core';
 import { SlateId, SlateVersionId } from '@agent-core/core/slates';
 import * as v from 'valibot';
-import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
-  SlateFiles, SlateShareStore, SqliteSlateContentStore, SqliteSlateStateStore, SqliteSlateStore, WorkspaceBlueprints, WorkspaceSlates, slateDirectory,
+  SlateFiles, SlateShareStore, WorkspaceSlateContentStore, SqliteSlateStateStore, SqliteSlateStore, WorkspaceBlueprints, WorkspaceSlates, slateDirectory,
   type BlueprintReading, type DurableAppIdentity, type DurableApps, type ShareUser,
 } from '@kinu.run/core/slates';
 import { SlateLiveShareStore, initSlateLiveShareTables, WorkspaceLiveShares } from '@kinu.run/core/slates';
@@ -110,7 +110,7 @@ interface RunningSlate {
  * and it binds no port.
  */
 export class SlateHost {
-  private readonly content: SqliteSlateContentStore;
+  private content: WorkspaceSlateContentStore | undefined;
   private readonly resident: ResidentSlateProcesses;
   private readonly store: SqliteSlateStore;
   private readonly state: SqliteSlateStateStore;
@@ -121,7 +121,6 @@ export class SlateHost {
   private readonly live: SlateLiveShareStore;
 
   constructor(private readonly deps: SlateHostDeps) {
-    this.content = new SqliteSlateContentStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
     this.resident = new ResidentSlateProcesses({ session: deps.session, facetManager: deps.facetManager });
     this.store = new SqliteSlateStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
     this.state = new SqliteSlateStateStore(deps.ctx.storage.sql);
@@ -142,8 +141,11 @@ export class SlateHost {
    * admission lands files as the workspace root the way a fork does.
    */
   private async blueprints(): Promise<WorkspaceBlueprints> {
-    return new WorkspaceBlueprints({
-      slates: await this.sources(CRED_SESSION_USER), content: this.content,
+    const slates = await this.sources(CRED_SESSION_USER);
+
+    if (this.content === undefined) throw new KinuError('io', 'Slate content was not initialized');
+
+    return new WorkspaceBlueprints({ slates, content: this.content,
       shares: new SlateShareStore(this.deps.ctx.storage.sql),
     });
   }
@@ -477,13 +479,14 @@ export class SlateHost {
 
   private async sources(cred: VfsCred): Promise<WorkspaceSlates> {
     const session = await this.deps.session();
+    this.content ??= session.vfs.withTransaction(() => new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL)));
     const key = slateCredentialKey(cred);
     let runtime = this.sourceRuntimes.get(key);
 
     if (runtime === undefined) {
       runtime = new WorkspaceSlates({
         workspaceId: new WorkspaceId(this.deps.workspace), store: this.store,
-        files: new SlateFiles(session.vfs.as(cred), this.content),
+        files: new SlateFiles(session.vfs.as(cred), this.content, (body) => session.vfs.withTransaction(body)),
         mutations: { mutate: async (request, mutation) => {
           if (request.workspaceId.value !== this.deps.workspace) throw new KinuError('denied', 'Slate mutation belongs to another workspace');
 

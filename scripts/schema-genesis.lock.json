@@ -916,16 +916,6 @@
     "evaluation_json",
     "created_at"
   ],
-  "slate_content_chunks@packages/core/src/state/workspace-schema.ts": [
-    "digest",
-    "offset",
-    "bytes"
-  ],
-  "slate_content@packages/core/src/state/workspace-schema.ts": [
-    "digest",
-    "size",
-    "hint"
-  ],
   "slate_deployment_reservations@packages/core/src/state/workspace-schema.ts": [
     "id",
     "workspace_id",

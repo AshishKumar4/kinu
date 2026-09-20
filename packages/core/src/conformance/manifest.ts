@@ -481,8 +481,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     slate_previews: EVERYWHERE,
     slate_deployment_reservations: EVERYWHERE,
     slate_resource_reservations: EVERYWHERE,
-    slate_content: EVERYWHERE,
-    slate_content_chunks: EVERYWHERE,
     slate_invocations: EVERYWHERE,
     slate_receipts: EVERYWHERE,
     // The authored slate's durable KV — the `this.storage` surface — lives in

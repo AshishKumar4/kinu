@@ -9,7 +9,7 @@
  */
 export { SqliteSlateStore } from './store';
 
-export { SqliteSlateContentStore } from './content';
+export { WorkspaceSlateContentStore, type SlateContentFiles } from './content';
 
 export { SqliteSlateInvocations, type SlateInvocationAuthority } from './invocations';
 

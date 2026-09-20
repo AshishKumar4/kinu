@@ -14,6 +14,7 @@ import * as v from 'valibot';
 import { newWebSocketRpcSession } from 'capnweb';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
 import { workspaceGenerationStorage } from '@kinu.run/core/workspace';
@@ -98,6 +99,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
     initWorkspaceSchema({ execRaw: (ddl: string) => ctx.storage.sql.exec(ddl), sql, exec });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
+    seedBaseFilesystem(this.vfs, ['home', 'etc']);
     // The supervisor's pids are generation-scoped, exactly as a hosted
     // workspace's are: each boot of this object adopts the persisted counter's
     // next generation, so a slate process re-spawned after an eviction is
