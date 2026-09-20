@@ -26,6 +26,7 @@ import {
   UnsafeUrlError,
   stripBase64Images,
   TOOL_OUTPUT_DIR,
+  DEFAULT_TOOL_RESULT_MAX_CHARS,
   decodeJsonValue,
   projectJsonValue,
   type CraftedToolExecute,
@@ -589,7 +590,7 @@ describe('web builtin', () => {
     await expect(execute({ action: 'fetch' })).rejects.toMatchObject({ code: 'bad_input', message: 'web.fetch requires `url`' });
   });
 
-  test('action=fetch clamps a big page to a head with a VFS restore path', async () => {
+  test('action=fetch clamps a big page to a head with a VFS restore path, header included in the budget', async () => {
     const { rt } = createTestRuntime();
     const big = '<html><body>' + 'word '.repeat(20000) + '</body></html>';
     const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: big, headers: { 'content-type': 'text/html' } })).fetch });
@@ -597,11 +598,14 @@ describe('web builtin', () => {
     const out = await execute({ action: 'fetch', url: 'https://example.com/big' });
 
     expect(out).toContain('Source: https://example.com/big');
-    expect(out).toContain('[output truncated');
+    expect(out).toContain('[truncated;');
     expect(out).toContain(`${TOOL_OUTPUT_DIR}/`);
+    // The provenance header is prepended after the clamp, so it is reserved
+    // inside the cap rather than charged on top of it.
+    expect(out.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
+
     // The full output is restorable from the VFS.
-    const m = /full output saved to (\S+)/.exec(out);
-    const savedPath = m?.[1];
+    const savedPath = /full result at (\S+)\]/.exec(out)?.[1];
     expect(savedPath).toContain(TOOL_OUTPUT_DIR);
 
     if (savedPath === undefined) throw new Error(`Expected a saved-output path in: ${out}`);
