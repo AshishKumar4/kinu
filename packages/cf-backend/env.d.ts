@@ -14,6 +14,7 @@ import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
 import type { DeployRunDO } from "./src/deploy/deploy-do";
 import type { CodemodeEgress } from "./src/codemode-egress";
 import type { SlateBinding } from "./src/slates/bindings";
+import type { MossaicShardDO, MossaicUserDO } from "./src/server";
 import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
 
 // This file has top-level imports (for the DO class generics below), which
@@ -61,6 +62,13 @@ declare global {
      *  door): the step ledger, the run key's digest, and the Cloudflare tokens
      *  the run holds until the last step hands them to the new Worker. */
     DeployRunDO: DurableObjectNamespace<DeployRunDO>;
+    /** The user-level shared Drive's tenant objects (Mossaic). Both are the
+     *  SDK's fixed binding names; `createVFS(env, { tenant })` reads the first
+     *  and the tenant object reads the second. OPTIONAL because a test worker
+     *  that binds neither still composes a workspace: the `/shared` mount then
+     *  states its absence instead of failing the first file call. */
+    MOSSAIC_USER?: DurableObjectNamespace<MossaicUserDO>;
+    MOSSAIC_SHARD?: DurableObjectNamespace<MossaicShardDO>;
     /** Browser sessions, one-time OAuth state, and CLI browser-approval state.
      *  Everything in it expires on its own; nothing in it is a source of truth. */
     AUTH_KV: KVNamespace;

@@ -9,6 +9,7 @@
     "smoke:workspace": "bun scripts/smoke-workspace.ts",
     "types": "wrangler types env.d.ts --include-runtime false"
   },
+  "//dependencies:@mossaic/sdk": "The SDK is vendored SOURCE under third_party/mossaic and built into its own ignored dist by the root prepare hook; `workspace:*` is the only way to name it, because upstream publishes no npm package. The three specifiers its BUILT dist actually imports and cannot resolve on its own are declared here, derived from `dist/*.js` rather than from upstream's manifest: `jose` (2 sites, already present for Kinu's own use), `yjs` (7) and `y-protocols/awareness` (2). `zod/v4` is already covered by zod. `yjs` is EXACT at the version the SDK's peerDependencies name, not a caret, because the bundle externalises it deliberately — upstream's tsdown config says a second copy gives consumers two `Y.Doc` constructors with different module identities and silently broken edits — and because a caret already drifted the tree to 13.6.32 through y-protocols' `^13.0.0` peer while the SDK asks for 13.6.31. NOT declared: `hono`, which the worker/core routes import but no SDK entry point reaches, so it appears nowhere in dist; and `isomorphic-git`, an optional peer named only in comments and never imported. Both would be dependencies on the strength of upstream's manifest rather than of a real import.",
   "dependencies": {
     "@agent-core/core": "workspace:*",
     "@ai-sdk/anthropic": "3.0.89",
@@ -26,6 +27,7 @@
     "@kinu.run/devbox": "workspace:*",
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@mossaic/sdk": "workspace:*",
     "@nimbus-sh/core": "0.10.0",
     "@nimbus-sh/fabric": "0.6.0",
     "@nimbus-sh/sdk": "0.7.0",
@@ -55,6 +57,8 @@
     "simple-icons": "^16.31.0",
     "valibot": "^1.4.1",
     "vgpu": "0.4.1",
+    "y-protocols": "^1.0.7",
+    "yjs": "13.6.31",
     "zod": "^4.3.6"
   },
   "devDependencies": {

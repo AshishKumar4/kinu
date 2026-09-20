@@ -125,6 +125,14 @@ export { ContainerProxy } from "@cloudflare/sandbox";
 
 export { UserDO } from "./user/user-do";
 
+// The user-level shared Drive: Mossaic's two Durable Object classes, built
+// from the vendored SDK source (scripts/mossaic-sdk.ts). Re-exported under
+// Kinu names because `UserDO` is already this Worker's own per-user object;
+// the SDK addresses them by BINDING name (`MOSSAIC_USER`, `MOSSAIC_SHARD`),
+// never by class name, so the rename costs nothing. One Mossaic tenant per
+// Kinu user, mounted at `/shared` in every workspace that user owns.
+export { UserDO as MossaicUserDO, ShardDO as MossaicShardDO } from "@mossaic/sdk";
+
 // Synthetic monitoring's durable state: open incidents + the alert outbox.
 export { MonitorDO } from "./monitor/monitor-do";
 

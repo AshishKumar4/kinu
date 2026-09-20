@@ -111,11 +111,16 @@ async function harness(opts: {
     ASSETS: { fetch: async () => new Response('<html></html>', { headers: { 'content-type': 'text/html' } }) },
   });
 
-  const ctx: ExecutionContext = {
+  const partialCtx: Partial<ExecutionContext> = {
     props: {},
     waitUntil(promise: Promise<unknown>) { retained.push(promise); },
     passThroughOnException() {},
   };
+
+  // SAFETY: the route reads exactly the `waitUntil` constructed above, whose
+  // retained promises the suite settles; `tracing` (required since
+  // workers-types 4.20260702.1) is never reached by the code under test.
+  const ctx = partialCtx as ExecutionContext;
 
   return {
     env,

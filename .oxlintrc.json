@@ -75,6 +75,7 @@
     "node_modules",
     "dist",
     "tools/oxlint/anti-slop",
+    "third_party/mossaic",
     "scripts/security-scanner.bundle.js"
   ]
 }

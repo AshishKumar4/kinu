@@ -224,11 +224,17 @@ function hostActor(): Actor {
     SupervisorRPC: ({ props }: { props: SupervisorProps }) => {
       supervisorBindings.push(props);
 
-      return new SupervisorRPC({
+      const partialCtx: Partial<ExecutionContext<SupervisorProps>> = {
         props,
         waitUntil: () => { throw new Error('unexpected supervisor background work'); },
         passThroughOnException: () => { throw new Error('unexpected supervisor pass-through'); },
-      }, actorEnv);
+      };
+
+      // SAFETY: the supervisor reads exactly the `props` constructed above, and
+      // the two throwing members constructed with it prove it schedules no
+      // background work; `tracing` (required since workers-types
+      // 4.20260702.1) is never reached by the code under test.
+      return new SupervisorRPC(partialCtx as ExecutionContext<SupervisorProps>, actorEnv);
     },
   };
 

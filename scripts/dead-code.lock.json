@@ -1,6 +1,7 @@
 [
   "packages/cf-backend/package.json#@ai-sdk/anthropic (unused-dependency)",
   "packages/cf-backend/package.json#@ai-sdk/openai (unused-dependency)",
+  "packages/cf-backend/package.json#y-protocols (unused-dependency)",
   "packages/cf-backend/src/lib/user-api.ts#PollResult (unreferenced)",
   "packages/cf-backend/src/lib/user-api.ts#RegisteredDevice (unreferenced)",
   "packages/cf-backend/src/sandbox-lifecycle.ts#SandboxLifecycleStage (unreferenced)",

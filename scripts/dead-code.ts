@@ -94,7 +94,7 @@ import * as v from 'valibot';
 import { assertMeasured, finding, reconcile, report, writeLock } from './gate-ratchet';
 import { parseJsonc } from './jsonc';
 import {
-  isDocument, isLockfile, isManifest, isParseable, isProductSource, isStylesheet,
+  isDocument, isLockfile, isManifest, isParseable, isProductSource, isStylesheet, isVendoredSource,
   isTestScaffold, isTextSource, trackedFiles,
 } from './sources';
 import {
@@ -577,6 +577,12 @@ export const DEPENDENCY_REASONS = {
     'the same redundant duplicate: packages/core/src/providers/openai.ts:8 and '
     + 'packages/cli-backend/src/opencode-provider.ts:17 import it through the root pin, '
     + 'and no cf-backend file imports it.',
+  'packages/cf-backend/package.json#y-protocols (unused-dependency)':
+    'declared HERE and imported from the BUILT Mossaic SDK — third_party/mossaic/sdk/'
+    + 'dist/*.js imports `y-protocols/awareness` (2 sites) and upstream\'s manifest '
+    + 'names it as a peer the consumer supplies, so this declaration is what hoisting '
+    + 'resolves those imports against. No cf-backend source file imports it; the '
+    + 'SDK\'s own dist is not in the corpus, which is why the census cannot see the importer.',
   'packages/devbox/package.json#@cloudflare/containers (unused-dependency)':
     'declared HERE and imported from cf-backend — packages/cf-backend/src/egress/'
     + 'outbound.ts:53 type-imports it while cf-backend declares nothing, so this '
@@ -615,7 +621,9 @@ if (import.meta.main) {
   const files = production.files.filter(inScope).sort();
 
   const tracked = trackedFiles();
-  const manifests = tracked.filter(isManifest);
+  // A vendored closure's manifest is upstream's declaration over upstream's
+  // files, pinned by digest; it is not a statement about what this tree imports.
+  const manifests = tracked.filter((file) => isManifest(file) && !isVendoredSource(file));
   const installed = readInstalled(read(tracked.filter(isLockfile)[0] ?? 'bun.lock'));
 
   const dependencies = unusedDependencies(

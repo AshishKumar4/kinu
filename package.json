@@ -11,12 +11,14 @@
     "cloudflare",
     "durable-objects"
   ],
+  "//workspaces": "third_party/mossaic/sdk is @mossaic/sdk, vendored SOURCE at one upstream commit because upstream publishes no npm package. It is named exactly, not by a `third_party/*` glob: the closure it builds from (shared/, worker/core/) sits beside it at the upstream-relative paths its own imports and its `@shared` alias require, and those are vendored bytes, not packages.",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "third_party/mossaic/sdk"
   ],
   "scripts": {
     "preinstall": "bun scripts/refuse-linked-install.ts",
-    "prepare": "bun scripts/ladder.ts --install-hooks",
+    "prepare": "bun scripts/ladder.ts --install-hooks && bun scripts/mossaic-sdk.ts",
     "test": "bun run test:core && bun run test:spine",
     "test:core": "bun scripts/ladder.ts --run bun test --timeout=0 --parallel=4 packages/core/",
     "test:spine": "bun scripts/ladder.ts --run bun test --timeout=0 packages/agent-core/ packages/agent-utils/ packages/compaction/",
@@ -28,7 +30,7 @@
     "coverage": "bun scripts/coverage.ts",
     "coverage:check": "bun scripts/coverage-check.ts",
     "typecheck": "tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cf-backend/tests/workerd && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/devbox && tsc --noEmit -p packages/devbox/tests/workerd && tsc --noEmit -p packages/test-utils && tsc --noEmit -p tests && tsc --noEmit -p scripts/tsconfig.scripts.json && tsc --noEmit -p scripts/fixtures/r2-bench && tsc --noEmit -p scripts/fixtures/kinu-durability && tsc --noEmit -p scripts/fixtures/hardening-runtime && tsc --noEmit -p scripts/fixtures/payload-transport && tsc --noEmit -p scripts/fixtures/fuse-probe && node --check packages/pc-agent/src/index.js && node --check packages/pc-agent/src/sandbox.js && node --check packages/pc-agent/src/pty.js",
-    "check": "bun run lint && bun test --timeout=0 packages/agent-core/drift.test.ts && bun run typecheck && bun run gate:typecheck-coverage",
+    "check": "bun run lint && bun test --timeout=0 packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts && bun run typecheck && bun run gate:typecheck-coverage",
     "test:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/rules.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-swallow.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-wait-until.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-ambient-git.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-copy-rpc-stub.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-untyped-console.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/import-extension.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/typescript-escapes.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-deep-import.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-elapsed-deadline.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/type-aware.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-vacuous-type-predicate.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/live-tree.gate.test.ts",
     "lint": "bun run test:anti-slop && NODE_OPTIONS=--experimental-strip-types oxlint",
     "deploy": "bash scripts/deploy.sh",
