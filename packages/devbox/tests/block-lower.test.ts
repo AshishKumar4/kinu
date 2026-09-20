@@ -75,7 +75,7 @@ test('real squashfuse and overlay compose indexed bytes with zero payload read a
   writeFileSync(`${root}/pkg/.devbox-delta/manifest.json`, JSON.stringify(manifest));
   writeFileSync(`${root}/namespace.sh`, ['set -e', ...buildDeltaAttachOps(manifest, '/var/tmp/devbox/upper')].join('\n'));
 
-  const result = spawnSync('docker', ['run', '--rm', '--privileged', '--device', '/dev/fuse',
+  const result = spawnSync('docker', ['run', '--rm', '--network=none', '--privileged', '--device', '/dev/fuse',
     '-v', `${root}:/fixture:ro`, '-v', `${join(import.meta.dir, 'support/block-lower-probe.sh')}:/probe.sh:ro`,
     '--entrypoint', '/bin/sh', image, '/probe.sh'], { encoding: 'utf8' });
 
@@ -96,7 +96,7 @@ test('a renamed replacement directory checkpoints and restores without the old l
   writeFileSync(`${fixture}/probe.sh`, deltaProbeCommand('/fixture/upper', []));
   const script = join(import.meta.dir, 'support/opaque-namespace-probe.sh');
 
-  const run = (phase: string) => spawnSync('docker', ['run', '--rm', '--privileged', '--device', '/dev/fuse',
+  const run = (phase: string) => spawnSync('docker', ['run', '--rm', '--network=none', '--privileged', '--device', '/dev/fuse',
     '-v', `${fixture}:/fixture`, '-v', `${script}:/probe.sh:ro`, '--entrypoint', '/bin/sh', image, '/probe.sh', phase], { encoding: 'utf8' });
 
   const prepared = run('prepare');
@@ -127,7 +127,7 @@ test('moving the checkpoint session out of the workspace reseats the base and pu
     upperPath: `/fixture/upper/${path}`, basePath: `/fixture/lower-base/${path}` }] }));
   const script = join(import.meta.dir, 'support/reseat-cwd-probe.sh');
 
-  const run = (phase: string) => spawnSync('docker', ['run', '--rm', '--privileged', '--device', '/dev/fuse',
+  const run = (phase: string) => spawnSync('docker', ['run', '--rm', '--network=none', '--privileged', '--device', '/dev/fuse',
     '-v', `${fixture}:/fixture`, '-v', `${script}:/probe.sh:ro`, '--entrypoint', '/bin/bash', image, '/probe.sh', phase], { encoding: 'utf8' });
 
   const prepared = run('prepare');
