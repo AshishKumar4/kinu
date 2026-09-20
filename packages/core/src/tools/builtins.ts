@@ -486,31 +486,25 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       // `device.exec()` land, so the same command answers to the identical
       // decision whichever path reached it — not a check re-derived here.
 
-      // Restorable result budget — full stdout/stderr is offloaded to the
-      // workspace VFS before clamping (see clamp.ts), so big outputs never
-      // rot the session and nothing is lost. A command that hand-rolls a file
-      // edit carries the `file` steer back with it, the first time this turn
-      // uses that shape (shell-file-steer.ts) — outside the clamp, so the note is
-      // never the part that gets truncated, and reserved INSIDE the budget, so
-      // the steer costs the command's output rather than the cap.
+      // Restorable result budget — the full text is offloaded to the workspace
+      // VFS before clamping (see clamp.ts), so big outputs never rot the
+      // session and nothing is lost. A command that hand-rolls a file edit
+      // carries the `file` steer back with it, the first time this turn uses
+      // that shape (shell-file-steer.ts). The steer is composed INTO the text
+      // that gets clamped rather than added after it: what the model receives
+      // is one string, so one cap, one spill and one accounting cover it.
       const steer = fileToolSteer(args.command);
-      const prefix = steer ? `${steer}\n\n` : '';
-
-      const clampOpts: ClampToolResultOptions = {
-        vfs: rt.storage.vfs, budget, producer: 'shell', reserveChars: prefix.length,
-      };
+      const clampOpts: ClampToolResultOptions = { vfs: rt.storage.vfs, budget, producer: 'shell' };
 
       const clamp = async (result: CommandResult): Promise<string> => {
         if (!v.is(v.string(), result)) {
-          // A refusal carries no steer, so it reserves nothing.
-          const failure = await clampToolResult(result.error, { ...clampOpts, reserveChars: 0 });
+          // A refusal carries no steer.
+          const failure = await clampToolResult(result.error, clampOpts);
 
           throw new KinuError(result.reason, failure, { execution: result.execution });
         }
 
-        const clamped = await clampToolResult(result, clampOpts);
-
-        return prefix + clamped;
+        return clampToolResult(steer ? `${steer}\n\n${result}` : result, clampOpts);
       };
 
       const defaultRuntime = 'workspace';
@@ -796,18 +790,18 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           case 'fetch': {
             if (!args.url) throw new KinuError('bad_input', 'web.fetch requires `url`');
             const res = await webSearch.fetch(args.url);
-            // Restorable clamp: oversized pages are offloaded to the
-            // workspace VFS and reduced to a re-readable head (see
-            // clamp.ts), so a big page never rots the session. The provenance
-            // header is reserved inside the budget rather than added on top of
-            // it — the model receives header + body, so that is what is priced.
+            // Restorable clamp: an oversized page is offloaded to the
+            // workspace VFS and reduced to a re-readable head (see clamp.ts),
+            // so a big page never rots the session. The provenance header is
+            // part of the clamped text, not a prefix added after it: the
+            // title and URL come from the page, so a hostile one cannot buy
+            // itself room outside the cap, and the spilled copy is exactly
+            // what the model was shown a digest of.
             const header = `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n`;
 
-            const body = await clampToolResult(res.markdown, {
-              vfs: rt.storage.vfs, budget, producer: 'web_fetch', reserveChars: header.length,
+            return clampToolResult(header + res.markdown, {
+              vfs: rt.storage.vfs, budget, producer: 'web_fetch',
             });
-
-            return header + body;
           }
         }
       },

@@ -1,29 +1,33 @@
 /**
  * Cutting text to a budget without cutting a character in half.
  *
- * A JS string is UTF-16 units and an astral character (emoji, rare CJK, most
- * symbols) is two of them, so a `slice` at an arbitrary length lands between
- * the halves as often as not. A lone surrogate is not text: it renders as a
- * replacement character, and re-encoded it is not valid UTF-8. Every budgeted
- * cut in the harness — the tool-result clamp's head and tail, the file
- * reader's one oversize line — goes through here rather than carrying its own
- * copy of the rule.
+ * An astral character (emoji, rare CJK) is two UTF-16 units, so a `slice` at
+ * an arbitrary length can land between them and hand back a half. Only a real
+ * pair is protected: a lone surrogate already in the text is data, and moving
+ * the cut to drop one would change what the caller stored.
  *
- * Both return a length/offset that is never FURTHER from the budget than one
- * unit, so a caller's cap still holds.
+ * Both move the cut by at most one unit, and never outward, so a caller's cap
+ * still holds.
  */
 
-/** The cut point at or below `len` that ends a whole character. */
-export function headEnd(text: string, len: number): number {
-  const code = len > 0 ? text.charCodeAt(len - 1) : 0;
+const isHigh = (code: number): boolean => code >= 0xD800 && code <= 0xDBFF;
 
-  return code >= 0xD800 && code <= 0xDBFF ? len - 1 : len;
+const isLow = (code: number): boolean => code >= 0xDC00 && code <= 0xDFFF;
+
+/** The cut point at or below `len` that does not split a pair. */
+export function headEnd(text: string, len: number): number {
+  const splitsPair = len > 0 && len < text.length
+    && isHigh(text.charCodeAt(len - 1)) && isLow(text.charCodeAt(len));
+
+  return splitsPair ? len - 1 : len;
 }
 
-/** The start of the last `len` units, moved forward if that split a pair. */
+/** The start of the last `len` units, moved forward only if that split a pair. */
 export function tailStart(text: string, len: number): number {
   const start = text.length - len;
-  const code = text.charCodeAt(start);
 
-  return code >= 0xDC00 && code <= 0xDFFF ? start + 1 : start;
+  const splitsPair = start > 0 && start < text.length
+    && isLow(text.charCodeAt(start)) && isHigh(text.charCodeAt(start - 1));
+
+  return splitsPair ? start + 1 : start;
 }

@@ -149,13 +149,13 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     inject: (s) => ({
       ...s,
       contextWindowForModel: () => 128_000,
-      clampToolResult: async (text, opts = {}) => {
-        const maxChars = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
+      clampToolResult: async (text) => {
+        if (text.length <= DEFAULT_TOOL_RESULT_MAX_CHARS) return text;
+        const headLen = Math.floor(DEFAULT_TOOL_RESULT_MAX_CHARS * 0.5);
 
-        if (text.length <= maxChars) return text;
-        const headLen = Math.floor(maxChars * 0.5);
-
-        return `${text.slice(0, headLen)}\n\n[output truncated]\n\n${text.slice(-(maxChars - headLen))}`;
+        // The regression: the marker is charged on top of a full cap, and the
+        // head/tail split moves.
+        return `${text.slice(0, headLen)}\n\n[output truncated]\n\n${text.slice(-(DEFAULT_TOOL_RESULT_MAX_CHARS - headLen))}`;
       },
     }),
   },

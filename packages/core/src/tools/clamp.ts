@@ -9,9 +9,10 @@
  * Code / Manus drop-content-keep-the-path pattern).
  *
  * The budget is what the MODEL receives, not what the clamp kept: the marker
- * and anything the caller prepends (`reserveChars`) are priced inside the cap,
- * because a result that arrives at cap + marker + header is over budget by
- * exactly the length of its own excuse.
+ * is priced inside the cap, because a result that arrives at cap + marker is
+ * over budget by exactly the length of its own excuse. A producer that frames
+ * its output (a shell steer, a page header) composes the whole string first
+ * and clamps that, so one call owns the cap, the spill and the accounting.
  *
  * Applied inside `buildBuiltinTools` (run + eval), so both backends
  * share one budget policy.
@@ -48,36 +49,13 @@ const HEAD_FRACTION = 0.7;
 const MARKER_FENCE_CHARS = 4;
 
 export interface ClampToolResultOptions {
-  maxChars?: number;
   /** Workspace VFS the full output is saved to. Without it the marker still
    *  reports the omission but cannot offer a restore path. */
   vfs?: VFS;
-  /** The turn's cumulative budget. Present: the per-result cap tightens once
-   *  the turn has admitted its budget, and every trip is counted. Absent: the
-   *  per-result cap is the whole policy (heads, tests, one-off calls). */
+  /** The turn's ledger: every result's admitted chars and every spill trip. */
   budget?: TurnContextBudget;
   /** Which producer this result came from — the counter's breakdown key. */
   producer?: BulkProducer;
-  /** Chars the caller prepends to whatever this returns — a shell steer, a
-   *  fetched page's header. Held out of the cap and counted as admitted, so
-   *  the budget prices what the model actually receives rather than the part
-   *  that happened to go through the clamp. */
-  reserveChars?: number;
-}
-
-/** The cap this result clamps to, and the prefix held out of it. */
-interface ResultBudget {
-  /** Chars the clamped text itself may occupy, marker included. */
-  readonly maxChars: number;
-  /** Chars the caller will prepend, already held out of `maxChars`. */
-  readonly reserve: number;
-}
-
-function resultBudget(opts: ClampToolResultOptions): ResultBudget {
-  const configured = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
-  const reserve = Math.max(0, opts.reserveChars ?? 0);
-
-  return { maxChars: Math.max(0, configured - reserve), reserve };
 }
 
 /** Save the full text where the marker can promise it. Returns the path the
@@ -116,10 +94,8 @@ export async function clampToolResult(
   text: string,
   opts: ClampToolResultOptions = {},
 ): Promise<string> {
-  const { maxChars, reserve } = resultBudget(opts);
-
-  if (text.length <= maxChars) {
-    opts.budget?.admit(text.length + reserve);
+  if (text.length <= DEFAULT_TOOL_RESULT_MAX_CHARS) {
+    opts.budget?.admit(text.length);
 
     return text;
   }
@@ -129,20 +105,17 @@ export async function clampToolResult(
   // it leaves behind.
   const savedPath = opts.vfs ? await offload(opts.vfs, text) : null;
   const marker = truncationMarker(savedPath);
-  const room = maxChars - marker.length - MARKER_FENCE_CHARS;
-  const headLen = room > 0 ? headEnd(text, Math.floor(room * HEAD_FRACTION)) : 0;
-  const tailLen = room > 0 ? room - headLen : 0;
-
-  // A cap with no room for even a fence is answered by the marker alone: the
-  // recovery path is the one part that is never worth truncating.
-  const clamped = room > 0
-    ? `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(tailStart(text, tailLen))}`
-    : marker;
-
-  const omitted = text.length - headLen - tailLen;
+  const room = DEFAULT_TOOL_RESULT_MAX_CHARS - marker.length - MARKER_FENCE_CHARS;
+  const headLen = Math.floor(room * HEAD_FRACTION);
+  const head = text.slice(0, headEnd(text, headLen));
+  const tail = text.slice(tailStart(text, room - headLen));
+  const clamped = `${head}\n\n${marker}\n\n${tail}`;
+  // What the root never sees, counted off what was actually kept: refusing to
+  // split a character can drop a unit the nominal split had allowed for.
+  const omitted = text.length - head.length - tail.length;
 
   if (opts.budget) {
-    opts.budget.admit(clamped.length + reserve);
+    opts.budget.admit(clamped.length);
     opts.budget.recordSpill({
       producer: opts.producer ?? 'eval',
       omitted,
@@ -167,11 +140,10 @@ export async function clampSerializedToolResult(
 
   if (text.success) return clampToolResult(text.output, opts);
   const serialized = JSON.stringify(output);
-  const { maxChars, reserve } = resultBudget(opts);
 
-  if (serialized.length <= maxChars) {
+  if (serialized.length <= DEFAULT_TOOL_RESULT_MAX_CHARS) {
     // The model pays for the serialization, not for the object graph.
-    opts.budget?.admit(serialized.length + reserve);
+    opts.budget?.admit(serialized.length);
 
     return output;
   }

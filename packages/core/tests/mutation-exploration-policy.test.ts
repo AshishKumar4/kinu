@@ -177,7 +177,7 @@ const CYCLE_SCAN = 'if (placed.has(member.nodeId)) continue;\n\n    const stuck 
 
 const BUDGET_ROOM = 'if (remainingChildren < width) {';
 
-const CLAMP_TAIL = 'const tailLen = room > 0 ? room - headLen : 0;';
+const CLAMP_TAIL = 'const tail = text.slice(tailStart(text, room - headLen));';
 
 /** Every snippet above, against the file it must sit in exactly once. */
 const SNIPPETS: readonly (readonly [src: string, snippet: string])[] = [
@@ -278,7 +278,7 @@ const EVERY_POLICY_REACHABLE: Defended = {
 
 const HONOURS_A_CUSTOM_BUDGET: Defended = {
   file: CLAMP_SUITE,
-  name: 'honours a custom budget',
+  name: 'the shared budget is honoured',
 };
 
 const PARETO_DIRECTION: Defended = {
@@ -615,8 +615,8 @@ async function everyPolicyReachable(budget: SwarmBudgetModule): Promise<void> {
 
 /** {@link HONOURS_A_CUSTOM_BUDGET}. */
 async function honoursACustomBudget(clamp: ClampModule): Promise<void> {
-  const clamped = await clamp.clampToolResult('a'.repeat(5_000), { maxChars: 1_000 });
-  expect(clamped.length).toBeLessThanOrEqual(1_000);
+  const clamped = await clamp.clampToolResult('a'.repeat(50_000));
+  expect(clamped.length).toBeLessThanOrEqual(clamp.DEFAULT_TOOL_RESULT_MAX_CHARS);
 }
 
 /* ── The mutants, one loader per closure ──────────────────────────────────── */
@@ -858,7 +858,7 @@ describe('budget arbitration is load-bearing', () => {
 /* ── The clamp arithmetic ─────────────────────────────────────────────────── */
 
 describe('the clamp arithmetic is load-bearing', () => {
-  test('GREEN: a custom budget is honoured', async () => {
+  test('GREEN: the shared budget is honoured', async () => {
     await honoursACustomBudget(pristineClamp);
   });
 
@@ -868,7 +868,7 @@ describe('the clamp arithmetic is load-bearing', () => {
   // observable is a length nobody asserts unless a test pins it.
   test(`RED: giving the tail the whole cap turns "${HONOURS_A_CUSTOM_BUDGET.name}" red`, async () => {
     const mutant = await mutantClamp('tail-takes-the-cap', [
-      [CLAMP_TAIL, 'const tailLen = maxChars;'],
+      [CLAMP_TAIL, 'const tail = text.slice(tailStart(text, DEFAULT_TOOL_RESULT_MAX_CHARS));'],
     ]);
 
     await expect(honoursACustomBudget(mutant)).rejects.toThrow(ASSERTION_FAILED);

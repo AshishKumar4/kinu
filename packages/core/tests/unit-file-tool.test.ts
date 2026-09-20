@@ -235,6 +235,20 @@ describe('readFileSlice', () => {
     expect(slice.omitted).toBe(500 - slice.output.indexOf('\n\n['));
   });
 
+  test('a leading blank line does not make the next line look free', () => {
+    // The joining newline costs a char for every line after the first, keyed
+    // on the line COUNT rather than the running total. Measured at this cap:
+    // the rule keeps 2 lines, dropping the join cost keeps 3, so the shown
+    // text is what tells the two apart.
+    const rows = ['', ...Array.from({ length: 29 }, (_, i) => String.fromCharCode(97 + (i % 26)).repeat(10))];
+    const slice = readFileSlice(rows.join('\n'), { path: '/f', maxChars: 121 });
+
+    expect(slice.output.split('\n\n[')[0]).toBe('\naaaaaaaaaa');
+    expect(slice.last).toBe(2);
+    expect(slice.output).toContain('offset=3');
+    expect(slice.output.length).toBeLessThanOrEqual(121);
+  });
+
   test('an offset past the end says so rather than returning empty', () => {
     expect(readFileSlice(file, { path: '/f', offset: 99, maxChars: 10_000 }).output)
       .toContain('past the end');

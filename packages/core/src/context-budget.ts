@@ -10,16 +10,8 @@
  * often does the real workload cross the bulk thresholds at all" is a query
  * rather than a guess.
  *
- * It is a LEDGER, not a governor. The per-result cap is
- * `DEFAULT_TOOL_RESULT_MAX_CHARS` (tools/clamp.ts) and nothing here
- * moves it. A turn-cumulative second cap lived here until 2026-09-20: it
- * dropped the per-result cap to an 8,000-char floor after 120,000 chars had
- * been admitted, which was a real constraint while the per-result cap was
- * 40,000 chars. The shared cap is now 2,000 estimated tokens — 8,000 chars,
- * the floor itself — so every production caller's `capFor` was the identity
- * and the `tightened` counter could no longer be reached. Restoring it means
- * restoring a floor BELOW the shared cap, which is a policy change with its
- * own measurement, not a mechanism to keep warm.
+ * It is a LEDGER, not a governor: the per-result cap is
+ * `DEFAULT_TOOL_RESULT_MAX_CHARS` (tools/clamp.ts) and nothing here moves it.
  *
  * Owned per turn by the TurnAccumulator (reset with the rest of the turn's
  * accounting), and by construction per ROOT — a node or a subordinate builds

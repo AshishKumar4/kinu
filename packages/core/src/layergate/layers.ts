@@ -733,20 +733,25 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'context-budget/clamp-under-budget-passthrough',
-        asserts: 'a result inside budget is returned identically — no marker, no offload',
+        asserts: 'a result inside the shared budget is returned identically — no marker, no offload',
         observe: async (s) => {
           const text = 'small output';
 
-          return { same: (await s.clampToolResult(text, { maxChars: 100 })) === text };
+          return { same: (await s.clampToolResult(text)) === text };
         },
       },
       {
         id: 'context-budget/clamp-oversize-marker',
-        asserts: 'oversize output keeps head+tail, and the whole result INCLUDING the marker fits the cap',
+        asserts: 'oversize output keeps head+tail, and the whole result INCLUDING the marker fits the shared cap',
         observe: async (s) => {
-          const clamped = await s.clampToolResult(`${'H'.repeat(600)}${'M'.repeat(400)}${'T'.repeat(600)}`, { maxChars: 200 });
+          const clamped = await s.clampToolResult(`${'H'.repeat(9_000)}${'M'.repeat(4_000)}${'T'.repeat(9_000)}`);
 
-          return { length: clamped.length, clamped };
+          return {
+            length: clamped.length,
+            head: clamped.slice(0, 20),
+            tail: clamped.slice(-20),
+            marker: clamped.slice(clamped.indexOf('\n\n[') + 2, clamped.indexOf(']\n\n') + 1),
+          };
         },
       },
       {
@@ -760,7 +765,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const sizes: number[] = [];
 
           for (let i = 0; i < 4; i++) {
-            sizes.push((await s.clampToolResult('Z'.repeat(5_000), { maxChars: 400, budget, producer: 'shell' })).length);
+            sizes.push((await s.clampToolResult('Z'.repeat(50_000), { budget, producer: 'shell' })).length);
           }
 
           return { sizes, snapshot: budget.snapshot() };
@@ -768,13 +773,12 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'context-budget/clamp-serialized',
-        asserts: 'structured results pass through under budget and serialize+clamp over it',
+        asserts: 'structured results pass through under the shared budget and serialize+clamp over it',
         observe: async (s) => ({
-          nullish: await s.clampSerializedToolResult({ output: null }, { maxChars: 10 }),
-          small: await s.clampSerializedToolResult({ output: { ok: true } }, { maxChars: 100 }),
+          nullish: await s.clampSerializedToolResult({ output: null }),
+          small: await s.clampSerializedToolResult({ output: { ok: true } }),
           big: await s.clampSerializedToolResult(
-            { output: { rows: Array.from({ length: 40 }, (_, i) => `row-${i}`) } },
-            { maxChars: 120 },
+            { output: { rows: Array.from({ length: 4_000 }, (_, i) => `row-${i}`) } },
           ),
         }),
       },
@@ -1407,10 +1411,14 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'a capped or limited read names the offset that continues it and still fits its cap; an oversize line names its recipe',
         observe: (s) => {
           const file = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join('\n');
+          // Long enough that a 140-char cap actually truncates it: the short
+          // fixture fits whole once the marker is inside the cap, and a
+          // "capped" case that is not capped asserts nothing.
+          const wide = Array.from({ length: 8 }, (_, i) => `line ${i + 1} ${'.'.repeat(20)}`).join('\n');
 
           return [
             ['whole', s.readFileSlice(file, { path: '/f', maxChars: 1000 })],
-            ['capped', s.readFileSlice(file, { path: '/f', maxChars: 140 })],
+            ['capped', s.readFileSlice(wide, { path: '/f', maxChars: 140 })],
             ['limited', s.readFileSlice(file, { path: '/f', limit: 3, maxChars: 1000 })],
             ['limit-reaches-end', s.readFileSlice(file, { path: '/f', offset: 7, limit: 5, maxChars: 1000 })],
             ['past-end', s.readFileSlice(file, { path: '/f', offset: 99, maxChars: 1000 })],

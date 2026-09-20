@@ -4,7 +4,7 @@ One rule governs model-bound bulk. Bulk that enters the root's context arrives a
 
 Tool-borne bulk (stdout, fetched pages, MCP responses) clamps at 2,000 estimated tokens — 8,000 chars through `estimateTokens`/`admissionBytes`, not a tokenizer and not any provider's count (`DEFAULT_TOOL_RESULT_MAX_CHARS`). Message-borne bulk (attachments and pasted documents) clamps at 8 KiB (`INLINE_TEXT_MAX_BYTES`). Every clamp writes the full payload somewhere the agent can read it back. Without that whole, a digest is data loss.
 
-The cap covers the whole string the model receives. The truncation marker is priced inside it, and so is any prefix the producer adds afterwards (the shell's `file` steer, a fetched page's provenance header) — those pass `reserveChars` and the clamp holds that much back. A marker charged on top of a full budget is a result over budget by the length of its own explanation.
+The cap covers the whole string the model receives. The truncation marker is priced inside it, and a producer that frames its output — the shell's `file` steer, a fetched page's provenance header — composes the whole string and clamps that, so one call owns the cap, the spill and the accounting. A marker or a header charged on top of a full budget is a result over budget by the length of its own framing.
 
 ## The producers, and where each one spills
 
@@ -33,7 +33,7 @@ It is a ledger, not a second governor:
 - The budget is per root. Use `TurnAccumulator.context`, reset with the turn, or a fresh `TurnContextBudget`. Roots never share a ledger.
 - `buildNodeToolSet` (`packages/core/src/strategy/node-agent.ts`) passes no `contextBudget`. A swarm node has its own budget and no `context_budget` row.
 
-A turn-cumulative second cap lived here until 2026-09-20: after 120,000 admitted chars the per-result cap dropped to an 8,000-char floor. That was a real constraint while the per-result cap was 40,000 chars. The shared cap is now 8,000 chars — the floor itself — so `capFor` was the identity for every production caller and the `tightened` counter could not be reached. Both are removed. Restoring the mechanism means choosing a floor BELOW the shared cap, which is a policy change with its own measurement.
+A turn-cumulative second cap lived here until 2026-09-20: after 120,000 admitted chars the per-result cap dropped to an 8,000-char floor. That was a real constraint while the per-result cap was 40,000 chars. The shared cap is now 8,000 chars — the floor itself — so `capFor` was the identity for every production caller and the `tightened` counter could not be reached. Both are removed.
 
 A tool result is bulk that arrives once. A tool *definition* is different. The description and the JSON Schema ride every request of every step. For MCP a third party writes them. An unbounded catalog is a stranger spending the user's window.
 
@@ -68,8 +68,8 @@ I recorded these before the numbers existed. `M2` means (a) single-query digesti
 | Change | Ships permanently if | Reverts if |
 |---|---|---|
 | Ingress unification (spill every message-borne bulk producer) | correctness-motivated, so it ships on tests; counters retained | n/a |
-| Turn-cumulative egress budget | M2(a) pass-rate delta CI excludes 0 in favor, **and** the 159-task defect bench + M2(b) show no regression (CI excludes −5pp) | any regression on the existing bench — **reverted 2026-09-20**, unreachable once the per-result cap fell to the floor |
-| The per-result cap (2,000 estimated tokens) | tuned on M2, not on intuition | n/a |
+| Turn-cumulative egress budget | M2(a) pass-rate delta CI excludes 0 in favor, **and** the 159-task defect bench + M2(b) show no regression (CI excludes −5pp) | any regression on the existing bench — **removed 2026-09-20**, unreachable once the per-result cap fell to the floor |
+| The per-result cap (2,000 estimated tokens) | owner-specified on 2026-09-20; **unmeasured** — no bench or M2 arm has been run against it | n/a |
 
 The bench is the seeded-defect corpus in `docs/BENCH.md`. Its patches under
 `tests/bench/patches/` numbered 159 on 2026-08-19 and 157 on 2026-08-24 after
