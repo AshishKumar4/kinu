@@ -1836,6 +1836,7 @@ export function useKinu(target?: string | KinuActorAddress) {
           refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
           refreshBackgroundJobs(),
           refreshPendingActions(),
+          refreshTabPresence(),
           refreshSlates(),
           refreshCurrentLiveResource(
             "consents",

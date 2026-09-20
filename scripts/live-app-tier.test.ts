@@ -340,7 +340,6 @@ async function sendInChat(page: Page, text: string): Promise<SendSite> {
   await page.keyboard.type(text);
 
   const site = v.parse(SendSiteSchema, await page.evaluate(`(() => {
-    const tabs = [...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')];
     const send = [...document.querySelectorAll('#chat button')]
       .find((el) => el.getClientRects().length > 0
         && /send$|steer the running turn/iu.test((el.getAttribute('aria-label') ?? '').trim()));
@@ -348,7 +347,7 @@ async function sendInChat(page: Page, text: string): Promise<SendSite> {
     send.click();
     return {
       path: location.pathname,
-      tabIndex: tabs.findIndex((tab) => tab.getAttribute('aria-current') === 'page'),
+      tabIndex: ${ACTIVE_TAB_INDEX},
       composerInChat: ${CHAT_COMPOSER_LIVE},
     };
   })()`));
@@ -491,6 +490,13 @@ async function measurePanel(newPage: LiveApp['newPage'], origin: string): Promis
   const workspace = await createWorkspace(origin, `live-row-panel-${RUN_ID}`, 'panel state probe', SCRIPTED_MODEL_SPEC);
   const page = await openWorkspace(newPage, origin, workspace);
 
+  await page.evaluate(ClickScripts.newAgent);
+  await page.waitForFunction(`${ACTIVE_TAB_INDEX} > 0`, { polling: 100 });
+  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+  await page.evaluate(ClickScripts.mainTab);
+  await page.waitForFunction(`${ACTIVE_TAB_INDEX} === 0`, { polling: 100 });
+  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+
   await openInspector(page);
 
   const counter = await countRpc(page);
@@ -504,9 +510,8 @@ async function measurePanel(newPage: LiveApp['newPage'], origin: string): Promis
   const marked = v.parse(
     v.object({ ok: v.literal(true), scrollTop: v.number() }),
     await page.evaluate(() => {
-      const strips = [...document.querySelectorAll('.p-tabstrip')];
-      const workStrip = strips.find((el) => [...el.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Work'));
-      const content = workStrip?.parentElement?.parentElement?.children[1];
+      const strip = document.querySelector('#inspector .p-tabstrip');
+      const content = strip?.parentElement?.parentElement?.children[1];
 
       if (!content) return { ok: false as const, scrollTop: -1 };
 
@@ -519,11 +524,6 @@ async function measurePanel(newPage: LiveApp['newPage'], origin: string): Promis
 
   const beforeSwitch = counter.counts();
 
-  await page.evaluate(ClickScripts.newAgent);
-  await page.waitForFunction(
-    `[...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')].length > 1`,
-    { polling: 100 },
-  );
   await page.evaluate(ClickScripts.lastAgentTab);
   await page.waitForFunction(`${ACTIVE_TAB_INDEX} > 0`, { polling: 100 });
 
@@ -611,9 +611,8 @@ async function measurePlanTabs(newPage: LiveApp['newPage'], origin: string): Pro
 }
 
 const readStripGeometry = `(() => {
-  const strip = [...document.querySelectorAll('.p-tabstrip')].find((el) =>
-    [...el.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Work'));
-  if (strip === undefined) throw new Error('no Work strip');
+  const strip = document.querySelector('#inspector .p-tabstrip');
+  if (strip === null) throw new Error('no inspector tab strip');
   const rule = strip.parentElement;
   if (rule === null) throw new Error('no strip rule container');
   const active = [...strip.querySelectorAll('button')].find((b) => b.className.includes('p-tab-active'));
@@ -772,12 +771,12 @@ async function paneHolds(page: Page, phrase: string): Promise<{ carriers: number
     await page.evaluate((needle: string) => {
       const visible = (el: Element): boolean => el.getClientRects().length > 0;
 
-      const carriers = [...document.querySelectorAll('#chat *')]
+      const carriers = [...document.querySelectorAll('#chat [data-agent-pane] *')]
         .filter(visible)
         .filter((el) => (el.textContent ?? '').includes(needle))
         .filter((el) => ![...el.children].some((child) => (child.textContent ?? '').includes(needle)));
 
-      const cards = [...document.querySelectorAll('#chat [data-system-event], #chat [data-advisor-severity]')]
+      const cards = [...document.querySelectorAll('#chat [data-agent-pane] [data-system-event], #chat [data-agent-pane] [data-advisor-severity]')]
         .filter(visible)
         .map((el) => el.getAttribute('data-system-event') ?? el.getAttribute('data-advisor-severity') ?? '?');
 
@@ -975,7 +974,7 @@ function verdictOf<Value>(value: Value | null, row: string): Value {
 }
 
 describe('the right panel keeps its Work, Files and Env state when the chat tab changes', () => {
-  test('the Work surface DOM node identity and scroll position survive', () => {
+  test('the Files surface DOM node identity and scroll position survive', () => {
     const panel = verdictOf(observed.panel, 'panel');
 
     expect(panel.nodeSurvives).toBe(true);

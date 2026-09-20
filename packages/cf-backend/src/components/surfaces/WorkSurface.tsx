@@ -140,7 +140,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
 
   const chip = focus.readyChip;
 
-  useEffect(() => { if (props.planFocus) focus.navigate("Work"); }, [props.planFocus, focus.navigate]);
+  const workAvailable = surfaceHasContent("Work", props.tabPresence, props.mctsTrees, props.slates);
+
+  useEffect(() => {
+    if (props.planFocus && workAvailable) focus.navigate("Work");
+  }, [props.planFocus, workAvailable, focus.navigate]);
   const [hasDiffs, setHasDiffs] = useState(false);
 
   const ports = props.pinnedPorts.filter(port => !props.slates?.some(slate => port.executor === "workspace" && slate.port === port.port));

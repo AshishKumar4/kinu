@@ -413,7 +413,8 @@ export async function drivePlanReview(
   const inspectorBeforePlan = Number(await page.evaluate(INSPECTOR_WIDTH));
   await until(page, `document.querySelector('#chat [data-tool-group]') !== null
     || document.querySelector('#inspector [data-plan-status]') !== null`, onFrame, 'turn');
-  await until(page, `document.querySelector('#inspector [data-plan-decisions] button:not([disabled])') !== null`, onFrame, 'turn');
+  await until(page, `[...document.querySelectorAll('#inspector [data-plan-decisions] button:not([disabled])')]
+    .some(button => button.getClientRects().length > 0)`, onFrame, 'turn');
 
   const inspectorOnPlan = Number(await page.evaluate(INSPECTOR_WIDTH));
   const planReviewShown = await page.evaluate(`document.querySelector('#inspector [data-plan-body]') !== null`) === true;
