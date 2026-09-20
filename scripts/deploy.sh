@@ -453,8 +453,7 @@ flush_gates() {
       # `exec` so the tracked pid IS `timeout`: one process fewer per gate, and
       # the status `wait` reports below is the gate's own, not a wrapper's.
       (
-        # shellcheck disable=SC2086
-        exec timeout --signal=TERM --kill-after=5s "${GATE_DEADLINE[pick]}" ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1
+        exec timeout --signal=TERM --kill-after=5s "${GATE_DEADLINE[pick]}" bun scripts/ladder.ts --gate "${GATE_CMDS[pick]}" > "$dir/$pick.log" 2>&1
       ) &
       gate_of_pid[$!]=$pick
       started[pick]=$SECONDS

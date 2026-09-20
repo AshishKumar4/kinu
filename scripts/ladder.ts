@@ -1143,7 +1143,7 @@ export const LADDER: readonly Gate[] = [
       + 'equality with the gate that runs it.',
     // Measured by `--audit-closure` 2026-09-15: the suite opens hundreds of
     // tracked sources by path (it scans the tree), so its closure is the corpus.
-    inputs: { ...AMBIENT_BY_NAME, corpus: true, imports: ['packages/core/src/strategy/', 'packages/core/src/execution/codemode-node-shim.ts'] },
+    inputs: { ...AMBIENT_BY_NAME, corpus: true },
   },
   {
     run: 'bun run test:spine',
@@ -3329,19 +3329,28 @@ if (import.meta.main) {
     process.exit(0);
   }
 
+  const gateAt = process.argv.indexOf('--gate');
+  const selectedGate = gateAt === -1 ? undefined : LADDER.find((gate) => gate.run === process.argv[gateAt + 1]);
+
+  if (gateAt !== -1 && selectedGate === undefined) {
+    console.error('ladder --gate: expected an exact command from the declared gate table');
+    process.exit(2);
+  }
+
   const flag = process.argv.find((argument) => argument.startsWith('--tier='));
-  const asked = flag?.slice('--tier='.length);
+  const asked = selectedGate === undefined ? flag?.slice('--tier='.length) : 'deploy';
   const tier = TIERS.find((candidate) => candidate === asked);
 
   if (tier === undefined) {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --plan | --audit-closure [--tier=<tier>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --plan | --audit-closure [--tier=<tier>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
     );
     process.exit(2);
   }
 
-  const gates = gatesFor(tier)
-    .filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+  const gates = selectedGate === undefined
+    ? gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT))
+    : [selectedGate];
 
   const measured = assertMeasured(`ladder --tier=${tier}`, [
     ['gates in this tier', gates.length],

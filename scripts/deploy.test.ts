@@ -94,6 +94,11 @@ if [ "$command_line" = "bun scripts/ladder.ts --plan" ]; then
   cat "$KINU_DEPLOY_PLAN"
   exit 0
 fi
+if [ "$1" = "scripts/ladder.ts" ] && [ "$2" = "--gate" ]; then
+  gate="$3"
+  set -- $gate
+  command_line="$*"
+fi
 printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
 # WHAT THE INFRASTRUCTURE GATE ACTUALLY SAW. The phase travels in the
 # environment because the gate line has to stay one string for ladder.ts to
@@ -384,7 +389,7 @@ describe("deploy gate", () => {
 
   test("every gate has a process-tree deadline, from its row or the shared figure", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    expect(source).toContain('timeout --signal=TERM --kill-after=5s "${GATE_DEADLINE[pick]}" ${GATE_CMDS[pick]}');
+    expect(source).toContain('timeout --signal=TERM --kill-after=5s "${GATE_DEADLINE[pick]}" bun scripts/ladder.ts --gate "${GATE_CMDS[pick]}"');
     expect(GATE_DEADLINE_SECONDS).toBe(480);
 
     for (const row of PLAN) {
