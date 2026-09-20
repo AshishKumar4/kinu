@@ -11,19 +11,24 @@ import { CONTEXT_CHECKPOINT_PREFIX, type TransformContext } from '@kinu.run/core
 import {
   createCompactionExtension,
   kinuCodec,
+  DEFAULT_CUSTOM_COMPACTION,
   type CompactionExtensionDeps,
   type CompactionOutcomeEvent,
   type CompactionProfile,
 } from '../src/index';
 import {
-  assistant, history, memoryArchive, memoryPorts, user,
+  assistant, history, memoryArchive, memoryPorts, toolCall, toolMessage, toolResult, user,
   validSummary, type MemoryArchiveStore, type MemoryPorts,
 } from './helpers';
 
 const SESSION = 'agent-test-session';
 
-/** Small window + tiny recent-tool budget so modest fixtures overflow. */
+/** Small window + tiny recent-tool budget so modest fixtures overflow. The
+ *  rest comes from the library's own custom defaults: the extension forwards
+ *  exactly these four knobs, so spelling the others out would pin settings no
+ *  assertion here depends on. */
 const profile: CompactionProfile = {
+  ...DEFAULT_CUSTOM_COMPACTION,
   preset: 'custom',
   triggerPercent: 85,
   targetPercent: 30,
@@ -502,6 +507,60 @@ describe('summaries', () => {
     const runPrompts = prompts.filter((p) => p.includes('Summarize this historical assistant turn'));
     expect(runPrompts.length).toBeGreaterThan(0);
     expect(JSON.stringify(result)).toContain('Summary(');
+  });
+
+  test('collapsing a tool-bearing assistant turn takes the whole native pair, never half of it', async () => {
+    // The ladder's collapse unit is ONE assistant turn, and this codec hangs a
+    // tool call, its result part and the carrier `role:'tool'` message off that
+    // single turn. So a collapse that reaches a tool-bearing turn has to erase
+    // every one of those footprints together: a surviving call with no result
+    // (or a result with no call) is a request the provider rejects outright.
+    const { transform } = rig();
+    const messages: ModelMessage[] = [user('start')];
+
+    for (let i = 0; i < 8; i++) {
+      messages.push(assistant([
+        { type: 'text', text: `plan ${i}: ${'prose '.repeat(400)}` },
+        toolCall(`c${i}`, 'shell', { command: `run ${i}` }),
+      ]));
+      messages.push(toolMessage([toolResult(`c${i}`, 'shell', `out ${i}: ${'z'.repeat(400)}`)]));
+      messages.push(assistant([{ type: 'text', text: `recap ${i}: ${'words '.repeat(400)}` }]));
+      messages.push(user(`next ${i}`));
+    }
+
+    const result = await transform(messages);
+
+    if (!result) throw new Error('expected a rewrite');
+    const calls = new Set<string>();
+    const results = new Set<string>();
+
+    for (const message of result) {
+      if (message.role === 'tool') {
+        // An emptied carrier is as invalid as an orphan result.
+        expect(message.content.length).toBeGreaterThan(0);
+
+        for (const part of message.content) {
+          if (part.type === 'tool-result') results.add(part.toolCallId);
+        }
+
+        continue;
+      }
+
+      if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
+
+      for (const part of message.content) {
+        if (part.type === 'tool-call') calls.add(part.toolCallId);
+
+        if (part.type === 'tool-result') results.add(part.toolCallId);
+      }
+    }
+
+    // Non-vacuous on both sides: turns holding tool calls really were collapsed
+    // away (stubbing alone would leave all eight calls standing), and what the
+    // protected tail kept is still a matched pair.
+    expect(calls.size).toBeGreaterThan(0);
+    expect(calls.size).toBeLessThan(8);
+    expect([...results].sort()).toEqual([...calls].sort());
   });
 
   test('an advanced boundary re-summarizes iteratively from the previous checkpoint', async () => {

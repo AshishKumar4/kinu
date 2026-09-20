@@ -193,7 +193,7 @@
       "name": "@kinu.run/compaction",
       "version": "0.1.0",
       "dependencies": {
-        "@better-compact/core": "^0.1.0",
+        "@better-compact/core": "0.2.2",
         "@kinu.run/core": "workspace:*",
         "ai": "6.0.214",
         "valibot": "^1.4.1",
@@ -403,7 +403,7 @@
 
     "@base-ui/utils": ["@base-ui/utils@0.2.9", "", { "dependencies": { "@babel/runtime": "^7.29.2", "@floating-ui/utils": "^0.2.11", "reselect": "^5.1.1", "use-sync-external-store": "^1.6.0" }, "peerDependencies": { "@types/react": "^17 || ^18 || ^19", "react": "^17 || ^18 || ^19", "react-dom": "^17 || ^18 || ^19" }, "optionalPeers": ["@types/react"] }, "sha512-x/PDDCYzoqPpjrdyb3VcyylTI2IjUXEtYDGi5foh7KsnmNJIIaVwA2GLgDH1dps1GgXiJbA60hM+AyuTfQzIvw=="],
 
-    "@better-compact/core": ["@better-compact/core@0.1.0", "", {}, "sha512-TL1+jinxrOaj635cW2q3OW5EtWKFiFUFRWuFi2RPYFoSQOrNBOuv1qNYn2ulwCLyidcfmWzk1R8vs+YgjTk7pw=="],
+    "@better-compact/core": ["@better-compact/core@0.2.2", "", {}, "sha512-aOOfprQdWO7UyvHJSrcrwbfJsXp9TP/KQIND8HBSsPOYIL1o57xe0RPYCUZiLzl+GxkmgDBLYqybnBnQvpUYdA=="],
 
     "@borewit/text-codec": ["@borewit/text-codec@0.2.2", "", {}, "sha512-DDaRehssg1aNrH4+2hnj1B7vnUGEjU6OIlyRdkMd0aUdIUvKXrJfXsy8LVtXAy7DRvYVluWbMspsRhz2lcW0mQ=="],
 

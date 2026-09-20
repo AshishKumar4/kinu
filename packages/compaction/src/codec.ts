@@ -16,10 +16,10 @@
  *
  * Identity is id-less (Kinu ModelMessages carry no ids): content-hash keys
  * with occurrence ordinals, stable across requests because durable history is
- * append-only. The turn stamp is derived from the deduped key — stamps feed
- * `assistantRunKey` (`role:stamp` seeds), so they must be content-derived and
- * distinct per turn or every equal-length assistant run would share one
- * summary key.
+ * append-only. The turn stamp is derived from the deduped key — stamps seed
+ * `assistantRunKey` alongside the turn's own item digest, so they must be
+ * content-derived and distinct per turn or two turns whose items differ only
+ * in a field the digest does not read would share one summary key.
  */
 
 import type {
@@ -287,8 +287,8 @@ function bindResult(pendingCalls: Map<string, ToolPairHandle>, result: ToolResul
 
 /** Content-derived numeric stamp (48 bits of the key's hash). Ladder range
  *  hashes fold edit-sensitivity into the content-hash key itself; the stamp
- *  exists so assistant-run summary keys (`role:stamp` seeds) stay distinct
- *  per run and stable across requests. */
+ *  exists so assistant-run summary keys (`role:stamp:item-digest` seeds) stay
+ *  distinct per turn and stable across requests. */
 function stampOf(key: string): number {
   return Number.parseInt(fnv1a64(key).slice(0, 12), 16);
 }
