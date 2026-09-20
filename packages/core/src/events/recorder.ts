@@ -142,7 +142,7 @@ export const RunEventSchema = v.variant('type', [
       shell: v.optional(v.number()), file_read: v.optional(v.number()), web_fetch: v.optional(v.number()),
       eval: v.optional(v.number()), external_tool: v.optional(v.number()),
       attachment: v.optional(v.number()), pasted_text: v.optional(v.number()),
-    }), referenced: v.number(), tightened: v.number(), followUps: v.number() }),
+    }), referenced: v.number(), followUps: v.number() }),
   v.object({ ...BaseFields, type: v.literal('file_edit'), attempts: v.number(), applied: v.number(),
     failures: v.object({
       empty_anchor: v.optional(v.number()), not_found: v.optional(v.number()),

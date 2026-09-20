@@ -26,6 +26,7 @@ import {
   UnsafeUrlError,
   stripBase64Images,
   TOOL_OUTPUT_DIR,
+  DEFAULT_TOOL_RESULT_MAX_CHARS,
   decodeJsonValue,
   projectJsonValue,
   type CraftedToolExecute,
@@ -589,7 +590,7 @@ describe('web builtin', () => {
     await expect(execute({ action: 'fetch' })).rejects.toMatchObject({ code: 'bad_input', message: 'web.fetch requires `url`' });
   });
 
-  test('action=fetch clamps a big page to a head with a VFS restore path', async () => {
+  test('action=fetch clamps a big page to a head with a VFS restore path, header included in the budget', async () => {
     const { rt } = createTestRuntime();
     const big = '<html><body>' + 'word '.repeat(20000) + '</body></html>';
     const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: big, headers: { 'content-type': 'text/html' } })).fetch });
@@ -597,16 +598,53 @@ describe('web builtin', () => {
     const out = await execute({ action: 'fetch', url: 'https://example.com/big' });
 
     expect(out).toContain('Source: https://example.com/big');
-    expect(out).toContain('[output truncated');
+    expect(out).toContain('[truncated;');
     expect(out).toContain(`${TOOL_OUTPUT_DIR}/`);
+    // The provenance header is part of the clamped text, so it cannot buy
+    // room outside the cap.
+    expect(out.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
+
     // The full output is restorable from the VFS.
-    const m = /full output saved to (\S+)/.exec(out);
-    const savedPath = m?.[1];
+    const savedPath = /full result at (\S+)\]/.exec(out)?.[1];
     expect(savedPath).toContain(TOOL_OUTPUT_DIR);
 
     if (savedPath === undefined) throw new Error(`Expected a saved-output path in: ${out}`);
     const saved = await rt.storage.vfs.readFile(savedPath, { encoding: 'utf8' });
     expect(String(saved).length).toBeGreaterThan(out.length);
+    // The spilled copy is what the model was shown a digest OF, header and all.
+    expect(String(saved)).toStartWith('# ');
+  });
+
+  test('a page whose own header material is huge cannot buy room outside the budget', async () => {
+    // Title and URL come from the page, so they are untrusted input to the
+    // budget rather than a fixed cost the clamp could be asked to reserve.
+    const { rt } = createTestRuntime();
+    const title = 'T'.repeat(30_000);
+    const body = `<html><head><title>${title}</title></head><body>${'word '.repeat(5_000)}</body></html>`;
+    const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body, headers: { 'content-type': 'text/html' } })).fetch });
+    const execute = toolExecute<WebArgs, string>(buildWithWeb(rt, provider).web);
+    const out = await execute({ action: 'fetch', url: `https://example.com/${'u'.repeat(5_000)}` });
+
+    expect(out.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
+    expect(out).toContain('[truncated;');
+    const savedPath = /full result at (\S+)\]/.exec(out)?.[1];
+
+    if (savedPath === undefined) throw new Error(`Expected a saved-output path in: ${out.slice(-300)}`);
+    const saved = String(await rt.storage.vfs.readFile(savedPath, { encoding: 'utf8' }));
+    // Whatever the header turned out to be, the spill holds the whole of it.
+    expect(saved).toStartWith('# ');
+    expect(saved.length).toBeGreaterThan(out.length);
+  });
+
+  test('an empty page still returns its provenance header, unclamped', async () => {
+    const { rt } = createTestRuntime();
+    const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: '', headers: { 'content-type': 'text/html' } })).fetch });
+    const execute = toolExecute<WebArgs, string>(buildWithWeb(rt, provider).web);
+    const out = await execute({ action: 'fetch', url: 'https://example.com/empty' });
+
+    expect(out).toContain('Source: https://example.com/empty');
+    expect(out).not.toContain('[truncated;');
+    expect(out.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
   });
 
   test('a provider error preserves its message and retry metadata on the error channel', async () => {

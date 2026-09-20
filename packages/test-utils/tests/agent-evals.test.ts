@@ -362,7 +362,7 @@ describe('BEHAVIOUR_SCORERS — the panel contract', () => {
     // followUps deliberately exceeds referenced: one spill address cited twice.
     emit(store.sql, store.actor, 'run-a', 'context_budget', {
       admittedChars: 10, omittedChars: 900, trips: { run: 1 },
-      referenced: 1, tightened: 0, followUps: 3,
+      referenced: 1, followUps: 3,
     });
     const score = spillRetrieval.score(store.sql, store.actor);
     expect(score.eligible).toBe(1);
@@ -581,7 +581,7 @@ describe('spillRetrieval — spilled context read back', () => {
     const store = eventStore();
     emit(store.sql, store.actor, 'run-a', 'context_budget', {
       admittedChars: 1_000, omittedChars: 40_000, trips: { run: 2 },
-      referenced: 2, tightened: 1, followUps: 2,
+      referenced: 2, followUps: 2,
     });
     const score = spillRetrieval.score(store.sql, store.actor);
     expect(score.eligible).toBe(2);
@@ -594,7 +594,7 @@ describe('spillRetrieval — spilled context read back', () => {
     const store = eventStore();
     emit(store.sql, store.actor, 'run-a', 'context_budget', {
       admittedChars: 500, omittedChars: 80_000, trips: { run: 3 },
-      referenced: 3, tightened: 0, followUps: 0,
+      referenced: 3, followUps: 0,
     });
     const score = spillRetrieval.score(store.sql, store.actor);
     expect(score.eligible).toBe(3);
@@ -609,7 +609,7 @@ describe('spillRetrieval — spilled context read back', () => {
     const store = eventStore();
     emit(store.sql, store.actor, 'run-a', 'context_budget', {
       admittedChars: 0, omittedChars: 9_000, trips: { attachment: 1 },
-      referenced: 0, tightened: 0, followUps: 0,
+      referenced: 0, followUps: 0,
     });
     const score = spillRetrieval.score(store.sql, store.actor);
     expect(score.eligible).toBe(0);

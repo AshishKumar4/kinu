@@ -7,6 +7,7 @@ import {
   CompletionGate, observeCompletionState, completionGateText,
   COMPLETION_GATE_HEADER, COMPLETION_PROBE_COMMANDS, COMPLETION_TASK_ECHO_MAX_CHARS,
 } from '../src/orchestrator/completion-gate';
+import { DEFAULT_TOOL_RESULT_MAX_CHARS } from '../src/tools/clamp';
 
 const DID_WORK = { completed: true, toolCalls: 4 };
 
@@ -130,8 +131,8 @@ describe('the state the harness observes', () => {
       exec: async () => ({ stdout: 'F'.repeat(50_000), stderr: '', exitCode: 0 }),
     });
 
-    expect(observed!.length).toBeLessThan(20_000);
-    expect(observed).toContain('chars omitted');
+    expect(observed!.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
+    expect(observed).toContain('[truncated;');
   });
 });
 

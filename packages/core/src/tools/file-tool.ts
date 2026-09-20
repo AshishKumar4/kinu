@@ -279,20 +279,22 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
           return failure(vfsFail.reason, vfsFail.error);
         }
 
-        const configured = DEFAULT_TOOL_RESULT_MAX_CHARS;
-        const cap = budget.capFor(configured);
         // The BOM is stripped from what the model is SHOWN, not from the file:
         // it is invisible, so a model copying the first line back as old_text
         // would carry it and never match, with no way to see why.
         const shown = content.startsWith(BOM) ? content.slice(1) : content;
-        const slice = readFileSlice(shown, { path, offset: args.offset, limit: args.limit, maxChars: cap });
+
+        const slice = readFileSlice(shown, {
+          path, offset: args.offset, limit: args.limit, maxChars: DEFAULT_TOOL_RESULT_MAX_CHARS,
+        });
+
         ledger.observeRange(path, content, slice.first, slice.last, slice.total);
         budget.admit(slice.output.length);
 
         if (slice.omitted > 0) {
           // The full text is not spilled anywhere: it is already addressable
           // at its own path, and the marker says which offset continues it.
-          budget.recordSpill({ producer: 'file_read', omitted: slice.omitted, referenced: true, tightened: cap < configured });
+          budget.recordSpill({ producer: 'file_read', omitted: slice.omitted, referenced: true });
         }
 
         return slice.output;

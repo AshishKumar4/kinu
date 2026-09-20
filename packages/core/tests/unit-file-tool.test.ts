@@ -183,29 +183,36 @@ describe('applyFileEdits', () => {
 // ── the read ────────────────────────────────────────────────────────────────
 
 describe('readFileSlice', () => {
-  const file = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join('\n');
+  const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1} ${'.'.repeat(12)}`);
+  const file = lines.join('\n');
+  // Above the continuation marker's own length and below the whole file, so a
+  // read at this cap truncates for the reason the test is about. A cap under
+  // the marker cannot be honoured AND stay restorable; the marker wins there.
+  const CAP = 180;
 
   test('returns the whole file unmarked when it fits', () => {
     expect(readFileSlice(file, { path: '/f', maxChars: 10_000 }))
       .toEqual({ output: file, omitted: 0, first: 1, last: 10, total: 10 });
   });
 
-  test('a cap-truncated read names the offset that continues it', () => {
-    const slice = readFileSlice(file, { path: '/f', maxChars: 20 });
+  test('a cap-truncated read names the offset that continues it, marker inside the cap', () => {
+    const slice = readFileSlice(file, { path: '/f', maxChars: CAP });
     expect(slice.omitted).toBeGreaterThan(0);
     expect(slice.output).toContain('of 10 in /f');
     expect(slice.output).toMatch(/action=read offset=\d+/);
+    // The marker is part of the budget, not an extra charged on top of it.
+    expect(slice.output.length).toBeLessThanOrEqual(CAP);
   });
 
   test('continuing from the named offset reaches the end', () => {
-    const first = readFileSlice(file, { path: '/f', maxChars: 20 });
+    const first = readFileSlice(file, { path: '/f', maxChars: CAP });
     const offsetMatch = /offset=(\d+)/.exec(first.output);
 
     if (!offsetMatch) throw new Error('truncated read did not include its continuation offset');
     const next = Number(offsetMatch[1]);
     const second = readFileSlice(file, { path: '/f', offset: next, maxChars: 10_000 });
     expect(second.omitted).toBe(0);
-    expect(second.output.split('\n')[0]).toBe(`line ${next}`);
+    expect(second.output.split('\n')[0]).toBe(lines[next - 1]);
   });
 
   test('a limit that stops early says so too', () => {
@@ -216,21 +223,30 @@ describe('readFileSlice', () => {
 
   test('a limit that reaches the end is not marked', () => {
     expect(readFileSlice(file, { path: '/f', offset: 8, limit: 3, maxChars: 10_000 }).output)
-      .toBe('line 8\nline 9\nline 10');
+      .toBe(lines.slice(7).join('\n'));
   });
 
   test('one line larger than the cap hands over a recipe instead of clipping silently', () => {
-    const slice = readFileSlice('x'.repeat(500), { path: '/f', maxChars: 100 });
-    expect(slice.output).toContain('does not fit');
+    const slice = readFileSlice('x'.repeat(500), { path: '/f', maxChars: 300 });
+    expect(slice.output).toContain('is 500 chars and does not fit');
     expect(slice.output).toContain('workspace.readFile inside eval');
-    expect(slice.omitted).toBe(400);
+    expect(slice.output.length).toBeLessThanOrEqual(300);
+    // Shown head plus withheld chars is the whole line: nothing vanishes.
+    expect(slice.omitted).toBe(500 - slice.output.indexOf('\n\n['));
   });
 
   test('a leading blank line does not make the next line look free', () => {
-    // The joining newline is keyed on the line count, not the running total.
-    const slice = readFileSlice('\nabcde\nfghij', { path: '/f', maxChars: 6 });
-    expect(slice.output.split('\n\n')[0]).toBe('\nabcde'.slice(0, 6));
-    expect(slice.output).toContain('offset=');
+    // The joining newline costs a char for every line after the first, keyed
+    // on the line COUNT rather than the running total. Measured at this cap:
+    // the rule keeps 2 lines, dropping the join cost keeps 3, so the shown
+    // text is what tells the two apart.
+    const rows = ['', ...Array.from({ length: 29 }, (_, i) => String.fromCharCode(97 + (i % 26)).repeat(10))];
+    const slice = readFileSlice(rows.join('\n'), { path: '/f', maxChars: 121 });
+
+    expect(slice.output.split('\n\n[')[0]).toBe('\naaaaaaaaaa');
+    expect(slice.last).toBe(2);
+    expect(slice.output).toContain('offset=3');
+    expect(slice.output.length).toBeLessThanOrEqual(121);
   });
 
   test('an offset past the end says so rather than returning empty', () => {
@@ -243,6 +259,21 @@ describe('readFileSlice', () => {
     expect(slice).toEqual({ output: 'a\nb\n', omitted: 0, first: 1, last: 2, total: 2 });
   });
 
+  test('a whole read that only just fits keeps the file byte-identical', () => {
+    // The file's own trailing newline is part of the output, so it is part of
+    // what the cap measures.
+    const content = 'ab\ncd\n';
+    expect(readFileSlice(content, { path: '/f', maxChars: content.length }).output).toBe(content);
+    expect(readFileSlice(content, { path: '/f', maxChars: content.length - 1 }).output)
+      .not.toBe(content);
+  });
+
+  test('multibyte text survives the slice as characters, not halves', () => {
+    const slice = readFileSlice('🙂'.repeat(500), { path: '/f', maxChars: 300 });
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(slice.output)).toBe(false);
+    expect(slice.output.length).toBeLessThanOrEqual(300);
+  });
+
   test('an empty file says it is empty rather than returning nothing', () => {
     expect(readFileSlice('', { path: '/f', maxChars: 100 }).output).toBe('[/f is empty]');
   });
@@ -252,7 +283,7 @@ describe('readFileSlice', () => {
       const slice = readFileSlice('a\nb\nc\n', { path: '/f', limit, maxChars: 100 });
       expect(slice.output.split('\n')[0]).toBe('a');
       expect(slice.last).toBe(1);
-      expect(slice.omitted).toBeGreaterThanOrEqual(0);
+      expect(slice.output).toContain('limit=1');
     }
   });
 
@@ -262,7 +293,8 @@ describe('readFileSlice', () => {
     let rebuilt = '';
 
     for (let guard = 0; guard < 50; guard++) {
-      const slice = readFileSlice(big, { path: '/f', offset, maxChars: 30 });
+      const slice = readFileSlice(big, { path: '/f', offset, maxChars: CAP });
+      expect(slice.output.length).toBeLessThanOrEqual(CAP);
       rebuilt += slice.output.split('\n\n[')[0];
 
       if (slice.last >= slice.total) break;
@@ -274,7 +306,7 @@ describe('readFileSlice', () => {
   });
 
   test('never numbers lines — old_text is copied out of this output', () => {
-    expect(readFileSlice(file, { path: '/f', maxChars: 10_000 }).output.split('\n')[0]).toBe('line 1');
+    expect(readFileSlice(file, { path: '/f', maxChars: 10_000 }).output.split('\n')[0]).toBe(lines[0]);
   });
 });
 

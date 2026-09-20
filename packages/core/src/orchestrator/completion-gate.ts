@@ -65,11 +65,6 @@ export const COMPLETION_GATE_HEADER =
  */
 export const COMPLETION_PROBE_COMMANDS = ['pwd', 'ls -la', 'git status --short'] as const;
 
-/** Bound on the observation. Big enough for a full directory listing plus a
- *  working tree's worth of changes; clamped through the ordinary tool-result
- *  path, so an overflowing listing still spills with its restore recipe. */
-export const COMPLETION_OBSERVATION_MAX_CHARS = 8_000;
-
 /** Bound on the task echoed back. The task is already in history — the echo is
  *  there to re-anchor a weak model at the moment it is deciding it is done, not
  *  to re-send the prompt. */
@@ -106,10 +101,10 @@ export async function observeCompletionState(deps: {
 
   if (blocks.length === 0) return null;
 
-  return clampToolResult(blocks.join('\n\n'), {
-    maxChars: COMPLETION_OBSERVATION_MAX_CHARS,
-    vfs: deps.vfs,
-  });
+  // The shared tool-result budget, not a bound of its own: the observation is
+  // a probe's stdout and pays what any other stdout pays, spill recipe
+  // included.
+  return clampToolResult(blocks.join('\n\n'), { vfs: deps.vfs });
 }
 
 /** The turn the gate enqueues: the task, the observation, and the stakes. */
