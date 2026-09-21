@@ -33,6 +33,7 @@ import { FilledButton } from "./ui/FilledButton";
 import { KinuLogo } from "./ui/KinuLogo";
 import { removeWorkspace, type WorkspaceEntry } from "../lib/user-api";
 import { useAccount } from "@/hooks/use-account";
+import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { useWorkspaceRpc } from "../hooks/use-kinu";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { lastValue } from "../hooks/use-async-resource";
@@ -227,17 +228,8 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
   }, []);
 
 
-  useEffect(() => {
-    const onClick = (e: MouseEvent) => {
-      if (userMenuRef.current && e.target instanceof Node && !userMenuRef.current.contains(e.target)) {
-        setShowUserMenu(false);
-      }
-    };
-
-    document.addEventListener('click', onClick);
-
-    return () => document.removeEventListener('click', onClick);
-  }, []);
+  const closeUserMenu = useCallback(() => setShowUserMenu(false), []);
+  useCloseOnOutsideClick(showUserMenu, userMenuRef, closeUserMenu);
 
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget) return;

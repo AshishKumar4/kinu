@@ -11,7 +11,8 @@
  * presets expand one labelled field under the row. Removal is the ordinary
  * server remove, under the added row's own menu.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import {
   ArrowSquareOutIcon, CaretDownIcon, PlusIcon, TrashIcon, XIcon,
 } from "@phosphor-icons/react";
@@ -64,8 +65,7 @@ function presetWord(server: McpServerSummary | undefined) {
 }
 
 /** An added row's one control: the state its server is in, and — on click —
- *  the two things a person does with it. The outside click that closes it is
- *  the listener the Drive menus use. */
+ *  the two things a person does with it. */
 function PresetMenu({ preset, word, dot, onRemove }: {
   preset: McpPreset;
   word: string;
@@ -74,18 +74,8 @@ function PresetMenu({ preset, word, dot, onRemove }: {
 }) {
   const [open, setOpen] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const onClick = (event: MouseEvent) => {
-      if (menu.current && event.target instanceof Node && !menu.current.contains(event.target)) setOpen(false);
-    };
-
-    document.addEventListener("click", onClick);
-
-    return () => document.removeEventListener("click", onClick);
-  }, [open]);
+  const close = useCallback(() => setOpen(false), []);
+  useCloseOnOutsideClick(open, menu, close);
 
   const item = "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm p-card-hover";
 

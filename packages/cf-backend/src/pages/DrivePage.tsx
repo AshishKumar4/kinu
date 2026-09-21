@@ -25,6 +25,7 @@ import {
   uploadFile, uploadFolder, uploadZip, type PickedFile,
 } from "@/lib/drive-api";
 import { useAsyncResource, lastValue } from "@/hooks/use-async-resource";
+import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Modal } from "@/components/ui/Modal";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -307,18 +308,8 @@ function UploadMenu({ disabled, onFiles, onFolder, onZip }: {
   const filesInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
   const zipInput = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const onClick = (event: MouseEvent) => {
-      if (menu.current && event.target instanceof Node && !menu.current.contains(event.target)) setOpen(false);
-    };
-
-    document.addEventListener("click", onClick);
-
-    return () => document.removeEventListener("click", onClick);
-  }, [open]);
+  const close = useCallback(() => setOpen(false), []);
+  useCloseOnOutsideClick(open, menu, close);
 
   const item = "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm p-card-hover";
 
