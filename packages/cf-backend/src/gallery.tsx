@@ -4009,27 +4009,45 @@ const SUBORDINATES: Parameters<typeof SubordinateTabs>[0]["subordinates"] = [
   { name: "agent-4f2c", displayName: "", role: "agent", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
 ];
 
+/* One strip of the frame: the tab it has open, the column width it draws at,
+   and the body under it. The open tab is the strip's hook, so a gate can read
+   one strip's paint beside another's. */
+interface TabStripCase {
+  readonly open?: string;
+  readonly width: number;
+  readonly body: string;
+}
+
+const TAB_STRIPS: readonly TabStripCase[] = [
+  { width: 520, body: "Main chat body" },
+  { width: 380, body: "Main chat body" },
+  { open: "coupon-tester", width: 520, body: "Subordinate chat body" },
+  // The agent still under its codename. A blank display name renders the word
+  // pair it was born with, and that tab must read as the open one too. It is
+  // the last of the roster, so this strip is wide enough to hold the whole
+  // set — a photograph of a scrolled strip shows the open tab off its edge.
+  { open: "agent-4f2c", width: 760, body: "Codename chat body" },
+];
+
 /* The strip sits at the top of Column A, on the chat column's own ground —
    photographing it anywhere else hides the seam that the complaint is about. */
 function TabsFrame() {
   return (
     <div className="p-bg min-h-screen p-8 space-y-8">
-      {[520, 380].map((w) => (
-        <div key={w} className="flex flex-col border p-border overflow-hidden" style={{ width: w, height: 190 }}>
+      {TAB_STRIPS.map((one) => (
+        <div
+          key={`${one.open ?? "main"}-${one.width}`}
+          data-tab-strip={one.open ?? "main"}
+          className="flex flex-col border p-border overflow-hidden"
+          style={{ width: one.width, height: 190 }}
+        >
           <SubordinateTabs
-            workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
+            workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={one.open}
             onCreate={async () => {}} creating={false} onDismiss={async () => {}} onRename={async (_name, displayName) => displayName}
           />
-          <div className="flex-1 px-5 py-4 p-row-text p-text-3">Main chat body</div>
+          <div className="flex-1 px-5 py-4 p-row-text p-text-3">{one.body}</div>
         </div>
       ))}
-      <div className="flex flex-col border p-border overflow-hidden" style={{ width: 520, height: 190 }}>
-        <SubordinateTabs
-          workspace="checkout-fixes" subordinates={SUBORDINATES} activeName="coupon-tester"
-          onCreate={async () => {}} creating={false} onDismiss={async () => {}} onRename={async (_name, displayName) => displayName}
-        />
-        <div className="flex-1 px-5 py-4 p-row-text p-text-3">Subordinate chat body</div>
-      </div>
     </div>
   );
 }

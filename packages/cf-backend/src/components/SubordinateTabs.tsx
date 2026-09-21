@@ -70,20 +70,28 @@ export function SubordinateTabs({
   return (
     <>
       {/* One tab grammar with the work surfaces: a bottom edge, not a box.
-          `-mb-px` puts the active bar on the strip's own rule so the two
-          read as one line rather than two.
+
+          The ROW owns the rule and the strip reaches one pixel over it, so the
+          open tab's bar lands ON that rule and the two read as one line. The
+          rule cannot live on the strip itself: the strip clips vertically —
+          a tab's overhang is enough to raise a scrollbar beside a single row
+          of tabs — and a bar drawn past the strip's own edge is clipped away.
+          That clip is what hid the open tab: every tab stood taller than the
+          45px strip, so its accent bar fell outside the box the strip shows.
+          `h-full` with `items-stretch` makes each tab the strip's own height
+          and puts the bar back in view.
 
           The trailing controls are a SIBLING of the strip, not content inside
           it: the strip scrolls horizontally once the roster outgrows the
-          column, and anything within it scrolls away with the tabs. They carry
-          the same bottom rule so the two still read as one line. */}
-      <div className={`flex shrink-0 items-stretch ${tabStripH}`}>
-        <nav aria-label="Workspace agents" className={`p-tabstrip flex min-w-0 flex-1 items-center gap-2 border-b p-border px-2 ${tabStripH}`}>
+          column, and anything within it scrolls away with the tabs. The row's
+          rule runs under both, so the two still read as one line. */}
+      <div className={`flex shrink-0 items-stretch border-b p-border ${tabStripH}`}>
+        <nav aria-label="Workspace agents" className={`p-tabstrip -mb-px flex min-w-0 flex-1 items-stretch gap-2 px-2 ${tabStripH}`}>
           <Link
             to={mainPath}
             data-agent-tab="main"
             aria-current={!activeName ? "page" : undefined}
-            className={`${tabCls} px-3 ${!activeName ? "p-tab-active font-medium" : ""}`}
+            className={`${tabCls} h-full px-3 ${!activeName ? "p-tab-active font-medium" : ""}`}
           >
             <HouseIcon size={13} weight={!activeName ? "fill" : "regular"} />
             Main
@@ -97,12 +105,18 @@ export function SubordinateTabs({
                 {active ? (
                   // The open tab is not a link anywhere; it is where the agent is renamed.
                   <div aria-current="page" className={`${tabCls} p-tab-active h-full max-w-64 pl-3 pr-8 font-medium`}>
+                    {/* The mounting row names the colour its own title reads
+                        in — the rename control's contract — so the open tab
+                        hands over the accent. An agent still under its
+                        codename keeps the italic and drops the muted colour
+                        with it; muted was how a lit tab still printed its name
+                        like a closed one. */}
                     <InlineRenameTitle
                       title={title}
                       editValue={subordinate.displayName}
                       onRename={(displayName) => onRename(subordinate.name, displayName)}
                       subject="agent"
-                      textClass={`p-t-control font-medium ${subordinate.displayName ? "" : "italic p-text-3"}`}
+                      textClass={`p-t-control p-accent font-medium ${subordinate.displayName ? "" : "italic"}`}
                     />
                     <StatusMark subordinate={subordinate} />
                   </div>
@@ -171,7 +185,7 @@ export function SubordinateTabs({
           </button>
         </nav>
         {trailing && (
-          <div className="flex shrink-0 items-center gap-2 border-b p-border pl-2 pr-3">{trailing}</div>
+          <div className="flex shrink-0 items-center gap-2 pl-2 pr-3">{trailing}</div>
         )}
       </div>
 

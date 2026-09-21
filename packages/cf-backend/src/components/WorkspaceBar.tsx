@@ -176,9 +176,13 @@ export function WorkspaceBar({
  * The click-to-edit identity control, shared by the workspace bar and each
  * agent conversation's header — one rename affordance, whatever it names.
  * `subject` labels the accessible controls; `textClass` carries the mounting
- * row's type scale so the still text and the editor agree.
+ * row's type scale AND its text colour, so the still text and the editor agree
+ * and the row decides how its own name reads. The colour used to be written
+ * here as well, which a mounting row cannot overrule — a role in Tailwind's
+ * utility layer outranks the grammar of whatever the name sits in — and that
+ * is how the open agent tab kept printing its name in the closed colour.
  */
-export function InlineRenameTitle({ title, editValue, onRename, subject, textClass = "text-[15px] font-semibold" }: {
+export function InlineRenameTitle({ title, editValue, onRename, subject, textClass = "text-[15px] font-semibold p-text" }: {
   title: string;
   /** What the field opens with. The shown title is the label a person reads —
    *  "Untitled workspace" included — and pre-filling it would persist the
@@ -256,7 +260,7 @@ export function InlineRenameTitle({ title, editValue, onRename, subject, textCla
       title={`Rename ${subject}`}
     >
       {/* 15px/600 is the mock's top-bar name weight; headers pass their own. */}
-      <span className={`truncate ${textClass} p-text`}>{title}</span>
+      <span className={`truncate ${textClass}`}>{title}</span>
       <PencilSimpleIcon size={11} className="shrink-0 p-text-4 opacity-0 transition-opacity group-hover/title:opacity-100" />
     </button>
   );
