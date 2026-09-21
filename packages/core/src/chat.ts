@@ -730,14 +730,14 @@ function suppressDeferredRejections(
 }
 
 /** The window a turn is assembled, admitted and pruned against, and the answer allowance inside it. */
-function turnWindow(modelContext: ChatOptions['modelContext']): ModelWindow {
-  const contextWindow = modelContext?.contextWindow ?? contextWindowForModel(modelContext?.id ?? '');
+function turnWindow(opts: ChatOptions): ModelWindow {
+  const contextWindow = opts.modelContext?.contextWindow ?? contextWindowForModel(opts.modelContext?.id ?? '');
 
   // An unreported answer allowance says nothing about how much of the window
   // the answer may take, so the honest reading is the whole window and
   // `outputReserveTokens` splits from there. A picked number here would put a
   // fact in the catalog's mouth.
-  return { contextWindow, modelOutputLimit: modelContext?.modelOutputLimit ?? contextWindow };
+  return { contextWindow, modelOutputLimit: opts.modelContext?.modelOutputLimit ?? contextWindow };
 }
 
 /**
@@ -791,7 +791,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const modelSpec = opts.modelContext?.id;
 
   let stepCount = 0;
-  const { contextWindow, modelOutputLimit } = turnWindow(opts.modelContext);
+  const { contextWindow, modelOutputLimit } = turnWindow(opts);
 
   // The shared turn-context assembly (orchestrator/turn-context.ts): attachment
   // sanitize → extension onTurnStart → awaited transformContext (compaction) →
