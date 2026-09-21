@@ -26,6 +26,12 @@
  * plus JSON control messages (`{type:'resize'}` in, `ready`/`exit`/`error`
  * out). `@cloudflare/sandbox/xterm`'s `SandboxAddon` is the client half of
  * that same protocol, so the browser speaks it verbatim.
+ *
+ * The workspace's shell is Nimbus's own, and it lives inside the workspace
+ * object with the runtime: the upgrade is forwarded there under
+ * `WORKSPACE_TERMINAL_PATH`, the object accepts and tags the socket, and every
+ * frame after that is the runtime's (see workspace-terminal.ts). This route
+ * stays the auth and ownership boundary; the runtime owns the shell.
  */
 
 import { getSandbox, type PtyOptions } from "@cloudflare/sandbox";
@@ -38,6 +44,7 @@ import { DEVICE_PTY_MAX_AXIS, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
 import { terminalLane } from "@kinu.run/core";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
+import { WORKSPACE_TERMINAL_PATH } from "@kinu.run/core";
 
 /**
  * The PTY entry points the SDK's client proxy adds around the container stub.
@@ -54,6 +61,9 @@ type SandboxPty = {
 
 /** The executor name for the owner's own machine. */
 const DEVICE_EXECUTOR = "device";
+
+/** The executor name for the workspace's own runtime. */
+const WORKSPACE_EXECUTOR = "workspace";
 
 /** The window a pane gets when it names none. 80x24 is what a terminal has
  *  been since DEC sold one, and every program still assumes it. */
@@ -272,6 +282,57 @@ export async function handleTerminalRequest(
     const namespace: DeviceHolderNamespace = env.UserDO;
 
     return namespace.get(namespace.idFromName(opened.user)).fetch(new Request(socketUrl, request));
+  }
+
+  // THE WORKSPACE'S OWN SHELL. No container and no lease: the shell is the
+  // runtime's, inside the workspace object, so the upgrade goes there once the
+  // runtime is composed. The keepalive and reset verbs are guards here for the
+  // same reason they are for a device — the pane calls neither, and the
+  // container path below must not be reached for a shell it does not run.
+  if (executor === WORKSPACE_EXECUTOR) {
+    if (keepalive || reset) {
+      if (request.method !== "POST") return err(405, "use POST");
+
+      return json({ ok: true });
+    }
+
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return err(400, "the terminal endpoint is a WebSocket; send an Upgrade: websocket request");
+    }
+
+    try {
+      const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+      const ready = await agent.prepareTerminal(executor);
+
+      if ("error" in ready) {
+        diagnostics.failure("terminal.workspace_not_ready", toKinuError({
+          doing: "composing this workspace's runtime for a terminal",
+          cause: ready.error,
+          otherwise: "unavailable",
+        }), scope);
+
+        return err(503, ready.error);
+      }
+
+      if (request.signal.aborted) return abandonedAttach();
+      // The identity headers server.ts appended ride along, so the accepted
+      // socket carries the same session authority a chat socket does and is
+      // closed by the same revocation.
+      const socketUrl = new URL(request.url);
+      socketUrl.pathname = WORKSPACE_TERMINAL_PATH;
+
+      return await agent.fetch(new Request(socketUrl, request));
+    } catch (cause) {
+      const error = toKinuError({
+        doing: "reaching this workspace to open its shell",
+        cause,
+        otherwise: "unavailable",
+      });
+
+      diagnostics.failure("terminal.workspace_open_failed", error, scope);
+
+      return err(503, renderCauseChain(error));
+    }
   }
 
   if (!env.Sandbox) return err(503, "no Sandbox binding is configured on this deployment");

@@ -1,6 +1,6 @@
 /**
  * What kind of terminal each environment can give a user, and the line-mode
- * driver for the environments that can give no pseudo-terminal.
+ * driver for the environments that can give no shell at all.
  *
  * One module because the lane answer has two readers that must agree: the
  * route that attaches the socket (terminal-route.ts) and the pane that renders
@@ -25,6 +25,7 @@
  */
 export type TerminalLane =
   | { mode: 'pty' }
+  | { mode: 'shell' }
   | { mode: 'line' };
 
 /** The line-mode label, beside the pane so a test can read it without xterm. */
@@ -512,13 +513,16 @@ export function writeOutputRow(term: TerminalWriter, out: TerminalPaneOutput) {
  *   `resize(cols, rows)` reaches that terminal, and a 256 KiB ring buffer
  *   replays to a reattaching client.
  *
- * `workspace` — Nimbus. Its session handle (core/src/execution/nimbus.ts,
- *   `NimbusSandboxHandle`) offers `exec` with a one-shot `stdin?: string`,
- *   `startProcess` with `processes.logs(pid)` polling, and nothing more: no
- *   bidirectional byte stream, no resize, no raw-mode input. Nimbus is a
- *   JS/WASM substrate and its own tty shim states there is no real TTY
- *   (`@nimbus-sh/core` substrate/lifo/node-compat/tty.d.ts), so its processes
- *   have no controlling terminal to attach to.
+ * `workspace` — Nimbus's own shell, `shell` mode. The hosted runtime
+ *   (@nimbus-sh/worker 0.8.0 `composeHostedRuntime`: `attachTerminal`,
+ *   `terminalFrame`, `terminalClose`) keeps one `WebSocketTerminal` per
+ *   workspace with its own line editor, scrollback replay on reattach, and
+ *   the bash and python REPLs. It is not a pseudo-terminal: Nimbus is a
+ *   JS/WASM substrate whose tty shim states there is no real TTY
+ *   (`@nimbus-sh/core` substrate/lifo/node-compat/tty.d.ts), so there is no
+ *   raw mode and a full-screen program cannot paint. The wire is JSON text:
+ *   `{type:'input'}` and `{type:'resize'}` in, `{type:'output'}` and
+ *   `{type:'ready'}` out (`packages/worker/src/facets/ws-terminal.ts`).
  *
  * `device` — the owner's own machine, through its agent
  *   (`packages/pc-agent/src/pty.js`). The agent allocates a real terminal per
@@ -533,5 +537,7 @@ export function writeOutputRow(term: TerminalWriter, out: TerminalPaneOutput) {
  *   with no session of its own to attach to.
  */
 export function terminalLane(executor: string): TerminalLane {
-  return executor === 'sandbox' || executor === 'device' ? { mode: 'pty' } : { mode: 'line' };
+  if (executor === 'sandbox' || executor === 'device') return { mode: 'pty' };
+
+  return executor === 'workspace' ? { mode: 'shell' } : { mode: 'line' };
 }

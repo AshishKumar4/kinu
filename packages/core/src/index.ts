@@ -1282,7 +1282,6 @@ export {
   writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, archiveFileTree,
 } from './vfs/workspace-planes';
 
-export { wireWorkspaceLoopback } from './vfs/workspace-runtimes';
 
 export {
   makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
@@ -2323,6 +2322,11 @@ export {
   BUSY, LINE_MODE_LABEL, LineTerminalState, type TerminalLane, type TerminalPaneOutput,
   type TerminalWriter, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
 } from './execution/terminal-lane';
+
+export {
+  WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG, WorkspaceTerminalInputSchema, WorkspaceTerminalOutputSchema,
+  isWorkspaceTerminal,
+} from './execution/workspace-terminal';
 
 export {
   type WorkspacePreviewHost, type WorkspacePreviewUrl, buildWorkspacePreviewHost, parseWorkspacePreviewLabel,

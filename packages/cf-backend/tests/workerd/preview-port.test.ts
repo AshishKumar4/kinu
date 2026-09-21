@@ -4,17 +4,6 @@ import { describe, expect, it } from 'vitest';
 describe('a served port from the hosted workspace', () => {
   const open = (name: string) => env.PREVIEW_PORT_PROBE.get(env.PREVIEW_PORT_PROBE.idFromName(name));
 
-  it('refuses node with a reason naming the container, not the raw V8 error alone', async () => {
-    const subject = open('node-refusal');
-
-    const evaluated = await subject.nodeEval();
-    const filed = await subject.nodeFile();
-    expect(evaluated.exitCode).toBe(127);
-    expect(filed.exitCode).toBe(127);
-    expect(evaluated.stderr).toContain('sandbox');
-    expect(filed.stderr).toContain('sandbox');
-  });
-
   it('a user-invoked program runs past the old 30 s wall-clock lifetime and reports its own exit', async () => {
     const subject = open('outlast');
 

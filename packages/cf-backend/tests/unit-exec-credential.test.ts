@@ -16,14 +16,14 @@ import { Nimbus, type NimbusExecOptions } from '@nimbus-sh/sdk';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
+  programmaticHostOver,
   ensureProgrammaticReady,
   rpcExec,
   rpcProcessLogs,
   rpcStartProcess,
   type ProgrammaticExecOptions,
   type ProgrammaticHost,
-} from '@nimbus-sh/worker/programmatic';
-import { programmaticHostOver } from './helpers/programmatic-host';
+} from './helpers/programmatic-host';
 
 const databases: Database[] = [];
 

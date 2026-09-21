@@ -8,7 +8,6 @@ import type {
 } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { _rpcWriteProtectedRootFile } from '@nimbus-sh/worker/rpc';
 
 const repositoryRoot = join(import.meta.dir, '../../..');
 
@@ -72,35 +71,6 @@ describe('installed Nimbus dependency integrity', () => {
     const result = await workspace.exec('xargs -0 -n 1 echo', { stdin: ' leading\0second\0' });
 
     expect(result).toMatchObject({ exitCode: 0, stdout: ' leading\nsecond\n' });
-    db.close();
-  });
-
-  test('a protected root file is host-writable and immutable to the session user', async () => {
-    const db = new Database(':memory:');
-
-    const workspace = await NimbusWorkspace.create({
-      sql: workspaceSql(db),
-      transactions: { storage: { transactionSync: <T,>(fn: () => T): T => db.transaction(fn)() } },
-      generation: 1,
-      cwd: '/home/user',
-    });
-
-    const host = {
-      ensureSqliteFs() {},
-      sqliteFs: workspace.vfs,
-    };
-
-    await _rpcWriteProtectedRootFile(host, '/home/user', '/home/user/SOUL.md', 'owner identity');
-    expect((await workspace.exec("printf 'agent overwrite' > SOUL.md")).exitCode).not.toBe(0);
-    expect((await workspace.exec('rm SOUL.md')).exitCode).not.toBe(0);
-    expect((await workspace.exec('mv SOUL.md stolen.md')).exitCode).not.toBe(0);
-    expect(await workspace.fs.readFile('/home/user/SOUL.md')).toBe('owner identity');
-
-    await _rpcWriteProtectedRootFile(host, '/home/user', '/home/user/SOUL.md', 'owner update');
-    expect(await workspace.fs.readFile('/home/user/SOUL.md')).toBe('owner update');
-    await workspace.fs.writeFile('/home/user/project.txt', 'ordinary file');
-    expect((await workspace.exec('rm project.txt')).exitCode).toBe(0);
-    expect(await workspace.fs.exists('/home/user/project.txt')).toBe(false);
     db.close();
   });
 

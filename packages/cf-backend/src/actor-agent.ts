@@ -268,6 +268,8 @@ import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
 import { diagnostics, KinuError, refusalOf, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserDoRpcMethod } from "./rpc-surface";
+import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
+import type { WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
 import { sha256Hex } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
@@ -1415,6 +1417,14 @@ export abstract class ActorAgent extends Agent<Env> {
     const dispatchMessage = this.onMessage;
     this.onMessage = async (connection, message) => {
       if (await this.refuseRevokedSocketAuthority(connection, message)) return;
+      const terminal = await this.terminalFor(connection);
+
+      if (terminal) {
+        await this.forwardTerminalFrame(terminal, connection, message);
+
+        return;
+      }
+
       const rejection = rejectOutOfScopeRpc(connection.tags, message);
 
       if (rejection) {
@@ -1477,11 +1487,17 @@ export abstract class ActorAgent extends Agent<Env> {
       this.connectionOpened();
 
       await baseOnConnect.call(this, connection, ctx);
-      await this.chatRoomFor(connection)?.onConnect(connection);
+      const terminal = await this.terminalFor(connection);
+
+      if (terminal) await terminal.attachTerminal(connection);
+      else await this.chatRoomFor(connection)?.onConnect(connection);
     };
 
     this.onClose = async (connection, code, reason, wasClean) => {
-      this.chatRoomFor(connection)?.onClose(connection);
+      const terminal = await this.terminalFor(connection);
+
+      if (terminal) terminal.terminalClose(connection);
+      else this.chatRoomFor(connection)?.onClose(connection);
       await baseOnClose.call(this, connection, code, reason, wasClean);
 
       // The closing socket is no longer open, so the manager's iterator does
@@ -2588,6 +2604,50 @@ export abstract class ActorAgent extends Agent<Env> {
     }
 
     this.broadcast(message, [...new Set([...(exclude ?? []), ...elsewhere])]);
+  }
+
+  /**
+   * The runtime shell a socket addresses, or null for a chat or RPC socket.
+   * The base hosts no workspace, so the answer here is always null; the root
+   * answers with its hosted runtime for a socket tagged as its terminal.
+   */
+  protected terminalFor(_connection: Connection): Promise<WorkspaceTerminal | null> {
+    return Promise.resolve(null);
+  }
+
+  /**
+   * One frame from a terminal socket, into the runtime's shell. The frame is
+   * checked here, at the client boundary, so the runtime only ever parses a
+   * frame of its own shape; a socket that sends anything else is closed with
+   * the reason, since the pane and the route ship together.
+   */
+  private async forwardTerminalFrame(terminal: WorkspaceTerminal, connection: Connection, message: WSMessage): Promise<void> {
+    const frame = v.is(v.string(), message)
+      ? v.safeParse(WorkspaceTerminalInputSchema, tolerate(() => JSON.parse(message), 'malformed-input'))
+      : null;
+
+    if (frame === null || !frame.success) {
+      connection.close(WEBSOCKET_POLICY_CLOSE, 'terminal frame refused: not an input or resize frame');
+
+      return;
+    }
+
+    await terminal.terminalFrame(connection, JSON.stringify(frame.output));
+  }
+
+  /**
+   * The object's fan-out, minus its terminal sockets: those carry the shell's
+   * own frames and nothing of the actor protocol, and the pane at the other
+   * end would only drop a chat or state frame that reached it.
+   */
+  override broadcast(message: string | ArrayBuffer | ArrayBufferView, without?: string[]): void {
+    const terminals: string[] = [];
+
+    for (const connection of this.getConnections()) {
+      if (isWorkspaceTerminal(connection.tags)) terminals.push(connection.id);
+    }
+
+    super.broadcast(message, terminals.length === 0 ? without : [...(without ?? []), ...terminals]);
   }
 
   /** The chat rooms of this object: the root's transport, and one per hosted

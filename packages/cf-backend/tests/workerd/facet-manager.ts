@@ -10,7 +10,6 @@ import type { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { composeFacetManager, type ComposedFacetManager } from '@nimbus-sh/worker/workspace-host';
 import { readPortReservationByOwner } from '@nimbus-sh/worker/port-capability';
-import { facetDiagnosticsHooks } from '../../src/nimbus-programmatic';
 
 export interface ProbeFacetManagerDeps {
   readonly ctx: DurableObjectState;
@@ -24,7 +23,9 @@ export function probeFacetManager(deps: ProbeFacetManagerDeps): ComposedFacetMan
   const composed: ComposedFacetManager = composeFacetManager({
     ...deps,
     hooks: {
-      ...facetDiagnosticsHooks(),
+      onExternalExit: () => undefined,
+      onSpawn: () => undefined,
+      notify: () => undefined,
       requestLaunchTurn: () => { deps.ctx.waitUntil(composed.pumpLaunches()); },
       // A durable spawn carrying the egress binding is journalled only under
       // a resolver; a probe re-drives nothing across a reset, so the journal

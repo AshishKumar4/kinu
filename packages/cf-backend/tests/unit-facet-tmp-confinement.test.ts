@@ -16,6 +16,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
+import type { HostedRuntime } from '@nimbus-sh/worker/workspace-host';
 import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { NimbusSandboxHandle, NodeHomeHost, NodeIdentity } from '@kinu.run/core';
 import {
@@ -23,11 +24,12 @@ import {
 } from '@kinu.run/core';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
+  credentialedSessionBox,
+  programmaticHostOver,
   ensureProgrammaticReady,
   rpcExec,
   type ProgrammaticHost,
-} from '@nimbus-sh/worker/programmatic';
-import { credentialedSessionBox, programmaticHostOver } from './helpers/programmatic-host';
+} from './helpers/programmatic-host';
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
 
@@ -52,6 +54,7 @@ function sqlBinding(value: SqlValue): SQLQueryBindings {
 interface OwnerFixture {
   readonly workspace: NimbusWorkspace;
   readonly host: ProgrammaticHost;
+  readonly runtime: () => Promise<HostedRuntime>;
   readonly sql: SqlDatabase;
   readonly box: NimbusSandboxHandle;
   readonly databases: Database[];
@@ -81,7 +84,8 @@ async function openOwner(): Promise<OwnerFixture> {
     generation: 1,
   });
 
-  const host = programmaticHostOver(workspace).host;
+  const composed = programmaticHostOver(workspace);
+  const host = composed.host;
 
   await ensureProgrammaticReady(host);
 
@@ -115,14 +119,14 @@ async function openOwner(): Promise<OwnerFixture> {
   };
 
   return {
-    workspace, host, sql, box, databases: [database],
+    workspace, host, runtime: composed.runtime, sql, box, databases: [database],
     homeHost: { root: workspace.vfs.as(CRED_KERNEL), confiner: workspace.vfs, sql },
   };
 }
 
 /** The session addressed as one node, for the credentialed file plane. */
 function sessionBoxFor(f: OwnerFixture, cred: VfsCred): NimbusSandboxHandle {
-  return credentialedSessionBox(f.workspace, f.host, cred);
+  return credentialedSessionBox(f.runtime, cred);
 }
 
 function node(nodeId: string): NodeIdentity {

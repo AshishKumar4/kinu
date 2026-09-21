@@ -65,6 +65,7 @@ import type { ExplorationHostSeams } from '../../src/exploration-hosting';
 import type { HostedTaskProfile } from '../../src/subordinate-hosting';
 import type { AgentProviderRegistry } from '../../src/providers/agent-registry';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 
 mockAgentsSdk();
 
@@ -1786,6 +1787,10 @@ export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
     blockConcurrencyWhile: <Result>(fn: () => Promise<Result>): Promise<Result> => fn(),
     getWebSockets: () => [],
     abort: () => {},
+    // The supervisor entrypoint the hosted runtime requires at composition —
+    // the deployment exports it beside the actor, and workerd hangs a Durable
+    // Object's exports off its ctx.
+    exports: { SupervisorRPC },
   };
 
   const partialContext: Partial<AgentContext> = {};
@@ -1943,7 +1948,7 @@ export function makeEnv(
     Object.assign(bindings, { OrchestratorAgent: parentNamespace });
   } else if (parent) {
     Object.assign(bindings, {
-      OrchestratorAgent: { idFromName: (n: string) => n, get: () => parent },
+      OrchestratorAgent: { idFromName: (n: string) => n, idFromString: (id: string) => id, get: () => parent },
     });
   }
 
@@ -1977,7 +1982,7 @@ function instantiate<T extends object>(
     // reach across, is this object. Without it every shell exec dies in the
     // gate on `env.OrchestratorAgent.get`, a harness gap rather than a refusal.
     Object.assign(builtEnv, {
-      OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
+      OrchestratorAgent: { idFromName: (n: string) => n, idFromString: (id: string) => id, get: () => agent },
     });
   }
 
