@@ -39,10 +39,20 @@ export function fakeMossaic(): FakeMossaic {
 
     const isDir = (p: string): boolean => dirs.has(p) || [...files.keys()].some((f) => f.startsWith(`${p}/`));
 
+    /** A write touches the entry and, as on a real filesystem, every folder above it. */
+    const stamp = (p: string): void => {
+      const at = Date.now();
+
+      for (let key = p; key !== ''; key = key.slice(0, key.lastIndexOf('/'))) touched.set(`${id}:${key}`, at);
+      touched.set(`${id}:/`, at);
+    };
+
     const statOf = (p: string): MossaicStat => {
       const bytes = files.get(p);
 
-      const mtimeMs = touched.get(`${id}:${p}`) ?? 1;
+      // Unstamped is unknown (0), the same absence the product renders as no
+      // age; a stand-in epoch would read as decades old in every listing.
+      const mtimeMs = touched.get(`${id}:${p}`) ?? 0;
 
       if (bytes !== undefined) return { type: 'file', size: bytes.byteLength, mtimeMs };
 
@@ -78,7 +88,7 @@ export function fakeMossaic(): FakeMossaic {
       },
       async writeFile(p, data) {
         files.set(p, data instanceof Uint8Array ? data : new TextEncoder().encode(data));
-        touched.set(`${id}:${p}`, Date.now());
+        stamp(p);
       },
       async readdir(p) { return children(p).map((c) => c.name); },
       async stat(p) { return statOf(p); },
@@ -90,6 +100,7 @@ export function fakeMossaic(): FakeMossaic {
 
         if (opts?.recursive !== true && !isDir(parent)) throw new FakeMossaicError('ENOENT', parent);
         dirs.add(p);
+        stamp(p);
       },
       async rmdir(p) { dirs.delete(p); },
       async removeRecursive(p) {
@@ -105,6 +116,7 @@ export function fakeMossaic(): FakeMossaic {
         if (bytes !== undefined) {
           files.delete(src);
           files.set(dst, bytes);
+          stamp(dst);
 
           return;
         }
@@ -114,6 +126,7 @@ export function fakeMossaic(): FakeMossaic {
         if (target !== undefined) {
           symlinks.delete(src);
           symlinks.set(dst, target);
+          stamp(dst);
 
           return;
         }
@@ -133,8 +146,13 @@ export function fakeMossaic(): FakeMossaic {
             dirs.add(`${dst}${dir.slice(src.length)}`);
           }
         }
+
+        stamp(dst);
       },
-      async symlink(target, p) { symlinks.set(p, target); },
+      async symlink(target, p) {
+        symlinks.set(p, target);
+        stamp(p);
+      },
       async readlink(p) {
         const target = symlinks.get(p);
 

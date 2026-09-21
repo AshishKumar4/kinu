@@ -79,7 +79,7 @@ describe('the /shared mount', () => {
 
     const listed = await plane.readdirStats(`${SHARED_ROOT}/skills`);
 
-    expect(listed).toEqual([{ name: 'ship', stat: { size: 0, mtimeMs: 1, isDir: true } }]);
+    expect(listed).toEqual([{ name: 'ship', stat: { size: 0, mtimeMs: expect.any(Number), isDir: true } }]);
     await plane.removeRecursive(`${SHARED_ROOT}/skills`);
     expect(await plane.readdir(SHARED_ROOT)).toEqual([]);
   });
