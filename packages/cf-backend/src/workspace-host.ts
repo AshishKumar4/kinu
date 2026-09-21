@@ -498,7 +498,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
           env: runtimeBindings,
           ports: portRegistry,
           lifecycle,
-          hooks: { resolveWorkerLaunch: (recipe) => resolveSlateLaunch(deps, recipe) },
+          resolveWorkerLaunch: (recipe) => resolveSlateLaunch(deps, recipe),
         });
 
         // The first pump of an incarnation drains the launch journal's

@@ -71,7 +71,7 @@ describe('cf background policy follows the turn surface', () => {
     setTurnContinuity(agent, 'independent_task');
     expect(runnerPolicy(agent)).toEqual(invocationBackgroundPolicy('one-shot', true));
 
-    expect(await agent.send('a human typed this while it ran')).toEqual({ landed: 'mid-turn' });
+    await agent.send('a human typed this while it ran', 'steer-human');
     await turns.step(0, [{ role: 'user', content: 'an unwatched turn' }]);
     expect(runnerPolicy(agent)).toEqual(BACKGROUND_POLICY.interactive);
 

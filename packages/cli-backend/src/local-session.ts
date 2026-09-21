@@ -31,7 +31,7 @@ import type {
   ChatOptions,
   TurnContinuity, FiberCtx,
   LLM, ModelCallSink, ModelRouteResolution, HeadMergeModelBinding,
-  BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding,
+  BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions,
   SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
@@ -1533,7 +1533,7 @@ export class LocalAgentSession implements BackendHost {
   /** Send the user's message — the one entry, whatever the session is doing. */
   send(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
-    opts: { tier?: TierId } = {},
+    opts: Pick<SendOptions, 'tier' | 'id'> = {},
   ): Promise<SendLanding> {
     return this.chat.send(input, opts);
   }

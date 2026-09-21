@@ -20,6 +20,8 @@
  *   user turn is queued and not yet opened, goes through the actor's inbox and
  *   lands at that turn's next step; nothing running starts a user turn. A
  *   splice that never sees a step boundary reruns as the immediate next turn.
+ *   Which of the two happened is answered where it is decided — at the drain
+ *   or at the rerun's settle — never guessed at admission.
  *
  *   DURABLE BEFORE ACKNOWLEDGED. Every accepted send is a `pending_steers` row
  *   before the caller hears it was taken; a user turn's opening row is on disk
@@ -463,11 +465,41 @@ export interface ChatSessionOptions {
   readonly mintAnswerId: () => string;
 }
 
+/** What a surface says about the message it sends, beyond the words. */
+export interface SendOptions {
+  readonly tier?: TierId;
+  /** The message's own id, when the client minted one: the opening row, the
+   *  reservation and every announcement then carry the id the client already
+   *  renders under, and a rerun of the message keeps it as its turn id.
+   *  Absent, the session mints one. */
+  readonly id?: string;
+  /** The composer's mode, a fact on the message: a turn it starts runs under
+   *  it, and a splice's leftovers rerun under it. Build by default. */
+  readonly mode?: WorkMode;
+}
+
+/** A caller's wait for one message's landing: answered where the landing is
+ *  decided, with the landing or the error that says the words never landed. */
+export type SendLandingWaiter = Pick<ReturnType<typeof Promise.withResolvers<SendLanding>>, 'resolve' | 'reject'>;
+
+/** The landing a driver-lease refusal answers: the message did not run here,
+ *  and the holder is where it can. */
+function refusedLanding(refusal: Refusal): KinuError {
+  return new KinuError(refusal.reason, `${refusal.error}. Close that session, or send this from it.`);
+}
+
 export class ChatSession {
   private readonly actorSession: ActorSession;
   private readonly sessionId: string;
   private readonly transcript: SessionTranscript;
   private readonly pendingSends: PendingSendStore;
+  /** The sends whose caller awaits a landing, by the id each was admitted
+   *  under: the message's own id, which a rerun of it keeps as its turn id.
+   *  Settled where the fate is decided — the step drain that splices it, the
+   *  settle of the turn that ran it, the interrupt that handed it back — and
+   *  never before, so no answer is a guess. A send admitted without a waiter
+   *  (`admit`) has no entry: its fate reaches surfaces as steer_status. */
+  private readonly landings = new Map<string, SendLandingWaiter>();
   private readonly eventLog: EventLog;
   private readonly eventRecorder: RunEventRecorder;
   private readonly compactionState: CompactionTriggerState;
@@ -614,7 +646,11 @@ export class ChatSession {
         // retired with it in the same transaction, so a restart cannot
         // re-deliver steers the rerun already carries.
         steerIds: input.steerIds,
-        settle: () => {},
+        // The rerun IS where these words landed: a caller awaiting one hears
+        // `'turn'` once it has run, exactly as a turn it started itself.
+        settle: (refusal) => {
+          this.settleLandings(input.steerIds ?? [], refusal === null ? 'turn' : refusedLanding(refusal));
+        },
       };
 
       // A send that reached the queue while another user turn held the pump is
@@ -733,37 +769,55 @@ export class ChatSession {
   // ── Public driver API ──────────────────────────────────────────────
 
   /**
-   * Send the user's message — the one entry, whatever the session is doing.
+   * Send the user's message — the one entry, whatever the session is doing —
+   * and answer where it LANDED, once that is known.
    *
    * A turn is running (or one this session queued has not yet opened): the
-   * message goes through the inbox and lands at that turn's next step, where
-   * everything pending drains into one merged user message; the answer is
-   * `'mid-turn'`, at once. Input that never sees a step boundary (the model
-   * was already writing its final answer) reruns as the immediate next turn.
+   * message goes through the inbox. It lands at that turn's next step, where
+   * everything pending drains into one merged user message, and the answer is
+   * `'mid-turn'` at that step. Input that never sees a step boundary (the
+   * model was already writing its final answer) reruns as the immediate next
+   * turn, and the answer is `'turn'` when that turn has finished. The answer
+   * is never given at admission: which of the two happens is decided by the
+   * running turn, and a surface that read a guess as the truth counted a
+   * rerun's reply under the turn before it.
    *
    * Nothing is running: the message starts a user turn (and any programmatic
    * turns it cascades) and the answer is `'turn'` when that turn has finished.
    * Attachments (data-URL PromptFiles) become file parts on the turn's user
    * message either way.
    *
-   * REJECTS when another process holds this conversation's driver lease. The
-   * message was not sent and no turn ran, so resolving would tell the person
-   * their words landed when they were dropped; the rejection names the holder
-   * and what to do about it.
+   * REJECTS when the message did not land: another process holds this
+   * conversation's driver lease, so no turn ran, or an interrupt handed the
+   * words back before the model read them. Resolving would tell the person
+   * their words landed when they were dropped; the rejection says which.
+   *
+   * A caller that needs only the admission — the words are taken and owed a
+   * landing, which surfaces then follow as steer_status — uses {@link admit}.
    */
-  async send(
+  async send(input: string | { text: string; files: ReadonlyArray<PromptFile> }, opts: SendOptions = {}): Promise<SendLanding> {
+    const landing = Promise.withResolvers<SendLanding>();
+
+    await this.admit(input, opts, landing);
+
+    return landing.promise;
+  }
+
+  /**
+   * Admit the user's message: resolves once the words are reserved,
+   * announced, and owed a turn or a step, and rejects exactly where `send`
+   * refuses at the door. Where they land is decided later; a `landing` given
+   * here is registered under the message's id before the message can move,
+   * so it hears the landing however soon it comes. Without one, the landing
+   * reaches surfaces as steer_status (`landed`, `turn`, `returned`) — the
+   * channel a surface reads anyway, and one with no deadline, unlike a
+   * client call.
+   */
+  async admit(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
-    opts: {
-      readonly tier?: TierId;
-      /** The message's own id, when the client minted one: the opening row,
-       *  the reservation and every announcement then carry the id the client
-       *  already renders under. Absent, the session mints one. */
-      readonly id?: string;
-      /** The composer's mode, a fact on the message: a turn it starts runs
-       *  under it, and a splice's leftovers rerun under it. Build by default. */
-      readonly mode?: WorkMode;
-    } = {},
-  ): Promise<SendLanding> {
+    opts: SendOptions = {},
+    landing: SendLandingWaiter | null = null,
+  ): Promise<void> {
     const { text, files } = normalizePromptInput(input);
 
     // The operator spoke: the reminder count starts over, whether these words
@@ -784,15 +838,18 @@ export class ChatSession {
       const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = { text, id, ...(opts.mode !== undefined && { mode: opts.mode }) };
 
       if (files !== undefined && files.length > 0) Object.assign(steer, { files });
+
+      if (landing !== null) this.landings.set(id, landing);
       const outcome = await this.actorSession.send(steer);
 
-      if (outcome === 'mid-turn') return 'mid-turn';
-
-      if (outcome === 'queued') return 'turn';
+      // Pending in the running turn's inbox, or queued as a turn of its own:
+      // either way the words are owed a landing, and the drain, the rerun's
+      // settle, or the interrupt answers it under this id.
+      if (outcome === 'mid-turn' || outcome === 'queued') return;
+      this.landings.delete(id);
       throw new KinuError('unavailable', 'The message could not be handed to the running turn. Send it again.');
     }
 
-    const { promise, resolve, reject } = Promise.withResolvers<SendLanding>();
     const mode = opts.mode ?? 'build';
 
     // The message's own facts, on the row it becomes: the mode it was typed
@@ -806,31 +863,36 @@ export class ChatSession {
     // runs BEFORE the pump can begin the turn, so a process that dies after
     // this line still owes the person the message it acknowledged.
     const pendingSendId = opts.id ?? `steer-${crypto.randomUUID().slice(0, 12)}`;
+    const turnId = opts.id ?? crypto.randomUUID();
+
+    if (landing !== null) this.landings.set(turnId, landing);
     this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode, text, files });
     this.queue.push({
       text, files, metadata, kind: 'user',
-      turnId: opts.id ?? crypto.randomUUID(), pendingSendId,
+      turnId, pendingSendId,
       settle: (refusal) => {
         // A refusal means this process never owed the message — another driver
         // took it — so the reservation goes with the refusal. Leaving it
         // would re-deliver the words under the next session after the caller
         // was already told no.
-        if (refusal) {
-          this.pendingSends.retire([pendingSendId]);
-          reject(new KinuError(
-            refusal.reason,
-            `${refusal.error}. Close that session, or send this from it.`,
-          ));
-
-          return;
-        }
-
-        resolve('turn');
+        if (refusal) this.pendingSends.retire([pendingSendId]);
+        this.settleLandings([turnId], refusal === null ? 'turn' : refusedLanding(refusal));
       },
     });
     this.pump();
+  }
 
-    return promise;
+  /** Answer the callers awaiting these messages' landings, if any. */
+  private settleLandings(ids: readonly string[], fate: SendLanding | KinuError): void {
+    for (const id of ids) {
+      const landing = this.landings.get(id);
+
+      if (landing === undefined) continue;
+      this.landings.delete(id);
+
+      if (fate instanceof KinuError) landing.reject(fate);
+      else landing.resolve(fate);
+    }
   }
 
   /** Abort the in-flight turn (Ctrl+C / Esc). Pending steers are dropped —
@@ -843,7 +905,9 @@ export class ChatSession {
     // The words came back to the surface: the reservation they were held under
     // is spent, or a restart would re-deliver a steer the operator watched come
     // back as text. A steer that carries no id never wrote a row to spend.
-    this.pendingSends.retire(returned.flatMap((steer) => steer.id === undefined ? [] : [steer.id]));
+    const ids = returned.flatMap((steer) => steer.id === undefined ? [] : [steer.id]);
+    this.pendingSends.retire(ids);
+    this.settleLandings(ids, new KinuError('cancelled', 'The turn was stopped before the agent read this message; it is back in the composer.'));
 
     return returned.map((steer) => steer.text);
   }
@@ -1722,6 +1786,9 @@ export class ChatSession {
         this.transcript.appendUser({ ...entry, context });
         this.pendingSends.retire([entry.id]);
       }
+
+      // Durable in the running turn: the one moment `'mid-turn'` is a fact.
+      this.settleLandings(prepared.map((entry) => entry.id), 'mid-turn');
     };
   }
 

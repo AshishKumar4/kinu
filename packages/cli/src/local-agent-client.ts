@@ -211,7 +211,11 @@ export interface LocalAgentClientDeps {
   surface: InvocationSurface;
 }
 
+/** One send awaiting its landing, under the id it went to the session by. */
 interface PendingLocalTurn {
+  /** The message's row for the CLI transcript, appended when the turn that
+   *  runs it opens — or, marked steered, when the running turn read it. */
+  readonly entry: JsonObject;
   /** Null until the turn's own `turn-end` arrives — see `unfinishedTurn`. */
   result: AgentTurnResult | null;
 }
@@ -261,7 +265,13 @@ export class LocalAgentClient implements AgentClient {
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
   private session: LocalAgentSession;
   private activeCliSession: CliSession;
-  private pending: PendingLocalTurn | null = null;
+  /** The sends whose landing is awaited, by the id each went under. The turn
+   *  that opens under that id answers the send: the turn an idle send starts,
+   *  or the rerun of words a running turn ended before reading. A send the
+   *  running turn read leaves here at that landing. */
+  private readonly awaiting = new Map<string, PendingLocalTurn>();
+  /** The awaited send whose turn is open now, filled at its `turn-end`. */
+  private live: PendingLocalTurn | null = null;
   private closed = false;
   /** The one title operation may outlive opening or a turn, but never the
    * workspace database. Its owning client joins it during close. */
@@ -420,34 +430,35 @@ export class LocalAgentClient implements AgentClient {
 
     if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
 
-    // A turn is running: the message reaches its next step through the
-    // session, which answers at once; nothing here waits for that turn.
-    if (this.pending) {
-      const landed = await this.session.send(payload, { tier: opts.tier });
-
-      if (landed !== 'mid-turn') throw new Error('A turn is already in progress.');
-      this.activeCliSession.append('user', { ...sessionEntry, steered: true });
-
-      return { landed };
-    }
-
-    this.activeCliSession.append('user', sessionEntry);
-    const pending: PendingLocalTurn = { result: null };
-    this.pending = pending;
+    // The session decides where the words go — the running turn's next step,
+    // or a turn of their own, at once or as the rerun of what that turn ended
+    // before reading — and answers once it is decided. The id minted here is
+    // the id that turn opens under, which is how its result is this send's.
+    const id = crypto.randomUUID();
+    const pending: PendingLocalTurn = { entry: sessionEntry, result: null };
+    const first = this.awaiting.size === 0;
+    this.awaiting.set(id, pending);
 
     try {
-      const landed = await this.session.send(payload, { tier: opts.tier });
+      const landed = await this.session.send(payload, { tier: opts.tier, id });
 
-      if (landed === 'mid-turn') return { landed };
+      if (landed === 'mid-turn') {
+        this.activeCliSession.append('user', { ...sessionEntry, steered: true });
+
+        return { landed };
+      }
+
       // An agent the owner added without naming has no title yet. What the
       // owner brings to it is the only thing that distinguishes it from the
       // peers it shares a mission with, so that is what names it — once, since
       // persisting marks `name_origin` and the shared policy stops matching.
-      this.startAutoTitle({ mission: text });
+      if (first) this.startAutoTitle({ mission: text });
 
       return { landed, ...(pending.result ?? unfinishedTurn()) };
     } finally {
-      if (this.pending === pending) this.pending = null;
+      this.awaiting.delete(id);
+
+      if (this.live === pending) this.live = null;
     }
   }
 
@@ -472,7 +483,7 @@ export class LocalAgentClient implements AgentClient {
    *  message, on the context the actor held there. A fresh transcript
    *  artifact takes the entries recorded after the walk-back. */
   async fork(point: ForkPoint): Promise<AgentForkResult> {
-    if (this.pending) throw new Error('Cannot fork while a turn is running.');
+    if (this.awaiting.size > 0) throw new Error('Cannot fork while a turn is running.');
     const transcript = this.deps.rt.stores.history.transcript(this.canonicalConversation);
     const rows: Array<{ id: string; role: string; content: string }> = [];
 
@@ -703,7 +714,16 @@ export class LocalAgentClient implements AgentClient {
 
     if (!mapped) return;
 
-    if (mapped.type === 'turn-end' && this.pending) this.pending.result = mapped.turn;
+    if (event.type === 'turn-start') {
+      // The turn under an awaited send's id is that send's turn: its row goes
+      // into the CLI transcript ahead of the turn's events, and its end is
+      // the send's result. Any other turn — a wake, a delegation — is nobody's.
+      this.live = this.awaiting.get(event.turnId) ?? null;
+
+      if (this.live !== null) this.activeCliSession.append('user', this.live.entry);
+    }
+
+    if (mapped.type === 'turn-end' && this.live !== null) this.live.result = mapped.turn;
     this.emit(mapped);
   }
 

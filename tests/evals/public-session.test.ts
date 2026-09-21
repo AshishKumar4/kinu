@@ -237,7 +237,7 @@ describe('the public session speaks the frames the web client speaks', () => {
 
   test('an RPC request carries the method and its arguments', () => {
     const frame = decodeFrame(encodeRpcRequest({
-      requestId: 'rpc-1', method: 'send', args: ['stop, use the file tool', [], 'build'],
+      requestId: 'rpc-1', method: 'send', args: ['stop, use the file tool', 'steer-1', [], 'build'],
     }));
 
     // Same as above: an outbound frame is not one this session consumes.
@@ -248,6 +248,20 @@ describe('the public session speaks the frames the web client speaks', () => {
     })));
 
     expect(sent).toEqual({ type: 'rpc', id: 'rpc-1', method: 'setModel', args: ['@cf/x'] });
+  });
+
+  test("a steer's landing is the DO's steer_status for its id, and only a decided one", () => {
+    // The composer's steer is admitted under an id and answered by the
+    // broadcast for that id: `landed` is the running turn reading it,
+    // `turn` is the turn that reran it. `queued` decides nothing.
+    const decode = (status: string) => decodeFrame(JSON.stringify({ type: 'steer_status', steerId: 'steer-1', text: 'use yaml', status }));
+
+    expect(decode('landed')).toEqual({ kind: 'steer', steerId: 'steer-1', status: 'landed' });
+    expect(decode('turn')).toEqual({ kind: 'steer', steerId: 'steer-1', status: 'turn' });
+    expect(decode('returned')).toEqual({ kind: 'steer', steerId: 'steer-1', status: 'returned' });
+    expect(decode('queued')).toEqual({ kind: 'steer', steerId: 'steer-1', status: 'queued' });
+    // A status this session does not know is not a landing it may guess at.
+    expect(decode('absorbed')).toEqual({ kind: 'other', type: 'steer_status' });
   });
 
   test('a file-producing turn decodes to its tool call, its text and its steps', () => {

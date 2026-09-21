@@ -114,7 +114,7 @@ export function McpServersPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="space-y-0.5">
         <McpPresetCards servers={servers} availability={presets} onChanged={refresh} />
       </div>
 

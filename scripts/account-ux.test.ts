@@ -308,7 +308,9 @@ describe('account panels', () => {
               const links = await home.$$eval('nav[aria-label="Primary"] a', (anchors) =>
                 anchors.map((a) => ({ label: a.textContent?.trim() ?? '', current: a.getAttribute('aria-current') })));
 
-              expect(links.map((link) => link.label)).toEqual(['Home', 'Workspaces', 'Drive', 'Devices', 'Plugins', 'Settings']);
+              // Account settings is reached from the gear at the foot of the
+              // rail, so the nav carries no row of its own for it.
+              expect(links.map((link) => link.label)).toEqual(['Home', 'Workspaces', 'Drive', 'Devices', 'Plugins']);
               expect(links[0]?.current).toBe('page');
               expect(await activeNavRow(home)).toBe('Home');
               // The rail's own furniture is untouched around it: the roster

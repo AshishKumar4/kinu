@@ -529,11 +529,17 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     file_chunks: NIMBUS_BASE,
     content_lifecycle: NIMBUS_BASE,
     vfs_schema_migrations: NIMBUS_BASE,
-    vfs_append_receipts: NIMBUS_BASE,
-    vfs_append_writer_state: NIMBUS_BASE,
-    vfs_append_module_state: NIMBUS_BASE,
-    vfs_append_pid_revocations: NIMBUS_BASE,
-    vfs_append_acked_gaps: NIMBUS_BASE,
+    // @nimbus-sh/core 0.11.0: the append ledger moved to `_v2` tables, the
+    // filesystem gained an identity row and a device row (one credential-bound
+    // authority per workspace), and inodes come from a stable allocator.
+    vfs_append_receipts_v2: NIMBUS_BASE,
+    vfs_append_writer_state_v2: NIMBUS_BASE,
+    vfs_append_module_state_v2: NIMBUS_BASE,
+    vfs_append_pid_revocations_v2: NIMBUS_BASE,
+    vfs_append_acked_gaps_v2: NIMBUS_BASE,
+    nimbus_filesystem_identity: NIMBUS_BASE,
+    nimbus_filesystem_devices: NIMBUS_BASE,
+    vfs_ino_allocator: NIMBUS_BASE,
     // ── the roster plane, held by every actor that can hire ──
     actor_subordinates: {
       'cf-orchestrator': WIRED,

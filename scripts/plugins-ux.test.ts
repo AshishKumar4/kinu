@@ -1,14 +1,16 @@
 /**
- * The one-click MCP presets, in a real browser: the three cards on the Plugins
+ * The one-click MCP presets, in a real browser: the three rows on the Plugins
  * page and inside the account modal's MCP panel, the OAuth preset's add call,
  * and the token preset's single field — each at desktop and phone width in
  * dark and light.
  *
- * What only a browser can say here: that the cards sit in the shipped grid at
- * both widths, that Connect POSTs the preset id to the real add route (the
- * fixture keeps the roster, so the follow-up list read is what flips the
- * card's status), and that the authorize URL the server returns is what
- * `window.open` is handed. Screenshots land in ~/kinu-logs/mcp-presets/
+ * What only a browser can say here: that the rows sit in the shipped list at
+ * both widths, that the add control POSTs the preset id to the real add route
+ * (the fixture keeps the roster, so the follow-up list read is what flips the
+ * row's state), that the authorize URL the server returns is what
+ * `window.open` is handed, and that the row grammar holds — one trailing
+ * control per row, the account's holdings in the Installed strip, and no
+ * endpoint anywhere on a row. Screenshots land in ~/kinu-logs/mcp-presets/
  * (outside the worktree).
  */
 import { describe, expect, test } from 'bun:test';
@@ -42,9 +44,27 @@ async function shoot(page: Page, name: string): Promise<string> {
   return path;
 }
 
-/** The status word one preset card shows. */
+/** The state word one preset row is in. */
 const presetStatus = (page: Page, id: string): Promise<string> =>
-  page.$eval(`[data-mcp-preset-status="${id}"]`, (el) => el.textContent ?? '');
+  page.$eval(`[data-plugin-source="${id}"]`, (el) => el.getAttribute('data-plugin-state') ?? '');
+
+/** Every row the page draws, as a reader meets it: the name it claims, the
+ *  text inside it, how many controls its trailing slot offers, and whether a
+ *  preset drew it. */
+function drawnRows(page: Page): Promise<{ name: string; text: string; buttons: number; preset: boolean }[]> {
+  return page.$$eval('[data-plugin]', (nodes) => nodes.map((node) => ({
+    name: node.getAttribute('data-plugin') ?? '',
+    text: node.textContent ?? '',
+    buttons: node.querySelectorAll('button').length,
+    preset: node.hasAttribute('data-plugin-source'),
+  })));
+}
+
+/** The names in the Installed strip, in the order it draws them. */
+function installedStrip(page: Page): Promise<string[]> {
+  return page.$$eval('[data-installed-strip] [data-installed]',
+    (nodes) => nodes.map((node) => node.getAttribute('data-installed') ?? ''));
+}
 
 /** The body the fixture recorded for the page's add POST. The fixture writes
  *  it as JSON; the caller's valibot schema is what shapes the field it needs. */
@@ -61,14 +81,14 @@ async function lastMcpAdd(page: Page): Promise<JsonValue> {
 }
 
 describe('MCP presets', () => {
-  test('the plugins page renders all three preset cards Not added, and Connect adds via the RPC', async () => {
+  test('the plugins page renders all three preset rows Not added, and the add control adds via the RPC', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'plugins', 'dark', 'desktop');
 
       try {
-        await page.waitForSelector('[data-mcp-preset="github"]');
+        await page.waitForSelector('[data-plugin-source="github"]');
         await page.waitForFunction(
-          () => document.querySelector('[data-mcp-preset-status="cloudflare"]')?.textContent === 'Not added',
+          () => document.querySelector('[data-plugin-source="cloudflare"]')?.getAttribute('data-plugin-state') === 'Not added',
         );
 
         expect(await presetStatus(page, 'github')).toBe('Not added');
@@ -77,7 +97,7 @@ describe('MCP presets', () => {
 
         // The authorize tab: a real `window.open` navigation would hang the
         // fixture, so the capture replaces it — into the same localStorage
-        // pocket the fixture uses — and the assertion reads what the card
+        // pocket the fixture uses — and the assertion reads what the row
         // would have opened.
         await page.evaluate(() => {
           localStorage.setItem('gallery-mcp-opened', '');
@@ -90,7 +110,7 @@ describe('MCP presets', () => {
         });
 
         // Cloudflare is the OAuth preset: one click posts the add.
-        await page.click('[data-mcp-preset="cloudflare"] button');
+        await page.click('[data-plugin-source="cloudflare"] [data-plugin-add]');
 
         const add = v.parse(v.object({ presetId: v.literal('cloudflare') }), await lastMcpAdd(page));
 
@@ -105,17 +125,21 @@ describe('MCP presets', () => {
           await page.evaluate(() => localStorage.getItem('gallery-mcp-opened')),
         );
 
-        expect(opened.trim()).toBe('https://mcp.cloudflare.com/authorize?srv-add-3');
+        // The authorize server is the preset's own, and the URL carries the
+        // row the add created — whose id is the fixture's own counter.
+        expect(opened.trim()).toMatch(/^https:\/\/mcp\.cloudflare\.com\/authorize\?srv-add-\d+$/);
 
         // The status the next list read reports — the same poll the panel runs.
         await page.waitForFunction(
-          () => document.querySelector('[data-mcp-preset-status="cloudflare"]')?.textContent === 'Needs sign-in',
+          () => document.querySelector('[data-plugin-source="cloudflare"]')?.getAttribute('data-plugin-state') === 'Needs sign-in',
         );
         expect(await presetStatus(page, 'cloudflare')).toBe('Needs sign-in');
 
-        // The added preset is a server row like any other.
-        expect(await page.$eval('[data-plugin="Cloudflare"]', (el) => el.textContent ?? ''))
-          .toContain('https://mcp.cloudflare.com/mcp');
+        // The added server joins the strip of what the account holds, and the
+        // page still draws it once: its own preset row, not a second copy in
+        // the servers list.
+        await page.waitForFunction(() => document.querySelector('[data-installed="Cloudflare"]') !== null);
+        expect(await page.$$('[data-plugin="Cloudflare"]')).toHaveLength(1);
       } finally {
         await page.close();
       }
@@ -124,22 +148,29 @@ describe('MCP presets', () => {
 
   test('a token preset opens one field and posts it as the bearer header', async () => {
     await withGallery(async (gallery) => {
-      // GitHub without its app: the card falls back to the PAT field. Google
+      // GitHub without its app: the row falls back to the PAT field. Google
       // stays configured so the split is observable on one page.
       const page = await freshPage(gallery, 'plugins&mcp-preset=open&mcp-secrets=google', 'dark', 'desktop');
 
       try {
-        await page.waitForSelector('[data-mcp-preset="github"]');
+        await page.waitForSelector('[data-plugin-source="github"]');
         await page.waitForFunction(
-          () => document.querySelector('[data-mcp-preset-status="github"]')?.textContent === 'Not added',
+          () => document.querySelector('[data-plugin-source="github"]')?.getAttribute('data-plugin-state') === 'Not added',
         );
 
-        await page.click('[data-mcp-preset="github"] button');
+        await page.click('[data-plugin-source="github"] [data-plugin-add]');
+        await page.waitForSelector('[aria-label="Personal access token"]');
+
+        // The one control the row offers while it asks drops the field again.
+        await page.click('[data-plugin-source="github"] [data-plugin-cancel]');
+        expect(await page.$('[aria-label="Personal access token"]')).toBeNull();
+
+        await page.click('[data-plugin-source="github"] [data-plugin-add]');
         await page.waitForSelector('[aria-label="Personal access token"]');
         await page.type('[aria-label="Personal access token"]', 'ghp_fixture');
 
-        const card = await page.$('[data-mcp-preset="github"]');
-        const connect = await card?.waitForSelector('aria/Connect');
+        const row = await page.$('[data-plugin-source="github"]');
+        const connect = await row?.waitForSelector('aria/Connect');
         await connect?.click();
 
         const add = v.parse(
@@ -150,30 +181,32 @@ describe('MCP presets', () => {
         expect(add.headers.Authorization).toBe('Bearer ghp_fixture');
 
         await page.waitForFunction(
-          () => document.querySelector('[data-mcp-preset-status="github"]')?.textContent === 'Connected',
+          () => document.querySelector('[data-plugin-source="github"]')?.getAttribute('data-plugin-state') === 'Connected',
         );
         expect(await presetStatus(page, 'github')).toBe('Connected');
-        expect(await page.$eval('[data-plugin="GitHub"]', (el) => el.textContent ?? ''))
-          .toContain('api.githubcopilot.com');
+
+        // A token add is an add: the same row, and the same strip.
+        await page.waitForFunction(() => document.querySelector('[data-installed="GitHub"]') !== null);
+        expect(await installedStrip(page)).toContain('GitHub');
       } finally {
         await page.close();
       }
     });
   });
 
-  test('an oauth-app card signs in under its app, and hides when it has neither app nor fallback', async () => {
+  test('an oauth-app row signs in under its app, and hides when it has neither app nor fallback', async () => {
     await withGallery(async (gallery) => {
       // Only GitHub's app is configured: Google has no registered client and
-      // no token fallback, so its card is not rendered at all.
+      // no token fallback, so its row is not rendered at all.
       const page = await freshPage(gallery, 'plugins&mcp-preset=open&mcp-secrets=github', 'dark', 'desktop');
 
       try {
-        await page.waitForSelector('[data-mcp-preset="github"]');
+        await page.waitForSelector('[data-plugin-source="github"]');
         await page.waitForFunction(
-          () => document.querySelector('[data-mcp-preset-status="github"]')?.textContent === 'Not added',
+          () => document.querySelector('[data-plugin-source="github"]')?.getAttribute('data-plugin-state') === 'Not added',
         );
 
-        expect(await page.$('[data-mcp-preset="google"]')).toBeNull();
+        expect(await page.$('[data-plugin-source="google"]')).toBeNull();
 
         await page.evaluate(() => {
           localStorage.setItem('gallery-mcp-opened', '');
@@ -185,9 +218,9 @@ describe('MCP presets', () => {
           };
         });
 
-        // GitHub's Connect is a sign-in, not a token prompt: no field opens
-        // and the add posts the preset id alone.
-        await page.click('[data-mcp-preset="github"] button');
+        // GitHub's add is a sign-in, not a token prompt: no field opens and
+        // the add posts the preset id alone.
+        await page.click('[data-plugin-source="github"] [data-plugin-add]');
 
         const add = v.parse(
           v.object({ presetId: v.literal('github') }),
@@ -205,10 +238,10 @@ describe('MCP presets', () => {
           await page.evaluate(() => localStorage.getItem('gallery-mcp-opened')),
         );
 
-        expect(opened.trim()).toBe('https://api.githubcopilot.com/authorize?srv-add-2');
+        expect(opened.trim()).toMatch(/^https:\/\/api\.githubcopilot\.com\/authorize\?srv-add-\d+$/);
 
         await page.waitForFunction(
-          () => document.querySelector('[data-mcp-preset-status="github"]')?.textContent === 'Needs sign-in',
+          () => document.querySelector('[data-plugin-source="github"]')?.getAttribute('data-plugin-state') === 'Needs sign-in',
         );
       } finally {
         await page.close();
@@ -227,15 +260,19 @@ describe('MCP presets', () => {
           try {
             await modal.waitForSelector('[role="dialog"]');
             await modal.waitForFunction(
-              () => document.querySelector('[data-mcp-preset-status="cloudflare"]')?.textContent === 'Needs sign-in',
+              () => document.querySelector('[data-plugin-source="cloudflare"]')?.getAttribute('data-plugin-state') === 'Needs sign-in',
             );
 
             const text = await modal.$eval('[role="dialog"]', (el) => el.textContent ?? '');
             expect(text).toContain('GitHub');
             expect(text).toContain('Connected');
             expect(text).toContain('Needs sign-in');
-            expect(text).toContain('Not added');
             expect(text).toContain('Add custom server');
+
+            // The unclaimed preset says its state by what it offers: the one
+            // control that adds it.
+            expect(await presetStatus(modal, 'google')).toBe('Not added');
+            expect(await modal.$('[data-plugin-source="google"] [data-plugin-add]')).not.toBeNull();
             shots.push(await shoot(modal, `setupmodal-mcp-${viewport}-${theme}`));
           } finally {
             await modal.close();
@@ -244,10 +281,31 @@ describe('MCP presets', () => {
           const plugins = await freshPage(gallery, 'plugins&mcp-preset=connected', theme, viewport);
 
           try {
-            await plugins.waitForSelector('[data-mcp-preset="github"]');
+            await plugins.waitForSelector('[data-plugin-source="github"]');
             await plugins.waitForFunction(
-              () => document.querySelector('[data-mcp-preset-status="github"]')?.textContent === 'Connected',
+              () => document.querySelector('[data-plugin-source="github"]')?.getAttribute('data-plugin-state') === 'Connected',
             );
+
+            // The row grammar, at this width: the endpoint is gone from every
+            // row — a preset's, a server's and a skill's alike — and each row
+            // carries one trailing control, which is the preset rows' add or
+            // menu button and nobody else's.
+            const drawn = await drawnRows(plugins);
+
+            expect(drawn.filter((row) => row.preset).map((row) => row.name))
+              .toEqual(['GitHub', 'Cloudflare', 'Gmail']);
+            // The failed server is on the page, so its line — a failure, where
+            // the endpoint used to be — is under the same rule.
+            expect(drawn.map((row) => row.name)).toContain('notion');
+
+            for (const row of drawn) {
+              expect(row.text).not.toContain('http');
+              expect(row.buttons).toBe(row.preset ? 1 : 0);
+            }
+
+            // What the account holds, as the strip draws it: both connected
+            // presets and both servers of its own.
+            expect(await installedStrip(plugins)).toEqual(['GitHub', 'Cloudflare', 'linear', 'notion']);
             shots.push(await shoot(plugins, `plugins-mcp-${viewport}-${theme}`));
           } finally {
             await plugins.close();

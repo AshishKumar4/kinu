@@ -4,10 +4,11 @@
  *
  * Both chat columns (the workspace conversation and a subordinate's) mount the
  * same `Composer`, and both need the same answers a user is owed after typing
- * to a working agent — "taken, it lands at the next step" and "that turn had
- * ended so this went as a new message". Stop aborts the turn while queued
- * messages stay queued and run as the next turn. This hook owns those, so
- * neither column can drift into a different account of what happened.
+ * to a working agent — "taken, it lands at the next step", "that turn had
+ * ended so this went as a new message", and "stopped before it was read, so
+ * here it is back". Stop aborts the turn and hands back what the model never
+ * saw. This hook owns those, so neither column can drift into a different
+ * account of what happened.
  *
  * A message carries its attachments with it, whatever the agent is doing: the
  * inbox splices them as file parts on the merged user message.
@@ -30,6 +31,7 @@ import type { FileUIPart } from "ai";
 import { describeError } from "@/hooks/use-async-resource";
 import type { ComposerNotice } from "@/components/Composer";
 import type { InlineSteer } from "@kinu.run/core";
+import { KinuError } from "@kinu.run/core/obs";
 import type { SendAdmission } from "@/hooks/use-kinu";
 
 /** The notice id every line here writes, so one replaces the other rather than
@@ -43,8 +45,8 @@ export interface SteerActionsDeps {
    *  by the actor as the next ordinary turn. The actor decides atomically in
    *  its own turn queue, so nothing is ever left with this hook to re-send. */
   sendChat: (text: string, files: readonly FileUIPart[]) => SendAdmission;
-  /** `useKinu().abortChat` — aborts the running turn. Queued messages stay
-   *  queued and run as the next turn. */
+  /** `useKinu().abortChat` — aborts the running turn. Messages it had not
+   *  read come back to the composer. */
   abortChat: () => Promise<void>;
   draft: string;
   setDraft: (update: (current: string) => string) => void;
@@ -60,7 +62,7 @@ export interface SteerActions {
   notice: ComposerNotice | null;
   /** Send the draft, with its attachments, wherever the agent is. */
   send: () => void;
-  /** Abort the running turn. Queued messages stay queued and run next. */
+  /** Abort the running turn. Messages it had not read come back. */
   stop: () => void;
 }
 
@@ -115,13 +117,14 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
         // Otherwise say nothing here: the server's `queued` broadcast is what
         // the line is read from, and it is the same fact for every open tab.
       } catch (cause) {
-        // Nothing was accepted, so the draft is still the user's — give it back
-        // rather than reporting a failure over an empty composer.
-        setDraft((current) => current === "" ? text : current);
-        setSettled({
-          id: NOTICE_ID, tone: "danger",
-          text: `Couldn't send to the turn: ${describeError(cause)}`,
-        });
+        // The words did not land, so they are the user's again — given back
+        // rather than reported as a failure over an empty composer, and
+        // appended to a draft typed since, so two messages a stop handed back
+        // both return. A stop is the user's own act, not a failure.
+        setDraft((current) => current === "" ? text : `${current}\n\n${text}`);
+        setSettled(cause instanceof KinuError && cause.code === "cancelled"
+          ? { id: NOTICE_ID, tone: "info", text: "Stopped before the agent read this, so it is back here." }
+          : { id: NOTICE_ID, tone: "danger", text: `Couldn't send to the turn: ${describeError(cause)}` });
       }
     });
   }, [draft, setDraft, attachments, sendChat]);

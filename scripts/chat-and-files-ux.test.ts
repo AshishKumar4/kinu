@@ -25,6 +25,8 @@
  * every assertion here reads from the same two frames.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { diagnosticsSettled, recordDiagnostics, withGallery, type Gallery } from './gallery-harness';
@@ -2936,6 +2938,154 @@ test('workspace tabs keep scrolling horizontal and suppress the scrollbar', asyn
     expect(strip.scrollLeft).toBeGreaterThan(0);
     await page.close();
   });
+});
+
+/** Where the agent tab strip's photographs land, outside the worktree. */
+const TAB_SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'chat-and-files-ux');
+
+mkdirSync(TAB_SHOTS, { recursive: true });
+
+/** One agent tab, as the browser painted it. */
+interface AgentTabPaint {
+  /** The tab's own hook: `main`, or the agent's address. */
+  readonly tab: string;
+  readonly current: string | null;
+  readonly color: string;
+  readonly background: string;
+  readonly underlineColor: string;
+  readonly underlineWidth: number;
+  /**
+   * The colour of the element that holds the tab's NAME.
+   *
+   * Measured apart from the box because the two disagree: the open tab's name
+   * lives in its rename control, which carries a text role of its own, and a
+   * role in Tailwind's utility layer outranks the tab grammar in the
+   * components layer. A tab can own the active class and still print its name
+   * in the closed colour.
+   */
+  readonly labelColor: string;
+  readonly bottom: number;
+}
+
+/** One strip's tabs, the rule its bar has to land on, and the edge the strip
+ *  clips at — a bar drawn past that edge is painted and still invisible. */
+interface StripPaint {
+  readonly tabs: readonly AgentTabPaint[];
+  readonly ruleBottom: number;
+  readonly clipBottom: number;
+}
+
+function agentStripPaint(page: Page, strip: string): Promise<StripPaint> {
+  return page.$eval(`[data-tab-strip="${strip}"] nav[aria-label="Workspace agents"]`, (nav) => {
+    // The name sits in the deepest element that has text and no children of
+    // its own; Main writes its name as a text node, so it reports itself.
+    const labelled = (tab: Element): Element => {
+      for (const node of tab.querySelectorAll('*')) {
+        if (node.children.length === 0 && (node.textContent ?? '').trim() !== '') return node;
+      }
+
+      return tab;
+    };
+
+    const tabs = [...nav.querySelectorAll('[data-agent-tab]')].flatMap((host) => {
+      // Main IS its link; an agent's tab wraps the box that carries the
+      // grammar, so the paint is read from whichever of the two holds it.
+      const tab = host.classList.contains('p-tab') ? host : host.querySelector('.p-tab');
+
+      if (tab === null) return [];
+      const style = getComputedStyle(tab);
+
+      return [{
+        tab: host.getAttribute('data-agent-tab') ?? '',
+        current: tab.getAttribute('aria-current'),
+        color: style.color,
+        background: style.backgroundColor,
+        underlineColor: style.borderBottomColor,
+        underlineWidth: Number.parseFloat(style.borderBottomWidth),
+        labelColor: getComputedStyle(labelled(tab)).color,
+        bottom: tab.getBoundingClientRect().bottom,
+      }];
+    });
+
+    // The rule belongs to whichever box around the strip draws a bottom edge.
+    let ruled: Element | null = nav;
+
+    while (ruled !== null && getComputedStyle(ruled).borderBottomWidth === '0px') ruled = ruled.parentElement;
+
+    // The strip scrolls, so what it shows ends at its padding box.
+    const navStyle = getComputedStyle(nav);
+    const navBox = nav.getBoundingClientRect();
+
+    return {
+      tabs,
+      ruleBottom: (ruled ?? nav).getBoundingClientRect().bottom,
+      clipBottom: navBox.bottom - Number.parseFloat(navStyle.borderBottomWidth),
+    };
+  });
+}
+
+/**
+ * The open chat tab, as a reader finds it.
+ *
+ * The complaint: with an agent open, `Main | Brisk Cairn | +` showed nothing
+ * about which tab the conversation below belonged to. `aria-current` alone
+ * does not answer that — a sighted reader needs paint — so every strip is read
+ * for both, and the open tab is compared against the closed tabs beside it in
+ * the same strip rather than against a colour written here.
+ *
+ * `agent-4f2c` is the case the complaint came from: an agent still under its
+ * born codename, so its name renders through the unnamed text role and the
+ * tab has to light up regardless.
+ */
+describe('the open agent tab, as the browser paints it', () => {
+  for (const open of ['main', 'coupon-tester', 'agent-4f2c']) {
+    test(`the ${open} tab reads as the open one, dark and light`, async () => {
+      await withGallery(async ({ newPage, origin }) => {
+        for (const theme of ['dark', 'light'] as const) {
+          const page = await newPage();
+          await page.setViewport({ width: 900, height: 1000 });
+          await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
+          await page.goto(`${origin}/gallery.html?frame=tabs`, { waitUntil: 'networkidle0' });
+          await page.waitForSelector(`[data-tab-strip="${open}"] nav[aria-label="Workspace agents"]`);
+
+          const paint = await agentStripPaint(page, open);
+          const current = paint.tabs.filter((one) => one.current === 'page');
+          const closed = paint.tabs.filter((one) => one.current !== 'page');
+
+          // One tab is current, and it is the one the chat below belongs to.
+          expect(current.map((one) => one.tab)).toEqual([open]);
+          expect(closed.length).toBeGreaterThan(0);
+
+          for (const tab of current) {
+            // The bar is drawn, in a colour of its own.
+            expect(tab.underlineWidth).toBeGreaterThanOrEqual(2);
+            expect(tab.underlineColor).not.toBe('rgba(0, 0, 0, 0)');
+
+            // The NAME reads in the tab's own colour, whatever holds it. Main
+            // inherits that by writing its name as text; an agent's name sits
+            // in a rename control, and the control used to write a role of its
+            // own over it — a lit bar above a word that still read as closed.
+            expect(tab.labelColor).toBe(tab.color);
+
+            for (const other of closed) {
+              expect(tab.underlineColor).not.toBe(other.underlineColor);
+              expect(tab.color).not.toBe(other.color);
+              expect(tab.labelColor).not.toBe(other.labelColor);
+            }
+
+            // The whole bar is inside what the strip SHOWS, and it lands on
+            // the rule so the two read as one line. Every tab once stood
+            // taller than the strip, which clipped the bar away entirely.
+            expect(tab.bottom).toBeLessThanOrEqual(paint.clipBottom + 0.01);
+            expect(Math.abs(tab.bottom - paint.ruleBottom)).toBeLessThan(1.5);
+          }
+
+          await page.screenshot({ path: join(TAB_SHOTS, `agent-tabs-${open}-${theme}.png`), fullPage: true });
+          await page.close();
+        }
+      });
+    });
+  }
 });
 
 /** One Work section, as the browser drew it. */

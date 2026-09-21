@@ -69,10 +69,10 @@ describe('the workspace root answers the actor control plane', () => {
     // The send is the turn: the loop admits it as the operator's own next
     // turn, under the operator's stamp and the mode it was typed in, and the
     // caller hears it landed as one once it has.
-    const landing = agent.send('use the other parser');
+    const landing = agent.harnessChatLoop.send('use the other parser');
     await next;
     await turns.settle({ messageId: 'a-parser', text: 'ok' });
-    expect(await landing).toEqual({ landed: 'turn' });
+    expect(await landing).toBe('turn');
 
     const opened = (await agent.harnessTranscript.history()).find((message) => message.role === 'user');
     expect(opened?.parts).toEqual([{ type: 'text', text: 'use the other parser' }]);

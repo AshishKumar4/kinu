@@ -35,8 +35,9 @@ export const USER_MESSAGE_SIGNAL_KIND = 'user_message';
  *  generation won the queue slot; 'failed' = the platform enqueue threw. */
 export type SignalUndeliveredReason = 'preempted' | 'failed';
 
-/** What actually happened to a sent message. 'mid-turn': it rides the next
- *  step of a turn that already exists. 'queued': it started a turn of its own.
+/** What the inbox did with a sent message. 'mid-turn': it is pending in a
+ *  turn that already exists — it lands at that turn's next step, or reruns as
+ *  the next turn when no step comes. 'queued': it started a turn of its own.
  *  'yielded': the turn the signal was offered reached its slot after an
  *  operator message was already admitted — the offer was withdrawn and that
  *  message is the turn now. */

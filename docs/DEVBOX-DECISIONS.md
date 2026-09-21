@@ -730,6 +730,78 @@ showed the earlier `dist`-only hunk never reached bun at all, since the
 package's `bun` export condition resolves to `src/*.ts`; the patch now carries
 both.
 
+D22. The Nimbus upgrade retires the hook patch and grows the read-only one
+(2026-09-21, commits `81e5964ff`, `7eaef3034` and this one on
+`lane/nimbus-0921b`). Core moves to 0.11.0, worker to 0.9.0, sdk to 0.8.0 and
+fabric to 0.7.0; `@nimbus-sh/platform` follows to 0.5.0 under them and stays
+undeclared. Every version stays an EXACT pin rather than a caret, because
+`patchedDependencies` is keyed by `name@version`: a range that aged to 0.11.1
+would match no key and would drop the patch with no manifest line changing.
+So every declaration moves by hand, the ROOT `devDependencies` included: left
+at 0.10.0 it hoisted core 0.10.0 to the top of `node_modules` and nested
+0.11.0 under each workspace, so the copy that ran was the stale unpatched one.
+
+RETIRED because upstream carries them. D20's `resolveWorkerLaunch` embedder
+hook is in worker 0.9.0 at `dist/hosted/runtime.d.ts:29`
+(`resolveWorkerLaunch?: FacetManagerHostHooks['resolveWorkerLaunch']`) and
+`dist/hosted/runtime.js:74`, with the plumbing at `dist/hosted/services.d.ts:20`
+and `dist/hosted/services.js:86`. It sits on `HostedRuntimeOptions` DIRECTLY,
+not under a `hooks` member, so `createHostedWorkspace` passes it flat now.
+`dist/workspace-host.d.ts:1-2` re-exports `FacetManagerHostHooks` and
+`WorkerRecipe`. Two hunks are NOT upstream and stay: `facets()` is absent from
+`composeHostedRuntime`'s return (the 0.9.0 surface is `workspace terminal files
+runtimes ready exec runCode startProcess listProcesses killProcess
+writeProcessInput endProcessInput resizeProcess signalProcess processLogs
+listPorts listApps ensureDurableApp unexposePort removeDurableApp exposeApp
+removeApp rotateLink installRuntime ensureRuntimes listRuntimes spawnWorker
+routeCapabilityPort supervisorOp onScheduled attachTerminal terminalFrame
+terminalClose close`), and `LongRunningWorkerSpawnOptions` is still not
+re-exported from `workspace-host.d.ts`. The whole `NPM_REGISTRY` group is
+absent too: `dist/hosted/commands.js:824` calls
+`install(cwd, { packages, pid: ctx.pid })` and `dist/npm/r2-cache.js:102` keeps
+`NPM_REGISTRY_ORIGIN` a module-private constant.
+
+GROWN. Core 0.11.0 reintroduces D21's defect in three new places, all
+unconditional writes on the construction path: the filesystem identity row
+(`src/vfs/sqlite-vfs.ts:772`), the device row (`:780`), the `vfs_ino_allocator`
+seed (`:924`) and `backfillInoColumn`'s two `UPDATE`s (`:1033-1034`) — the
+stable-inode allocator is new in this version. Each is now gated on its row's
+absence, the same shape D21 used. Measured 2026-09-21 in this worktree with
+`bun test packages/cli-backend/tests/vfs-blob.test.ts` ("a current filesystem
+opens read-only and reads what a writer left"): 5 pass 0 fail with all five
+guards, and 4 pass 1 fail with ANY ONE of them reverted alone — identity,
+device, allocator seed, backfill and the D21 marker each measured separately.
+
+Upstream contract changes our code took: the flat `resolveWorkerLaunch` above,
+and one credential-bound filesystem authority — `composeFacetManager`'s
+`FacetManagerDeps` and core's wasm runner factories now take
+`NimbusFilesystemAuthority` where they took a raw `SqliteVFS`
+(`@nimbus-sh/core/dist/runtime/bash-runner.d.ts:74-77`), read off
+`NimbusWorkspace.filesystem`. The handoff's unlink-ENOENT restoration needed no
+adaptation: our `unlink` delegates to `files.delete` and reads no code.
+
+Measurements, all 2026-09-21 in `/home/mrwhite0racle/Kinu-wt-nimbus-0921b`:
+`bun test packages/cli-backend/tests/vfs-blob.test.ts` 5 pass 0 fail;
+`bunx vitest run tests/workerd/{slate-durability,do-eviction-recovery,slate-egress,slate-process}.test.ts`
+from `packages/cf-backend` 4 files 20 tests passed 0 failed;
+`bun run gate:patch-parity` ok, 7 patched dependencies and 30 files governed,
+core 4/4 and worker 13/13 matching; `bunx tsc --noEmit` clean on the `core`,
+`cf-backend` and `cli-backend` projects; `git diff --stat bun.lock` 16
+insertions 16 deletions, every version row `@nimbus-sh`.
+
+One finding worth the next upgrade's time: `bun patch --commit` followed by
+`bun install` left THREE module instances of `@nimbus-sh/platform` (top level,
+under `fabric`, under `sdk/@nimbus-sh/core`). `composeFabric` holds its
+composition in module state and is first-write-wins, so the host's
+`hostNamespace: 'OrchestratorAgent'` went into one instance while the runtime
+read another and refused with `HostedRuntime: env.NIMBUS_SESSION must be the
+Durable Object namespace configured by composeFabric` — 6 of 20 workerd tests
+red on a tree whose manifests and lock were already correct. A
+`rm -rf node_modules && bun install` collapsed it to one copy of each and all
+20 passed. The duplication is an artefact of incremental installs over a patch
+cycle, not of the new ranges: the primary checkout's tree holds one copy.
+Re-cut a patch, then install clean before believing any suite.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

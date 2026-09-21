@@ -25,7 +25,7 @@ import { orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, t
 
 const SteerFrameSchema = v.object({
   type: v.literal('steer_status'),
-  status: v.picklist(['queued', 'landed', 'returned']),
+  status: v.picklist(['queued', 'landed', 'returned', 'turn']),
   steerId: v.string(),
   text: v.string(),
   atStep: v.optional(v.number()),
@@ -116,7 +116,7 @@ describe('a message typed while the agent is working', () => {
     // first can no longer push these words to a later, unpredictable slot
     // (KINU-N026). The row carries the operator's authorship and the turn mode,
     // exactly as the ordinary send path would have written them.
-    expect(await h.agent.send('nothing is running')).toEqual({ landed: 'turn' });
+    expect(await h.agent.harnessChatLoop.send('nothing is running')).toBe('turn');
     // The loop admitted it as a turn of its own, under the operator's
     // authorship and the turn mode: the user row it left, and the claim the
     // turn ran under, say so. The reservation was spent by that row.
@@ -138,7 +138,7 @@ describe('a message typed while the agent is working', () => {
 
   test('a plan-mode steer that missed its turn queues a plan turn, not a build one', async () => {
     const h = steerHarness();
-    await h.agent.send('tighten the rollout plan first', [], 'plan');
+    await h.agent.harnessChatLoop.send('tighten the rollout plan first', { mode: 'plan' });
     const admitted = (await h.agent.harnessTranscript.history()).filter((message) => message.role === 'user');
     expect(turnAuthor(admitted[0]!)).toBe('operator');
     expect(h.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0]!.id)).toEqual({ work_mode: 'plan' });
@@ -151,7 +151,7 @@ describe('a message typed while the agent is working', () => {
     // an answer claiming placement here would be the silent text loss this
     // closes — and the reservation is retired with it.
     h.agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another session is driving this workspace' });
-    await expect(h.agent.send('nothing is running')).rejects.toThrow(/another session is driving/);
+    await expect(h.agent.harnessChatLoop.send('nothing is running')).rejects.toThrow(/another session is driving/);
     expect(h.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get()!.c).toBe(0);
   });
 
@@ -159,7 +159,7 @@ describe('a message typed while the agent is working', () => {
     const h = steerHarness();
     await h.startTurn();
 
-    expect(await h.agent.send('also check staging')).toEqual({ landed: 'mid-turn' });
+    await h.agent.send('also check staging', 'steer-staging');
 
     // Announced BEFORE the model has it — "we took your words" is a different
     // fact from "the model is reading them", and the composer needs the first
@@ -193,7 +193,7 @@ describe('a message typed while the agent is working', () => {
     const h = steerHarness();
     await h.startTurn();
 
-    expect(await h.agent.send('now build a slate that answers GET /ping')).toEqual({ landed: 'mid-turn' });
+    await h.agent.send('now build a slate that answers GET /ping', 'steer-ping');
 
     const carried = await stepMessages(h.agent, 0, HISTORY);
     // The steer's words verbatim and durable, then the skill it activated as
@@ -213,7 +213,7 @@ describe('a message typed while the agent is working', () => {
     const turnId = h.agent.harnessDurableTurnId();
 
     if (turnId === null) throw new Error('expected the harness turn to be durable');
-    await h.agent.send('recover this after reset');
+    await h.agent.send('recover this after reset', 'steer-recover');
 
     h.agent.harnessRestorePendingSteers(turnId);
 
@@ -226,7 +226,7 @@ describe('a message typed while the agent is working', () => {
   test('persists as a VERBATIM user row carrying the id and the step it landed in', async () => {
     const h = steerHarness();
     await h.startTurn();
-    await h.agent.send('also check staging');
+    await h.agent.send('also check staging', 'steer-1');
     await stepMessages(h.agent, 4, HISTORY);
 
     // A user row, not a card and not a rewritten summary: the walk-back fork
@@ -251,8 +251,8 @@ describe('a message typed while the agent is working', () => {
   test('two steers merge into one user message but persist as two rows', async () => {
     const h = steerHarness();
     await h.startTurn();
-    await h.agent.send('also check staging');
-    await h.agent.send('and the logs');
+    await h.agent.send('also check staging', 'steer-2');
+    await h.agent.send('and the logs', 'steer-3');
 
     expect(await stepMessages(h.agent, 0, HISTORY)).toEqual([
       ...HISTORY,
@@ -269,7 +269,7 @@ describe('a message typed while the agent is working', () => {
   test('an empty steer is refused outright rather than sent as a blank turn', async () => {
     const h = steerHarness();
     await h.startTurn();
-    await expect(h.agent.send('   ')).rejects.toThrow(/requires the message text/);
+    await expect(h.agent.send('   ', 'steer-blank')).rejects.toThrow(/requires the message text/);
   });
 
   test('a pending steer with an attachment survives a reset intact — the rerun carries real file data', async () => {
@@ -311,7 +311,7 @@ describe('stopping a turn with a steer still pending', () => {
   test('keeps the text queued instead of handing it back', async () => {
     const h = steerHarness();
     await h.startTurn();
-    await h.agent.send('change of plans');
+    await h.agent.send('change of plans', 'steer-change');
 
     const outcome = await h.agent.cancelCurrentWork();
 
@@ -329,7 +329,7 @@ describe('stopping a turn with a steer still pending', () => {
   test('leaves a steer the model already read alone', async () => {
     const h = steerHarness();
     await h.startTurn();
-    await h.agent.send('also check staging');
+    await h.agent.send('also check staging', 'steer-4');
     await stepMessages(h.agent, 0, HISTORY);
 
     expect(await h.agent.cancelCurrentWork()).not.toHaveProperty('returnedSteers');
@@ -339,8 +339,8 @@ describe('stopping a turn with a steer still pending', () => {
   test('two queued steers become the next turn text in order once the abort settles', async () => {
     const h = steerHarness();
     await h.startTurn();
-    await h.agent.send('first');
-    await h.agent.send('second');
+    await h.agent.send('first', 'steer-first');
+    await h.agent.send('second', 'steer-second');
     await h.agent.cancelCurrentWork();
 
     await chatSessionTurns(h.agent).settle({ messageId: 'assistant-stop', text: 'partial', requestId: 'req-stop', status: 'aborted' });
@@ -360,7 +360,7 @@ describe('a steer that never saw a step boundary', () => {
     await h.startTurn();
     // Typed while the model was already writing its final answer: there is no
     // further step for it to land on.
-    await h.agent.send('one more thing');
+    await h.agent.send('one more thing', 'steer-5');
     const settled = await chatSessionTurns(h.agent).settle({ messageId: 'assistant-1', text: 'deployed', requestId: 'req-1' });
 
     expect(h.enqueued).toHaveLength(1);
@@ -385,12 +385,41 @@ describe('a steer that never saw a step boundary', () => {
     // as the harness's.
   });
 
+  test('answers its sender with the rerun, never with a guess at admission', async () => {
+    const h = steerHarness();
+    await h.startTurn();
+    // The first-run row `every-tool` sent its prompt while the genesis turn
+    // was writing its only answer. The loop said `mid-turn` at admission, the
+    // harness counted the reply under the genesis run, and the tool list the
+    // rerun then produced was never read. What the send resolves with is the
+    // rows durable at that moment: the answer of the turn that ran the words.
+
+    const atLanding = h.agent.harnessChatLoop.send('one more thing').then(async (landed) => ({
+      landed,
+      answers: (await h.agent.harnessTranscript.history()).filter((message) => message.role === 'assistant').map((message) => message.id),
+    }));
+
+    await chatSessionTurns(h.agent).settle({ messageId: 'assistant-1', text: 'deployed', requestId: 'req-1' });
+    const landing = await atLanding;
+
+    expect(landing.landed).toBe('turn');
+    // The live turn's answer AND the rerun's were on disk before the sender
+    // heard anything; a verdict at admission would have seen neither.
+    expect(landing.answers).toHaveLength(2);
+    // The rerun opened under the steer's own id, and every open surface heard
+    // the words became a turn — the fact a composer that only admitted them
+    // reads its landing from.
+    const steerId = steerFrames(h.frames).find((frame) => frame.status === 'queued')?.steerId;
+    expect(steerFrames(h.frames).map((frame) => frame.status)).toEqual(['queued', 'turn']);
+    expect((await h.agent.harnessTranscript.history()).filter((message) => message.role === 'user').at(-1)?.id).toBe(steerId);
+  });
+
   test('leftovers of mixed modes rerun as ONE plan turn, once, across duplicate terminal callbacks', async () => {
     const h = steerHarness();
     await h.startTurn();
-    await h.agent.send('first build', [], 'build');
-    await h.agent.send('plan next', [], 'plan');
-    await h.agent.send('second build', [], 'build');
+    await h.agent.send('first build', 'steer-b1', [], 'build');
+    await h.agent.send('plan next', 'steer-p', [], 'plan');
+    await h.agent.send('second build', 'steer-b2', [], 'build');
 
     await chatSessionTurns(h.agent).settle({ messageId: 'assistant-groups', text: 'ok', requestId: 'req-groups' });
     await chatSessionTurns(h.agent).settle({ messageId: 'assistant-groups', text: 'ok', requestId: 'req-groups-duplicate' });
@@ -410,7 +439,7 @@ describe('a steer that never saw a step boundary', () => {
   test('is not rerun twice — the turn that takes it drains it', async () => {
     const h = steerHarness();
     await h.startTurn();
-    await h.agent.send('one more thing');
+    await h.agent.send('one more thing', 'steer-6');
 
     await chatSessionTurns(h.agent).settle({ messageId: 'assistant-1', text: 'ok', requestId: 'req-1' });
     await chatSessionTurns(h.agent).settle({ messageId: 'assistant-1', text: 'ok', requestId: 'req-2' });
@@ -426,7 +455,7 @@ describe('an eviction with acknowledged steers', () => {
     // A real activation drives this turn under the id of its driving user
     // message; naming that id is what makes the resume re-bind under it.
     await h.startTurn('u-live');
-    await h.agent.send('the live turn keeps me');
+    await h.agent.send('the live turn keeps me', 'steer-live');
 
     // A second, DEAD turn's reservation: the activation that owned it never
     // reached its settle. Written through SQL, because the point is that SQL —
