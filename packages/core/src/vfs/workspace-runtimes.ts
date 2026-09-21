@@ -368,7 +368,7 @@ function provisioningStub(deps: {
     try {
       await deps.install();
     } catch (error) {
-      ctx.stderr.write(`${deps.binName}: installing the ${deps.runtimeName} runtime failed: `
+      await ctx.stderr.write(`${deps.binName}: installing the ${deps.runtimeName} runtime failed: `
         + `${renderThrownChain({ cause: error })}\n`);
 
       return 127;
@@ -377,7 +377,7 @@ function provisioningStub(deps: {
     const command = await deps.registry.resolve(deps.binName);
 
     if (!command || command === stub) {
-      ctx.stderr.write(`${deps.binName}: the ${deps.runtimeName} runtime installed but provides no `
+      await ctx.stderr.write(`${deps.binName}: the ${deps.runtimeName} runtime installed but provides no `
         + `runnable ${deps.binName} in this workspace\n`);
 
       return 127;
