@@ -15,7 +15,7 @@ import { scriptedTurnModel } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
   resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
-  decodeModelMessages, contextMount, withMountTable, createFileDispatcher, TurnContextBudget,
+  contextMount, withMountTable, createFileDispatcher, TurnContextBudget,
 } from '@kinu.run/core';
 import type {
   ActorHandle, AgentRuntime, AgentStores, ChatEvent, FileToolInput, ProfileAuthorityInputs,
@@ -77,20 +77,18 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
     });
 
     const runtime: AgentRuntime = { ...rt, actor: handle, identity: { ...rt.identity, id: handle.actorId, name: handle.name } };
-    const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync);
+    const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
 
-    const actor: ActorSession = new ActorSession({
-      runtime, claims: stores.claims, installedBuild: null,
-      orchestration: {
-        engine: new EvolutionEngine(runtime, { enabled: false }), eventLog: new EventLog(eventSql, handle),
-        host: {
-          broadcast: () => {},
-          enqueueTurn: async () => { throw new Error('this fixture must not enqueue another turn'); },
-          turnInFlight: () => actor.inFlight,
-          setTimer: () => { throw new Error('this fixture must not schedule background work'); },
-        },
+    const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null,
+    orchestration: {
+      engine: new EvolutionEngine(runtime, stores.history, { enabled: false }), eventLog: new EventLog(eventSql, handle),
+      host: {
+        broadcast: () => {},
+        enqueueTurn: async () => { throw new Error('this fixture must not enqueue another turn'); },
+        turnInFlight: () => actor.inFlight,
+        setTimer: () => { throw new Error('this fixture must not schedule background work'); },
       },
-    });
+    }, });
 
     return { actor, runtime, stores, handle };
   };
@@ -126,7 +124,7 @@ async function runTurn(bound: Bound, opts: {
   bound.actor.bindProfile(lease, resolveTurnProfile({
     ...profiles, roleId: 'task', workMode: mode, availableTools: Object.keys(opts.tools ?? {}), activeSkills: [],
   }), profiles);
-  bound.actor.appendInput(lease, opts.input);
+  await bound.actor.openTurnInput(lease, { item: {}, message: opts.input, birthContext: async () => [] });
 
   const result = await bound.actor.execute(lease, {
     task: 'go', loopVersion: opts.loopVersion,
@@ -142,6 +140,13 @@ async function runTurn(bound: Bound, opts: {
   bound.actor.finishTurn(lease);
 
   return { lease, result };
+}
+
+async function selectedInput(bound: Bound, messages: readonly ModelMessage[]) {
+  return (await bound.stores.history.replaceHistory(messages, {
+    author: bound.handle.actorId, via: 'session', turnId: null, stage: false,
+    assertOwner: () => bound.handle.assertCurrent(),
+  })).selection;
 }
 
 test('the claim and its admitted context are durable before the first model call', async () => {
@@ -175,7 +180,7 @@ test('the claim and its admitted context are durable before the first model call
   expect(result.claim).toMatchObject({ turnId: 'turn-a', runId: 'run-turn-a', epoch: 1 });
   // Revision 0 exists in the same transaction as the claim, and it is the
   // context the turn was admitted against — not a placeholder.
-  const admitted = left.stores.claims.admittedContext('turn-a');
+  const admitted = await left.stores.claims.admittedContext('turn-a');
   expect(admitted?.messages).toEqual([{ role: 'user', content: 'admitted input' }]);
 });
 
@@ -234,9 +239,7 @@ test('a cold reader recovers the claimed program identity and the exact context 
 
   // A SECOND store bundle over the same database, bound to the same issued
   // actor: this is what an activation that did not run the turn can see.
-  const cold = createAgentStores(
-    () => left.runtime.storage.sql, () => left.handle, left.runtime.storage.transactionSync,
-  );
+  const cold = createAgentStores(() => left.runtime.storage.sql, () => left.handle, left.runtime.storage.transactionSync, async () => ({ vfs: left.runtime.storage.vfs, artifactDirectory: '/actors/' + left.handle.actorId }));
 
   const claim = cold.claims.read('turn-cold');
   expect(claim).toMatchObject({ turnId: 'turn-cold', epoch: 1, status: 'settled', outcome: 'completed' });
@@ -255,7 +258,7 @@ test('a cold reader recovers the claimed program identity and the exact context 
   );
 
   expect(recovery.kind).toBe('build_unknown');
-  const consumed = cold.claims.consumedContext('turn-cold');
+  const consumed = await cold.claims.consumedContext('turn-cold');
   expect(consumed?.stepIndex).toBe(0);
   // The step's own input, byte-for-byte, with its typed attachment intact —
   // not display prose, and not a JSON round trip of the bytes.
@@ -295,7 +298,7 @@ test('a rich tool exchange survives the revision round trip as native messages',
   });
   // The SECOND step's revision is the one that carries the assistant tool call
   // and its result: the pairing a provider rejects if either half is lost.
-  const second = left.stores.claims.consumedContext('turn-tools', 2);
+  const second = await left.stores.claims.consumedContext('turn-tools', 1);
   expect(second?.stepIndex).toBe(1);
   const roles = (second?.messages ?? []).map((message) => message.role);
   expect(roles).toContain('assistant');
@@ -310,33 +313,31 @@ test('a stale execution epoch cannot write to the claim a newer one owns', async
   const left = bind('left');
   const claims = left.stores.claims;
 
-  const stale = claims.admit({
+  const stale = await claims.admit({
     runId: 'run-old', turnId: 'turn-fence', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
-    context: [{ role: 'user', content: 'first activation' }], workingRevision: 0,
+    context: await selectedInput(left, [{ role: 'user', content: 'first activation' }]),
   });
 
   expect(stale.epoch).toBe(1);
 
   // The activation that replaces it re-admits the SAME turn and takes the next
   // epoch — the case the single-row handoff could not represent.
-  const live = claims.admit({
+  const live = await claims.admit({
     runId: 'run-new', turnId: 'turn-fence', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
-    context: [{ role: 'user', content: 'second activation' }], workingRevision: 0,
+    context: await selectedInput(left, [{ role: 'user', content: 'second activation' }]),
   });
 
   expect(live.epoch).toBe(2);
-  expect(() => claims.consume(stale, { index: 0, messages: [{ role: 'user', content: 'stale step' }], workingRevision: 0 }))
-    .toThrow(KinuError);
+  await expect(claims.consume(stale, { index: 0, messages: [{ role: 'user', content: 'stale step' }] })).rejects.toThrow(KinuError);
   expect(() => claims.settle(stale, 'completed')).toThrow(KinuError);
   // The live claim is untouched by the refusals.
-  claims.consume(live, { index: 0, messages: [{ role: 'user', content: 'live step' }], workingRevision: 0 });
+  await claims.consume(live, { index: 0, messages: [{ role: 'user', content: 'live step' }] });
   expect(claims.read('turn-fence')).toMatchObject({ epoch: 2, runId: 'run-new', consumedRevision: 1 });
   // A settled claim takes no further work either.
   claims.settle(live, 'completed');
-  expect(() => claims.consume(live, { index: 1, messages: [{ role: 'user', content: 'after settle' }], workingRevision: 0 }))
-    .toThrow(KinuError);
+  await expect(claims.consume(live, { index: 1, messages: [{ role: 'user', content: 'after settle' }] })).rejects.toThrow(KinuError);
 });
 
 test('one actor cannot write another actor\'s claim, and their revisions never mix', async () => {
@@ -344,27 +345,27 @@ test('one actor cannot write another actor\'s claim, and their revisions never m
   const left = bind('left');
   const right = bind('right');
 
-  const leftClaim = left.stores.claims.admit({
+  const leftClaim = await left.stores.claims.admit({
     runId: 'run-l', turnId: 'shared-turn-id', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
-    context: [{ role: 'user', content: 'left context' }], workingRevision: 0,
+    context: await selectedInput(left, [{ role: 'user', content: 'left context' }]),
   });
 
-  const rightClaim = right.stores.claims.admit({
+  const rightClaim = await right.stores.claims.admit({
     runId: 'run-r', turnId: 'shared-turn-id', workMode: 'plan',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
-    context: [{ role: 'user', content: 'right context' }], workingRevision: 0,
+    context: await selectedInput(right, [{ role: 'user', content: 'right context' }]),
   });
 
   // The same turn id on two issued actors is two claims, each at epoch 1.
   expect(leftClaim.epoch).toBe(1);
   expect(rightClaim.epoch).toBe(1);
-  expect(() => right.stores.claims.consume(leftClaim, {
-    index: 0, messages: [{ role: 'user', content: 'cross-actor step' }], workingRevision: 0,
-  })).toThrow(KinuError);
-  expect(left.stores.claims.admittedContext('shared-turn-id')?.messages)
+  await expect(right.stores.claims.consume(leftClaim, {
+    index: 0, messages: [{ role: 'user', content: 'cross-actor step' }],
+  })).rejects.toThrow(KinuError);
+  expect((await left.stores.claims.admittedContext('shared-turn-id'))?.messages)
     .toEqual([{ role: 'user', content: 'left context' }]);
-  expect(right.stores.claims.admittedContext('shared-turn-id')?.messages)
+  expect((await right.stores.claims.admittedContext('shared-turn-id'))?.messages)
     .toEqual([{ role: 'user', content: 'right context' }]);
   expect(right.stores.claims.read('shared-turn-id')?.workMode).toBe('plan');
 });
@@ -389,6 +390,8 @@ test('a context edit written through the native file tool reaches the NEXT model
   // that distinction honest instead of asserting one is the other.
   const requests: string[] = [];
   let step = 0;
+  const edits: string[] = [];
+  const fileErrors: string[] = [];
 
   // THREE steps, because that is what the product actually requires of a model
   // editing a file: read it, then edit against what the read returned, then
@@ -418,13 +421,30 @@ test('a context edit written through the native file tool reaches the NEXT model
       },
       required: ['action', 'path'],
     }),
-    execute: async (args: FileToolInput) => file(args),
+    execute: async (args: FileToolInput) => {
+      let output: Awaited<ReturnType<typeof file>>;
+
+      try {
+        output = await file(args);
+      } catch (cause) {
+        fileErrors.push(cause instanceof Error ? cause.message : String(cause));
+        throw cause;
+      }
+
+      if (args.action === 'edit') edits.push(JSON.stringify(output));
+
+      return output;
+    },
   }) };
 
   await runTurn(left, {
     turnId: 'turn-edit', loopVersion: 0, model, tools,
     input: { role: 'user', content: 'reason from the WRONG premise' },
   });
+
+  expect(fileErrors).toEqual([]);
+  expect(edits).toHaveLength(1);
+  expect(JSON.parse(edits[0] ?? 'null')).toMatchObject({ ok: true });
 
   // The first two requests ran on the original premise: an in-flight request
   // keeps the versions it started with, and the edit was not even authored
@@ -456,33 +476,91 @@ test('a context edit written through the native file tool reaches the NEXT model
 
   expect(premise).toBe('reason from the RIGHT premise');
 
-  // The durable record agrees. The edit is its own revision, authored through
-  // the file surface by this actor and activated at the step that took it; the
-  // rendered request of that step points at it; and the working history the
-  // finished turn left behind carries the edited message.
-  const edit = left.stores.claims.working.history().find((row) => row.source === 'edit');
-  expect(edit).toMatchObject({
-    via: 'file', author: left.handle.actorId, activatedStep: 2, activatedTurnId: 'turn-edit',
-  });
-  expect(left.stores.claims.consumedContext('turn-edit')?.workingRevision).toBe(edit?.revision);
-  const settled = left.stores.claims.working.active();
-  expect(settled?.messages[0]).toEqual({ role: 'user', content: 'reason from the RIGHT premise' });
+  const settled = await left.stores.history.materialize();
+  expect(settled.messages[0]).toEqual({ role: 'user', content: 'reason from the RIGHT premise' });
   // And the FIRST step's evidence is untouched — an edit does not rewrite what
   // a past request was.
-  expect(JSON.stringify(left.stores.claims.consumedContext('turn-edit', 1)?.messages))
+  expect(JSON.stringify((await left.stores.claims.consumedContext('turn-edit', 0))?.messages))
     .toContain('the WRONG premise');
   // The next turn starts from the edited history, not from the pre-edit array.
   expect(left.actor.history[0]).toEqual({ role: 'user', content: 'reason from the RIGHT premise' });
 });
 
+test('a versioned context edit refuses a replaced target and preserves its historical bytes', async () => {
+  const { bind } = await workspace();
+  const left = bind('left');
+  await selectedInput(left, [{ role: 'user', content: 'original premise' }]);
+
+  const files = withMountTable(left.runtime.storage.vfs, [contextMount({
+    stores: () => ({ claims: left.stores.claims, events: null }),
+  })]);
+
+  const file = createFileDispatcher({ vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
+  const path = '/context/working.jsonl';
+  await file({ action: 'read', path });
+  const revision = (await files.stat(path))?.revision;
+
+  if (revision === undefined || files.readFileAtRevision === undefined) throw new Error('context must expose immutable revisions');
+  const original = await files.readFileAtRevision(path, revision);
+
+  await selectedInput(left, [{ role: 'user', content: 'peer replacement' }]);
+
+  expect(await files.readFileAtRevision(path, revision)).toBe(original);
+  await expect(file({ action: 'edit', path, edits: [{ old_text: 'original premise', new_text: 'lost update' }] }))
+    .rejects.toMatchObject({ verdict: 'stale' });
+  expect((await left.stores.history.materialize()).messages).toEqual([{ role: 'user', content: 'peer replacement' }]);
+});
+
+test('pending context edits can be read and revised but cannot overwrite another pending edit', async () => {
+  const { bind } = await workspace();
+  const left = bind('left');
+  await selectedInput(left, [{ role: 'user', content: 'original premise' }]);
+
+  const files = withMountTable(left.runtime.storage.vfs, [contextMount({
+    stores: () => ({ claims: left.stores.claims, events: null }),
+  })]);
+
+  const first = createFileDispatcher({ vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
+  const second = createFileDispatcher({ vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
+  const path = '/context/working.jsonl';
+  await first({ action: 'read', path });
+  await second({ action: 'read', path });
+  await first({ action: 'edit', path, edits: [{ old_text: 'original premise', new_text: 'first proposal' }] });
+  await expect(second({ action: 'edit', path, edits: [{ old_text: 'original premise', new_text: 'stale proposal' }] }))
+    .rejects.toMatchObject({ verdict: 'stale' });
+  await first({ action: 'read', path });
+  await first({ action: 'edit', path, edits: [{ old_text: 'first proposal', new_text: 'revised proposal' }] });
+  const next = await left.stores.history.stepBase(() => left.handle.assertCurrent());
+  expect(next.messages).toEqual([{ role: 'user', content: 'revised proposal' }]);
+});
+
+test('historical context reads preserve byte ranges and cannot cross actor boundaries', async () => {
+  const { bind } = await workspace();
+  const left = bind('left');
+  const right = bind('right');
+  await selectedInput(left, [{ role: 'user', content: 'café boundary' }]);
+
+  const files = withMountTable(left.runtime.storage.vfs, [contextMount({
+    stores: () => ({ claims: left.stores.claims, events: null }),
+    children: { list: () => ['right'], resolve: name => name === 'right' ? { claims: right.stores.claims, events: null } : null },
+  })]);
+
+  const path = '/context/working.jsonl';
+  const revision = (await files.stat(path))?.revision;
+
+  if (revision === undefined || files.readFileAtRevision === undefined) throw new Error('context must expose immutable revisions');
+  const original = v.parse(v.string(), await files.readFileAtRevision(path, revision));
+  const bytes = new TextEncoder().encode(original);
+  expect(await files.readFileAtRevision(path, revision, { offset: bytes.length - 12, length: 9 })).toEqual(bytes.slice(-12, -3));
+  await expect(files.readFileAtRevision('/context/agents/right/working.jsonl', revision)).rejects.toMatchObject({ code: 'denied' });
+});
+
 test('a mid-turn host edit stages a revision instead of rewriting a running turn', async () => {
   const { bind } = await workspace();
   const left = bind('left');
-  let stagedRevision: number | null = null;
 
-  const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: () => {
-    // A host edit arriving while the turn is admitted and running.
-    stagedRevision = left.actor.restoreHistory([{ role: 'user', content: 'replaced by the host' }]);
+  const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: async () => {
+    await left.actor.restoreHistory([{ role: 'user', content: 'replaced by the host' }]);
 
     return { content: [{ type: 'text', text: 'answered' }],
       finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] };
@@ -492,16 +570,9 @@ test('a mid-turn host edit stages a revision instead of rewriting a running turn
     turnId: 'turn-hydrate', loopVersion: 0, model,
     input: { role: 'user', content: 'original' },
   });
-  expect(stagedRevision).toBeGreaterThan(0);
   // The step that was already issued kept the context it was issued with.
-  const first = left.stores.claims.consumedContext('turn-hydrate', 1);
+  const first = await left.stores.claims.consumedContext('turn-hydrate', 0);
   expect(first?.messages).toEqual([{ role: 'user', content: 'original' }]);
-  // The turn boundary IS a safe boundary, so the edit landed there rather than
-  // waiting: the tail (the assistant's answer) was complete, and the working
-  // history the next turn builds on is the edited one.
-  expect(left.stores.claims.working.staged()).toBeNull();
-  expect(left.stores.claims.working.revision(stagedRevision ?? 0))
-    .toMatchObject({ via: 'session', activatedStep: null, activatedTurnId: 'turn-hydrate' });
 
   // The NEXT turn is the next safe boundary: it admits the edited history with
   // the newly delivered input preserved after it exactly once.
@@ -509,40 +580,32 @@ test('a mid-turn host edit stages a revision instead of rewriting a running turn
     turnId: 'turn-after', loopVersion: 0, model: answerOnce('second answer'),
     input: { role: 'user', content: 'follow-up' },
   });
-  const admitted = left.stores.claims.admittedContext('turn-after')?.messages ?? [];
+  const admitted = (await left.stores.claims.consumedContext('turn-after', 0))?.messages ?? [];
   expect(admitted[0]).toEqual({ role: 'user', content: 'replaced by the host' });
   expect(admitted.filter((message) => message.content === 'follow-up')).toHaveLength(1);
-  expect(left.stores.claims.working.active()).toMatchObject({ source: 'turn' });
 
   // Outside a turn the same call hydrates rather than staging.
-  expect(left.actor.restoreHistory([{ role: 'user', content: 'cold hydration' }])).toBeNull();
+  await left.actor.restoreHistory([{ role: 'user', content: 'cold hydration' }]);
   expect(left.actor.history).toEqual([{ role: 'user', content: 'cold hydration' }]);
 });
 
-test('the stored revision decodes through the codec the recorder validates with', async () => {
+test('claim recovery preserves native binary and URL attachment carriers', async () => {
   const { bind } = await workspace();
   const left = bind('left');
   const claims = left.stores.claims;
 
-  const claim = claims.admit({
+  const claim = await claims.admit({
     runId: 'run-codec', turnId: 'turn-codec', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
-    context: [{ role: 'user', content: [
+    context: await selectedInput(left, [{ role: 'user', content: [
       { type: 'text', text: 'binary and a url' },
       { type: 'file', data: new Uint8Array([0, 1, 254, 255]), mediaType: 'application/octet-stream' },
       { type: 'file', data: new URL('https://example.invalid/a.pdf'), mediaType: 'application/pdf' },
-    ] }], workingRevision: 0,
+    ] }]),
   });
 
-  const row = left.runtime.storage.sql<{ messages: string; digest: string }>`
-    SELECT messages, digest FROM actor_context_revisions
-    WHERE actor_id = ${left.handle.actorId} AND turn_id = ${claim.turnId} AND revision = 0`[0];
-
-  if (row === undefined) throw new Error('the admitting transaction must write revision 0');
-  // The stored payload is not a JSON dump of the byte array: the object index
-  // shape `{"0":0,"1":1}` is exactly the lossy round trip this codec avoids.
-  expect(row.messages).not.toContain('"0":0');
-  const decoded = decodeModelMessages(row.messages);
+  const admitted = await claims.admittedContext(claim.turnId);
+  const decoded = admitted?.messages ?? [];
   const parts = Array.isArray(decoded[0]?.content) ? decoded[0].content : [];
   const bytes = parts.find((part) => part.type === 'file' && part.mediaType === 'application/octet-stream');
   const url = parts.find((part) => part.type === 'file' && part.mediaType === 'application/pdf');

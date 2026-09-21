@@ -20,7 +20,9 @@ const CLAIM = { userId: null, source: 'vitest', consented: true };
 it('a public share serves the slate, admits the granted member, refuses the rest and audits all of it', async () => {
   const probe = subject('live-share');
   await probe.start();
-  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
+  const shared = await probe.share();
+  expect(shared, JSON.stringify(shared)).toMatchObject({ ok: true });
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), shared).value);
   const handle = created.share.handle;
 
   expect(created.url).toBe(`https://${handle}.share.test/`);

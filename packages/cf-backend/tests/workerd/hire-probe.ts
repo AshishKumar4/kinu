@@ -150,7 +150,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
    *  A delegated turn reports rather than chats, so its durable record is the
    *  child's OWN `run_events` — `run_start` carries the admitted brief as the
    *  turn's input, `step_partial` the streamed answer as it accumulated, and
-   *  `step_finish` the step's settled messages. `actor_messages` is not it:
+   *  `step_finish` the step's settled messages. The transcript is not it:
    *  that store is written by the conversational path a delegated turn never
    *  enters. Read here rather than over RPC so the assertion sees what the
    *  child's turn actually persisted, not a projection built for a pane. */

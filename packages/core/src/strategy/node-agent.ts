@@ -578,6 +578,7 @@ function buildNodeToolSet(input: {
   // the handle the model was told rather than a result it never saw.
   return buildToolSurface({
     rt: deps.actor.runtime,
+    history: deps.actor.stores.history,
     workMode: input.mode,
     logger: deps.logger,
     report,

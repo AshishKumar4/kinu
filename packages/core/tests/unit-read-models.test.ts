@@ -14,7 +14,6 @@ import { jsonSchema, tool, type ToolSet } from 'ai';
 import { testActorHandle } from '@kinu.run/test-utils';
 import {
   collectWorkspaceTextFiles, createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
-  SDK_SESSION_DDL,
 } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
@@ -24,8 +23,10 @@ import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { getRunTimeline } from '../src/read-models/timeline';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs';
 import { getAgentStatus, getChatHistoryPage, getToolList } from '../src/read-models/status';
-import { StaleCursorError, type SeekCursor } from '../src/read-models/page';
-import { uiMessageText } from '../src/utils/ui-message';
+import { SessionHistory } from '../src/session/history';
+import type { SessionTranscriptReader } from '../src/session/transcript';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
+import { StaleCursorError, type SeekCursor } from '../src/session/page';
 import {
   getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
 } from '../src/read-models/workspace-diff';
@@ -54,31 +55,48 @@ function workspace() {
   return { db, sql, execRaw, actor, vfs: createWorkspaceBundle(db).vfs, config: actor.config };
 }
 
-interface SeedRow { id: string; role: string; content: string }
+interface SeedRow { id: string; role: 'user' | 'assistant'; content: string }
 
-/** `n` transcript rows, m1 oldest. Inserted through the SDK's own column list
- *  so `created_at` is the whole-second DATETIME default a real turn writes. */
+/** `n` transcript rows, m1 oldest. */
 function transcriptOf(n: number): SeedRow[] {
   return Array.from({ length: n }, (_, i) => ({
-    id: `m${i + 1}`, role: i % 2 === 0 ? 'user' : 'assistant', content: `message ${i + 1}`,
+    id: `m${i + 1}`, role: i % 2 === 0 ? 'user' as const : 'assistant' as const, content: `message ${i + 1}`,
   }));
 }
 
-function seedTranscript(sql: SqlExecutor, rows: readonly SeedRow[]): void {
+/** The canonical session store over one workspace, and the chat transcript a
+ *  surface reads through. */
+function chatStore(w: { db: Database; sql: SqlExecutor; actor: ActorHandle; vfs: VFS }) {
+  const history = new SessionHistory({
+    sql: w.sql, actor: w.actor, transactionSync: (write) => w.db.transaction(write)(),
+    files: async () => ({ vfs: w.vfs, artifactDirectory: '/actor/.kinu/context' }),
+  });
+
+  return { history, transcript: history.transcript(CHAT_SESSION_ID) };
+}
+
+/** Seed the canonical transcript, each entry the child of the one before it —
+ *  the parentage a real turn writes. */
+async function seedTranscript(history: SessionHistory, rows: readonly SeedRow[], after: string | null = null): Promise<void> {
+  let parentId = after;
+
   for (const row of rows) {
-    void sql`INSERT INTO assistant_messages (id, session_id, role, content, created_at)
-      VALUES (${row.id}, ${''}, ${row.role}, ${row.content}, ${'2026-01-01 00:00:00'})`;
+    await history.record(CHAT_SESSION_ID, {
+      id: row.id, parentId, message: { role: row.role, content: row.content },
+      origin: row.role === 'user' ? 'input' : 'output',
+    });
+    parentId = row.id;
   }
 }
 
 /** Every page, oldest first — the walk a caller performs, and the only way to
  *  observe that the pages join up without overlapping. */
-function walkTranscript(sql: SqlExecutor, actor: ActorHandle, limit: number): string[] {
+async function walkTranscript(transcript: SessionTranscriptReader, limit: number): Promise<string[]> {
   const ids: string[] = [];
   let cursor: SeekCursor | undefined;
 
   for (;;) {
-    const page = getChatHistoryPage(sql, actor, { limit, cursor });
+    const page = await getChatHistoryPage(transcript, { limit, cursor });
     ids.unshift(...page.items.map((m) => m.id));
 
     if (page.status === 'end') return ids;
@@ -278,10 +296,10 @@ describe('run timeline', () => {
 
 describe('agent status', () => {
   test('identity, counts and the model the next turn runs, in one shape', async () => {
-    const { db, sql, actor, vfs } = workspace();
+    const w = workspace();
+    const { db, sql, actor, vfs } = w;
     void sql`UPDATE workspace_identity SET name = 'jarvis', created_at = 42`;
-    void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
-      VALUES (${actor.actorId}, 'm1', 'default', 'user', 'hi', 1)`;
+    await seedTranscript(chatStore(w).history, [{ id: 'm1', role: 'user', content: 'hi' }]);
 
     // The caller resolves the model; the read model reports it as given, so a
     // workspace on its tier's model never reads as having none.
@@ -306,54 +324,56 @@ describe('agent status', () => {
     })).rejects.toThrow(/no such table/);
   });
 
-  test('chat history flattens UI-message parts and drops non-chat roles', () => {
-    const { db, sql, actor, execRaw } = workspace();
-    execRaw(SDK_SESSION_DDL);
-    seedTranscript(sql, [
-      { id: 'a', role: 'user', content: JSON.stringify({ parts: [{ type: 'text', text: 'hello' }] }) },
-      { id: 'b', role: 'tool', content: 'not a chat role' },
-    ]);
-
-    expect(getChatHistoryPage(sql, actor)).toEqual({
-      status: 'end',
-      items: [{ id: 'a', role: 'user', content: 'hello', createdAt: '2026-01-01 00:00:00' }],
+  test('chat history flattens multi-part content and drops non-chat roles', async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+    await history.record(CHAT_SESSION_ID, {
+      id: 'a', parentId: null, origin: 'input',
+      message: { role: 'user', content: [{ type: 'text', text: 'hel' }, { type: 'text', text: 'lo' }] },
     });
-    db.close();
+    await history.record(CHAT_SESSION_ID, {
+      id: 'b', parentId: 'a', origin: 'output',
+      message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'probe', output: { type: 'text', value: 'not a chat role' } }] },
+    });
+
+    const recorded = transcript.read('a');
+
+    if (recorded === null) throw new Error('the seeded user entry must be in the transcript');
+    expect(await getChatHistoryPage(transcript)).toEqual({
+      status: 'end',
+      items: [{ id: 'a', role: 'user', content: 'hello', createdAt: recorded.recordedAt }],
+    });
+    w.db.close();
   });
 
-  test('chat history falls back to the plain mirror when there is no rich table', () => {
-    const { db, sql, actor } = workspace();
-    void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
-      VALUES (${actor.actorId}, 'm1', 'default', 'assistant', 'plain', 5)`;
-    expect(getChatHistoryPage(sql, actor, { limit: 1 })).toEqual({
-      status: 'end',
-      items: [{ id: 'm1', role: 'assistant', content: 'plain', createdAt: 5 }],
-    });
-    db.close();
-  });
-
-  test('a harness row walks back with the markers its card is drawn from', () => {
+  test('a harness row walks back with the markers its card is drawn from', async () => {
     // The production row, verbatim in shape: sunlit-stone-4a20's
     // `fork_interrupted` notice. Reporting it `system` is half the answer — the
     // chat draws the CARD from `kinuEvent`, and a page that reports the role
     // and drops the marker leaves the renderer with a system row it can say
     // nothing about.
-    const { db, sql, actor, execRaw } = workspace();
-    execRaw(SDK_SESSION_DDL);
-    seedTranscript(sql, [{
-      id: 'f8798675-5e9a-4d13-aac2-293f4557f1c1', role: 'user',
-      content: JSON.stringify({
-        parts: [{ type: 'text', text: '9 head(s) across 1 fork run(s)…' }],
-        metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
-      }),
-    }]);
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+    const id = 'f8798675-5e9a-4d13-aac2-293f4557f1c1';
 
-    expect(getChatHistoryPage(sql, actor).items).toEqual([{
-      id: 'f8798675-5e9a-4d13-aac2-293f4557f1c1', role: 'system',
-      content: '9 head(s) across 1 fork run(s)…', createdAt: '2026-01-01 00:00:00',
+    const message = await history.admitInput({
+      id, turnId: id, message: { role: 'user', content: '9 head(s) across 1 fork run(s)…' },
+      assertOwner: () => { w.actor.assertCurrent(); },
+    });
+
+    transcript.appendUser(await transcript.prepareUser({
+      id, turnId: id, message, metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
+    }));
+
+    const recorded = transcript.read(id);
+
+    if (recorded === null) throw new Error('the harness notice must be in the transcript');
+    expect((await getChatHistoryPage(transcript)).items).toEqual([{
+      id, role: 'system',
+      content: '9 head(s) across 1 fork run(s)…', createdAt: recorded.recordedAt,
       metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
     }]);
-    db.close();
+    w.db.close();
   });
 
   /**
@@ -366,15 +386,15 @@ describe('agent status', () => {
    * alone — `rows.length === limit` is true for both — so an implementation
    * that compares lengths reports `more` here and then serves an empty page.
    */
-  test('a short page is exhaustion, a full page is not, and an exactly-full page is', () => {
-    const { db, sql, actor, execRaw } = workspace();
-    execRaw(SDK_SESSION_DDL);
-    seedTranscript(sql, transcriptOf(4));
+  test('a short page is exhaustion, a full page is not, and an exactly-full page is', async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+    await seedTranscript(history, transcriptOf(4));
 
-    expect(getChatHistoryPage(sql, actor, { limit: 9 }).status).toBe('end');
-    expect(getChatHistoryPage(sql, actor, { limit: 2 })).toMatchObject({ status: 'more', next: { after: 'm3' } });
-    expect(getChatHistoryPage(sql, actor, { limit: 4 }).status).toBe('end');
-    db.close();
+    expect((await getChatHistoryPage(transcript, { limit: 9 })).status).toBe('end');
+    expect(await getChatHistoryPage(transcript, { limit: 2 })).toMatchObject({ status: 'more', next: { after: 'm3' } });
+    expect((await getChatHistoryPage(transcript, { limit: 4 })).status).toBe('end');
+    w.db.close();
   });
 
   /**
@@ -388,21 +408,21 @@ describe('agent status', () => {
    * compensate and it skips instead. There is no offset that is right, because
    * an offset names a position in a sequence that changed.
    */
-  test('a message arriving mid-pagination causes neither a duplicate nor a gap', () => {
-    const { db, sql, actor, execRaw } = workspace();
-    execRaw(SDK_SESSION_DDL);
-    seedTranscript(sql, transcriptOf(10));
+  test('a message arriving mid-pagination causes neither a duplicate nor a gap', async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+    await seedTranscript(history, transcriptOf(10));
 
-    const first = getChatHistoryPage(sql, actor, { limit: 4 });
+    const first = await getChatHistoryPage(transcript, { limit: 4 });
     expect(first).toMatchObject({ status: 'more' });
 
     if (first.status !== 'more') throw new Error('unreachable');
     expect(first.items.map((m) => m.id)).toEqual(['m7', 'm8', 'm9', 'm10']);
 
     // The live turn lands while the reader is scrolling up.
-    seedTranscript(sql, [{ id: 'm11', role: 'assistant', content: 'live arrival' }]);
+    await seedTranscript(history, [{ id: 'm11', role: 'assistant', content: 'live arrival' }], 'm10');
 
-    const second = getChatHistoryPage(sql, actor, { limit: 4, cursor: first.next });
+    const second = await getChatHistoryPage(transcript, { limit: 4, cursor: first.next });
     expect(second.items.map((m) => m.id)).toEqual(['m3', 'm4', 'm5', 'm6']);
 
     // No duplicate: nothing from page 1 reappears. No gap: m6 is the row
@@ -410,29 +430,28 @@ describe('agent status', () => {
     // page walking away from it.
     expect(second.items.map((m) => m.id)).not.toContain('m11');
 
-    const walked = walkTranscript(sql, actor, 4);
+    const walked = await walkTranscript(transcript, 4);
     expect(walked).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11']);
     expect(new Set(walked).size).toBe(walked.length);
-    db.close();
+    w.db.close();
   });
 
   /**
-   * `assistant_messages.created_at` is a whole-second DATETIME and a turn emits
-   * several rows inside one second (see identity/session-tree.ts). Every row
-   * here shares a timestamp, so a `created_at` cursor has no boundary to seek
-   * on at all and a `created_at` ORDER BY has no defined membership.
+   * A turn emits several entries inside one clock tick, so every row here
+   * shares a `recorded_at`: a timestamp cursor would have no boundary to seek
+   * on at all, and a timestamp ORDER BY no defined membership.
    */
-  test('messages sharing one whole second still page without loss', () => {
-    const { db, sql, actor, execRaw } = workspace();
-    execRaw(SDK_SESSION_DDL);
+  test('messages sharing one recorded instant still page without loss', async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+    await seedTranscript(history, transcriptOf(6));
+    // Collapsed onto one instant, so a `recorded_at` cursor would have no
+    // boundary to seek on and a `recorded_at` ORDER BY no defined membership.
+    void w.sql`UPDATE conversation_entries SET recorded_at = ${1_772_000_000_000}
+      WHERE actor_id = ${w.actor.actorId} AND session_id = ${CHAT_SESSION_ID}`;
 
-    for (const row of transcriptOf(6)) {
-      void sql`INSERT INTO assistant_messages (id, session_id, role, content, created_at)
-        VALUES (${row.id}, ${''}, ${row.role}, ${row.content}, ${'2026-03-04 05:06:07'})`;
-    }
-
-    expect(walkTranscript(sql, actor, 2)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']);
-    db.close();
+    expect(await walkTranscript(transcript, 2)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']);
+    w.db.close();
   });
 
   /**
@@ -440,22 +459,16 @@ describe('agent status', () => {
    * because that is the exhaustion answer and the caller would stop walking a
    * conversation it never finished reading.
    */
-  test('a cursor whose anchor has vanished is refused, not reported as exhausted', () => {
-    const { db, sql, actor, execRaw } = workspace();
-    execRaw(SDK_SESSION_DDL);
-    seedTranscript(sql, transcriptOf(3));
+  test('a cursor whose anchor has vanished is refused, not reported as exhausted', async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+    await seedTranscript(history, transcriptOf(3));
 
-    expect(() => getChatHistoryPage(sql, actor, { cursor: { after: 'never-existed' } }))
-      .toThrow(StaleCursorError);
-    expect(() => getChatHistoryPage(sql, actor, { cursor: { after: 'never-existed' } }))
-      .toThrow(/no longer in it/);
-    db.close();
-  });
-
-  test('uiMessageText leaves plain text alone', () => {
-    expect(uiMessageText('just text')).toBe('just text');
-    expect(uiMessageText(JSON.stringify({ parts: [{ type: 'text', text: 'a' }, { type: 'tool', x: 1 }, { type: 'text', text: 'b' }] })))
-      .toBe('ab');
+    await expect(getChatHistoryPage(transcript, { cursor: { after: 'never-existed' } }))
+      .rejects.toThrow(StaleCursorError);
+    await expect(getChatHistoryPage(transcript, { cursor: { after: 'never-existed' } }))
+      .rejects.toThrow(/no longer in it/);
+    w.db.close();
   });
 
   test('the tool list carries each crafted tool with its live score', async () => {

@@ -1,5 +1,5 @@
 /**
- * CF runtime adapter — bridges Think's DO context to core's AgentRuntime.
+ * CF runtime adapter — bridges the Agents DO context to core's AgentRuntime.
  *
  * ONE DURABLE OBJECT PER WORKSPACE. Everything a workspace stores is in the
  * owning actor's own `ctx.storage.sql`:
@@ -41,6 +41,7 @@ import {
   type WorkspaceVFS,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
   withMountTable, standardMounts, contextMount,
+  sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
   withApprovalGatedShell, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   type EgressSecretBinding,
@@ -63,6 +64,7 @@ export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
 import { kinuEgressParams } from "./egress/configure";
+import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox, SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 import { previewHostSuffix } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
@@ -418,7 +420,7 @@ export interface CFRuntimeHooks {
 }
 
 /**
- * Build a full AgentRuntime from a Think agent's DO context.
+ * Build a full AgentRuntime from the workspace's DO context.
  */
 export function createCFRuntime(
   agent: AgentHost,
@@ -603,6 +605,30 @@ export function createCFRuntime(
   // context mount is LAST because it is the only entry that is per-actor: two
   // actors share every other mount and never share this one.
   const mounts = [...standardMounts((name) => executionRouter.getProvider(name))];
+
+  // `/shared` — the owner's Drive, one Mossaic tenant per user, the same
+  // tenant in every workspace that user owns. The owner is resolved at every
+  // call, never captured: a claim that lands after this plane is built mounts
+  // the Drive from that moment, and an unclaimed workspace states its absence.
+  let drive: { tenant: string; files: MossaicVfs } | null = null;
+
+  mounts.push(sharedDriveMount(
+    () => {
+      const tenant = actor.ownerUserId();
+
+      if (tenant === null) return null;
+
+      if (drive === null || drive.tenant !== tenant) {
+        const files = tenantDrive(env, tenant);
+
+        if (files === null) return null;
+        drive = { tenant, files };
+      }
+
+      return drive.files;
+    },
+    () => (driveBound(env) ? SHARED_DRIVE_UNCLAIMED : SHARED_DRIVE_UNBOUND),
+  ));
   const plane = hooks.contextPlane;
 
   if (plane) {
@@ -618,16 +644,12 @@ export function createCFRuntime(
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
-    // FALSE, with the bucket bound. `runtimeCatalog` declares that this
-    // deployment can INSTALL AND RUN an interpreter runtime; a workspace held
-    // as a library in the actor's own Durable Object can fetch one out of
-    // NIMBUS_RUNTIME_CACHE and cannot run it — a wasm guest needs a facet
-    // substrate that compiles and enters a module, which on workerd is the
-    // dynamic-worker pool a Nimbus SESSION object composes for itself. So
-    // `python`/`native_binary` are not declared, `runtimes.*` still reaches the
-    // bucket, and `python3` is "command not found" rather than a command that
-    // installs 35.7 MB of rows and then fails.
-    runtimeCatalog: false,
+    // `runtimeCatalog` declares that this deployment can INSTALL AND RUN an
+    // interpreter runtime: the hosted runtime installs one out of
+    // NIMBUS_RUNTIME_CACHE on first use and runs it in a dynamic-worker
+    // facet of its own. Without the bucket there is nothing to install, so
+    // `python`/`native_binary` are declared exactly when it is bound.
+    runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
       vfs: agentFileVfs, memory, craftStore, shell,
@@ -1041,7 +1063,7 @@ function actorProviderRegistry(
     env,
     userDO: userCredentialSourceFor(env, actor),
     appTitle: title,
-    workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
+    sessionAffinity: agentAffinityKey(agent.name),
   });
 }
 

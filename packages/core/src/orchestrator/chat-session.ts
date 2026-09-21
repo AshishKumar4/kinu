@@ -3,7 +3,7 @@
  *
  * Seeded from the local backend's session and generalized over the seams both
  * backends already share: `ActorSession`, `Inbox`, `PendingSendStore`, the
- * `SqlExecutor` port behind a {@link TranscriptStore}, the event log, the run
+ * canonical SessionTranscript references, the event log, the run
  * recorder and core's terminal ledger. A backend supplies what the loop cannot
  * know — how a turn is assembled, what a settled turn owes, its effect bodies,
  * its driver lease and where events go — through {@link ChatSessionPorts} and
@@ -65,9 +65,8 @@ import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
 import type { PartialToolCall, RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
-import { estimateTokens } from '../llm';
 import { diagnostics, KinuError, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
-import { stepContextLimit, type ModelWindow } from '../prompting/step-prune';
+import type { ModelWindow } from '../prompting/step-prune';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
 import type { CacheWarmingLane } from '../providers/cache-warming';
@@ -92,8 +91,10 @@ import {
   owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, persistMeasuredPromptTokens, snapshotCompletedTurn,
   type CompactionTriggerState, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
-import { olderHistoryNotice, type TranscriptStore } from './transcript-store';
+import type { SessionTranscript, PreparedConversationEntry } from '../session/transcript';
 import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
+import type { MessageReference } from '../session/messages';
+import type { ContextSelection } from '../session/context';
 import { subordinateTurnContext } from '../subordinates/support';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
 import type { TaskListStore } from '../tasks/store';
@@ -271,16 +272,12 @@ interface TurnContinuation {
   readonly partial: { readonly text: string; readonly toolCalls: readonly PartialToolCall[] } | null;
 }
 
-/** What a tool that was cut before it answered tells the model on the
- *  continuation: the outcome is stated, never dropped, so the model knows the
- *  call never ran to completion and can decide to make it again. */
-const INTERRUPTED_TOOL_OUTPUT = 'This tool call was interrupted before it produced a result; the process running it stopped. Make the call again if its result is still needed.';
 
 /** A turn's input as the model message the working history carries: the
  *  attachments as file parts — the shape ai's convertToModelMessages emits
  *  for FileUIParts, so multimodal models receive them natively — then the
  *  text. */
-function turnInputMessage(item: Pick<ChatTurnInput, 'text' | 'files'>): ModelMessage {
+export function turnInputMessage(item: Pick<ChatTurnInput, 'text' | 'files'>): ModelMessage {
   const fileParts = (item.files ?? []).map((f) => ({
     type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
   }));
@@ -311,50 +308,15 @@ function continuedAnswer(
   return execution.interrupted || execution.steps <= 1 ? partial.text + execution.text : execution.text;
 }
 
-/**
- * The assistant's prior output for a re-opened turn, as model messages: every
- * finished step's messages as recorded, then the cut step — its text and the
- * tool calls it issued as one assistant message, each call answered by the
- * result the ledger holds or, for a call cut before it answered, by the
- * explicit interrupted outcome (the repair the SDK's own recovery applies to a
- * dangling tool part). A cut step that produced nothing adds nothing.
- */
-function priorOutputOf(continuation: TurnContinuation): ModelMessage[] {
-  const messages: ModelMessage[] = [...continuation.steps];
-  const partial = continuation.partial;
-
-  if (partial === null || (partial.text === '' && partial.toolCalls.length === 0)) return messages;
-
-  messages.push({
-    role: 'assistant',
-    content: [
-      ...(partial.text === '' ? [] : [{ type: 'text' as const, text: partial.text }]),
-      ...partial.toolCalls.map((call) => ({ type: 'tool-call' as const, toolCallId: call.toolCallId, toolName: call.toolName, input: call.args })),
-    ],
-  });
-
-  if (partial.toolCalls.length > 0) {
-    messages.push({
-      role: 'tool',
-      content: partial.toolCalls.map((call) => ({
-        type: 'tool-result' as const,
-        toolCallId: call.toolCallId,
-        toolName: call.toolName,
-        output: call.error !== undefined
-          ? { type: 'error-text' as const, value: call.error }
-          : { type: 'text' as const, value: call.result ?? INTERRUPTED_TOOL_OUTPUT },
-      })),
-    });
-  }
-
-  return messages;
-}
 
 /** How events reach the client: the CLI's in-process callback today, a
  *  WebSocket frame writer on the hosted backend later. May throw — the session
  *  records the failure and the loop continues. */
 export interface ChatTransport {
-  deliver(event: SessionEvent): void;
+  /** Synchronous delivery lands before the caller's next statement; a
+   *  transport that must read durable state on a boundary returns a promise
+   *  and the session serializes it behind the events before it. */
+  deliver(event: SessionEvent): void | Promise<void>;
 }
 
 /** What the backend's assembly reads of an admitted turn. */
@@ -367,11 +329,6 @@ export interface ChatTurnInput {
    *  named one: what a backend reads to know WHICH decision this turn is the
    *  handoff of. Absent on a user turn. */
   readonly idempotencyKey?: string;
-  /** What the turn had already produced when the last process died — the
-   *  assistant's own prior output, placed after the input on the working
-   *  history so the model continues rather than starts over. Absent on a
-   *  turn that is new. */
-  readonly priorOutput?: readonly ModelMessage[];
 }
 
 /** One assembled turn, ready to execute. */
@@ -483,7 +440,7 @@ export interface ChatSessionPorts {
 export interface ChatSessionOptions {
   readonly actorSession: ActorSession;
   readonly sessionId: string;
-  readonly transcript: TranscriptStore;
+  readonly transcript: SessionTranscript;
   /** The ONE pending-send ledger's store — every acknowledged send's row read
    *  and write goes through core's PendingSendStore, the same object the cf
    *  actor holds. Bound to the session's own actor id. */
@@ -509,13 +466,15 @@ export interface ChatSessionOptions {
 export class ChatSession {
   private readonly actorSession: ActorSession;
   private readonly sessionId: string;
-  private readonly transcript: TranscriptStore;
+  private readonly transcript: SessionTranscript;
   private readonly pendingSends: PendingSendStore;
   private readonly eventLog: EventLog;
   private readonly eventRecorder: RunEventRecorder;
   private readonly compactionState: CompactionTriggerState;
   private readonly transaction: <T>(body: () => T) => T;
   private readonly transport: ChatTransport;
+  /** The delivery still in flight, when a transport answered asynchronously. */
+  private delivery: Promise<void> | null = null;
   private readonly ports: ChatSessionPorts;
   private readonly mintAnswerId: () => string;
   private ended = false;
@@ -528,7 +487,7 @@ export class ChatSession {
   /** The running programmatic turn's opening row, as its commit will write
    *  it, for a steer that lands before the commit; null for a user turn,
    *  whose row is durable from admission. */
-  private openingRow: { id: string; text: string; metadata?: JsonObject } | null = null;
+  private openingRow: PreparedConversationEntry | null = null;
   /** The id the in-flight turn's answer is persisted under — minted with the
    *  turn, streamed under, committed under. */
   private messageId = '';
@@ -572,7 +531,7 @@ export class ChatSession {
     // built by the host without a view of this workspace's queue.
     this.actorSession.bindSteerPersistence({
       onAccept: (steer) => { this.pendingSends.reserve({ ...steer, turnId: this.steerTurnId() }); },
-      onDrain: (rows) => { this.commitLandedSteers(rows); },
+      prepareDrain: (rows, _atStep, reference) => this.prepareLandedSteers(rows, reference),
       turnId: () => this.steerTurnId(),
       skills: (text) => this.ports.steerSkills(text),
     });
@@ -960,19 +919,39 @@ export class ChatSession {
 
   // ── Internals ──────────────────────────────────────────────────────
 
+  /** Deliver one event in order; {@link flushEvents} awaits whatever is still in flight. */
   emit(event: SessionEvent): void {
-    try {
-      this.transport.deliver(event);
-    } catch (error) {
-      // A frontend render error must not kill the agent loop — but it is still a
-      // defect, and the event stream that would have shown it is the thing that
-      // just failed, so stderr is the only channel left.
-      diagnostics.failure(
-        'session.event_listener_failed',
-        toKinuError({ doing: 'delivering a session event to the frontend listener', cause: error, otherwise: 'io' }),
-        { eventType: event.type },
-      );
+    // A frontend listener's throw must not kill the agent loop; it is stated
+    // on stderr, the one channel left once the event stream itself failed.
+    const failed = (cause: KinuError): void => {
+      diagnostics.failure('session.event_listener_failed', cause, { eventType: event.type });
+    };
+
+    const settle = async (delivered: Promise<void>): Promise<void> => {
+      try {
+        await delivered;
+      } catch (cause) {
+        failed(toKinuError({ doing: 'delivering a session event to the frontend listener', cause, otherwise: 'io' }));
+      }
+    };
+
+    if (this.delivery !== null) {
+      this.delivery = settle(this.delivery.then(() => this.transport.deliver(event))).finally(() => { this.delivery = null; });
+
+      return;
     }
+
+    try {
+      const delivered = this.transport.deliver(event);
+
+      if (delivered instanceof Promise) this.delivery = settle(delivered).finally(() => { this.delivery = null; });
+    } catch (cause) {
+      failed(toKinuError({ doing: 'delivering a session event to the frontend listener', cause, otherwise: 'io' }));
+    }
+  }
+
+  async flushEvents(): Promise<void> {
+    while (this.delivery !== null) await this.delivery;
   }
 
   /** Kick the serialized turn pump if idle — idempotent, so a concurrent
@@ -1025,7 +1004,7 @@ export class ChatSession {
         // persisted; the offer is consumed.
         if (item.yieldsToUserMessage === true
           && (this.queue.some((queued) => queued.kind === 'user')
-            || this.transcript.operatorSpoke())) {
+            || await this.transcript.operatorSpoke())) {
           diagnostics.event('genesis.yielded_to_message', {
             signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
           });
@@ -1047,6 +1026,7 @@ export class ChatSession {
             toKinuError({ doing: 'processing a queued turn', cause: err, otherwise: 'io' }),
           );
         } finally {
+          await this.flushEvents();
           this.runningAnnouncement = null;
           item.settle(null);
         }
@@ -1158,29 +1138,15 @@ export class ChatSession {
     // reconnects holds that message, and the answer is one row either way.
     this.messageId = item.continuation?.messageId ?? this.mintAnswerId();
 
-    // A USER turn's opening row is durable at admission, not at commit — a
-    // steer landed mid-turn is written when the drain sees it (before the
-    // turn's commit could exist), so the row it parents to must already be on
-    // disk, and a turn the process kills leaves the question it was asked
-    // rather than an answer-less steer. Written BEFORE `turn-start` goes out:
-    // the loop is the ONE writer of a user row, so a transport that tells its
-    // clients the transcript at the turn's opening reads the row from here and
-    // never writes one of its own. A PROGRAMMATIC turn writes at commit
-    // exactly as before: `announcementOnDisk` is its dedup — an admitted-but-
-    // unfinished gate turn must read as not-yet-said so the retry re-queues it.
-    this.openingRow = item.kind === 'programmatic'
-      ? { id: this.turnId, text: item.text, ...(item.metadata !== undefined && { metadata: stampTurnAuthor(item.metadata) }) }
-      : null;
+    this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
+    const inputReference = await this.actorSession.canonical.admitInput({ id: this.turnId, turnId: this.turnId, message: turnInputMessage(item), assertOwner: () => this.actorSession.runtime.actor.assertCurrent() });
 
-    if (item.kind === 'user') {
-      this.transcript.appendUser({
-        id: this.turnId, text: item.text,
-        ...(item.files !== undefined && { files: item.files }),
-        // ONE row shape per message, whichever transport carried it: the
-        // operator's own message says so and names the mode it was typed in.
-        metadata: { ...item.metadata, [TURN_AUTHOR_METADATA_KEY]: 'operator' },
-      });
-    }
+    const opening = await this.transcript.prepareUser({ id: this.turnId, turnId: this.turnId, runId: this.runId, message: inputReference,
+      metadata: item.kind === 'user' ? { ...item.metadata, [TURN_AUTHOR_METADATA_KEY]: 'operator' } : stampTurnAuthor(item.metadata) });
+
+    this.openingRow = item.kind === 'programmatic' ? opening : null;
+
+    if (item.kind === 'user') this.transcript.appendUser(opening);
 
     this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode, turnId: this.turnId, messageId: this.messageId });
 
@@ -1189,7 +1155,6 @@ export class ChatSession {
     // Provenance mirrors the DO's: a real chat turn is 'chat', a programmatic
     // one names its trigger. A re-opened turn continues the run it was left
     // in; only a new turn opens a run.
-    this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
 
     // The re-opened run is this run now, named by `runId` for as long as it
     // runs; nothing else is held open on its behalf.
@@ -1359,7 +1324,7 @@ export class ChatSession {
   }
 
   private async runTurn(item: QueueItem, event: string | undefined, startedAt: number, lease: ActorTurnLease): Promise<void> {
-    const input: ChatTurnInput = item.continuation === undefined ? item : { ...item, priorOutput: priorOutputOf(item.continuation) };
+    const input: ChatTurnInput = item;
 
     // The one rule for where the turn's conversation comes from, on both
     // backends: a delivery's reply turn opens on the settled working revision
@@ -1367,10 +1332,10 @@ export class ChatSession {
     // other turn appends, and prior output follows either. The message shape
     // is a function of the input alone, so it is built here and not in each
     // backend's prepareTurn.
-    this.actorSession.openTurnInput(lease, {
+    await this.actorSession.openTurnInput(lease, {
       item: input,
       message: turnInputMessage(input),
-      birthContext: (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
+      birthContext: async (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
     });
 
     const prepared = await this.ports.prepareTurn(input, lease);
@@ -1394,7 +1359,7 @@ export class ChatSession {
 
       if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;
 
-      if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') this.emit(event);
+      if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') return this.emit(event);
     });
 
     const fullText = continuedAnswer(item.continuation, execution);
@@ -1415,6 +1380,14 @@ export class ChatSession {
       }).enqueueRetry;
     }
 
+    const finalText = execution.claim === null ? execution.finalTextReference
+      : await this.actorSession.recordTranscriptText(execution.claim, 'answer', fullText, execution.outputReferences);
+
+    const preparedAssistant = streamed || !interrupted ? await this.transcript.prepareAssistant({
+      id: this.messageId, parentId: this.actorSession.landedSteers.at(-1)?.id ?? lease.turnId,
+      turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
+    }) : null;
+
     // The turn's whole durable record, in ONE commit — see {@link commitTurn}.
     const commit = this.commitTurn({
       item,
@@ -1425,6 +1398,7 @@ export class ChatSession {
       // row stands alone, on both backends, as it did before the switch — an
       // empty assistant row was an empty bubble on every reload.
       assistantRow: streamed || !interrupted,
+      preparedAssistant,
       runError,
       interrupted,
       trialContext: execution.admittedMessages,
@@ -1573,6 +1547,7 @@ export class ChatSession {
     /** Whether an assistant row is written at all. False only for a turn
      *  interrupted before it streamed anything. */
     readonly assistantRow: boolean;
+    readonly preparedAssistant: PreparedConversationEntry | null;
     readonly runError: string | null;
     readonly interrupted: boolean;
     /** The turn's inference history, for the shadow trial's recorded replay. */
@@ -1650,6 +1625,11 @@ export class ChatSession {
           asyncWakePending: this.ports.hasPendingAsyncWake(),
         });
 
+      // The roster keys every effect on the answer row; a turn cut before its
+      // first token writes none, and the roster's contract for that is an
+      // empty id, not an identity no effect could ever read back.
+      const answerId = input.preparedAssistant === null ? '' : messageId;
+
       const owed = this.ports.owedTerminalEffects({
         turn,
         status,
@@ -1658,9 +1638,9 @@ export class ChatSession {
         // core (orchestrator/turn-lifecycle.ts `creditedTurnId`) rather than once
         // here and again in the cf backend's onChatResponse.
         credited: creditedTurnId({
-          messageId, completed: runError === null, workMode: this.actorSession.workMode,
+          messageId: answerId, completed: runError === null, workMode: this.actorSession.workMode,
         }),
-        messageId,
+        messageId: answerId,
         userText: item.text,
         assistantText: input.assistantText,
         completed: runError === null,
@@ -1680,22 +1660,7 @@ export class ChatSession {
         : { turnId, messageId };
 
       this.transaction(() => {
-        this.persist(
-          turnId,
-          messageId,
-          item.text,
-          // The landed ledger, not `drainedTexts()`: same steers in the same
-          // order, but each still carrying the id its queued/landed
-          // announcements used and the step index it was spliced into — which is
-          // what the durable row's parent chain is ordered by. The rows
-          // themselves were written by their own drains, at the step boundary.
-          this.actorSession.landedSteers,
-          input.assistantRow ? input.assistantText : null,
-          // The opening row already carries the operator's message's facts;
-          // a programmatic turn's row is written here, with the producer's
-          // stamp and event.
-          item.kind === 'programmatic' ? item.metadata : undefined,
-        );
+        this.persist(input.preparedAssistant);
 
         // The reservation the queue item was admitted as is spent by its own
         // durable row — same transaction, so a restart sees one or neither.
@@ -1721,48 +1686,11 @@ export class ChatSession {
     }
   }
 
-  /** Persist the exchange: the user row, any mid-turn steers, the assistant row.
-   *
-   *  `assistantId` is MINTED BY THE CALLER, because the roster the same
-   *  transaction freezes keys on it — a turn cannot record what it owes under an
-   *  id this method has not handed back yet.
-   *
-   *  `turnId` is the identity of the row that OPENS the exchange: derived from
-   *  the producer's name for the fact when the harness enqueued this turn, a
-   *  fresh uuid when the operator typed it. `INSERT OR IGNORE` is what makes the
-   *  first form idempotent — the primary key refuses a second announcement of
-   *  the same fact — and is a no-op for the second, whose id is unique by
-   *  construction.
-   *
-   *  A programmatic row also STATES its provenance: `metadata` is stamped here,
-   *  at the one seam every durable CLI turn is written through, so authorship
-   *  and event kind live in the row itself. The `programmatic:` id prefix
-   *  remains only as the read-side fallback for rows that carry no stamp —
-   *  never the thing a new row leans on.
-   *
-   *  A steer row states its provenance the same way, under the two keys core
-   *  declares for both backends: that it WAS a steer, and the step it was
-   *  spliced into. Its ROW is not written here — the drain wrote it when the
-   *  steer landed, inside the running turn; what the `steers` list still does
-   *  here is order the parent chain the assistant row hangs off. */
-  private persist(
-    turnId: string,
-    assistantId: string,
-    userText: string,
-    steers: ReadonlyArray<{ id: string; text: string; atStep: number }>,
-    assistantText: string | null,
-    metadata?: JsonObject,
-  ): void {
-    this.transcript.appendUser({
-      id: turnId, text: userText,
-      ...(metadata !== undefined && { metadata: stampTurnAuthor(metadata) }),
-    });
-    // The chain only: user → steers → assistant. Each steer row was committed
-    // by its own drain at the step boundary it landed on, parented to this
-    // turn's opening row.
-    const parentId = steers.length > 0 ? steers[steers.length - 1]!.id : turnId;
+  /** Public rows contain references only; output bytes committed before this terminal transaction. */
+  private persist(assistant: PreparedConversationEntry | null): void {
+    if (this.openingRow !== null) this.transcript.appendUser(this.openingRow);
 
-    if (assistantText !== null) this.transcript.appendAssistant({ id: assistantId, parentId, text: assistantText });
+    if (assistant !== null) this.transcript.appendAssistant(assistant);
   }
 
   // ─── The pending-send ledger ─────────────────────────────────────────────
@@ -1778,26 +1706,23 @@ export class ChatSession {
    *  here — and each later one under the steer before it, so a walk up from
    *  the answer reaches every steer the model read. The stamp is the one
    *  `describeLandedSteers` already gave each row. */
-  private commitLandedSteers(rows: readonly LandedSteerRow[]): void {
-    this.transaction(() => {
-      // A steer chains under the turn's opening row, so that row must be on
-      // disk first. A user turn's is, from admission; a programmatic turn's is
-      // written at commit, so the first steer to land in one writes it here —
-      // idempotent on its id, the commit's write is then the same row.
-      const opening = this.openingRow;
+  private async prepareLandedSteers(rows: readonly LandedSteerRow[], reference: MessageReference): Promise<(context: ContextSelection) => void> {
+    const turnId = this.turnId;
+    const runId = this.runId;
 
+    if (turnId === null || runId === null) throw new KinuError('denied', 'steer publication requires an active turn');
+    const opening = this.openingRow;
+    const parentId = this.actorSession.landedSteers.at(-1)?.id ?? turnId;
+    const prepared = await this.transcript.prepareSteers(rows, reference, turnId, runId, parentId);
+
+    return context => {
       if (opening !== null && this.actorSession.landedSteers.length === 0) this.transcript.appendUser(opening);
-      let parentId = this.actorSession.landedSteers.at(-1)?.id ?? this.turnId;
 
-      for (const row of rows) {
-        this.transcript.appendUser({
-          id: row.id, text: row.text, parentId, metadata: row.metadata,
-          ...(row.files !== undefined && { files: row.files }),
-        });
-        this.pendingSends.retire([row.id]);
-        parentId = row.id;
+      for (const entry of prepared) {
+        this.transcript.appendUser({ ...entry, context });
+        this.pendingSends.retire([entry.id]);
       }
-    });
+    };
   }
 
   /** The turn a steer's reservation is bound to: the live turn when one is
@@ -1952,58 +1877,8 @@ export class ChatSession {
     }
   }
 
-  /**
-   * Restore the working revision on open, falling back to the transcript only
-   * when the actor has never recorded a working revision.
-   */
-  restoreHistory(): void {
-    this.actorSession.restoreWorkingHistory(() => this.restoreTranscript());
-  }
-
-  /**
-   * The transcript fallback is bounded by the model's context window.
-   *
-   * Bounded by what the model could ever be shown at once — the resolved
-   * context window, LESS what is held back for the answer, since a restore that
-   * fills the window leaves nothing to reply with and hands the compaction
-   * ladder a request that is already over — rather than by a message count.
-   * The count was 40, was
-   * never overridden by anything, and was applied on EVERY reconnect: a
-   * session past 40 messages silently lost everything older each time the CLI
-   * restarted, with no marker in the transcript and no way for the model to
-   * ask what it had lost. Restoring to the window instead hands the whole
-   * conversation to the compaction ladder, which is the thing that actually
-   * knows how to shed it (summarize, archive verbatim, cite the archive).
-   *
-   * A session larger than the window still cannot be restored whole, so what
-   * did not fit is STATED: the count, and where it is still readable from.
-   */
-  private restoreTranscript(): readonly ModelMessage[] {
-    const rows = this.transcript.newestFirst();
-    const budget = stepContextLimit(this.ports.modelWindow());
-
-    const restored: ModelMessage[] = [];
-    let tokens = 0;
-    let omitted = 0;
-
-    for (const row of rows) {
-      if (row.role !== 'user' && row.role !== 'assistant') continue;
-
-      if (omitted > 0) { omitted++; continue; }
-
-      const cost = estimateTokens(row.content.length);
-
-      // The newest message is always restored. A single over-window message
-      // belongs to the compaction ladder, not an empty-history fallback.
-      if (restored.length > 0 && tokens + cost > budget) { omitted++; continue; }
-
-      tokens += cost;
-      restored.push({ role: row.role, content: row.content });
-    }
-
-    return omitted > 0
-      ? [olderHistoryNotice(omitted, this.sessionId), ...restored.reverse()]
-      : restored.reverse();
+  restoreHistory(): Promise<boolean> {
+    return this.actorSession.restoreWorkingHistory();
   }
 }
 

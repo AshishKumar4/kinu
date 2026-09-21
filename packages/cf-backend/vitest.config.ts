@@ -50,6 +50,7 @@ import { buildSlateVendor, slateVendor } from './slate-vendor';
 import { defineConfig, type Plugin } from 'vitest/config';
 import { probeOutbound } from './tests/workerd/http-model-fake';
 import { hireOutbound } from './tests/workerd/hire-model-fake';
+import { registryOutbound } from './tests/workerd/npm-registry-fake';
 import {
   DEPLOY_FAKE_CHANNEL, DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_RECORD, DEPLOY_FAKE_REFRESH_TOKEN,
   assetsOutbound, deployOutbound,
@@ -387,6 +388,7 @@ export default defineConfig({
             DEV_USER_EMAIL: 'probe@local',
             CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=',
           },
+          outboundService: registryOutbound,
           durableObjects: {
             SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
@@ -534,11 +536,8 @@ export default defineConfig({
           SOCKET: { className: 'SocketDO', useSQLite: true },
           ALARMED: { className: 'AlarmDO', useSQLite: true },
           CACHE_WARM_PROBE: { className: 'CacheWarmProbeDO', useSQLite: true },
-          STEER_PROBE: { className: 'SteerProbeDO', useSQLite: true },
           EVICTION_PROBE: { className: 'EvictionProbeDO', useSQLite: true },
           WITNESS: { className: 'WitnessDO', useSQLite: true },
-          CAPPED_TURN_PROBE: { className: 'CappedTurnProbeDO', useSQLite: true },
-          UNBOUNDED_TURN_PROBE: { className: 'UnboundedTurnProbeDO', useSQLite: true },
           SPEND_PROBE: { className: 'SpendProbeDO', useSQLite: true },
           TERMINAL_EFFECT_PROBE: { className: 'TerminalEffectProbeDO', useSQLite: true },
           DB_CAPABILITY_PROBE: { className: 'DbCapabilityProbeDO', useSQLite: true },

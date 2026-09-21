@@ -1,6 +1,7 @@
 import { Agent } from 'agents';
 import * as v from 'valibot';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
@@ -59,6 +60,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
       sql: <Row>(query: TemplateStringsArray, ...values: SqlValue[]): Row[] => this.sql<Row>(query,
         ...v.parse(v.array(v.union([v.string(), v.number(), v.boolean(), v.null()])), values)),
     });
+    seedBaseFilesystem(this.vfs, ['home', 'etc']);
     const files = this.vfs.as(CRED_KERNEL);
     const root = '/home/user/slates/network';
 

@@ -37,7 +37,7 @@ import {
 import {
   listRecordCells, listRecordObjectives, readRecordCell,
 } from '../src/read-models/exploration-records';
-import { StaleCursorError, type Page, type SeekCursor } from '../src/read-models/page';
+import { StaleCursorError, type Page, type SeekCursor } from '../src/session/page';
 import type { Floor, ObjectiveIdentity, PublicationState } from '../src/strategy/objective';
 import type { SqlExecutor } from '../src/types/primitives';
 

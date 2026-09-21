@@ -25,7 +25,7 @@ import { listForkRuns, readForkRun } from '../src/read-models/fork-runs';
 import { readExplorationCanvas } from '../src/read-models/exploration-canvas';
 import { HeadJournal } from '../src/heads/journal';
 import { newBranchId } from '../src/steer-branch';
-import type { Page, SeekCursor } from '../src/read-models/page';
+import type { Page, SeekCursor } from '../src/session/page';
 import type { ForkRunSummary } from '../src/read-models/fork-runs';
 
 function freshDb() {

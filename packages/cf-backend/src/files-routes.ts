@@ -32,11 +32,11 @@
  */
 
 import { getAgentByName } from "agents";
-import type { ExecutorWriteResult } from "@kinu.run/core";
-import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES } from "@kinu.run/core";
+import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, pumpUploadChunks, VfsRevisionSchema, type ExecutorWriteResult, type VfsRevision } from "@kinu.run/core";
+import * as v from 'valibot';
 import type { OrchestratorAgent } from "./orchestrator";
 import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
-import { err, fileResponseHeaders, json, readBoundedStream } from "@kinu.run/core";
+import { err, fileResponseHeaders, json } from "@kinu.run/core";
 
 /** The stub surface this route drives — narrowed so tests can stand in for
  *  the agent without impersonating the whole actor. */
@@ -50,7 +50,7 @@ export interface FilesRouteAgent {
   abortExecutorFileDownload(transferId: string): Promise<void>;
   writeExecutorFileChunk(
     executorId: string, path: string, transferId: string, offset: number,
-    chunk: Uint8Array, final: boolean, expectedRevision?: number,
+    chunk: Uint8Array, final: boolean, expectedRevision?: VfsRevision,
   ): Promise<ExecutorWriteResult>;
   abortExecutorFileWrite(transferId: string): Promise<void>;
 }
@@ -89,22 +89,20 @@ export async function handleFilesRequest(
     const expectedRevision = expectedRevisionFrom(request);
 
     return expectedRevision === null
-      ? err(400, 'If-Match must be a non-negative integer revision')
+      ? err(400, 'If-Match must encode a numeric or string revision')
       : upload(request, agent, executorId, path, expectedRevision);
   }
 
   return download(agent, executorId, path, url);
 }
 
-function expectedRevisionFrom(request: Request): number | undefined | null {
+function expectedRevisionFrom(request: Request): VfsRevision | undefined | null {
   const value = request.headers.get('if-match');
 
   if (value === null) return undefined;
+  const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), VfsRevisionSchema), value);
 
-  if (!/^(?:0|[1-9]\d*)$/.test(value)) return null;
-  const revision = Number(value);
-
-  return Number.isSafeInteger(revision) ? revision : null;
+  return parsed.success ? parsed.output : null;
 }
 
 /**
@@ -122,7 +120,7 @@ async function upload(
   agent: FilesRouteAgent,
   executorId: string,
   path: string,
-  expectedRevision: number | undefined,
+  expectedRevision: VfsRevision | undefined,
 ): Promise<Response> {
   if (request.body === null) return err(400, 'request body required');
 
@@ -132,28 +130,6 @@ async function upload(
   );
 
   const transferId = crypto.randomUUID();
-  const pending: Uint8Array[] = [];
-  let pendingBytes = 0;
-  let offset = 0;
-
-  const take = (want: number): Uint8Array => {
-    const out = new Uint8Array(want);
-    let at = 0;
-
-    while (at < want) {
-      const part = pending[0]!;
-      const count = Math.min(part.byteLength, want - at);
-      out.set(part.subarray(0, count), at);
-
-      if (count === part.byteLength) pending.shift();
-      else pending[0] = part.subarray(count);
-      at += count;
-    }
-
-    pendingBytes -= want;
-
-    return out;
-  };
 
   /** Abort the half-written transfer, naming an abort that itself failed. */
   const abandon = async (): Promise<void> => {
@@ -168,19 +144,18 @@ async function upload(
     }
   };
 
+  let sent = 0;
+
   try {
-    const outcome = await readBoundedStream(request, FILE_TRANSFER_MAX_BYTES, async (value) => {
-      pending.push(value);
-      pendingBytes += value.byteLength;
+    const outcome = await pumpUploadChunks(request, async (offset, chunk, final) => {
+      const written = await agent.writeExecutorFileChunk(
+        executorId, path, transferId, offset, chunk, final, expectedRevision,
+      );
 
-      while (pendingBytes >= FILE_CHUNK_BYTES) {
-        const written = await agent.writeExecutorFileChunk(
-          executorId, path, transferId, offset, take(FILE_CHUNK_BYTES), false, expectedRevision,
-        );
+      if (!final && 'error' in written) throw new Error(written.error);
+      sent = offset + chunk.byteLength;
 
-        if ('error' in written) throw new Error(written.error);
-        offset += FILE_CHUNK_BYTES;
-      }
+      return written;
     });
 
     if (outcome === 'too_large') {
@@ -196,11 +171,7 @@ async function upload(
       return err(400, 'the upload stopped before the whole file arrived');
     }
 
-    const tail = pendingBytes > 0 ? take(pendingBytes) : new Uint8Array(0);
-
-    const result = await agent.writeExecutorFileChunk(
-      executorId, path, transferId, offset, tail, true, expectedRevision,
-    );
+    const result = outcome.result;
 
     if ('conflict' in result) {
       return json(
@@ -218,7 +189,7 @@ async function upload(
       doing: 'streaming an uploaded file to the workspace actor',
       cause,
       otherwise: 'unavailable',
-    }), { executorId, path, bytes: offset + pendingBytes });
+    }), { executorId, path, bytes: sent });
 
     return err(400, cause instanceof Error ? cause.message : 'upload failed');
   }

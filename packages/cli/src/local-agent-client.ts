@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
-import { applyWorkspaceTitle, persistAutoTitle, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, invalidateConversationSearchIndex, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
+import { applyWorkspaceTitle, persistAutoTitle, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import {
   DriverLeaseHold,
@@ -468,45 +468,31 @@ export class LocalAgentClient implements AgentClient {
     return true;
   }
 
-  /** Walk-back fork: everything from the picked user message on leaves the
-   *  one durable conversation (archived under a throwaway id) and the client
-   *  continues on the truncated conversation. A fresh transcript artifact
-   *  takes the entries recorded after the walk-back. Works whether or not
-   *  this process records — the fork reads the durable store, never JSONL. */
+  /** Walk-back: the conversation continues from before the picked user
+   *  message, on the context the actor held there. A fresh transcript
+   *  artifact takes the entries recorded after the walk-back. */
   async fork(point: ForkPoint): Promise<AgentForkResult> {
     if (this.pending) throw new Error('Cannot fork while a turn is running.');
-    const { actorId } = this.deps.rt.actor;
+    const transcript = this.deps.rt.stores.history.transcript(this.canonicalConversation);
+    const rows: Array<{ id: string; role: string; content: string }> = [];
 
-    const rows = this.deps.rt.storage.sql<{ id: string; parent_id: string | null; role: 'user' | 'assistant'; content: string; created_at: number }>`
-      SELECT id, parent_id, role, content, created_at
-      FROM actor_messages
-      WHERE actor_id = ${actorId} AND session_id = ${this.canonicalConversation}
-        AND role IN ('user', 'assistant')
-      ORDER BY created_at ASC, rowid ASC`;
+    for (const entry of transcript.ancestry()) {
+      if (entry.role !== 'user' && entry.role !== 'assistant') continue;
+      const projected = await transcript.project(entry.id);
 
-    const pivot = findForkPivot(rows, point);
-
-    if (pivot < 0) {
-      throw new Error('Could not locate that message in the durable conversation.');
+      if (projected !== null) rows.push({ id: entry.id, role: entry.role, content: projected.content });
     }
 
-    const archivedConversation = `archive-${crypto.randomUUID()}`;
+    const pivotRow = rows[findForkPivot(rows, point)];
 
-    for (const row of rows.slice(pivot)) {
-      void this.deps.rt.storage.sql`
-        UPDATE actor_messages SET session_id = ${archivedConversation}
-        WHERE actor_id = ${actorId} AND id = ${row.id}`;
-    }
-
-    // Session reassignment is invisible to the search index's rowid watermark;
-    // its entries now name conversations the rows left.
-    invalidateConversationSearchIndex(this.deps.rt.storage.sql);
+    if (pivotRow === undefined) throw new Error('Could not locate that message in the durable conversation.');
+    await this.session.revertConversation(pivotRow.id);
     await this.session.end();
     this.activeCliSession = createCliSession(this.agentName, {
       ...this.deps.transcript,
       conversationId: this.canonicalConversation,
     });
-    this.session = this.createAgentSession(rows.slice(0, pivot).map(({ role, content }) => ({ role, content })));
+    this.session = this.createAgentSession();
     await this.connect();
 
     return { client: this, label: `branch ${this.activeCliSession.id}` };
@@ -682,10 +668,9 @@ export class LocalAgentClient implements AgentClient {
     return normalizeModelMenu({ payload: await this.session.listAvailableModels() });
   }
 
-  private createAgentSession(historySeed?: LocalAgentSessionOpts['historySeed']): LocalAgentSession {
+  private createAgentSession(): LocalAgentSession {
     const options: LocalAgentSessionOpts = {
       rt: this.deps.rt,
-      historySeed,
       db: this.deps.db,
       model: this.deps.model,
       modelResolver: this.deps.modelResolver,

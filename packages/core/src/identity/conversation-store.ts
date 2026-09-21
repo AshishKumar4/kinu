@@ -1,126 +1,14 @@
 /**
- * The conversation store — the transcript as a DAG, and the one place that
- * decides which SQLite table owns the default chat.
- *
- * The transcript has always been a tree. `actor_messages.parent_id` has existed since
- * the schema's first commit (`identity/schema.ts`, whose own comment calls it a
- * "simplified session tree") and is indexed by `idx_actor_messages_parent`; on the
- * Cloudflare backend the SDK's own store — `assistant_messages`, written by
- * `agents`' `AgentSessionProvider` — carries the same edges, defaults a missing
- * parent to the latest leaf so no message is ever edgeless, and already exposes
- * `getHistory(leafId)`, `getBranches(messageId)`, `getLatestLeaf()` and
- * `getPathLength(leafId)`. Kinu called none of those. The tree was written,
- * indexed, and dead.
- *
- * Two consequences, both of which the operator hit:
- *
- *  1. Cutting a tree by timestamp is not a cut. `assistant_messages.created_at`
- *     is `DATETIME DEFAULT CURRENT_TIMESTAMP` — whole seconds — and a turn emits
- *     several messages inside one second, so `created_at <= T` could not resolve
- *     which side of the cut a message was on. It also cannot express a second
- *     child of the same message, which is the whole point of a tree.
- *     {@link sessionTreeAncestry} cuts on the edges.
- *
- *  2. One copy of a conversation, or none. Every reader goes through THIS
- *     module, and each workspace carries its default chat in exactly ONE
- *     store. A second copy — a post-turn reconciler projecting the pane's
- *     newest-leaf ancestry into plain `actor_messages` rows — leaves an interrupted
- *     turn, or a sibling branch off an older node, unprojected until the next
- *     pass, invisible to status counts, paging, search and outcome
- *     attribution.
+ * The canonical conversation store: the flat reads every grader, fork preflight
+ * and recovery takes over `conversation_entries`.
  */
 
 import * as v from 'valibot';
-import { seekPage, mapPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle, ActorReference } from './actor-handle';
-import { tableExists } from './schema';
-import { uiMessageRow, uiMessageText, turnAuthor } from '../utils/ui-message';
-import { parseJsonValue, JsonObjectSchema, type JsonObject } from '../utils/json';
-import { tolerate } from '../obs/index';
+import type { ActorHandle } from './actor-handle';
+import type { SessionTranscriptReader } from '../session/transcript';
 
-/**
- * Bound on an ancestry walk, and the cycle guard. Matches the bound `agents`'
- * own `getPathLength` uses on the same edges, so a Kinu walk and an SDK walk
- * stop in the same place on a pathological chain.
- */
-export const SESSION_TREE_MAX_DEPTH = 10_000;
-
-/** The chat session every conversational read and write uses. `actor_messages` also
- *  holds `session_id = 'mcts'` rows written by the durable MCTS session writer,
- *  which are a different tree and are never touched here. */
-export const CHAT_SESSION_ID = 'default';
-
-/** One message in the tree, root-first when returned as a chain. `content` is
- *  plain text — what search and the evolution read models want. */
-export interface SessionTreeNode {
-  id: string;
-  parent_id: string | null;
-  role: string;
-  content: string;
-  created_at: number;
-}
-
-/** A row of the SDK's store — the serialized UI message the chat pane renders,
- *  which {@link SessionTreeNode.content} has already flattened away. */
-export interface ChatPaneRow {
-  id: string;
-  session_id: string;
-  parent_id: string | null;
-  role: string;
-  content: string;
-  created_at: string;
-}
-
-/**
- * Which store owns this workspace's default chat.
- *
- * The SDK's pane store where it exists (it is the one the chat pane renders,
- * so it is the one whose ids the user can point at), plain `actor_messages`
- * otherwise — the CLI has no second store and writes its own edges. Asked as a
- * question against `sqlite_master`, never discovered by catching: a missing
- * table is a normal state of a workspace that has not run a hosted turn, while
- * a failing query is a fault that must still throw.
- *
- * The inference is only as sound as the invariant behind it, and two flows
- * would break that invariant if left alone — both normalized once, at their
- * boundary, by this module:
- *
- *   - A cloud archive imported into a LOCAL workspace arrives carrying the
- *     pane schema and rows; {@link normalizeImportedConversation} projects
- *     them into `actor_messages` and drops the pane, so a local database never
- *     carries a second store.
- *   - A fork whose snapshot carries rich rows lands in the destination the
- *     caller DECLARES (`writeForkSnapshot`'s `targetAuthority`); hosted
- *     callers pass `'pane'`, local ones fall to `'plain'` — never "whatever
- *     table happens to exist".
- *
- * The pane store is VENDOR-OWNED. `agents`' `AgentSessionProvider.ensureTable`
- * creates it on Think's boot and Think's session is the only writer, so its
- * shape is the vendor's and Kinu adds nothing to it and creates none of it: a
- * column Kinu added would survive the vendor's `CREATE TABLE IF NOT EXISTS`
- * and then be named by no vendor INSERT, while a column Kinu read that the
- * vendor never creates throws `no such column` on every hosted workspace —
- * which is how every hosted snapshot failed on 2026-09-11. The one test
- * fixture of that shape lives in `packages/core/tests/helpers`
- * (`SDK_SESSION_DDL`), and `unit-pane-store-shape.test.ts` holds it to the
- * installed SDK.
- *
- * It is the ROOT actor's transcript by construction: Think's session belongs
- * to the workspace object, and no child actor runs Think. So the pane carries
- * no actor column and needs none; {@link usesPaneStore} is the one place that
- * says whose it is, and a child's default chat is the plain store.
- */
-export function hasPaneStore(sql: SqlExecutor): boolean {
-  return tableExists(sql, 'assistant_messages');
-}
-
-/** Whether THIS actor's default chat is the pane store: the workspace's root on
- *  a hosted workspace. The directory's CHECK makes `parentActorId === null` the
- *  root's own definition. */
-export function usesPaneStore(sql: SqlExecutor, actor: ActorReference): boolean {
-  return actor.parentActorId === null && hasPaneStore(sql);
-}
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
 
 /** Cheap fork-cut preflight. It reads only the authority table primary key, so
  * the driver can refuse an unknown requested cut before it probes or reserves a
@@ -128,361 +16,17 @@ export function usesPaneStore(sql: SqlExecutor, actor: ActorReference): boolean 
 export function forkPointExists(sql: SqlExecutor, actor: ActorHandle, messageId: string): boolean {
   actor.assertCurrent();
 
-  if (usesPaneStore(sql, actor)) {
-    return sql<{ name: string }>`SELECT id AS name FROM assistant_messages
-      WHERE id = ${messageId} LIMIT 1`.length > 0;
-  }
-
-  return sql<{ name: string }>`
-    SELECT id AS name FROM actor_messages
-    WHERE actor_id = ${actor.actorId} AND id = ${messageId} AND session_id = ${CHAT_SESSION_ID} LIMIT 1
-  `.length > 0;
+  return sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${actor.actorId} AND session_id=${CHAT_SESSION_ID} AND id=${messageId} LIMIT 1`.length > 0;
 }
 
-/**
- * The pane's whole-second `YYYY-MM-DD HH:MM:SS` stamp as UTC ms — the store
- * writes `CURRENT_TIMESTAMP`, which SQLite renders in UTC with no zone marker,
- * so the `Z` is what stops the host's local offset from being applied. Public
- * because every writer that lands a row in the pane store must read one back
- * under exactly this rule.
- */
-export function paneStampMs(createdAt: string): number {
-  return Date.parse(`${createdAt.replace(' ', 'T')}Z`);
-}
-
-/** The session id a reader reports for a stored row: the pane stamps hosted
- *  sessions with `''`; every surface says `default`. */
-function reportedSession(sessionId: string): string {
-  return sessionId === '' ? CHAT_SESSION_ID : sessionId;
-}
-
-/** A row of the SDK's store as a tree node: the serialized UI message flattened
- *  to text, and its stamp read as ms. */
-function paneRowToNode(row: ChatPaneRow): SessionTreeNode {
-  return {
-    id: row.id,
-    parent_id: row.parent_id,
-    role: row.role,
-    content: uiMessageText(row.content),
-    created_at: paneStampMs(row.created_at),
-  };
-}
-
-/** Which store owns a chain, and the ids that chain carries. */
-export interface AncestryIds {
-  /** The store that answered — {@link hasPaneStore}'s question, asked once so
-   *  every read of one chain reads the same store. */
-  authority: 'pane' | 'plain';
-  /** The chain from the tree's root down to the walked id, inclusive, root
-   *  first. Ids repeat where the edges do: a self-parented row terminates by
-   *  exhausting {@link SESSION_TREE_MAX_DEPTH}, and what the walk repeated is
-   *  what the walk carried, so a reader that deduplicated here would report a
-   *  chain nobody took. */
-  ids: string[];
-}
-
-/**
- * WHICH rows an ancestry walk carries, as ids, root first.
- *
- * One recursive walk per store, and therefore one authority that every ancestry
- * read agrees with by construction: the tree read below, the fork's whole-value
- * read, and the fork's bounded frame stream (`identity/fork-transfer.ts`) all
- * resolve their chain here and then read rows by id.
- *
- * Ids and not rows, because a sender that must never hold the whole
- * conversation still has to know the whole ORDER before it can send the first
- * row: the walk climbs parent edges up from the leaf, and root-first is its
- * reverse. Ids are the smallest thing that answers that, and they carry no text.
- */
-export function ancestryIds(sql: SqlExecutor, actor: ActorHandle, messageId: string): AncestryIds {
-  actor.assertCurrent();
-
-  // Pane authority is absolute: a stale default-session mirror must never make
-  // a deleted pane id look forkable again.
-  if (usesPaneStore(sql, actor)) {
-    return {
-      authority: 'pane',
-      ids: sql<{ id: string }>`
-        WITH RECURSIVE ancestry(id, parent_id, depth) AS (
-          SELECT id, parent_id, 0 FROM assistant_messages WHERE id = ${messageId}
-          UNION ALL
-          SELECT am.id, am.parent_id, a.depth + 1
-          FROM assistant_messages am JOIN ancestry a ON am.id = a.parent_id
-          WHERE a.depth < ${SESSION_TREE_MAX_DEPTH}
-        )
-        SELECT id FROM ancestry ORDER BY depth DESC
-      `.map((row) => row.id),
-    };
-  }
-
-  // The recursive STEP carries the actor as tightly as the anchor does:
-  // `parent_id` names an id, ids are minted per actor, so one unscoped join hop
-  // would climb out of this actor's rows and splice a stranger's conversation
-  // onto this chain — the splice `schema.ts` puts the actor in the key to stop.
-  const actorId = actor.actorId;
-
-  return {
-    authority: 'plain',
-    ids: sql<{ id: string }>`
-      WITH RECURSIVE ancestry(id, parent_id, depth) AS (
-        SELECT id, parent_id, 0 FROM actor_messages
-        WHERE actor_id = ${actorId} AND id = ${messageId} AND session_id = ${CHAT_SESSION_ID}
-        UNION ALL
-        SELECT m.id, m.parent_id, a.depth + 1
-        FROM actor_messages m JOIN ancestry a ON m.id = a.parent_id
-        WHERE m.actor_id = ${actorId} AND m.session_id = ${CHAT_SESSION_ID}
-          AND a.depth < ${SESSION_TREE_MAX_DEPTH}
-      )
-      SELECT id FROM ancestry ORDER BY depth DESC
-    `.map((row) => row.id),
-  };
-}
-
-/** One row of the SDK's store by id — the read half of {@link ancestryIds} for
- *  the pane, and the unit a bounded sender reads one row at a time. */
-export function paneRowById(sql: SqlExecutor, id: string): ChatPaneRow | undefined {
-  return sql<ChatPaneRow>`
-    SELECT id, session_id, parent_id, role, content, created_at
-    FROM assistant_messages WHERE id = ${id} LIMIT 1
-  `[0];
-}
-
-/** One row of the plain chat table by id, in the default session — so an `mcts`
- *  row under the same id cannot answer for it. */
-export function messageRowById(sql: SqlExecutor, actor: ActorHandle, id: string): SessionTreeNode | undefined {
-  actor.assertCurrent();
-
-  return sql<SessionTreeNode>`
-    SELECT id, parent_id, role, content, created_at FROM actor_messages
-    WHERE actor_id = ${actor.actorId} AND id = ${id} AND session_id = ${CHAT_SESSION_ID} LIMIT 1
-  `[0];
-}
-
-/** Rows for a walked chain, in the chain's order. A row absent from the store it
- *  was just walked out of is skipped rather than reported as a hole, which is
- *  what the join inside the former single-query walk did with it. */
-function rowsForIds<R>(ids: string[], read: (id: string) => R | undefined): R[] {
-  return ids.flatMap((id) => {
-    const row = read(id);
-
-    return row === undefined ? [] : [row];
-  });
-}
-
-/**
- * The chain from the tree's root down to `messageId`, inclusive, root first.
- *
- * A node lives in whichever store owns this backend's default chat, so the
- * lookup is "the store that has it, SDK's first". Non-default trees (`mcts`,
- * local peers) always live in `actor_messages`; they have no ids that collide with
- * the pane's, so the rich-first probe cannot answer for them by accident.
- *
- * Empty when the id is in neither, which is the only honest answer and the one a
- * fork reports rather than cutting an arbitrary prefix.
- *
- * Cost is one indexed point lookup per ancestor — both stores key on `id` — so
- * it is linear in the chain and touches nothing else.
- */
-export function sessionTreeAncestry(sql: SqlExecutor, actor: ActorHandle, messageId: string): SessionTreeNode[] {
-  const { authority, ids } = ancestryIds(sql, actor, messageId);
-
-  return authority === 'pane'
-    ? rowsForIds(ids, (id) => paneRowById(sql, id)).map(paneRowToNode)
-    : rowsForIds(ids, (id) => messageRowById(sql, actor, id));
-}
-
-/** One row of the plain chain as a fork carries it: `content` is nullable
- *  because the rich twin under the same id carries the text wherever one
- *  exists. */
-export interface ForkChainRow {
-  id: string;
-  parent_id: string | null;
-  role: string;
-  content: string | null;
-  created_at: number;
-}
-
-/** The ancestry as a fork carries it across a process boundary. */
-export interface ForkAncestry {
-  /** The chain for the plain `actor_messages` table, root first, with `content` null
-   *  wherever {@link ForkAncestry.pane} carries the same id: the plain row is a
-   *  flattened projection of the rich one, so carrying both ships one
-   *  conversation twice — 14.4 MiB beside 20.5 MiB for a real long session. */
-  chain: ForkChainRow[];
-  /** The same chain in the SDK's store, verbatim; empty where it has none. */
-  pane: ChatPaneRow[];
-}
-
-/** The plain-table half of one pane row, as a fork carries it: the text elided
- *  because the rich row under the same id carries it, and the pane's stamp read
- *  as ms. THE elision contract, in one function, so the whole-value snapshot and
- *  the bounded frame stream cannot drift apart on it. */
-export function paneRowToForkChainRow(row: ChatPaneRow): ForkChainRow {
-  return {
-    id: row.id,
-    parent_id: row.parent_id,
-    role: row.role,
-    content: null,
-    created_at: paneStampMs(row.created_at),
-  };
-}
-
-/**
- * Both halves of the ancestry a fork copies, and the elision between them.
- *
- * Here rather than in `identity/fork.ts` because which store owns the tree is
- * decided once in this module, and the elision is only sound because both halves
- * are the same walk from the same node: where the pane owns the tree the plain
- * chain IS its flattening, id for id. A prefix cut could not say that, which is
- * why it had to carry the text twice.
- */
-export function forkAncestry(sql: SqlExecutor, actor: ActorHandle, messageId: string): ForkAncestry {
-  const { authority, ids } = ancestryIds(sql, actor, messageId);
-
-  if (authority === 'plain') {
-    return { chain: rowsForIds(ids, (id) => messageRowById(sql, actor, id)), pane: [] };
-  }
-
-  const pane = rowsForIds(ids, (id) => paneRowById(sql, id));
-
-  return { pane, chain: pane.map(paneRowToForkChainRow) };
-}
-
-/**
- * The same chain in the SDK's store, verbatim — the rows the chat pane renders
- * and a fork must therefore carry, since the flattened text cannot rebuild a
- * tool call. Empty where the SDK's store does not exist.
- */
-export function chatPaneAncestry(sql: SqlExecutor, actor: ActorHandle, messageId: string): ChatPaneRow[] {
-  const { authority, ids } = ancestryIds(sql, actor, messageId);
-
-  if (authority !== 'pane') return [];
-
-  return rowsForIds(ids, (id) => paneRowById(sql, id));
-}
-
-// ── The flat reads: count, page, turn pair ──────────────────────────────────
-
-/** How many messages the workspace's default chat holds, per its own authority. */
+/** How many messages the workspace's default chat holds. */
 export function conversationCount(sql: SqlExecutor, actor: ActorHandle): number {
   actor.assertCurrent();
 
-  if (usesPaneStore(sql, actor)) return sql<{ c: number }>`SELECT COUNT(*) AS c FROM assistant_messages`[0]?.c ?? 0;
-
-  return sql<{ c: number }>`
-    SELECT COUNT(*) AS c FROM actor_messages
-    WHERE actor_id = ${actor.actorId} AND session_id = ${CHAT_SESSION_ID}`[0]?.c ?? 0;
+  return sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_entries WHERE actor_id=${actor.actorId} AND session_id=${CHAT_SESSION_ID}`[0]?.c ?? 0;
 }
 
-interface StoredTranscriptRow {
-  id: string;
-  role: string;
-  /** Raw stored content: the pane's serialized UI message, or plain text. */
-  content: string;
-  /** Provenance column — exists on `actor_messages` only. */
-  metadata?: string | null;
-  created_at: string | number;
-}
-
-/** One raw transcript row, exactly as the authority stores it. Projection to
- *  display shape belongs to the serving read model; dropped roles must still
- *  count against a page and be able to anchor its cursor. */
-export interface ConversationPageRow {
-  id: string;
-  role: string;
-  content: string;
-  metadata?: string | null;
-  createdAt: string | number;
-}
-
-/** Widest transcript page a surface may ask for. */
-const MAX_HISTORY_LIMIT = 200;
-
-/** Page size when a caller does not care — one screenful of chat and then
- *  some, small enough that scrolling up stays responsive. */
-const DEFAULT_HISTORY_LIMIT = 100;
-
-const rowIdOf = (row: StoredTranscriptRow): string => row.id;
-
-/**
- * One page of the canonical transcript, newest page first, oldest-first items.
- *
- * ── Why the cursor is rowid and not created_at ───────────────────────────────
- * `assistant_messages.created_at` is whole seconds and a turn emits several
- * messages inside one second, so `created_at` ties have no defined order and
- * `ORDER BY created_at DESC LIMIT n` does not even have a defined MEMBERSHIP.
- * Paging on it would drop and repeat messages at every page boundary without a
- * single concurrent write. `rowid` is total, is the insertion order, and both
- * stores have one (a `TEXT PRIMARY KEY` does not make a table WITHOUT ROWID).
- */
-export function conversationPageRows(
-  sql: SqlExecutor,
-  actor: ActorHandle,
-  request: PageRequest = {},
-): Page<ConversationPageRow> {
-  actor.assertCurrent();
-  const limit = Math.max(1, Math.min(MAX_HISTORY_LIMIT, Math.floor(request.limit ?? DEFAULT_HISTORY_LIMIT)));
-  const after = request.cursor?.after ?? null;
-  const over = limit + 1;
-
-  /** The cursor's anchor as a rowid, or the refusal that keeps a vanished
-   *  anchor from reading as an exhausted conversation. */
-  const anchorRowid = (found: { seek: number }[]): number => {
-    const seek = found[0]?.seek;
-
-    if (seek === undefined) throw new StaleCursorError('conversation', after!);
-
-    return seek;
-  };
-
-  if (usesPaneStore(sql, actor)) {
-    const from = after === null
-      ? null
-      : anchorRowid(sql`SELECT rowid AS seek FROM assistant_messages WHERE id = ${after}`);
-
-    return mapPage(seekPage(from === null
-      ? sql<StoredTranscriptRow>`
-        SELECT id, role, content, created_at FROM assistant_messages
-        WHERE role IN ('user', 'assistant', 'system')
-        ORDER BY rowid DESC LIMIT ${over}`
-      : sql<StoredTranscriptRow>`
-        SELECT id, role, content, created_at FROM assistant_messages
-        WHERE role IN ('user', 'assistant', 'system') AND rowid < ${from}
-        ORDER BY rowid DESC LIMIT ${over}`,
-      limit, rowIdOf), (rows) => rows.map((row) => ({
-        id: row.id, role: row.role, content: row.content, createdAt: row.created_at,
-      })));
-  }
-
-  // The anchor is resolved inside THIS actor's rows, not merely the page behind
-  // it: `rowid` is global to the table, so an anchor read without the actor
-  // would let a stranger's row set the seek and return a window of a
-  // conversation the cursor never came from.
-  const actorId = actor.actorId;
-
-  const from = after === null
-    ? null
-    : anchorRowid(sql`
-        SELECT rowid AS seek FROM actor_messages
-        WHERE actor_id = ${actorId} AND id = ${after} AND session_id = ${CHAT_SESSION_ID}`);
-
-  return mapPage(seekPage(from === null
-    ? sql<StoredTranscriptRow>`
-      SELECT id, role, content, metadata, created_at FROM actor_messages
-      WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID}
-        AND role IN ('user', 'assistant', 'system')
-      ORDER BY rowid DESC LIMIT ${over}`
-    : sql<StoredTranscriptRow>`
-      SELECT id, role, content, metadata, created_at FROM actor_messages
-      WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID}
-        AND role IN ('user', 'assistant', 'system') AND rowid < ${from}
-      ORDER BY rowid DESC LIMIT ${over}`,
-    limit, rowIdOf), (rows) => rows.map((row) => ({
-      id: row.id, role: row.role, content: row.content, metadata: row.metadata ?? undefined, createdAt: row.created_at,
-    })));
-}
-
-/** The user→assistant pair behind a completed turn, from the authority. */
+/** The user→assistant pair behind a completed turn. */
 export interface ConversationTurnPair {
   /** The conversation the turn lives in, as surfaces report it. */
   sessionId: string;
@@ -494,15 +38,6 @@ export interface ConversationTurnPair {
   endedAtMs: number;
 }
 
-/**
- * The request/response pair behind a turn id — what outcome attribution, take
- * picks and explicit feedback grade a turn from.
- *
- * The default-chat arm reads the authority; the `actor_messages` arm exists for the
- * NON-default trees (`mcts`, local peers) whose turn ids never enter the pane
- * store. Where the pane owns the backend there is no third place a default-chat
- * turn can live, so no fallback into stale mirror rows happens.
- */
 /** The one field a resumed reply reads off a queued drain turn's user row.
  *  Non-strict: every other stamp the enqueue seam writes is irrelevant here. */
 const DrainTurnMetadataSchema = v.object({ drainTurnId: v.optional(v.string()) });
@@ -512,184 +47,71 @@ const DrainTurnMetadataSchema = v.object({ drainTurnId: v.optional(v.string()) }
  * it never got one.
  *
  * What makes a recovery able to finish a reply the answering turn never sent.
- * The link is the store's own parent edge: a queued drain turn's USER row
- * carries `drainTurnId` in its metadata, and the assistant row whose
- * `parent_id` is that user row is the answer to it. Both are the SDK's durable
- * pane rows, so this reads the transcript rather than a live activation's
- * hydrated message list — a recovery has no such list, and that is the whole
- * point of it.
+ * The link is the store's own parent edge: a queued drain turn's USER entry
+ * carries `drainTurnId` in its metadata, and the assistant entry whose
+ * `parentId` is that user entry is the answer to it. This reads the durable
+ * transcript rather than a live activation's hydrated message list — a recovery
+ * has no such list, and that is the whole point of it.
  *
  * An empty answer is ABSENT from the result, never present as `''`. Replying
  * with nothing would close a delivery the sender is still waiting on.
  */
-export function answersForDrainTurns(
-  sql: SqlExecutor,
-  actor: ActorHandle,
+export async function answersForDrainTurns(
+  transcript: SessionTranscriptReader,
   drainTurnIds: readonly string[],
-): Map<string, string> {
-  actor.assertCurrent();
+): Promise<Map<string, string>> {
   const answers = new Map<string, string>();
-
-  if (drainTurnIds.length === 0 || !usesPaneStore(sql, actor)) return answers;
   const wanted = new Set(drainTurnIds);
 
-  const rows = sql<{ ask: string; answer: string }>`
-    SELECT u.content AS ask, a.content AS answer
-    FROM assistant_messages u JOIN assistant_messages a ON a.parent_id = u.id
-    WHERE u.role = 'user' AND a.role = 'assistant'
-    ORDER BY a.rowid ASC`;
+  for (const ask of [...transcript.ancestry()].reverse()) {
+    if (answers.size === wanted.size) break;
 
-  for (const row of rows) {
-    const parsed = v.safeParse(DrainTurnMetadataSchema, uiMessageRow(row.ask).metadata);
+    if (ask.role !== 'user') continue;
+    const parsed = v.safeParse(DrainTurnMetadataSchema, await transcript.metadata(ask.id));
     const drainTurnId = parsed.success ? parsed.output.drainTurnId : undefined;
 
-    if (drainTurnId === undefined || !wanted.has(drainTurnId)) continue;
-    const text = uiMessageText(row.answer);
+    if (drainTurnId === undefined || !wanted.has(drainTurnId) || answers.has(drainTurnId)) continue;
 
-    if (text.trim().length > 0) answers.set(drainTurnId, text);
+    for (const replyId of [...transcript.children(ask.id)].reverse()) {
+      const reply = transcript.read(replyId);
+
+      if (reply?.role !== 'assistant') continue;
+      const answer = await transcript.project(replyId);
+
+      if (answer !== null && answer.content.trim().length > 0) { answers.set(drainTurnId, answer.content); break; }
+    }
   }
 
   return answers;
 }
 
-export function conversationTurnPair(
-  sql: SqlExecutor,
-  actor: ActorHandle,
+/**
+ * The request/response pair behind a turn id — what outcome attribution, take
+ * picks and explicit feedback grade a turn from.
+ *
+ * A turn is named by the id of the answer it produced, so an id that names
+ * anything but an assistant entry is not a turn and has no pair. The parent
+ * edge carries the ask: absent where the answer roots its own chain, which the
+ * pair reports as a null request rather than as no pair at all.
+ */
+export async function conversationTurnPair(
+  transcript: SessionTranscriptReader,
   messageId: string,
-): ConversationTurnPair | undefined {
-  actor.assertCurrent();
-  const pane = usesPaneStore(sql, actor);
+): Promise<ConversationTurnPair | undefined> {
+  const entry = transcript.read(messageId);
 
-  if (pane) {
-    const row = sql<{
-      sessionId: string; responseRaw: string;
-      requestRaw: string | null; startedAt: string | null; endedAt: string;
-    }>`
-      SELECT a.session_id AS sessionId, a.content AS responseRaw,
-             u.content AS requestRaw, u.created_at AS startedAt, a.created_at AS endedAt
-      FROM assistant_messages a LEFT JOIN assistant_messages u ON u.id = a.parent_id
-      WHERE a.id = ${messageId} LIMIT 1`[0];
+  if (entry === null || entry.role !== 'assistant') return undefined;
 
-    if (row) {
-      return {
-        sessionId: reportedSession(row.sessionId),
-        request: row.requestRaw === null ? null : uiMessageText(row.requestRaw),
-        responseId: messageId,
-        response: uiMessageText(row.responseRaw),
-        startedAtMs: row.startedAt === null ? null : paneStampMs(row.startedAt),
-        endedAtMs: paneStampMs(row.endedAt),
-      };
-    }
-  }
-
-  // Where the pane store exists, plain `default` rows are the retired mirror —
-  // a turn id the pane does not know must not resolve against them.
-  // The self-join carries the actor across the parent edge: `u.id = m.parent_id`
-  // alone would pair this actor's answer with a stranger's ask.
-  const actorId = actor.actorId;
-
-  const row = (pane
-    ? sql<{
-        sessionId: string; responseRaw: string;
-        requestRaw: string | null; startedAt: number | null; endedAt: number;
-      }>`
-        SELECT m.session_id AS sessionId, m.content AS responseRaw,
-               u.content AS requestRaw, u.created_at AS startedAt, m.created_at AS endedAt
-        FROM actor_messages m LEFT JOIN actor_messages u ON u.actor_id = m.actor_id AND u.id = m.parent_id
-        WHERE m.actor_id = ${actorId} AND m.id = ${messageId}
-          AND m.session_id <> ${CHAT_SESSION_ID} LIMIT 1`
-    : sql<{
-        sessionId: string; responseRaw: string;
-        requestRaw: string | null; startedAt: number | null; endedAt: number;
-      }>`
-        SELECT m.session_id AS sessionId, m.content AS responseRaw,
-               u.content AS requestRaw, u.created_at AS startedAt, m.created_at AS endedAt
-        FROM actor_messages m LEFT JOIN actor_messages u ON u.actor_id = m.actor_id AND u.id = m.parent_id
-        WHERE m.actor_id = ${actorId} AND m.id = ${messageId} LIMIT 1`)[0];
-
-  if (!row) return undefined;
+  const parent = entry.parentId === null ? null : transcript.read(entry.parentId);
+  const response = await transcript.project(entry.id);
+  const request = parent === null ? null : await transcript.project(parent.id);
 
   return {
-    sessionId: reportedSession(row.sessionId),
-    request: row.requestRaw,
+    sessionId: transcript.sessionId,
+    request: request === null ? null : request.content,
     responseId: messageId,
-    response: row.responseRaw,
-    startedAtMs: row.startedAt === null ? null : Number(row.startedAt),
-    endedAtMs: Number(row.endedAt),
+    response: response === null ? null : response.content,
+    startedAtMs: parent === null ? null : parent.recordedAt,
+    endedAtMs: entry.recordedAt,
   };
-}
-
-/**
- * Whether an operator-authored user row exists in this actor's default chat —
- * the durable proof that somebody has already spoken to this agent.
- *
- * Read inside a `yieldsToUserMessage` turn's slot by the host that dequeues it
- * (cf `enqueueTurn` → `saveMessages`' `shouldApplyMessages`; the CLI's pump),
- * never before it: the race the flag closes is a message landing between the
- * enqueue and the start, and only a read at the start can see it. Both stores
- * are read through {@link turnAuthor}'s own provenance rules — the pane keeps
- * the author stamp inside the serialized message, the plain store keeps it in
- * the `metadata` column, and a row with neither resolves by its id prefix.
- *
- * `sessionId` scopes the plain store, where several conversations share one
- * `actor_messages` table; the pane holds the default chat only, so it needs none.
- */
-export function operatorMessageAdmitted(
-  sql: SqlExecutor,
-  actor: ActorReference,
-  sessionId: string = CHAT_SESSION_ID,
-): boolean {
-  if (usesPaneStore(sql, actor)) {
-    return sql<{ id: string; content: string }>`
-      SELECT id, content FROM assistant_messages WHERE role = 'user'`
-      .some((row) => turnAuthor({ id: row.id, metadata: uiMessageRow(row.content).metadata }) === 'operator');
-  }
-
-  return sql<{ id: string; metadata: string | null }>`
-    SELECT id, metadata FROM actor_messages
-    WHERE actor_id = ${actor.actorId} AND session_id = ${sessionId} AND role = 'user'`
-    .some((row) => turnAuthor({ id: row.id, metadata: storedStamp(row.metadata) }) === 'operator');
-}
-
-/** The plain store's `metadata` column as `turnAuthor` reads it — a parsed
- *  object, or undefined where the column holds nothing parseable (a row that
- *  predates the stamp falls to the id-prefix rule instead of failing here). */
-function storedStamp(metadata: string | null): JsonObject | undefined {
-  if (!metadata) return undefined;
-  const decoded = tolerate(() => parseJsonValue(metadata), 'malformed-input');
-  const parsed = decoded === undefined ? undefined : v.safeParse(JsonObjectSchema, decoded);
-
-  return parsed?.success === true ? parsed.output : undefined;
-}
-
-/**
- * Land a cloud import on the LOCAL authority.
- *
- * A cloud export carries the pane store; a local workspace's default chat
- * lives in `actor_messages` alone. Run once over an imported database before it is
- * exposed: every pane row is projected into the plain store (text flattened,
- * ms stamps) and the pane schema is removed — so "does assistant_messages
- * exist" keeps meaning exactly one thing everywhere else. Returns how many
- * rows moved.
- */
-export function normalizeImportedConversation(sql: SqlExecutor, actor: ActorHandle): number {
-  actor.assertCurrent();
-
-  if (!hasPaneStore(sql)) return 0;
-
-  const rows = sql<ChatPaneRow>`
-    SELECT id, session_id, parent_id, role, content, created_at
-    FROM assistant_messages ORDER BY rowid ASC`;
-
-  for (const row of rows) {
-    void sql`
-      INSERT OR IGNORE INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-      VALUES (${actor.actorId}, ${row.id}, ${CHAT_SESSION_ID}, ${row.parent_id}, ${row.role},
-              ${uiMessageText(row.content)}, ${paneStampMs(row.created_at)})
-    `;
-  }
-
-  void sql`DROP TABLE assistant_messages`;
-
-  return rows.length;
 }

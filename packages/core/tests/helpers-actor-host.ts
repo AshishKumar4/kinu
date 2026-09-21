@@ -167,13 +167,18 @@ export function hostedSeatsOver(input: {
     // suite opted in above: a hosted head or node under test then records no
     // evolution state, and every ledger the orchestrator reads is the one the
     // engine owns.
-    engine: new EvolutionEngine(bound.runtime, { enabled: input.autoEvolve === true }),
+    engine: new EvolutionEngine(bound.runtime, bound.stores.history, { enabled: input.autoEvolve === true }),
     // This actor's OWN log, bound to the handle the host bound: a child that
     // published into the root's rows would be one actor's turn moving another's.
     eventLog: new EventLog(exec, bound.handle),
   });
 
   const host = createActorHost({
+    filesFor: async (bound) => {
+      bound.handle.assertCurrent();
+
+      return { vfs: rt.storage.vfs, artifactDirectory: `/actors/${bound.handle.actorId}/.kinu/context` };
+    },
     storage: { sql, transactionSync: rt.storage.transactionSync, exec: exec.exec },
     directory,
     installedBuild: 'test-build',

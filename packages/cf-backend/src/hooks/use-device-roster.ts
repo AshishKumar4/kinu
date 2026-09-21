@@ -1,7 +1,7 @@
 /**
  * The one device-roster read for the web UI.
  *
- * Three surfaces ask the same question — Account settings → Devices, the
+ * Three surfaces ask the same question — the Devices page, the
  * Environment tab's offline device, and the connect panel waiting for a
  * machine to arrive — and one read model answers all three. A `listDevices()`
  * call per surface means hand-rolled `setInterval` loops and a mount-time fetch

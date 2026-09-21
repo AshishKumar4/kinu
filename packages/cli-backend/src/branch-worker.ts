@@ -18,7 +18,7 @@
 
 import { Database } from 'bun:sqlite';
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID, WorkspaceActorDirectory,
+  DEFAULT_WORKERS_AI_MODEL_ID, WorkspaceActorDirectory, agentAffinityKey,
   exploreRollout,
   formatInheritedContext,
   parseModelSpec,
@@ -77,14 +77,6 @@ const credentials: LocalProviderCredentials = readJson(
 
 if (process.env.CODEX_ACCESS_TOKEN) credentials.codexAccessToken = process.env.CODEX_ACCESS_TOKEN;
 
-const modelResolver = createLocalModelResolver({
-  llm: llmConfig,
-  credentials,
-  codexAuthStore: process.env.KINU_CONFIG_PATH
-    ? createFileCodexAuthStore(process.env.KINU_CONFIG_PATH)
-    : undefined,
-});
-
 const encodedBootstrap = process.env.KINU_ACTOR_BOOTSTRAP;
 
 if (!encodedBootstrap) throw new KinuError('missing', 'The branch has no root-issued actor bootstrap.');
@@ -117,6 +109,15 @@ const validateActor = () => {
 };
 
 validateActor();
+
+const modelResolver = createLocalModelResolver({
+  llm: llmConfig,
+  credentials,
+  sessionAffinity: agentAffinityKey(bootstrap.name),
+  codexAuthStore: process.env.KINU_CONFIG_PATH
+    ? createFileCodexAuthStore(process.env.KINU_CONFIG_PATH)
+    : undefined,
+});
 
 /**
  * This branch's rollout attempt, held for the reflection that grades it.

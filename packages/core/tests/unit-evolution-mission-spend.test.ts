@@ -51,7 +51,7 @@ function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
 /** A workspace whose fast tier is counted, wired exactly as a live one is: the
  *  governor over the workspace's own storage, handed to the engine as config. */
 function workspace() {
-  const { rt } = createTestRuntime({
+  const { rt, stores } = createTestRuntime({
     llmResponses: { [CLASSIFY]: '{"outcome":"corrected","confidence":0.9,"evidence":"test"}' },
   });
 
@@ -72,7 +72,7 @@ function workspace() {
   return {
     rt: counted,
     governor,
-    engine: new EvolutionEngine(counted, { governor }),
+    engine: new EvolutionEngine(counted, stores.history, { governor }),
     calls: () => completions,
   };
 }

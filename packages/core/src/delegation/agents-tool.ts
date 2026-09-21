@@ -191,7 +191,7 @@ export interface SubordinateHandoff {
 
 export interface TeamToolDeps {
   /** The same bounded parent conversation handed to an exploration head. */
-  inheritedContext?(): SerializedMessage[];
+  inheritedContext?(): Promise<SerializedMessage[]>;
   /**
    * Where the actor holding this roster sits in the subordinate tree, and how
    * much room is left below it (subordinates/depth.ts).
@@ -2118,7 +2118,7 @@ async function hireCreate(
   }
 
   const inheritedContext = input.context === 'inherit'
-    ? [...freezeInheritedContext(team.inheritedContext?.()
+    ? [...freezeInheritedContext(await team.inheritedContext?.()
       ?? badInput('context:"inherit" requires this actor\'s parent-conversation source'))]
     : undefined;
 

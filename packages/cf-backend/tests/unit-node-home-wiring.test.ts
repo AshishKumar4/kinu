@@ -23,6 +23,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
+import type { HostedRuntime } from '@nimbus-sh/worker/workspace-host';
 import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   facetHomeProvisioner, headAgentName,
@@ -38,11 +39,12 @@ import type { NimbusSandboxHandle } from '@kinu.run/core';
 import { nimbusSessionFiles, readExecutorFile, writeExecutorFileOp, type ExecutorFileLookup, type VFS } from '@kinu.run/core';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import {
+  credentialedSessionBox,
+  programmaticHostOver,
   ensureProgrammaticReady,
   rpcExec,
   type ProgrammaticHost,
-} from '@nimbus-sh/worker/programmatic';
-import { credentialedSessionBox, programmaticHostOver } from './helpers/programmatic-host';
+} from './helpers/programmatic-host';
 import { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 const databases: Database[] = [];
@@ -79,6 +81,7 @@ function sqlBinding(value: SqlValue): SQLQueryBindings {
 interface Fixture {
   readonly workspace: NimbusWorkspace;
   readonly host: ProgrammaticHost;
+  readonly runtime: () => Promise<HostedRuntime>;
   /** The seam under test, wired from this workspace's own three members. */
   readonly provision: NodeWorkspaceProvisioner;
   /** A second provisioner over the same workspace — proves uid allocation is a
@@ -108,7 +111,8 @@ async function openFixture(): Promise<Fixture> {
     generation: 1,
   });
 
-  const host = programmaticHostOver(workspace).host;
+  const composed = programmaticHostOver(workspace);
+  const host = composed.host;
 
   await ensureProgrammaticReady(host);
   const wiring = { root: workspace.vfs.as(ROOT), confiner: workspace.vfs, sql };
@@ -116,6 +120,7 @@ async function openFixture(): Promise<Fixture> {
   return {
     workspace,
     host,
+    runtime: composed.runtime,
     // Keyed on the node ACTOR's storage key, not the raw node id. Every
     // actor-scoped address is keyed that way — `shellId`, the state subtree,
     // the home — because a rename must not move an actor's directory and two
@@ -202,7 +207,7 @@ describe('a provisioned node gets a real home', () => {
     // that set it moves both sides of the comparison together — a home narrowed
     // to 0o700 satisfies that equality and locks both readers out.
     const origin = f.workspace.vfs.as(ORIGIN);
-    expect(origin.readdir(provisioned.home).map((entry) => entry.name)).toEqual(['candidate.md']);
+    expect(origin.readdir(provisioned.home).map((entry) => entry.name)).toEqual(['.kinu', 'candidate.md']);
     expect(origin.readFileString(`${provisioned.home}/candidate.md`)).toBe('my answer\n');
     // The literal, once: owner writes, everyone reads.
     expect(statOf(f.workspace, provisioned.home).mode).toBe(0o755);
@@ -480,7 +485,7 @@ describe('hosted node execution', () => {
  * file tools and its commands are one identity over one tree.
  */
 function sessionBox(f: Fixture, cred: VfsCred): NimbusSandboxHandle {
-  return credentialedSessionBox(f.workspace, f.host, cred);
+  return credentialedSessionBox(f.runtime, cred);
 }
 
 describe('the hosted file plane acts as the node, or the home is unwritable', () => {
@@ -535,7 +540,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     // Byte-exact, and the ORIGIN's uid-0 view agrees these are the same rows.
     expect(await asA.readFile('/home/head-aX9/candidate.bin')).toEqual(bytes);
     expect(f.workspace.vfs.as(ROOT).readFile('/home/head-aX9/candidate.bin')).toEqual(bytes);
-    expect(await asA.readdir('/home/head-aX9')).toEqual(['candidate.bin']);
+    expect(await asA.readdir('/home/head-aX9')).toEqual(['.kinu', 'candidate.bin']);
     expect((await asA.stat('/home/head-aX9/candidate.bin'))?.size).toBe(bytes.byteLength);
     // The read window: a sibling reads a 0o755 home, which the grader and
     // merge-back need too.
@@ -584,14 +589,14 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
       await asA.writeFile(`/home/head-aX9/${name}`, `body ${String(index)}`);
     }
 
-    expect((await asA.readdir('/home/head-aX9')).sort()).toEqual([...names].sort());
+    expect((await asA.readdir('/home/head-aX9')).sort()).toEqual(['.kinu', ...names].sort());
     expect(await asA.readFile(`/home/head-aX9/${names[0]}`, { encoding: 'utf8' })).toBe('body 0');
     await asA.rename(`/home/head-aX9/${names[0]}`, '/home/head-aX9/clean');
     expect(await asA.exists(`/home/head-aX9/${names[0]}`)).toBe(false);
     expect(await asA.readFile('/home/head-aX9/clean', { encoding: 'utf8' })).toBe('body 0');
     await asA.unlink(`/home/head-aX9/${names[1]}`);
     expect((await asA.readdir('/home/head-aX9')).sort())
-      .toEqual(['back\\slash$dollar', 'clean', 'two  spaces\ttab']);
+      .toEqual(['.kinu', 'back\\slash$dollar', 'clean', 'two  spaces\ttab']);
     await asA.mkdir('/home/head-aX9/nest/deep', { recursive: true });
     await asA.writeFile('/home/head-aX9/nest/deep/leaf', 'leaf');
     await asA.removeRecursive('/home/head-aX9/nest');
@@ -633,7 +638,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
 
     expect(await asA.readFile('/home/head-aX9/keeper', { encoding: 'utf8' })).toBe('the old bytes\n');
     expect(await asA.readFile('/home/head-aX9/occupied/child', { encoding: 'utf8' })).toBe('child');
-    expect((await asA.readdir('/home/head-aX9')).sort()).toEqual(['keeper', 'occupied']);
+    expect((await asA.readdir('/home/head-aX9')).sort()).toEqual(['.kinu', 'keeper', 'occupied']);
   });
 });
 

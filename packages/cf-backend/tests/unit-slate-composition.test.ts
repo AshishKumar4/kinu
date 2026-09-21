@@ -568,7 +568,7 @@ test('a slate agent binding delivers one inbox signal naming the slate', async (
   await actor.agent.harnessChatLoop.pumpPromise;
   // The delivered turn carries the slate's words and names it — the same row
   // the binding wrote through `send`.
-  const admitted = actor.agent.harnessTranscript.history().filter((message) => message.role === 'user');
+  const admitted = (await actor.agent.harnessTranscript.history()).filter((message) => message.role === 'user');
   expect(admitted).toHaveLength(1);
   expect(admitted[0]).toMatchObject({
     parts: [{ type: 'text', text: 'Slate pager: done' }],

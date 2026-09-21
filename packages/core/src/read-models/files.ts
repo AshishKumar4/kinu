@@ -15,14 +15,16 @@
 
 import { normalizePath } from '@kinu.run/agent-utils';
 import {
-  MOUNT_EXECUTORS, carryFileWithVfsOps, listWithVfsOps, readBoundedWithVfsOps,
-  partialTreeRemovalMessage, removeTreeWithVfsOps, type VfsNativeMutations,
+  MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, carryFileWithVfsOps, listWithVfsOps,
+  readBoundedWithVfsOps, partialTreeRemovalMessage, removeTreeWithVfsOps,
+  type VfsNativeMutations,
 } from '../vfs/mounts';
 import { isVfsError } from '../vfs/errno';
 import { inlineFileType } from './file-types';
-import type { VFS } from '../types/primitives';
+import type { VFS, VfsRevision } from '../types/primitives';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
+import { readBoundedStream } from '../http/http';
 
 /** Just enough of the router to find one executor's files, and to ask that
  *  environment where its own relative paths resolve. */
@@ -94,8 +96,8 @@ export interface DirEntry {
 
 
 export type ExecutorWriteResult =
-  | { ok: true; revision?: number }
-  | { conflict: true; revision: number }
+  | { ok: true; revision?: VfsRevision }
+  | { conflict: true; revision: VfsRevision }
   | { unsupported: true; error: string }
   | { error: string }
   /** A partial tree removal: the refusal shape plus the two sets it names —
@@ -106,17 +108,6 @@ export type ExecutorWriteResult =
 const CONDITIONAL_WRITE_UNSUPPORTED =
   'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.';
 
-/**
- * Byte bound for the file viewer's text preview — past this the content is
- * carried truncated.
- *
- * A `response` bound in the platform catalog's terms, and the READ bound as
- * well: `readExecutorFile` asks the plane for this many bytes and decodes only
- * those. Applied after the whole file is already a resident JavaScript string,
- * it would protect only the wire — previewing a large file would cost the file
- * plus a clipped copy of it.
- */
-const MAX_VIEWABLE_BYTES = 512 * 1024;
 
 import { FILE_CHUNK_BYTES } from '../types/read-models';
 
@@ -127,7 +118,7 @@ export { FILE_CHUNK_BYTES } from '../types/read-models';
 export interface ExecutorTextFile {
   content?: string;
   truncated?: boolean;
-  revision?: number;
+  revision?: VfsRevision;
   readOnlyReason?: string;
   error?: string;
 }
@@ -147,23 +138,50 @@ export const FILE_TRANSFER_MAX_BYTES = PLATFORM_CATALOG['do.isolate.transient_al
  * and write in one plane call.
  */
 export class ExecutorFileUpload {
-  private parts: Uint8Array[] = [];
-  private received = 0;
-  private settled = false;
+  private readonly chunks = new ChunkedUpload();
 
   constructor(
     private readonly router: ExecutorFileLookup,
     private readonly executorId: string,
     private readonly path: string,
-    private readonly expectedRevision?: number,
+    private readonly expectedRevision?: VfsRevision,
   ) {}
+
+  /** True once finalized or aborted — the holder must stop feeding it. */
+  get done(): boolean {
+    return this.chunks.done;
+  }
+
+  async chunk(offset: number, chunk: Uint8Array, final: boolean): Promise<ExecutorWriteResult> {
+    const step = this.chunks.chunk(offset, chunk, final);
+
+    if (!('assembled' in step)) return step;
+
+    return writeExecutorFileOp(this.router, this.executorId, this.path, step.assembled, this.expectedRevision);
+  }
+
+  abort(): void {
+    this.chunks.abort();
+  }
+}
+
+/**
+ * The in-order chunk assembly every bounded upload shares, apart from what is
+ * done with the bytes: the workspace plane writes them where the route said,
+ * the Drive may unpack them first. `assembled` is answered exactly once, on
+ * the final chunk, after which the instance is settled.
+ */
+export class ChunkedUpload {
+  private parts: Uint8Array[] = [];
+  private received = 0;
+  private settled = false;
 
   /** True once finalized or aborted — the holder must stop feeding it. */
   get done(): boolean {
     return this.settled;
   }
 
-  async chunk(offset: number, chunk: Uint8Array, final: boolean): Promise<ExecutorWriteResult> {
+  chunk(offset: number, chunk: Uint8Array, final: boolean): { ok: true } | { error: string } | { assembled: Uint8Array } {
     if (this.settled) return { error: 'file transfer already settled' };
 
     if (offset < 0) return { error: 'chunk offset must not be negative' };
@@ -196,7 +214,7 @@ export class ExecutorFileUpload {
 
     this.settled = true;
 
-    return writeExecutorFileOp(this.router, this.executorId, this.path, assembled, this.expectedRevision);
+    return { assembled };
   }
 
   abort(): void {
@@ -204,6 +222,56 @@ export class ExecutorFileUpload {
     this.received = 0;
     this.settled = true;
   }
+}
+
+/**
+ * The request body as the actor takes it: whole chunks of FILE_CHUNK_BYTES in
+ * order, then one final chunk carrying the tail (possibly empty). The bound is
+ * `readBoundedStream`'s; nothing materialises the whole body at the edge. A
+ * `send` that throws stops the pump and the throw is the caller's to handle,
+ * since only it knows how to abort the transfer it opened. The final send's
+ * answer is the pump's.
+ */
+export async function pumpUploadChunks<Result>(
+  request: Request,
+  send: (offset: number, chunk: Uint8Array, final: boolean) => Promise<Result>,
+): Promise<'too_large' | KinuError | { result: Result }> {
+  const pending: Uint8Array[] = [];
+  let pendingBytes = 0;
+  let offset = 0;
+
+  const take = (want: number): Uint8Array => {
+    const out = new Uint8Array(want);
+    let at = 0;
+
+    while (at < want) {
+      const part = pending[0]!;
+      const count = Math.min(part.byteLength, want - at);
+      out.set(part.subarray(0, count), at);
+
+      if (count === part.byteLength) pending.shift();
+      else pending[0] = part.subarray(count);
+      at += count;
+    }
+
+    pendingBytes -= want;
+
+    return out;
+  };
+
+  const outcome = await readBoundedStream(request, FILE_TRANSFER_MAX_BYTES, async (value) => {
+    pending.push(value);
+    pendingBytes += value.byteLength;
+
+    while (pendingBytes >= FILE_CHUNK_BYTES) {
+      await send(offset, take(FILE_CHUNK_BYTES), false);
+      offset += FILE_CHUNK_BYTES;
+    }
+  });
+
+  if (outcome !== 'ok') return outcome;
+
+  return { result: await send(offset, pendingBytes > 0 ? take(pendingBytes) : new Uint8Array(0), true) };
 }
 
 /** Actor-side snapshot behind one chunked download. `open` reads once, enforces
@@ -463,7 +531,11 @@ export async function readExecutorFile(
       return { error: `${inlineType} is not text — this file is shown and downloaded as bytes` };
     }
 
-    const window = stat === null ? MAX_VIEWABLE_BYTES : Math.min(stat.size, MAX_VIEWABLE_BYTES);
+    // The viewer's preview bound is also its READ bound: the plane is asked
+    // for this many bytes and only those are decoded. Applied after the whole
+    // file is already a resident string it would protect only the wire, and
+    // previewing a large file would cost the file plus a clipped copy of it.
+    const window = stat === null ? RESIDENT_TEXT_MAX_BYTES : Math.min(stat.size, RESIDENT_TEXT_MAX_BYTES);
     const bytes = await readBoundedWithVfsOps(vfs, path, window, stat?.size ?? null);
 
     if (bytes.includes(0)) return { error: 'binary file — not previewable' };
@@ -503,7 +575,7 @@ export async function writeExecutorFileOp(
   executorId: string,
   path: string,
   bytes: Uint8Array,
-  expectedRevision?: number,
+  expectedRevision?: VfsRevision,
 ): Promise<ExecutorWriteResult> {
   if (!path || path.endsWith('/')) return { error: 'file path required' };
   const vfs = executorFiles(router, executorId);

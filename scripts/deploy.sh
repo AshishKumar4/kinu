@@ -453,8 +453,7 @@ flush_gates() {
       # `exec` so the tracked pid IS `timeout`: one process fewer per gate, and
       # the status `wait` reports below is the gate's own, not a wrapper's.
       (
-        # shellcheck disable=SC2086
-        exec timeout --signal=TERM --kill-after=5s "${GATE_DEADLINE[pick]}" ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1
+        exec timeout --signal=TERM --kill-after=5s "${GATE_DEADLINE[pick]}" bun scripts/ladder.ts --gate "${GATE_CMDS[pick]}" > "$dir/$pick.log" 2>&1
       ) &
       gate_of_pid[$!]=$pick
       started[pick]=$SECONDS
@@ -474,11 +473,11 @@ flush_gates() {
 
     finished=""
     wait -n -p finished; status=$?
-    if [ -z "$finished" ] || [ -z "${gate_of_pid[$finished]:-}" ]; then
+    if [ -z "${finished:-}" ] || [ -z "${gate_of_pid[$finished]:-}" ]; then
       # `wait` came back without naming a child of this wave, so the status
       # cannot be attributed to a gate. Stop rather than credit it to one.
       echo -e "${RED}❌ a gate wait returned no child of this wave (status $status).${NC}"
-      rm -rf "$dir"
+      echo "Gate logs retained at $dir" >&2
       exit 1
     fi
     index="${gate_of_pid[$finished]}"

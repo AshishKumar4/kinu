@@ -45,7 +45,9 @@ export interface ForkTransport {
   occupied(name: string): Promise<boolean>;
   /** Stream the source state into the named workspace and report where and at
    *  which cut point it landed. */
-  deliver(name: string, source: { sql: SqlExecutor; vfs: ForkFileSource; untilMessageId: string }): Promise<{
+  deliver(name: string, source: {
+    sql: SqlExecutor; vfs: ForkFileSource; untilMessageId: string; artifactDirectory: string;
+  }): Promise<{
     workspaceId: string; forkPointMs: number;
   }>;
 }
@@ -55,6 +57,10 @@ export interface ForkDriverDeps {
   readonly vfs: ForkFileSource;
   /** The source workspace's own SQL — where the snapshot is read from. */
   sql: SqlExecutor;
+  /** Where the source actor's payload files live. The carried conversation
+   *  references them by absolute path, so a delivery without it cannot tell a
+   *  payload of this actor from a path it must refuse. */
+  readonly artifactDirectory: string;
   /** The actor whose transcript is being cut. The fork point is looked up in
    *  THIS actor's rows: a workspace database holds every actor it issued, and
    *  message ids are minted per actor, so an unscoped preflight would admit a
@@ -114,7 +120,7 @@ export async function forkWorkspace(
   }
 
   const { workspaceId, forkPointMs } = await deps.transport.deliver(name, {
-    sql: deps.sql, vfs: deps.vfs, untilMessageId,
+    sql: deps.sql, vfs: deps.vfs, untilMessageId, artifactDirectory: deps.artifactDirectory,
   });
 
   return { workspaceId, name, forkPointMs };

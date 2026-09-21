@@ -277,8 +277,8 @@ This is the source inventory for the reviewed revision, not a proposed schema an
 
 | Family | Current records | Physical owner and significance |
 |---|---|---|
-| Hosted conversation | `assistant_messages`, `assistant_config`, `assistant_compactions`, `assistant_fts` | The agents SDK session tables inside the workspace one SQLite. `assistant_messages` is the vendor shape with no actor column: the root actor transcript by construction (Think session belongs to the workspace object). A child actor default chat is the plain `actor_messages` store. Messages carry session and ancestry fields. Kinu returns the SDK default session unchanged. |
-| Local conversation/search | `actor_messages`, `conversation_fts`, `conversation_fts_state` | Current actor database. The search index is derived; it is not another authoritative conversation. Hosted readers select the pane store when present. |
+| Conversation | `session_messages`, `message_parts`, `message_updates`, `conversation_entries`, `conversation_entry_parts`, `conversation_heads`, and the context tables (`actor_contexts`, `context_revisions`, `context_memberships`, `actor_context_selection`, `context_proposals`) | The canonical conversation store (`packages/core/src/session`), one per actor, in the workspace's one SQLite on both backends. The agents SDK's `assistant_messages` is the vendor's own table; Kinu neither writes nor reads it, and serves the SDK's message seed from the canonical entries. |
+| Search | `conversation_fts`, `conversation_fts_state` | Derived from `conversation_entries` by rowid; it is not another authoritative conversation. |
 | Optional SDK session/context | `assistant_sessions`, context-block and search tables | SDK facilities. Their existence in the package does not prove Kinu uses them for every actor. |
 | Stream replay | `cf_ai_chat_stream_chunks`, `cf_ai_chat_stream_metadata` | Actor-local reconnect buffers. Cleaning a replay buffer is not deletion of canonical messages. |
 | SDK lifecycle | `cf_agents_state`, queues, schedules, workflows, runs and fibers | SDK-owned runtime state in the workspace database, with root coordination where the SDK requires it. |

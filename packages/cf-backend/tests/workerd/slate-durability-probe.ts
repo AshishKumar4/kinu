@@ -33,7 +33,8 @@ import { newWebSocketRpcSession } from 'capnweb';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { handleNimbusPreviewHostRequest } from '../../src/nimbus-route';
-import { listPortReservations } from '../../src/nimbus-programmatic';
+import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema } from '@kinu.run/core';
+import { listPortReservations } from '@nimbus-sh/worker/port-capability';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';
@@ -89,10 +90,19 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
 export { ObservedOrchestrator as OrchestratorAgent };
 
+// The composed supervisor entrypoint, exported exactly as `src/server.ts`
+// exports it: the hosted runtime refuses to compose over a worker whose
+// `ctx.exports` carries none, and every facet reaches its host through it.
+export { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
+
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'slateAs' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator, 'portReservations'>;
 
 const PreviewValueSchema = v.object({ url: v.string(), port: v.number() });
+
+type TerminalDrive =
+  | { ok: true; frames: string[]; output: string }
+  | { ok: false; error: string };
 
 const RemovedValueSchema = v.object({
   id: v.string(), removed: v.boolean(), port: v.nullable(v.number()),
@@ -276,6 +286,68 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeEnv> {
 
     if ('error' in answer) return { exitCode: 1, stdout: answer.error };
 
-    return { exitCode: answer.exitCode, stdout: answer.stdout };
+    return { exitCode: answer.exitCode, stdout: `${answer.stdout}${answer.stderr}` };
+  }
+
+  /**
+   * The workspace's shell over the socket the terminal route forwards: one
+   * upgrade into the workspace object, a resize, one typed line, and the
+   * frames back until the shell has echoed `until`. The socket lives and
+   * dies inside this call, like `rpcPreview`'s.
+   */
+  async driveTerminal(workspace: string, line: string, until: string): Promise<TerminalDrive> {
+    const target = await this.workspaceTarget(workspace);
+
+    const response = await target.fetch(new Request(`https://workspace.invalid${WORKSPACE_TERMINAL_PATH}`, {
+      headers: { Upgrade: 'websocket' },
+    }));
+
+    const socket = response.webSocket;
+
+    if (socket === null || socket === undefined) {
+      return { ok: false, error: `upgrade refused: ${response.status} ${await response.text()}` };
+    }
+
+    socket.accept();
+    const frames: string[] = [];
+    let output = '';
+
+    const echoed = new Promise<void>((resolve) => {
+      socket.addEventListener('message', (event) => {
+        const parsed = v.safeParse(WorkspaceTerminalOutputSchema, JSON.parse(String(event.data)));
+
+        if (!parsed.success) {
+          frames.push('other');
+
+          return;
+        }
+
+        frames.push(parsed.output.type);
+
+        if (parsed.output.type === 'output') output += parsed.output.data;
+
+        if (output.includes(until)) resolve();
+      });
+    });
+
+    try {
+      socket.send(JSON.stringify({ type: 'resize', cols: 100, rows: 30 }));
+      socket.send(JSON.stringify({ type: 'input', data: `${line}\r` }));
+      await echoed;
+
+      return { ok: true, frames, output };
+    } finally {
+      socket.close(1000, 'drive complete');
+    }
+  }
+
+  /** A file of the workspace as its user reads it, or null when absent. */
+  async readWorkspaceFile(workspace: string, path: string): Promise<string | null> {
+    const target = await this.workspaceTarget(workspace);
+    const answer = await target.executeInExecutor('workspace', `cat ${path}`);
+
+    if ('error' in answer || answer.exitCode !== 0) return null;
+
+    return answer.stdout;
   }
 }

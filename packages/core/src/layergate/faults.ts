@@ -19,6 +19,7 @@ import type { ModelMessage } from 'ai';
 import type { PrepareStepContext } from '../extension';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
 import { StepInjections, type RecordedInjection } from '../prompting/step-injections';
+import { DEFAULT_TOOL_RESULT_MAX_CHARS } from '../tools/clamp';
 import { LAYERS, type Layer } from './layers';
 import { observePipeline, scoreAgainstBaseline } from './gate';
 import type { PipelineSubjects } from './subjects';
@@ -144,17 +145,17 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     id: 'context-budget/policy-regresses',
     layer: 'context-budget',
     patches: ['contextWindowForModel', 'clampToolResult'],
-    models: 'the window table rots back to the default and the clamp head/tail split shifts',
+    models: 'the window table rots back to the default, and the clamp charges its marker on top of the cap instead of inside it',
     inject: (s) => ({
       ...s,
       contextWindowForModel: () => 128_000,
-      clampToolResult: async (text, opts = {}) => {
-        const maxChars = opts.maxChars ?? 40_000;
+      clampToolResult: async (text) => {
+        if (text.length <= DEFAULT_TOOL_RESULT_MAX_CHARS) return text;
+        const headLen = Math.floor(DEFAULT_TOOL_RESULT_MAX_CHARS * 0.5);
 
-        if (text.length <= maxChars) return text;
-        const headLen = Math.floor(maxChars * 0.5);
-
-        return `${text.slice(0, headLen)}\n\n[output truncated]\n\n${text.slice(-(maxChars - headLen))}`;
+        // The regression: the marker is charged on top of a full cap, and the
+        // head/tail split moves.
+        return `${text.slice(0, headLen)}\n\n[output truncated]\n\n${text.slice(-(DEFAULT_TOOL_RESULT_MAX_CHARS - headLen))}`;
       },
     }),
   },
@@ -279,12 +280,12 @@ export const FAULTS: readonly Fault[] = Object.freeze([
   {
     id: 'file-plane/edits-land-blind',
     layer: 'file-plane',
-    patches: ['applyFileEdits', 'readFileSlice'],
+    patches: ['applyFileEdits', 'formatFileSlice'],
     models: 'the plane goes quiet: a repeated anchor lands on its first occurrence, and a capped read stops naming the offset that continues it',
     inject: (s) => ({
       ...s,
-      readFileSlice: (content, opts) => {
-        const slice = s.readFileSlice(content, opts);
+      formatFileSlice: (range, opts) => {
+        const slice = s.formatFileSlice(range, opts);
 
         return { ...slice, output: slice.output.replace(/\n\n\[[^\]]*\]$/, '') };
       },

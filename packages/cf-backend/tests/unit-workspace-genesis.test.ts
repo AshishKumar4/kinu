@@ -28,8 +28,8 @@ const TurnProvenanceSchema = v.looseObject({
 
 /** The turns the loop ran, as their durable user rows read: the text the turn
  *  was opened for and the provenance its metadata carries. */
-function turnsRun(agent: HarnessOrchestratorAgent): Array<{ text: string; provenance: v.InferOutput<typeof TurnProvenanceSchema> }> {
-  return agent.harnessTranscript.history()
+async function turnsRun(agent: HarnessOrchestratorAgent): Promise<Array<{ text: string; provenance: v.InferOutput<typeof TurnProvenanceSchema> }>> {
+  return (await agent.harnessTranscript.history())
     .filter((message) => message.role === 'user')
     .map((message) => ({
       text: message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''),
@@ -76,7 +76,7 @@ describe('the workspace takes its own first turn', () => {
     const request = await next;
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
 
-    const ran = turnsRun(harness.agent);
+    const ran = (await turnsRun(harness.agent));
     expect(ran).toHaveLength(1);
     const turn = ran[0]!;
     expect(turn.provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
@@ -96,8 +96,8 @@ describe('the workspace takes its own first turn', () => {
     const request = await next;
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
 
-    expect(turnsRun(harness.agent)[0]!.text).not.toContain('OAuth');
-    expect(turnsRun(harness.agent)[0]!.text).not.toContain(MISSION);
+    expect((await turnsRun(harness.agent))[0]!.text).not.toContain('OAuth');
+    expect((await turnsRun(harness.agent))[0]!.text).not.toContain(MISSION);
     expect(requestText(request.prompt)).not.toContain(MISSION);
     harness.db.close();
   });
@@ -107,7 +107,7 @@ describe('the workspace takes its own first turn', () => {
     seedMission(harness.db, PLACEHOLDER_MISSION);
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: false });
-    expect(turnsRun(harness.agent)).toEqual([]);
+    expect((await turnsRun(harness.agent))).toEqual([]);
     harness.db.close();
   });
 
@@ -119,8 +119,8 @@ describe('the workspace takes its own first turn', () => {
 
     // Answered while the turn it started is still parked at its model call.
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
-    expect(harness.agent.harnessChatLoop.turnInFlight()).toBe(true);
     await next;
+    expect(harness.agent.harnessChatLoop.turnInFlight()).toBe(true);
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
     harness.db.close();
   });
@@ -154,8 +154,8 @@ describe('the workspace takes its own first turn', () => {
 
     // The offer yielded at its slot: nothing of it ran, and the ledger says
     // why. The operator's message is the one turn that ran.
-    expect(turnsRun(harness.agent).map((turn) => turn.provenance.kinuEvent)).toEqual([undefined]);
-    expect(turnsRun(harness.agent).map((turn) => turn.text)).toEqual(['Summarize the incident timeline first.']);
+    expect((await turnsRun(harness.agent)).map((turn) => turn.provenance.kinuEvent)).toEqual([undefined]);
+    expect((await turnsRun(harness.agent)).map((turn) => turn.text)).toEqual(['Summarize the incident timeline first.']);
     expect(activityEvents(harness.db)).toContain('genesis.yielded_to_message');
     harness.db.close();
   });
@@ -170,7 +170,7 @@ describe('the workspace takes its own first turn', () => {
     await next;
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
 
-    const ran = turnsRun(harness.agent);
+    const ran = (await turnsRun(harness.agent));
     expect(ran).toHaveLength(1);
     expect(ran[0]!.text).toContain('first turn');
     expect(ran[0]!.provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
@@ -195,11 +195,11 @@ describe('the workspace takes its own first turn', () => {
     expect(await late).toBe('mid-turn');
 
     expect(activityEvents(harness.db)).not.toContain('genesis.yielded_to_message');
-    const ran = turnsRun(harness.agent);
+    const ran = (await turnsRun(harness.agent));
     expect(ran).toHaveLength(2);
     expect(ran[0]!.provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
     expect(ran[1]!.text).toBe('Late but admitted.');
-    expect(harness.agent.harnessTranscript.history().filter((message) => message.role === 'assistant')).toHaveLength(2);
+    expect((await harness.agent.harnessTranscript.history()).filter((message) => message.role === 'assistant')).toHaveLength(2);
     harness.db.close();
   });
 });

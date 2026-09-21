@@ -12,6 +12,7 @@ import {
   BUILTIN_PROFILE_CATALOG, BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel, profileCatalogDigest,
   type AgentRuntime, type CodemodeProvider, type JsonValue, type ProfileCatalogEnvelope,
 } from '../src/index';
+import { storesFor } from './helpers';
 
 type TasksResult = object | string | number | boolean | null | undefined;
 
@@ -47,7 +48,7 @@ const PROFILE_ENVELOPE: ProfileCatalogEnvelope = {
 };
 
 function nativeTasks(rt: AgentRuntime): Exec {
-  const entry = buildBuiltinTools({ rt, roleAuthority: () => PROFILE_ENVELOPE }).tasks;
+  const entry = buildBuiltinTools({ rt, roleAuthority: () => PROFILE_ENVELOPE, history: storesFor(rt).history }).tasks;
 
   if (!entry) throw new Error('Expected tasks tool to be registered');
 
@@ -154,7 +155,8 @@ describe('tasks tool', () => {
         .replace(/'/g, '"'),
     ));
 
-    const entry = buildBuiltinTools({ rt: createTestRuntime().rt }).tasks;
+    const fresh = createTestRuntime().rt;
+    const entry = buildBuiltinTools({ rt: fresh, history: storesFor(fresh).history }).tasks;
 
     if (!entry) throw new Error('Expected tasks tool to be registered');
 
@@ -311,12 +313,12 @@ describe('tasks action=mode — the agent\'s durable role', () => {
     expect(plan).toContain('Role: Task');
     expect(plan).toContain('In Plan, inspect and research only. Do not change project files or system resources, release, deploy');
     expect(plan).toContain('Implementation waits for an approved Build turn.');
-    expect(Object.keys(buildBuiltinTools({ rt }))).not.toContain('submit_plan');
+    expect(Object.keys(buildBuiltinTools({ rt, history: storesFor(rt).history }))).not.toContain('submit_plan');
   });
 
   test('the model can discover durable role switching from the schema', () => {
     const { rt } = createTestRuntime();
-    const entry = buildBuiltinTools({ rt, roleAuthority: () => PROFILE_ENVELOPE }).tasks;
+    const entry = buildBuiltinTools({ rt, roleAuthority: () => PROFILE_ENVELOPE, history: storesFor(rt).history }).tasks;
     const description = entry?.description ?? '';
     expect(description).toContain('mode switches your durable role');
     expect(BUILTIN_TOOL_SPECS.tasks.whenToUse).toContain('mode switches your durable role');

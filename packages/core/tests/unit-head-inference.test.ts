@@ -14,9 +14,11 @@ import {
 } from '../src/heads/head-inference';
 import type { Decision, Evidence, HeadInput, SerializedMessage } from '../src/heads/types';
 import {
-  inheritedContextFromHistory, inheritedContextFromRows, inheritedContextOmissionNote,
-  inheritedContextFromConversation, INHERITED_CONTEXT_CAP,
+  inheritedContextFromHistory, inheritedContextOmissionNote,
+  inheritedContextFromTranscript,
 } from '../src/orchestrator/heads-support';
+import { SessionHistory } from '../src/session/history';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/prompts/evidence-window';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
@@ -189,31 +191,72 @@ describe('durable delegated turn opening', () => {
       const seed = empty ? [] : original.slice(0, 2);
 
       try {
-        source.actor.session.restoreHistory(original);
-        fork.actor.session.restoreHistory(seed);
-        const revisions = fork.actor.stores.claims.working.history();
-        expect(revisions).toHaveLength(1);
-        expect(fork.actor.stores.claims.working.active()?.messages).toEqual(seed);
-        expect(source.actor.stores.claims.working.active()?.messages).toEqual(original);
+        await source.actor.session.restoreHistory(original);
+        await fork.actor.session.restoreHistory(seed);
+        const selection = fork.actor.stores.history.context.selected();
+
+        if (selection === null) throw new Error('a restored fork must have a selected working context');
+        const revisions = fork.actor.stores.history.context.revisions(selection.contextId);
+        // Its own log and nothing else: the seed, empty or not, is one authored revision over the initial one.
+        expect(revisions.map((row) => row.revision)).toEqual([1, 0]);
+        expect((await fork.actor.stores.history.materialize()).messages).toEqual(seed);
+        expect((await source.actor.stores.history.materialize()).messages).toEqual(original);
 
         const reopened = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back-fork', 'subordinate');
-        reopened.actor.session.restoreWorkingHistory(() => original);
+        await reopened.actor.session.restoreWorkingHistory();
         expect(reopened.actor.session.history).toEqual(seed);
-        expect(reopened.actor.stores.claims.working.history()).toEqual(revisions);
+        expect(reopened.actor.stores.history.context.revisions(selection.contextId)).toEqual(revisions);
       } finally {
         testSql.close();
       }
     });
   }
 
+  test('the walk-back is one session method: head, selection, woven blocks and working history move together', async () => {
+    const { rt, testSql } = createTestRuntime();
+    const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back', 'subordinate');
+    const { session, stores } = seat.actor;
+    const chat = stores.history.transcript(CHAT_SESSION_ID);
+    const assertOwner = () => rt.actor.assertCurrent();
+
+    try {
+      for (const [ask, answer, text] of [['ask-1', 'answer-1', 'one'], ['ask-2', 'answer-2', 'two']] as const) {
+        const input = await stores.history.append({ id: ask, message: { role: 'user', content: text }, origin: 'input', turnId: ask, assertOwner });
+        chat.record({ ...await chat.prepareUser({ id: ask, turnId: ask, message: input }), parentId: undefined });
+        const output = await stores.history.append({ id: answer, message: { role: 'assistant', content: `${text} answered` }, origin: 'output', turnId: ask, assertOwner });
+        chat.appendAssistant(await chat.prepareAssistant({ id: answer, parentId: ask, turnId: ask, runId: ask, parts: [{ messageId: answer, partNo: 0, throughSequence: output.sequence }], finalText: null }));
+      }
+
+      await session.restoreWorkingHistory();
+      expect(session.history.map((message) => message.content)).toEqual(['one', 'one answered', 'two', 'two answered']);
+      // A block woven against the four-message stream: positioned there, and meaningless anywhere else.
+      session.dynamic.weave(session.history, { mode: { workMode: 'build', planSubmission: false } });
+      expect(session.dynamic.size).toBe(1);
+
+      // The host's own idle condition is raised inside the same transaction: nothing moves.
+      await expect(session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => { throw new Error('a queued turn holds the loop'); }))
+        .rejects.toThrow('a queued turn holds the loop');
+      expect(chat.ancestry().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2']);
+      expect(session.dynamic.size).toBe(1);
+
+      await session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => {});
+      expect(chat.ancestry().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1']);
+      expect(session.history.map((message) => message.content)).toEqual(['one', 'one answered']);
+      expect((await stores.history.materialize()).messages.map((message) => message.content)).toEqual(['one', 'one answered']);
+      expect(session.dynamic.size).toBe(0);
+    } finally {
+      testSql.close();
+    }
+  });
+
   test('an explicitly empty working revision is authoritative, not a new birth', async () => {
     const { rt, testSql } = createTestRuntime();
     const first = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'subordinate');
-    first.actor.session.restoreHistory([]);
+    await first.actor.session.restoreHistory([]);
     const restored = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'subordinate');
 
     try {
-      restored.actor.session.restoreWorkingHistory(() => { throw new Error('A working revision must not consult the transcript.'); });
+      await restored.actor.session.restoreWorkingHistory();
 
       const report = await runHeadInference(headInput(), {
         ...restored, model: fakeHeadModel('Child answer.'), tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
@@ -300,7 +343,7 @@ describe('durable delegated turn opening', () => {
       framing: { system: 'Read the ledger.', messages: [{ role: 'user', content: assignmentId }] },
       delegation: { assignmentId, birthContext: [{ role: 'user', content: 'Original birth prefix.' }] },
       profile: async (input) => {
-        if (edit) seat.actor.session.restoreHistory([{ role: 'user', content: 'Edited working prefix.' }]);
+        if (edit) await seat.actor.session.restoreHistory([{ role: 'user', content: 'Edited working prefix.' }]);
 
         return seat.profile(input);
       },
@@ -438,6 +481,43 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
   });
 });
 
+async function seededTranscript(count: number, extra?: (history: SessionHistory) => Promise<void>) {
+  const { db, sql, execRaw, vfs } = createTestWorkspace();
+  const actor = createTestActors(sql, execRaw).main;
+
+  const history = new SessionHistory({
+    sql, actor, transactionSync: (write) => db.transaction(write)(),
+    files: async () => ({ vfs, artifactDirectory: '/actor/.kinu/context' }),
+  });
+
+  let parentId: string | null = null;
+
+  for (let i = 0; i < count; i++) {
+    await history.record(CHAT_SESSION_ID, {
+      id: `m${i}`, parentId, origin: i % 2 === 0 ? 'input' : 'output',
+      message: { role: i % 2 === 0 ? 'user' : 'assistant', content: `body ${i}` },
+    });
+    parentId = `m${i}`;
+  }
+
+  await extra?.(history);
+
+  return { db, history, transcript: history.transcript(CHAT_SESSION_ID) };
+}
+
+/** The parent-conversation cap core hands each spawned head, measured rather
+ *  than restated: a transcript far longer than any cap inherits the cap plus
+ *  the one omission note, so the read itself says what the cap is. */
+async function measuredInheritedCap(): Promise<number> {
+  const seeded = await seededTranscript(400);
+  const inherited = await inheritedContextFromTranscript(seeded.transcript);
+
+  seeded.db.close();
+  expect(inherited[0]).toMatchObject({ id: 'ctx-omitted', role: 'system' });
+
+  return inherited.length - 1;
+}
+
 describe('inherited context is windowed at READ time, exactly once (C4)', () => {
   test('plain text and SDK text parts inherit the same conversation bytes', () => {
     // The literal is the contract: an all-text part array serializes to the
@@ -457,8 +537,12 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
   // budget plus that single disclosure line — never the stored body.
   const bound = cap + 80;
 
-  test('inheritedContextFromRows caps each stored body as it builds the digest', () => {
-    const ctx = inheritedContextFromRows([{ id: 'r1', role: 'assistant', content: stored, createdAt: 1 }], 1);
+  test('the transcript read caps each stored body as it builds the digest', async () => {
+    const seeded = await seededTranscript(0, async (history) => {
+      await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'output', message: { role: 'assistant', content: stored } });
+    });
+
+    const ctx = await inheritedContextFromTranscript(seeded.transcript);
 
     expect(ctx).toHaveLength(1);
     expect(ctx[0]!.content.length).toBeLessThanOrEqual(bound);
@@ -466,11 +550,16 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
     // Head AND tail survive — the window is a window, not a head truncation.
     expect(ctx[0]!.content.startsWith('HEAD-MARK')).toBe(true);
     expect(ctx[0]!.content.endsWith('TAIL-MARK')).toBe(true);
+    seeded.db.close();
   });
 
-  test('a body within budget passes through byte-identical', () => {
-    const ctx = inheritedContextFromRows([{ id: 'r1', role: 'user', content: 'short body', createdAt: 1 }], 1);
-    expect(ctx[0]!.content).toBe('short body');
+  test('a body within budget passes through byte-identical', async () => {
+    const seeded = await seededTranscript(0, async (history) => {
+      await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'input', message: { role: 'user', content: 'short body' } });
+    });
+
+    expect((await inheritedContextFromTranscript(seeded.transcript))[0]!.content).toBe('short body');
+    seeded.db.close();
   });
 
   test('inheritedContextFromHistory caps each live-history body the same way', () => {
@@ -482,9 +571,14 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
     expect(ctx[0]!.content.endsWith('TAIL-MARK')).toBe(true);
   });
 
-  test('buildHeadMessages neither expands nor re-windows what the read already capped', () => {
-    const inheritedContext = inheritedContextFromRows(
-      [{ id: 'r1', role: 'assistant', content: stored, createdAt: 1 }], 1);
+  test('buildHeadMessages neither expands nor re-windows what the read already capped', async () => {
+    const seeded = await seededTranscript(0, async (history) => {
+      await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'output', message: { role: 'assistant', content: stored } });
+    });
+
+    const inheritedContext = await inheritedContextFromTranscript(seeded.transcript);
+
+    seeded.db.close();
 
     const windowed = inheritedContext[0]!.content;
 
@@ -497,39 +591,35 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
   });
 });
 
-describe('inheritedContextFromConversation — the plain store, read once for both hosts', () => {
-  test('the newest rows up to the cap, in order, with the omission note core owes a hire', () => {
-    const { sql, execRaw } = createTestWorkspace();
-    const actor = createTestActors(sql, execRaw).main;
+describe('inheritedContextFromTranscript — the canonical store, read once for both hosts', () => {
+  /** One actor's canonical session store over a real workspace database, and a
+   *  seeded chat transcript to read a hire's inheritance out of. */
 
-    for (let i = 0; i < INHERITED_CONTEXT_CAP + 5; i++) {
-      void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
-        VALUES (${actor.actorId}, ${`m${i}`}, ${'default'}, ${i % 2 === 0 ? 'user' : 'assistant'}, ${`body ${i}`}, ${1_000 + i})`;
-    }
+  test('the newest rows up to the cap, in order, with the omission note core owes a hire', async () => {
+    const cap = await measuredInheritedCap();
 
-    // A row of another session, and a system row of this one: neither is a
-    // turn the hire inherits, and neither counts against what it was not told.
-    void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
-      VALUES (${actor.actorId}, ${'other'}, ${'side'}, ${'user'}, ${'elsewhere'}, ${5_000})`;
-    void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
-      VALUES (${actor.actorId}, ${'sys'}, ${'default'}, ${'system'}, ${'runtime note'}, ${5_001})`;
+    // A row of another session: not a turn the hire inherits, and it does not
+    // count against what it was not told.
+    const seeded = await seededTranscript(cap + 5, async (history) => {
+      await history.record('side', { id: 'other', parentId: null, origin: 'input', message: { role: 'user', content: 'elsewhere' } });
+    });
 
-    const ctx = inheritedContextFromConversation(sql, actor, 'default');
+    const ctx = await inheritedContextFromTranscript(seeded.transcript);
     expect(ctx[0]).toMatchObject({ id: 'ctx-omitted', role: 'system' });
     expect(ctx[0]!.content).toContain('5 earlier messages omitted');
-    expect(ctx).toHaveLength(INHERITED_CONTEXT_CAP + 1);
-    expect(ctx[1]).toMatchObject({ id: 'm5', role: 'assistant', content: 'body 5', createdAt: 1_005 });
-    expect(ctx.at(-1)).toMatchObject({ id: `m${INHERITED_CONTEXT_CAP + 4}` });
-    expect(ctx.some((entry) => entry.content === 'elsewhere' || entry.content === 'runtime note')).toBe(false);
+    expect(ctx).toHaveLength(cap + 1);
+    expect(ctx[1]).toMatchObject({ id: 'm5', role: 'assistant', content: 'body 5' });
+    expect(ctx.at(-1)).toMatchObject({ id: `m${cap + 4}` });
+    expect(ctx.some((entry) => entry.content === 'elsewhere')).toBe(false);
+    seeded.db.close();
   });
 
-  test('a conversation inside the cap carries no note', () => {
-    const { sql, execRaw } = createTestWorkspace();
-    const actor = createTestActors(sql, execRaw).main;
-    void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
-      VALUES (${actor.actorId}, ${'m0'}, ${'default'}, ${'user'}, ${'hello'}, ${1})`;
-    expect(inheritedContextFromConversation(sql, actor, 'default')).toEqual([
-      { id: 'm0', role: 'user', content: 'hello', createdAt: 1 },
+  test('a conversation inside the cap carries no note', async () => {
+    const seeded = await seededTranscript(1);
+
+    expect(await inheritedContextFromTranscript(seeded.transcript)).toMatchObject([
+      { id: 'm0', role: 'user', content: 'body 0' },
     ]);
+    seeded.db.close();
   });
 });

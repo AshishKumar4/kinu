@@ -94,7 +94,7 @@ const ImportSchema = v.object({
 });
 
 function workspace(name: string, library: ExperienceLibraryStore, llmResponses?: Record<string, string>): Workspace {
-  const { rt, db } = createTestRuntime(llmResponses ? { llmResponses } : undefined);
+  const { rt, db, stores } = createTestRuntime(llmResponses ? { llmResponses } : undefined);
   initTurnOutcomeTables(rt.storage.execRaw);
   initFactsTable(rt.storage.execRaw);
   initImportedExperienceTable(rt.storage.execRaw);
@@ -102,8 +102,8 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
     id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, message TEXT NOT NULL,
     data TEXT, created_at INTEGER NOT NULL)`);
   // Shaped exactly as `cf-backend/src/orchestrator.ts` creates it: `actor_id`
-  // leads the key because `actor_messages` is keyed `(actor_id, id)`, so two actors'
-  // turns really do present the same message id — and a bare `message_id`
+  // leads the key because `session_messages` is keyed `(actor_id, message_id)`,
+  // so two actors' turns really do present the same message id — and a bare `message_id`
   // primary key lets one actor's thumbs overwrite a sibling's through the
   // writer's ON CONFLICT. A fixture without the column would take the reader's
   // `actor_id` predicate down with `no such column`.
@@ -132,7 +132,7 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
 
   const call = (input: ExperienceTestInput) => runExperienceAction(deps, input);
 
-  return { rt, db, facts, call, engine: new EvolutionEngine(rt) };
+  return { rt, db, facts, call, engine: new EvolutionEngine(rt, stores.history) };
 }
 
 /** Give a crafted tool a real usage record, which is what makes it publishable. */

@@ -5,7 +5,7 @@ import { nanoid } from '../utils/nanoid';
 import { JsonArraySchema, isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
-import { seekPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
+import { seekPage, StaleCursorError, type Page, type PageRequest } from '../session/page';
 import { boundedInt } from '../utils/bounds';
 import type {
   PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanEdit,

@@ -201,7 +201,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // subordinate is not a workspace root, but it has no database of its own to
     // hold an identity in, and the roster it reads is the root's.
     workspace_actors: EVERYWHERE,
-    actor_messages: EVERYWHERE,
     crafted_tools: EVERYWHERE,
     search_nodes: EVERYWHERE,
     fibers: EVERYWHERE,
@@ -412,46 +411,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': LAZY_ON_FIRST_USE('the chat transport'),
       cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },
     },
-    cf_ai_chat_stream_metadata: {
-      'cf-orchestrator': LAZY_ON_FIRST_USE('the chat transport'),
-      'cf-subordinate': LAZY_ON_FIRST_USE('the chat transport'),
-      cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },
-    },
-    // The Agents SDK's session store — the tables Think's activation creates
-    // (`Session.create(this)` then a session read in Think's `onStart`, which
-    // runs `AgentSessionProvider.ensureTable`) on every wake of either cf root,
-    // in the one database every actor of the workspace shares. Declared because
-    // Kinu READS them directly: `assistant_messages` is the pane store
-    // `identity/conversation-store.ts` selects on a hosted workspace, and the
-    // fork, archive, search, eval-split and inherited-context readers all name
-    // it in raw SQL. `@cloudflare/think`'s unreleased `brisk-chats-branch`
-    // changeset lifts these into `cf_agents_session_*` on first wake and DROPS
-    // them, which is exactly the disappearance this census must report.
-    // `assistant_compactions` and `assistant_config` are read by nothing in
-    // Kinu and are here so the one `ensureTable` that creates all four is
-    // observed whole. `assistant_fts` is the provider's FTS5 index
-    // (`normalizeObservedTables` folds its shadow tables); Kinu's own index is
-    // `conversation_fts`.
-    assistant_messages: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: 'a local session has no Think base; its default chat is the core `actor_messages` table, the store `hasPaneStore` falls to' },
-    },
-    assistant_compactions: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: 'a local session has no Think base and no SDK compaction overlay; compaction is the core transformContext extension' },
-    },
-    assistant_config: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: 'a local session has no Think base; session settings are `actor_config` rows' },
-    },
-    assistant_fts: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: 'a local session has no Think base; the conversation index is the core `conversation_fts` table' },
-    },
     // `cf_agents_sub_agents` IS DELIBERATELY ABSENT FROM THIS REGISTRY, and its
     // absence is the entry. It is the Agents SDK's facet registry, created by
     // the first `subAgent()` call. No Kinu actor spawns a facet: a hired
@@ -481,8 +440,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     slate_previews: EVERYWHERE,
     slate_deployment_reservations: EVERYWHERE,
     slate_resource_reservations: EVERYWHERE,
-    slate_content: EVERYWHERE,
-    slate_content_chunks: EVERYWHERE,
     slate_invocations: EVERYWHERE,
     slate_receipts: EVERYWHERE,
     // The authored slate's durable KV — the `this.storage` surface — lives in
@@ -708,8 +665,8 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // On the CLI the same reservation lives on the workspace's own database,
     // created by the session's own genesis beside the terminal ledger; its
     // `turn_id` is nullable because a send accepted while the actor is idle is
-    // held BY the queue — a state cf does not have (its send is admitted as an
-    // `assistant_messages` row before it is ever read).
+    // held BY the queue — a state cf does not have (its send is admitted as a
+    // transcript entry before it is ever read).
     pending_steers: EVERYWHERE,
     // The file parts of a pending send (a mid-turn steer awaiting its step
     // drain, or an idle-queued send awaiting its turn), one row per part in
@@ -726,14 +683,27 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // reads them. A resumed turn reads the context revision it was interrupted at
     // rather than the newest one, so the revisions travel with the claims.
     actor_turn_claims: EVERYWHERE,
-    actor_context_revisions: EVERYWHERE,
     // The raw working history a `/context` edit rewrites, numbered per ACTOR
     // rather than per turn: an edit authored between turns, or before the
     // actor's first turn, belongs to no turn at all. Created unconditionally by
     // `initActorClaimTables` beside the two tables above, because the working
     // snapshot is written at hydration and turn admission — not on first edit —
     // so an actor that never edits anything still has it.
-    actor_working_revisions: EVERYWHERE,
+    session_messages: EVERYWHERE,
+    message_parts: EVERYWHERE,
+    message_updates: EVERYWHERE,
+    actor_contexts: EVERYWHERE,
+    actor_context_selection: EVERYWHERE,
+    context_revisions: EVERYWHERE,
+    context_memberships: EVERYWHERE,
+    context_proposals: EVERYWHERE,
+    context_proposal_entries: EVERYWHERE,
+    context_proposal_sources: EVERYWHERE,
+    actor_requests: EVERYWHERE,
+    request_messages: EVERYWHERE,
+    conversation_entries: EVERYWHERE,
+    conversation_heads: EVERYWHERE,
+    conversation_entry_parts: EVERYWHERE,
     // The terminal ledger is EVERYWHERE now. It was cf-only while the CLI
     // released its claims at transcript persist and had no recovery at all —
     // KINU-021 hoisted the lifecycle into core and the CLI drives the same

@@ -193,18 +193,27 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
       return [(clientX - box.left) / box.width, (clientY - box.top) / box.height];
     };
 
-    const onMove = (event: PointerEvent): void => {
+    /** One pointer handler for both inputs: a move feeds the hold, a press
+     *  radiates the wave. Touch does neither. */
+    const onPointer = (press: boolean) => (event: PointerEvent): void => {
       if (event.pointerType === 'touch') return;
       const [x, y] = toView(event.clientX, event.clientY);
-      mounted.art().setPointer(x, y);
+
+      if (press) mounted.art().click(x, y);
+      else mounted.art().setPointer(x, y);
     };
+
+    const onMove = onPointer(false);
+    const onPress = onPointer(true);
 
     const onLeave = (): void => {
       mounted.art().clearPointer();
     };
 
+
     if (hoverable && !calm) {
       window.addEventListener('pointermove', onMove, { passive: true });
+      window.addEventListener('pointerdown', onPress, { passive: true });
       window.addEventListener('pointerleave', onLeave);
       window.addEventListener('blur', onLeave);
       document.documentElement.addEventListener('pointerleave', onLeave);
@@ -233,6 +242,7 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
       changes.disconnect();
       shell.removeEventListener('scroll', onScroll, { capture: true });
       window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerdown', onPress);
       window.removeEventListener('pointerleave', onLeave);
       window.removeEventListener('blur', onLeave);
       document.documentElement.removeEventListener('pointerleave', onLeave);

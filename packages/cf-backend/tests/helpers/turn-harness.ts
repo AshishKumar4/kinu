@@ -21,8 +21,7 @@
  */
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
 import type { SessionMessage } from 'agents/experimental/memory/session';
-import type { ChatResponseResult, TurnConfig } from '@cloudflare/think';
-import type { JsonObject } from '@kinu.run/core';
+import type { ChatOptions, JsonObject } from '@kinu.run/core';
 
 /** What the loop was about to send the model for one admitted turn. */
 export interface PreparedRequest {
@@ -37,7 +36,7 @@ export interface PreparedRequest {
   readonly model: LanguageModel | string | undefined;
   readonly tools: ToolSet;
   readonly activeTools: readonly string[] | undefined;
-  readonly providerOptions: TurnConfig['providerOptions'];
+  readonly providerOptions: ChatOptions['providerOptions'];
 }
 
 /** The answer a turn settles with, as the suite scripts it. */
@@ -45,17 +44,13 @@ export interface ScriptedAnswer {
   readonly messageId: string;
   readonly text?: string;
   readonly parts?: UIMessage['parts'];
-  readonly status?: ChatResponseResult['status'];
+  readonly status?: RanTurn['status'];
   readonly error?: string;
   readonly requestId?: string;
   readonly continuation?: boolean;
   /** The user message this answer is for, when the suite needs one on disk
    *  first (the loop's own admission writes it in production). */
   readonly turnId?: string;
-  /** A stored row the converter REFUSES — the one reason to say a role the
-   *  SDK's own type forbids. Production never writes one; recovery can meet
-   *  one, and the suite that pins that arm needs it. */
-  readonly unreadableRole?: 'tool';
   /** How the model's step ended: `length` is an answer the provider cut at
    *  its output limit, which the loop continues once and the roster then
    *  reads off the last step. Stop by default. */

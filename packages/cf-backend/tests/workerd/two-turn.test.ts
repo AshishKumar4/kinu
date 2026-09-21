@@ -6,9 +6,9 @@
  * every suite that seeds its own history:
  *
  *  (a) the open read (`getWorkspaceSnapshot` → `getAgentStatus` →
- *      `conversationCount`) selects `assistant_messages` for a hosted
- *      workspace root — a table the agents-SDK session creates on ITS first
- *      read — so the read is green only when the SDK's own DDL ran.
+ *      `conversationCount`) once selected a table a hosted workspace root
+ *      only gained on the SDK session's first read, so the read was green
+ *      only when that DDL had run.
  *  (b) the second turn's model request must carry the user message that
  *      started it. The Node-side fake records the HTTP bodies as the
  *      production SDK sent them, so the assertion reads the defect at the

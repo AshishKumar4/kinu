@@ -239,6 +239,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
       input,
       capture,
       rt,
+      history: seat.actor.stores.history,
       codemodeTool,
       webSearch: deps.webSearch,
       split: (request) => runLocalSplit(request, input, deps),

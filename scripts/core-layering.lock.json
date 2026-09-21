@@ -18,7 +18,6 @@
   "packages/core/src/execution/inline.ts -> packages/core/src/tools/outcome.ts (value)",
   "packages/core/src/execution/inline.ts -> packages/core/src/tools/registry.ts (value)",
   "packages/core/src/execution/sandbox-errors.ts -> packages/core/src/tools/registry.ts (value)",
-  "packages/core/src/identity/conversation-store.ts -> packages/core/src/read-models/page.ts (value)",
   "packages/core/src/identity/create.ts -> packages/core/src/read-models/workspace-diff.ts (value)",
   "packages/core/src/identity/create.ts -> packages/core/src/runtime-builder.ts (value)",
   "packages/core/src/identity/create.ts -> packages/core/src/scaffold/bootstrap.ts (value)",
@@ -34,7 +33,6 @@
   "packages/core/src/tools/builtins.ts -> packages/core/src/delegation/report-tool.ts (value)",
   "packages/core/src/tools/builtins.ts -> packages/core/src/heads/types.ts (value)",
   "packages/core/src/tools/builtins.ts -> packages/core/src/tasks/store.ts (value)",
-  "packages/core/src/tools/file-ledger.ts -> packages/core/src/prompting/volatile-context.ts (value)",
   "packages/core/src/tools/mcp-error.ts -> packages/core/src/prompts/evidence-window.ts (value)",
   "packages/core/src/tools/mcp-surface.ts -> packages/core/src/prompting/step-prune.ts (value)",
   "packages/core/src/tools/release-tool.ts -> packages/core/src/release/index.ts (value)",
@@ -45,7 +43,5 @@
   "packages/core/src/types/agent-runtime.ts -> packages/core/src/tools/file-ledger.ts (type)",
   "packages/core/src/types/backend-host.ts -> packages/core/src/heads/controller.ts (type)",
   "packages/core/src/vfs/context-plane.ts -> packages/core/src/orchestrator/actor-claims.ts (type)",
-  "packages/core/src/vfs/context-plane.ts -> packages/core/src/orchestrator/context-plane.ts (value)",
-  "packages/core/src/vfs/context-plane.ts -> packages/core/src/prompting/message-codec.ts (value)",
   "packages/core/src/vfs/context-plane.ts -> packages/core/src/tools/file-edit.ts (value)"
 ]

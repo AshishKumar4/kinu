@@ -113,15 +113,19 @@ class RelocatableBuild(unittest.TestCase):
             entry = root / _BUILD.CLI_ENTRYPOINT
             entry.parent.mkdir(parents=True)
             entry.write_text(
-                "import bash from '@nimbus-sh/runtime-bash';\n"
-                "import python from '@nimbus-sh/runtime-cpython';\n"
-                "console.log(bash + ' + ' + python);\n"
+                "".join(
+                    f"import module{index} from {json.dumps(name)};\n"
+                    for index, name in enumerate(_BUILD.EXTERNAL_MODULES)
+                )
+                + "console.log(["
+                + ", ".join(f"module{index}" for index in range(len(_BUILD.EXTERNAL_MODULES)))
+                + "].join(' + '));\n"
             )
-            for name, marker in zip(_BUILD.EXTERNAL_MODULES, ("bash-owned", "python-owned")):
+            for name in _BUILD.EXTERNAL_MODULES:
                 package = root / "node_modules" / name
                 package.mkdir(parents=True)
                 (package / "package.json").write_text(json.dumps({"name": name, "type": "module", "exports": "./index.js"}))
-                (package / "manifest.json").write_text(json.dumps(marker))
+                (package / "manifest.json").write_text(json.dumps(f"{name}-owned"))
                 (package / "index.js").write_text(
                     "import {readFileSync} from 'node:fs';\n"
                     "export default JSON.parse(readFileSync(new URL('manifest.json', import.meta.url), 'utf8'));\n"
@@ -136,7 +140,10 @@ class RelocatableBuild(unittest.TestCase):
             for name, source in build.modules.items():
                 shutil.copytree(source, installed / "node_modules" / name)
             shutil.rmtree(root)
-            self.assertEqual(_BUILD.probe_binary(binary, installed / "node_modules"), "bash-owned + python-owned")
+            self.assertEqual(
+                _BUILD.probe_binary(binary, installed / "node_modules"),
+                " + ".join(f"{name}-owned" for name in _BUILD.EXTERNAL_MODULES),
+            )
             shutil.rmtree(installed / "node_modules")
             with self.assertRaises(RuntimeError):
                 _BUILD.probe_binary(binary, installed / "node_modules")

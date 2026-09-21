@@ -14,13 +14,12 @@
  * new is written:
  *   `step_finish` rows  — the turn loop, as `agent`
  *   `model_call` rows   — every other producer, as itself (events/model-call.ts)
- *   `head_journal`      — exploration heads, whose usage comes back from another
- *                         Durable Object inside a `HeadReport` and is stored
- *                         per head; the parent's event log never sees the call
+ *   `head_journal`      — completed head reports, correlated with the producing
+ *                         actor and the attempt's start time
  *
- * Heads are read from the journal and NOT reported through the `model_call`
- * sink, deliberately: two writers for one call is how a total learns to
- * double-count. The journal row is the head's one durable cost record.
+ * A measured head report replaces that attempt's step usage, not its recorded
+ * prices or auxiliary model calls. Running and earlier interrupted steps remain
+ * visible. A report with no usage does not erase measured steps.
  *
  * COVERAGE IS PART OF THE ANSWER, not a footnote. A total that silently omits
  * four producers is worse than a per-agent number that is honest about its
@@ -40,15 +39,11 @@
  * history answers nobody's question. Heads are read whole from their journal for
  * the same reason: a workspace has orders of magnitude fewer heads than steps.
  *
- * TWO AXES OVER ONE SUM. `producers` groups the spend by what KIND of work made
- * the call; `missions` groups it by which declared piece of work it was made
- * FOR, read out of the same ledger the budget caps are enforced against. Both
- * are cumulative over the workspace's whole life, so they answer at the same
- * scope — but they still must not be added together, because one call appears in
- * exactly one producer row and in every mission label above it.
+ * `producers` covers the workspace. `missions` reads the requesting actor's
+ * declared budget ledger. These views overlap and must not be added together.
  */
 
-import type { RunEventRecorder } from '../events/recorder';
+import type { RunEventRecorder, StepSpendSource } from '../events/recorder';
 import { SPEND_SOURCES, type SpendSource, type SpendTally } from '../events/model-call';
 import type { SqlExecutor } from '../types/primitives';
 import { addUsage, usageReported, usageTotal, type Usage } from '../usage';
@@ -197,8 +192,7 @@ function openTally(tally: SpendTally): Tally {
 export interface WorkspaceSpendDeps {
   readonly events: RunEventRecorder;
   readonly sql: SqlExecutor;
-  /** Whose spend. The head journal is actor-private, so a total that read every
-   *  head row would bill this actor for a sibling's branches. */
+  /** The actor whose mission budgets accompany the workspace-wide producer totals. */
   readonly actor: ActorHandle;
 }
 
@@ -209,17 +203,30 @@ export interface WorkspaceSpendDeps {
  * Two reads, both unbounded, and neither is a sample. `spendByProducer` sums the
  * `step_finish` and `model_call` rows in SQL — one pass over the table for every
  * producer at once, rather than a fold over rows carried into memory a window at
- * a time. The head journal is then folded in through the same accumulator: a
- * head's usage never reaches the parent's event log (it comes back inside a
- * `HeadReport` from another Durable Object), so the journal is its one durable
- * cost record and the two sources meet here rather than in two totals.
+ * a time. Completed head reports replace only their own attempt's step usage.
+ * The actor directory supplies identity; a sibling's report cannot cover it.
  */
 export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
+  deps.actor.assertCurrent();
   const tallies: Tallies = new Map();
+  const heads = readHeadSpend(deps.sql);
 
-  for (const [source, tally] of deps.events.spendByProducer()) tallies.set(source, openTally(tally));
+  const stepSources = heads.flatMap((head): StepSpendSource[] => head.headActorId === null ? [] : [{
+    actorId: head.headActorId,
+    source: 'head',
+    coveredSince: head.completedAt !== null && usageReported(storedUsage(head))
+      ? new Date(head.spawnedAt).toISOString() : null,
+  }]);
 
-  for (const head of readHeadSpend(deps.sql, deps.actor)) record(tallyFor(tallies, 'head'), head, undefined);
+  for (const [source, tally] of deps.events.spendByProducer(stepSources)) tallies.set(source, openTally(tally));
+
+  for (const head of heads) {
+    const usage = storedUsage(head);
+
+    if (head.completedAt !== null && (usageReported(usage) || head.hasSteps === 0)) {
+      record(tallyFor(tallies, 'head'), usage, undefined);
+    }
+  }
 
   // Largest measured token total first: the panel's first job is to show where
   // the tokens went. A producer with nothing measured sorts last however many
@@ -304,9 +311,21 @@ function finishTotal(tally: Tally): SpendTally {
  * a broken workspace rather than an empty one and the error belongs at the
  * surface.
  */
-function readHeadSpend(sql: SqlExecutor, actor: ActorHandle): Usage[] {
-  return sql<StoredHeadUsage>`
-    SELECT token_input, token_output, token_cache_read, token_cache_write,
-           token_cache_write_1h, token_reasoning, neurons
-    FROM head_journal WHERE actor_id = ${actor.actorId}`.map(storedUsage);
+interface HeadSpendRow extends StoredHeadUsage {
+  readonly headActorId: string | null;
+  readonly spawnedAt: number;
+  readonly completedAt: number | null;
+  readonly hasSteps: number;
+}
+
+function readHeadSpend(sql: SqlExecutor): HeadSpendRow[] {
+  return sql<HeadSpendRow>`
+    SELECT h.token_input, h.token_output, h.token_cache_read, h.token_cache_write,
+           h.token_cache_write_1h, h.token_reasoning, h.neurons,
+           a.actor_id AS headActorId, h.spawned_at AS spawnedAt, h.completed_at AS completedAt,
+           EXISTS(SELECT 1 FROM run_events e
+             WHERE e.actor_id = a.actor_id AND e.type = 'step_finish'
+               AND e.ts >= strftime('%Y-%m-%dT%H:%M:%fZ', h.spawned_at / 1000.0, 'unixepoch')) AS hasSteps
+    FROM head_journal h LEFT JOIN workspace_actors a
+      ON a.parent_actor_id = h.actor_id AND a.creation_id = h.id AND a.kind IN ('head', 'branch')`;
 }

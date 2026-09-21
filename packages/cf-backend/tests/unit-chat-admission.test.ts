@@ -106,8 +106,8 @@ function fleetRowKinds(agent: { harnessFleetTurnRows(): object[] }): string[] {
   });
 }
 
-function userRows(agent: { harnessTranscript: { history(): SessionMessage[] } }): string[] {
-  return agent.harnessTranscript.history()
+async function userRows(agent: { harnessTranscript: { history(): Promise<SessionMessage[]> } }): Promise<string[]> {
+  return (await agent.harnessTranscript.history())
     .filter((message) => message.role === 'user')
     .map((message) => message.id);
 }
@@ -128,7 +128,7 @@ describe('a chat request through the production gate', () => {
     // the test waits for the client's own evidence: the done frame's send.
     await frame((frames) => doneFrames(frames).length > 0);
 
-    expect(userRows(agent)).toEqual(['input-req-idle']);
+    expect((await userRows(agent))).toEqual(['input-req-idle']);
     expect(doneFrames(sent)).toEqual([{ id: 'req-idle' }]);
     // The row above and the loop's own send ledger are the whole durable
     // record of an admission: neither Think's submission ledger nor an input
@@ -148,7 +148,7 @@ describe('a chat request through the production gate', () => {
     // arm exactly as a message typed while the agent works does. Nothing of
     // the live turn itself runs here: its text is the step's input below.
     await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
-    const [liveRow] = userRows(agent);
+    const [liveRow] = (await userRows(agent));
 
     // Admit the splice first, then drive the step it lands in: the drain
     // at the step boundary commits the row the assertions read back.
@@ -156,8 +156,8 @@ describe('a chat request through the production gate', () => {
     const stepped = await agent.harnessStepInto(0, [{ role: 'user', content: 'the long job' }]);
     const carried = stepped.flatMap((m) => m.role === 'user' && v.is(v.string(), m.content) ? [m.content] : []);
     expect(carried.some((content) => content.includes('check staging'))).toBe(true);
-    expect(userRows(agent)).toEqual([liveRow, 'input-req-steer']);
-    const appended = agent.harnessTranscript.history().find((m) => m.id === 'input-req-steer');
+    expect((await userRows(agent))).toEqual([liveRow, 'input-req-steer']);
+    const appended = (await agent.harnessTranscript.history()).find((m) => m.id === 'input-req-steer');
     expect(v.is(v.object({ metadata: v.object({ kinuSteer: v.literal(true) }) }), appended)).toBe(true);
     expect(JSON.parse(JSON.stringify(appended))).toMatchObject({ metadata: { kinuSteer: true, kinuSteerAtStep: 0 } });
     expect(doneFrames(sent)).toEqual([{ id: 'req-steer', landed: 'mid-turn' }]);
@@ -196,7 +196,7 @@ describe('a chat request through the production gate', () => {
     // gold is what the SECOND socket sees while the turn is still running.
     await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
     await gate(wire, chatRequest('req-live', 'the long job'));
-    const [liveRow] = agent.harnessTranscript.history().filter((m) => m.role === 'user').map((m) => m.id);
+    const [liveRow] = (await agent.harnessTranscript.history()).filter((m) => m.role === 'user').map((m) => m.id);
 
     const second = connection(agent);
     await agent.onConnect(second.wire, { request: new Request('https://agent/connect') });
@@ -279,6 +279,6 @@ describe('a chat request through the production gate', () => {
     const [done] = doneFrames(sent);
     expect(done?.id).toBe('req-no');
     expect(done?.error).toMatch(/another session is driving/);
-    expect(userRows(agent)).toEqual([]);
+    expect((await userRows(agent))).toEqual([]);
   });
 });

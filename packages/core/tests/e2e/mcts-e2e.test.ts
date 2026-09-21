@@ -96,8 +96,7 @@ function createE2ESession(): SessionWriter {
     async appendMessage(msg: SessionMessage, parentId?: string | null) {
       messages.push({ id: msg.id, parentId, role: msg.role, content: msg.parts.map(p => p.text).join('') });
     },
-    getHistory(leafId?: string | null) {
-      if (!leafId) return messages.map(m => ({ role: m.role, content: m.content }));
+    async getHistory(leafId: string) {
       const result: Array<{ role: string; content: string }> = [];
       let current = messages.find(m => m.id === leafId);
 

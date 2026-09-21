@@ -18,7 +18,7 @@ import { renderReflectionPrompt } from '../src/evolution/gepa/mutate';
 import type { GepaCandidate } from '../src/evolution/gepa/types';
 import { initReplayTables, runReplayEval } from '../src/evolution/replay';
 import { buildOutcomeClassifierPrompt, initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
-import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
+import { createTestRuntime, makeExecRaw, makeSql, storesFor } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import { RunEventRecorder } from '../src/events/recorder';
 
@@ -145,6 +145,7 @@ describe('the readers can see the end of a long turn', () => {
       events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt,
       sql: rt.storage.sql,
+      history: storesFor(rt).history,
       config: {
         getShadowSampleRate: () => 1,
         getAutoPromoteScaffold: () => false,

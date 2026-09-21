@@ -317,7 +317,7 @@ describe('tool effect claims', () => {
             return `charged-${String(args.amount)}`;
           },
           effectClaims: { sql, actor, turnId: () => 'turn-1' },
-          clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(4096), producer: 'external_tool' },
+          clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(), producer: 'external_tool' },
         },
       );
 
@@ -344,7 +344,7 @@ describe('tool effect claims', () => {
         {
           call: async () => 'ok',
           effectClaims: { sql, actor, turnId: () => 'turn-1' },
-          clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(4096), producer: 'external_tool' },
+          clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(), producer: 'external_tool' },
         },
       );
 
@@ -371,7 +371,7 @@ describe('tool effect claims', () => {
             return `lookup-${String(dispatched)}`;
           },
           effectClaims: { sql, actor, turnId: () => 'turn-1' },
-          clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(4096), producer: 'external_tool' },
+          clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(), producer: 'external_tool' },
         },
       );
 

@@ -3,10 +3,8 @@
 // evolution cadence, and the event→turn reactor — parameterized over the
 // EvolutionEngine + EventLog (from AgentRuntime's storage) and a BackendHost.
 //
-// The cf-backend OrchestratorAgent (a @cloudflare/think subclass) and the local
-// cli-backend both delegate their loop hooks here. Platform transport (Think's
-// private TurnQueue / the CLI's local loop), durable fibers, and the @callable
-// control plane stay on each backend; this owns the LOGIC.
+// Both backend sessions delegate their loop hooks here. Platform sockets,
+// durable fibers and the control plane stay in the adapters.
 //
 // ── The evolution exit contract ──────────────────────────────────────────
 //

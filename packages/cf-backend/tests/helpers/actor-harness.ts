@@ -15,8 +15,8 @@
  */
 import { Database } from 'bun:sqlite';
 import { makeSqlExec } from '../../../core/tests/helpers';
+import type { SessionHistory } from '@kinu.run/core';
 import type { AgentContext, Connection, FiberRecoveryContext, FiberRecoveryResult, WSMessage } from 'agents';
-import { AgentSessionProvider } from 'agents/experimental/memory/session';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
@@ -25,7 +25,7 @@ import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from '
 import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, SpendSource, BackendHost } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { Refusal } from '@kinu.run/core/obs';
-import type { AssistantMessagesTranscript } from '../../src/chat-transcript';
+import type { SessionTranscript } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
 import type { ChatTurnInput, ActorTurnLease, PreparedTurn, RunEventRecorder } from '@kinu.run/core';
 import type { ChatWireTransport } from '../../src/chat-transport';
@@ -34,7 +34,8 @@ import { createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagno
 import type { UserDO } from '../../src/user/user-do';
 import type { SlateHost } from '../../src/slates/host';
 import {
-  shadowTrialPlan, claimToolEffect, actorReferenceOf, 
+  shadowTrialPlan, claimToolEffect, actorReferenceOf,
+  type ActorHandle, type SqlExecutor,
   type ActorHost, type HostedActor, type SubordinateSeed, type HeadStreamFrame,
 } from '@kinu.run/core';
 import {
@@ -64,6 +65,7 @@ import type { ExplorationHostSeams } from '../../src/exploration-hosting';
 import type { HostedTaskProfile } from '../../src/subordinate-hosting';
 import type { AgentProviderRegistry } from '../../src/providers/agent-registry';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 
 mockAgentsSdk();
 
@@ -136,15 +138,18 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  actor whose working history has been written — by a turn it ran, by an
    *  authored edit — keeps it, since that history is what such a suite is
    *  asserting on. */
-  harnessSeedHistory(messages: readonly ModelMessage[]): void {
-    if (this.actorSession.history.length > 0) return;
-    this.actorSession.restoreHistory(messages);
+  async harnessSeedHistory(messages: readonly ModelMessage[]): Promise<void> {
+    const current = await this.actorSession.canonical.materialize();
+
+    if (current.entries.length > 0) return;
+    await this.actorSession.restoreHistory(messages);
   }
   /** An observer on the actor's own extension host — the seam the loop's chat
    *  runner reports each tool call and result through, in the order the
    *  tools settled. A suite that watches completion order registers here. */
   harnessRegisterExtension(extension: KinuExtension): void { this.extensions.register(extension); }
-  get harnessTranscript(): AssistantMessagesTranscript { return this.chatTranscript; }
+  get harnessTranscript(): SessionTranscript { return this.chatTranscript; }
+  get harnessHistory(): SessionHistory { return this.actorSession.canonical; }
   /** A programmatic turn admitted the way every producer admits one. */
   harnessEnqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> { return this.chatLoop.enqueueTurn(input); }
   /** The answer id the NEXT turn is persisted under, when a suite named one:
@@ -162,6 +167,24 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  stream the transport delivers, so a suite sees exactly what a client would. */
   private _lastTurnStart: { turnId: string; messageId: string } | null = null;
   harnessLastTurnStart(): { turnId: string; messageId: string } | null { return this._lastTurnStart; }
+  /** Every text delta the transport delivered, in order: what a client has seen so far. */
+  private readonly _deliveredText: string[] = [];
+  private readonly _deliveryWatchers = new Set<() => void>();
+  harnessDeliveredText(): string { return this._deliveredText.join(''); }
+  /** Settles once the delivered text ends with `text`: the client has seen it. */
+  harnessDelivered(text: string): Promise<void> {
+    if (this.harnessDeliveredText().endsWith(text)) return Promise.resolve();
+
+    return new Promise<void>((resolve) => {
+      const watcher = (): void => {
+        if (!this.harnessDeliveredText().endsWith(text)) return;
+        this._deliveryWatchers.delete(watcher);
+        resolve();
+      };
+
+      this._deliveryWatchers.add(watcher);
+    });
+  }
   protected override get chatTransport(): ChatWireTransport {
     const transport = super.chatTransport;
 
@@ -171,52 +194,20 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
       transport.deliver = (event) => {
         if (event.type === 'turn-start') this._lastTurnStart = { turnId: event.turnId, messageId: event.messageId };
-        deliver(event);
+
+        if (event.type === 'text-delta') {
+          this._deliveredText.push(event.delta);
+
+          for (const watcher of this._deliveryWatchers) watcher();
+        }
+
+        return deliver(event);
       };
     }
 
     return transport;
   }
   private _observedTransport = false;
-  /** The next answer row is one the converter refuses — a tool-role message
-   *  under the assistant's id. Production never writes one; the arm that pins
-   *  what a refusal costs needs the row to exist, and this is the one seam
-   *  the transcript reads the streamed answer through. */
-  harnessNextAnswerUnreadable(role: 'tool'): void {
-    // The loop's own construction installs the production source; built first
-    // so this arm is the LAST installer, not the one it overwrites.
-    this.resumeChatLoop();
-    const transcript = this.harnessTranscript;
-    let armed: string | null = null;
-
-    const unreadable = (id: string) => {
-      const message = { id, role: 'assistant', parts: [{ type: 'text', text: 'the answer' }] };
-      // Past the type on purpose: the SDK forbids the shape and that is the
-      // point of the arm that asks for it.
-      Reflect.set(message, 'role', role);
-
-      return message;
-    };
-
-    // The roster reads the answer first (streamed), the row spends it (answer):
-    // both see the one unreadable message, so the recorded input and the stored
-    // row are the same shape the converter refuses.
-    transcript.answersFrom({
-      streamed: (id) => {
-        if (armed === null && this.chatTransport.streamed(id) !== null) armed = id;
-
-        return armed === id ? unreadable(id) : this.chatTransport.streamed(id);
-      },
-      answer: (id) => {
-        const real = this.chatTransport.answer(id);
-
-        if (armed !== id) return real;
-        armed = null;
-
-        return unreadable(id);
-      },
-    });
-  }
 
   /** The next assistant row fails to write — the one way a turn the model
    *  answered leaves no durable answer on the loop. The commit is one
@@ -233,9 +224,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     });
   }
 
-  harnessAdmitChat(trigger = 'ws-chat'): void {
-    this._emit('chat:turn:start', { requestId: 'harness-admitted', trigger, admission: 'queue' });
-  }
   /** The head-stream broadcaster, which is `protected` because only this
    *  actor's own reporters call it — `reportNodeDelta` and the exploration
    *  seams' `publishDelta`. Exposed so a suite asserting what a client
@@ -357,18 +345,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    * A further activation, through the ACTOR's own `onStart` — the sweep, the
    * wake reconcile, the stale-delivery unbind, exactly as the platform calls
    * them on a cold start.
-   *
-   * `agent.onStart()` is the vendor chat base's wrapper around this one. It
-   * boots Think's session and transcript first and reaches the actor's
-   * `onStart` after that, the activation the SDK runs before a facet's first
-   * `@callable`. This bridge is the actor half
-   * alone, for the suites that assert a sweep or a reconcile and nothing of
-   * Think's, the same reach `ensureActorSchema` takes below.
    */
   activateActor(): Promise<void> { return Promise.resolve(super.onStart()); }
-  /** The installed chat protocol gate, for suites that speak the hook's own
-   *  frames: Think ran its `onStart` above and reached this actor's, which
-   *  installed the gate over `onMessage`. */
+  /** The installed gate, for suites that speak the client's chat protocol. */
   harnessChatGate(): (connection: Connection, message: WSMessage) => Promise<void> {
     const gate = this.onMessage.bind(this);
 
@@ -429,6 +408,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  interrupted job leaves behind. The production store, not an INSERT: the
    *  lease epoch and the resume counter are its policy. */
   harnessJobs(): BackgroundJobStore { return this.jobs; }
+  /** The actor's own SQL executor and handle, so a test seeds the same rows a
+   *  real store writes — task lists, plans, the evolution ledgers — through
+   *  the production classes rather than an INSERT that skips their schema. */
+  harnessSql(): SqlExecutor { return this.boundSql; }
+  harnessActor(): ActorHandle { return this.actorHandle(); }
   /** One post-turn evolution lane, started exactly as a completed turn does. */
   harnessSettleEvolution(): void { this.settleEvolutionInBackground(); }
   /** One activation's alarm housekeeping — the entry point that runs the
@@ -520,7 +504,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     const result = await composePrepareStep(
       {
         extensions,
-        dynamic: { ledger: this.dynamicLedger, snapshot: () => dynamic(profile, this._preparedTools) },
+        dynamic: { ledger: this.actorSession.dynamic, snapshot: () => dynamic(profile, this._preparedTools) },
         // The provider this request is bound for — the destination boundary a
         // replay from another provider is re-keyed at, read as the loop reads it.
         destinationProviderId: this.promptModelContext().provider,
@@ -629,16 +613,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    */
 
   /** The persisted identity a fresh activation uses to stop old device work. */
-  harnessPersistActiveTurn(turnId: string): void {
-    // A durable CLAIM, which is what a real `beforeTurn` writes: a fresh
-    // activation identifies old device work through the claim ledger.
-    this.claims.admit({
-      runId: `harness-${turnId}`, turnId, workMode: 'build',
+  async harnessPersistActiveTurn(turnId: string): Promise<void> {
+    const history = this.actorSession.canonical;
+    const context = history.context.selected() ?? history.context.initialize();
+    await this.claims.admit({
+      runId: 'harness-' + turnId, turnId, workMode: 'build',
       program: { kind: 'builtin', version: 0, digest: null, build: null },
-      context: [],
-      // Zero, and honest: this harness drives no context plane, so the actor
-      // has no recorded working revision for the claim to name.
-      workingRevision: 0,
+      context,
     });
   }
 
@@ -1445,6 +1426,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       // The stream, so a CUT answer is what a cut answer is on the loop: the
       // text it streamed before the interrupt, then the abort.
       doStream: async (options) => {
+
         const scripted = await script(options);
         const text = textOf(scripted);
         const parts: ModelStreamPart[] = [{ type: 'stream-start', warnings: [] }];
@@ -1467,11 +1449,14 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
 
                 return;
               }
-              // Everything the answer had streamed is out; the turn is cut
-              // here — the cut a Stop makes, which keeps queued steers queued.
 
-              agent.harnessChatLoop.stop();
-              controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+              // Everything the answer had streamed is out and seen by the
+              // client; the turn is cut here — the cut a Stop makes, which
+              // keeps queued steers queued.
+              return agent.harnessDelivered(text).then(() => {
+                agent.harnessChatLoop.stop();
+                controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+              });
             },
           }),
         };
@@ -1593,7 +1578,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       if (installed !== undefined && !seamFactories.has(installed)) {
         const landing = await agent.harnessChatLoop.send(text);
         await agent.harnessChatLoop.pumpPromise;
-        const last = agent.harnessTranscript.history().at(-1);
+        const last = (await agent.harnessTranscript.history()).at(-1);
 
         return { status: landing === 'turn' ? 'completed' : 'skipped', message: last?.role === 'assistant' ? last : undefined };
       }
@@ -1602,7 +1587,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       parked.answer.resolve({ messageId: parked.identity.messageId, text: 'ok' });
       const landing = await parked.landed;
       await agent.harnessChatLoop.pumpPromise;
-      const last = agent.harnessTranscript.history().at(-1);
+      const last = (await agent.harnessTranscript.history()).at(-1);
 
       return { status: landing === 'turn' ? 'completed' : 'skipped', message: last?.role === 'assistant' ? last : undefined };
     },
@@ -1676,7 +1661,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       // revision holds it.
       const prior = lastUser === -1 ? [...input.messages] : input.messages.slice(0, lastUser);
 
-      if (prior.length > 0) agent.harnessSeedHistory(prior);
+      if (prior.length > 0) await agent.harnessSeedHistory(prior);
       const content = user?.content;
       const text = content === undefined ? '' : v.is(v.string(), content) ? content : content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('');
       // ONE mode carrier, the product's: the composer stamps `kinuMode` on
@@ -1694,7 +1679,6 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     },
 
     async settle(answer) {
-      if (answer.unreadableRole !== undefined) agent.harnessNextAnswerUnreadable(answer.unreadableRole);
 
       if (answer.persistFails === true) agent.harnessNextAnswerUndurable();
       // A prepared turn is parked at its model call and settles under the
@@ -1819,6 +1803,10 @@ export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
     blockConcurrencyWhile: <Result>(fn: () => Promise<Result>): Promise<Result> => fn(),
     getWebSockets: () => [],
     abort: () => {},
+    // The supervisor entrypoint the hosted runtime requires at composition —
+    // the deployment exports it beside the actor, and workerd hangs a Durable
+    // Object's exports off its ctx.
+    exports: { SupervisorRPC },
   };
 
   const partialContext: Partial<AgentContext> = {};
@@ -1976,7 +1964,7 @@ export function makeEnv(
     Object.assign(bindings, { OrchestratorAgent: parentNamespace });
   } else if (parent) {
     Object.assign(bindings, {
-      OrchestratorAgent: { idFromName: (n: string) => n, get: () => parent },
+      OrchestratorAgent: { idFromName: (n: string) => n, idFromString: (id: string) => id, get: () => parent },
     });
   }
 
@@ -2010,7 +1998,7 @@ function instantiate<T extends object>(
     // reach across, is this object. Without it every shell exec dies in the
     // gate on `env.OrchestratorAgent.get`, a harness gap rather than a refusal.
     Object.assign(builtEnv, {
-      OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
+      OrchestratorAgent: { idFromName: (n: string) => n, idFromString: (id: string) => id, get: () => agent },
     });
   }
 
@@ -2039,36 +2027,12 @@ function instantiate<T extends object>(
  * deliberately dropped: a failed boot classifies inside `onStart` and never
  * throws, and suites that need the BOOTED workspace await the memoized session
  * through ordinary operations.
- *
- * First, the one thing of Think's the actor's half reads: the session the
- * vendor hydrated before reaching it (`@cloudflare/think` 0.17.0 `think.js`
- * `startThink`, read 2026-09-15: `Session.create(this)` — the empty session
- * id — then the `transcript-hydration` step, whose first read declares the
- * provider's DDL, and `_onStart` after both). The wake guard asks whether that
- * declaration left the table Kinu's readers name, so a construction that
- * skipped it would refuse every fresh workspace; {@link wakeOverMovedTranscript}
- * is the one that skips it on purpose.
  */
 function ensureActorSchema(agent: InstanceType<typeof OrchestratorAgent>): void {
-  new AgentSessionProvider(agent, '').getLatestLeaf();
   const gate: unknown = OrchestratorAgent.prototype.onStart.call(agent);
   void gate;
 }
 
-/**
- * The activation a REPLATFORMED SDK gives storage the last one wrote: Think's
- * hydration declares its transcript under `cf_agents_session_*`
- * (the Agents SDK's `brisk-chats-branch` changeset) and no `assistant_messages`,
- * then the actor's `onStart` runs over that. Under the installed SDK the only
- * way to reach that state is to run the actor's half without the vendor's
- * declaration, which is what this does; the actor's own `onStart` promise is
- * returned rather than dropped, because the refusal it carries is the point.
- */
-export function wakeOverMovedTranscript(db: Database): Promise<void> {
-  const { agent } = instantiate(HarnessOrchestratorAgent, db);
-
-  return Promise.resolve(OrchestratorAgent.prototype.onStart.call(agent));
-}
 
 /** A real OrchestratorAgent with a claimed owner, schema ensured.
  *

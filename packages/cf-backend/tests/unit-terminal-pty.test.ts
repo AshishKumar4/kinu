@@ -20,6 +20,7 @@ import {
 } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { LINE_MODE_LABEL, LineTerminalState, terminalLane } from '@kinu.run/core';
+import { WORKSPACE_TERMINAL_PATH } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
@@ -65,6 +66,8 @@ interface Trace {
   options: PtySize | undefined;
   /** The upgrade request the SDK was handed, if any. */
   request: Request | undefined;
+  /** The upgrade the workspace object was handed for its own shell, if any. */
+  forwarded: Request | undefined;
   /** The session the PTY was opened in. A user's terminal must not land in the
    *  agent's own exec session, where one long agent command would swallow the
    *  user's keystrokes. */
@@ -89,7 +92,7 @@ function harness(opts: {
   attach?: () => Promise<Response>;
   sandboxBound?: boolean;
 } = {}): Harness {
-  const trace: Trace = { calls: [], options: undefined, request: undefined, session: undefined };
+  const trace: Trace = { calls: [], options: undefined, request: undefined, forwarded: undefined, session: undefined };
 
   const container = jsrpcStub<TerminalDouble>({
     noteTerminalActivity: async () => {
@@ -126,6 +129,12 @@ function harness(opts: {
       trace.calls.push(`prepareTerminal:${executorId}`);
 
       return opts.prepare ? await opts.prepare() : { ok: true as const };
+    },
+    fetch: async (request: Request) => {
+      trace.calls.push('fetch');
+      trace.forwarded = request;
+
+      return new Response('workspace-socket', { status: 200 });
     },
   });
 
@@ -185,10 +194,32 @@ async function body(response: Response | null | undefined) {
   return v.parse(payloadSchema, await response.json());
 }
 
+/** What `body` answered AND what the diagnostic sink was told while it ran.
+ *  Both from one seam: a case asserts the client's answer as well as the fleet
+ *  row, and returning the value is what keeps the response properly typed
+ *  instead of assigned out through a widened binding. */
+async function recorded<T>(body: () => Promise<T>): Promise<{
+  readonly value: T;
+  readonly logs: readonly RecordedLog[];
+}> {
+  const logger = createRecordingLogger();
+  const restore = setDiagnosticsSink(logger);
+
+  try {
+    return { value: await body(), logs: logger.emitted };
+  } finally {
+    restore();
+  }
+}
+
 describe('which environments can have a terminal', () => {
   test('the container and the owner machine are the PTY lanes', () => {
     expect(terminalLane('sandbox')).toEqual({ mode: 'pty' });
     expect(terminalLane('device')).toEqual({ mode: 'pty' });
+  });
+
+  test('the workspace is the runtime\'s own shell', () => {
+    expect(terminalLane('workspace')).toEqual({ mode: 'shell' });
   });
 
   // THE CONTRACT CHANGED HERE, and this case is what enforces the new one.
@@ -200,9 +231,10 @@ describe('which environments can have a terminal', () => {
   // reach the screen through.
   //
   // `device` left this list on 2026-09-03, when the machine's own agent grew a
-  // real terminal. The lane table states what an ENVIRONMENT can give; whether
-  // one particular machine is attached right now is the route's preflight.
-  test.each(['workspace', 'parent', 'something-invented'])(
+  // real terminal, and `workspace` on 2026-09-21, when the hosted runtime's
+  // shell was wired through. The lane table states what an ENVIRONMENT can
+  // give; whether one is reachable right now is the route's preflight.
+  test.each(['parent', 'something-invented'])(
     '%s is line mode, and its lane carries no sentence to render',
     (executor) => {
       expect(terminalLane(executor)).toEqual({ mode: 'line' });
@@ -330,7 +362,7 @@ describe('attaching a terminal', () => {
 
   test('an executor with no terminal is refused as line mode, carrying no implementation detail', async () => {
     const { env, trace } = harness();
-    const response = await terminalRequest(attachRequest('executor=workspace'), env);
+    const response = await terminalRequest(attachRequest('executor=parent'), env);
     expect(response?.status).toBe(409);
     const payload = await body(response);
     expect(payload.lane).toBe('line');
@@ -387,24 +419,6 @@ describe('attaching a terminal', () => {
  * which the container is touched.
  */
 describe('a terminal failure names the workspace and the executor', () => {
-  /** What `body` answered AND what the diagnostic sink was told while it ran.
-   *  Both from one seam: every case here asserts the client's answer as well as
-   *  the fleet row, and returning the value is what keeps the response properly
-   *  typed instead of assigned out through a widened binding. */
-  async function recorded<T>(body: () => Promise<T>): Promise<{
-    readonly value: T;
-    readonly logs: readonly RecordedLog[];
-  }> {
-    const logger = createRecordingLogger();
-    const restore = setDiagnosticsSink(logger);
-
-    try {
-      return { value: await body(), logs: logger.emitted };
-    } finally {
-      restore();
-    }
-  }
-
   /** The `terminal.*` rows one case produced, by event name. */
   function terminalRows(
     logs: readonly RecordedLog[], event: string,
@@ -478,7 +492,7 @@ describe('a terminal failure names the workspace and the executor', () => {
     const { env } = harness();
 
     const { logs } = await recorded(
-      async () => await terminalRequest(attachRequest('executor=workspace'), env),
+      async () => await terminalRequest(attachRequest('executor=parent'), env),
     );
 
     // The negative control, and a deliberate boundary: routing to line mode is a
@@ -568,11 +582,74 @@ describe('an attached terminal and a container that wants to sleep', () => {
     const { env, trace } = harness();
 
     const response = await terminalRequest(
-      new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=workspace`,
+      new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=parent`,
         { method: 'POST' }), env,
     );
 
     expect(response?.status).toBe(409);
+    expect(trace.calls).toEqual([]);
+  });
+});
+
+describe('the workspace shell', () => {
+  test('the upgrade is forwarded into the workspace object once its runtime is composed', async () => {
+    const { env, trace } = harness();
+
+    const response = await terminalRequest(attachRequest('executor=workspace&cols=100&rows=30', {
+      headers: { upgrade: 'websocket', 'x-kinu-probe': 'rides-along' },
+    }), env);
+
+    // The object's answer is the route's answer, and the container was never
+    // touched: the shell is the runtime's, not a PTY in a container.
+    expect(await response?.text()).toBe('workspace-socket');
+    expect(trace.calls).toEqual(['prepareTerminal:workspace', 'fetch']);
+    const forwarded = new URL(trace.forwarded?.url ?? '');
+    expect(forwarded.pathname).toBe(WORKSPACE_TERMINAL_PATH);
+    expect(forwarded.searchParams.get('executor')).toBe('workspace');
+    expect(trace.forwarded?.headers.get('upgrade')).toBe('websocket');
+    expect(trace.forwarded?.headers.get('x-kinu-probe')).toBe('rides-along');
+  });
+
+  test('a runtime that cannot compose is the reason the pane sees, and a fleet row', async () => {
+    const { env, trace } = harness({ prepare: async () => ({ error: 'the workspace database is read-only' }) });
+
+    const { value: response, logs } = await recorded(
+      async () => await terminalRequest(attachRequest('executor=workspace'), env),
+    );
+
+    expect(response?.status).toBe(503);
+    expect(String((await body(response)).error)).toContain('read-only');
+    expect(trace.calls).toEqual(['prepareTerminal:workspace']);
+    expect(logs.map((log) => log.event)).toEqual(['terminal.workspace_not_ready']);
+  });
+
+  test('a request that is not an upgrade touches nothing', async () => {
+    const { env, trace } = harness();
+
+    const response = await terminalRequest(
+      new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal?executor=workspace`), env,
+    );
+
+    expect(response?.status).toBe(400);
+    expect(trace.calls).toEqual([]);
+  });
+
+  test('the beat and the reset are guards: a POST is acknowledged, nothing else is reached', async () => {
+    const { env, trace } = harness();
+
+    for (const verb of ['keepalive', 'reset']) {
+      const acknowledged = await terminalRequest(
+        new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/${verb}?executor=workspace`, { method: 'POST' }), env,
+      );
+
+      const refused = await terminalRequest(
+        new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/${verb}?executor=workspace`), env,
+      );
+
+      expect(await body(acknowledged)).toEqual({ ok: true });
+      expect(refused?.status).toBe(405);
+    }
+
     expect(trace.calls).toEqual([]);
   });
 });

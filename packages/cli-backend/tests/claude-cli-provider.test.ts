@@ -482,9 +482,6 @@ describe('claude-cli provider — tool loop composition', () => {
     });
 
     const db = new Database(scratchPath('claude-cli-provider', 'agent.db'), { create: true });
-    // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
-  // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { dbPath: db.filename, llm: openaiLlm });
     const events: SessionEvent[] = [];

@@ -1,27 +1,33 @@
 // Behavior tests for the `memory` tool's `conversations` action over the same
 // ConversationSearchStore on both backends.
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
+import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   buildBuiltinTools,
-  initAllTables,
   type MemoryToolInput,
   type JsonValue,
 } from '../src/index';
+import { createTestRuntime } from './helpers';
 
 function setup() {
-  const { rt, testSql } = createTestRuntime();
-  initAllTables(testSql.execRaw, testSql.sql);
-  const tools = buildBuiltinTools({ rt });
+  const { rt, stores } = createTestRuntime();
+  const tools = buildBuiltinTools({ rt, history: stores.history });
   const memoryExec = toolExecute<MemoryToolInput, JsonValue>(tools.memory);
   let row = 0;
 
-  const insert = (conversationId: string, role: string, content: string): string => {
+  // The canonical write both backends make: one message and its transcript
+  // entry, published together. `recorded_at` is wall-clock, so the stamp the
+  // browse order reads is set explicitly.
+  const insert = async (conversationId: string, role: 'user' | 'assistant', content: string): Promise<string> => {
     const id = `m-${++row}`;
-    void testSql.sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
-                VALUES (${rt.actor.actorId}, ${id}, ${conversationId}, ${role}, ${content},
-                        ${1_000_000 + row * 1000})`;
+    const recordedAt = 1_000_000 + row * 1000;
+    await stores.history.record(conversationId, {
+      id, parentId: null, message: { role, content },
+      origin: role === 'user' ? 'input' : 'output',
+    });
+    void rt.storage.sql`UPDATE conversation_entries SET recorded_at = ${recordedAt}
+      WHERE actor_id = ${rt.actor.actorId} AND session_id = ${conversationId} AND id = ${id}`;
 
     return id;
   };
@@ -54,8 +60,8 @@ describe('memory tool — conversations action', () => {
 
   test('searches past transcripts and returns ranked hits with refs', async () => {
     const { memoryExec, insert } = setup();
-    const id = insert('proj', 'assistant', 'we shipped the cloudflare tunnel fix yesterday');
-    insert('proj', 'user', 'unrelated chatter');
+    const id = await insert('proj', 'assistant', 'we shipped the cloudflare tunnel fix yesterday');
+    await insert('proj', 'user', 'unrelated chatter');
 
     const res = v.parse(
       SearchResultSchema,
@@ -70,9 +76,9 @@ describe('memory tool — conversations action', () => {
 
   test('scrolls a window around a hit when around_message_id is set', async () => {
     const { memoryExec, insert } = setup();
-    insert('proj', 'user', 'before');
-    const anchor = insert('proj', 'assistant', 'anchor message');
-    insert('proj', 'user', 'after');
+    await insert('proj', 'user', 'before');
+    const anchor = await insert('proj', 'assistant', 'anchor message');
+    await insert('proj', 'user', 'after');
 
     const res = v.parse(
       ScrollResultSchema,
@@ -86,8 +92,8 @@ describe('memory tool — conversations action', () => {
 
   test('browses archived conversation roots when no query or anchor is given', async () => {
     const { memoryExec, insert } = setup();
-    insert('a', 'user', 'first conversation kickoff');
-    insert('b', 'user', 'second conversation kickoff');
+    await insert('a', 'user', 'first conversation kickoff');
+    await insert('b', 'user', 'second conversation kickoff');
     const res = v.parse(BrowseResultSchema, await memoryExec({ action: 'conversations' }));
     expect(res.mode).toBe('browse');
     expect(res.conversations.map((conversation) => conversation.conversationId)).toEqual(['b', 'a']);

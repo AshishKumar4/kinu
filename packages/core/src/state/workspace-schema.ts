@@ -120,13 +120,6 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   initWorkspaceOwnershipTables(execRaw);
   initWorkspaceActorTable(execRaw);
   initActorStateSchema(db);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_content (
-    digest TEXT PRIMARY KEY, size INTEGER NOT NULL, hint TEXT
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_content_chunks (
-    digest TEXT NOT NULL REFERENCES slate_content(digest), offset INTEGER NOT NULL, bytes BLOB NOT NULL,
-    PRIMARY KEY (digest, offset)
-  )`);
   execRaw(`CREATE TABLE IF NOT EXISTS slates (
     id TEXT NOT NULL, workspace_id TEXT NOT NULL, revision INTEGER NOT NULL, bytes BLOB NOT NULL,
     PRIMARY KEY (id, revision)

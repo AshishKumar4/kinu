@@ -127,9 +127,14 @@ async function* scaffoldTurn(
       case 'chat_chunk': {
         const inner = ev.chunk;
 
-        // Custom model calls retain their own onStep/spend owner; do not price
-        // their steps again as default-turn step_finish records.
-        if (ev.type === 'model_chunk' && inner.type === 'step-finish') break;
+        // Custom model calls retain their own onStep/spend owner: their step
+        // boundary crosses so the durable output opens the next step, its
+        // usage does not, so the step is not priced twice.
+        if (ev.type === 'model_chunk' && inner.type === 'step-finish') {
+          const { usage: _usage, ...boundary } = inner;
+          yield boundary;
+          break;
+        }
 
         if (inner.type === 'done') {
           responses.push(...inner.responseMessages);
@@ -222,7 +227,7 @@ async function* scaffoldTurn(
     text,
     ...(settled !== undefined && settled.trim() !== '' && { answer: settled }),
     responseMessages: nativeText.trim()
-      ? [...responses, { role: 'assistant', content: nativeText }]
+      ? [...responses, { role: 'assistant', content: [{ type: 'text', text: nativeText }] }]
       : responses,
   };
 }

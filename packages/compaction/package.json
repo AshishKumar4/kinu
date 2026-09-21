@@ -8,7 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@better-compact/core": "^0.1.0",
+    "@better-compact/core": "0.2.2",
     "@kinu.run/core": "workspace:*",
     "ai": "6.0.214",
     "valibot": "^1.4.1"

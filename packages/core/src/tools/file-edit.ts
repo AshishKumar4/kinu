@@ -24,6 +24,7 @@
  * ending with its BOM restored.
  */
 import { KinuError } from '../obs/error';
+import { headEnd } from '../utils/text';
 import {
   FILE_REFUSAL_REASONS, type FileEditFailure,
 } from '../types/file-edits';
@@ -259,93 +260,153 @@ export interface FileSlice {
 }
 
 /**
- * The requested line range of `content`, capped at `maxChars` and honest about
- * it: a capped read always names the offset that continues it, and a single
- * line too large to show at all names the way to slice it. Nothing is ever
- * clipped silently, and no output is ever a bare empty string.
+ * One read's worth of a file, as the scan saw it: the retained head of the
+ * requested range plus the counts the range had BEFORE any budget touched it.
+ *
+ * It exists so a read that never materializes the whole file — a chunked
+ * native range scan — renders through exactly the formatter a whole-string
+ * read renders through, instead of growing a second set of markers that say
+ * the same thing in different words.
+ *
+ * `lines` is the retained head, so it may be shorter than `requestedLines`,
+ * and its first entry may be a prefix of one oversize line; the counts never
+ * come from it.
+ */
+export interface SliceWindow {
+  /** 1-indexed first line of the requested range, already normalized. */
+  readonly first: number;
+  /** Lines in the whole file. 0 means the file has no displayable text. */
+  readonly total: number;
+  /** The file's last line ends with a newline. */
+  readonly trailingNewline: boolean;
+  /** The retained head of the requested range — whole lines, except that a
+   *  first line larger than the budget arrives as its prefix and alone. */
+  readonly lines: readonly string[];
+  /** Lines the range asked for, before any budget dropped one. */
+  readonly requestedLines: number;
+  /** Chars the range asked for, newline joins included. */
+  readonly requestedChars: number;
+  /** The range's first line at full length — `lines[0]` may be a prefix. */
+  readonly firstLineChars: number;
+}
+
+/**
+ * Render one window, capped at `maxChars` and honest about it: a capped read
+ * always names the offset that continues it, and a single line too large to
+ * show at all names the way to slice it. Nothing is ever clipped silently, and
+ * no output is ever a bare empty string.
+ *
+ * The cap covers the WHOLE returned string, marker included. A marker charged
+ * on top of a full budget is a result over budget by the length of its own
+ * explanation, so the marker's length is reserved before the lines are chosen.
+ * The one exception is a cap smaller than the marker itself: the recovery
+ * instruction is never the part that gets truncated.
  *
  * Lines are NOT numbered. The model builds `old_text` by copying from what this
  * returns, and a line-number gutter is the most reliable way to make it copy
  * something that is not in the file.
  */
-export function readFileSlice(
-  content: string,
-  opts: { path: string; offset?: number | undefined; limit?: number | undefined; maxChars: number },
+export function formatFileSlice(
+  range: SliceWindow,
+  opts: { path: string; limit?: number | undefined; maxChars: number },
 ): FileSlice {
-  const first = Math.max(1, Math.floor(opts.offset ?? 1));
-  // A limit is a count of lines, so anything under one line is one line. Left
-  // as given it would ask for an empty range, which has no honest rendering.
-  const limit = opts.limit != null ? Math.max(1, Math.floor(opts.limit)) : undefined;
+  const { first, total, requestedLines, requestedChars } = range;
 
-  if (content.length === 0) {
-    return { output: `[${opts.path} is empty]`, omitted: 0, first: 1, last: 0, total: 0 };
+  /**
+   * The marker the cap can afford: the one that names the file wherever it
+   * fits, and a path-free one where the path alone would crowd out the read
+   * it is describing. A deep enough path is longer than the whole budget, and
+   * a marker that overran the cap to spell it would break the one promise the
+   * cap makes. The caller knows which file it asked for; what it cannot
+   * reconstruct is the offset to continue from, so that is what never goes.
+   */
+  const affordable = (named: string, plain: string): string =>
+    named.length <= opts.maxChars ? named : plain;
+
+  if (total === 0) {
+    return { output: affordable(`[${opts.path} is empty]`, '[this file is empty]'), omitted: 0, first: 1, last: 0, total: 0 };
   }
 
-  // A trailing newline ENDS the last line; splitting alone would report a
-  // phantom empty line after it, and hand back an offset that reads as "".
-  const split = content.split('\n');
-  const trailingNewline = split.length > 1 && split[split.length - 1] === '';
-  const lines = trailingNewline ? split.slice(0, -1) : split;
-  const total = lines.length;
-
   if (first > total) {
+    const lines = `${total} line${total === 1 ? '' : 's'}`;
+
     return {
-      output: `[${opts.path} has ${total} line${total === 1 ? '' : 's'}; offset=${first} is past the end]`,
+      output: affordable(
+        `[${opts.path} has ${lines}; offset=${first} is past the end]`,
+        `[this file has ${lines}; offset=${first} is past the end]`),
       omitted: 0, first, last: first - 1, total,
     };
   }
 
-  const requestedLast = limit != null ? Math.min(total, first + limit - 1) : total;
-  const requested = lines.slice(first - 1, requestedLast);
+  const requestedLast = first + requestedLines - 1;
+  // Reaching the end costs the file's own trailing newline, so a whole read is
+  // byte-identical to the file.
+  const ending = requestedLast === total && range.trailingNewline ? '\n' : '';
+
+  if (requestedLines === range.lines.length && requestedLast === total
+    && requestedChars + ending.length <= opts.maxChars) {
+    return { output: range.lines.join('\n') + ending, omitted: 0, first, last: requestedLast, total };
+  }
+
+  // Past here the output carries a marker, so the marker is part of the
+  // budget. Its length is reserved at its worst case — the furthest line the
+  // range could reach, and the longer of the two reasons — because the
+  // reservation is what decides how far it actually reaches.
+  const continuation = (last: number, reason: string): string => {
+    const tail = `${reason} stopped it; continue with action=read offset=${last + 1}]`;
+
+    return affordable(
+      `\n\n[showing lines ${first}-${last} of ${total} in ${opts.path} — ${tail}`,
+      `\n\n[showing lines ${first}-${last} of ${total} — ${tail}`);
+  };
+
+  const capReason = `the ${opts.maxChars}-char cap`;
+  // A limit is a count of lines, so anything under one line is one line. Left
+  // as given it would name an empty range, which has no honest rendering.
+  const limitReason = opts.limit == null ? capReason : `limit=${Math.max(1, Math.floor(opts.limit))}`;
+
+  const reserve = Math.max(
+    continuation(requestedLast, capReason).length,
+    continuation(requestedLast, limitReason).length,
+  );
 
   let kept = 0;
   let chars = 0;
 
-  for (const line of requested) {
+  for (const line of range.lines) {
     // The joining newline costs a character for every line after the first —
     // keyed on the line COUNT, not on the running total, so a leading blank
     // line does not make the next one look free.
     const cost = kept === 0 ? line.length : line.length + 1;
 
-    if (chars + cost > opts.maxChars) break;
+    if (chars + cost > opts.maxChars - reserve) break;
     chars += cost;
     kept++;
   }
-
-  const requestedChars = requested.join('\n').length;
 
   if (kept === 0) {
     // One line, on its own, larger than the whole budget. Show its head and
     // name the way to get the rest: the same workspace.readFile-inside-
     // eval recipe every other oversize payload in Kinu uses.
-    const line = requested[0] ?? '';
+    const line = range.lines[0] ?? '';
 
-    return {
-      output:
-        `${line.slice(0, opts.maxChars)}\n\n` +
-        `[line ${first} of ${opts.path} is ${line.length} chars and does not fit the ${opts.maxChars}-char cap; ` +
-        'read or slice it with workspace.readFile inside eval]',
-      omitted: Math.max(0, requestedChars - opts.maxChars),
-      first, last: first - 1, total,
-    };
+    const tail =
+      `is ${range.firstLineChars} chars and does not fit the ${opts.maxChars}-char cap; ` +
+      'read or slice it with workspace.readFile inside eval]';
+
+    const refusal = affordable(`\n\n[line ${first} of ${opts.path} ${tail}`, `\n\n[line ${first} ${tail}`);
+
+    const shown = line.slice(0, headEnd(line, Math.max(0, opts.maxChars - refusal.length)));
+
+    return { output: shown + refusal, omitted: requestedChars - shown.length, first, last: first - 1, total };
   }
 
   const last = first + kept - 1;
-  const shown = requested.slice(0, kept).join('\n');
-
-  if (last === total) {
-    // Reached the end: reproduce the file's own trailing newline so a whole
-    // read is byte-identical to the file.
-    return { output: shown + (trailingNewline ? '\n' : ''), omitted: 0, first, last, total };
-  }
-
-  const reason = kept < requested.length ? `the ${opts.maxChars}-char cap` : `limit=${limit}`;
+  const shown = range.lines.slice(0, kept).join('\n');
 
   return {
-    output:
-      `${shown}\n\n[showing lines ${first}-${last} of ${total} in ${opts.path} — ` +
-      `${reason} stopped it; continue with action=read offset=${last + 1}]`,
-    omitted: Math.max(0, requestedChars - shown.length),
+    output: shown + continuation(last, kept < requestedLines ? capReason : limitReason),
+    omitted: requestedChars - shown.length,
     first, last, total,
   };
 }

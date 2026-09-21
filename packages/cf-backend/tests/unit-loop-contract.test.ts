@@ -98,11 +98,12 @@ async function claimTurnOn(actor: HostedActor, turnId: string): Promise<{
     version: await actor.runtime.identity.scaffold.version(),
   });
 
-  const claim = actor.stores.claims.admit({
+  const context = actor.stores.history.context.selected() ?? actor.stores.history.context.initialize();
+
+  const claim = await actor.stores.claims.admit({
     runId: `run-${turnId}`, turnId, workMode: 'build',
     program: programIdentityOf(program, 'harness-build'),
-    context: [],
-    workingRevision: 0,
+    context,
   });
 
   return {

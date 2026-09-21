@@ -15,7 +15,7 @@ import {
   type PeerAgentPayload, type ReplyDispatcher, type ReplyChannelKind,
   type PeerMessage, type KinuEvent, type ReceiveResult, type SqlExec,
 } from '@kinu.run/core';
-import { createMemoryVfs, createTestActorsOver } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActorsOver, type MemoryVfs } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
 
 function makeExec(db: Database): SqlExec {
@@ -30,7 +30,7 @@ interface TestAgent {
   replyChannels: ReplyChannelStore;
   hub: PeerHub;
   /** The agent's own file plane — oversize peer bodies spill here. */
-  files: Map<string, string>;
+  files: MemoryVfs['files'];
   /** onAdmitted() fires — the drain→programmatic-turn wake. */
   wakes: number;
   /** scheduleDispatch timestamps — the DO alarm arms. */

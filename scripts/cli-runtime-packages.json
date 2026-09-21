@@ -1,4 +1,5 @@
 [
   "@nimbus-sh/runtime-bash",
-  "@nimbus-sh/runtime-cpython"
+  "@nimbus-sh/runtime-cpython",
+  "web-tree-sitter"
 ]

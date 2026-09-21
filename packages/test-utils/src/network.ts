@@ -145,6 +145,18 @@ export const OPENAI_RESPONSES_BODY = {
   usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
 } as const;
 
+/** models.dev OpenCode Go routing declaration, measured 2026-09-19. */
+export const OPENCODE_GO_CATALOG = {
+  'opencode-go': {
+    id: 'opencode-go', npm: '@ai-sdk/openai-compatible', api: 'https://opencode.ai/zen/go/v1',
+    models: {
+      'muse-spark-1.3-contributor': {
+        id: 'muse-spark-1.3-contributor', tool_call: true, provider: { npm: '@ai-sdk/openai' },
+      },
+    },
+  },
+};
+
 /** OpenAI-compatible chat completions — OpenRouter, Groq, every `openai-compat` endpoint. */
 export const CHAT_COMPLETION_BODY = {
   id: 'chatcmpl_mock',

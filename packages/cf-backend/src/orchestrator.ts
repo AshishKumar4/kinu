@@ -12,7 +12,7 @@
  * @kinu.run/core so the CLI surface shares them verbatim.
  */
 
-import { callable, type AgentContext } from "agents";
+import { callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
@@ -33,12 +33,16 @@ import {
   type LoopOrigin, type MergeResult, type NimbusSandboxHandle, type NodeHomeHost,
   type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
 } from "@kinu.run/core";
-import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
+import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
+import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
-import { ActorMessagesTranscript, CHAT_SESSION_ID, recordedAnswer } from '@kinu.run/core';
-import type { UIMessage } from 'ai';
-import { actorChatClear, actorChatHistory, actorChatNewestId } from './chat-transcript';
+import { CHAT_SESSION_ID, turnInputMessage, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
+// The main actor's payload plane, on both halves of a fork: the carried
+// conversation references payload files by absolute path, and the fork is a cut
+// of the MAIN actor's conversation.
+import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
+import type { HostedTaskResult } from './subordinate-hosting';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
@@ -98,6 +102,7 @@ import {
   drainAssignments,
   // Canonical memory-note write primitive
   appendMemoryNote,
+  parseMemoryNotes,
   type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT,
   type SlateBindingCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
@@ -156,7 +161,7 @@ import {
   type ReleaseStatus, type ReleaseToolDeps,
   // Release execution engine — the driver beneath the governance ledger
   ReleaseEngine, createSandboxReleaseExec,
-  readWorkspaceWork, type WorkspaceWork,
+  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork,
   // Peer-agent teams (the agents tool's team deps contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
@@ -224,7 +229,7 @@ import {
   type EvolutionConfigView, type MctsConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   planReviewAwaitingDecision,
-  JsonValueSchema, type JsonValue, type KinuEvent,
+  JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
   // The one declaration of the event-variant set, and the one classifier that
   // names how a run ended. Both were hand-mirrored here.
   EVENT_VARIANTS,
@@ -702,8 +707,7 @@ export class OrchestratorAgent extends ActorAgent {
    * The actor's OWN event log is the durable queue, so admission is a write
    * plus a drain on that actor's orchestration rather than a message pushed
    * into this object's transcript. That is the whole difference from the root's
-   * own `enqueueTurn`, which goes through Think's message store because the
-   * root's turns ARE that transcript.
+   * own enqueueTurn, which uses the root's ChatSession and transcript.
    *
    * The mode comes off the turn's own metadata through core's one reader, which
    * answers `build` for a turn that named none. Hardcoding `build` here was the
@@ -877,6 +881,9 @@ export class OrchestratorAgent extends ActorAgent {
     const deps: ActorToolsetDeps = {
       rt: turn.runtime,
       workMode: turn.input.mode,
+      // This actor's own conversation — the rows the `memory` tool recalls are
+      // the ones this actor wrote, never the workspace's.
+      history: turn.actor.stores.history,
       // Keyed on the TURN this surface was built for, because that is the id a
       // recovery re-admits: an effect claimed under a fresh id would replay on
       // the turn that is already holding it.
@@ -1037,7 +1044,7 @@ export class OrchestratorAgent extends ActorAgent {
       now: () => Date.now(),
       // This actor's own transcript, capped — what a child it hires inherits.
       inheritedContext: () => this.readInheritedContext(actor.handle),
-      originContext: () => actor.session.history,
+      originContext: async () => actor.session.history,
       // The WORKSPACE's purpose, which is the same fact for every actor in it:
       // an agent added here is here for what this workspace is for.
       ownMission: () => this.ownMission(),
@@ -1192,10 +1199,28 @@ export class OrchestratorAgent extends ActorAgent {
     return await super.fetch(request);
   }
 
-  protected override turnWorkMode(): WorkMode {
-    const requested = super.turnWorkMode();
+  /** A socket the terminal route forwarded is tagged as the workspace's shell,
+   *  ahead of the identity tags the base reads off the same request. */
+  override async getConnectionTags(connection: Connection, ctx: ConnectionContext): Promise<string[]> {
+    const tags = await super.getConnectionTags(connection, ctx);
 
-    const approvedHandoff = this.turnUserMessageEvent() === 'plan_approved';
+    return new URL(ctx.request.url).pathname === WORKSPACE_TERMINAL_PATH ? [WORKSPACE_TERMINAL_TAG, ...tags] : tags;
+  }
+
+  /** The SDK's identity, state and MCP frames are for a pane that speaks the
+   *  actor protocol; a terminal socket carries the shell's frames only. */
+  override shouldSendProtocolMessages(_connection: Connection, ctx: ConnectionContext): boolean {
+    return new URL(ctx.request.url).pathname !== WORKSPACE_TERMINAL_PATH;
+  }
+
+  protected override async terminalFor(connection: Connection): Promise<WorkspaceTerminal | null> {
+    return isWorkspaceTerminal(connection.tags) ? await this.hostedWorkspace().terminal() : null;
+  }
+
+  protected override workModeForMetadata(metadata: JsonObject | undefined): WorkMode {
+    const requested = super.workModeForMetadata(metadata);
+
+    const approvedHandoff = metadata?.kinuEvent === 'plan_approved';
 
     return requested === 'build'
       && !approvedHandoff
@@ -1241,12 +1266,12 @@ export class OrchestratorAgent extends ActorAgent {
    * recovery may run on an activation that has hydrated nothing, and the
    * transcript is the authority either way.
    */
-  private owedDrainReplies(): ReadonlyMap<string, string> {
+  private async owedDrainReplies(): Promise<ReadonlyMap<string, string>> {
     const leases = this.eventLog.openDrainLeases();
 
     return leases.length === 0
       ? new Map<string, string>()
-      : answersForDrainTurns(this.boundSql, this.actorHandle(), leases);
+      : answersForDrainTurns(this.chatTranscript, leases);
   }
 
   /**
@@ -1378,17 +1403,17 @@ export class OrchestratorAgent extends ActorAgent {
             const room = this.chatRooms.hostedRoom(record.name);
             const answerId = crypto.randomUUID();
 
-            room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined });
+            await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined });
 
             try {
-              const { text } = await runHostedTask(seams, reference, task, room === null ? undefined : (chunks) => room.observe(chunks));
+              const result = await runHostedTask(seams, reference, task, room === null ? undefined : (chunks) => room.observe(chunks));
 
-              this.recordHostedChatAnswer(reference, answerId, text, room?.answer(answerId) ?? null);
+              await this.recordHostedChatAnswer(reference, answerId, result.canonicalCompletion);
             } catch (cause) {
-              room?.deliver({ type: 'error', message: renderThrownChain({ cause }) });
+              await room?.deliver({ type: 'error', message: renderThrownChain({ cause }) });
               throw cause;
             } finally {
-              room?.closeTurn();
+              await room?.closeTurn();
             }
           },
           onFailure: ({ cause }) => {
@@ -1512,7 +1537,7 @@ export class OrchestratorAgent extends ActorAgent {
     let owed: ReadonlyMap<string, string> = new Map<string, string>();
 
     try {
-      owed = this.owedDrainReplies();
+      owed = await this.owedDrainReplies();
 
       const reconciledEventIds = this.eventLog.unbindStale(
         STALE_EVENT_DELIVERY_MS, Date.now(), new Set(owed.keys()),
@@ -1665,7 +1690,7 @@ export class OrchestratorAgent extends ActorAgent {
             // the same rows a redial reads — with the reply appended.
             this.broadcast(JSON.stringify({
               type: 'cf_agent_chat_messages',
-              messages: [...this.chatTranscript.history(), message],
+              messages: [...await this.chatTranscript.history(), message],
             }));
 
             return { delivered: true };
@@ -2090,7 +2115,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   protected get engine(): EvolutionEngine {
     if (!this._engine) {
-      this._engine = new EvolutionEngine(this.rt, {
+      this._engine = new EvolutionEngine(this.rt, this.stores.history, {
         // The grading pass's verdict row, craft scores, tombstone and
         // announcement as ONE unit. A synchronous run inside a Durable Object is
         // already atomic, so this is the honest identity — but answering through
@@ -2110,7 +2135,7 @@ export class OrchestratorAgent extends ActorAgent {
         replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
         // The promotion gate's evidence is gathered on the cadence lane rather
         // than on the turn: a DO under keepAlive can afford a candidate
-        // rollout, Think's TurnQueue cannot.
+        // rollout without blocking the chat queue.
         ...this.shadowTrialPorts,
       });
       // Mission Inbox: the session-end changelog digest also goes to the
@@ -2302,24 +2327,39 @@ export class OrchestratorAgent extends ActorAgent {
    * list on every request, so `admitted` has to recognise it — and the answer
    * is recorded when the turn ends ({@link recordHostedChatAnswer}).
    */
+  protected override transcriptFor(actor: ActorHandle): SessionTranscript {
+    return this.actorHost().bindStores(actor).stores.history.transcript(CHAT_SESSION_ID);
+  }
+
   protected override hostedChatWire(name: string): ChatWire | null {
     const row = this.subordinateRoster.get(name);
 
     if (!row || row.status === 'dismissed' || !row.actorReference) return null;
     const reference = row.actorReference;
-    const rows = new ActorMessagesTranscript(this.boundSql, reference, CHAT_SESSION_ID);
+    const bound = this.actorHost().bindStores(reference);
+    const history = bound.stores.history;
+    const rows = history.transcript(CHAT_SESSION_ID);
 
     return {
       sql: null,
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(name, message, exclude); },
-      history: () => actorChatHistory(this.boundSql, reference),
+      history: () => rows.history(),
       admitted: (id) => rows.has(id),
       send: async (input) => {
         // The opening row FIRST, under the id the client renders it by: the
         // hook resends its whole list, and `admitted` is what stops the same
         // words becoming a second turn.
-        rows.appendUser({ id: input.id, text: input.text });
+        const message = await history.admitInput({
+          id: input.id, turnId: input.id, message: turnInputMessage(input),
+          assertOwner: () => bound.handle.assertCurrent(),
+        });
+
+        const prepared = await rows.prepareUser({
+          id: input.id, turnId: input.id, message, metadata: { kinuMode: input.mode },
+        });
+
+        this.ctx.storage.transactionSync(() => rows.appendUser(prepared));
 
         const handoff = await admitHostedTask(this.subordinateSeams(), reference, {
           kind: 'message', body: input.text, mode: input.mode, messageId: input.id,
@@ -2341,7 +2381,11 @@ export class OrchestratorAgent extends ActorAgent {
       },
       interrupt: () => { this.actorHost().hosted(reference)?.session.interrupt(); },
       clear: () => {
-        actorChatClear(this.boundSql, reference);
+        history.clearConversation(CHAT_SESSION_ID, () => {
+          if (this.actorHost().hosted(reference)?.session.inFlight === true) {
+            throw new KinuError('denied', 'Stop the active turn before clearing its conversation');
+          }
+        });
 
         return Promise.resolve();
       },
@@ -2357,12 +2401,20 @@ export class OrchestratorAgent extends ActorAgent {
    * root's leaked into it. The row lands here, at the one place a hosted turn
    * ends, and the pane is told in the same breath.
    */
-  private recordHostedChatAnswer(reference: ActorReference, id: string, text: string, streamed: UIMessage | null): void {
-    const parentId = actorChatNewestId(this.boundSql, reference);
+  private async recordHostedChatAnswer(reference: ActorReference, id: string, completion: HostedTaskResult['canonicalCompletion']): Promise<void> {
+    if (completion === undefined) return;
+    const history = this.actorHost().bindStores(reference).stores.history;
+    const transcript = history.transcript(CHAT_SESSION_ID);
+    const parentId = transcript.newestId();
 
-    if (parentId === null || (text.trim().length === 0 && streamed === null)) return;
-    new ActorMessagesTranscript(this.boundSql, reference, CHAT_SESSION_ID)
-      .appendAssistant({ id, parentId, text, message: recordedAnswer(streamed, id, text) });
+    if (parentId === null) return;
+
+    const entry = await transcript.prepareAssistant({
+      id, parentId, turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
+      finalText: completion.finalTextReference,
+    });
+
+    this.ctx.storage.transactionSync(() => transcript.appendAssistant(entry));
   }
   /** The agents tool's peer deps over the cross-workspace transport. Owner
    *  resolution is lazy inside each action (the toolset is cached across
@@ -2708,9 +2760,7 @@ export class OrchestratorAgent extends ActorAgent {
     const parts: TerminalTurnParts = {
       // Over the row the transcript is about to persist, so the announcement a
       // cut turn still owes replays from what the row holds.
-      turnEndExtensions: {
-        message: projectJsonValue({ value: this.chatTranscript.recordedAssistant(input.messageId, input.assistantText) }),
-      },
+      turnEndExtensions: true,
       takes: {
         credited: input.credited,
         startedAt: input.startedAt,
@@ -2815,7 +2865,7 @@ export class OrchestratorAgent extends ActorAgent {
         // actually finishes.
         run: async () => {
           if (!this.config.getSleepTimeComputeEnabled()) return { status: 'completed', detail: 'the lane is off' };
-          const window = this.sleepTimeWindow();
+          const window = await this.sleepTimeWindow();
 
           // THE TURN-COUNT TRIGGER. A turn that does not reach the cadence is
           // left for a later one, or for the idle and closed-tab wakes, which
@@ -2876,9 +2926,9 @@ export class OrchestratorAgent extends ActorAgent {
    * hold the cadence, and a wake and a turn-count trigger cannot both run over
    * one set of turns — the second finds the first's tombstone and nothing owed.
    */
-  private sleepTimeWindow(): SleepTimeWindow {
+  private async sleepTimeWindow(): Promise<SleepTimeWindow> {
     return sleepTimeWindow(
-      this.chatTranscript.newestFirst(SLEEP_TIME_READ_ROWS),
+      await this.chatTranscript.newestFirst(SLEEP_TIME_READ_ROWS),
       (answerId) => effectAlreadyDone(this.boundSql, this.actorHandle(), SLEEP_TIME_APPLIED, answerId),
     );
   }
@@ -2936,7 +2986,7 @@ export class OrchestratorAgent extends ActorAgent {
     if (settledAt === null) return false;
     // The lane switched off after the arm is one more window nothing can run
     // over, and releases the instant for the same reason the others do.
-    const window = this.config.getSleepTimeComputeEnabled() ? this.sleepTimeWindow() : null;
+    const window = this.config.getSleepTimeComputeEnabled() ? await this.sleepTimeWindow() : null;
 
     if (window === null || window.completedTurns < 2 || window.turns.length === 0 || window.inputPending) {
       this.config.delete(SLEEP_TIME_SETTLED_AT);
@@ -3527,8 +3577,8 @@ export class OrchestratorAgent extends ActorAgent {
     // turn completes), so it can't be read at turn time.
     //
     // KEYED (actor_id, message_id), never message_id alone. A message id is
-    // minted PER ACTOR — `actor_messages` is `PRIMARY KEY (actor_id, id)` for exactly
-    // this reason — so ids are not unique across the actors sharing this one
+    // minted PER ACTOR — the transcript is keyed `(actor_id, session_id, id)`
+    // for exactly this reason — so ids are not unique across the actors sharing this one
     // database. Under a bare `message_id` primary key two actors' turns that
     // collide do not error, they silently OVERWRITE each other's thumbs, and
     // the graded-outcome read behind them grades one actor's turn with a
@@ -3598,7 +3648,6 @@ export class OrchestratorAgent extends ActorAgent {
   async onStart(): Promise<void> {
     this.installClientMessageGate();
     this.ensureSchema();
-    this.assertSessionStore();
     // EVERY budgeted sweep this actor owns, through the seam the alarm frame
     // runs — one list, not a hand-folded copy of it, so a sweep added to the
     // seam cannot be missing from the gate. They run inside `Agent.alarm()`'s
@@ -3666,11 +3715,8 @@ export class OrchestratorAgent extends ActorAgent {
     // reclaims under a fresh lease and a job this isolate is already driving
     // is skipped.
     //
-    // Detached, not awaited: the journal writes are synchronous and land in this
-    // method's own frame, but TELLING the agent goes through the signal seam,
-    // which queues a turn via `Think.saveMessages` and resolves only when that
-    // turn ENDS. Awaiting a whole agent turn inside the init gate is the 30s
-    // object reset.
+    // Telling the agent goes through the signal seam and can run a turn.
+    // Awaiting that work inside the init gate can reset the object.
     // Fork-journal recovery is turn-capable — the signal seam queues a turn —
     // so it runs under the terminal wake's alarm frame (`maintenanceWork`),
     // and the delivery reconcile above is what arms that wake: its existence
@@ -3765,8 +3811,7 @@ export class OrchestratorAgent extends ActorAgent {
       const rootActorId = this.actorHandle().actorId;
       const rootIsLive = () => this._inFlight;
 
-      // Think owns the foreground root, not the host's logical ActorSession.
-      // Core reads liveness through the actual driver, including after awaits.
+      // Read root liveness from its chat driver, including after awaits.
       const recovered = await recoverActorTurns({
         resumable: (limit) => host.resumable(limit),
         acquire: async (reference) => {
@@ -3814,9 +3859,7 @@ export class OrchestratorAgent extends ActorAgent {
       await reconcileInterruptedForks({
         now: this.activationStartedAt,
         journal: this.headJournal,
-        // NON-AWAITING: the notice's enqueue is durable the moment it lands
-        // (`Think.saveMessages`), and the delivered promise resolves only when
-        // the QUEUED TURN ends — freight this alarm frame must not carry. The
+        // The notice's queueing promise belongs outside this alarm frame. The
         // wait is owned, so a failure still classifies and the harness join
         // still sees it.
         inbox: {
@@ -4421,10 +4464,11 @@ export class OrchestratorAgent extends ActorAgent {
     }
 
     const id = newBranchId();
+    const inheritedContext = await this.readInheritedContext();
     this._pendingBranches.push({
       id, task,
       handle: startBranchHead(runtime, this.headJournal, {
-        id, task, inheritedContext: this.readInheritedContext(),
+        id, task, inheritedContext,
       }),
     });
     this.broadcastBranchStatus({ type: 'branch_status', status: 'running', branchId: id, task });
@@ -4452,7 +4496,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     const outcome = await pickAlternateTake(
-      { sql: this.boundSql, actor: this.rt.actor, engine: this.engine, inbox: this.orch.inbox },
+      { sql: this.boundSql, actor: this.rt.actor, history: this.stores.history, engine: this.engine, inbox: this.orch.inbox },
       takeId, nodeId);
 
     this.logActivity('take_pick', `${outcome.outcome} (${nodeId})`);
@@ -5734,7 +5778,8 @@ export class OrchestratorAgent extends ActorAgent {
     // on a subordinate. The two facts are reported separately, because they
     // are two facts: what the capability IS (declared) and what this actor
     // WIRES (observed from the ToolSet the turn actually built).
-    const wiredNames = new Set(Object.keys(this.getRawTools()));
+    const mode = await this.preparedWorkMode();
+    const wiredNames = new Set(Object.keys(this.getRawToolsForWorkMode(mode)));
 
     const builtIn = BUILTIN_TOOLS.map(name => ({
       name,
@@ -5808,19 +5853,19 @@ export class OrchestratorAgent extends ActorAgent {
    * Creation calls it once, last, so the mission, model and reasoning effort the
    * turn runs under are already durable.
    *
-   * Returns as soon as the turn is queued. Think's `saveMessages` — which
-   * `BackendHost.enqueueTurn` awaits — resolves only when the turn ENDS, so
-   * awaiting it here would hold the create request open for the whole turn and
-   * the New workspace dialog would sit there. The agents-SDK heartbeat holds
+   * Returns as soon as the turn is queued. The agents-SDK heartbeat holds
    * the DO instead, exactly as the drain timer does.
    */
   async beginGenesisTurn(): Promise<{ started: boolean }> {
     const signal = workspaceGenesisSignal(readMission(this.boundSql));
 
     if (!signal) return { started: false };
+    // Queued on this stack: the send admits the turn before its first await, and
+    // only the wait for the turn itself is detached under the heartbeat.
+    const sent = this.orch.inbox.send(signal);
     this.detachOwned(async () => {
       try {
-        await this.keepAliveWhile(() => this.orch.inbox.send(signal));
+        await this.keepAliveWhile(() => sent);
       } catch (cause) {
         diagnostics.failure('genesis.turn_failed', toKinuError({
           doing: "taking the workspace's first turn", cause, otherwise: 'unavailable',
@@ -5988,7 +6033,24 @@ export class OrchestratorAgent extends ActorAgent {
     // read: without an owner there is no release lane to have content in.
     const board = this.getOwnerUserId() ? await this.getReleaseBoard(1) : null;
 
+    // The Work tab's own inputs, through the same reads the tab mounts:
+    // the pending queue, the job ledger, plans and tasks across actors, the
+    // changelog, and learnings — one shared predicate says whether ANY of it
+    // exists. A live turn is not content: a workspace streaming with nothing
+    // renderable keeps the tab hidden.
+    const [pendingActions, jobs, workspaceWork, changelog, memoryContent] = await Promise.all([
+      this.listPendingActions(),
+      this.listBackgroundJobs(20),
+      this.listWorkspaceWork(),
+      this.getEvolutionChangelog({ limit: 1 }),
+      this.getMemoryContent(),
+    ]);
+
     return {
+      work: hasWorkspaceWork({
+        work: workspaceWork, pending: pendingActions, jobs,
+        changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''),
+      }),
       releases: (board?.changes.length ?? 0) > 0,
       explorations: listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,
     };
@@ -6162,7 +6224,7 @@ export class OrchestratorAgent extends ActorAgent {
   private executorFileUploads = new Map<string, {
     readonly executorId: string;
     readonly path: string;
-    readonly expectedRevision: number | undefined;
+    readonly expectedRevision: VfsRevision | undefined;
     readonly upload: ExecutorFileUpload;
   }>();
   private executorFileDownloads = new Map<string, ExecutorFileDownload>();
@@ -6234,7 +6296,7 @@ export class OrchestratorAgent extends ActorAgent {
     offset: number,
     chunk: Uint8Array,
     final: boolean,
-    expectedRevision?: number,
+    expectedRevision?: VfsRevision,
   ): Promise<ExecutorWriteResult> {
     const router = this.rt.executionRouter;
 
@@ -6292,6 +6354,24 @@ export class OrchestratorAgent extends ActorAgent {
       if (device.registered) return { error: 'That machine is offline. Run `kinu connect` on it.' };
 
       return { error: 'No machine is linked to this account yet. Run `kinu connect` on the one you want.' };
+    }
+
+    // The runtime's own shell. Composing the runtime is what an attach waits
+    // on; the socket itself is forwarded to this object afterwards.
+    if (executorId === 'workspace') {
+      try {
+        await this.hostedWorkspace().terminal();
+
+        return { ok: true };
+      } catch (cause) {
+        return {
+          error: renderCauseChain(toKinuError({
+            doing: 'composing the workspace runtime for a terminal',
+            cause,
+            otherwise: 'unavailable',
+          })),
+        };
+      }
     }
 
     if (executorId !== 'sandbox') return { error: `${executorId} has no terminal` };
@@ -6485,6 +6565,14 @@ export class OrchestratorAgent extends ActorAgent {
    *
    * See docs/WORKSPACES.md for the full spec.
    */
+  /** Continue the chat from before `entryId`, on the context the actor held there. */
+  @callable()
+  async revertConversation(entryId: string): Promise<void> {
+    await this.actorSession.revertConversation(CHAT_SESSION_ID, entryId, () => {
+      if (this.chatLoop.turnInFlight()) throw new KinuError('denied', 'Stop the active turn before reverting its conversation');
+    });
+  }
+
   @callable()
   async forkAgent(
     untilMessageId: string,
@@ -6502,6 +6590,7 @@ export class OrchestratorAgent extends ActorAgent {
       // through a native ranged read: a fork holds one frame of one file, never
       // the file.
       vfs: createWorkspaceForkSource(this.hostedWorkspace().bundle, this.rt.localVfs),
+      artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
       sourceName: this.name,
       busy: () => this._inFlight,
       transport: this.forkTransport,
@@ -6589,12 +6678,12 @@ export class OrchestratorAgent extends ActorAgent {
   #forkReceiverFor(forkName: string, transferId: string, ownerUserId: string): ForkTransferReceiver {
     if (this.forkReceiver?.transferId === transferId) return this.forkReceiver.receiver;
 
-    // No targetAuthority here: the begin frame declares it, and the writer's
-    // own inference — the pane table every booted Think leaves behind — is the
-    // right answer for an activation that resumes mid-transfer and never sees
-    // its transfer's begin.
     const writer = new ForkTargetWriter(this.boundSql, this.rt.storage.vfs, {
       workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
+      // This target's OWN payload plane. Every carried payload reference and
+      // payload file is re-rooted here, so the fork never reads the workspace
+      // it was cut from.
+      artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
       writeSoulFile: (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
       transaction: (rows) => this.ctx.storage.transactionSync(rows),
     });
@@ -6816,9 +6905,8 @@ export class OrchestratorAgent extends ActorAgent {
 
     // The prompt-section lane is the ONE automatic lane. A scaffold GEPA pass
     // sharing this tick would optimise `scaffold/agent.js`, which the chat turn
-    // does not run: the turn is Think's loop over `getSystemPrompt` / `getTools`
-    // / `beforeTurn`, and `runScaffold` is reached only by the MCP one-shot, the
-    // shadow trials and GEPA's own rollouts. Every 25 turns it would spend
+    // does not run: ActorSession owns the chat loop. runScaffold serves the
+    // MCP one-shot, shadow trials and GEPA rollouts. Every 25 turns it would spend
     // rollouts and judge calls improving an artifact no user ever saw answer them
     // (measured 2026-09-03 by grepping `runScaffold(` callers). The manual
     // `runScaffoldGepaOptimization` RPC is where the scaffold tooling asks for

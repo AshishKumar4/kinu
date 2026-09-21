@@ -81,7 +81,7 @@ export class WorkspaceSlates {
   };
 
   async synchronize(id: SlateId): Promise<Slate> {
-    const source = this.deps.store.transaction(() => this.deps.files.capture(id));
+    const source = this.deps.files.transaction(() => this.deps.files.capture(id));
     const current = this.deps.store.getSlate(id);
 
     if (current === undefined) return this.runtime(id).create(this.deps.workspaceId, source);

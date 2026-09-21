@@ -4,10 +4,12 @@
  *   ┌─────────────────┐
  *   │ ❯ Kinu          │   Newsreader brand lockup
  *   │ + New workspace │
- *   │ ⌂ Home          │   primary nav: the four places an account goes
+ *   │ ⌂ Home          │   primary nav: the six places an account goes
  *   │ ▦ Workspaces    │
- *   │ ⇄ Shared        │
+ *   │ ▤ Drive         │
+ *   │ ▣ Devices       │
  *   │ ⚙ Plugins       │
+ *   │ ⚙ Settings      │
  *   │ WORKSPACES      │
  *   │ ● Jarvis    4h  │
  *   │   ├ Scout       │   nested subordinates of the OPEN workspace
@@ -25,10 +27,8 @@
  */
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
-import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, ShareNetworkIcon, SidebarSimpleIcon,
-  HouseIcon, SquaresFourIcon, PuzzlePieceIcon,
+import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, SidebarSimpleIcon,
 } from "@phosphor-icons/react";
-import { APP_ROUTES } from "@kinu.run/core";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { KinuLogo } from "./ui/KinuLogo";
@@ -44,6 +44,7 @@ import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle } from "@k
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
+import { PRIMARY_NAV } from "./nav";
 
 /** The primary nav rows, in the order the rail draws them. One component with
  *  one class string on the default scale, so the rail reads the same on
@@ -72,12 +73,6 @@ function PrimaryNavRow({ to, label, Icon, end }: {
   );
 }
 
-export const PRIMARY_NAV = [
-  { to: APP_ROUTES.home, label: "Home", Icon: HouseIcon, end: true },
-  { to: APP_ROUTES.workspaces, label: "Workspaces", Icon: SquaresFourIcon, end: false },
-  { to: APP_ROUTES.shared, label: "Shared", Icon: ShareNetworkIcon, end: false },
-  { to: APP_ROUTES.plugins, label: "Plugins", Icon: PuzzlePieceIcon, end: false },
-] as const;
 
 // Route families in App.tsx that mount a live useKinu/useAgent socket for
 // :agentId. Deleting that agent must first navigate away from ALL of them —
@@ -307,7 +302,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
           </Button>
         </div>
       )}
-      {/* Primary nav — the four places an account goes, in the workspace
+      {/* Primary nav — the places an account goes, in the workspace
           rows' own rhythm and on their active token, above the roster. */}
       <nav aria-label="Primary" className="px-2 pt-1">
         {PRIMARY_NAV.map((item) => <PrimaryNavRow key={item.to} {...item} />)}

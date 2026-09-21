@@ -104,11 +104,10 @@ const KNOWN_TWINS: readonly string[] = [
   // + the local auth store. Only the memoisation is common, and memoisation is
   // not a module.
   'getWebSearchProvider',
-  // One shaper, two sources — the divergence is real: cf digests its durable
-  // assistant_messages rows (inheritedContextFromRows), the CLI reads live
-  // history (inheritedContextFromHistory). Both are core; SHARED_TRANSPORTS
-  // names a single symbol, so this cannot be recorded there honestly.
-  'readInheritedContext',
+  // The platform fan-out itself: cf's is the Durable Object's socket
+  // broadcast minus its terminal sockets, the CLI's is one frontend listener.
+  // Neither carries logic the other could share.
+  'broadcast',
   // The seam itself, not duplication: each backend describes the inference
   // surface a candidate scaffold runs on (its ToolSet, its history, its
   // default loop). Its four ports are already SHARED_TRANSPORTS entries; what
@@ -156,6 +155,8 @@ const SHARED_TRANSPORTS = {
   // owns the order, the lanes, the keys and the gates.
   owedTerminalEffects: 'declareTerminalRoster',
   // Both resolve the same core naming policy over their own persistence.
+  // Both read the same canonical transcript through core's one digest.
+  readInheritedContext: 'inheritedContextFromTranscript',
   applyAutoTitle: 'applyWorkspaceTitle',
   applyScaffoldDecision: 'applyScaffoldDecision',
   // Three lines each over ONE core store (CompactionStateStore). No duplicated
@@ -184,6 +185,10 @@ const SHARED_TRANSPORTS = {
   // alone. What stays per backend is only where a FRESH resolution comes from:
   // the actor's own profile inputs, the CLI's local profile authority.
   routingProfile: 'resolveRoutingProfile',
+  // The walk-back: head, context selection, woven blocks and working history
+  // move together inside core's one ActorSession method. What each backend
+  // adds is the one idle condition only it can see — its own turn queue.
+  revertConversation: '.revertConversation',
   // The claimed tier, else the stored spec, through the backend's own
   // normalizer — ONE spelling, because every model_call row is priced against
   // it and every analytics row grouped by it. The CLI's copy read its cached

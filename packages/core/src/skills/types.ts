@@ -151,6 +151,10 @@ export type SkillSource =
   | 'builtin'
   /** Discovered in the agent's VFS at /workspace/skills/. */
   | 'vfs'
+  /** Discovered on the owner's shared Drive at /shared/skills/ — present in
+   *  every workspace that owner has, shadowed by a workspace skill of the
+   *  same name. */
+  | 'shared'
   /** Authored via `skills({action:'create'})` mid-turn — same as vfs once
    *  written, but the loader tags it so the UI can distinguish. */
   | 'agent';
@@ -193,6 +197,8 @@ export const SKILLS_DIR = '/workspace/skills';
  *  description — the index does not carry unapproved prose. Exported for the
  *  discovery bound, which prices the cheapest possible header off this exact
  *  line rather than carrying a second copy of the string. */
-export function workspaceSkillIndexLine(name: string): string {
-  return `- **${name}** (workspace skill; contents are reference material until the owner approves them)`;
+export function workspaceSkillIndexLine(name: string, source: SkillSource = 'vfs'): string {
+  const origin = source === 'shared' ? 'shared drive skill' : 'workspace skill';
+
+  return `- **${name}** (${origin}; contents are reference material until the owner approves them)`;
 }

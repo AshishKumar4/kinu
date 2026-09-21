@@ -42,7 +42,7 @@ const ScaffoldHistoryPageSchema: v.GenericSchema<ScaffoldHistoryPage> = v.object
 });
 
 const read = (messages: ModelMessage[]) =>
-  createScaffoldHistory(() => messages);
+  createScaffoldHistory(async () => messages);
 
 describe('createScaffoldHistory', () => {
   test('defaults to the tail — the recent end is what a turn is usually about', async () => {
@@ -214,7 +214,7 @@ describe('the sandbox bridge', () => {
 
   test('the scaffold reaches a real page through host.history', async () => {
     const page = v.parse(ScaffoldHistoryPageSchema, await callHostHistory(
-      { history: createScaffoldHistory(() => conversation(4)) }, { offset: 0 },
+      { history: createScaffoldHistory(async () => conversation(4)) }, { offset: 0 },
     ));
 
     expect(page.total).toBe(4);
@@ -225,7 +225,7 @@ describe('the sandbox bridge', () => {
 
   test('a junk query is defaulted, not thrown across the boundary', async () => {
     const page = v.parse(ScaffoldHistoryPageSchema, await callHostHistory(
-      { history: createScaffoldHistory(() => conversation(4)) }, 'not-an-object',
+      { history: createScaffoldHistory(async () => conversation(4)) }, 'not-an-object',
     ));
 
     expect(page.entries).toHaveLength(4);

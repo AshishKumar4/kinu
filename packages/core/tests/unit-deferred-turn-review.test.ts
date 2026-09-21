@@ -38,11 +38,11 @@ function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
  *  production workspace schema already carries `completed_turns` and the
  *  crafted-tool quality columns. */
 function workspace(outcome: 'accepted' | 'corrected' = 'corrected') {
-  const { rt } = createTestRuntime({
+  const { rt, stores } = createTestRuntime({
     llmResponses: { [CLASSIFY]: `{"outcome":"${outcome}","confidence":0.9,"evidence":"test"}` },
   });
 
-  return { rt, engine: new EvolutionEngine(rt) };
+  return { rt, engine: new EvolutionEngine(rt, stores.history) };
 }
 
 /** Everything about an outcome row EXCEPT its row identity and clock, which are
@@ -198,8 +198,8 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
   });
 
   test('with auto-evolution off nothing is deferred and nothing is drained', async () => {
-    const { rt } = createTestRuntime({ llmResponses: {} });
-    const engine = new EvolutionEngine(rt, { enabled: false });
+    const { rt, stores } = createTestRuntime({ llmResponses: {} });
+    const engine = new EvolutionEngine(rt, stores.history, { enabled: false });
     engine.deferTurnReview(makeTurn(), 'anything');
     expect(engine.sessionWindow.countQueuedReviews()).toBe(0);
     expect(await engine.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: [] });

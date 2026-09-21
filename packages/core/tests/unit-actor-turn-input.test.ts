@@ -31,11 +31,11 @@ async function seated(name: string) {
   const { actor } = await seats.seat(name, 'subordinate');
   const asked: string[] = [];
 
-  const open = (turnId: string, message: string, item: { metadata?: { drainTurnId?: string }; priorOutput?: readonly ModelMessage[] }) => {
+  const open = async (turnId: string, message: string, item: { metadata?: { drainTurnId?: string } }) => {
     const lease = actor.session.beginTurn({ runId: `run-${turnId}`, turnId }, 'build', 0);
-    actor.session.openTurnInput(lease, {
+    await actor.session.openTurnInput(lease, {
       item, message: { role: 'user', content: message },
-      birthContext: (drainTurnId) => {
+      birthContext: async (drainTurnId) => {
         asked.push(drainTurnId);
 
         return BIRTH;
@@ -52,7 +52,7 @@ test('a delivery reply on an actor with no conversation is born from the deliver
   const s = await seated('born');
 
   try {
-    const lease = s.open('turn-1', 'write the report', { metadata: { drainTurnId: 'parent-turn-7' } });
+    const lease = await s.open('turn-1', 'write the report', { metadata: { drainTurnId: 'parent-turn-7' } });
 
     expect(s.asked).toEqual(['parent-turn-7']);
     expect(s.actor.session.history.map(textOf)).toEqual([...BIRTH.map(textOf), 'write the report']);
@@ -66,9 +66,9 @@ test('a delivery reply on an actor with a conversation keeps it and never asks f
   const s = await seated('grown');
 
   try {
-    const first = s.open('turn-1', 'hello', {});
+    const first = await s.open('turn-1', 'hello', {});
     s.actor.session.finishTurn(first);
-    const second = s.open('turn-2', 'now answer this delivery', { metadata: { drainTurnId: 'parent-turn-7' } });
+    const second = await s.open('turn-2', 'now answer this delivery', { metadata: { drainTurnId: 'parent-turn-7' } });
 
     expect(s.asked).toEqual([]);
     expect(s.actor.session.history.map(textOf)).toEqual(['hello', 'now answer this delivery']);
@@ -78,14 +78,14 @@ test('a delivery reply on an actor with a conversation keeps it and never asks f
   }
 });
 
-test('a plain turn appends, and a re-opened turn carries its prior output after the input', async () => {
+test('a plain turn appends its input and never asks for a birth', async () => {
   const s = await seated('plain');
 
   try {
-    const lease = s.open('turn-1', 'continue', { priorOutput: [{ role: 'assistant', content: 'half an answer' }] });
+    const lease = await s.open('turn-1', 'continue', {});
 
     expect(s.asked).toEqual([]);
-    expect(s.actor.session.history.map(textOf)).toEqual(['continue', 'half an answer']);
+    expect(s.actor.session.history.map(textOf)).toEqual(['continue']);
     s.actor.session.finishTurn(lease);
   } finally {
     s.close();

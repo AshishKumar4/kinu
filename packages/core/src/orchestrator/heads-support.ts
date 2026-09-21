@@ -14,13 +14,12 @@
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { SerializedMessage } from '../heads/types';
-import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../identity/actor-handle';
+import type { SessionTranscriptReader } from '../session/transcript';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 
 /** The parent-conversation cap handed to each spawned head — bounds head LLM
  *  context over long sessions. */
-export const INHERITED_CONTEXT_CAP = 50;
+const INHERITED_CONTEXT_CAP = 50;
 
 /** Detach a delegation's birth-time conversation from its parent's live turn. */
 export function freezeInheritedContext<T>(messages: readonly T[]): readonly T[] {
@@ -57,23 +56,8 @@ export function serializeContentForHeads(content: ModelMessage['content']): stri
 
 /** Stored conversation rows as inherited context (the cf backend's source: it
  *  digests durable message rows, having already decoded each row's text). */
-export function inheritedContextFromRows(
-  rows: ReadonlyArray<{ id: string; role: string; content: string; createdAt: number }>,
-  total: number,
-): SerializedMessage[] {
-  return [
-    ...inheritedContextOmissionNote(total, rows.length),
-    ...rows.map((r) => ({
-      id: r.id,
-      role: narrowInheritedRole(r.role),
-      content: evidenceWindow(r.content, EVIDENCE_BUDGETS.inheritedMessage),
-      createdAt: r.createdAt,
-    })),
-  ];
-}
-
-/** The recent live conversation as inherited context (the CLI's source; the
- *  cf backend digests its durable assistant_messages rows instead). */
+/** A live conversation as inherited context: the frozen origin a hire is
+ *  born with. The root's own inheritance reads the transcript instead. */
 export function inheritedContextFromHistory(
   history: readonly ModelMessage[],
   cap: number = INHERITED_CONTEXT_CAP,
@@ -89,42 +73,21 @@ export function inheritedContextFromHistory(
 }
 
 /**
- * The recent durable conversation of one actor as inherited context, off the
- * plain `actor_messages` store.
- *
- * The SAME cap and the SAME disclosure the cloud backend's row digest applies:
- * the newest {@link INHERITED_CONTEXT_CAP} user/assistant rows of the session,
- * and a count over the same predicate so a hire is told how much of the
- * conversation it was not handed. A reader that windowed to its own literal
- * and digested the window as if it were the whole history handed every local
- * hire sixteen messages and no note that the rest existed.
+ * The recent durable conversation of one actor as inherited context, read
+ * from the canonical transcript. Both backends hand a hire the same window:
+ * the newest {@link INHERITED_CONTEXT_CAP} entries of the leaf's ancestry,
+ * led by the disclosure note when the transcript holds more.
  */
-export function inheritedContextFromConversation(
-  sql: SqlExecutor, actor: ActorHandle, sessionId: string,
-): SerializedMessage[] {
-  actor.assertCurrent();
+export async function inheritedContextFromTranscript(transcript: SessionTranscriptReader): Promise<SerializedMessage[]> {
+  const kept: SerializedMessage[] = [];
 
-  type Row = { id: string; role: string; content: string; created_at: number };
+  for (const entry of transcript.ancestry(transcript.newestId(), INHERITED_CONTEXT_CAP)) {
+    const projected = await transcript.project(entry.id);
 
-  const rows = sql<Row>`
-    SELECT id, role, content, created_at
-    FROM (
-      SELECT id, role, content, created_at, rowid AS seq FROM actor_messages
-      WHERE actor_id = ${actor.actorId} AND session_id = ${sessionId}
-        AND role IN ('user', 'assistant')
-      ORDER BY created_at DESC, rowid DESC
-      LIMIT ${INHERITED_CONTEXT_CAP}
-    ) tail
-    ORDER BY created_at ASC, seq ASC`;
+    if (projected !== null) kept.push({ id: entry.id, role: narrowInheritedRole(entry.role), content: evidenceWindow(projected.content, EVIDENCE_BUDGETS.inheritedMessage), createdAt: entry.recordedAt });
+  }
 
-  const total = sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_messages
-    WHERE actor_id = ${actor.actorId} AND session_id = ${sessionId}
-      AND role IN ('user', 'assistant')`[0]?.n ?? rows.length;
-
-  return inheritedContextFromRows(
-    rows.map((row) => ({ id: row.id, role: row.role, content: row.content, createdAt: row.created_at })),
-    total,
-  );
+  return [...inheritedContextOmissionNote(transcript.count(), kept.length), ...kept];
 }
 
 /** The disclosure entry a capped inheritance leads with — a head must be able

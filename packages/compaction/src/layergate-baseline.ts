@@ -3,7 +3,7 @@ import type { Baseline } from '@kinu.run/core';
 
 export const COMPACTION_LOCKED_BASELINE: Baseline = {
   'compaction-ladder/codec-roundtrip': 'ab83e2cf94b12617',
-  'compaction-ladder/ladder-prunes-under-pressure': '961e18f26c7da0ba',
+  'compaction-ladder/ladder-prunes-under-pressure': 'c038c54c9016a21a',
   'compaction-ladder/no-pressure-no-plan': '5b9bc4ba528108e4',
   'compaction-ladder/replay-byte-stable': '6fc9cb27876a3945',
 };

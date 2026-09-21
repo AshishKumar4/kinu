@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { statSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { statSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -13,6 +13,8 @@ import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manife
 import { isControlPlaneSurface } from "../packages/cf-backend/src/control-plane/access-gate";
 import { isDocument, readRepositoryFile, trackedFiles } from "./sources";
 import * as v from "valibot";
+import { inkBefore, runTuiInPty, type PtyRun } from "../packages/cli/tests/helpers/pty-screen";
+import { BUILTIN_TUI_THEMES, createThemeRegistry, DEFAULT_TUI_THEME_SELECTION } from "../packages/cli/src/tui/theme";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 
@@ -91,6 +93,11 @@ command_line="${name} $*"
 if [ "$command_line" = "bun scripts/ladder.ts --plan" ]; then
   cat "$KINU_DEPLOY_PLAN"
   exit 0
+fi
+if [ "$1" = "scripts/ladder.ts" ] && [ "$2" = "--gate" ]; then
+  gate="$3"
+  set -- $gate
+  command_line="$*"
 fi
 printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
 # WHAT THE INFRASTRUCTURE GATE ACTUALLY SAW. The phase travels in the
@@ -382,7 +389,7 @@ describe("deploy gate", () => {
 
   test("every gate has a process-tree deadline, from its row or the shared figure", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    expect(source).toContain('timeout --signal=TERM --kill-after=5s "${GATE_DEADLINE[pick]}" ${GATE_CMDS[pick]}');
+    expect(source).toContain('timeout --signal=TERM --kill-after=5s "${GATE_DEADLINE[pick]}" bun scripts/ladder.ts --gate "${GATE_CMDS[pick]}"');
     expect(GATE_DEADLINE_SECONDS).toBe(480);
 
     for (const row of PLAN) {
@@ -1253,10 +1260,38 @@ describe("CLI distribution artifacts", () => {
         expect(entries.has(`kinu/pc-agent/${name}`), `${platform} artifact carries no pc-agent/${name}`).toBe(true);
       }
 
+      // The tree-sitter worker the markdown renderer spawns and the web-tree-
+      // sitter wasm it parses through: bun materializes the worker beside
+      // cli.js as parser.worker-<hash>.js, and an archive without it renders
+      // raw markers.
+      expect(
+        [...entries].some((entry) => /^kinu\/parser\.worker-\w+\.js$/.test(entry)),
+        `${platform} artifact carries no emitted parser worker`,
+      ).toBe(true);
+      expect(
+        entries.has("kinu/node_modules/web-tree-sitter/tree-sitter.wasm"),
+        `${platform} artifact carries no web-tree-sitter wasm`,
+      ).toBe(true);
+
       // The native library is the whole reason this artifact is per platform.
       expect(
         [...entries].some((entry) => entry.startsWith(`kinu/node_modules/@opentui/core-${platform}/`)),
         `${platform} artifact carries no @opentui/core-${platform}`,
+      ).toBe(true);
+
+      // Grammar assets the worker loads offline: markdown and its inline
+      // variant power the conceal and code highlighting in the chat surface.
+      expect(
+        [...entries].some((entry) => /^kinu\/tree-sitter-markdown-\w+\.wasm$/.test(entry)),
+        `${platform} artifact carries no markdown grammar`,
+      ).toBe(true);
+      expect(
+        [...entries].some((entry) => /^kinu\/tree-sitter-markdown_inline-\w+\.wasm$/.test(entry)),
+        `${platform} artifact carries no markdown_inline grammar`,
+      ).toBe(true);
+      expect(
+        [...entries].some((entry) => /^kinu\/highlights-\w+\.scm$/.test(entry)),
+        `${platform} artifact carries no highlight queries`,
       ).toBe(true);
 
       // Every other platform's native library stays out of it.
@@ -1356,6 +1391,245 @@ describe("CLI distribution artifacts", () => {
 
     expect(help.exitCode, launchFailure(help)).toBe(0);
     expect(decoder.decode(help.stdout)).toMatch(/^[ \t]+setup[ \t]/m);
+  });
+  // The markdown pipeline the archive is for: the parser worker beside
+  // cli.js, its web-tree-sitter wasm and grammar assets resolving from the
+  // unpack dir alone. The run happens in a PTY off a scratch install with a
+  // scratch KINU_HOME, a scrubbed child env (childEnv carries only PATH) and
+  // a loopback proxy that answers every request 502 — so nothing in it can
+  // fall back to the repository's node_modules, a warm TreeSitter cache, or
+  // the network. The probe fetch through the same env proves the guard
+  // actually intercepts, not merely that the network is down.
+
+  const MARKDOWN_TURN = [
+    "Ship verdict: **two green lanes** now.",
+    "",
+    "- worker bundle `parser.worker.js`",
+    "- markdown grammar `tree-sitter-markdown.wasm`",
+    "",
+    "1. archive unpacked",
+    "2. TUI rendered",
+    "",
+    "### Heading marker",
+    "",
+    "```ts",
+    "const PACKAGED = true;",
+    "```",
+  ].join("\n");
+
+  function unpackHostCli(into: string): string {
+    const host = `${process.platform}-${process.arch}`;
+    const decoder = new TextDecoder();
+
+    for (const name of [`kinu-cli-${host}.tar.gz`, CPYTHON]) {
+      const unpack = Bun.spawnSync(["tar", "-xzf", join(distribution.directory, name), "-C", into], {
+        stdout: "pipe", stderr: "pipe",
+      });
+
+      expect(unpack.exitCode, decoder.decode(unpack.stderr)).toBe(0);
+    }
+
+    return join(into, "kinu");
+  }
+
+  const MockLlmReadySchema = v.object({ model: v.number(), proxy: v.number() });
+
+  async function startMockLlmProcess(): Promise<{ modelPort: number; proxyPort: number; stop: () => void }> {
+    const proc = Bun.spawn(
+      [process.execPath, join(REPO_ROOT, "packages/cli/tests/fixtures/mock-llm-server.ts")],
+      { env: { MOCK_LLM_ANSWER: MARKDOWN_TURN }, stdout: "pipe", stderr: "pipe" },
+    );
+
+    let banner = "";
+
+    for await (const chunk of proc.stdout) {
+      banner += new TextDecoder().decode(chunk);
+
+      if (banner.includes("\n")) break;
+    }
+
+    const ready = /^READY (.+)$/m.exec(banner);
+    const ports = v.parse(MockLlmReadySchema, JSON.parse(ready?.[1] ?? "null"));
+
+    return { modelPort: ports.model, proxyPort: ports.proxy, stop: () => { proc.kill(); } };
+  }
+
+  // Every child the fixture runs — the provisioning CLI calls, the PTY chat,
+  // and the guard probe — carries the same isolation policy: all traffic must
+  // go through the rejecting loopback proxy except the loopback host itself.
+  function offlineChildEnv(home: string, proxyPort: number) {
+    const proxy = `http://127.0.0.1:${String(proxyPort)}`;
+
+    return {
+      ...freshHome(home),
+      KINU_SKIP_DAEMON: "1",
+      HTTP_PROXY: proxy,
+      HTTPS_PROXY: proxy,
+      http_proxy: proxy,
+      https_proxy: proxy,
+      NO_PROXY: "127.0.0.1,localhost,::1",
+      no_proxy: "127.0.0.1,localhost,::1",
+    };
+  }
+
+  const NetworkCheckSchema = v.object({ attempted: v.boolean() });
+
+  async function networkAttempted(modelPort: number): Promise<boolean> {
+    const response = await fetch(`http://127.0.0.1:${String(modelPort)}/network-check`);
+
+    return v.parse(NetworkCheckSchema, await response.json()).attempted;
+  }
+
+  // The red control: a fetch that must fail, and must fail AT the proxy —
+  // if the proxy environment did not apply, this either succeeds outright or
+  // fails somewhere the guard never saw, and `attempted` stays false. The
+  // rejecting proxy answers with a status, which fetch resolves — the child
+  // turns anything but a real 200 into a nonzero exit.
+  async function proveNetworkGuard(env: Record<string, string>, modelPort: number): Promise<void> {
+    const probe = Bun.spawnSync(
+      [process.execPath, "-e", "const r = await fetch('https://example.com'); if (r.status !== 200) process.exit(1)"],
+      { cwd: REPO_ROOT, env, stdout: "pipe", stderr: "pipe" },
+    );
+
+    expect(probe.exitCode, "guard probe got a real 200 from example.com: isolation is not intercepting").not.toBe(0);
+    expect(await networkAttempted(modelPort), "guard probe failed without touching the proxy").toBe(true);
+
+    const reset = await fetch(`http://127.0.0.1:${String(modelPort)}/network-check`, { method: "POST" });
+    expect(reset.status).toBe(200);
+  }
+
+  function provisionWorkspace(root: string, env: Record<string, string>, baseURL: string): void {
+    const kinuHome = join(env.HOME ?? "", ".kinu");
+
+    // The session override only reaches the resolver when the provider has a
+    // stored credential: openaiCompat.default is the shape `provider connect`
+    // writes for an OpenAI-compatible endpoint.
+    mkdirSync(kinuHome, { recursive: true });
+    writeFileSync(join(kinuHome, "config.json"), `${JSON.stringify({
+      providers: { openaiCompat: { default: { baseURL, apiKey: "mock" } } },
+    })}\n`);
+
+    const run = (args: string[]) => {
+      const proc = Bun.spawnSync([process.execPath, "run", join(root, "cli.js"), ...args], {
+        cwd: root, env, stdout: "pipe", stderr: "pipe",
+      });
+
+      expect(proc.exitCode, launchFailure(proc)).toBe(0);
+    };
+
+    run(["create", "w1", "--mode", "local", "--model", "openai-compat/mock-model"]);
+    // Turns read the profile tier, not the actor's stored hint: `create
+    // --model` writes the hint, and only `kinu model` updates the tier the
+    // resolver actually consults.
+    run(["model", "w1", "openai-compat/mock-model"]);
+  }
+
+  function chatSurface(root: string, env: Record<string, string>): PtyRun {
+    return runTuiInPty(join(root, "cli.js"), {
+      args: ["chat", "w1"],
+      cwd: root,
+      steps: [
+        { wait: "Send a message" },
+        { send: "say hi" },
+        { wait: "say hi" },
+        { send: "\r" },
+        { wait: "two green lanes" },
+        { wait: "archive unpacked" },
+        // Only once the reply is all there is the absence of its markers
+        // meaningful: `gone` holds the run open for them to leave, which is
+        // where conceal fails when the worker never starts.
+        { gone: "**" },
+        { gone: "###" },
+        { gone: "`" },
+      ],
+      env,
+    });
+  }
+
+  test("a packaged chat renders streamed markdown: worker, conceal, and theme ink", async () => {
+    const server = await startMockLlmProcess();
+
+    try {
+      const install = scratchDir("cli-dist-installed");
+      const root = unpackHostCli(install);
+      const env = offlineChildEnv(join(install, "home"), server.proxyPort);
+
+      // The control: this environment cannot reach the outside, and reaching
+      // it provably goes through the guard. Until this holds, an `attempted:
+      // false` verdict at the end means nothing.
+      await proveNetworkGuard(env, server.modelPort);
+
+      provisionWorkspace(root, env, `http://127.0.0.1:${String(server.modelPort)}/v1`);
+
+      const run = chatSurface(root, env);
+
+      expect(run.waits.every((w) => w.met), `PTY waits failed: ${JSON.stringify(run.waits)}`).toBe(true);
+
+      // Conceal: every marker the text carries is gone from the frame. A
+      // worker that never starts leaves all of them literal.
+      expect(run.screen).toContain("two green lanes");
+      expect(run.screen).not.toContain("**");
+      expect(run.screen).not.toContain("###");
+      expect(run.screen).not.toContain("`");
+      expect(run.screen).toContain("worker bundle parser.worker.js");
+      expect(run.screen).toContain("1. archive unpacked");
+      expect(run.screen).toContain("2. TUI rendered");
+      expect(run.screen).toContain("Heading marker");
+      expect(run.screen).toContain("const PACKAGED = true;");
+
+      // The grammar actually painted: the bold span carries the bold attribute
+      // and the inline code span carries the theme's code ink — both emitted
+      // only when tree-sitter answers.
+      expect(run.raw).toContain("\x1b[1mtwo green lanes");
+      expect(run.raw).toContain("\x1b[1mHeading marker");
+
+      const codeInk = createThemeRegistry(BUILTIN_TUI_THEMES)
+        .get(DEFAULT_TUI_THEME_SELECTION.themeId).colors.well.code;
+
+      expect(inkBefore(run.raw, "parser.worker.js")).toBe(codeInk);
+
+      // Nothing the render needed came from the network: every asset the
+      // worker asked for was already in the unpack dir.
+      expect(await networkAttempted(server.modelPort)).toBe(false);
+    } finally {
+      server.stop();
+    }
+  });
+
+  // The regression this guards: an archive without the worker files renders
+  // the same turn with every marker literal — the state before this fix.
+  test("a packaged chat without the worker ships raw markdown", async () => {
+    const server = await startMockLlmProcess();
+
+    try {
+      const install = scratchDir("cli-dist-noworker");
+      const root = unpackHostCli(install);
+      const env = offlineChildEnv(join(install, "home"), server.proxyPort);
+
+      // Only files the runtime can resolve: what the bundled cli.js imported
+      // with type: "file" — a stray parser.worker.js beside it is not proof.
+      const workers = readdirSync(root)
+        .filter((name) => /^parser\.worker-\w+\.js$/.test(name))
+        .map((name) => join(root, name));
+
+      expect(workers.length, "no emitted parser.worker-*.js in the unpack dir").toBeGreaterThan(0);
+
+      for (const worker of workers) renameSync(worker, `${worker}.off`);
+
+      try {
+        provisionWorkspace(root, env, `http://127.0.0.1:${String(server.modelPort)}/v1`);
+
+        const run = chatSurface(root, env);
+
+        expect(run.screen).toContain("**two green lanes**");
+        expect(run.screen).toContain("### Heading marker");
+        expect(run.screen).toContain("`parser.worker.js`");
+      } finally {
+        for (const worker of workers) renameSync(`${worker}.off`, worker);
+      }
+    } finally {
+      server.stop();
+    }
   });
 });
 

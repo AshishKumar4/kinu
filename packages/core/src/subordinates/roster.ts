@@ -16,7 +16,7 @@
 import * as v from 'valibot';
 import type { SqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { seekPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
+import { seekPage, StaleCursorError, type Page, type PageRequest } from '../session/page';
 import { boundedInt } from '../utils/bounds';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import type { SubordinateReportOrigin } from './support';

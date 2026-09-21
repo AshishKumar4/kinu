@@ -35,7 +35,7 @@
 
 import * as v from 'valibot';
 
-import { proposeMeasuredPromptSection } from './control';
+import { controlTranscript, proposeMeasuredPromptSection } from './control';
 import { buildOutcomeEvalSplit } from './eval-split';
 import {
   describeSplitDegeneracy, listTurnOutcomes, type TurnOutcomeRow,
@@ -450,7 +450,7 @@ async function askRefiner(
   const brief: TemporaryRunRequest = {
     role: 'task',
     roleLabel: 'refiner',
-    task: renderRefinerBrief(deps, request, contextRefs),
+    task: await renderRefinerBrief(deps, request, contextRefs),
     contextRefs,
     // PLAN mode, and structurally: a refiner that could write would be a second
     // authority for every artifact it reviewed.
@@ -523,12 +523,12 @@ async function askRefiner(
  * holds for every kind. A brief that described the shape instead is what
  * answered `{"see_rpi":"…"}` on 2026-09-16.
  */
-function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest, contextRefs: readonly string[]): string {
+async function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest, contextRefs: readonly string[]): Promise<string> {
   const sql = deps.control.sql;
   const actor = deps.control.rt.actor;
 
-  const split = buildOutcomeEvalSplit(
-    sql, actor, clampGepaEvalBudget(deps.control.config.getGepaEvalBudget()),
+  const split = await buildOutcomeEvalSplit(
+    sql, actor, controlTranscript(deps.control), clampGepaEvalBudget(deps.control.config.getGepaEvalBudget()),
   );
 
   // The split's instances carry the turn's user message as `input`; that is the

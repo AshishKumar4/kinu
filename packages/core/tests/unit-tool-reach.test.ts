@@ -18,7 +18,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, storesFor } from './helpers';
 import {
   BUILTIN_TOOLS,
   TOOL_REACH,
@@ -113,6 +113,7 @@ describe('the reach declaration', () => {
 
   test('every declared codemode namespace is produced by a real factory', () => {
     const { rt } = createTestRuntime();
+    const { history } = storesFor(rt);
 
     const factories = {
       agents: () => createAgentsCodemodeProvider(() => ({
@@ -125,7 +126,10 @@ describe('the reach declaration', () => {
           hostNode: refuseHostNode('the tool-reach suite builds providers and runs no node'),
         },
       })),
-      memory: () => createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, actor: rt.actor })),
+      memory: () => createMemoryCodemodeProvider(() => ({
+        memory: rt.memory, sql: rt.storage.sql, actor: rt.actor,
+        transcriptFor: (sessionId) => history.transcript(sessionId),
+      })),
       tasks: () => createTasksCodemodeProvider(
         new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync),
         rt.actor.config,

@@ -31,6 +31,7 @@ import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { WorkspaceActorDirectory } from '../identity/workspace-actors';
+import type { SessionTranscriptReader } from '../session/transcript';
 
 export interface SubordinateInspectionAuthority {
   /** The owner the transport authenticated. */
@@ -50,16 +51,17 @@ export interface SubordinateInspectionAccess {
   readonly actor: ActorHandle;
   /** Membership authority: which actors exist, and whose children they are. */
   readonly directory: WorkspaceActorDirectory;
+  readonly transcriptFor: (actor: ActorHandle) => SessionTranscriptReader;
 }
 
 const OwnerRowSchema = v.object({ name: v.string(), owner_user_id: v.nullable(v.string()) });
 
 /** Read one actor's own rows, as that actor, under its ancestor's authority. */
-export function inspectSubordinateStorage(
+export async function inspectSubordinateStorage(
   access: SubordinateInspectionAccess,
   request: SubordinateInspectionRequest,
   authority: SubordinateInspectionAuthority,
-): SubordinateInspectionResult {
+): Promise<SubordinateInspectionResult> {
   const input = v.parse(SubordinateInspectionRequestSchema, request);
   const missing = (): SubordinateInspectionResult => missingSubordinateHistory(input.path);
 
@@ -81,5 +83,5 @@ export function inspectSubordinateStorage(
     target = child;
   }
 
-  return readSubordinateInspection(access.sql, target, access.raw, input);
+  return readSubordinateInspection(access.sql, target, access.raw, input, access.transcriptFor);
 }

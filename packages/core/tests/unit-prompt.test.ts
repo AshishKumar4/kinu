@@ -38,7 +38,7 @@ import {
   type SwarmInput,
 } from '../src/strategy/swarm';
 import { createTestRuntime, createTestActors, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
-import { makeSqlExec } from './helpers';
+import { makeSqlExec, storesFor } from './helpers';
 import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-self';
 
 /**
@@ -1271,7 +1271,9 @@ describe('buildSystemPromptSync', () => {
     try {
       for (const actor of [actors.main, actors.sibling('child')]) {
         const subject = { ...rt, actor };
-        const stores = createAgentStores(() => testSql.sql, () => actor, rt.storage.transactionSync);
+
+        const stores = createAgentStores(() => testSql.sql, () => actor, rt.storage.transactionSync,
+          async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' }));
 
         for (const id of Object.keys(BUILTIN_ROLE_DEFINITIONS)) {
           const ledger = new DynamicContextLedger();
@@ -1282,7 +1284,7 @@ describe('buildSystemPromptSync', () => {
             const mode = phase === 2 ? 'build' : 'plan';
             const path = `/mode-${actor.name}-${id}-${phase}.txt`;
             await subject.storage.vfs.writeFile(path, 'original');
-            const file = buildBuiltinTools({ rt: subject }).file;
+            const file = buildBuiltinTools({ rt: subject, history: storesFor(subject).history }).file;
 
             if (!file) throw new Error('missing file tool');
             const tools: ToolSet = { file };

@@ -23,7 +23,7 @@ import {
   calibrationReport,
   createCompletionLLM,
   ensembleReport,
-  getChatHistoryPage,
+  getChatHistoryPage, readSessionTranscript, CHAT_SESSION_ID,
   getEvolutionChangelog,
   ingestOutcomeLabels,
   initTurnOutcomeTables,
@@ -92,11 +92,11 @@ import {
 } from '@kinu.run/core';
 import { classify } from '@kinu.run/core/obs';
 import {
-  makeSql, makeSqlExec, createHostShell, hostToolchainCapabilities,
+  makeSql, makeSqlExec, createHostShell, hostToolchainCapabilities, inspectionFiles,
   type LocalModelResolver,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
-import { agentDbPath } from './config';
+import { agentDbPath, resolveAgentRef } from './config';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
 import { KinuError } from '@kinu.run/core/obs';
 
@@ -227,9 +227,12 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       // may not open one (see getLocalStatus).
       memorySize: 0,
       createdAt: status.createdAt ?? 0,
-      conversationCount: actor && tableExists(db, 'actor_messages')
+      conversationCount: actor && tableExists(db, 'conversation_entries')
         ? get<{ c: number }>(
-          db, `SELECT COUNT(DISTINCT session_id) AS c FROM actor_messages WHERE actor_id = ?`, actor.actorId,
+          db,
+          `SELECT COUNT(DISTINCT session_id) AS c FROM conversation_entries
+           WHERE actor_id = ? AND session_id != 'mcts'`,
+          actor.actorId,
         )?.c ?? 0
         : 0,
       model: status.model,
@@ -540,11 +543,13 @@ export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
 /** Local peer of the cloud `getChatHistoryPage` RPC — the newest page, which
  *  is what `kinu debug messages --limit` is asking for. The read model
  *  itself (core status.ts) works over any SqlExecutor. */
-export async function getLocalChatHistory(name: string, limit = 100): Promise<ChatHistoryEntry[]> {
-  return withLocalDb(name, (db) => {
+export function getLocalChatHistory(name: string, limit = 100): Promise<ChatHistoryEntry[]> {
+  return withLocalDbAsync(name, async (db) => {
     const sql = makeSql(db);
+    const files = inspectionFiles(db, resolveAgentRef(name)?.cwd ?? null);
+    const transcript = readSessionTranscript(sql, openWorkspaceMainActor(sql), CHAT_SESSION_ID, () => Promise.resolve(files));
 
-    return [...getChatHistoryPage(sql, openWorkspaceMainActor(sql), { limit }).items];
+    return [...(await getChatHistoryPage(transcript, { limit })).items];
   });
 }
 
@@ -869,14 +874,29 @@ export async function markLocalBackgroundJobsCancelled(name: string): Promise<st
   });
 }
 
-function withLocalDb<T>(name: string, fn: (db: SqliteDb) => T): T {
+function openLocalDb(name: string): SqliteDb {
   const dbPath = agentDbPath(name);
 
   if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
-  const db = new Database(dbPath, { readonly: true });
+
+  return new Database(dbPath, { readonly: true });
+}
+
+function withLocalDb<T>(name: string, fn: (db: SqliteDb) => T): T {
+  const db = openLocalDb(name);
 
   try {
     return fn(db);
+  } finally {
+    db.close();
+  }
+}
+
+async function withLocalDbAsync<T>(name: string, fn: (db: SqliteDb) => Promise<T>): Promise<T> {
+  const db = openLocalDb(name);
+
+  try {
+    return await fn(db);
   } finally {
     db.close();
   }
@@ -1083,9 +1103,10 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
       // the database read-only.
       memorySize: 0,
       createdAt: row.createdAt,
-      conversationCount: tableExists(db, 'actor_messages')
+      conversationCount: tableExists(db, 'conversation_entries')
         ? get<{ c: number }>(db,
-          `SELECT COUNT(DISTINCT session_id) AS c FROM actor_messages WHERE actor_id = ?`, actorId)?.c ?? 0
+          `SELECT COUNT(DISTINCT session_id) AS c FROM conversation_entries
+           WHERE actor_id = ? AND session_id != 'mcts'`, actorId)?.c ?? 0
         : 0,
       model: config?.getModel() ?? null,
       reasoningEffort: config?.getReasoningEffort() ?? null,
@@ -1133,8 +1154,8 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
     craftedToolCount: tableExists(db, 'crafted_tools')
       ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM crafted_tools`)?.c ?? 0
       : 0,
-    messageCount: actor && tableExists(db, 'actor_messages')
-      ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM actor_messages WHERE actor_id = ?`, actor.actorId)?.c ?? 0
+    messageCount: actor && tableExists(db, 'conversation_entries')
+      ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM conversation_entries WHERE actor_id = ?`, actor.actorId)?.c ?? 0
       : 0,
     model: tableExists(db, 'actor_config')
       ? openWorkspaceMainActor(makeSql(db)).config.getModel()

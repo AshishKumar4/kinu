@@ -9,7 +9,7 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
+import { childEnv, git, initRepo, scratchDir } from '@kinu.run/test-utils';
 import { claims, LADDER, gatesFor } from './ladder';
 import { auditClosure } from './ladder-audit';
 import { CACHE_BLIND_SPOTS, keyFor, planGate, recordGreen, storeAt, toolVersions } from './ladder-cache';
@@ -304,5 +304,38 @@ describe('ladder-cache — the live ladder declares what it never caches', () =>
     ]) {
       expect(live.has(run), `${run} is not declared live`).toBeTrue();
     }
+  });
+});
+
+describe('ladder-cache — single-gate CLI', () => {
+  test('a declared gate records its pass and reuses it on the next invocation', () => {
+    const cache = scratchDir('ladder-cache-store');
+
+    const invoke = () => Bun.spawnSync(['bun', 'scripts/ladder.ts', '--gate', 'bun run gate:install-scripts'], {
+      cwd: new URL('..', import.meta.url).pathname,
+      env: childEnv({ XDG_CACHE_HOME: cache }),
+      stdout: 'pipe', stderr: 'pipe',
+    });
+
+    const first = invoke();
+    expect(first.exitCode, first.stderr.toString()).toBe(0);
+    expect(first.stdout.toString()).toContain('cache: 0 hit, 1 recorded');
+    const second = invoke();
+    expect(second.exitCode, second.stderr.toString()).toBe(0);
+    expect(second.stdout.toString()).toContain('cache: 1 hit, 0 recorded');
+  });
+
+  test('an undeclared command is refused rather than executed or cached', () => {
+    const cache = scratchDir('ladder-cache-store');
+
+    const result = Bun.spawnSync(['bun', 'scripts/ladder.ts', '--gate', 'bun undeclared-gate.ts'], {
+      cwd: new URL('..', import.meta.url).pathname,
+      env: childEnv({ XDG_CACHE_HOME: cache }),
+      stdout: 'pipe', stderr: 'pipe',
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr.toString()).toContain('expected an exact command');
+    expect(existsSync(join(cache, 'kinu-ladder'))).toBe(false);
   });
 });

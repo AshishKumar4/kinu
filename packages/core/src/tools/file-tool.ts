@@ -18,7 +18,7 @@ import { formatReference, type ReferenceRoot } from '../vfs/references';
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
-import type { Memory, VFS } from '../types/primitives';
+import type { Memory, VFS, VfsRevision } from '../types/primitives';
 import type { TurnContextBudget } from '../context-budget';
 import { isVfsError, vfsAddressingHint } from '../vfs/errno';
 import { ensureDir, vfsDirname } from '../utils/vfs-helpers';
@@ -26,7 +26,8 @@ import { memoryIndexPath } from '../memory/note';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, FILE_TOOL_ACTIONS, unknownActionError, type FileToolAction,
 } from './registry';
-import { applyFileEdits, readFileSlice, BOM, FILE_REFUSAL_REASONS, FileRefusalError, type FileEdit } from './file-edit';
+import { applyFileEdits, formatFileSlice, FILE_REFUSAL_REASONS, FileRefusalError, type FileEdit } from './file-edit';
+import { readFileText, scanFileWindow, type ScannedFile } from './file-scan';
 import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from './file-ledger';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS, clampSerializedToolResult } from './clamp';
 import type { JsonValue } from '../utils/json';
@@ -169,27 +170,26 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
   const searchLines = (content: string, query: string): { line: number; text: string }[] =>
     content.split('\n').flatMap((text, index) => text.includes(query) ? [{ line: index + 1, text }] : []);
 
-  /** Text of a file. A VFS is free to answer `{encoding:'utf8'}` with bytes;
-   *  decoding beats an unchecked cast that would throw out of `execute`. */
-  const readText = async (path: string): Promise<string> => {
-    const raw = await vfs.readFile(path, { encoding: 'utf8' });
-    const text = v.safeParse(v.string(), raw);
-
-    return text.success
-      ? text.output
-      : new TextDecoder().decode(v.parse(v.instance(Uint8Array), raw));
-  };
-
   /** The one write path. `observe` runs the moment the bytes land — a later
    *  step failing must not leave the ledger denying content already on disk —
    *  and differs only in what the caller now knows: a `write` authored the whole
    *  file, an `edit` changed one span of what it already knew. */
-  const persist = async (path: string, content: string, observe: () => void): Promise<void> => {
+  const persist = async (path: string, content: string, observe: (revision?: VfsRevision) => void, expected?: VfsRevision): Promise<void> => {
     const dir = vfsDirname(path);
 
     if (dir) await ensureDir(vfs, dir);
-    await vfs.writeFile(path, content);
-    observe();
+
+    if (expected === undefined) {
+      await vfs.writeFile(path, content);
+      observe();
+    } else {
+      if (!vfs.writeFileIfRevision) throw new KinuError('unsupported', 'versioned edits require revision-checked writes');
+      const result = await vfs.writeFileIfRevision(path, new TextEncoder().encode(content), expected);
+
+      if (!result.ok) throw new FileRefusalError('stale', `${path} changed since the observed revision`);
+      observe(result.revision);
+    }
+
     const indexed = memoryIndexPath(path);
 
     if (deps.memory && indexed) await deps.memory.index(indexed);
@@ -265,34 +265,35 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
         if (!query.success) return failure('bad_input', 'file search requires a non-empty literal query');
 
-        return inspect('search', path, async () => ({ path, matches: searchLines(await readText(path), query.output) }));
+        return inspect('search', path, async () => ({ path, matches: searchLines(await readFileText(vfs, path), query.output) }));
       }
 
       case 'read': {
-        let content: string;
+        const maxChars = DEFAULT_TOOL_RESULT_MAX_CHARS;
+        let scanned: ScannedFile;
 
+        // RETAINED MEMORY, not I/O: the scan reads every byte, because the
+        // ledger keys on the fingerprint of the WHOLE content, and keeps only
+        // this window and the running hash. A read that authorized an edit
+        // from the lines it happened to show would be a cheaper gate, not
+        // the same one.
         try {
-          content = await readText(path);
+          scanned = await scanFileWindow(vfs, path, { offset: args.offset, limit: args.limit, maxChars });
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'read', path);
 
           return failure(vfsFail.reason, vfsFail.error);
         }
 
-        const configured = DEFAULT_TOOL_RESULT_MAX_CHARS;
-        const cap = budget.capFor(configured);
-        // The BOM is stripped from what the model is SHOWN, not from the file:
-        // it is invisible, so a model copying the first line back as old_text
-        // would carry it and never match, with no way to see why.
-        const shown = content.startsWith(BOM) ? content.slice(1) : content;
-        const slice = readFileSlice(shown, { path, offset: args.offset, limit: args.limit, maxChars: cap });
-        ledger.observeRange(path, content, slice.first, slice.last, slice.total);
+        const slice = formatFileSlice(scanned.window, { path, limit: args.limit, maxChars });
+
+        ledger.observeRange(path, scanned.fingerprint, slice.first, slice.last, slice.total, scanned.revision);
         budget.admit(slice.output.length);
 
         if (slice.omitted > 0) {
           // The full text is not spilled anywhere: it is already addressable
           // at its own path, and the marker says which offset continues it.
-          budget.recordSpill({ producer: 'file_read', omitted: slice.omitted, referenced: true, tightened: cap < configured });
+          budget.recordSpill({ producer: 'file_read', omitted: slice.omitted, referenced: true });
         }
 
         return slice.output;
@@ -303,7 +304,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         let existing: string | null = null;
 
         try {
-          existing = await readText(path);
+          existing = await readFileText(vfs, path);
         } catch (err) {
           if (!isVfsError(err) || err.code !== 'ENOENT') {
             const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
@@ -353,9 +354,16 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
           .map((edit) => ({ oldText: edit.old_text, newText: edit.new_text }));
 
         let current: string;
+        let revision = ledger.readRevision(path);
 
         try {
-          current = await readText(path);
+          try {
+            current = await readFileText(vfs, path, revision);
+          } catch (cause) {
+            if (!isVfsError(cause) || cause.code !== 'ENOTSUP') throw cause;
+            revision = undefined;
+            current = await readFileText(vfs, path);
+          }
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
           ledger.recordEdit(path, vfsFail.reason);
@@ -382,7 +390,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         try {
           // Coverage carries across the edit: only the span the model named
           // itself changed, so what it knew about the file it still knows.
-          await persist(path, outcome.content, () => ledger.observeEdited(path, current, outcome.content));
+          await persist(path, outcome.content, writtenRevision => ledger.observeEdited(path, current, outcome.content, writtenRevision), revision);
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
           ledger.recordEdit(path, vfsFail.reason);

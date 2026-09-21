@@ -16,16 +16,16 @@
         "content": {
           "id": "input-PARITY-ONE",
           "role": "user",
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          },
           "parts": [
             {
               "type": "text",
               "text": "PARITY-ONE"
             }
-          ],
-          "metadata": {
-            "kinuMode": "build",
-            "kinuAuthor": "operator"
-          }
+          ]
         }
       },
       {
@@ -54,16 +54,16 @@
         "content": {
           "id": "input-PARITY-TWO",
           "role": "user",
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          },
           "parts": [
             {
               "type": "text",
               "text": "PARITY-TWO"
             }
-          ],
-          "metadata": {
-            "kinuMode": "build",
-            "kinuAuthor": "operator"
-          }
+          ]
         }
       },
       {
@@ -92,22 +92,22 @@
         "content": {
           "id": "input-PARITY-TWO-STEER",
           "role": "user",
+          "metadata": {
+            "kinuAuthor": "operator",
+            "kinuMode": "build"
+          },
           "parts": [
             {
               "type": "file",
-              "url": "data:text/plain;base64,aGVsbG8=",
               "mediaType": "text/plain",
-              "filename": "note.txt"
+              "filename": "note.txt",
+              "url": "data:text/plain;base64,aGVsbG8="
             },
             {
               "type": "text",
               "text": "PARITY-TWO-STEER"
             }
-          ],
-          "metadata": {
-            "kinuAuthor": "operator",
-            "kinuMode": "build"
-          }
+          ]
         }
       },
       {
@@ -311,16 +311,16 @@
         "content": {
           "id": "input-PARITY-ONE",
           "role": "user",
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          },
           "parts": [
             {
               "type": "text",
               "text": "PARITY-ONE"
             }
-          ],
-          "metadata": {
-            "kinuMode": "build",
-            "kinuAuthor": "operator"
-          }
+          ]
         }
       },
       {
@@ -349,16 +349,16 @@
         "content": {
           "id": "input-PARITY-TWO",
           "role": "user",
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          },
           "parts": [
             {
               "type": "text",
               "text": "PARITY-TWO"
             }
-          ],
-          "metadata": {
-            "kinuMode": "build",
-            "kinuAuthor": "operator"
-          }
+          ]
         }
       },
       {
@@ -387,22 +387,22 @@
         "content": {
           "id": "input-PARITY-TWO-STEER",
           "role": "user",
+          "metadata": {
+            "kinuAuthor": "operator",
+            "kinuMode": "build"
+          },
           "parts": [
             {
               "type": "file",
-              "url": "data:text/plain;base64,aGVsbG8=",
               "mediaType": "text/plain",
-              "filename": "note.txt"
+              "filename": "note.txt",
+              "url": "data:text/plain;base64,aGVsbG8="
             },
             {
               "type": "text",
               "text": "PARITY-TWO-STEER"
             }
-          ],
-          "metadata": {
-            "kinuAuthor": "operator",
-            "kinuMode": "build"
-          }
+          ]
         }
       },
       {
@@ -431,16 +431,16 @@
         "content": {
           "id": "input-PARITY-THREE",
           "role": "user",
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          },
           "parts": [
             {
               "type": "text",
               "text": "PARITY-THREE"
             }
-          ],
-          "metadata": {
-            "kinuMode": "build",
-            "kinuAuthor": "operator"
-          }
+          ]
         }
       },
       {
@@ -450,16 +450,16 @@
         "content": {
           "id": "input-PARITY-FOUR-TOOL",
           "role": "user",
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          },
           "parts": [
             {
               "type": "text",
               "text": "PARITY-FOUR-TOOL"
             }
-          ],
-          "metadata": {
-            "kinuMode": "build",
-            "kinuAuthor": "operator"
-          }
+          ]
         }
       }
     ],
@@ -783,16 +783,16 @@
         "content": {
           "id": "input-PARITY-ONE",
           "role": "user",
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          },
           "parts": [
             {
               "type": "text",
               "text": "PARITY-ONE"
             }
-          ],
-          "metadata": {
-            "kinuMode": "build",
-            "kinuAuthor": "operator"
-          }
+          ]
         }
       },
       {
@@ -821,16 +821,16 @@
         "content": {
           "id": "input-PARITY-TWO",
           "role": "user",
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          },
           "parts": [
             {
               "type": "text",
               "text": "PARITY-TWO"
             }
-          ],
-          "metadata": {
-            "kinuMode": "build",
-            "kinuAuthor": "operator"
-          }
+          ]
         }
       },
       {
@@ -859,22 +859,22 @@
         "content": {
           "id": "input-PARITY-TWO-STEER",
           "role": "user",
+          "metadata": {
+            "kinuAuthor": "operator",
+            "kinuMode": "build"
+          },
           "parts": [
             {
               "type": "file",
-              "url": "data:text/plain;base64,aGVsbG8=",
               "mediaType": "text/plain",
-              "filename": "note.txt"
+              "filename": "note.txt",
+              "url": "data:text/plain;base64,aGVsbG8="
             },
             {
               "type": "text",
               "text": "PARITY-TWO-STEER"
             }
-          ],
-          "metadata": {
-            "kinuAuthor": "operator",
-            "kinuMode": "build"
-          }
+          ]
         }
       },
       {
@@ -903,16 +903,16 @@
         "content": {
           "id": "input-PARITY-THREE",
           "role": "user",
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          },
           "parts": [
             {
               "type": "text",
               "text": "PARITY-THREE"
             }
-          ],
-          "metadata": {
-            "kinuMode": "build",
-            "kinuAuthor": "operator"
-          }
+          ]
         }
       },
       {
@@ -922,16 +922,16 @@
         "content": {
           "id": "input-PARITY-FOUR-TOOL",
           "role": "user",
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          },
           "parts": [
             {
               "type": "text",
               "text": "PARITY-FOUR-TOOL"
             }
-          ],
-          "metadata": {
-            "kinuMode": "build",
-            "kinuAuthor": "operator"
-          }
+          ]
         }
       },
       {
@@ -941,22 +941,22 @@
         "content": {
           "id": "input-PARITY-FOUR-STEER",
           "role": "user",
+          "metadata": {
+            "kinuSteer": true,
+            "kinuSteerAtStep": 0
+          },
           "parts": [
             {
               "type": "file",
-              "url": "data:text/plain;base64,aGVsbG8=",
               "mediaType": "text/plain",
-              "filename": "note.txt"
+              "filename": "note.txt",
+              "url": "data:text/plain;base64,aGVsbG8="
             },
             {
               "type": "text",
               "text": "PARITY-FOUR-STEER"
             }
-          ],
-          "metadata": {
-            "kinuSteer": true,
-            "kinuSteerAtStep": 0
-          }
+          ]
         }
       },
       {
@@ -967,6 +967,22 @@
           "id": "<uuid#11>",
           "role": "assistant",
           "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "tool-file",
+              "toolCallId": "call_parity_1",
+              "state": "output-error",
+              "input": {
+                "action": "read",
+                "path": "probe-fixture.txt"
+              },
+              "errorText": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `shell` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+            },
+            {
+              "type": "step-start"
+            },
             {
               "type": "step-start"
             },
@@ -985,16 +1001,16 @@
         "content": {
           "id": "input-PARITY-FIVE",
           "role": "user",
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          },
           "parts": [
             {
               "type": "text",
               "text": "PARITY-FIVE"
             }
-          ],
-          "metadata": {
-            "kinuMode": "build",
-            "kinuAuthor": "operator"
-          }
+          ]
         }
       },
       {
@@ -1796,10 +1812,6 @@
       },
       {
         "socket": "B",
-        "type": "steer_status"
-      },
-      {
-        "socket": "B",
         "type": "cf_agent_use_chat_response",
         "id": "<uuid#15>",
         "done": false,
@@ -1807,6 +1819,10 @@
           "type": "start",
           "messageId": "<uuid#11>"
         }
+      },
+      {
+        "socket": "B",
+        "type": "steer_status"
       },
       {
         "socket": "B",

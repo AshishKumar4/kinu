@@ -167,7 +167,7 @@ export function admitSkillsIndex(
   const priced = [
     ...discovery.skills.map((skill) => skill.bodyRef.kind === 'builtin'
       ? skillIndexLine(skill)
-      : workspaceSkillIndexLine(skill.name)),
+      : workspaceSkillIndexLine(skill.name, skill.source)),
     ...discovery.unread.map(unreadSkillLine),
   ];
 

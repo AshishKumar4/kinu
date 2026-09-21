@@ -1,10 +1,7 @@
 {
   "measuredAt": "2026-09-18",
-  "total": 238,
+  "total": 236,
   "files": {
-    "packages/cf-backend/tests/fixtures/nimbus-capability-websocket-workerd.mjs": {
-      "sleep": 2
-    },
     "packages/cf-backend/tests/helpers/kv.ts": {
       "clock-compare": 1
     },
@@ -55,18 +52,10 @@
       "clock-compare": 2,
       "sleep": 2
     },
-    "packages/cf-backend/tests/workerd/long/step-cap.test.ts": {
-      "clock-compare": 1,
-      "sleep": 1
-    },
     "packages/cf-backend/tests/workerd/slate-durability.test.ts": {
       "sleep": 1
     },
     "packages/cf-backend/tests/workerd/slate-share-probe.ts": {
-      "sleep": 1
-    },
-    "packages/cf-backend/tests/workerd/steer-chain.test.ts": {
-      "clock-compare": 1,
       "sleep": 1
     },
     "packages/cf-backend/tests/workerd/two-turn-probe.ts": {
@@ -210,7 +199,7 @@
     "scripts/app-background-ux.test.ts": {
       "timeout-option": 3,
       "sleep": 1,
-      "test-timeout": 9
+      "test-timeout": 7
     },
     "scripts/bench.test.ts": {
       "sleep": 2
@@ -239,10 +228,6 @@
       "clock-compare": 1
     },
     "tests/evals/prompt-ledger.ts": {
-      "sleep": 1
-    },
-    "tests/evals/public-session.ts": {
-      "clock-compare": 1,
       "sleep": 1
     },
     "tests/evals/swarm.eval.ts": {

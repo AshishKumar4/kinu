@@ -29,7 +29,7 @@ import {
   WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
-  joinDir, parentDir, MOUNT_EXECUTORS, type DirEntry, type MountInfo,
+  formatBytes, joinDir, parentDir, MOUNT_EXECUTORS, type DirEntry, type MountInfo,
 } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import type { Rpc } from "@kinu.run/core";
@@ -54,16 +54,6 @@ const MOUNT_EXECUTOR: Record<string, string> = Object.fromEntries(
 );
 
 
-/** Sizes at a glance, in the unit that keeps the column scannable. */
-function fmtSize(n: number): string {
-  if (n < 1024) return `${n} B`;
-
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
-
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-
-  return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
 
 /** Relative "when", for the Modified column. Coarse on purpose. */
 function fmtWhen(mtimeMs: number | undefined): string {
@@ -672,7 +662,7 @@ function EntryTile({ entry, badge, selected, previewing, renaming, confirming, d
   onCancelDelete: () => void;
 }) {
   const meta = [
-    entry.type === "file" && entry.size != null ? fmtSize(entry.size) : null,
+    entry.type === "file" && entry.size != null ? formatBytes(entry.size) : null,
     fmtWhen(entry.mtimeMs) || null,
   ].filter(Boolean).join(" · ");
 

@@ -33,8 +33,8 @@ export interface CloudForkSource {
    * The actor whose transcript is being cut.
    *
    * Not derivable here and deliberately not derived: a workspace database holds
-   * every actor it issued, and the pane and message rows the frames read are
-   * keyed per actor, so a snapshot taken without one would carry a sibling's
+   * every actor it issued, and the conversation rows the frames read are keyed
+   * per actor, so a snapshot taken without one would carry a sibling's
    * conversation. The sender supplies its OWN fenced handle — the same one the
    * driver checked the fork point against.
    */
@@ -43,6 +43,9 @@ export interface CloudForkSource {
    *  file through. */
   vfs: ForkFileSource;
   untilMessageId: string;
+  /** Where that actor's payload files live: the carried conversation references
+   *  them by absolute path, and the frames carry them relative to it. */
+  artifactDirectory: string;
 }
 
 /**
@@ -84,7 +87,6 @@ export async function deliverCloudFork(input: {
     for await (const frame of forkTransferFrames({
       ...input.source,
       transferId: nanoid(),
-      targetAuthority: 'pane',
       frameBytes: FORK_FRAME_BYTES,
     })) {
       const ack = await input.target.rawCopyFromFork(input.name, frame, input.ownerUserId);

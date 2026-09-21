@@ -1015,10 +1015,10 @@ export function useKinu(target?: string | KinuActorAddress) {
   // accent badge on the strip, so the badge can never say something the queue
   // does not show. Host-owned: see the RPC's note on VIEW_DATA_SOURCES.
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
-  // Whether the gated right-pane tabs (Releases, Swarms) have content.
-  // Seeded by the snapshot, refreshed with the live cycle; a fresh workspace
-  // starts with neither tab until its first release change or search run.
-  const [tabPresence, setTabPresence] = useState<TabPresence>({ releases: false, explorations: false });
+  // Whether the gated right-pane tabs have content. Unknown until the first
+  // read lands — an optimistic absence would flip the strip to Files before
+  // the snapshot that names the workspace's real lanes.
+  const [tabPresence, setTabPresence] = useState<TabPresence | undefined>(undefined);
   // Unseen self-changes, kept only for the sidebar roster's dot — the tab badge
   // is the queue's length now.
   const [changelogUnseen, setChangelogUnseen] = useState(0);
@@ -1836,6 +1836,7 @@ export function useKinu(target?: string | KinuActorAddress) {
           refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
           refreshBackgroundJobs(),
           refreshPendingActions(),
+          refreshTabPresence(),
           refreshSlates(),
           refreshCurrentLiveResource(
             "consents",
@@ -2586,10 +2587,6 @@ interface ToolDescResult {
     name: string; summary: string; description: string;
     exposure: ToolInfo["exposure"]; wired: boolean;
   }>;
-  crafted: Array<{
-    name: string; description: string; exposure: ToolInfo["exposure"]; wired: boolean;
-    qualityScore?: number; usageCount?: number;
-  }>;
 }
 
 /** Map a getToolDescriptions result into the UI's ToolInfo[] — single source
@@ -2600,11 +2597,9 @@ interface ToolDescResult {
  *  capability. Neither is recomputed here — a single guessed word cannot tell
  *  absence from codemode-only reach. */
 function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
-  return [
-    ...r.builtIn.map((t) => ({ ...t, learned: false, qualityScore: 1, usageCount: 0 })),
-    // A crafted tool's description IS its one line — it has no second register.
-    ...r.crafted.map((t) => ({ ...t, summary: t.description, learned: true, qualityScore: t.qualityScore ?? 0.5, usageCount: t.usageCount ?? 0 })),
-  ];
+  // Crafted tools are the agent's own concern — scored and selected by its
+  // evolution loop — and are not listed to the user; only the built-ins are.
+  return r.builtIn.map((t) => ({ ...t, learned: false, qualityScore: 1, usageCount: 0 }));
 }
 
 /** MEMORY.md as pane rows. The heading the notes are read out of belongs to

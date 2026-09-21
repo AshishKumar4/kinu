@@ -145,6 +145,19 @@ function nativeOps(files: VFS): Partial<VfsNativeMutations & VfsNativeReads> {
 }
 
 /**
+ * The most text a surface will hold in memory to serve a BOUNDED view of a
+ * file.
+ *
+ * It bounds the two places a plane with no ranged read leaves no choice: the
+ * viewer's text preview, which decodes this many bytes and marks the rest
+ * truncated, and the `file` tool's scan, which refuses a file this large
+ * rather than materialize it (tools/file-scan.ts). One number because it is
+ * one question — a plane that cannot hand back a window can only hand back
+ * the file, and this is how much of it anything here is willing to hold.
+ */
+export const RESIDENT_TEXT_MAX_BYTES = 512 * 1024;
+
+/**
  * A file's leading `limit` bytes, off the plane's own prefix read.
  *
  * `size` is what the plane's stat said, and it decides whether a plane WITHOUT
@@ -566,6 +579,13 @@ export function withMountTable(
 		readFile(path, opts) {
 			return delegate(path, (files, native) => files.readFile(native, opts));
 		},
+		readFileAtRevision(path, revision, range) {
+			return delegate(path, (files, native) => {
+				if (!files.readFileAtRevision) throw makeVfsError('ENOTSUP', 'this file plane does not retain file revisions', path);
+
+				return files.readFileAtRevision(native, revision, range);
+			});
+		},
 		writeFile(path, data) {
 			return mutate(path, 'written', (files, native) => files.writeFile(native, data));
 		},
@@ -729,7 +749,11 @@ export function withMountTable(
 			return delegate(path, (files, native) => {
 				const range = nativeOps(files).readRange;
 
-				if (!range) throw makeVfsError('EPERM', 'this plane serves no ranged read', path);
+				// ENOTSUP, not EPERM: the capability is absent, the caller is not
+				// forbidden. One routed tree answers for every plane under it, so a
+				// caller that can fall back to a bounded whole read — the `file`
+				// tool's scan does — can only tell the two apart by the code.
+				if (!range) throw makeVfsError('ENOTSUP', 'this plane serves no ranged read', path);
 
 				return range.call(files, native, offset, length);
 			});

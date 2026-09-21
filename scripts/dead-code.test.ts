@@ -29,7 +29,7 @@ import { spawnSync } from 'node:child_process';
 import * as v from 'valibot';
 
 import {
-  DEPENDENCY_REASONS, dependencyKeyOf, dependencyReason, manifestCommands, readInstalled,
+  compileReach, DEPENDENCY_REASONS, dependencyKeyOf, dependencyReason, manifestCommands, readInstalled,
   referencesPackage, servedBy, typedRuntime, unusedDependencies,
 } from './dead-code';
 import { isManifest, readRepositoryFile, trackedFiles } from './sources';
@@ -119,6 +119,21 @@ describe('which files a manifest serves', () => {
     const devbox = servedBy('packages/devbox/package.json');
     expect(devbox('packages/devbox/src/a.ts')).toBe(true);
     expect(devbox('packages/cf-backend/src/a.ts')).toBe(false);
+  });
+
+  test('a package reaches what its tsconfig paths alias to, and nothing else outside it', () => {
+    const files = ['third_party/mossaic/sdk/tsconfig.json', 'third_party/mossaic/sdk/package.json'];
+
+    const reach = compileReach('third_party/mossaic/sdk/package.json', files, () => JSON.stringify({
+      compilerOptions: { paths: { '@shared/*': ['../shared/*'], '@own/*': ['./src/own/*'] } },
+    }));
+
+    expect(reach).toEqual(['third_party/mossaic/shared/']);
+
+    const sdk = servedBy('third_party/mossaic/sdk/package.json', reach);
+    expect(sdk('third_party/mossaic/shared/schemas/json.ts')).toBe(true);
+    expect(sdk('third_party/mossaic/worker/core/a.ts')).toBe(false);
+    expect(compileReach('packages/devbox/package.json', ['packages/devbox/package.json'], () => '')).toEqual([]);
   });
 
   test('a manifest is read for its commands, never for its declarations', () => {
@@ -258,6 +273,8 @@ describe('this repository', () => {
 
   test('the peer scan sees the contracts that keep four declarations alive', () => {
     expect(installed.peerRequirers.get('just-bash') ?? []).toContain('agents');
+    // A linked workspace's peers are read from the lock's workspaces block.
+    expect(installed.peerRequirers.get('y-protocols') ?? []).toContain('@mossaic/sdk');
     expect(installed.peerRequirers.get('oxlint-tsgolint') ?? []).toContain('oxlint');
     expect(installed.peerRequirers.get('@rolldown/plugin-babel') ?? [])
       .toContain('@vitejs/plugin-react');

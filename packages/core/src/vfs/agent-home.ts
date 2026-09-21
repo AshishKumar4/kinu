@@ -117,6 +117,11 @@ export function agentHome(agentName: string): string {
   return `/home/${agentName}`;
 }
 
+/** Durable payloads belong to this actor, not the publicly traversable home. */
+export function agentArtifactDirectory(home: string): string {
+  return `${home}/.kinu/context`;
+}
+
 /**
  * This agent's private `/tmp` as a logical absolute path.
  *
@@ -295,6 +300,8 @@ function agentHomeLayout(agentName: string, identity: AgentIdentity): readonly A
   return [
     { path: agentHome(agentName), uid: identity.uid, gid: identity.gid, mode: AGENT_HOME_MODE },
     { path: agentTmpRoot(agentName), uid: identity.uid, gid: identity.gid, mode: AGENT_TMP_MODE },
+    { path: `${agentHome(agentName)}/.kinu`, uid: identity.uid, gid: identity.gid, mode: 0o700 },
+    { path: agentArtifactDirectory(agentHome(agentName)), uid: identity.uid, gid: identity.gid, mode: 0o700 },
   ];
 }
 

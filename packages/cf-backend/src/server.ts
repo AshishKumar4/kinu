@@ -66,6 +66,7 @@ import { handleUpdatesRequest } from "./updates/routes";
 import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
 import { handleSharedPublicRequest, handleSharedRequest } from "./shared/routes";
+import { handleDriveRequest } from "./drive/routes";
 import { handleHubRequest, handleWebhookDeliveryRequest } from "./events/routes";
 import { handleFilesRequest } from "./files-routes";
 import { handleTerminalRequest } from "./terminal-route";
@@ -125,6 +126,14 @@ export { ContainerProxy } from "@cloudflare/sandbox";
 
 export { UserDO } from "./user/user-do";
 
+// The user-level shared Drive: Mossaic's two Durable Object classes, built
+// from the vendored SDK source (scripts/mossaic-sdk.ts). Re-exported under
+// Kinu names because `UserDO` is already this Worker's own per-user object;
+// the SDK addresses them by BINDING name (`MOSSAIC_USER`, `MOSSAIC_SHARD`),
+// never by class name, so the rename costs nothing. One Mossaic tenant per
+// Kinu user, mounted at `/shared` in every workspace that user owns.
+export { UserDO as MossaicUserDO, ShardDO as MossaicShardDO } from "@mossaic/sdk";
+
 // Synthetic monitoring's durable state: open incidents + the alert outbox.
 export { MonitorDO } from "./monitor/monitor-do";
 
@@ -144,7 +153,7 @@ export { DeployRunDO } from "./deploy/deploy-do";
 // outbound-interception fetchers from `ctx.exports.ContainerProxy`
 // (@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js:11509). The fabric mints each
 // facet's `env.SUPERVISOR` binding from the composed supervisor entrypoint
-// (`supervisorEntrypoint` in nimbus-programmatic.ts).
+// (`supervisorEntrypoint`, adopted by the hosted runtime in workspace-host.ts).
 //
 // REQUIRED, and the binding or lookup that requires each one.
 //   OrchestratorAgent carries the `OrchestratorAgent` durable_objects binding
@@ -168,7 +177,7 @@ export { DeployRunDO } from "./deploy/deploy-do";
 //     `@nimbus-sh/worker`'s root, whose module scope calls `composeFabric` for
 //     the hosted product (no `hostNamespace`, so `NIMBUS_SESSION`). The holder
 //     is first-write-wins per isolate, so the root's write beat this Worker's
-//     `HOST_FABRIC_COMPOSITION` (workspace-host.ts) and every facet dispatch
+//     the host fabric composition (workspace-host.ts) and every facet dispatch
 //     asked for a namespace this Worker does not bind.
 //
 // NOT EXPORTED, because no live path reads them. Kinu holds Nimbus as a
@@ -184,7 +193,7 @@ export { DeployRunDO } from "./deploy/deploy-do";
 // facet manager Kinu leaves null. The HMR binding resolves in cirrus-real.js.
 // A missing export is an absent property, so removing one breaks only a path
 // that reads it.
-export { SupervisorRPC } from "@nimbus-sh/worker/supervisor-rpc";
+export { SupervisorRPC } from "@nimbus-sh/worker/workspace-host";
 
 /** The SPA and every other static asset, under the app's document policy. */
 async function serveApp(request: Request, env: Env): Promise<Response> {
@@ -700,8 +709,9 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     if (controlResp) return controlResp;
   }
 
-  // 9. The signed-in account APIs — /api/user/* profile and roster, and
-  //    /api/shared/* publish, list, fork — plus /api/updates/*, this
+  // 9. The signed-in account APIs — /api/user/* profile and roster,
+  //    /api/shared/* publish, list, fork, /api/drive/* the owner's Drive —
+  //    plus /api/updates/*, this
   //    deployment reading its own release channel and installing from it.
   //    The updates owner check is the deployment's own record, inside that
   //    module: everyone else is answered 404, including the fact that the
@@ -713,6 +723,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     (req) => handleAccountRequest(req, env, identity),
     (req) => handleUserRequest(req, env, identity, ctx),
     (req) => handleSharedRequest(req, env, identity),
+    (req) => handleDriveRequest(req, env, identity),
     (req) => handleUpdatesRequest(req, env, identity),
   ]);
 

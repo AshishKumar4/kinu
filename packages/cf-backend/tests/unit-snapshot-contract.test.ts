@@ -262,6 +262,6 @@ describe('the workspace snapshot contract', () => {
     // exist AND carry a capability tier, because that map is also what puts it
     // on the orchestrator's declared RPC surface.
     expect(AGENT_RPC_ACCESS).toHaveProperty('getWorkspaceTabPresence', 'workspace.read');
-    expect(returnedKeys(SERVER, 'getWorkspaceTabPresence')).toEqual(['releases', 'explorations']);
+    expect(returnedKeys(SERVER, 'getWorkspaceTabPresence')).toEqual(['work', 'releases', 'explorations']);
   });
 });

@@ -38,7 +38,7 @@ const V1_CODE = 'async function* run(rt, task) { yield "v1-pending"; }';
 const RATIONALE = 'Session reflection: stream tool results incrementally for long tasks.';
 
 function setup() {
-  const { rt } = createTestRuntime();
+  const { rt, stores } = createTestRuntime();
   const execRaw = rt.storage.execRaw;
   initScaffoldTables(execRaw);
   initShadowTables(execRaw);
@@ -48,7 +48,7 @@ function setup() {
   initGepaTables(execRaw);
   initRefinementTables(execRaw);
 
-  return { rt, facts: createFactsStore(rt.storage.sql, rt.actor) };
+  return { rt, stores, facts: createFactsStore(rt.storage.sql, rt.actor) };
 }
 
 async function seedScaffoldPending(rt: AgentRuntime): Promise<number> {
@@ -677,8 +677,8 @@ describe('reverts — real paths only', () => {
 
 describe('session-end digest — assembled when the window closes', () => {
   test('onSessionComplete emits one changelog_digest covering the window', async () => {
-    const { rt, facts } = setup();
-    const engine = new EvolutionEngine(rt);
+    const { rt, facts, stores } = setup();
+    const engine = new EvolutionEngine(rt, stores.history);
     const events: EvolutionEvent[] = [];
     engine.onEvent((e) => events.push(e));
 
@@ -711,8 +711,8 @@ describe('session-end digest — assembled when the window closes', () => {
   });
 
   test('a window that changed nothing emits no digest', async () => {
-    const { rt } = setup();
-    const engine = new EvolutionEngine(rt);
+    const { rt, stores } = setup();
+    const engine = new EvolutionEngine(rt, stores.history);
     const events: EvolutionEvent[] = [];
     engine.onEvent((e) => events.push(e));
     await engine.onSessionComplete({

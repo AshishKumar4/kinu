@@ -27,7 +27,7 @@ import {
   discoverSkills, readSkillFile, type DiscoverOpts, type SkillsVfs,
 } from '../skills/discover';
 import { boundedInt } from '../utils/bounds';
-import { seekPage, type Page, type PageRequest } from './page';
+import { seekPage, type Page, type PageRequest } from '../session/page';
 import type { AgentsMdSources } from '../prompting/agents-md';
 import { tolerateAsync } from '../obs/index';
 

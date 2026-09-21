@@ -7,19 +7,14 @@
 import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 
-import { BUILTIN_TUI_THEMES, DEFAULT_TUI_THEME_SELECTION } from '../src/tui/theme';
+import { BUILTIN_TUI_THEMES, createThemeRegistry, DEFAULT_TUI_THEME_SELECTION } from '../src/tui/theme';
 import { inkBefore, runTuiInPty } from './helpers/pty-screen';
 
 const entry = resolve(import.meta.dir, 'fixtures/pty-chat.tsx');
 
 describe('the file diff card on a real terminal', () => {
   test('an edit result renders header and hunk lines in the well inks', () => {
-    const selection = DEFAULT_TUI_THEME_SELECTION;
-
-    if (selection.mode !== 'theme') throw new Error('the default selection opens on a pinned theme');
-    const theme = BUILTIN_TUI_THEMES.find((candidate) => candidate.id === selection.themeId);
-
-    if (theme === undefined) throw new Error(`missing default theme ${selection.themeId}`);
+    const theme = createThemeRegistry(BUILTIN_TUI_THEMES).get(DEFAULT_TUI_THEME_SELECTION.themeId);
 
     const run = runTuiInPty(entry, {
       env: { KINU_PTY_FILE_EDIT: '1' },

@@ -344,11 +344,9 @@ export type RunEvent =
    *  A refused edit writes neither, so an activation row is never a claim about
    *  an edit that never landed.
    *
-   *  `revision` is numbered PER ACTOR and not per turn: the raw working history
-   *  and a turn's rendered requests are different coordinate spaces, and an
-   *  edit authored between turns — or before the actor's first turn — has no
-   *  turn at all, which is why `turnId` is nullable. */
-  | (RunEventBase & { type: 'context_edit'; revision: number; baseRevision: number;
+   *  The committed revision and the pending proposal have distinct identities.
+   *  A staged event names its base revision; activation names the new revision. */
+  | (RunEventBase & { type: 'context_edit'; contextId: string; proposalId: string; revision: number; baseRevision: number;
       messageCount: number; author: string;
       via: ContextEditVia; status: ContextEditStatus; effectiveAt: ContextEditBoundary;
       turnId: string | null; stepIndex: number | null })

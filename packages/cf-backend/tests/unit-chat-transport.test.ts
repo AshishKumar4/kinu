@@ -33,7 +33,7 @@ function isRefusal(landing: SendLanding | HarnessRefusal): landing is HarnessRef
   return v.is(v.object({ refuse: v.string() }), landing);
 }
 
-function harness(landing: SendLanding | HarnessRefusal = 'turn') {
+function harness(landing: SendLanding | HarnessRefusal = 'turn', loadHistory?: () => Promise<UIMessage[]>) {
   const { sql, db } = createTestSql();
   const broadcasts: Array<{ frame: v.InferOutput<typeof FrameSchema>; exclude: string[] | undefined }> = [];
   const history: UIMessage[] = [];
@@ -64,7 +64,7 @@ function harness(landing: SendLanding | HarnessRefusal = 'turn') {
     sql,
     broadcast: (message, exclude) => { broadcasts.push({ frame: v.parse(FrameSchema, JSON.parse(message)), exclude }); },
     getConnection: (id) => connections.get(id),
-    history: () => [...history],
+    history: loadHistory ?? (async () => [...history]),
     admitted: (id) => history.some((row) => row.id === id) || reserved.has(id),
     send: (input) => {
       if (isRefusal(landing)) return Promise.reject(landing.fault === true ? new Error(landing.refuse) : new KinuError('bad_input', landing.refuse));
@@ -106,6 +106,37 @@ function chatRequest(id: string, text: string, file?: { url: string; mediaType: 
     }) },
   });
 }
+
+test('history materialization finishes before connect publication and chat admission', async () => {
+  const pending = Promise.withResolvers<UIMessage[]>();
+  const h = harness('turn', () => pending.promise);
+  const connection = h.connection('waiting-history');
+  const connected = h.transport.onConnect(connection);
+  const admitted = h.transport.onMessage(connection, chatRequest('replayed', 'already stored'));
+
+  expect(h.connectionFrames(connection.id)).toEqual([]);
+  expect(h.sent).toEqual([]);
+  h.history.push({ id: 'input-replayed', role: 'user', parts: [{ type: 'text', text: 'already stored' }] });
+  pending.resolve([...h.history]);
+  await Promise.all([connected, admitted]);
+  expect(h.sent).toEqual([]);
+  const frames = h.connectionFrames(connection.id).map((text) => v.parse(FrameSchema, JSON.parse(text)));
+  expect(frames).toContainEqual({ type: 'cf_agent_chat_messages', messages: [{ id: 'input-replayed', role: 'user', parts: [{ type: 'text', text: 'already stored' }] }] });
+});
+
+test('turn completion waits for materialized history before publishing done', async () => {
+  const pending = Promise.withResolvers<UIMessage[]>();
+  const h = harness('turn', () => pending.promise);
+  await h.transport.openTurn({ turnId: 'background', messageId: 'answer', userTurn: false });
+  const closing = h.transport.closeTurn();
+
+  expect(h.responses()).toEqual([]);
+  pending.resolve([{ id: 'answer', role: 'assistant', parts: [{ type: 'text', text: 'settled' }] }]);
+  await closing;
+  expect(h.responses()).toHaveLength(1);
+  expect(h.responses()[0]).toMatchObject({ done: true });
+  expect(h.broadcasts.at(-1)).toMatchObject({ frame: { type: 'cf_agent_chat_messages', messages: [{ id: 'answer' }] } });
+});
 
 function chunks(parts: UIMessageChunk[]): ReadableStream<UIMessageChunk> {
   return new ReadableStream({ start(controller) { for (const part of parts) controller.enqueue(part); controller.close(); } });
@@ -222,14 +253,14 @@ describe('ChatWireTransport', () => {
     // The loop wrote the opening row and opened the turn: every tab reads the
     // transcript with the operator's message in it.
     h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
-    h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     expect(h.broadcasts.at(-1)).toMatchObject({ frame: { type: 'cf_agent_chat_messages', messages: [{ id: 'input-req-1' }] }, exclude: undefined });
     await h.transport.observe(chunks([
       { type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't' },
       { type: 'text-delta', id: 't', delta: 'hel' }, { type: 'text-delta', id: 't', delta: 'lo' },
       { type: 'text-end', id: 't' }, { type: 'finish-step' }, { type: 'finish' },
     ]));
-    h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'hello', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'hello', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
 
     const frames = h.responses();
     expect(frames.map((f) => f.id)).toEqual(Array<string>(9).fill('req-1'));
@@ -253,7 +284,7 @@ describe('ChatWireTransport', () => {
     const conn = h.connection('c1');
     await h.transport.onMessage(conn, chatRequest('req-1', 'hello'));
     h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
-    h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
 
     // Two chunks reach the relay, then the stream fails under it — the loop's
     // own copy is unaffected and commits the whole answer from its text.
@@ -276,7 +307,7 @@ describe('ChatWireTransport', () => {
     expect(h.transport.streamed('msg-1')).toBeNull();
     expect(h.transport.answer('msg-1')).toBeNull();
 
-    h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'hello', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'hello', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
 
     // The request still closes at the turn's own end, and the partial is not
     // kept as a finished answer for a late reader either.
@@ -289,14 +320,14 @@ describe('ChatWireTransport', () => {
     const h = harness('turn');
     const first = h.connection('c1');
     await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
-    h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     // The first delta flushes the store; the turn is still live.
     await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]));
     expect(h.chunkRows().length).toBeGreaterThan(0);
 
     const second = h.connection('c2');
     h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
-    h.transport.onConnect(second);
+    await h.transport.onConnect(second);
     // Resuming first, then the transcript as it is now — the live turn's
     // opening row, which the loop wrote when the turn started.
     expect(JSON.parse(h.connectionFrames('c2')[0] ?? '{}')).toEqual({ type: 'cf_agent_stream_resuming', id: 'req-1' });
@@ -317,10 +348,10 @@ describe('ChatWireTransport', () => {
     const h = harness('turn');
     const conn = h.connection('c1');
     await h.transport.onMessage(conn, chatRequest('req-1', 'hello'));
-    h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     await h.transport.observe(chunks([{ type: 'start' }, { type: 'abort' }]));
-    h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN });
-    h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 0, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN });
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 0, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
 
     const frames = h.responses();
     expect(frames.filter((f) => f.error === true)).toEqual([]);
@@ -331,8 +362,8 @@ describe('ChatWireTransport', () => {
     const failed = harness('turn');
     const tab = failed.connection('c1');
     await failed.transport.onMessage(tab, chatRequest('req-2', 'hello'));
-    failed.transport.deliver(turnStart('input-req-2', 'msg-2'));
-    failed.transport.deliver({ type: 'error', message: 'the provider refused the request' });
+    await failed.transport.deliver(turnStart('input-req-2', 'msg-2'));
+    await failed.transport.deliver({ type: 'error', message: 'the provider refused the request' });
     expect(failed.responses().at(-1)).toMatchObject({ id: 'req-2', done: false, error: true, body: 'the provider refused the request' });
   });
 

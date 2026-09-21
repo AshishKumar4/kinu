@@ -9,7 +9,7 @@
 // These tests walk a transcript longer than one page and hold the contract the
 // chat history paging already established: every row reachable exactly once,
 // in order, `end` only stated by a query that ran off the data.
-import type { SeekCursor } from '../src/read-models/page';
+import type { SeekCursor } from '../src/session/page';
 import type { SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { describe, expect, test } from 'bun:test';

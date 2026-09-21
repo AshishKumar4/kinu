@@ -40,7 +40,7 @@ import { readForkRunParams } from '../src/read-models/fork-params';
 import {
   readExplorationCanvas, readExplorationRun, type ExplorationCanvasRun,
 } from '../src/read-models/exploration-canvas';
-import type { Page, SeekCursor } from '../src/read-models/page';
+import type { Page, SeekCursor } from '../src/session/page';
 
 function freshDb() {
   const db = new Database(':memory:');

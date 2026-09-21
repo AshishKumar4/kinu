@@ -22,9 +22,11 @@ import {
 } from '../src/index';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { getPendingPromptSection, listPromptSectionVersions, proposePromptSection, recordPromptSectionTrial } from '../src/prompting/section-store';
-import { createEvalExecutor, createTestActor, createTestRuntime, createTestWorkspace } from './helpers';
+import { createEvalExecutor, createTestActor, createTestRuntime, createTestWorkspace, storesFor } from './helpers';
 import { scoreInterval } from '../src/utils/stats';
 import { RunEventRecorder } from '../src/events/recorder';
+import { SessionHistory } from '../src/session/history';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 
 /** Small enough to keep the pass cheap, above `clampGepaEvalBudget`'s floor of
  *  4 so the budget the test asks for is the budget the split is drawn at. */
@@ -84,6 +86,7 @@ function refusingControl(rt: AgentRuntime) {
     rt,
     events: new RunEventRecorder(rt.storage.sql, rt.actor),
     sql: rt.storage.sql,
+    history: storesFor(rt).history,
     config,
     surface: () => refuse('surface'),
     model: () => refuse('model'),
@@ -120,6 +123,7 @@ function runnableControl(rt: AgentRuntime): RunnableControl {
       events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt,
       sql: rt.storage.sql,
+      history: storesFor(rt).history,
       config,
       surface: () => ({
         llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
@@ -216,7 +220,7 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     seedLedger(rt, { failures: 6, guards: 4 });
     const { control, reflectionPrompts, judgePrompts } = runnableControl(rt);
 
-    const split = buildOutcomeEvalSplit(rt.storage.sql, rt.actor, EVAL_SIZE);
+    const split = await buildOutcomeEvalSplit(rt.storage.sql, rt.actor, storesFor(rt).history.transcript(CHAT_SESSION_ID), EVAL_SIZE);
     expect(split.degeneracy).toBeNull();
     expect(split.train.length).toBeGreaterThan(0);
     expect(split.heldOutNegatives).toBeGreaterThan(0);
@@ -263,7 +267,7 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     seedLedger(rt, { failures: 1, guards: 4 });
     const { control } = runnableControl(rt);
 
-    const split = buildOutcomeEvalSplit(rt.storage.sql, rt.actor, EVAL_SIZE);
+    const split = await buildOutcomeEvalSplit(rt.storage.sql, rt.actor, storesFor(rt).history.transcript(CHAT_SESSION_ID), EVAL_SIZE);
     expect(split.degeneracy).toBe('no_held_out_negatives');
 
     const result = await runScaffoldGepaOptimization(control, {
@@ -276,8 +280,8 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     expect(result.selection?.heldOutNegatives).toBe(0);
   });
 
-  test('the split it consumes really is disjoint on the ledger it reads', () => {
-    const { sql, execRaw } = createTestWorkspace();
+  test('the split it consumes really is disjoint on the ledger it reads', async () => {
+    const { db, sql, execRaw, vfs } = createTestWorkspace();
     const actor = createTestActor(sql, execRaw, 'ws-gepa-split', 'gepa-split');
 
     for (let i = 0; i < 6; i++) {
@@ -291,7 +295,12 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
       });
     }
 
-    const split = buildOutcomeEvalSplit(sql, actor, 24);
+    const history = new SessionHistory({
+      sql, actor, transactionSync: write => db.transaction(write)(),
+      files: async () => ({ vfs, artifactDirectory: '/actor/.kinu/context' }),
+    });
+
+    const split = await buildOutcomeEvalSplit(sql, actor, history.transcript(CHAT_SESSION_ID), 24);
     const trainInputs = new Set(split.train.map((i) => i.input));
     expect(split.val.some((i) => trainInputs.has(i.input))).toBe(false);
     expect(split.heldOutNegatives).toBeGreaterThan(0);
@@ -317,7 +326,7 @@ test('a judge failure during reflection evaluation aborts instead of rejecting a
   const rt = await evolvableRuntime();
   seedLedger(rt, { failures: 8, guards: 4 });
   const { control: base, reflectionPrompts } = runnableControl(rt);
-  const seedCalls = buildOutcomeEvalSplit(rt.storage.sql, rt.actor, EVAL_SIZE).val.length;
+  const seedCalls = (await buildOutcomeEvalSplit(rt.storage.sql, rt.actor, storesFor(rt).history.transcript(CHAT_SESSION_ID), EVAL_SIZE)).val.length;
   let calls = 0;
 
   const control: ScaffoldControl = { ...base, judge: async ({ schema }) => {
@@ -436,7 +445,7 @@ test('a later unavailable judge leaves valid earlier measurements but no selecte
   const rt = await evolvableRuntime();
   seedLedger(rt, { failures: 8, guards: 4 });
   const { control: base } = runnableControl(rt);
-  const split = buildOutcomeEvalSplit(rt.storage.sql, rt.actor, EVAL_SIZE);
+  const split = await buildOutcomeEvalSplit(rt.storage.sql, rt.actor, storesFor(rt).history.transcript(CHAT_SESSION_ID), EVAL_SIZE);
   const completedCalls = split.val.length * 2 + Math.min(3, split.train.length);
   let calls = 0;
 

@@ -40,6 +40,9 @@ import {
 import { modifyScaffold } from '../scaffold/modify';
 import type { ScaffoldVersionView } from '../types/scaffold';
 import type { ActorHandle } from '../identity/actor-handle';
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
+import type { SessionHistory } from '../session/history';
+import type { SessionTranscriptReader } from '../session/transcript';
 import { listScaffoldArchive } from '../scaffold/archive';
 import {
   DEFAULT_SHADOW_CONFIG, MAX_QUEUED_SHADOW_TRIALS, applyPromotionDecision, countQueuedShadowTrials,
@@ -110,6 +113,10 @@ export interface ScaffoldControl {
   readonly rt: AgentRuntime;
   readonly events: ScaffoldDecisionEvents;
   readonly sql: SqlExecutor;
+  /** The actor's conversation store. Every eval split this plane draws reads
+   *  the graded turns' request/response text out of it, so the plane is given
+   *  the one the host already owns rather than opening a second view of it. */
+  readonly history: SessionHistory;
   readonly config: Pick<
     AgentConfigStore,
     'getShadowSampleRate' | 'getAutoPromoteScaffold' | 'getGepaEvalBudget'
@@ -157,6 +164,12 @@ export interface ScaffoldControl {
    * recorder through {@link recordModelOperations}.
    */
   readonly operations?: ModelOperationSink;
+}
+
+/** The chat transcript an eval split is drawn from — the graded turns all live
+ *  in the default conversation, whatever else this plane is optimising. */
+export function controlTranscript(control: ScaffoldControl): SessionTranscriptReader {
+  return control.history.transcript(CHAT_SESSION_ID);
 }
 
 function scaffoldRunOptions(
@@ -643,7 +656,7 @@ export async function runScaffoldGepaOptimization(
   const evalSize = clampGepaEvalBudget(opts?.evalSize ?? control.config.getGepaEvalBudget());
 
   // 1. Train/val split from outcome-labeled turns (the turn_outcomes ledger).
-  const split = buildOutcomeEvalSplit(control.sql, control.rt.actor, evalSize);
+  const split = await buildOutcomeEvalSplit(control.sql, control.rt.actor, controlTranscript(control), evalSize);
   const { train: trainSet, val: evalSet } = split;
 
   // Without a failure to optimise toward there is nothing to select on but
@@ -834,7 +847,7 @@ async function runPromptSectionGepaOptimization(
   opts: { sectionId: string; maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
 ): Promise<PromptSectionOptimizationResult> {
   const evalSize = clampGepaEvalBudget(opts.evalSize ?? control.config.getGepaEvalBudget());
-  const split = buildOutcomeEvalSplit(control.sql, control.rt.actor, evalSize);
+  const split = await buildOutcomeEvalSplit(control.sql, control.rt.actor, controlTranscript(control), evalSize);
 
   if (split.degeneracy === 'no_labeled_turns' || split.degeneracy === 'no_negatives') {
     return { ok: false, error: describeSplitDegeneracy(split.degeneracy) };
@@ -960,7 +973,7 @@ async function runPromptSectionTrials(
   // Drawn fresh each pass, so consecutive passes see the turns that happened in
   // between: the newest failures plus the accepted-turn guards, and never the
   // train half the candidate was written against.
-  const split = buildOutcomeEvalSplit(control.sql, control.rt.actor, control.config.getGepaEvalBudget());
+  const split = await buildOutcomeEvalSplit(control.sql, control.rt.actor, controlTranscript(control), control.config.getGepaEvalBudget());
   const instances = split.val.slice(0, Math.max(1, opts?.trials ?? 3));
 
   let trialsRun = 0;
@@ -1053,8 +1066,8 @@ export async function proposeMeasuredPromptSection(
     };
   }
 
-  const split = buildOutcomeEvalSplit(
-    control.sql, control.rt.actor, clampGepaEvalBudget(control.config.getGepaEvalBudget()),
+  const split = await buildOutcomeEvalSplit(
+    control.sql, control.rt.actor, controlTranscript(control), clampGepaEvalBudget(control.config.getGepaEvalBudget()),
   );
 
   if (split.degeneracy !== null) {

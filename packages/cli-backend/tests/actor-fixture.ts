@@ -59,6 +59,11 @@ export function localTestActorHost(
   const { directory } = localActorDirectory(parent.actor);
 
   return createActorHost({
+    filesFor: async (bound) => {
+      if (!parent.filesForActor) throw new Error('test workspace has no actor file resolver');
+
+      return parent.filesForActor(bound.handle);
+    },
     storage: {
       sql: parent.storage.sql,
       transactionSync: parent.storage.transactionSync,
@@ -81,7 +86,7 @@ export function localTestActorHost(
         // — under `.unref()` a failing drain could not even be observed late.
         setTimer: () => { throw new Error('this fixture host must not schedule background work'); },
       },
-      engine: new EvolutionEngine(bound.runtime, { enabled: false }),
+      engine: new EvolutionEngine(bound.runtime, bound.stores.history, { enabled: false }),
       eventLog: new EventLog(exec, bound.handle),
     }),
     contextEvents: (bound) => bound.stores.eventRecorder,
@@ -203,23 +208,21 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
     workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '',
   });
 
-  const stores = createAgentStores(() => rt.storage.sql, () => handle, rt.storage.transactionSync);
+  const stores = createAgentStores(() => rt.storage.sql, () => handle, rt.storage.transactionSync, async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
 
-  const session: ActorSession = new ActorSession({
-    runtime,
-    claims: stores.claims,
-    installedBuild: null,
-    orchestration: {
-      host: {
-        broadcast: () => {},
-        enqueueTurn: async () => ({ status: 'skipped' }),
-        turnInFlight: () => session.inFlight,
-        setTimer: () => { throw new Error('this fixture session must not schedule background work'); },
-      },
-      engine: new EvolutionEngine(rt, { enabled: false }),
-      eventLog: new EventLog(execOver(rt), handle),
+  const session: ActorSession = new ActorSession({ history: stores.history, runtime,
+  claims: stores.claims,
+  installedBuild: null,
+  orchestration: {
+    host: {
+      broadcast: () => {},
+      enqueueTurn: async () => ({ status: 'skipped' }),
+      turnInFlight: () => session.inFlight,
+      setTimer: () => { throw new Error('this fixture session must not schedule background work'); },
     },
-  });
+    engine: new EvolutionEngine(rt, stores.history, { enabled: false }),
+    eventLog: new EventLog(execOver(rt), handle),
+  }, });
 
   const inputs: ProfileAuthorityInputs = {
     envelope: {

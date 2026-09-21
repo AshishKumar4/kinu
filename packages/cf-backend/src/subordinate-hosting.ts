@@ -40,10 +40,10 @@
  * with the others.
  */
 
-import { REAL_CLOCK } from '@kinu.run/core';
+import { REAL_CLOCK, type HeadReport } from '@kinu.run/core';
 import type { LanguageModel, ToolSet, UIMessageChunk } from 'ai';
 import {
-  EventLog, HeadCapture, runHeadInference,
+  EventLog, HeadCapture, runHeadInference, titleActorFromMessage,
   admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus,
   receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles,
   subordinateForkContext, type SubordinateInheritedContext,
@@ -301,6 +301,13 @@ export async function admitHostedTask(
     if (input.messageId !== undefined) admission.messageId = input.messageId;
     const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);
 
+    // A hosted actor has no chat session, so no `auto_title` effect exists —
+    // the first admitted message titles it here instead, and a landed title is
+    // announced so the parent's roster stops showing the codename.
+    if (result.admitted && input.kind === 'message' && titleActorFromMessage(actor.handle, input.body)) {
+      seams.announce(actor);
+    }
+
     // THE WAKE, not the child's reactor. This used to call `scheduleDrain` on
     // the actor it had just written to, and both halves of that were wrong once
     // the assignment stopped being a reaction: the debounced drain selects
@@ -382,6 +389,12 @@ export async function relayHostedReport(
  * waiting and therefore leaves the answer owed, while a second settling
  * message would reach it as a second result for one question.
  */
+export interface HostedTaskResult {
+  readonly text: string;
+  readonly relayed: SubordinateEventResult | null;
+  readonly canonicalCompletion: HeadReport['canonicalCompletion'];
+}
+
 export async function runHostedTask(
   seams: SubordinateHostSeams,
   reference: ActorReference,
@@ -392,7 +405,7 @@ export async function runHostedTask(
     readonly inheritedContext?: SubordinateInheritedContext;
   },
   observeStream?: (chunks: ReadableStream<UIMessageChunk>) => Promise<void>,
-): Promise<{ readonly text: string; readonly relayed: SubordinateEventResult | null }> {
+): Promise<HostedTaskResult> {
   return await seams.host.run(reference, async (actor) => {
     // SAFETY: this runtime is the one `ActorHostDeps.runtimeFor` built, which on
     // this backend IS `createCFRuntime`. The core seam declares the RETURN type
@@ -524,10 +537,11 @@ export async function runHostedTask(
         : null
     );
 
-    if (relayed === null) return { text: report.summary, relayed: null };
+    if (relayed === null) return { text: report.summary, relayed: null, canonicalCompletion: report.canonicalCompletion };
 
     return {
       text: report.summary,
+      canonicalCompletion: report.canonicalCompletion,
       relayed: await relayHostedReport(seams, actor, {
         status: relayed.status, content: relayed.content, origin: 'turn_end',
         mode: task.mode, sequenceId: task.sequenceId,

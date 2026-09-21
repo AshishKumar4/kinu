@@ -11,7 +11,7 @@
  * what production has.
  *
  * Both sides here are DERIVED, nothing is hand-listed. The vendor side is
- * every `CREATE TABLE` in the installed `agents`, `@cloudflare/think` and
+ * every `CREATE TABLE` in the installed `agents` and
  * `@cloudflare/containers` dist, built in one in-memory SQLite. The Kinu side
  * is every SQL template literal in the product corpus that names one of those
  * tables, prepared against that database: SQLite refuses an unknown column at
@@ -34,7 +34,7 @@ import { tablesIn } from './schema-drift';
 import { isParseable, isTestFile, readMatching } from './sources';
 import { parse, walk } from './syntax';
 
-const VENDORS = ['agents', '@cloudflare/think', '@cloudflare/containers'] as const;
+const VENDORS = ['agents', '@cloudflare/containers'] as const;
 
 export interface VendorTable {
   readonly table: string;

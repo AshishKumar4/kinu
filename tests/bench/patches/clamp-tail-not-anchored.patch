@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/tools/clamp.ts b/packages/core/src/tools/clamp.ts
-index 502c01979..ba2776de6 100644
+index e27b1c491..badbca1e6 100644
 --- a/packages/core/src/tools/clamp.ts
 +++ b/packages/core/src/tools/clamp.ts
-@@ -96,7 +96,7 @@ export async function clampToolResult(
-       `(oversize: name the path in a lifetime:"task" agents hire so that agent reads it, or range-read it), or rerun with a filter]${reason}`
-     : `[output truncated: ${omitted} chars omitted; rerun with a filter (grep/head/tail) to see the rest]${reason}`;
- 
--  const clamped = `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(-tailLen)}`;
-+  const clamped = `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(tailLen)}`;
- 
-   if (opts.budget) {
-     opts.budget.admit(clamped.length);
+@@ -108,7 +108,7 @@ export async function clampToolResult(
+   const room = DEFAULT_TOOL_RESULT_MAX_CHARS - marker.length - MARKER_FENCE_CHARS;
+   const headLen = Math.floor(room * HEAD_FRACTION);
+   const head = text.slice(0, headEnd(text, headLen));
+-  const tail = text.slice(tailStart(text, room - headLen));
++  const tail = text.slice(room - headLen);
+   const clamped = `${head}\n\n${marker}\n\n${tail}`;
+   // What the root never sees, counted off what was actually kept: refusing to
+   // split a character can drop a unit the nominal split had allowed for.

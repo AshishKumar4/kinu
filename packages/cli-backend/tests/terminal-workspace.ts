@@ -33,9 +33,6 @@ const USAGE = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
  */
 export function openTerminalWorkspace(dbPath: string) {
   const db = new Database(dbPath);
-  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
-  // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
   initSearchTables(rt.storage.execRaw);

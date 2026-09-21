@@ -693,6 +693,43 @@ tests; `gate:do-init` is unchanged. No timeout, budget or window was
 raised and no test retries.
 
 
+D20. The hosted workspace runs Nimbus's published hosted runtime, not a
+hand-built host (2026-09-21, commits `5a3f3530f` and `5b7438e59` on
+`feat/nimbus-hosted-runtime-0921`). `createHostedWorkspace` composes
+`composeHostedRuntime` (`@nimbus-sh/worker` 0.8.0, core 0.10.0, fabric 0.6.0,
+sdk 0.7.0) over the bundle's own `NimbusWorkspace`, with Kinu's one
+`PortRegistry` per isolate and the runtime's `schedule`/`cancel` mapped onto a
+timer plus `waitUntil` per reason, because the object's alarm slot is the
+Agents SDK scheduler's. The slate re-drive hook is load-bearing (the manager
+refuses a durable spawn carrying `globalOutbound` without an embedder
+`resolveWorkerLaunch`), so it rides an upstream patch
+(`patches/@nimbus-sh%2Fworker@0.8.0.patch`, upstream branch
+`feat/hosted-runtime-hooks`, `3f83361e`). Measured 2026-09-21 in the worktree:
+`bun test packages/core/` 5807 pass 0 fail; the cf-backend host suites over the
+composed runtime (`unit-workspace-locality` 12/0, `unit-workspace-cwd` 4/0,
+`unit-private-tmp` 14/0, `unit-global-view` 16/0, `unit-exec-credential` 8/0,
+`unit-facet-tmp-confinement` 6/0, `unit-node-home-wiring` 28/0,
+`unit-workspace-host-facets` 3/1 — the hosted `npm install` case is red because
+upstream's installer resolves through a `LOADER.get` facet the suite's fake
+loader refuses); the commit tier (lint plus every typecheck project) green. The
+workerd tiers and the bundle size are unmeasured for this change.
+
+D21. A current workspace filesystem opens over a read-only handle
+(2026-09-21). Upstream `@nimbus-sh/core` 0.10.0 writes the schema-migration
+marker (`INSERT OR IGNORE INTO vfs_schema_migrations`) on every `SqliteVFS`
+construction; every other schema step is already conditional, so a reader
+holding a `readonly` database failed with `SQLITE_READONLY` although nothing
+needed writing. The fix gates the marker on the marker's absence, upstream on
+`feat/hosted-runtime-hooks` (`3f83361e`, `tests/unit/sqlite-vfs-readonly-open.mjs`:
+red at its line 27 without the change, `sqlite-vfs-readonly-open: ok` with it)
+and here in `patches/@nimbus-sh%2Fcore@0.10.0.patch`. Measured 2026-09-21 in
+this tree with `bun test packages/cli-backend/tests/vfs-blob.test.ts` ("a
+current filesystem opens read-only and reads what a writer left"): red with
+the guard removed from `src/vfs/sqlite-vfs.ts`, green with it. The same run
+showed the earlier `dist`-only hunk never reached bun at all, since the
+package's `bun` export condition resolves to `src/*.ts`; the patch now carries
+both.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

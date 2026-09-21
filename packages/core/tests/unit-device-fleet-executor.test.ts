@@ -17,7 +17,7 @@ import { setDiagnosticsSink } from '../src/obs/log';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { toolExecute } from '@kinu.run/test-utils';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, storesFor } from './helpers';
 import type { JsonValue } from '../src/utils/json';
 
 const STUDIO: DeviceFleetEntry = {
@@ -398,7 +398,7 @@ describe('the shell tool names the machine', () => {
     router.register(createDeviceTunnelExecutor(t));
     // The tool reads the fleet off the transport the backend hands it, so the
     // harness hands the same transport through the runtime.
-    const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router, deviceTransport: t } });
+    const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router, deviceTransport: t }, history: storesFor(rt).history });
 
     return {
       t,
@@ -438,7 +438,7 @@ describe('the shell tool names the machine', () => {
     const { rt } = createTestRuntime();
     const router = new DefaultExecutionRouter();
     router.register(createDeviceTunnelExecutor(undescribed));
-    const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router, deviceTransport: undescribed } });
+    const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router, deviceTransport: undescribed }, history: storesFor(rt).history });
     const run = toolExecute<{ command: string; runtime: string; why?: string }, string>(tools.shell);
 
     const early = run({ command: 'uname', runtime: 'spare box', why: 'their files' });

@@ -8,13 +8,13 @@ import { describe, expect, test } from 'bun:test';
 import { scratchDir } from '@kinu.run/test-utils';
 
 import { MessageList } from '../src/tui/messages';
-import { PhaseLine } from '../src/tui/overlays';
+import { PhaseLine, ThemePickerOverlay } from '../src/tui/overlays';
 import { createFileTuiPreferenceStore } from '../src/tui/preferences';
 import {
   BUILTIN_TUI_THEMES,
-  DEFAULT_TUI_THEME_SELECTION,
+  useTuiTheme,
   TuiThemeProvider,
-  createThemeRegistry,
+  createThemeRegistry, DEFAULT_TUI_THEME_SELECTION, type ThemeSelection,
 } from '../src/tui/theme';
 
 const TUI_SOURCES = join(import.meta.dir, '..', 'src', 'tui');
@@ -44,13 +44,51 @@ function contrast(foreground: string, background: string): number {
 }
 
 describe('TUI theme', () => {
-  test('a missing preference file holds no theme; an existing file keeps its choice', () => {
+  test('the theme picker renders and commits the selected shared default', async () => {
+    const { renderer, mockInput, waitForFrame, captureCharFrame } = await createTestRenderer({ width: 100, height: 32, useThread: false });
+    const root = createRoot(renderer);
+    const selected = Promise.withResolvers<ThemeSelection>();
+    const theme = createThemeRegistry(BUILTIN_TUI_THEMES).get(DEFAULT_TUI_THEME_SELECTION.themeId);
+
+    try {
+      flushSync(() => root.render(
+        <TuiThemeProvider>
+          <ThemePickerOverlay terminal={{ width: 100, height: 32 }} selection={DEFAULT_TUI_THEME_SELECTION} onSelect={selected.resolve} />
+        </TuiThemeProvider>,
+      ));
+      renderer.start();
+      await waitForFrame(() => captureCharFrame().includes(theme.label));
+      mockInput.pressEnter();
+      expect(await selected.promise).toEqual(DEFAULT_TUI_THEME_SELECTION);
+    } finally {
+      flushSync(() => root.unmount());
+      renderer.destroy();
+    }
+  });
+
+  test('a missing preference file holds no theme; an existing file keeps its choice', async () => {
     const path = join(scratchDir('tui-theme-prefs'), 'tui.json');
     const store = createFileTuiPreferenceStore(path);
     // Nothing is stored until the person picks in onboarding, and the TUI
     // paints the dark product face meanwhile.
     expect(store.read().theme).toBeUndefined();
-    expect(DEFAULT_TUI_THEME_SELECTION.themeId).toBe('kinu-dark-solid');
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 40, height: 4, useThread: false });
+    const root = createRoot(renderer);
+
+    function DefaultThemeProbe() {
+      const { definition } = useTuiTheme();
+
+      return <text>{definition.id}</text>;
+    }
+
+    try {
+      flushSync(() => root.render(<TuiThemeProvider><DefaultThemeProbe /></TuiThemeProvider>));
+      await renderOnce();
+      expect(captureCharFrame().trim()).toBe('kinu-dark-solid');
+    } finally {
+      flushSync(() => root.unmount());
+      renderer.destroy();
+    }
 
     for (const id of ['kinu-dark-solid', 'kinu-light-solid']) {
       const theme = BUILTIN_TUI_THEMES.find((candidate) => candidate.id === id);

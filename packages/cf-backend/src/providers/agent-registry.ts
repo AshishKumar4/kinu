@@ -23,7 +23,7 @@ import {
   type ProviderWaitInfo,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
-import { createWorkersAIProvider, type WorkersAIOptions } from '@kinu.run/core';
+import { createWorkersAIProvider } from '@kinu.run/core';
 import { createMyGatewayProvider } from '@kinu.run/core';
 import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from '@kinu.run/core';
 import type { CredentialSummary } from '../user/user-do';
@@ -67,7 +67,7 @@ export interface AgentProviderDeps {
    *  silent. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
   appTitle?: string;
-  workersAI?: WorkersAIOptions;
+  sessionAffinity?: string;
 }
 
 export interface AgentProviderRegistry {
@@ -126,7 +126,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     developmentBinding = opts.env.AI as Ai;
   }
 
-  registry.register(createWorkersAIProvider(opts.workersAI, developmentBinding));
+  registry.register(createWorkersAIProvider({ sessionAffinity: opts.sessionAffinity }, developmentBinding));
   registry.register(createMyGatewayProvider());
   registry.register(createAIGatewayProvider());
   registry.register(createCodexProvider());
@@ -156,6 +156,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
 
   const deps: ProviderDeps = {
     env: opts.env,
+    sessionAffinity: opts.sessionAffinity,
     getAuth,
     hasCredential: async (key: string) => (await credentialKeys()).includes(key),
     listCredentialKeys: credentialKeys,

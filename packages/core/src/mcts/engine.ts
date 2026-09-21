@@ -227,7 +227,7 @@ export async function runMCTS(
         throwIfAborted(config.signal);
 
         const priorHistory = selected.msg_id
-          ? session.getHistory(selected.msg_id)
+          ? await session.getHistory(selected.msg_id)
           : [{ role: 'user', content: task }];
 
         const craftedTools = rt.craftStore.list();

@@ -333,14 +333,18 @@ test('a managed context edit reaches the local request and retained trial togeth
     const claim = rt.stores.claims.latestTurn();
 
     if (trial === undefined || claim === null) throw new Error('the turn did not retain its claim and trial');
-    const admitted = rt.stores.claims.admittedContext(claim.turnId);
+    const admitted = await rt.stores.claims.admittedContext(claim.turnId);
+    const consumed = await rt.stores.claims.consumedContext(claim.turnId, 0);
 
-    if (admitted === null) throw new Error('the claim has no admitted context');
+    if (admitted === null || consumed === null) throw new Error('the turn recorded no admitted or consumed context');
     expect(requests.at(-1)).toContain('NEW premise');
     expect(requests.at(-1)).not.toContain('OLD premise');
+    // The admission is the selection before the edit landed; the retained trial
+    // is the context the model was actually called with at step 0.
+    expect(admitted.messages[0]).toEqual({ role: 'user', content: 'use the OLD premise' });
     expect(trial.context[0]).toEqual({ role: 'user', content: 'use the NEW premise' });
     expect(trial.context.filter((message) => message.content === 'follow-up input')).toHaveLength(1);
-    expect(trial.context).toEqual(admitted.messages);
+    expect(trial.context).toEqual(consumed.messages);
   } finally {
     await session.end();
     db.close();
@@ -715,7 +719,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
 });
 
 const assistantRows = (rt: CLIRuntime) =>
-  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM actor_messages WHERE role = 'assistant'`[0]?.n ?? 0;
+  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM conversation_entries WHERE actor_id = ${rt.actor.actorId} AND role = 'assistant'`[0]?.n ?? 0;
 
 const displayName = (rt: CLIRuntime) =>
   rt.storage.sql<{ value: string }>`SELECT value FROM actor_config WHERE key = 'display_name'`[0]?.value ?? null;

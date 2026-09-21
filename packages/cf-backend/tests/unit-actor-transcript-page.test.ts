@@ -16,8 +16,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { getChatHistoryPage, type ChatHistoryEntry, type Page, type SqlExecutor } from '@kinu.run/core';
-import { sqlOver } from '@kinu.run/test-utils';
+import { getChatHistoryPage, CHAT_SESSION_ID, type ActorHandle, type SessionHistory, type ChatHistoryEntry, type Page } from '@kinu.run/core';
 import { hostedExplorationHarness, hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
 /** A transcript reader: the root's public RPC, or the production read model
@@ -26,45 +25,16 @@ interface Root {
   page(request?: { limit?: number; cursor?: { after: string }; actor?: string }): Promise<Page<ChatHistoryEntry>> | Page<ChatHistoryEntry>;
 }
 
-/**
- * `n` turns of conversation, oldest first, in one actor's partition.
- *
- * Written through the production `actor_messages` columns, including `actor_id`: a
- * seed without the predicate column would put every fixture row in every
- * actor's conversation, which is exactly the leak this shape exists to catch.
- * `created_at` intentionally repeats across rows, because several messages of
- * one turn share a stamp and the walk must seek on `rowid` rather than time.
- */
-/**
- * The same `n` turns in the workspace ROOT's own store: the SDK-shaped pane
- * table the root's transcript writes and every conversational reader answers
- * from where it exists (`usesPaneStore`). No actor column — the root IS the
- * pane — and `created_at` repeats for the same reason.
- */
-function seedPane(sql: SqlExecutor, n: number, prefix = 'm'): string[] {
+async function seed(actor: ActorHandle, history: SessionHistory, n: number, prefix = 'm'): Promise<string[]> {
+  const store = history.transcript(CHAT_SESSION_ID);
   const ids: string[] = [];
 
   for (let i = 1; i <= n; i++) {
-    const id = `${prefix}${i}`;
-    const role = i % 2 === 0 ? 'assistant' : 'user';
-
+    const id = prefix + i;
+    const reference = await history.append({ id, turnId: id, message: { role: 'user', content: 'message ' + i }, origin: 'input', assertOwner: () => actor.assertCurrent() });
+    const entry = await store.prepareUser({ id, turnId: id, message: reference });
+    store.appendUser(entry);
     ids.push(id);
-    void sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${id}, '', ${i === 1 ? null : `${prefix}${i - 1}`}, ${role},
-        ${JSON.stringify({ id, role, parts: [{ type: 'text', text: `message ${i}` }] })}, ${`2026-01-01 00:00:0${i % 10}`})`;
-  }
-
-  return ids;
-}
-
-function seed(sql: SqlExecutor, actorId: string, n: number): string[] {
-  const ids: string[] = [];
-
-  for (let i = 1; i <= n; i++) {
-    const id = `m${i}`;
-    ids.push(id);
-    void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
-      VALUES (${actorId}, ${id}, 'default', ${i % 2 === 0 ? 'assistant' : 'user'}, ${`message ${i}`}, ${i})`;
   }
 
   return ids;
@@ -94,7 +64,8 @@ describe('a transcript longer than one window is reachable page by page', () => 
 
     await root.agent.activateActor();
     // The ROOT's conversation is the pane store its transcript writes.
-    const seeded = seedPane(sqlOver(root.db), 25);
+    const actor = root.agent.observeRuntime().actor;
+    const seeded = await seed(actor, root.agent.observeActorHost().bindStores(actor).stores.history, 25);
 
     const walked = await walk({ page: (request) => root.agent.getChatHistoryPage(request) }, 10);
 
@@ -115,10 +86,8 @@ describe('a transcript longer than one window is reachable page by page', () => 
       mission: 'hold one conversation',
     });
 
-    const sql = sqlOver(workspace.db);
-    const seeded = seed(sql, child.actor.handle.actorId, 25);
-
-    const walked = await walk({ page: (request) => getChatHistoryPage(sql, child.actor.handle, request) }, 10);
+    const seeded = await seed(child.actor.handle, child.actor.stores.history, 25);
+    const walked = await walk({ page: (request) => getChatHistoryPage(child.actor.stores.history.transcript(CHAT_SESSION_ID), request) }, 10);
 
     expect(walked.ids).toEqual(seeded);
     expect(walked.pages).toBe(3);
@@ -140,14 +109,14 @@ describe('a transcript longer than one window is reachable page by page', () => 
       mission: 'hold a separate conversation',
     });
 
-    const sql = sqlOver(parent.db);
     await parent.agent.activateActor();
-    seedPane(sql, 4);
+    const actor = parent.agent.observeRuntime().actor;
+    await seed(actor, parent.agent.observeActorHost().bindStores(actor).stores.history, 4);
 
     expect((await walk({ page: (request) => parent.agent.getChatHistoryPage(request) }, 10)).ids)
       .toEqual(['m1', 'm2', 'm3', 'm4']);
     expect((await walk({
-      page: (request) => getChatHistoryPage(sql, child.actor.handle, request),
+      page: (request) => getChatHistoryPage(child.actor.stores.history.transcript(CHAT_SESSION_ID), request),
     }, 10)).ids).toEqual([]);
   });
 
@@ -166,7 +135,7 @@ describe('a transcript longer than one window is reachable page by page', () => 
       mission: 'hold no conversation',
     });
 
-    const page = getChatHistoryPage(sqlOver(workspace.db), child.actor.handle, { limit: 10 });
+    const page = await getChatHistoryPage(child.actor.stores.history.transcript(CHAT_SESSION_ID), { limit: 10 });
 
     expect(page.status).toBe('end');
     expect(page.items).toEqual([]);
@@ -175,16 +144,15 @@ describe('a transcript longer than one window is reachable page by page', () => 
   /** A cursor naming a row this partition never had is refused, not answered with
    * the newest page — which would silently re-deliver history the caller
    * already holds and read as an exhausted conversation on the next page. */
-  test('a cursor from another conversation is refused rather than answered', () => {
+  test('a cursor from another conversation is refused rather than answered', async () => {
     const workspace = orchestratorHarness();
-    const sql = sqlOver(workspace.db);
-    const actorId = workspace.agent.observeRuntime().actor.actorId;
-    seed(sql, actorId, 4);
+    const actor = workspace.agent.observeRuntime().actor;
+    const history = workspace.agent.observeActorHost().bindStores(actor).stores.history;
+    await seed(actor, history, 4);
 
-    expect(() => getChatHistoryPage(sql, workspace.agent.observeRuntime().actor, {
-      limit: 2,
-      cursor: { after: 'not-in-this-store' },
-    })).toThrow(/no longer in it/);
+    await expect(getChatHistoryPage(history.transcript(CHAT_SESSION_ID), {
+      limit: 2, cursor: { after: 'not-in-this-store' },
+    })).rejects.toThrow(/no longer in it/);
   });
 
   /**
@@ -208,10 +176,10 @@ describe('a transcript longer than one window is reachable page by page', () => 
       mission: 'hold the conversation its own pane pages',
     });
 
-    const sql = sqlOver(workspace.db);
     await workspace.agent.activateActor();
-    seedPane(sql, 4, 'root');
-    const seeded = seed(sql, child.actor.handle.actorId, 25);
+    const actor = workspace.agent.observeRuntime().actor;
+    await seed(actor, workspace.agent.observeActorHost().bindStores(actor).stores.history, 4, 'root');
+    const seeded = await seed(child.actor.handle, child.actor.stores.history, 25);
 
     const walked = await walk({
       page: (request) => workspace.agent.getChatHistoryPage({ ...request, actor: child.actor.handle.actorId }),
@@ -226,7 +194,6 @@ describe('a transcript longer than one window is reachable page by page', () => 
   test('an actor id this workspace does not host is refused', async () => {
     const workspace = orchestratorHarness();
     await workspace.agent.activateActor();
-    seedPane(sqlOver(workspace.db), 4, 'root');
 
     await expect(workspace.agent.getChatHistoryPage({ limit: 10, actor: 'actor-of-another-workspace' }))
       .rejects.toThrow(/not registered in this workspace/);

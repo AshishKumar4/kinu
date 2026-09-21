@@ -15,7 +15,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { ComponentType, ReactNode } from "react";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Button, Loader, type ButtonProps } from "@cloudflare/kumo";
 import {
   GitBranchIcon, PackageIcon, BrainIcon,
   SparkleIcon, TimerIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
@@ -321,16 +321,10 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
           )}
           {actions}
           {hasDetails && (
-            <button
-              type="button"
-              onClick={() => setExpanded((previous) => !previous)}
-              aria-expanded={expanded}
-              aria-controls={detailsId}
+            <Button size="sm" variant="ghost" {...({ 'shape': 'square' } satisfies Pick<ButtonProps, 'shape'>)} onClick={() => setExpanded((previous) => !previous)}
+              aria-expanded={expanded} aria-controls={detailsId}
               aria-label={expanded ? `Collapse ${entry.summary}` : `Expand ${entry.summary}`}
-              className="flex size-7 items-center justify-center rounded-md p-text-3 hover:p-text"
-            >
-              {expanded ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />}
-            </button>
+              icon={expanded ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />} />
           )}
         </div>
       </div>

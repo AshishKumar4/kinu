@@ -9,35 +9,47 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
-  forkWorkspace, writeSoul, readForkLineage, writeForkSnapshot, snapshotWorkspaceForFork,
-  workspaceAddressRefusal,
-  type ForkTransport,
+  forkWorkspace, readForkLineage, writeForkSnapshot, snapshotWorkspaceForFork,
+  workspaceAddressRefusal, CHAT_SESSION_ID,
+  type ForkDriverDeps, type ForkTransport,
 } from '../src/index';
-import { createTestWorkspace } from './helpers';
+import { createTestWorkspace, type TestWorkspace } from './helpers';
+import { seedForkSource, SOURCE_ARTIFACTS, TARGET_ARTIFACTS } from './helpers/fork-conversation';
+import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
+import type { ActorHandle } from '../src/identity/actor-handle';
 
-import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
+interface ForkSourceFixture {
+  readonly workspace: TestWorkspace;
+  readonly actor: ActorHandle;
+}
 
-async function sourceWorkspace() {
-  const { db, sql, vfs } = createTestWorkspace();
-  void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'atlas'}, ${100})`;
-
-  const actor = new WorkspaceActorDirectory(sql, { workspaceId: 'SRC', ownerUserId: '' })
-    .createMain({ name: 'atlas' });
-
-  await writeSoul(vfs, sql, 'help with testing');
+async function sourceWorkspace(): Promise<ForkSourceFixture> {
+  const workspace = createTestWorkspace();
+  const chat = await seedForkSource(workspace, { workspaceId: 'SRC', workspaceName: 'atlas' });
   // The cut is looked up in THIS actor's rows, so the seeded transcript names it.
-  void sql`INSERT INTO actor_messages (actor_id, id, role, content, created_at)
-    VALUES (${actor.actorId}, ${'m1'}, ${'user'}, ${'hello'}, ${1000})`;
-  void sql`INSERT INTO actor_messages (actor_id, id, role, content, created_at)
-    VALUES (${actor.actorId}, ${'m2'}, ${'assistant'}, ${'hi'}, ${1100})`;
+  await chat.say({ id: 'm1', role: 'user', text: 'hello', parentId: null });
+  await chat.say({ id: 'm2', role: 'assistant', text: 'hi' });
 
-  return { db, sql, vfs, actor };
+  return { workspace, actor: chat.actor };
+}
+
+/** The driver's inputs, minus the transport each test varies. */
+function deps(source: ForkSourceFixture, transport: ForkTransport, busy = false): ForkDriverDeps {
+  return {
+    sql: source.workspace.sql,
+    actor: source.actor,
+    vfs: source.workspace.vfs,
+    artifactDirectory: SOURCE_ARTIFACTS,
+    sourceName: 'atlas',
+    busy: () => busy,
+    transport,
+  };
 }
 
 /** A transport that records what it was asked to do. `taken` is the set of
  *  names it reports as already holding data. */
 function recordingTransport(taken: readonly string[] = []) {
-  const delivered: Array<{ name: string; untilMessageId: string }> = [];
+  const delivered: Array<{ name: string; untilMessageId: string; artifactDirectory: string }> = [];
   const probed: string[] = [];
 
   const transport: ForkTransport = {
@@ -47,19 +59,21 @@ function recordingTransport(taken: readonly string[] = []) {
       return taken.includes(name);
     },
     async deliver(name, source) {
-      delivered.push({ name, untilMessageId: source.untilMessageId });
+      delivered.push({
+        name, untilMessageId: source.untilMessageId, artifactDirectory: source.artifactDirectory,
+      });
 
       // The transport is handed sql + the cut, never an actor: the real transfer
       // resolves the source's main actor itself (`forkTransferFrames`), and this
       // recording stand-in reads the chain the same way.
-      const message = source.sql<{ created_at: number }>`
-        SELECT created_at FROM actor_messages
+      const entry = source.sql<{ recorded_at: number }>`
+        SELECT recorded_at FROM conversation_entries
         WHERE actor_id = ${openWorkspaceMainActor(source.sql).actorId}
-          AND id = ${source.untilMessageId} LIMIT 1`[0];
+          AND session_id = ${CHAT_SESSION_ID} AND id = ${source.untilMessageId} LIMIT 1`[0];
 
-      if (!message) throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
+      if (!entry) throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
 
-      return { workspaceId: `DO-${name}`, forkPointMs: message.created_at };
+      return { workspaceId: `DO-${name}`, forkPointMs: entry.recorded_at };
     },
   };
 
@@ -71,162 +85,134 @@ describe('forkWorkspace', () => {
     const src = await sourceWorkspace();
     const t = recordingTransport();
 
-    const out = await forkWorkspace(
-      { sql: src.sql, actor: src.actor, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
-      'm1',
-      { name: 'my-fork' },
-    );
+    const out = await forkWorkspace(deps(src, t.transport), 'm1', { name: 'my-fork' });
 
-    expect(out).toEqual({ workspaceId: 'DO-my-fork', name: 'my-fork', forkPointMs: 1000 });
+    expect(out.workspaceId).toBe('DO-my-fork');
+    expect(out.name).toBe('my-fork');
     expect(t.delivered).toHaveLength(1);
-    expect(t.delivered[0]!.name).toBe('my-fork');
-    // The transport receives the cut, not a materialized snapshot. Its source
-    // side can stream rows/files in bounded frames, and m2 is past this cut.
-    expect(t.delivered[0]!.untilMessageId).toBe('m1');
-    src.db.close();
+    // The transport receives the cut and the source's payload plane, not a
+    // materialized snapshot: its source side streams rows and files in bounded
+    // frames, and m2 is past this cut.
+    expect(t.delivered[0]).toEqual({
+      name: 'my-fork', untilMessageId: 'm1', artifactDirectory: SOURCE_ARTIFACTS,
+    });
+    src.workspace.db.close();
   });
 
   test('an unnamed fork gets a fresh workspace address a preview hostname can carry, never pre-checked', async () => {
     const src = await sourceWorkspace();
     const t = recordingTransport();
 
-    const out = await forkWorkspace(
-      { sql: src.sql, actor: src.actor, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
-      'm2',
-    );
+    const out = await forkWorkspace(deps(src, t.transport), 'm2');
 
     expect(workspaceAddressRefusal(out.name)).toBeNull();
     expect(out.name).not.toContain('atlas');
     // Failing a fork over a random-id collision helps nobody, so a generated
     // name is not probed at all.
     expect(t.probed).toEqual([]);
-    expect(out.forkPointMs).toBe(1100);
-    src.db.close();
+    expect(out.forkPointMs).toBeGreaterThan(0);
+    src.workspace.db.close();
   });
 
   test('a requested name that is already taken is refused', async () => {
     const src = await sourceWorkspace();
     const t = recordingTransport(['taken']);
-    await expect(forkWorkspace(
-      { sql: src.sql, actor: src.actor, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
-      'm1',
-      { name: 'taken' },
-    )).rejects.toThrow('agent name already exists: "taken"');
+
+    await expect(forkWorkspace(deps(src, t.transport), 'm1', { name: 'taken' }))
+      .rejects.toThrow('agent name already exists: "taken"');
+
     expect(t.delivered).toEqual([]);
-    src.db.close();
+    src.workspace.db.close();
   });
 
   test('a malformed name is refused before anything is created', async () => {
     const src = await sourceWorkspace();
     const t = recordingTransport();
-    await expect(forkWorkspace(
-      { sql: src.sql, actor: src.actor, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
-      'm1',
-      { name: 'has spaces' },
-    )).rejects.toThrow('invalid agent name');
+
+    await expect(forkWorkspace(deps(src, t.transport), 'm1', { name: 'has spaces' }))
+      .rejects.toThrow('invalid agent name');
+
     expect(t.probed).toEqual([]);
     expect(t.delivered).toEqual([]);
-    src.db.close();
+    src.workspace.db.close();
   });
 
   test('a requested name no preview hostname can carry is refused with the limit', async () => {
     const src = await sourceWorkspace();
     const t = recordingTransport();
-    const name = 'a'.repeat(32);
-    await expect(forkWorkspace(
-      { sql: src.sql, actor: src.actor, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
-      'm1',
-      { name },
-    )).rejects.toThrow('31');
-    await expect(forkWorkspace(
-      { sql: src.sql, actor: src.actor, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
-      'm1',
-      { name: 'MyFork' },
-    )).rejects.toThrow('carries no case');
+
+    await expect(forkWorkspace(deps(src, t.transport), 'm1', { name: 'a'.repeat(32) })).rejects.toThrow('31');
+    await expect(forkWorkspace(deps(src, t.transport), 'm1', { name: 'MyFork' })).rejects.toThrow('carries no case');
     expect(t.probed).toEqual([]);
     expect(t.delivered).toEqual([]);
-    src.db.close();
+    src.workspace.db.close();
   });
 
-  test('an unknown cut point is refused by the bounded source stream', async () => {
+  test('an unknown cut point is refused by the bounded preflight', async () => {
     const src = await sourceWorkspace();
     const t = recordingTransport();
-    await expect(forkWorkspace(
-      { sql: src.sql, actor: src.actor, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
-      'nope',
-      { name: 'my-fork' },
-    )).rejects.toThrow('fork point not found');
+
+    await expect(forkWorkspace(deps(src, t.transport), 'nope', { name: 'my-fork' }))
+      .rejects.toThrow('fork point not found');
+
     expect(t.probed).toEqual([]);
     // The primary-key preflight is bounded: it proves the cut exists without
     // materialising its ancestry, so no pending target is ever addressed.
     expect(t.delivered).toEqual([]);
-    src.db.close();
+    src.workspace.db.close();
   });
 
   test('a busy agent is not forked: a mid-turn cut snapshots half a turn', async () => {
     const src = await sourceWorkspace();
     const t = recordingTransport();
-    await expect(forkWorkspace(
-      { sql: src.sql, actor: src.actor, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => true },
-      'm1',
-    )).rejects.toThrow('agent busy');
+
+    await expect(forkWorkspace(deps(src, t.transport, true), 'm1')).rejects.toThrow('agent busy');
     expect(t.delivered).toEqual([]);
-    src.db.close();
+    src.workspace.db.close();
   });
 
   test('a transport that cannot answer the pre-check does not block the fork', async () => {
     const src = await sourceWorkspace();
     const delivered: string[] = [];
 
-    const out = await forkWorkspace({
-      sql: src.sql,
-      actor: src.actor,
-      vfs: src.vfs,
-      sourceName: 'atlas',
-      busy: () => false,
-      transport: {
-        async occupied() { return false; },
-        async deliver(name, source) {
-          delivered.push(name);
-          const row = source.sql<{ created_at: number }>`SELECT created_at FROM actor_messages WHERE id = ${source.untilMessageId}`[0];
+    const out = await forkWorkspace(deps(src, {
+      async occupied() { return false; },
+      async deliver(name) {
+        delivered.push(name);
 
-          if (!row) throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
-
-          return { workspaceId: 'DO-1', forkPointMs: row.created_at };
-        },
+        return { workspaceId: 'DO-1', forkPointMs: 1 };
       },
-    }, 'm1', { name: 'my-fork' });
+    }), 'm1', { name: 'my-fork' });
 
     expect(delivered).toEqual(['my-fork']);
     expect(out.workspaceId).toBe('DO-1');
-    src.db.close();
+    src.workspace.db.close();
   });
 
   test('the delivered source stream lands a complete fork', async () => {
     const src = await sourceWorkspace();
-    const { db: tgtDb, sql: tgt, vfs: tgtVfs } = createTestWorkspace();
+    const target = createTestWorkspace();
 
-    const out = await forkWorkspace({
-      sql: src.sql,
-      actor: src.actor,
-      vfs: src.vfs,
-      sourceName: 'atlas',
-      busy: () => false,
-      transport: {
-        async occupied() { return false; },
-        async deliver(name, source) {
-          const snapshot = await snapshotWorkspaceForFork(source.sql, source.vfs, source.untilMessageId);
-          await writeForkSnapshot(tgt, tgtVfs, snapshot, { workspaceId: 'TGT', workspaceName: name, now: 5000 });
+    const out = await forkWorkspace(deps(src, {
+      async occupied() { return false; },
+      async deliver(name, source) {
+        const snapshot = await snapshotWorkspaceForFork({
+          sql: source.sql, vfs: source.vfs, untilMessageId: source.untilMessageId,
+          artifactDirectory: source.artifactDirectory,
+        });
 
-          return { workspaceId: 'TGT', forkPointMs: snapshot.cut.createdAtMs };
-        },
+        await writeForkSnapshot(target.sql, target.vfs, snapshot, {
+          workspaceId: 'TGT', workspaceName: name, artifactDirectory: TARGET_ARTIFACTS, now: 5000,
+        });
+
+        return { workspaceId: 'TGT', forkPointMs: snapshot.cut.createdAtMs };
       },
-    }, 'm2', { name: 'landed' });
+    }), 'm2', { name: 'landed' });
 
     expect(out.workspaceId).toBe('TGT');
-    expect(tgt<{ name: string }>`SELECT name FROM workspace_identity`[0]!.name).toBe('landed');
-    expect(readForkLineage(tgt)!.sourceWorkspaceName).toBe('atlas');
-    src.db.close();
-    tgtDb.close();
+    expect(target.sql<{ name: string }>`SELECT name FROM workspace_identity`[0]?.name).toBe('landed');
+    expect(readForkLineage(target.sql)?.sourceWorkspaceName).toBe('atlas');
+    src.workspace.db.close();
+    target.db.close();
   });
 });

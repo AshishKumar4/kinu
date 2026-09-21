@@ -94,7 +94,7 @@ export const PromptFileSchema: v.GenericSchema<PromptFile> = v.object({
 
 /** Merge steers into ONE user ModelMessage — text joined in arrival order,
  *  attachments carried as file parts (the runChat user-message shape). */
-function steerUserMessage(drained: ReadonlyArray<UserSteer>): ModelMessage {
+export function steerUserMessage(drained: ReadonlyArray<UserSteer>): ModelMessage {
   const text = drained.map((steer) => steer.text).join('\n\n');
   const files = drained.flatMap((steer) => steer.files ?? []);
 
@@ -184,8 +184,8 @@ export function describeLandedSteers(
  * `turn_id` is NULLABLE because the row carries two states the cf backend
  * does not share: bound (a steer accepted into a live or queued turn) and
  * idle-queued (NULL — the CLI's own send lane admits the message as the
- * queue's record while no turn owns it; cf admits such a send as an
- * `assistant_messages` row before it is ever read). cf simply never writes
+ * queue's record while no turn owns it; cf admits such a send as a
+ * transcript entry before it is ever read). cf simply never writes
  * NULL. Same-named tables MUST share one declaration, or first-creation order
  * would pick the shape.
  *
@@ -224,7 +224,7 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
  *     first step rather than starting a turn of its own;
  *   - IDLE-QUEUED — `turn_id` NULL; the CLI's own send lane admits the
  *     message as the queue's record while no turn owns it (cf admits such a
- *     send as an `assistant_messages` row first and never writes NULL).
+ *     send as a transcript entry first and never writes NULL).
  *
  * `actor_id` scopes every statement: one workspace database hosts a root and
  * every actor beneath it, and the `UNIQUE (actor_id, id)` key means an id is
@@ -377,7 +377,7 @@ export interface UserSteerDeps {
   /** Persist a drain before the rewritten messages reach the provider (CF: verbatim user rows +
    *  DELETE pending_steers; CLI: push landed rows). Rejection aborts the step; the inbox restores
    *  everything drained (users AND events) ahead of pending and moves no card. */
-  readonly onDrain?: (steers: readonly UserSteer[], atStep: number) => void | Promise<void>;
+  readonly onDrain?: (steers: readonly UserSteer[], atStep: number) => void | ModelMessage | Promise<void | ModelMessage>;
   /** The live turn's durable id, for the rerun key. Null when unknown. */
   readonly turnId?: () => string | null;
   /** The skill bodies the landed words activate that the turn does not
@@ -558,12 +558,15 @@ export class Inbox implements AgentInbox {
     const drained = this.pending.splice(0);
     const users = drained.filter(isUserSignal);
     const events = drained.filter((signal) => !isUserSignal(signal));
+    let landedMessage: ModelMessage | undefined;
 
     if (users.length > 0) {
       this.landing = drained;
 
       try {
-        await this.steers.onDrain?.(users.map(toUserSteer), ctx.stepNumber);
+        const landed = await this.steers.onDrain?.(users.map(toUserSteer), ctx.stepNumber);
+
+        if (landed !== undefined) landedMessage = landed;
       } catch (cause) {
         // New signals may arrive while persistence is awaited. The failed
         // prefix — users AND events, in order — goes back ahead of them.
@@ -589,7 +592,7 @@ export class Inbox implements AgentInbox {
     const entries: Array<{ readonly message: ModelMessage; readonly durable: boolean }> = [];
 
     if (users.length > 0) {
-      entries.push({ message: steerUserMessage(users.map(toUserSteer)), durable: true });
+      entries.push({ message: landedMessage ?? steerUserMessage(users.map(toUserSteer)), durable: true });
     }
 
     const bodies = [...events, ...steering].map(stepBody);

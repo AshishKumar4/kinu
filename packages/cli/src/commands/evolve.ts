@@ -1,6 +1,5 @@
 import { Database } from 'bun:sqlite';
-import { runMCTS, DEFAULT_CONFIG, type MCTSProgressEvent, type SearchNode } from '@kinu.run/core';
-import type { AgentRuntime, SessionWriter, SessionMessage } from '@kinu.run/core';
+import { runMCTS, createDurableMctsSession, DEFAULT_CONFIG, type MCTSProgressEvent, type SearchNode } from '@kinu.run/core';
 import { openWorkspaceCLI } from '@kinu.run/cli-backend';
 import { CONFIG_PATH, createCodexAuthStore, requireLLMConfig, resolveAgentRef, resolveProviderCredentials } from '../config';
 import { requireLocalAgent } from '../local-target';
@@ -55,7 +54,7 @@ export async function evolveCommand(name: string, opts: {
   console.log(`  ${DIM('Mission:')}  ${info.purpose.slice(0, 60)}`);
   console.log('');
 
-  const session = createEvolveSession(rt);
+  const session = createDurableMctsSession(rt.stores.history, 'evolve');
 
   const task = `Given my purpose: "${info.purpose}", identify one specific improvement I could make ` +
     `to be more effective. Consider: new tools I could learn, knowledge gaps, or workflow improvements.`;
@@ -173,28 +172,3 @@ function iterationTag(current: number, total: number): string {
   return DIM(`[${current}/${total}]`);
 }
 
-function createEvolveSession(rt: AgentRuntime): SessionWriter {
-  const messages: Array<{ id: string; parentId?: string | null; role: string; content: string }> = [];
-  const { actorId } = rt.actor;
-
-  return {
-    async appendMessage(msg: SessionMessage, parentId?: string | null) {
-      const content = msg.parts.map(p => p.text).join('');
-      messages.push({ id: msg.id, parentId, role: msg.role, content });
-      void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
-                          VALUES (${actorId}, ${msg.id}, ${'evolve'}, ${parentId ?? null}, ${msg.role}, ${content})`;
-    },
-    getHistory(leafId?: string | null) {
-      if (!leafId) return messages.map(m => ({ role: m.role, content: m.content }));
-      const result: Array<{ role: string; content: string }> = [];
-      let current = messages.find(m => m.id === leafId);
-
-      while (current) {
-        result.unshift({ role: current.role, content: current.content });
-        current = current.parentId ? messages.find(m => m.id === current!.parentId) : undefined;
-      }
-
-      return result;
-    },
-  };
-}

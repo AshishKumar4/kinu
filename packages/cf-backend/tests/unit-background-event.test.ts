@@ -1,6 +1,11 @@
 // A turn the reactor enqueued is not the operator speaking. The classifier
 // decides which messages lose the user bubble, and the parser recovers the
 // events from the prompt the drain wrapped around them.
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MessageView } from '../src/components/MessageView';
+import type { UIMessage } from 'ai';
+
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -82,6 +87,52 @@ describe('programmatic turn provenance', () => {
     expect(classifyProgrammaticTurn({ kinuEvent: genesis!.kind, signalId: 'sig-1' }))
       .toEqual({ kind: 'workspace_created' });
     expect(genesis!.kind).toBe(WORKSPACE_CREATED_EVENT);
+  });
+});
+
+describe('genesis in the transcript', () => {
+  // The workspace's opening turn is stored provenance, not something the owner
+  // said — and now not something the chat paints at all. What must remain: the
+  // owner's real first message and every other programmatic card.
+  test('the workspace_created turn renders nothing while real turns render', () => {
+    const genesisMessage: UIMessage = {
+      id: 'g1', role: 'user',
+      metadata: { kinuEvent: 'workspace_created', signalId: 'sig-1' },
+      parts: [{ type: 'text', text: 'This workspace has just been created.' }],
+    };
+
+    const genesis = renderToStaticMarkup(createElement(MessageView, {
+      message: genesisMessage,
+      isLast: false, isStreaming: false,
+    }));
+
+    expect(genesis).not.toContain('workspace has just been created');
+    expect(genesis).not.toContain('workspace_created');
+
+    const ownerMessage: UIMessage = {
+      id: 'u1', role: 'user',
+      parts: [{ type: 'text', text: 'Audit the checkout flow.' }],
+    };
+
+    const owner = renderToStaticMarkup(createElement(MessageView, {
+      message: ownerMessage,
+      isLast: false, isStreaming: false,
+    }));
+
+    expect(owner).toContain('Audit the checkout flow.');
+
+    const jobMessage: UIMessage = {
+      id: 'b1', role: 'user',
+      metadata: { kinuEvent: 'background_job', kind: 'test-suite', status: 'completed' },
+      parts: [{ type: 'text', text: 'background job completed' }],
+    };
+
+    const job = renderToStaticMarkup(createElement(MessageView, {
+      message: jobMessage,
+      isLast: false, isStreaming: false,
+    }));
+
+    expect(job.length).toBeGreaterThan(0);
   });
 });
 

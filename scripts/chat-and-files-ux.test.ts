@@ -29,6 +29,7 @@ import type { Page } from 'puppeteer';
 
 import { diagnosticsSettled, recordDiagnostics, withGallery, type Gallery } from './gallery-harness';
 import { codenameFor, parseJsonArray, parseJsonValue, redactPayload, type JsonValue } from '@kinu.run/core';
+import { PRIMARY_NAV } from '../packages/cf-backend/src/components/nav';
 
 /** One live-tail message, as the browser laid it out. */
 interface TailFrame {
@@ -1397,13 +1398,25 @@ describe('an additional agent, as an ordinary conversation', () => {
       // popup, not a native select: open it, pick the row.
       await page.click('[data-agent-pane] [aria-label="Thinking level"]');
       await page.waitForSelector('[role="option"]');
-      await page.evaluate(() => {
-        const row = [...document.querySelectorAll('[role="option"]')]
-          .find((option) => (option.textContent ?? '').trim() === 'High');
+      // A real pointer press: a synthetic DOM click never registers the pick
+      // on this select — the option commits on the pointer, not on click().
+      // `$$` + evaluate avoids evaluateHandle's `any`, and the bundled parsel
+      // drops `::-p-text(...)` arguments, so a p-selector can't name the row.
 
-        if (!(row instanceof HTMLElement)) throw new Error('High absent in the thinking-level popup');
-        row.click();
-      });
+      let pickedHigh = false;
+
+      for (const option of await page.$$('[role="option"]')) {
+        const label = await option.evaluate((el) => el.textContent);
+
+        if ((label ?? '').trim() === 'High') {
+          await option.click();
+          pickedHigh = true;
+          break;
+        }
+      }
+
+      if (!pickedHigh) throw new Error('High absent in the thinking-level popup');
+
       await page.waitForFunction(() => (document.documentElement.dataset.galleryModelCalls ?? '').includes('setReasoningEffort'));
       const calls = await page.evaluate(() => JSON.parse(document.documentElement.dataset.galleryModelCalls ?? '[]'));
       expect(calls).toEqual([{ method: 'setReasoningEffort', args: ['high', 'agent-1'] }]);
@@ -2725,6 +2738,7 @@ test('sidebar rows keep one height and font size on home and workspace routes', 
 
       const rows = await page.$$eval('nav[aria-label="Primary"] a', (anchors) =>
         anchors.map((a) => ({
+          to: new URL(a.href).pathname,
           height: a.getBoundingClientRect().height,
           font: getComputedStyle(a).fontSize,
         })));
@@ -2754,8 +2768,11 @@ test('sidebar rows keep one height and font size on home and workspace routes', 
     const home = await rowsFor('home');
     const shell = await rowsFor('shell');
 
-    expect(home.nav).toHaveLength(4);
-    expect(shell.nav).toHaveLength(4);
+    // The rail carries the public primary routes exactly — the roster, not a
+    // count that says nothing when the set is the thing that matters.
+    for (const rows of [home.nav, shell.nav]) {
+      expect(rows.map((row) => row.to)).toEqual(PRIMARY_NAV.map(({ to }) => to));
+    }
 
     for (const rows of [home.nav, shell.nav]) {
       for (const row of rows) {

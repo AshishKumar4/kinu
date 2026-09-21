@@ -62,3 +62,13 @@ describe('the welcome route', () => {
     expect(APP_ROUTES.welcome).toBe('/welcome');
   });
 });
+
+describe('the Drive routes', () => {
+  test('a folder below /shared reports as the splat, and the public blueprint page keeps its own template', () => {
+    expect(routeTemplateOf('/shared')).toBe(APP_ROUTES.shared);
+    expect(routeTemplateOf('/shared/blueprints')).toBe(APP_ROUTES.driveFolder);
+    expect(routeTemplateOf('/shared/projects/ops/deploy')).toBe(APP_ROUTES.driveFolder);
+    expect(routeTemplateOf('/shared/blueprint/abc')).toBe(APP_ROUTES.sharedBlueprint);
+    expect(routeTemplateOf('/sharedx/y')).toBe('/unmatched');
+  });
+});

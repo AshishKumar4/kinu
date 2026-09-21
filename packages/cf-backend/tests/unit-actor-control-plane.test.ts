@@ -74,7 +74,7 @@ describe('the workspace root answers the actor control plane', () => {
     await turns.settle({ messageId: 'a-parser', text: 'ok' });
     expect(await landing).toEqual({ landed: 'turn' });
 
-    const opened = agent.harnessTranscript.history().find((message) => message.role === 'user');
+    const opened = (await agent.harnessTranscript.history()).find((message) => message.role === 'user');
     expect(opened?.parts).toEqual([{ type: 'text', text: 'use the other parser' }]);
     expect(v.parse(v.looseObject({ metadata: v.optional(v.unknown()) }), opened).metadata)
       .toEqual({ [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: 'build' });

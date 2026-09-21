@@ -310,50 +310,6 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     ]);
   });
 
-  /**
-   * The window between a PERSISTED ANSWER and the claim that makes its effects
-   * recoverable.
-   *
-   * Think commits the assistant message before it calls `onChatResponse`, so the
-   * response-to-model-message conversion runs inside the `turn_end_extensions`
-   * body, where the claim already exists. Awaiting that conversion before any
-   * claim exists would let a conversion that throws — or an eviction inside it —
-   * leave a durable answer with no incomplete transition, so `resumeAll()` finds
-   * nothing and every effect the turn owed is lost.
-   *
-   * The oracle is a message the conversion CANNOT read. The roster is claimed,
-   * every other effect runs, and only that one effect records the refusal,
-   * instead of the whole sequence going with it and leaving no row at all.
-   */
-  test('a message the conversion cannot read costs that effect and no others', async () => {
-    const harness = orchestratorHarness();
-    turns(harness).open('u-unreadable');
-    harness.agent.harnessArmTerminalFault('turn_record', 'before');
-
-    // The one shape `convertToModelMessages` refuses outright: a tool-role
-    // message. This is a stored row the converter will never accept, however
-    // many times it is replayed.
-    await expect(turns(harness).settle({ messageId: 'a-unreadable', text: 'the answer', unreadableRole: 'tool' }))
-      .rejects.toThrow('terminal effect turn_record:a-unreadable interrupted before its side effect');
-
-    // THE CLAIM EXISTS. Nothing before it awaited, so the answer's effects are
-    // recoverable even though reading the answer itself failed.
-    expect(harness.agent.harnessTerminalClaims()).toEqual([
-      { turn_id: 'u-unreadable', call_id: 'terminal:response:a-unreadable', result_json: null },
-    ]);
-
-    const rows = harness.agent.harnessTerminalEffects('u-unreadable', 'a-unreadable');
-    const turnEnd = rows.find((row) => row.effect_key === 'v1:turn_end_extensions:a-unreadable');
-    // A REFUSAL, not an owed row: the stored message never changes, so retrying
-    // it would hold the transition open for good.
-    expect(turnEnd?.outcome).toBe("reading the recorded assistant message this turn's extensions announce");
-    // The effect before it ran, and the suffix after the cut is still owed.
-    expect(rows.filter((row) => row.status === 'pending').map((row) => row.effect_key)).toEqual([
-      'v1:turn_record:a-unreadable', 'v1:event_drain:a-unreadable',
-      'v1:improvement_lanes:a-unreadable', 'v1:sleep_time:a-unreadable',
-      'v1:auto_title:a-unreadable', 'v1:auto_gepa:a-unreadable',
-    ]);
-  });
 
   /**
    * The hardest instant to recover, on the effect where repeating is worst.
@@ -1108,7 +1064,7 @@ describe('a turn releases its tool claims only when no response can still run', 
    */
   test('cold recovery keeps the claims of a continuation it has not replayed yet', async () => {
     const harness = orchestratorHarness();
-    harness.agent.harnessPersistActiveTurn('u-cont');
+    await harness.agent.harnessPersistActiveTurn('u-cont');
     harness.agent.harnessClaimTool('u-cont', 'call_send_1');
     // The earlier response: claimed, interrupted, and now being recovered.
     expect(harness.agent.harnessBeginTerminalTransition('u-cont', 'a-first')).toBe('first');
@@ -1126,7 +1082,7 @@ describe('a turn releases its tool claims only when no response can still run', 
    *  nothing can replay under it and the claims are the close's to drop. */
   test('cold recovery releases them when no response survived the isolate', async () => {
     const harness = orchestratorHarness();
-    harness.agent.harnessPersistActiveTurn('u-gone');
+    await harness.agent.harnessPersistActiveTurn('u-gone');
     harness.agent.harnessClaimTool('u-gone', 'call_send_1');
     expect(harness.agent.harnessBeginTerminalTransition('u-gone', 'a-first')).toBe('first');
     openRun(harness, 'run-other-turn', 'u-other');

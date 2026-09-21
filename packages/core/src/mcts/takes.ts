@@ -19,6 +19,7 @@ import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../identity/effect-tombstones';
 import { conversationTurnPair } from '../identity/conversation-store';
+import type { SessionTranscriptReader } from '../session/transcript';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
@@ -418,11 +419,12 @@ export function latestAlternateTakeSet(sql: SqlExecutor, actor: ActorHandle): Al
  *    sibling was preferred — with the chosen text as the correction
  *    follow-up, so GEPA/EMA/scaffold-prior routes consume it unchanged.
  */
-export function recordTakePick(
+export async function recordTakePick(
   sql: SqlExecutor,
   actor: ActorHandle,
+  transcript: SessionTranscriptReader,
   input: { takeId: string; nodeId: string; scaffoldVersion?: number | null; now?: number },
-): TakePickRecord {
+): Promise<TakePickRecord> {
   actor.assertCurrent();
 
   const row = sql<RawTakeRow>`SELECT * FROM alternate_takes
@@ -459,7 +461,7 @@ export function recordTakePick(
   let assistantResponse = '';
 
   if (set.turnId) {
-    const pair = conversationTurnPair(sql, actor, set.turnId);
+    const pair = await conversationTurnPair(transcript, set.turnId);
 
     if (pair) {
       assistantResponse = pair.response ?? '';

@@ -9,7 +9,7 @@
 //
 // Implement both, then drive the loop harness through AgentOrchestrator's
 // lifecycle methods, and you have the whole agent. The Cloudflare Durable Object
-// (via @cloudflare/think) and the local Bun CLI are then THIN adapters over one
+// (via the Agents platform) and the local Bun CLI are thin adapters over one
 // core agent — the DO is just one backend.
 //
 // Deliberately minimal: every member maps to exactly one capability that
@@ -98,8 +98,7 @@ export interface BackendHost {
    *  to the TUI store / print to stdout. Never throws. */
   broadcast<Event extends BroadcastEvent>(event: Event): void;
 
-  /** Inject a programmatic turn, serialized behind any live turn. CF:
-   *  Think.saveMessages (TurnQueue). CLI: enqueue into the local loop's queue.
+  /** Inject a programmatic turn through the backend's core ChatSession queue.
    *  The core Inbox (orchestrator/inbox.ts) is its only caller — producers
    *  send a message and never pick the mechanism. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;

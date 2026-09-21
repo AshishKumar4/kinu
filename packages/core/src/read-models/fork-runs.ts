@@ -39,7 +39,7 @@
 
 import type { SqlExecutor } from '../types/primitives';
 import { boundedInt } from '../utils/bounds';
-import { seekPage, StaleCursorError, type Page, type SeekCursor } from './page';
+import { seekPage, StaleCursorError, type Page, type SeekCursor } from '../session/page';
 import { STEER_BRANCH_RUN_ID_PREFIX } from '../steer-branch';
 import type { ActorHandle } from '../identity/actor-handle';
 

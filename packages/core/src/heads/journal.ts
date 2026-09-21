@@ -30,7 +30,7 @@ import type {
 import { headProducedFindings } from './head-summary';
 import { USAGE_FIELDS, type Usage } from '../usage';
 import { HEAD_USAGE_COLUMNS, type StoredHeadUsage } from './schema';
-import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
+import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from '../session/page';
 import type { ActiveRoster } from '../prompting/volatile-context';
 
 

@@ -9,7 +9,7 @@
  * smears all of their work into one pile.
  */
 
-import type { VFS } from '../types/primitives';
+import type { VFS, VfsRevision } from '../types/primitives';
 import { isVfsError } from './errno';
 
 /** A write or delete that landed, reported to an observer. */
@@ -132,7 +132,7 @@ export function observeWrites<T extends VFS>(vfs: T, observer: WriteObserver): T
 
   if (conditional) {
     Object.assign(wrapped, {
-      writeFileIfRevision: async (path: string, data: Uint8Array, expectedRevision: number) => {
+      writeFileIfRevision: async (path: string, data: Uint8Array, expectedRevision: VfsRevision) => {
         const baseline = await baselineFor(path);
         const result = await conditional(path, data, expectedRevision);
 

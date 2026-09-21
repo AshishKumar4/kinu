@@ -661,7 +661,7 @@ describe('a transfer that does not finish', () => {
     expect(mountedConditional.status).toBe(409);
     expect(await errorOf(mountedConditional)).toContain('cannot protect an in-place edit');
     expect(malformed.status).toBe(400);
-    expect(await errorOf(malformed)).toBe('If-Match must be a non-negative integer revision');
+    expect(await errorOf(malformed)).toBe('If-Match must encode a numeric or string revision');
     // Every refusal left its file as it was.
     expect(await bytesOf(await rail.files({
       session: rail.ownerSession, workspace: 'upload-conditional', path: WORKSPACE_FILE,

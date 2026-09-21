@@ -34,6 +34,7 @@ import {
   TURN_CONTEXT_HEADER,
   type PromptExecutorInfo,
 } from '../src/index';
+import { Fnv1a64 } from '../src/utils/fnv1a';
 import { admitActiveSkills } from '../src/skills/loader';
 import { skillPath } from '../src/skills/discover';
 import { estimateTokens } from '../src/llm';
@@ -206,6 +207,35 @@ describe('byte-stable system prefix', () => {
     }));
 
     expect(skills).not.toBe(h1);
+  });
+
+  /**
+   * The streamed form of the same hash, which the `file` read depends on: it
+   * scans a file it never holds and still has to produce the digest the read
+   * ledger would have got from the whole string.
+   *
+   * The split points are the point. A chunk boundary lands wherever a plane's
+   * ranged read and the decoder put it, including between the two halves of a
+   * surrogate pair, and a digest that changed with the boundary would make the
+   * gate reject reads it had itself authorized.
+   */
+  test('fed in pieces, the hash is the digest of the whole — at every split, surrogate pairs included', () => {
+    for (const text of ['', 'a', 'abc', '\uFEFFwith a mark', '😀', 'a😀b', 'κόσμε 😀 ✓ line\nsecond\n']) {
+      for (let cut = 0; cut <= text.length; cut++) {
+        const streamed = new Fnv1a64();
+        streamed.update(text.slice(0, cut));
+        streamed.update(text.slice(cut));
+        expect(streamed.digest()).toBe(fnv1a64(text));
+      }
+    }
+
+    // …and fed one UTF-16 code unit at a time, which splits every pair.
+    const body = 'a😀b\nκόσμε\n'.repeat(50);
+    const unit = new Fnv1a64();
+
+    for (let i = 0; i < body.length; i++) unit.update(body.slice(i, i + 1));
+
+    expect(unit.digest()).toBe(fnv1a64(body));
   });
 
   // The measured leak this pins. `provenance` is documented as an overlay and

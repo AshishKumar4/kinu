@@ -1,13 +1,13 @@
-diff --git a/packages/core/src/identity/fork.ts b/packages/core/src/identity/fork.ts
-index 547fe4830..773d30967 100644
---- a/packages/core/src/identity/fork.ts
-+++ b/packages/core/src/identity/fork.ts
-@@ -198,7 +198,7 @@ export async function snapshotWorkspaceForFork(
-       workspaceName: identity[0]?.name ?? '',
-     },
-     cut: { messageId: untilMessageId, createdAtMs: forkPointMs },
--    messages,
-+    messages: messages.slice(0, -1),
-     assistantMessages,
-     files,
-     memoryChunks,
+diff --git a/packages/core/src/identity/fork-plan.ts b/packages/core/src/identity/fork-plan.ts
+index 12567deca..24807f764 100644
+--- a/packages/core/src/identity/fork-plan.ts
++++ b/packages/core/src/identity/fork-plan.ts
+@@ -303,7 +303,7 @@ export function planForkConversation(input: {
+ 
+   return {
+     cut: { entryId: cutEntry.id, recordedAt: cutEntry.recorded_at },
+-    entryIds: chain.map((entry) => entry.id),
++    entryIds: chain.slice(0, -1).map((entry) => entry.id),
+     messages: ordered,
+     members,
+     artifacts,

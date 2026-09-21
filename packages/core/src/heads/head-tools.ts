@@ -36,6 +36,7 @@ import { buildToolSurface } from '../tools/builtins';
 import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference';
 import { budgetExhausted, HEAD_BUILTIN_TOOLS } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
+import type { SessionHistory } from '../session/history';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
 import { KinuError, renderThrownChain } from '../obs/index';
@@ -64,6 +65,10 @@ export interface HeadToolDeps {
   /** The head's forked runtime. Its exact file topology is supplied separately
    *  to the inference prompt; this value backs `shell`, `file`, and eval. */
   rt: AgentRuntime;
+  /** The conversation of the logical actor this head runs as. A head is not
+   *  given `memory` (HEAD_BUILTIN_TOOLS), but the builtin factory builds one
+   *  surface and narrows it afterwards, so the deps it narrows from are whole. */
+  history: SessionHistory;
   /** Pre-built `eval`; the backend owns it because codemode
    *  construction differs per platform (cf: LOADER Worker; CLI: Node eval).
    *  A FUNCTION is called with the finished head surface and its result
@@ -167,6 +172,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
 
   return buildToolSurface({
     rt: deps.rt,
+    history: deps.history,
     workMode: input.mode,
     webSearch: deps.webSearch,
     admitted: HEAD_BUILTIN_TOOLS,

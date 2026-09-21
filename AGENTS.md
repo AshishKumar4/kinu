@@ -1,20 +1,27 @@
 # Kinu — Agent Guide
 
-Self-evolving agent framework: MCTS exploration, mutable scaffolding, durable skill evolution. Two backends over one core: Cloudflare Workers (`cf-backend`, Think DOs) and local CLI (`cli-backend`, bun:sqlite). Bun workspaces under `packages/*`.
+Self-evolving agent framework: MCTS exploration, mutable scaffolding, durable skill evolution. Two backends over one core: Cloudflare Workers (`cf-backend`, Agents SDK DOs) and local CLI (`cli-backend`, bun:sqlite). Bun workspaces under `packages/*`.
 
 ## Commands
 `bun install` · `bun run check` (strict lint + typecheck; all anti-slop rules are errors, warnings fail) · `bun test --cwd packages/core` · `bun run dev` · `bun run layergate` · `bun run deploy` (the only deploy path; never bare `wrangler deploy`) · `bash scripts/setup-worktree.sh` (once per fresh worktree; never symlink the primary's `node_modules`; never `bun install` in a linked worktree, the root `preinstall` refuses).
 
 ## Gates
 - A gate governs exactly the set it measures; read the corpus through `scripts/sources.ts`, never a hand list. Prove a gate red in every direction it claims before trusting it green; print its blind spots on the green path.
-- A red gate is work. Never: `--no-verify`, `oxlint-disable`, an allowlist or ignore entry, a severity downgrade, a narrowed assertion, a skipped or deleted test, a raised timeout, a lock ratchet. Either the code is wrong or the fixture is stale; fix that one. A rule you think is wrong is surfaced with evidence, not bypassed.
-- A defect the owner finds by hand gets a `tests/first-run/` row proved red against the deployed build before its fix ships; `gate:first-run` runs on every deploy against the product.
-- A fixture that can no longer fail is worse than red; restoring its red direction is part of the same change. Retire a corpus entry only after showing no live code holds its property.
+- A red gate requires diagnosis, not automatic obedience to its assertion. Fix a real defect or stale fixture; retire a low-value check under Testing judgment below. Never bypass useful coverage with `--no-verify`, `oxlint-disable`, an allowlist, an ignore entry, a severity downgrade, a weakened assertion, a skip, a raised timeout, or a lock ratchet.
+- A functional defect the owner finds by hand gets a regression check at the closest realistic boundary. Use `tests/first-run/` when reproduction requires the deployed product, and prove it red before the fix ships. Cosmetic feedback does not require a regression test.
+- A useful fixture must detect its claimed failure. Restore that ability when it breaks; remove the fixture when its contract is obsolete.
 - A verification claim names the tree, the command, and the revision. A subagent's summary is a claim to check.
 - A gate that pins platform behaviour (what the runtime, an SDK, or a service does) cites a dated measurement on that platform in its header. A comment in our own source is not a measurement. A gate built on an unmeasured premise enforces the regression it was meant to prevent; `scripts/do-init-gate.ts` did exactly that from 2026-09-10 to 2026-09-13.
 - Locks keyed by path (`schema-genesis`, `wired`, `complexity`, `pattern-inventory`, `test-clocks`) are re-keyed on the path half only when a file moves; values stay byte-identical.
-- `gate:core-layering`: `packages/core` is platform (`obs utils types identity vfs execution events memory safety slates providers config credentials checkpoints`, plus root files by name), tools (`tools craft web`), harness (everything else). Imports point down or sideways, never up; the lock shrinks only.
+- `gate:core-layering`: `packages/core` is platform (`obs utils types identity vfs execution events memory safety slates session providers config credentials checkpoints`, plus root files by name), tools (`tools craft web`), harness (everything else). Imports point down or sideways, never up; the lock shrinks only.
 - `gate:client-graph`: no path from a client entry reaches `@agent-core/core` or `bun:sqlite`.
+
+## Testing judgment
+- Tests earn their maintenance cost by catching meaningful failures. Before adding one, name the failure and check existing coverage. A changed line, a minor UI tweak, or a higher test count is not justification.
+- Test behavior and contracts: permissions, data integrity, accounting, lifecycle, navigation, accessibility, compatibility, and resource limits. Prefer public interfaces over implementation details or copied logic.
+- Inspect cosmetic changes in the rendered product. Do not pin incidental wording, CSS classes, DOM structure, spacing, decorative density, or animation brightness. Automate a visual check only for an explicit requirement, such as contrast or a control remaining visible.
+- Prune low-value tests as you encounter them: redundant cases, obsolete contracts, implementation mirrors, copy blacklists, and arbitrary aesthetic thresholds. Remove unused fixtures and helpers with them. Do not start a separate audit unless asked.
+- For each removal, briefly identify why the check adds noise rather than protection. If it covers a meaningful failure, preserve that coverage elsewhere. A failing test alone is not grounds for deletion; an existing test is not grounds for preserving it. Never tune product behavior merely to satisfy an unjustified assertion.
 
 ## Vendored
 - `tools/oxlint/anti-slop`: upstream `dmmulroy/anti-slop` pinned in `upstream.json` with per-file digests; `drift.test.ts` names any divergence. Local strengthenings are declared deltas with a reason. Sync: clone upstream, merge `rules/` and tests, `ANTI_SLOP_UPSTREAM=<clone> node --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts --update`, `bun run test:anti-slop`. A sync is a strict improvement: every fixture rejected before is rejected after; an upstream weakening is declined as a delta.
@@ -58,17 +65,17 @@ Default is solo + sidekick (if available). Delegation beyond that must beat the 
 - A commit body is not where a decision lives; it is where the change is explained. The log entry is the durable record, and the body cites it.
 
 ## Packages
-`core` (interfaces, MCTS, evolution, scaffold, craft) · `cf-backend` (Think DOs, React UI, Vite+Wrangler) · `agent-utils` (stores, VFS types) · `cli` · `cli-backend` · `compaction` · `devbox` · `test-utils` · `tests/` (E2E) · `bench/clbench/`.
+`core` (interfaces, MCTS, evolution, scaffold, craft) · `cf-backend` (Agents SDK DOs, React UI, Vite+Wrangler) · `agent-utils` (stores, VFS types) · `cli` · `cli-backend` · `compaction` · `devbox` · `test-utils` · `tests/` (E2E) · `bench/clbench/`.
 
 ## Architecture
 - One Durable Object per workspace: files, conversation, ledgers, memory index in one SQLite. Every non-root kind (hired subordinate, exploration head, swarm node, branch) is a logical actor of that object, one identity row per actor, hosted through `subordinate-hosting.ts` / `exploration-hosting.ts`; they run `runHeadInference` and record no turn into the evolution window.
-- `OrchestratorAgent extends ActorAgent extends Think<Env>`; Kinu overrides `getModel` / `getSystemPrompt` / `getTools` / `beforeTurn`; Think's workspace, skills, actions, channels, scheduled tasks are unused. `@callable()` exposes RPC to the UI; `rpc-surface.ts` seals what a stub-holder can reach.
-- The root actor's chat lives in `assistant_messages`, the Agents SDK's own table — Kinu never creates or redeclares it; `gate:vendor-schema` prepares every statement that names it against the installed vendor's DDL. A non-root actor's default chat is the plain `actor_messages` store.
+- `OrchestratorAgent extends ActorAgent extends Agent<Env>`. Agents owns platform lifecycle, scheduling, fibers and RPC; core `ActorSession`/`ChatSession` owns the turn loop. The root initializes its transcript through the public `AgentSessionProvider`. `@callable()` exposes RPC to the UI; `rpc-surface.ts` seals what a stub-holder can reach.
+- Every actor's chat, root and hosted alike, lives in the canonical conversation store (`conversation_entries` over `session_messages`, `packages/core/src/session`); the Agents SDK's `/get-messages` seed is served from it. `assistant_messages` is the SDK's own table — Kinu never creates, redeclares or writes it; `gate:vendor-schema` prepares every statement that names a vendor table against the installed vendor's DDL.
 - `AgentRuntime` bundles six primitives: `VFS Memory Executor LLM Schedule Identity`. `SqlExecutor` is tagged-template SQL; `RawSqlExec` only for `CREATE ... IF NOT EXISTS`; schema init is idempotent, genesis is locked, no column reconcile ever.
-- Execution: `workspace` (Nimbus over the DO's SQLite; canonical files, shell, git; hosted `node` refuses runtime compilation), `sandbox` (Linux container), `device` (user's machines via tunnel, one grant per workspace+machine, always mounted at `/pc/<name>`), `parent` (forks). One file plane; mounts extend the view, never copy it. Capabilities are rendered into the prompt from `TOOL_REACH`; see `docs/EXECUTION-LAYER-SPEC.md`.
+- Execution: `workspace` (Nimbus over the DO's SQLite; canonical files, shell, git; hosted `node` runs in a facet), `sandbox` (Linux container), `device` (user's machines via tunnel, one grant per workspace+machine, always mounted at `/pc/<name>`), `parent` (forks). One file plane; mounts extend the view, never copy it. Capabilities are rendered into the prompt from `TOOL_REACH`; see `docs/EXECUTION-LAYER-SPEC.md`.
 - Eight native tools (`BUILTIN_TOOLS`): `eval shell file agents memory tasks web report`. Reach is declared in `TOOL_REACH`, not derived. `agents` is the one delegation surface: `swarm | hire | msg | list | dismiss`; every field belongs to an action and an unknown field is refused naming the one meant (`gate:agents-fields`). `file` is `read | edit | write` with edit refusing absent or repeated `old_text` and requiring a prior read. `memory` is `save | search | conversations | remember | recall | forget`; `web` is `search | fetch`. `eval`'s description is composed once in `registry.ts`. Never reintroduce removed tools or actions.
 - `SOUL.md` in VFS is the workspace identity; scaffold versioned in VFS; MCTS in `search_nodes`; crafted tools in `crafted_tools` (workspace-wide, no `actor_id`) with EMA scores; evolution runs async and never blocks the turn queue.
-- The AI SDK (`ai`) is required by Think and is not up for replacement. `@earendil-works/pi-*` is a bench subject only; oh-my-pi (`can1357/oh-my-pi`) is the source for borrowed ideas, cited.
+- The AI SDK (`ai`) is required by the core chat driver and is not up for replacement. `@earendil-works/pi-*` is a bench subject only; oh-my-pi (`can1357/oh-my-pi`) is the source for borrowed ideas, cited.
 - Port 3000 is reserved; dev servers bind `0.0.0.0`; wrangler uses `--ip 0.0.0.0`.
 
 ## Errors and Logs

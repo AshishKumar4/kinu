@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
-import { ActorClaimStore } from '@kinu.run/core';
-import { makeSql, SDK_SESSION_DDL } from '../../core/tests/helpers';
+import { ActorClaimStore, SessionHistory } from '@kinu.run/core';
+import { makeSql } from '../../core/tests/helpers';
 import { orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 const GENESIS = { role: 'user', content: 'Read your standing brief and ask what to do first.' } satisfies ModelMessage;
@@ -9,7 +9,14 @@ const GENESIS = { role: 'user', content: 'Read your standing brief and ask what 
 type Harness = ActorHarness<HarnessOrchestratorAgent>;
 
 function claims(harness: Harness): ActorClaimStore {
-  return new ActorClaimStore(makeSql(harness.db), harness.agent.observeRuntime().actor, (write) => write());
+  const runtime = harness.agent.observeRuntime();
+  const sql = makeSql(harness.db);
+  const transactionSync = <T>(write: () => T): T => write();
+
+  const history = new SessionHistory({ sql, actor: runtime.actor, transactionSync,
+    files: async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actor/.kinu/context' }) });
+
+  return new ActorClaimStore(sql, runtime.actor, transactionSync, history);
 }
 
 async function settle(harness: Harness, id: string, text: string): Promise<void> {
@@ -18,7 +25,6 @@ async function settle(harness: Harness, id: string, text: string): Promise<void>
 
 async function opening(): Promise<Harness> {
   const harness = orchestratorHarness();
-  harness.db.run(SDK_SESSION_DDL);
   await chatSessionTurns(harness.agent).prepare({ messages: [GENESIS] });
 
   return harness;

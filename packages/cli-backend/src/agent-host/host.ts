@@ -46,7 +46,7 @@ import {
   delegationBudgetOf,
   delegationExhausted,
   describeSubordinateHandoff,
-  inheritedContextFromConversation,
+  inheritedContextFromTranscript,
   headAgentName,
   readSubordinateLiveStatus,
   receiveSubordinateEvent,
@@ -676,6 +676,11 @@ export class LocalAgentHost {
       // records the build as unknown rather than naming one nobody can verify.
       installedBuild: null,
       runtimeFor: (bound) => this.runtimeFor(runtimes, dbPath, db, bound),
+      filesFor: async (bound) => {
+        if (!ws.rt.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
+
+        return ws.rt.filesForActor(bound.handle);
+      },
       loopFor: (bound) => {
         const parentId = bound.reference.parentActorId;
         const parentEntry = parentId === null ? null : this.requireActorEntry(parentId);
@@ -699,6 +704,7 @@ export class LocalAgentHost {
 
         const orchestration = createLocalOrchestration({
           runtime: bound.runtime,
+          history: bound.stores.history,
           // This ACTOR's own durable event rail — the queue both of its
           // ingresses publish into.
           eventLog: new EventLog(hubSql, bound.handle),
@@ -1511,8 +1517,8 @@ export class LocalAgentHost {
       roster: parent.roster,
       runtime: this.childRuntime(parent.key),
       now: () => Date.now(),
-      inheritedContext: (): SerializedMessage[] => readConversationTail(parent),
-      originContext: () => parent.actor.session.history,
+      inheritedContext: (): Promise<SerializedMessage[]> => inheritedContextFromTranscript(parent.actor.session.canonical.transcript(parent.sessionId)),
+      originContext: async () => parent.actor.session.history,
       // What this agent is FOR, as its own workspace records it — inherited by
       // an additional agent the owner adds beneath it without saying anything.
       ownMission: () => localActorMission(parent.ws.rt, makeSqlExec(parent.tree.db)) ?? '',
@@ -1962,11 +1968,6 @@ function childRef(parent: HostEntry, childName: string): HostedAgentRef {
   return { name: childName, cwd: parent.ref.cwd, workspaceId: parent.ref.workspaceId };
 }
 
-/** The recent durable conversation a hire inherits — core's one reader over
- *  the plain store, with core's cap and its omission note. */
-function readConversationTail(entry: HostEntry): SerializedMessage[] {
-  return inheritedContextFromConversation(makeSql(entry.tree.db), entry.ws.rt.actor, entry.sessionId);
-}
 
 /**
  * When this PROCESS must next wake, over every actor in the workspace.

@@ -132,7 +132,7 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('db_op'), op: v.picklist(APP_MUTATIONS),
     table: v.string(), scope: v.picklist(APP_TABLE_SCOPES), rowsAffected: v.number(),
     batch: v.nullable(v.number()) }),
-  v.object({ ...BaseFields, type: v.literal('context_edit'), revision: v.number(),
+  v.object({ ...BaseFields, type: v.literal('context_edit'), contextId: v.string(), proposalId: v.string(), revision: v.number(),
     baseRevision: v.number(), messageCount: v.number(), author: v.string(),
     via: v.picklist(CONTEXT_EDIT_VIA), status: v.picklist(CONTEXT_EDIT_STATUSES),
     effectiveAt: v.picklist(CONTEXT_EDIT_BOUNDARIES),
@@ -142,7 +142,7 @@ export const RunEventSchema = v.variant('type', [
       shell: v.optional(v.number()), file_read: v.optional(v.number()), web_fetch: v.optional(v.number()),
       eval: v.optional(v.number()), external_tool: v.optional(v.number()),
       attachment: v.optional(v.number()), pasted_text: v.optional(v.number()),
-    }), referenced: v.number(), tightened: v.number(), followUps: v.number() }),
+    }), referenced: v.number(), followUps: v.number() }),
   v.object({ ...BaseFields, type: v.literal('file_edit'), attempts: v.number(), applied: v.number(),
     failures: v.object({
       empty_anchor: v.optional(v.number()), not_found: v.optional(v.number()),
@@ -299,6 +299,13 @@ export function initRunEventTables(execRaw: RawSqlExec): void {
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_run_ts ON run_events(actor_id, run_id, ts)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_type ON run_events(actor_id, type, ts DESC)`);
+}
+
+/** A producer's step attribution and the attempt already covered by a report. */
+export interface StepSpendSource {
+  readonly actorId: string;
+  readonly source: SpendSource;
+  readonly coveredSince: string | null;
 }
 
 /**
@@ -864,9 +871,8 @@ export class RunEventRecorder {
    * own `actor_id`; a total scoped to the root's rows answered "what the main
    * agent spent" while the panel said "workspace", and the first-run agent-tab
    * row read a hired agent's whole conversation as zero calls (2026-09-19).
-   * Exploration heads are the one producer this table never sees — their usage
-   * comes back inside a `HeadReport` — and the read model folds their journal
-   * in beside this.
+   * The read model supplies step attribution and report coverage. Covered steps
+   * retain their recorded prices; their usage is counted by the covering report.
    *
    * THREE PARSES PER ROW, NOT NINE. `payload` is opaque TEXT, so each field
    * costs a JSON walk of the whole row — and a `step_finish` payload carries the
@@ -890,24 +896,32 @@ export class RunEventRecorder {
    * the one that would go stale unnoticed. So this counts the marker's PRESENCE
    * and knows nothing about what makes one.
    */
-  spendByProducer(): ReadonlyMap<SpendSource, SpendTally> {
+  spendByProducer(stepSources: readonly StepSpendSource[] = []): ReadonlyMap<SpendSource, SpendTally> {
     this.actor.assertCurrent();
 
     const rows = this.sql<SpendAggregateRow>`
-      WITH call AS (
+      WITH step_source AS (
+        SELECT json_extract(value, '$.actorId') AS actor_id,
+               json_extract(value, '$.source') AS source,
+               json_extract(value, '$.coveredSince') AS covered_since
+        FROM json_each(${JSON.stringify(stepSources)})
+      ), call AS (
         SELECT CASE type
-                 WHEN ${'step_finish' satisfies RunEventType} THEN ${'agent' satisfies SpendSource}
+                 WHEN ${'step_finish' satisfies RunEventType} THEN COALESCE(step_source.source, ${'agent' satisfies SpendSource})
                  ELSE json_extract(payload, '$.source')
                END AS source,
                json_extract(payload, '$.usage') AS usage,
                json_extract(payload, '$.usd') AS usd,
-               json_extract(payload, '$.usdFloorTokens') AS usdFloorTokens
-        FROM run_events
-        WHERE type = ${'step_finish' satisfies RunEventType}
-           OR type = ${'model_call' satisfies RunEventType}
+               json_extract(payload, '$.usdFloorTokens') AS usdFloorTokens,
+               run_events.actor_id AS actor_id,
+               type = ${'step_finish' satisfies RunEventType}
+                 AND step_source.covered_since IS NOT NULL AND ts >= step_source.covered_since AS covered
+        FROM run_events LEFT JOIN step_source ON step_source.actor_id = run_events.actor_id
+        WHERE (type = ${'step_finish' satisfies RunEventType}
+           OR type = ${'model_call' satisfies RunEventType})
       ),
       field AS (
-        SELECT source, usd, usdFloorTokens,
+        SELECT source, usd, usdFloorTokens, actor_id, covered,
                json_extract(usage, '$.input') AS input,
                json_extract(usage, '$.output') AS output,
                json_extract(usage, '$.cacheRead') AS cacheRead,
@@ -923,15 +937,20 @@ export class RunEventRecorder {
         FROM field
       )
       SELECT source,
-             COUNT(*) AS calls,
-             SUM(CASE WHEN reported THEN 0 ELSE 1 END) AS callsWithoutUsage,
-             SUM(CASE WHEN reported AND usd IS NULL THEN 1 ELSE 0 END) AS unpricedCalls,
+             SUM(CASE WHEN covered THEN 0 ELSE 1 END) AS calls,
+             SUM(CASE WHEN NOT covered AND NOT reported THEN 1 ELSE 0 END) AS callsWithoutUsage,
+             SUM(CASE WHEN NOT covered AND reported AND usd IS NULL THEN 1 ELSE 0 END) AS unpricedCalls,
              -- Aggregated from the row, never re-derived here: see the docblock.
-             SUM(CASE WHEN reported AND usdFloorTokens IS NOT NULL THEN 1 ELSE 0 END) AS floorPricedCalls,
+             SUM(CASE WHEN NOT covered AND reported AND usdFloorTokens IS NOT NULL THEN 1 ELSE 0 END)
+               + COUNT(DISTINCT CASE WHEN covered AND reported AND usdFloorTokens IS NOT NULL THEN actor_id END) AS floorPricedCalls,
              SUM(CASE WHEN reported THEN usd END) AS usd,
-             SUM(input) AS input, SUM(output) AS output, SUM(cacheRead) AS cacheRead,
-             SUM(cacheWrite) AS cacheWrite, SUM(cacheWrite1h) AS cacheWrite1h,
-             SUM(reasoning) AS reasoning, SUM(neurons) AS neurons
+             SUM(CASE WHEN NOT covered THEN input END) AS input,
+             SUM(CASE WHEN NOT covered THEN output END) AS output,
+             SUM(CASE WHEN NOT covered THEN cacheRead END) AS cacheRead,
+             SUM(CASE WHEN NOT covered THEN cacheWrite END) AS cacheWrite,
+             SUM(CASE WHEN NOT covered THEN cacheWrite1h END) AS cacheWrite1h,
+             SUM(CASE WHEN NOT covered THEN reasoning END) AS reasoning,
+             SUM(CASE WHEN NOT covered THEN neurons END) AS neurons
       FROM measured
       GROUP BY source`;
 

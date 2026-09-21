@@ -27,7 +27,8 @@ export interface SessionMessage {
 /** Minimal Session interface — the subset we need for MCTS node recording */
 export interface SessionWriter {
   appendMessage(message: SessionMessage, parentId?: string | null): Promise<void>;
-  getHistory(leafId?: string | null): Array<{ role: string; content: string }>;
+  /** The branch's ancestry, root first, read back from durable storage. */
+  getHistory(leafId: string): Promise<Array<{ role: string; content: string }>>;
 }
 
 /**

@@ -363,9 +363,9 @@ function ChatScene({
     [modelCatalog, modelSpec, status],
   );
 
-  const settings = useMemo<TuiSettingChoice[]>(() => {
-    const effort = status?.reasoningEffort ?? 'medium';
+  const effort = status?.reasoningEffort ?? 'medium';
 
+  const settings = useMemo<TuiSettingChoice[]>(() => {
     const rows: TuiSettingChoice[] = [
       {
         id: 'model',
@@ -410,7 +410,7 @@ function ChatScene({
     }
 
     return rows;
-  }, [activeTheme.label, client, efforts, modelSpec, status?.reasoningEffort]);
+  }, [activeTheme.label, client, efforts, modelSpec, effort]);
 
   useEffect(() => {
     if (activeSurface?.kind !== 'model') modelRequestRef.current += 1;
@@ -1583,7 +1583,7 @@ function ChatScene({
     turnTier: status?.tierId,
     setNextTier,
     toggleToolDetails: () => setToolDetailsExpanded((expanded) => !expanded),
-    cycleReasoningEffort: () => selectReasoningEffort(nextReasoningEffort(efforts, status?.reasoningEffort ?? 'medium')),
+    cycleReasoningEffort: () => selectReasoningEffort(nextReasoningEffort(efforts, effort)),
     history: historyRef.current,
     rememberScroll: scrollAnchor.remember,
     createNewAgent: onNewAgent === undefined ? undefined : createNewAgent,
@@ -1725,7 +1725,7 @@ function ChatScene({
         name={status?.name ?? client.agentName}
         mode={client.mode}
         model={modelSpec}
-        reasoningEffort={status?.reasoningEffort ?? 'medium'}
+        reasoningEffort={effort}
         onModelSelect={() => {
           if (!overlayOpen) return openModelPicker();
         }}

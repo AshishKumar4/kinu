@@ -48,7 +48,7 @@ test('the theme step stands until a theme is stored, and closes once one is', as
     skip: () => {},
   };
 
-  const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
+  const { renderer, mockInput, waitForFrame, captureCharFrame } = await createTestRenderer({
     width: 80,
     height: 28,
     useThread: false,
@@ -68,14 +68,16 @@ test('the theme step stands until a theme is stored, and closes once one is', as
         />
       </TuiProductProvider>,
     );
-    // Nothing stored: the step is the one the person is standing on, and it
-    // offers the registry under its two appearance headings.
-    await waitForFrame(renderOnce, captureCharFrame, 'Choose a theme');
+    // The render loop must run for frame events to fire; the wait itself is
+    // condition-bound — it returns on the first captured frame that shows the
+    // step, so readiness settling at any pace still resolves deterministically.
+    renderer.start();
+    await waitForFrame((frame) => frame.includes('Choose a theme'));
     expect(captureCharFrame()).toContain('Light');
     expect(captureCharFrame()).toContain('Dark');
     mockInput.pressEnter();
     // The choice is what closes the step: the next scene is the following one.
-    await waitForFrame(renderOnce, captureCharFrame, 'Choose a keymap');
+    await waitForFrame((frame) => frame.includes('Choose a keymap'));
     expect(store.read().theme).toBeDefined();
     expect(captureCharFrame()).not.toContain('Choose a theme');
   } finally {
@@ -120,18 +122,3 @@ test('a provider connected through the port stores the key the connected check r
   const config = parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8'));
   expect(JSON.stringify(config)).toContain('sk-onboarding-key');
 });
-
-async function waitForFrame(
-  renderOnce: () => Promise<void>,
-  capture: () => string,
-  expected: string,
-): Promise<void> {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    await renderOnce();
-
-    if (capture().includes(expected)) return;
-    await Bun.sleep(5);
-  }
-
-  expect(capture()).toContain(expected);
-}

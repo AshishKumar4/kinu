@@ -195,12 +195,13 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
 
   const tools = buildActorTools({
     rt,
+    history: rt.stores.history,
     craftedToolExecute: createNodeCraftedExecute(),
     codemode: createNodeCodemodeToolFactory({
       extraProviders: [
         createAgentsCodemodeProvider(() => agents),
         createWebCodemodeProvider(webSearch),
-        createMemoryCodemodeProvider(() => ({ memory: rt.memory, facts, sql, actor: rt.actor })),
+        createMemoryCodemodeProvider(() => ({ memory: rt.memory, facts, sql, actor: rt.actor, transcriptFor: (sessionId) => rt.stores.history.transcript(sessionId) })),
         createTasksCodemodeProvider(taskList, config),
       ],
     }),
@@ -301,8 +302,7 @@ export function makeSessionWriter(): SessionWriter {
     async appendMessage(msg: SessionMessage, parentId?: string | null) {
       msgs.push({ id: msg.id, parentId, role: msg.role, content: msg.parts.map((p) => p.text).join('') });
     },
-    getHistory(leafId?: string | null) {
-      if (!leafId) return msgs.map((m) => ({ role: m.role, content: m.content }));
+    async getHistory(leafId: string) {
       const result: Array<{ role: string; content: string }> = [];
       let cur = msgs.find((m) => m.id === leafId);
 

@@ -7,6 +7,7 @@
  */
 
 import type { SqlExecutor, SqlValue } from '@kinu.run/agent-utils';
+import * as v from 'valibot';
 import type { MemorySearchResult } from '@kinu.run/agent-utils/memory';
 import type { ToolSet as AiToolSet } from 'ai';
 import type { JsonObject, JsonValue } from '../utils/json';
@@ -52,6 +53,11 @@ export interface SqlExec {
 /** One dynamically queried SQLite row in the portable value vocabulary. */
 export type SqlExecRow = Record<string, SqlValue>;
 
+/** Native generations remain numbers; relational projections expose their persisted identity tuple. */
+export const VfsRevisionSchema = v.union([v.number(), v.string()]);
+
+export type VfsRevision = v.InferOutput<typeof VfsRevisionSchema>;
+
 /** What {@link VFS.stat} answers for a path that exists. Named because a
  *  consumer holding one needs the type, and `ReturnType<typeof vfs.stat>`
  *  couples it to the method rather than to the contract. */
@@ -61,7 +67,7 @@ export interface VfsEntryStat {
   isDir: boolean;
   /** Authoritative backend path revision when the plane has one. Never derived
    * from size/mtime: a same-size/same-mtime peer write is still a new value. */
-  revision?: number;
+  revision?: VfsRevision;
 }
 
 /**
@@ -81,9 +87,11 @@ export interface VFS {
   writeFileIfRevision?(
     path: string,
     data: Uint8Array,
-    expectedRevision: number,
-  ): Promise<{ ok: true; revision: number } | { ok: false; revision: number }>;
+    expectedRevision: VfsRevision,
+  ): Promise<{ ok: true; revision: VfsRevision } | { ok: false; revision: VfsRevision }>;
   readFile(path: string, opts?: { encoding?: string }): Promise<Uint8Array | string>;
+  /** Exact immutable version or refusal; never substitutes the current file. */
+  readFileAtRevision?(path: string, revision: VfsRevision, range?: { offset: number; length: number }): Promise<Uint8Array | string>;
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
   readdir(path: string): Promise<string[]>;
   stat(path: string): Promise<VfsEntryStat | null>;

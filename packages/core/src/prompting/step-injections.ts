@@ -52,7 +52,14 @@ export class StepInjections<E extends { readonly message: ModelMessage; readonly
     let offset = 0;
 
     for (const entry of this.entries) {
-      next.splice(entry.index + offset, 0, entry.message);
+      // A pinned index is a coordinate of the step that drained it. A later
+      // step's array has grown behind it, and a tool result now standing at
+      // that index answers the call before it; the injection lands after the
+      // pair rather than between its halves.
+      let at = entry.index + offset;
+
+      while (next[at]?.role === 'tool') at += 1;
+      next.splice(at, 0, entry.message);
       offset += 1;
     }
 

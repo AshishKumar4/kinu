@@ -31,7 +31,7 @@ is the canonical cloud client through `useAgent`/`useAgentChat`
 | User identity | KV session store plus `UserDO` | local config, local prefs only | Cloud identity never comes from local config. |
 | Workspace roster | `UserDO.user_workspaces` | local config plus local DB discovery | The CLI caches aliases, not the roster. |
 | Identity and soul | `SOUL.md` in the workspace VFS | local VFS and SQLite | One `SOUL.md` per backend. |
-| Chat history | SDK `assistant_messages` projection via `getChatHistoryPage` | `actor_messages` SQLite rows for inspection; `AgentClient.history()` reads the active CLI JSONL for rendering | Cloud clients read the SDK projection; local render history remains a diagnostic view. |
+| Chat history | canonical `conversation_entries` projection via `getChatHistoryPage` | the same canonical store in the local SQLite, read for inspection; `AgentClient.history()` reads the active CLI JSONL for rendering | Cloud clients read the SDK projection; local render history remains a diagnostic view. |
 | Model selection | `agent_config` in the Durable Object | local `agent_config` | A cloud model change goes to the Durable Object. |
 | Memory, VFS, craft, scaffold | Durable Object SQLite and VFS | local SQLite and VFS | The client fetches. It never mirrors. |
 | Exploration, heads, GEPA | Durable Object tables | local tables | The adapter projects the same surfaces. |
@@ -222,8 +222,9 @@ Consumers: the web chat pane via `useChatThread`
 (`packages/cli/src/commands/debug.ts:356`), and local peer
 (`packages/cli/src/local-inspection.ts:501`).
 
-`actor_messages` is Kinu's plain actor tree (`parent_id`, `core/src/identity/schema.ts`).
-The hosted root chat lives in the vendor-owned `assistant_messages` table.
+Every actor's chat, on both backends, is the canonical conversation store
+(`conversation_entries` over `session_messages`, `core/src/session`;
+`docs/STORAGE.md`).
 `getChatHistoryPage` projects the actor's authoritative rows for display. A row the
 projection drops still counts against the page and can still anchor the cursor,
 so paging never re-delivers a dropped row.

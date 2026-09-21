@@ -11,6 +11,7 @@ import * as v from "valibot";
 import { inlineFileType } from './file-types';
 import type { DirEntry } from './files';
 import { tolerate } from '../obs/index';
+import { VfsRevisionSchema, type VfsRevision } from '../types/primitives';
 
 /** The executor whose file view is the composite plane — the workspace tree
  *  extended by the mount table. The drive browses THROUGH it, always. */
@@ -21,7 +22,7 @@ export const PLANE = "workspace";
 export interface FileText {
   content?: string;
   truncated?: boolean;
-  revision?: number;
+  revision?: VfsRevision;
   readOnlyReason?: string;
   error?: string;
 }
@@ -42,7 +43,7 @@ export function viewerKindOf(path: string): ViewerKind {
 }
 
 export class FileWriteConflict extends Error {
-  constructor(readonly currentRevision: number) {
+  constructor(readonly currentRevision: VfsRevision) {
     super('This file changed after you opened it.');
     this.name = 'FileWriteConflict';
   }
@@ -170,11 +171,11 @@ export function sandboxedHtml(source: string): string {
 export async function putFileBytes(
   href: string,
   body: Blob | string,
-  expectedRevision?: number,
+  expectedRevision?: VfsRevision,
 ): Promise<void> {
   const headers = expectedRevision === undefined
     ? undefined
-    : { "If-Match": String(expectedRevision) };
+    : { "If-Match": JSON.stringify(expectedRevision) };
 
   const response = await fetch(href, { method: "PUT", body, headers });
 
@@ -182,7 +183,7 @@ export async function putFileBytes(
   const text = await response.text();
 
   const parsed = v.safeParse(
-    v.object({ error: v.optional(v.string()), revision: v.optional(v.number()) }),
+    v.object({ error: v.optional(v.string()), revision: v.optional(VfsRevisionSchema) }),
     tolerate<unknown>(() => JSON.parse(text), "malformed-input"),
   );
 

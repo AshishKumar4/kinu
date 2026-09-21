@@ -244,8 +244,10 @@ describe('MCTS integration', () => {
     const child = rt.storage.sql<SearchNode>`
       SELECT * FROM search_nodes WHERE parent_id IS NOT NULL`[0]!;
 
+    if (child.msg_id === null) throw new Error('the expanded branch recorded no message to inherit from');
+
     // The exact read the next expansion makes (engine.ts: priorHistory).
-    const inherited = session.getHistory(child.msg_id).map((m) => m.content).join('\n');
+    const inherited = (await session.getHistory(child.msg_id)).map((m) => m.content).join('\n');
     expect(inherited).toContain('FAILED');
     expect(inherited).toContain('marker assertion failed');
     // The proposal is still there — the observation is added to the action, not
@@ -293,7 +295,9 @@ describe('MCTS integration', () => {
     const prose = rt.storage.sql<SearchNode>`
       SELECT * FROM search_nodes WHERE parent_id IS NOT NULL AND code_used IS NULL`[0]!;
 
-    expect(session.getHistory(prose.msg_id).map((m) => m.content).join('\n'))
+    if (prose.msg_id === null) throw new Error('the prose branch recorded no message to read back');
+
+    expect((await session.getHistory(prose.msg_id)).map((m) => m.content).join('\n'))
       .not.toContain('Observation:');
   });
 

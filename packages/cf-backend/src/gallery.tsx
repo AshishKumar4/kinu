@@ -28,6 +28,9 @@
  *   /gallery.html?frame=home     → HomePage
  *   /gallery.html?frame=workspaces → the Workspaces page (`&view=list` for the list)
  *   /gallery.html?frame=plugins  → the Plugins page
+ *   /gallery.html?frame=drive    → the Drive page over a seeded tenant (gallery-drive.tsx)
+ *   /gallery.html?frame=devices  → the Devices page: the linked machines, their
+ *     link states and the per-workspace grants
  *   /gallery.html?frame=setupmodal → HomePage with an account panel open in
  *                                  the modal the Setup card opens;
  *                                  `&panel=providers|mcp|cli` picks which
@@ -168,14 +171,15 @@ import { WorkspaceOverviewsProvider } from "@/hooks/use-workspace-overviews";
 import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
 import type { EvolutionEntry } from "@/components/surfaces/supervise-evolution";
 import { AddServerCard } from "@/components/account/McpServersPanel";
-import { PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
+import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
 import { AccountProvider } from "@/hooks/use-account";
-import SharedPage from "@/pages/SharedPage";
+import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
 import type { BlueprintInspection, BlueprintView, LiveShareRecord, SharedLibrary, SlateBindingDeclaration, SlateCapabilityGraph } from "@kinu.run/core";
-import UserSettingsPage, { DeviceRow } from "@/pages/UserSettingsPage";
+import UserSettingsPage from "@/pages/UserSettingsPage";
+import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
@@ -296,8 +300,8 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
 
 /* The frames the account fixture answers: settings sections, and the surfaces
    that mount the account panels in place — the setup modal and the wizard
-   today; plugins and workspaces join when their commits land. */
-const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins"]);
+   today; plugins, workspaces and devices join when their commits land. */
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices"]);
 
 /* Account-settings failure rig. The browser owns the two transitions: Codex
    stays failed until `gallery:settings-heal`; the gateway read stays pending
@@ -383,32 +387,19 @@ const mcpSecrets = (() => {
   return new Set(listed.filter((entry) => entry.length > 0));
 })();
 
-/** What the plugins page reads beyond the settings reads: the device grants
- *  (one for the plugins frame; the settings frames keep an empty list because
- *  the device-row gate reads the roster without one) and the owner's crafted
- *  tools. Null for every other path. */
+/** What the devices page reads beyond the settings reads: the grants rows —
+ *  one of each state, because the page's whole question is the state per
+ *  workspace. Null for every other path. */
 function pluginsFixture(path: string): Response | null {
   if (path === "/api/user/devices/consents") {
-    return fixtureJson(frame === "plugins"
-      ? [{ agentName: "checkout-fixes", deviceId: "dev-1", policy: "allow", lastMethod: "exec", lastSummary: "bun test" }]
+    return fixtureJson(frame === "devices"
+      ? [
+        { agentName: "checkout-fixes", deviceId: "dev-1", policy: "allow", lastMethod: "exec", lastSummary: "bun test" },
+        { agentName: "landing-page", deviceId: "dev-1", policy: "denied", lastMethod: "exec", lastSummary: null },
+      ]
       : []);
   }
 
-  // The query string rides on `path` for a relative URL, so the match is by prefix.
-  if (path.startsWith("/api/user/experience")) {
-    return fixtureJson([
-      {
-        id: "exp-1", kind: "craft", key: "parse-ledger", title: "parse-ledger", sourceWorkspace: "checkout-fixes",
-        publishedAt: NOW - 2 * 864e5, evidence: "EMA 0.91 over 12 runs",
-        payload: { kind: "craft", description: "Turn a bank CSV export into settlement rows.", params: null, code: "", score: 0.91 },
-      },
-      {
-        id: "exp-2", kind: "craft", key: "triage-inbox", title: "triage-inbox", sourceWorkspace: "email-triage",
-        publishedAt: NOW - 5 * 864e5, evidence: "EMA 0.84 over 9 runs",
-        payload: { kind: "craft", description: "Sort a mailbox into the three piles the owner acts on.", params: null, code: "", score: 0.84 },
-      },
-    ]);
-  }
 
   return null;
 }
@@ -641,16 +632,27 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
     if (incident === "acknowledged") return fixtureJson([]);
     const revoked = incident === "revoked";
 
-    return fixtureJson([{
-      id: "dev-1", label: "Workstation", os: "linux", hostname: "workstation",
-      connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
-      lastIp: "192.0.2.1", lastAgent: "kinu-device", replacedAt: null,
-      revokedAt: revoked ? NOW : null, unstoppedAt: revoked ? NOW : null,
-      sandbox: {
-        tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
-        capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0"],
+    return fixtureJson([
+      {
+        id: "dev-1", label: "Workstation", os: "linux", hostname: "workstation",
+        connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
+        lastIp: "192.0.2.1", lastAgent: "kinu-device", replacedAt: null,
+        revokedAt: revoked ? NOW : null, unstoppedAt: revoked ? NOW : null,
+        sandbox: {
+          tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
+          capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0"],
+        },
       },
-    }]);
+      // The offline half of the roster question the Devices page answers:
+      // only that frame needs a second machine to photograph it.
+      ...(frame === "devices" ? [{
+        id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
+        connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
+        lastIp: "192.0.2.2", lastAgent: "kinu-device", replacedAt: null,
+        revokedAt: null, unstoppedAt: null,
+        sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
+      }] : []),
+    ]);
   }
 
   return null;
@@ -776,7 +778,10 @@ const STOCK_OVERVIEWS = {
   "checkout-fixes": {
     observedAt: NOW - 30e3, activity: "working", decisionsWaiting: 2, hasUpdates: true,
     latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration" },
-    primarySlate: { id: "coupon-board", title: "Coupon board", url: SLATE_GALLERY_URL },
+    // The tile draws this URL live in its iframe — a real fixture page must
+    // answer it. The coupon-board slate IS this gallery frame; pointing the
+    // tile at the dead preview.example.test URL photographed white.
+    primarySlate: { id: "coupon-board", title: "Coupon board", url: "/gallery.html?frame=couponboard" },
   },
   "perf-audit": {
     observedAt: NOW - 30e3, activity: "working", decisionsWaiting: 0, hasUpdates: false,
@@ -992,6 +997,10 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
 
 window.fetch = galleryFetch;
 
+// The Drive frames answer `/api/drive/*` from an in-memory tenant, wrapped
+// around the fixture fetch above rather than branched inside it.
+if (frame === "drive" || frame === "drive-empty" || frame === "app") installDriveFixture(frame !== "drive-empty");
+
 
 /* ── A search worth photographing ───────────────────────────────── */
 
@@ -1149,7 +1158,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     pendingSteers: [], branchRuns: [],
     // Both gated surfaces have content in the gallery, so the tab-strip frames
     // keep showing them.
-    tabPresence: { releases: true, explorations: true },
+    tabPresence: { releases: true, explorations: true, work: true },
     activePlan: null,
     slates: [],
   },
@@ -1641,6 +1650,9 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     tasks: [],
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
+  // The frame's plan is live, so its presence says the Work lane has content;
+  // without an answer the strip hid Work on first paint.
+  getWorkspaceTabPresence: () => ({ work: true, releases: true, explorations: true }),
   listPendingConsents: () => [],
 }));
 
@@ -4455,6 +4467,44 @@ function SlatePreviewFrame() {
   );
 }
 
+/** The coupon-board slate itself — the app a workspaces tile draws in its
+ *  live frame. Rendered at the tile's own 4x viewport so the scaled-down
+ *  photograph shows a real app, not a reflowed column. */
+function CouponBoardSlate() {
+  const coupons = [
+    { code: "SAVE20", kind: "percent", state: "active", used: 41 },
+    { code: "FREESHIP", kind: "shipping", state: "active", used: 12 },
+    { code: "LEGACY5", kind: null, state: "500s on apply", used: 3 },
+    { code: "WELCOME", kind: "fixed", state: "paused", used: 88 },
+  ];
+
+  return (
+    <div className="p-bg min-h-screen p-8 font-sans">
+      <div className="mx-auto max-w-2xl">
+        <div className="flex items-baseline justify-between">
+          <h1 className="p-display text-3xl p-text">Coupon board</h1>
+          <span className="p-meta p-text-3">4 rules · checkout-fixes</span>
+        </div>
+        <div className="mt-6 space-y-2">
+          {coupons.map((coupon) => (
+            <div key={coupon.code} className="flex items-center justify-between rounded-lg border p-border p-recessed px-4 py-3">
+              <div>
+                <span className="font-mono text-sm font-medium p-text">{coupon.code}</span>
+                <span className="ml-3 p-meta p-text-3">{coupon.kind ?? "no kind"}</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="p-meta p-text-3">{coupon.used} uses</span>
+                <span className={`p-meta ${coupon.state === "500s on apply" ? "p-danger" : coupon.state === "active" ? "p-success" : "p-text-3"}`}>{coupon.state}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <p className="mt-6 p-meta p-text-3">LEGACY5 fails in applyCoupon — kind:null rows from the 0412 migration.</p>
+      </div>
+    </div>
+  );
+}
+
 /* A slate rendered where the owner reads it: inside the transcript, at the
    card's own height, while the conversation stays legible around it. The
    thread ends on the bare `slate://` address the agent typed — the markdown
@@ -4938,7 +4988,7 @@ function WorkFrame() {
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={lane.jobs} onRefreshJobs={() => {}} pendingActions={lane.queue}
-          tabPresence={{ releases: true, explorations: true }}
+          tabPresence={{ releases: true, explorations: true, work: true }}
           rpc={lane.rpc}
         />
       </div>
@@ -5016,7 +5066,7 @@ function WorkEmptyFrame() {
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
-          tabPresence={{ releases: false, explorations: false }}
+          tabPresence={{ releases: false, explorations: false, work: false }}
           rpc={settledEmptyRpc}
         />
       </div>
@@ -6700,7 +6750,8 @@ async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string
           <Route index element={<HomePage />} />
           <Route path="/user/settings" element={<UserSettingsPage />} />
           <Route path="/workspace/:agentId" element={<div className="h-full" data-gallery-blank />} />
-          <Route path="/shared" element={<SharedPage fixture={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />} />
+          <Route path="/shared" element={<DriveRoute />} />
+          <Route path="/shared/*" element={<DriveRoute />} />
         </Route>
       </Routes>
     ),
@@ -6817,6 +6868,35 @@ async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[
   };
 }
 
+/**
+ * The Environment tab and the composite drive share one stateful frame, so
+ * an Environment card's Files action genuinely lands the drive. Routed: the
+ * Files surface reads `agentId` off the route to address the raw-bytes HTTP
+ * route. `&offline=device` photographs the stated-absence row for a
+ * disconnected device; `&wide=1` the ≥64rem side-panel preview.
+ */
+/** What a gallery frame mounts, and the routed location the MemoryRouter opens on. */
+interface MountedFrame { node: React.ReactNode; entries: string[] }
+
+function driveFrame(frame: "environment" | "files"): MountedFrame {
+  const params = new URLSearchParams(location.search);
+
+  return {
+    entries: ["/workspace/checkout-fixes"],
+    node: (
+      <Routes>
+        <Route path="/workspace/:agentId"
+          element={<DriveFrame
+            initialSurface={frame === "files" ? "Files" : "Environment"}
+            offlineDevice={params.get("offline") === "device"}
+            width={params.get("wide") === null ? (frame === "files" ? "w-[860px]" : "w-[720px]") : "w-[1240px]"}
+            deferPreview={params.get("deferpreview") === "1"}
+          />} />
+      </Routes>
+    ),
+  };
+}
+
 async function mount() {
   // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
@@ -6844,26 +6924,17 @@ async function mount() {
     ["blueprint", { node: <BlueprintFrame />, entries: [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`] }],
     // A slate card inside a chat message, at its inline height.
     ["chat-slate", { node: <ChatSlateFrame />, entries: ["/"] }],
-    ["shared", {
-      node: (
-        <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
-          <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
-          <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><SharedPage fixture={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} /></main>
-        </div>
-      ),
-      // On its own route, so the rail's primary nav lights Shared and not Home.
-      entries: [APP_ROUTES.shared],
-    }],
-    // The same page before anything is shared: every list shows its empty line.
+    // The Drive's blueprints folder: the shared library, behind the chrome.
+    // On its own route, so the rail's primary nav lights Drive and not Home.
+    ["shared", { node: <DrivePageFrame library={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />, entries: ["/shared/blueprints"] }],
+    // The same folder before anything is shared: every list shows its empty line.
     ["shared-empty", {
-      node: (
-        <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
-          <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
-          <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><SharedPage fixture={{ mine: [], received: [], public: [], known: [] }} workspaces={STOCK_ROSTER.entries} /></main>
-        </div>
-      ),
-      entries: [APP_ROUTES.shared],
+      node: <DrivePageFrame library={{ mine: [], received: [], public: [], known: [] }} workspaces={STOCK_ROSTER.entries} />,
+      entries: ["/shared/blueprints"],
     }],
+    // The Drive over a seeded tenant (`&path=/projects/ops` opens a folder), and over an empty one.
+    ["drive", { node: <DrivePageFrame />, entries: [`/shared${new URLSearchParams(location.search).get("path") ?? ""}`] }],
+    ["drive-empty", { node: <DrivePageFrame />, entries: [APP_ROUTES.shared] }],
     // The task indicator mid-wait: the model call is sleeping out the
     // provider's declared window and the bar names it instead of "working".
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
@@ -6887,6 +6958,8 @@ async function mount() {
     // Chat with ts/bash/json fences — the frame the highlighting test shoots.
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
+    ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["couponboard", { node: <CouponBoardSlate />, entries: ["/"] }],
   ]);
 
   const fixture = fixtureFrames.get(frame);
@@ -7043,26 +7116,7 @@ async function mount() {
   else if (frame === "planreview") node = <PlanReviewFrame />;
   else if (frame === "workempty") node = <WorkEmptyFrame />;
   else if (frame === "approvals") node = <ApprovalsFrame />;
-  // The Environment tab and the composite drive share one stateful frame, so
-  // an Environment card's Files action genuinely lands the drive. Routed: the
-  // Files surface reads `agentId` off the route to address the raw-bytes HTTP
-  // route. `&offline=device` photographs the stated-absence row for a
-  // disconnected device; `&wide=1` the ≥64rem side-panel preview.
-  else if (frame === "environment" || frame === "files") {
-    const params = new URLSearchParams(location.search);
-    entries = ["/workspace/checkout-fixes"];
-    node = (
-      <Routes>
-        <Route path="/workspace/:agentId"
-          element={<DriveFrame
-            initialSurface={frame === "files" ? "Files" : "Environment"}
-            offlineDevice={params.get("offline") === "device"}
-            width={params.get("wide") === null ? (frame === "files" ? "w-[860px]" : "w-[720px]") : "w-[1240px]"}
-            deferPreview={params.get("deferpreview") === "1"}
-          />} />
-      </Routes>
-    );
-  }
+  else if (frame === "environment" || frame === "files") ({ node, entries } = driveFrame(frame));
   else if (fixture !== undefined) { node = fixture.node; entries = fixture.entries; }
   // The log pane alone, at fixture scale — the close-up the composed activity
   // frames render too small to read.

@@ -58,7 +58,7 @@ import type { InstructionApprovalStore } from '../safety/instruction-trust';
 import type { TemporaryAgentPort } from '../subordinates/temporary';
 import type { ScaffoldControl } from './control';
 import { JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
-import { fnv1a64 } from '../prompting/volatile-context';
+import { fnv1a64 } from '../utils/fnv1a';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';

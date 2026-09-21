@@ -43,6 +43,10 @@ import {
   initGepaTables, startGepaRun, persistGepaCandidate, listGepaRuns, loadGepaCandidates,
 } from '../src/evolution/gepa/persistence';
 import { initActorTables } from '../src/identity/schema';
+import { initSessionContextTables } from '../src/session/schema';
+import { initSessionTranscriptTables } from '../src/session/transcript-schema';
+import { SessionHistory } from '../src/session/history';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../src/identity/effect-tombstones';
@@ -743,14 +747,21 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
     w.close();
   });
 
-  test('a pick re-points the picker\'s search nodes and not the sibling\'s', () => {
+  test('a pick re-points the picker\'s search nodes and not the sibling\'s', async () => {
     const w = world();
     initTurnOutcomeTables(w.execRaw);
     initAlternateTakesTable(w.execRaw);
     initSearchTables(w.execRaw);
     // `recordTakePick` resolves the turn's conversation pair, so the transcript
-    // table has to exist — the ledger row it writes quotes what was said.
+    // tables have to exist — the ledger row it writes quotes what was said.
     initActorTables(w.execRaw, w.sql);
+    initSessionContextTables(w.execRaw);
+    initSessionTranscriptTables(w.execRaw);
+
+    const transcript = new SessionHistory({
+      sql: w.sql, actor: w.a, transactionSync: write => w.db.transaction(write)(),
+      files: async () => ({ vfs: createMemoryVfs().vfs, artifactDirectory: '/actor/.kinu/context' }),
+    }).transcript(CHAT_SESSION_ID);
 
     const candidates = JSON.stringify([
       { nodeId: 'n-1', text: 'winner', score: 0.6, visits: 2, depth: 1 },
@@ -774,7 +785,7 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
 
     expect(w.count('search_nodes')).toBe(4);
 
-    const record = recordTakePick(w.sql, w.a, { takeId: 'take-1', nodeId: 'n-2', now: 2 });
+    const record = await recordTakePick(w.sql, w.a, transcript, { takeId: 'take-1', nodeId: 'n-2', now: 2 });
     expect(record.changedAnswer).toBe(true);
 
     const status = (actor: ActorHandle, nodeId: string): string | undefined =>

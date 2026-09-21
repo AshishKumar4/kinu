@@ -70,7 +70,7 @@ import type { TurnSteeringRecord, TurnSteeringTrigger } from '../events/types';
 import type { PrepareStepContext, ToolCallContext, ToolResultContext } from '../extension';
 import type { AgentSignal } from '../types/signals';
 import type { RecoveryFinding } from '../evolution/recovery';
-import { fnv1a64 } from '../prompting/volatile-context';
+import { fnv1a64 } from '../utils/fnv1a';
 import {
   isJsonObject,
   type JsonObject,

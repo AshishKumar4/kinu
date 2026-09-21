@@ -170,10 +170,10 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
       setTimer: () => {},
     };
 
-    const { rt } = createTestRuntime();
+    const { rt, stores } = createTestRuntime();
 
     const orch = new AgentOrchestrator({
-      host, eventLog: log, engine: new EvolutionEngine(rt, { enabled: false }),
+      host, eventLog: log, engine: new EvolutionEngine(rt, stores.history, { enabled: false }),
     });
 
     await orch.drainPendingEvents();

@@ -344,7 +344,7 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
       messageId: 'm1', status, workMode: 'build', continuity: 'independent_task',
       completed: status === 'completed', userText: 'q', assistantText: 'a',
       scopedTurn: {}, recordedAt: 1, evolutionEnabled: true, ...over,
-    }, { turnEndExtensions: { message: {} } });
+    }, { turnEndExtensions: true });
 
   // THE DIVERGENCE. One backend early-returned on any status but 'completed', so
   // a failed cloud turn reached neither the outcome-review buffer nor the

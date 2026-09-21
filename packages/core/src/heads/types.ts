@@ -33,6 +33,7 @@ import type { Usage } from '../usage';
 import type { ToolSet } from 'ai';
 import type { BuiltinToolName } from '../tools/registry';
 import type { LoopOrigin } from '../scaffold/loop-origin';
+import type { MessageReference, MessagePartReference } from '../session/messages';
 
 /** What a head did to the shared filesystem — see heads/file-changes.ts. */
 export type { HeadFileChange, HeadFileChangeSet, HeadId, SerializedMessage };
@@ -212,6 +213,7 @@ export function storedHeadReportStatus(status: string): HeadReportStatus | null 
 /** What a head reports back to its parent on completion. */
 export interface HeadReport {
   readonly id: HeadId;
+  readonly canonicalCompletion?: { readonly turnId: string; readonly runId: string; readonly outputReferences: readonly MessageReference[]; readonly outputPartReferences: readonly MessagePartReference[]; readonly finalTextReference: MessagePartReference | null };
   readonly status: HeadReportStatus;
   /** 2-4 sentence finding — the LLM writes this. Used in the merge prompt. */
   readonly summary: string;

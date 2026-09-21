@@ -17,7 +17,7 @@ import {
   type JsonValue,
   type PlanEdit,
 } from '../src/index';
-import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
+import { createTestRuntime, makeExecRaw, makeSql, storesFor } from './helpers';
 
 describe('plan edit contract', () => {
   test('writes the initial full plan and applies later edits against pre-edit line numbers', () => {
@@ -220,12 +220,13 @@ describe('durable plan review lifecycle', () => {
 describe('submit_plan native tool', () => {
   test('exists only when a plan-mode submit dependency is wired', async () => {
     const { rt } = createTestRuntime();
-    expect(buildBuiltinTools({ rt }).submit_plan).toBeUndefined();
+    expect(buildBuiltinTools({ rt, history: storesFor(rt).history }).submit_plan).toBeUndefined();
 
     const received: Array<readonly PlanEdit[]> = [];
 
     const tools = buildBuiltinTools({
       rt,
+      history: storesFor(rt).history,
       submitPlan: {
         submit: (edits) => {
           received.push([...edits]);

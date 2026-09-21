@@ -13,15 +13,9 @@
  * no reset there — so a green bun suite says nothing about whether recovery ever
  * STARTS in production.
  *
- * Deliberately `Think`, not `ActorAgent`, for the reason `steer-probe.ts` records:
- * a full actor turn needs the hosted workspace plane (NIMBUS_SESSION's wasm
- * subgraph, LOADER's worker_loaders) which this pool loads neither, and hosting
- * any `@callable()`-bearing class additionally needs legacy decorators. The
- * subject here is the SDK's fiber machinery, which is the same machinery under
- * both. The SDK's durable-submission machinery is NOT a subject any more: the
- * chat turn runs on the loop (`ChatSession`), whose sends are `pending_steers`
- * rows the two-turn probe carries across a reset through the production
- * orchestrator.
+ * The probe extends Agent, the same platform lifecycle ActorAgent uses.
+ * Chat recovery belongs to Kinu's ChatSession and is exercised through the
+ * production orchestrator by the two-turn probe.
  *
  * THE OBSERVATION IS OUTSIDE THE PROBE, and that is the whole design. Reading
  * anything off this object is a REQUEST, and a request runs `onStart`, which runs
@@ -31,7 +25,7 @@
  * Until the witness answers, nothing has touched the probe since the reset.
  */
 import { DurableObject } from 'cloudflare:workers';
-import { Think } from '@cloudflare/think';
+import { Agent } from 'agents';
 
 /**
  * Where the probe reports work it completed with nobody watching.
@@ -51,7 +45,7 @@ export class WitnessDO extends DurableObject<Cloudflare.Env> {
   }
 }
 
-export class EvictionProbeDO extends Think<Cloudflare.Env> {
+export class EvictionProbeDO extends Agent<Cloudflare.Env> {
   /**
    * A one-second heartbeat instead of the default thirty.
    *

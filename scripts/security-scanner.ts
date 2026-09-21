@@ -318,12 +318,7 @@ export const REVIEWED_ADVISORIES = {
       + 'pin blocks until it moves.',
     ids: [1112706],
   },
-  'file-type': {
-    reason: 'transitive: @jimp/core requires ^16.0.0 <- jimp <- @opentui/core, the CLI\'s TUI '
-      + 'image path. Infinite loop in the ASF parser on malformed input. 16.5.4 is the last of '
-      + 'that major line, so the fix (21.3.1) needs a @jimp bump.',
-    ids: [1114301],
-  },
+
   'ip-address': {
     reason: 'transitive: express-rate-limit 8.5.2 <- @modelcontextprotocol/sdk. Leading-zero '
       + 'octet and IPv4-mapped misclassification that can bypass an SSRF check — in the rate '

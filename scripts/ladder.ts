@@ -243,14 +243,19 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', imports: ['tools/oxlint/anti-slop/rules/'] },
   },
   {
-    run: 'bun test --timeout=0 packages/agent-core/drift.test.ts',
-    label: 'Vendored runtime drift',
+    run: 'bun test --timeout=0 packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts',
+    label: 'Vendored upstream drift',
     tier: 'commit',
-    // Measured 2026-09-15 on the 24-thread workstation, quiet: 0.1 s solo.
-    seconds: 0.1,
-    catches: 'a byte of the vendored agent-core runtime that no longer matches its digest-pinned '
-      + 'upstream. Its closure is that dist and nothing else, which is why it is its own row.',
-    blind: 'whether the pinned upstream is the one that should ship.',
+    // Measured 2026-09-20 on the 24-thread workstation, quiet: 0.18 s solo for
+    // both files in one invocation — the same figure the agent-core file alone
+    // carried, because the cost here is process start, not the digests.
+    seconds: 0.2,
+    catches: 'a byte of vendored upstream that no longer matches its digest-pinned commit — the '
+      + 'agent-core runtime dist, and the Mossaic SDK source closure. The Mossaic half also holds '
+      + 'the file SET, so a path in the tree that the manifest never pinned is a finding: that is '
+      + 'what a declaration generator writing beside the sources looks like, and every digest '
+      + 'still matches while it happens.',
+    blind: 'whether the pinned upstream commit is the one that should ship.',
     inputs: AMBIENT_BY_NAME,
   },
   {
@@ -1143,7 +1148,7 @@ export const LADDER: readonly Gate[] = [
       + 'equality with the gate that runs it.',
     // Measured by `--audit-closure` 2026-09-15: the suite opens hundreds of
     // tracked sources by path (it scans the tree), so its closure is the corpus.
-    inputs: { ...AMBIENT_BY_NAME, corpus: true, imports: ['packages/core/src/strategy/', 'packages/core/src/execution/codemode-node-shim.ts'] },
+    inputs: { ...AMBIENT_BY_NAME, corpus: true },
   },
   {
     run: 'bun run test:spine',
@@ -3329,19 +3334,28 @@ if (import.meta.main) {
     process.exit(0);
   }
 
+  const gateAt = process.argv.indexOf('--gate');
+  const selectedGate = gateAt === -1 ? undefined : LADDER.find((gate) => gate.run === process.argv[gateAt + 1]);
+
+  if (gateAt !== -1 && selectedGate === undefined) {
+    console.error('ladder --gate: expected an exact command from the declared gate table');
+    process.exit(2);
+  }
+
   const flag = process.argv.find((argument) => argument.startsWith('--tier='));
-  const asked = flag?.slice('--tier='.length);
+  const asked = selectedGate === undefined ? flag?.slice('--tier='.length) : 'deploy';
   const tier = TIERS.find((candidate) => candidate === asked);
 
   if (tier === undefined) {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --plan | --audit-closure [--tier=<tier>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --plan | --audit-closure [--tier=<tier>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
     );
     process.exit(2);
   }
 
-  const gates = gatesFor(tier)
-    .filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+  const gates = selectedGate === undefined
+    ? gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT))
+    : [selectedGate];
 
   const measured = assertMeasured(`ladder --tier=${tier}`, [
     ['gates in this tier', gates.length],

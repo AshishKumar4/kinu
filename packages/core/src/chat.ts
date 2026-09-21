@@ -25,7 +25,8 @@ import {
   assertToolsSupportedByModel,
   type PromptModelContext,
 } from './prompting/model-profile';
-import { applyCacheBreakpoints, hasCacheMarkers } from './prompting/cache-breakpoints';
+import { applyCacheBreakpoints, hasCacheMarkers, type CacheBreakpointPlan } from './prompting/cache-breakpoints';
+import type { ModelWindow } from './prompting/step-prune';
 import type { CacheRetention } from './providers/types';
 import type { TurnContextMeter } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
@@ -143,6 +144,9 @@ export interface ChatOptions {
    *  first safe boundary. Absent for unclaimed work — a head's own inference,
    *  a shadow-eval replay. */
   stepContext?: StepContextPlane;
+  /** Durable native stream sink, awaited before the corresponding public event. */
+  persistStreamPart?: (part: TextStreamPart<ToolSet>) => Promise<void>;
+  persistStep?: (messages: readonly ModelMessage[]) => Promise<void>;
   /** Turn-local context (skill activation reasons, device notice) — spliced
    *  at the tail of the turn's initial array for THIS turn only; never visible
    *  to a transform and never treated as durable history. */
@@ -260,25 +264,6 @@ export interface ChatOptions {
  */
 export const UNBOUNDED_STEPS: StopCondition<ToolSet> = () => false;
 
-/**
- * The step count a turn runs under when no bound is wanted — for the loops that
- * take a NUMBER rather than a condition.
- *
- * `runChat` needs none of this: it hands `stopWhen` straight to `streamText`, so
- * {@link UNBOUNDED_STEPS} alone makes it unbounded. `@cloudflare/think` does
- * not. It composes `[stepCountIs(config.maxSteps ?? this.maxSteps), ...caller]`
- * and the array is OR-ed, so a caller's condition can only ever ADD a way to
- * stop — it cannot widen the cap ahead of it, and the vendor's own type doc
- * says so ("Think always keeps its `maxSteps` stop condition as a safety
- * bound"). Its instance default is 10, which is how the cloud backend ran
- * capped at ten steps for the whole time the CLI ran unbounded, with both
- * loops' comments asserting parity.
- *
- * So the number IS the lever, and this is it. `stepCountIs` compares with
- * `===`, so a step count no turn can reach never fires — an unreachable bound
- * rather than a removed one, because the vendor gives no way to remove it.
- */
-export const UNBOUNDED_MAX_STEPS = Number.MAX_SAFE_INTEGER;
 
 /**
  * THE TWO OPENINGS A SILENT TURN'S FAILURE WAS RECORDED WITH.
@@ -744,6 +729,55 @@ function suppressDeferredRejections(
   for (const deferred of [result.steps, result.finishReason, result.rawFinishReason, result.totalUsage]) deferred.then(undefined, ignore);
 }
 
+/** The window a turn is assembled, admitted and pruned against, and the answer allowance inside it. */
+function turnWindow(opts: ChatOptions): ModelWindow {
+  const contextWindow = opts.modelContext?.contextWindow ?? contextWindowForModel(opts.modelContext?.id ?? '');
+
+  // An unreported answer allowance says nothing about how much of the window
+  // the answer may take, so the honest reading is the whole window and
+  // `outputReserveTokens` splits from there. A picked number here would put a
+  // fact in the catalog's mouth.
+  return { contextWindow, modelOutputLimit: opts.modelContext?.modelOutputLimit ?? contextWindow };
+}
+
+/**
+ * Provider prompt-cache plan: cache-eligible system + request-level cache
+ * routing at turn assembly; marker strategies additionally re-roll the tail
+ * breakpoints in prepareStep so every request of the agentic loop reads the
+ * previous step's prefix. Without opts.cache the plan is a pass-through.
+ */
+function turnCachePlan(opts: ChatOptions, turnMessages: readonly ModelMessage[]): CacheBreakpointPlan {
+  return applyCacheBreakpoints({
+    providerId: opts.cache?.providerId,
+    modelId: opts.cache?.modelId ?? opts.modelContext?.id,
+    system: opts.system,
+    messages: turnMessages,
+    sessionKey: opts.cache?.sessionKey ?? '',
+    retention: opts.cache?.retention,
+  });
+}
+
+/** The text a finished turn reports: its answer when the steps settled one, else what streamed, else the steps' own text, else a line synthesized from the tool results. */
+function turnText(streamed: string, steps: readonly StepResult<ToolSet>[], answer: string | null): string {
+  let allText = answer ?? streamed;
+
+  // If the model produced no text (ended on a tool call), gather from steps
+  if (!allText.trim()) {
+    for (const step of steps) {
+      if (step.text?.trim()) allText += step.text;
+    }
+  }
+
+  // If still no text, synthesize from tool results
+  if (!allText.trim()) {
+    const fallback = synthesizeToolFallback(steps);
+
+    if (fallback) allText = fallback;
+  }
+
+  return allText;
+}
+
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const extensions = opts.extensions;
 
@@ -757,20 +791,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const modelSpec = opts.modelContext?.id;
 
   let stepCount = 0;
+  const { contextWindow, modelOutputLimit } = turnWindow(opts);
 
   // The shared turn-context assembly (orchestrator/turn-context.ts): attachment
   // sanitize → extension onTurnStart → awaited transformContext (compaction) →
   // turn-local tail. The cf backend's beforeTurn runs the SAME function, so the
   // ordering cannot drift per backend.
-  const contextWindow = opts.modelContext?.contextWindow
-    ?? contextWindowForModel(opts.modelContext?.id ?? '');
-
-  // An unreported answer allowance says nothing about how much of the window
-  // the answer may take, so the honest reading is the whole window and
-  // `outputReserveTokens` splits from there. A picked number here would put a
-  // fact in the catalog's mouth.
-  const modelOutputLimit = opts.modelContext?.modelOutputLimit ?? contextWindow;
-
   const assembly: Parameters<typeof assembleTurnMessages>[0] = {
     system: opts.system,
     history: opts.history,
@@ -796,21 +822,30 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     limits: { contextWindow, modelOutputLimit },
   };
 
-  const turnMessages = await assembleTurnMessages(assembly);
+  const stepContext = opts.stepContext;
+  const initialContext = stepContext === undefined ? null : await stepContext.base();
+  const turnMessages = await assembleTurnMessages({ ...assembly, history: initialContext?.messages ?? assembly.history });
+  let initialContextAvailable = initialContext !== null;
 
-  // Provider prompt-cache plan: cache-eligible system + request-level cache
-  // routing at turn assembly; marker strategies additionally re-roll the tail
-  // breakpoints in prepareStep so every request of the agentic loop reads the
-  // previous step's prefix. Without opts.cache the plan is a pass-through.
-  const cache = applyCacheBreakpoints({
-    providerId: opts.cache?.providerId,
-    modelId: opts.cache?.modelId ?? opts.modelContext?.id,
-    system: opts.system,
-    messages: turnMessages,
-    sessionKey: opts.cache?.sessionKey ?? '',
-    retention: opts.cache?.retention,
-  });
+  // The first step reads the turn's assembled messages; every later step reads
+  // the plane's current base, assembled the same way minus the admission.
+  const stepContextPlane: StepContextPlane | undefined = stepContext === undefined ? undefined : {
+    base: async () => {
+      if (initialContextAvailable) {
+        initialContextAvailable = false;
 
+        return { messages: turnMessages, changed: initialContext?.changed ?? false };
+      }
+
+      const base = await stepContext.base();
+      const messages = await assembleTurnMessages({ ...assembly, history: base.messages, admission: undefined });
+
+      return { messages, changed: base.changed };
+    },
+    consume: step => stepContext.consume(step),
+  };
+
+  const cache = turnCachePlan(opts, turnMessages);
   const rollTail = hasCacheMarkers(cache.strategy);
   const providerOptions = mergeProviderOptions(cache.providerOptions, opts.providerOptions);
 
@@ -938,11 +973,18 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           dynamic: opts.dynamicContext,
           destinationProviderId: opts.cache?.providerId,
           meter: opts.meter,
-          context: opts.stepContext,
+          context: stepContextPlane,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
       },
+      experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
+        async transform(part, controller) {
+          await opts.persistStreamPart?.(part);
+          controller.enqueue(part);
+        },
+      }),
       onStepFinish: async (step) => {
         stepCount++;
+        await opts.persistStep?.(step.response.messages);
         call.stepFinished(step, stepCount);
         await opts.onStep?.(step);
       },
@@ -1011,10 +1053,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     settleModelOperation(operation, result, cut);
     const steps = cut ? call.recordedSteps : await result.steps;
     const produced = call.produced();
+    const paired = settleUnpairedToolCalls(produced) ?? produced;
+
+    if (cut) await opts.persistStep?.(paired);
 
     return {
       steps,
-      produced: settleUnpairedToolCalls(produced) ?? produced,
+      produced: paired,
       finishReason: call.lastFinishReason,
       interrupted: cut,
     };
@@ -1061,25 +1106,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   }
 
   const answer = answerFromSteps(steps, interrupted);
+  const text = turnText(allText, steps, answer);
 
-  if (answer !== null) allText = answer;
-
-  // If the model produced no text (ended on a tool call), gather from steps
-  if (!allText.trim()) {
-    for (const step of steps) {
-      if (step.text?.trim()) allText += step.text;
-    }
-  }
-
-  // If still no text, synthesize from tool results
-  if (!allText.trim()) {
-    const fallback = synthesizeToolFallback(steps);
-
-    if (fallback) allText = fallback;
-  }
-
-  await extensions?.emitTurnEnd({ text: allText, responseMessages });
-  yield { type: 'done', text: allText, responseMessages, ...(answer !== null && { answer }) };
+  await extensions?.emitTurnEnd({ text, responseMessages });
+  yield { type: 'done', text, responseMessages, ...(answer !== null && { answer }) };
 
   // The turn did not finish, and the caller's turn record must say so — but
   // only AFTER `done`, so the history above is durably kept. Being cut is not a

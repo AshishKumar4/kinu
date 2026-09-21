@@ -317,6 +317,20 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'shares', name: 'sharesReceived_list', run: (u, c) => u.sharesReceived_list(c) },
   { capability: 'shares', name: 'sharesReceived_forget', run: (u, c) => u.sharesReceived_forget(c, USER_ID) },
 
+  // The owner's Drive. Every workspace already reaches the same tenant through
+  // its own `/shared` mount, so the management surface is the owner's alone.
+  { capability: 'drive', name: 'drive_list', run: (u, c) => u.drive_list(c, '/') },
+  { capability: 'drive', name: 'drive_mkdir', run: (u, c) => u.drive_mkdir(c, '/x') },
+  { capability: 'drive', name: 'drive_rename', run: (u, c) => u.drive_rename(c, '/x', '/y') },
+  { capability: 'drive', name: 'drive_delete', run: (u, c) => u.drive_delete(c, '/x') },
+  { capability: 'drive', name: 'drive_markAsSkill', run: (u, c) => u.drive_markAsSkill(c, '/x') },
+  { capability: 'drive', name: 'drive_addSkill', run: (u, c) => u.drive_addSkill(c, '') },
+  { capability: 'drive', name: 'drive_writeChunk', run: (u, c) => u.drive_writeChunk(c, { kind: 'file', path: '/x' }, 't', 0, new Uint8Array(0), true) },
+  { capability: 'drive', name: 'drive_abortUpload', run: (u, c) => u.drive_abortUpload(c, 't') },
+  { capability: 'drive', name: 'drive_startDownload', run: (u, c) => u.drive_startDownload(c, '/x', 't') },
+  { capability: 'drive', name: 'drive_readChunk', run: (u, c) => u.drive_readChunk(c, 't', 0, 1) },
+  { capability: 'drive', name: 'drive_abortDownload', run: (u, c) => u.drive_abortDownload(c, 't') },
+
   // LAST, because an owner reaching it destroys the object under every row
   // above: its storage is dropped and its context aborted, so no later call
   // could observe anything but a wiped harness.

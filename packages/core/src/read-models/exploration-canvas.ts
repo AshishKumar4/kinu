@@ -33,7 +33,7 @@ import { readForkRunParams, type ForkRunParams } from './fork-params';
 import { readSearchTree } from './search-tree';
 import { paretoFront, type ParetoAxis, type ParetoEvidence } from '../strategy/objective';
 import { readSwarmNodeRecords } from '../strategy/swarm-resume';
-import { mapPage, type Page, type SeekCursor } from './page';
+import { mapPage, type Page, type SeekCursor } from '../session/page';
 
 /** One run on the canvas, with everything the canvas draws for it. */
 export interface ExplorationCanvasRun {

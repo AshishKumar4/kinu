@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
 import { WorkspaceId } from '@agent-core/core';
 import { SlateId, SlatePublicationId } from '@agent-core/core/slates';
-import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SlateFiles, slateDirectory } from '../src/slates/files';
-import { SqliteSlateContentStore } from '../src/slates/content';
+import { WorkspaceSlateContentStore } from '../src/slates/content';
 import { SqliteSlateStore } from '../src/slates/store';
 import { SlateShareStore } from '../src/slates/shares';
 import { WorkspaceSlates } from '../src/slates/runtime';
@@ -18,10 +18,10 @@ async function slatePlane(name: string) {
   const exec = makeSqlExec(ws.db);
   const atomic = <Result,>(body: () => Result) => ws.db.transaction(body)();
   const store = new SqliteSlateStore(exec, atomic);
-  const content = new SqliteSlateContentStore(exec, atomic);
+  const content = new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL));
 
   const slates = new WorkspaceSlates({
-    workspaceId: new WorkspaceId(name), store, files: new SlateFiles(vfs, content),
+    workspaceId: new WorkspaceId(name), store, files: new SlateFiles(vfs, content, (body) => session.vfs.withTransaction(body)),
     mutations: { mutate: async (_request, mutation) => session.vfs.withTransaction(mutation) },
   });
 
@@ -70,6 +70,8 @@ test('a blueprint carries the included tree and its requirements, and admits wit
     expect(owner.slates.skeleton(publication.id).sourceDigest.value).toBe(publication.materialization.digest.value);
 
     const bundle = owner.blueprints.bundle(published.share.id);
+    owner.vfs.writeFile(root + '/src/server.ts', 'later authored edits');
+    expect(owner.blueprints.bundle(published.share.id)).toEqual(bundle);
     expect(Object.keys(bundle.blobs).length).toBe(2);
     expect(bundle.tree).not.toContain('cache.json');
     expect(bundle.skeleton.bindings.map((requirement) => requirement.name + '@' + requirement.facet)).toEqual([

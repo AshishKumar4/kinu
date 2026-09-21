@@ -53,7 +53,6 @@ import {
   parseProtocolMessage, reconcileMessages, sanitizeMessage, sendIfOpen,
   type ChatProtocolEvent,
 } from 'agents/chat';
-import type { SessionMessage } from 'agents/experimental/memory/session';
 import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import {
@@ -72,7 +71,7 @@ export interface ChatWire {
   getConnection(id: string): Connection | undefined;
   /** The transcript as the client should see it, oldest first — the SDK
    *  session's own rows, which the SDK's clients render as UI messages. */
-  history(): SessionMessage[];
+  history(): Promise<UIMessage[]>;
   /** Whether the loop already holds a message under this id — a durable row,
    *  or the reservation an accepted send keeps until its row lands. The hook
    *  sends its whole message list with every request, so a message sent
@@ -89,7 +88,7 @@ export interface ChatWire {
 /** Where one socket's chat frames go. Both rooms answer it, and
  *  {@link ActorChatRooms} is what picks between them. */
 export interface ChatRoom {
-  onConnect(connection: Connection): void;
+  onConnect(connection: Connection): Promise<void>;
   onClose(connection: Connection): void;
   /** Handle one socket frame if it is chat protocol; false when it is not. */
   onMessage(connection: Connection, raw: string): Promise<boolean>;
@@ -228,11 +227,12 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
    *  AND reads the transcript as it is now: the seed and the socket connect
    *  are separate fetches, and a turn that started between them would
    *  otherwise leave the tab without the opening row until the turn ends. */
-  onConnect(connection: Connection): void {
+  async onConnect(connection: Connection): Promise<void> {
     const resume = this.resume;
+    const history = await this.wire.history();
 
     if (resume !== null && resume.resumable.hasActiveStream()) resume.handshake.notifyStreamResuming(connection);
-    sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() }));
+    sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history }));
   }
 
   onClose(connection: Connection): void {
@@ -318,12 +318,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       return;
     }
 
-    const stored = this.wire.history();
-    // SAFETY: a stored row IS the UIMessage the SDK persisted — its session
-    // provider writes `{ id, role, parts, metadata }` from a UIMessage and
-    // reads it back unchanged; the SDK's own agent hands `getHistory()` rows
-    // to `reconcileMessages` the same way (Think, `_readMessagesFromStorage`).
-    const storedMessages = stored as UIMessage[];
+    const storedMessages = await this.wire.history();
 
     const fresh = reconcileMessages(parsed.output.messages, storedMessages, sanitizeMessage)
       .filter((message) => message.role === 'user' && !this.wire.admitted(message.id));
@@ -381,7 +376,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
    * steer's own id is the turn id of its rerun. A user turn's opening row is
    * durable before this, so every tab reads the transcript with it.
    */
-  openTurn(turn: { readonly turnId: string; readonly messageId: string; readonly userTurn: boolean }): void {
+  async openTurn(turn: { readonly turnId: string; readonly messageId: string; readonly userTurn: boolean }): Promise<void> {
     const requestId = this.requests.get(turn.turnId) ?? crypto.randomUUID();
     this.requests.delete(turn.turnId);
 
@@ -389,34 +384,35 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     this.live = { requestId, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), cadence: partialFlushCadence(), taken: false, broken: false };
 
-    if (turn.userTurn) this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() }));
+    if (turn.userTurn) this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: await this.wire.history() }));
   }
 
   /** The turn's answer row is durable before this: the done frame and the
    *  transcript broadcast read the finished turn's rows. */
-  closeTurn(): void {
+  async closeTurn(): Promise<void> {
     const live = this.live;
 
     if (live === null) return;
     this.live = null;
 
     if (!live.taken && !live.broken && live.accumulator.parts.length > 0) this.answers.set(live.accumulator.messageId, live.accumulator.toMessage());
+    const history = await this.wire.history();
 
     this.resume?.resumable.complete(live.streamId);
     this.pendingResume.clear();
     this.done(live.requestId);
-    this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() }));
+    this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history }));
   }
 
-  deliver(event: SessionEvent): void {
+  async deliver(event: SessionEvent): Promise<void> {
     switch (event.type) {
       case 'turn-start':
-        this.openTurn({ turnId: event.turnId, messageId: event.messageId, userTurn: event.kind === 'user' });
+        await this.openTurn({ turnId: event.turnId, messageId: event.messageId, userTurn: event.kind === 'user' });
 
         return;
 
       case 'turn-end':
-        this.closeTurn();
+        await this.closeTurn();
 
         return;
 

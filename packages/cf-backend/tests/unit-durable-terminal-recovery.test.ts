@@ -18,13 +18,13 @@
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
-import { SDK_SESSION_DDL } from '../../core/tests/helpers';
 import {
   orchestratorHarness,
   type ActorHarness,
   type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import type { FiberRecoveryContext } from 'agents';
+import { CHAT_SESSION_ID } from '@kinu.run/core';
 import {
   sweepUnrecoverableFibers,
   FIBER_RECOVERY_MAX_AGE_MS,
@@ -108,36 +108,19 @@ function boundDelivery(
 }
 
 /** The durable transcript pair a resumed reply reads: the queued drain turn's
- *  user row carrying `drainTurnId`, and the assistant row answering it. */
-function persistedDrainTurn(
+ *  user entry carrying `drainTurnId`, and the assistant entry answering it. */
+async function persistedDrainTurn(
   harness: ActorHarness<HarnessOrchestratorAgent>,
   drainTurnId: string,
   answer: string | null,
-): void {
-  // The SDK's own transcript table, created the way every other suite over it
-  // does: the agents base class creates it lazily on Think's boot, and no turn
-  // has run here. It is the vendor's shape — no owner column; `usesPaneStore`
-  // scopes the read to the workspace's root actor instead.
-  harness.db.exec(SDK_SESSION_DDL);
-
-  const append = harness.db.prepare(
-    `INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-     VALUES (?, 'default', ?, ?, ?, '2026-08-16 22:05:00')`,
-  );
-
-  append.run(`u-${drainTurnId}`, null, 'user', JSON.stringify({
-    id: `u-${drainTurnId}`,
-    role: 'user',
-    parts: [{ type: 'text', text: '1 event arrived while you were idle.' }],
-    metadata: { kinuEvent: 'event_drain', drainTurnId },
-  }));
+): Promise<void> {
+  const history = harness.agent.harnessHistory;
+  await history.record(CHAT_SESSION_ID, { id: `u-${drainTurnId}`, parentId: history.transcript(CHAT_SESSION_ID).newestId(), origin: 'input',
+    message: { role: 'user', content: '1 event arrived while you were idle.' }, metadata: { kinuEvent: 'event_drain', drainTurnId } });
 
   if (answer === null) return;
-  append.run(`a-${drainTurnId}`, `u-${drainTurnId}`, 'assistant', JSON.stringify({
-    id: `a-${drainTurnId}`,
-    role: 'assistant',
-    parts: [{ type: 'text', text: answer }],
-  }));
+  await history.record(CHAT_SESSION_ID, { id: `a-${drainTurnId}`, parentId: `u-${drainTurnId}`, origin: 'output',
+    message: { role: 'assistant', content: answer } });
 }
 
 /** A lease a LIVE activation left open, inside the sweep's 10-minute grace. The
@@ -163,7 +146,7 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
   test('the answer already in the transcript is dispatched and the lease closes', async () => {
     const harness = orchestratorHarness();
     boundDelivery(harness, 'ev-owed', 'evt-owed', 5);
-    persistedDrainTurn(harness, 'evt-owed', 'the build passed');
+    await persistedDrainTurn(harness, 'evt-owed', 'the build passed');
     // The prefix: the turn answered, the transition was claimed, and the isolate
     // died before the reply left.
     expect(harness.agent.harnessBeginTerminalTransition('u-owed')).toBe('first');
@@ -193,7 +176,7 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
   test('a lease whose turn never answered is left open for the sweep to re-ask', async () => {
     const harness = orchestratorHarness();
     boundDelivery(harness, 'ev-silent', 'evt-silent', RECENT);
-    persistedDrainTurn(harness, 'evt-silent', null);
+    await persistedDrainTurn(harness, 'evt-silent', null);
     harness.agent.harnessBeginTerminalTransition('u-silent');
     // The lease is in the RESUME's OWN view before the resume runs. Both
     // assertions below are "nothing moved", and a row filed under an actor this
@@ -217,7 +200,7 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
   test('an empty answer does not count as a reply', async () => {
     const harness = orchestratorHarness();
     boundDelivery(harness, 'ev-blank', 'evt-blank', RECENT);
-    persistedDrainTurn(harness, 'evt-blank', '   ');
+    await persistedDrainTurn(harness, 'evt-blank', '   ');
     harness.agent.harnessBeginTerminalTransition('u-blank');
     expect(harness.agent.harnessOwedWorkExists()).toBe(true);
 
@@ -247,8 +230,8 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     const harness = orchestratorHarness();
     boundDelivery(harness, 'ev-answered', 'evt-answered', 5);
     boundDelivery(harness, 'ev-unanswered', 'evt-unanswered', 5);
-    persistedDrainTurn(harness, 'evt-answered', 'the build passed');
-    persistedDrainTurn(harness, 'evt-unanswered', null);
+    await persistedDrainTurn(harness, 'evt-answered', 'the build passed');
+    await persistedDrainTurn(harness, 'evt-unanswered', null);
 
     await harness.agent.activateActor();
     // The reconcile is detached from `onStart` (a bounded sweep plus one

@@ -1,34 +1,49 @@
 import { AgentCoreError, ContentRef, Digest } from '@agent-core/core';
-import { ByteRange, ContentStat, ContentStore, MediaHint, type ContentPutResult } from '@agent-core/core/content';
-import { CHUNK_SIZE } from '@nimbus-sh/core/constants.js';
-import * as v from 'valibot';
-import type { SqlExec } from '../types/primitives';
+import { ByteRange, ContentStat, ContentStore, type ContentPutResult } from '@agent-core/core/content';
 
-const Metadata = v.object({ size: v.number(), hint: v.nullable(v.string()) });
+/** Under the kernel-owned /etc, never under an authored or user-owned parent. */
+const SLATE_CONTENT_ROOT = '/etc/kinu-slate-content';
 
-const Chunk = v.object({ bytes: v.instance(ArrayBuffer) });
+export interface SlateContentFiles {
+  exists(path: string): boolean;
+  lstat(path: string): { type: string; size: number; mode: number; uid: number; gid: number };
+  mkdir(path: string, options: { mode: number }): void;
+  writeFile(path: string, bytes: Uint8Array, options: { mode: number }): void;
+  readRangeUncached(path: string, offset: number, length: number): Uint8Array;
+}
 
-export class SqliteSlateContentStore extends ContentStore {
-  constructor(private readonly db: SqlExec, private readonly atomic: <Result>(operation: () => Result) => Result) {
+/** Immutable content in the workspace filesystem; SQL records retain only refs.
+ * The adapter supplies a kernel-owned view, never the view used to capture live
+ * source. retain joins its caller's synchronous VFS transaction without nesting.
+ * Existing digest paths are never overwritten; a wrong node/owner/mode/size is
+ * corruption, not permission to repair it. Size comes from the inode; no caller
+ * needs media hints, so neither hints nor a second size counter are retained.
+ * Workspace archives carry these inodes through the authoritative VFS tables. */
+export class WorkspaceSlateContentStore extends ContentStore {
+  constructor(private readonly files: SlateContentFiles) {
     super();
+    this.requireProtected('/etc', 'directory', 0o755);
+
+    if (!files.exists(SLATE_CONTENT_ROOT)) files.mkdir(SLATE_CONTENT_ROOT, { mode: 0o700 });
+    this.requireProtected(SLATE_CONTENT_ROOT, 'directory', 0o700);
   }
 
-  async put(bytes: Uint8Array, hint?: MediaHint): Promise<ContentPutResult> {
-    return this.retain(bytes, hint);
+  async put(bytes: Uint8Array): Promise<ContentPutResult> {
+    return this.retain(bytes);
   }
 
-  retain(bytes: Uint8Array, hint?: MediaHint): ContentPutResult {
+  retain(bytes: Uint8Array): ContentPutResult {
     const digest = Digest.sha256(bytes);
     const ref = ContentRef.fromDigest(digest);
-    this.atomic(() => {
-      if (this.describe(ref) !== undefined) return;
-      this.db.exec('INSERT INTO slate_content (digest, size, hint) VALUES (?, ?, ?)', ref.value, bytes.length, hint?.mediaType ?? null);
+    const path = this.path(ref);
 
-      for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
-        this.db.exec('INSERT INTO slate_content_chunks (digest, offset, bytes) VALUES (?, ?, ?)',
-          ref.value, offset, bytes.slice(offset, offset + CHUNK_SIZE).buffer);
-      }
-    });
+    if (this.files.exists(path)) {
+      const stat = this.requireProtected(path, 'file', 0o400);
+
+      if (stat.size !== bytes.length) throw new AgentCoreError('codec.invalid', 'Slate content size differs from its digest object');
+    } else {
+      this.files.writeFile(path, bytes, { mode: 0o400 });
+    }
 
     return { digest, ref };
   }
@@ -42,21 +57,8 @@ export class SqliteSlateContentStore extends ContentStore {
 
     if (stat === undefined) throw new AgentCoreError('content.not-found', `Slate content not found: ${ref.value}`);
     const window = range.resolve(stat.size);
-    const output = new Uint8Array(window.length);
-    const end = window.offset + window.length;
 
-    for (let offset = Math.floor(window.offset / CHUNK_SIZE) * CHUNK_SIZE; offset < end; offset += CHUNK_SIZE) {
-      const row = this.db.exec('SELECT bytes FROM slate_content_chunks WHERE digest = ? AND offset = ?', ref.value, offset).toArray()[0];
-
-      if (row === undefined) throw new AgentCoreError('content.not-found', `Slate content chunk not found: ${ref.value}@${String(offset)}`);
-      const bytes = new Uint8Array(v.parse(Chunk, row).bytes);
-
-      if (bytes.length !== Math.min(CHUNK_SIZE, stat.size - offset)) throw new AgentCoreError('codec.invalid', 'Slate content chunk size differs from its record');
-      const start = Math.max(offset, window.offset);
-      output.set(bytes.subarray(start - offset, Math.min(bytes.length, end - offset)), start - window.offset);
-    }
-
-    return output;
+    return this.files.readRangeUncached(this.path(ref), window.offset, window.length);
   }
 
   async stat(ref: ContentRef): Promise<ContentStat | undefined> {
@@ -64,11 +66,29 @@ export class SqliteSlateContentStore extends ContentStore {
   }
 
   private describe(ref: ContentRef): ContentStat | undefined {
-    const row = this.db.exec('SELECT size, hint FROM slate_content WHERE digest = ?', ref.value).toArray()[0];
+    const path = this.path(ref);
 
-    if (row === undefined) return undefined;
-    const record = v.parse(Metadata, row);
+    if (!this.files.exists(path)) return undefined;
+    const stat = this.requireProtected(path, 'file', 0o400);
 
-    return new ContentStat(ref, ref.digest, record.size, record.hint === null ? undefined : new MediaHint(record.hint));
+    return new ContentStat(ref, ref.digest, stat.size);
+  }
+
+  private path(ref: ContentRef): string {
+    const digest = ref.digest.value;
+
+    if (!/^[a-f0-9]{64}$/.test(digest)) throw new AgentCoreError('codec.invalid', 'Slate content requires a SHA-256 digest');
+
+    return `${SLATE_CONTENT_ROOT}/${digest}`;
+  }
+
+  private requireProtected(path: string, type: string, mode: number) {
+    const stat = this.files.lstat(path);
+
+    if (stat.type !== type || stat.uid !== 0 || stat.gid !== 0 || (stat.mode & 0o7777) !== mode) {
+      throw new AgentCoreError('codec.invalid', `Slate content path is not kernel-owned and protected: ${path}`);
+    }
+
+    return stat;
   }
 }

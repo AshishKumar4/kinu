@@ -76,13 +76,20 @@ export type { ProfileProvenance, SwarmProfileSnapshot } from './profiles';
 export { DEFAULT_WORKERS_AI_MODEL_SPEC } from './providers/workers-ai';
 
 export {
-  forkWorkspaceStorage, snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage,
-  ForkSnapshotSchema, ForkTargetWriter,
-  type ForkOpts, type ForkResult, type ForkLineageRow, type ForkSnapshot,
-  type ForkSnapshotHead, type ForkMessageRow, type ForkPaneRow,
-  type ForkMemoryChunkRow, type ForkCraftedToolRow, type ForkConfigRow, type ForkFile,
-  type ForkWriteTarget, type ForkStagedCounts,
+  forkWorkspaceStorage, snapshotWorkspaceForFork, readForkLineage,
+  type ForkOpts, type ForkLineageRow, type ForkSnapshotSource,
 } from './identity/fork';
+
+export {
+  ForkSnapshotSchema,
+  type ForkSnapshot, type ForkSnapshotHead,
+  type ForkMemoryChunkRow, type ForkCraftedToolRow, type ForkConfigRow, type ForkFile,
+} from './identity/fork-rows';
+
+export {
+  writeForkSnapshot, ForkTargetWriter,
+  type ForkResult, type ForkWriteTarget, type ForkStagedCounts,
+} from './identity/fork-writer';
 
 export { ForkStagingState, type ForkStaging } from './identity/fork-staging';
 
@@ -102,13 +109,11 @@ export {
 } from './identity/fork-sink';
 
 export {
-  sessionTreeAncestry, chatPaneAncestry, hasPaneStore, usesPaneStore, forkPointExists, normalizeImportedConversation,
-  answersForDrainTurns,
-  conversationCount, conversationTurnPair, conversationPageRows, operatorMessageAdmitted,
-  SESSION_TREE_MAX_DEPTH, CHAT_SESSION_ID,
-  type SessionTreeNode, type ChatPaneRow,
-  type ConversationTurnPair, type ConversationPageRow,
+  forkPointExists, answersForDrainTurns, conversationCount, conversationTurnPair,
+  type ConversationTurnPair,
 } from './identity/conversation-store';
+
+export { CHAT_SESSION_ID, MCTS_SESSION_ID } from './session/transcript-schema';
 
 export {
   forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,
@@ -133,7 +138,7 @@ export {
   fallbackWorkspaceIdentity,
   mintSubordinateName,
   parseWorkspaceTitle,
-  planWorkspaceTitle, autoTitleMayReplace, persistAutoTitle,
+  planWorkspaceTitle, autoTitleMayReplace, persistAutoTitle, titleActorFromMessage,
   resolveWorkspaceTitle,
   suggestWorkspaceTitle,
   workspaceSlug, workspaceAddressRefusal, isPlaceholderWorkspaceTitle, codenameFor,
@@ -268,7 +273,7 @@ export {
 // Configuration
 export { DEFAULT_CONFIG } from './config';
 
-export { UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS } from './chat';
+export { UNBOUNDED_STEPS } from './chat';
 
 // Typed accessors over the `actor_config` key/value table — collapses ~23
 // raw-SQL sites into a deep module with known-key getters/setters.
@@ -282,6 +287,8 @@ export {
 
 // Types
 export type * from './types/primitives';
+
+export { VfsRevisionSchema } from './types/primitives';
 
 export { REAL_CLOCK, waitOn, every, type Clock } from './types/clock';
 
@@ -462,35 +469,28 @@ export {
   type StepPrepareResult, type StepPrepareContext,
 } from './prompting/prepare-step';
 
-export {
-  applyStagedContext, unpairedToolCallIds, STAGED_CONTEXT_DEFERRALS,
-  type StagedContextEdit, type StagedContextDeferral, type StagedContextOutcome,
-} from './prompting/staged-context';
+export { toolPairingGaps } from './session/tool-pairing';
 
-// The actor's editable working history, and the `/context` projection of it.
-export {
-  ActorWorkingContextStore, initActorWorkingContextTables,
-  type WorkingRevision, type WorkingRevisionContent, type WorkingSource,
-  type WorkingStatus, type WorkingVia, type WorkingClosedReason,
-} from './orchestrator/working-context';
+export { STAGED_CONTEXT_DEFERRALS, type StagedContextDeferral, type ContextProposalClosure, type ContextEditEffect, type ContextEventRecorder, type ContextEditEvent } from './types/context-plane';
 
-export {
-  createActorContextPlane,
-  type ActorContextPlane, type ActorContextPlaneDeps, type AdmittedContext,
-  type SettledContext, type ContextEditReceipt, type ContextEditEffect, type ContextPlaneState,
-  // The audit port every host wires per actor, and the event it takes. Exported
-  // because the hosts that construct a session are in other packages: a
-  // recorder that satisfies this is what turns a landed context edit into
-  // evidence, and `null` is the stated spelling for a host that publishes none.
-  type ContextEventRecorder, type ContextEditEvent,
-} from './orchestrator/context-plane';
+export { SessionHistory, type SessionHistoryDependencies } from './session/history';
+
+export type { ContextSelection, ContextEntry } from './session/context';
+
+export type { ContextProposal, ContextChange } from './session/proposals';
 
 export {
   contextMount,
   type ActorContextStores, type ChildContextResolver, type ContextMountDeps, type ContextFileHeader,
 } from './vfs/context-plane';
 
-export { encodeModelMessages, decodeModelMessages, modelMessagesDigest } from './prompting/message-codec';
+export type { SessionFilePlane } from './session/payload';
+
+export type { MessageReference, MessagePartReference, ActorReadAuthority } from './session/messages';
+
+export { SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './session/transcript';
+
+export { encodeModelMessages, decodeModelMessages } from './session/message-codec';
 
 export {
   pruneStepToolOutputs,
@@ -548,8 +548,6 @@ export {
   TurnContextBudget,
   citesSpillAddress,
   SPILL_DIRS,
-  DEFAULT_TURN_ADMIT_BUDGET_CHARS,
-  TIGHTENED_RESULT_MAX_CHARS,
   type BulkProducer,
   type ContextBudgetSnapshot,
   type SpillTrip,
@@ -940,7 +938,6 @@ export {
   DynamicContextLedger,
   agentDynamicContext,
   executorAvailabilityLabel,
-  fnv1a64,
   searchDelegates,
   observeSystemPromptHash,
   renderDynamicContextBlock,
@@ -1278,7 +1275,7 @@ export {
 } from './vfs/workspace-path';
 
 export {
-  agentHome, agentTmpRoot, agentCred, agentIdentity,
+  agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements,
   subordinateAgentName, headAgentName,
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
@@ -1294,7 +1291,6 @@ export {
   writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, archiveFileTree,
 } from './vfs/workspace-planes';
 
-export { wireWorkspaceLoopback } from './vfs/workspace-runtimes';
 
 export {
   makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
@@ -1304,6 +1300,22 @@ export {
 export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
 
 export { ensureDir } from './utils/vfs-helpers';
+
+export { mossaicVfs, type MossaicClient, type MossaicVfs, type MossaicStat, type MossaicChild } from './vfs/mossaic-vfs';
+
+export {
+  sharedDriveMount, SHARED_SKILLS_DIR, DRIVE_SKILLS_DIR, DRIVE_BLUEPRINTS_DIR, DRIVE_RESERVED_DIRS,
+  SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND,
+} from './vfs/shared-drive';
+
+export { packZip, unpackZip, looksLikeZip, type ZipEntry } from './utils/zip';
+
+export {
+  normalizeDrivePath, listDrive, makeDriveFolder, renameDriveEntry,
+  deleteDriveEntry, markAsSkill, addSkill, receiveDriveUpload, packDriveFolder, driveFailure,
+  DriveListingSchema, MarkedSkillSchema, DriveUploadTargetSchema,
+  type DriveEntry, type DriveListing, type MarkedSkill, type DriveFailure, type DriveUploadTarget, type DriveUploadOutcome,
+} from './skills/drive';
 
 export {
   withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, RESERVED_REFERENCE_ROOTS,
@@ -1706,6 +1718,8 @@ export {
 } from './safety/egress-destination';
 
 // Utils
+export { fnv1a64, Fnv1a64 } from './utils/fnv1a';
+
 export { nanoid } from './utils/nanoid';
 
 // An abort's reason as an Error, so a cancelled run is attributable to whoever
@@ -1811,7 +1825,7 @@ export {
 
 // The workspace's work across every actor — the read model behind
 // `listWorkspaceWork` on both backends.
-export { readWorkspaceWork } from './read-models/workspace-work';
+export { readWorkspaceWork, hasWorkspaceWork } from './read-models/workspace-work';
 
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
 
@@ -1823,11 +1837,10 @@ export {
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
 export {
-  ChatSession, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
+  ChatSession, turnInputMessage, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from './orchestrator/chat-session';
 
-export { ActorMessagesTranscript, type TranscriptStore } from './orchestrator/transcript-store';
 
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
 
@@ -1853,7 +1866,7 @@ export { CraftCycle } from './orchestrator/craft-cycle';
 export {
   CompletionGate, observeCompletionState, completionGateText,
   COMPLETION_GATE_EVENT, COMPLETION_GATE_HEADER, COMPLETION_PROBE_COMMANDS,
-  COMPLETION_OBSERVATION_MAX_CHARS, COMPLETION_TASK_ECHO_MAX_CHARS,
+  COMPLETION_TASK_ECHO_MAX_CHARS,
   type TurnCompletionFacts,
 } from './orchestrator/completion-gate';
 
@@ -1907,8 +1920,8 @@ export { ModelCatalogSession, resolveEffectiveModelSpec } from './orchestrator/m
 
 export {
   serializeContentForHeads, narrowInheritedRole,
-  inheritedContextFromHistory, inheritedContextFromRows, inheritedContextFromConversation,
-  INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
+  inheritedContextFromHistory, inheritedContextFromTranscript,
+  inheritedContextOmissionNote,
 } from './orchestrator/heads-support';
 
 // ── skills (Claude-Code / Hermes-compatible SKILL.md workflow store) ──
@@ -1924,7 +1937,7 @@ export {
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, skillIndexLine, unreadSkillLine,
   unionAllowedTools, toolAllowedBySkills, trustedActiveSkills,
-  SkillError, SKILLS_DIR,
+  SkillError, SKILLS_DIR, SKILL_FOLDER_FILE,
 } from './skills/index';
 
 export type {
@@ -2107,7 +2120,7 @@ export {
   readExecutorFileBytes, statExecutorFile, renameExecutorPathOp, deleteExecutorPathOp,
   listEnvironments, normalizeDir, joinDir, parentDir,
   FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
-  ExecutorFileUpload, ExecutorFileDownload,
+  ExecutorFileUpload, ExecutorFileDownload, ChunkedUpload, pumpUploadChunks,
 } from './read-models/files';
 
 export type {
@@ -2183,23 +2196,22 @@ export type {
 
 export { getAgentStatus, getChatHistoryPage, getToolList } from './read-models/status';
 
-export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './read-models/page';
+export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 
-export type { Page, PageRequest, SeekCursor } from './read-models/page';
+export type { Page, PageRequest, SeekCursor } from './session/page';
 
 export {
-  mergeTranscript, restoredRows, uiMessageRow, uiMessageText, transcriptRole, recordedAnswer, storedUiMessageParts,
-  transcriptRow, type TranscriptRow, type TranscriptSourceRow,
+  mergeTranscript, restoredRows, transcriptRole,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 
-export type { TurnAuthor, StoredRowProjection } from './utils/ui-message';
+export type { TurnAuthor } from './utils/ui-message';
 
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions';
 
 export { buildWorkspaceOverview, overviewHeadline, rosterActivity, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
-export type { RosterActivity, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewSlate } from './read-models/workspace-overview';
+export type { RosterActivity, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewSlate, WorkspaceStatus } from './read-models/workspace-overview';
 
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
@@ -2309,7 +2321,7 @@ export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 // describe a shape the resolver does not produce.
 export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
 
-export { fmtPct, fmtTokens, fmtUsd, shortAge, timeAgo } from './utils/format';
+export { fmtPct, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
 
 export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
 
@@ -2337,6 +2349,11 @@ export {
 } from './execution/terminal-lane';
 
 export {
+  WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG, WorkspaceTerminalInputSchema, WorkspaceTerminalOutputSchema,
+  isWorkspaceTerminal,
+} from './execution/workspace-terminal';
+
+export {
   type WorkspacePreviewHost, type WorkspacePreviewUrl, buildWorkspacePreviewHost, parseWorkspacePreviewLabel,
 } from './preview/nimbus-preview-host';
 
@@ -2361,9 +2378,11 @@ export {
 } from './preview/preview-exposures';
 
 export {
-  KINU_USER_AGENT, err, escapeHtml, fileResponseHeaders, firstResponse, json,
-  kinuUserAgent, readBounded, readBoundedStream, reoriginateRequest, safeJson,
+  err, escapeHtml, fileResponseHeaders, firstResponse, json,
+  readBounded, readBoundedStream, reoriginateRequest, safeJson,
 } from './http/http';
+
+export { KINU_USER_AGENT, kinuUserAgent } from './utils/user-agent';
 
 export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './http/security-headers';
 

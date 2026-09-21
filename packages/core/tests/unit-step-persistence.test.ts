@@ -307,7 +307,9 @@ describe('a completed step is durable at the moment it completes', () => {
   test('a provider throw mid-turn keeps the steps that finished', async () => {
     const provider = scriptedProvider([
       () => toolStep('call_a', 'git status'),
-      () => new Response('{"error":{"message":"upstream exploded"}}', { status: 500, headers: { 'content-type': 'application/json' } }),
+      // A terminal provider failure: a 5xx would be retried by the SDK before
+      // it throws, which measures backoff, not what the turn keeps.
+      () => new Response('{"error":{"message":"upstream refused the request"}}', { status: 400, headers: { 'content-type': 'application/json' } }),
     ]);
 
     const { db, sql } = workspaceOnDisk();

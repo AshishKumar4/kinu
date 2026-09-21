@@ -8,16 +8,19 @@
 // archive DECLARES how many actors its roster carried and the restore refuses an
 // archive whose rebuilt roster disagrees.
 //
-// This suite deliberately depends on nothing but the archive, the directory and
-// the workspace schema: no session, no event log, no store bundle. It proves the
-// ARCHIVE's own property — every actor's rows in, every actor's rows out — with
-// no hosting in the way.
+// This suite deliberately depends on nothing but the archive, the directory,
+// the workspace schema and the canonical conversation writer: no event log, no
+// store bundle, no hosting. It proves the ARCHIVE's own property — every
+// actor's rows in, every actor's rows out.
 import { describe, test, expect } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import { makeSqlExec, SDK_SESSION_DDL } from './helpers';
+import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { restoreWorkspaceArchive, writeWorkspaceArchive } from '../src/identity/archive';
+import { SessionHistory } from '../src/session/history';
+import { readSessionTranscript, type SessionTranscriptReader } from '../src/session/transcript';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor, SqlValue } from '../src/types/primitives';
 
@@ -56,12 +59,33 @@ function workspace(): Workspace {
   return { db, sql, directory, main: directory.createMain({ name: 'hosted' }) };
 }
 
+/** The seeds below are short enough to stay inline, so neither the writer nor
+ *  the reader below ever reaches a file plane. */
+async function noFilePlane(): Promise<never> {
+  throw new Error('an inline-payload conversation must never open a file plane');
+}
+
+/** What one actor said, read back over whichever database holds it — entry
+ *  text lives in message parts, so only a projection can answer it. */
+async function spoken(sql: SqlExecutor, actorId: string): Promise<string | undefined> {
+  const transcript: SessionTranscriptReader =
+    readSessionTranscript(sql, { actorId, assertCurrent() {} }, CHAT_SESSION_ID, noFilePlane);
+
+  return (await transcript.project(`m-${actorId}`))?.content;
+}
+
 /** One actor's conversation, claim and promoted-loop pointer — the three things
  *  a snapshot has to carry FOR EVERY actor, not for one. */
-function seedActorState(ws: Workspace, actor: ActorHandle, text: string, runId: string, version: number): void {
+async function seedActorState(ws: Workspace, actor: ActorHandle, text: string, runId: string, version: number): Promise<void> {
   const now = Date.now();
-  void ws.sql`INSERT INTO actor_messages (actor_id, id, role, content, created_at)
-    VALUES (${actor.actorId}, ${`m-${actor.actorId}`}, 'user', ${text}, ${now})`;
+
+  const history = new SessionHistory({
+    sql: ws.sql, actor, transactionSync: (write) => ws.db.transaction(write)(), files: noFilePlane,
+  });
+
+  await history.record(CHAT_SESSION_ID, {
+    id: `m-${actor.actorId}`, parentId: null, origin: 'input', message: { role: 'user', content: text },
+  });
   void ws.sql`INSERT INTO actor_turn_claims (
       actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version,
       program_digest, program_build, status, outcome, consumed_revision, claimed_at, settled_at)
@@ -76,9 +100,9 @@ describe('a workspace snapshot covers every actor', () => {
     const ws = workspace();
     const hire = ws.directory.create({ parent: ws.main, name: 'alpha', creationId: 'c1', kind: 'subordinate', lifetime: 'durable' });
     const head = ws.directory.create({ parent: ws.main, name: 'exp:head-1', creationId: 'c2', kind: 'head', lifetime: 'task' });
-    seedActorState(ws, ws.main, 'the main actor said this', 'run-main', 4);
-    seedActorState(ws, hire, 'alpha said this', 'run-alpha', 1);
-    seedActorState(ws, head, 'the head said this', 'run-head', 7);
+    await seedActorState(ws, ws.main, 'the main actor said this', 'run-main', 4);
+    await seedActorState(ws, hire, 'alpha said this', 'run-alpha', 1);
+    await seedActorState(ws, head, 'the head said this', 'run-head', 7);
 
     const lines = await writeWorkspaceArchive(makeSqlExec(ws.db), { workspace: 'hosted', source: 'local', now: 7 });
     const end = JSON.parse(lines[lines.length - 1] ?? '{}');
@@ -97,8 +121,7 @@ describe('a workspace snapshot covers every actor', () => {
       [hire, 'alpha said this', 'run-alpha', 1],
       [head, 'the head said this', 'run-head', 7],
     ] as const) {
-      expect(there<{ content: string }>`
-        SELECT content FROM actor_messages WHERE actor_id = ${actor.actorId}`[0]?.content).toBe(text);
+      expect(await spoken(there, actor.actorId)).toBe(text);
       expect(there<{ run_id: string; program_version: number }>`
         SELECT run_id, program_version FROM actor_turn_claims WHERE actor_id = ${actor.actorId}`[0])
         .toEqual({ run_id: runId, program_version: version });
@@ -109,14 +132,14 @@ describe('a workspace snapshot covers every actor', () => {
 
     // No child database and no second object was needed to produce any of it.
     expect(there<{ n: number }>`
-      SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'actor_messages'`[0]?.n).toBe(1);
+      SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'conversation_entries'`[0]?.n).toBe(1);
   });
 
   test('a retained dismissal is still in the snapshot', async () => {
     const ws = workspace();
     const gone = ws.directory.create({ parent: ws.main, name: 'beta', creationId: 'c3', kind: 'subordinate', lifetime: 'durable' });
-    seedActorState(ws, ws.main, 'main', 'run-main', 1);
-    seedActorState(ws, gone, 'beta said this before it was dismissed', 'run-beta', 2);
+    await seedActorState(ws, ws.main, 'main', 'run-main', 1);
+    await seedActorState(ws, gone, 'beta said this before it was dismissed', 'run-beta', 2);
     const reference = { actorId: gone.actorId, workspaceId: gone.workspaceId, parentActorId: gone.parentActorId };
     const path = ws.directory.storagePath({ actorId: ws.main.actorId, workspaceId: ws.main.workspaceId, parentActorId: null });
     ws.directory.apply(ws.main, path, { action: 'retire', name: 'beta', reference });
@@ -129,16 +152,14 @@ describe('a workspace snapshot covers every actor', () => {
     expect(restored.actors).toBe(2);
     // Its history retained means its rows are workspace state, so losing them
     // in a backup is data loss and not tidiness.
-    expect(sqlOver(target)<{ content: string }>`
-      SELECT content FROM actor_messages WHERE actor_id = ${gone.actorId}`[0]?.content)
-      .toBe('beta said this before it was dismissed');
+    expect(await spoken(sqlOver(target), gone.actorId)).toBe('beta said this before it was dismissed');
   });
 
   test('an archive that lost one actor is refused even when its row total agrees', async () => {
     const ws = workspace();
     const head = ws.directory.create({ parent: ws.main, name: 'exp:head-1', creationId: 'c4', kind: 'head', lifetime: 'task' });
-    seedActorState(ws, ws.main, 'main', 'run-main', 1);
-    seedActorState(ws, head, 'head', 'run-head', 1);
+    await seedActorState(ws, ws.main, 'main', 'run-main', 1);
+    await seedActorState(ws, head, 'head', 'run-head', 1);
 
     const lines = await writeWorkspaceArchive(makeSqlExec(ws.db), { workspace: 'hosted', source: 'local' });
     const end = JSON.parse(lines[lines.length - 1] ?? '{}');
@@ -156,29 +177,5 @@ describe('a workspace snapshot covers every actor', () => {
     expect(short.length).toBe(lines.length - 1);
     await expect(restoreWorkspaceArchive(makeSqlExec(new Database(':memory:')), short))
       .rejects.toThrow(/declares 2 actors but restored 1/);
-  });
-
-  // The restore half of the same claim: the pane is normalized into `actor_messages`
-  // on the way in, and the pane is the vendor's shape — no owner column, every
-  // row the root actor's — so the directory the restore landed is the only
-  // place the attribution lives and the main actor is the honest one.
-  test('a pane with no owner column is attributed to the main actor', async () => {
-    const ws = workspace();
-    ws.directory.create({ parent: ws.main, name: 'delta', creationId: 'c6', kind: 'subordinate', lifetime: 'durable' });
-    ws.db.exec(SDK_SESSION_DDL);
-    void ws.sql`INSERT INTO assistant_messages (id, role, content, created_at)
-      VALUES ('unowned-1', 'user', 'the root actor wrote this', '2026-01-02 03:04:05')`;
-
-    const lines = await writeWorkspaceArchive(makeSqlExec(ws.db), { workspace: 'hosted', source: 'cloud' });
-    const target = new Database(':memory:');
-    await restoreWorkspaceArchive(makeSqlExec(target), lines);
-    const there = sqlOver(target);
-
-    expect(there<{ actor_id: string }>`
-      SELECT actor_id FROM actor_messages WHERE id = 'unowned-1'`[0]?.actor_id).toBe(ws.main.actorId);
-    // Normalized once: the pane schema does not survive alongside the plain store.
-    expect(there<{ n: number }>`
-      SELECT COUNT(*) AS n FROM sqlite_master
-      WHERE type = 'table' AND name = 'assistant_messages'`[0]?.n).toBe(0);
   });
 });

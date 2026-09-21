@@ -1,5 +1,5 @@
 {
-  "measured": "16c1e14a2: 1085 test files, 968 runnable suites, 12689 tests, 35 runners, 85 non-public product members",
+  "measured": "423f9832b: 1129 test files, 998 runnable suites, 13088 tests, 40 runners, 90 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -58,18 +58,6 @@
       "count": 1
     },
     {
-      "key": "mirror :: packages/core/tests/integration-fork-pipeline.test.ts :: payload round-trips across the RPC boundary (structured clone) and replays into the fork DB :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/core/tests/integration-fork-pipeline.test.ts :: repeating a completed delivery converges on exactly one copied history :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/core/tests/unit-conversation-store.test.ts :: a pane clear refuses a stale mirror fork point :: declared mirror",
-      "count": 1
-    },
-    {
       "key": "mirror :: packages/core/tests/unit-core-adapter-seams.test.ts :: (file scope) :: declared mirror",
       "count": 3
     },
@@ -96,10 +84,6 @@
     {
       "key": "mirror :: packages/core/tests/unit-subordinates.test.ts :: (file scope) :: declared mirror",
       "count": 2
-    },
-    {
-      "key": "mirror :: packages/core/tests/unit-turn-authorship.test.ts :: the projection reads text and provenance out of one stored row :: declared mirror",
-      "count": 1
     },
     {
       "key": "mirror :: packages/core/tests/unit-usage.test.ts :: an unreported cache write is ABSENT, not the zero the SDK fabricates :: declared mirror",
@@ -252,10 +236,6 @@
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a live sequence keeps a wake, pushed past the busy window :: harness bridge to a non-public member",
       "count": 4
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a message the conversion cannot read costs that effect and no others :: harness bridge to a non-public member",
-      "count": 2
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a review re-run after a refusal grades the turn once :: harness bridge to a non-public member",
@@ -427,14 +407,6 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-reconnect-snapshot.test.ts :: a redial mid-turn is told the queued steer and the running branch :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-session-store-guard.test.ts :: a fresh workspace wakes with the table and no rows yet :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-session-store-guard.test.ts :: the store the guard reads is the one every turn writes :: harness bridge to a non-public member",
       "count": 1
     },
     {

@@ -170,9 +170,8 @@ export interface ForkPoint {
 }
 
 export interface AgentForkResult {
-  /** The client to continue on: `this` re-pointed (local) or a sibling client
-   *  for the forked cloud agent. Callers must switch and close the old client
-   *  when a different instance is returned. */
+  /** The client to continue on. Callers switch and close the old client when
+   *  a different instance is returned. */
   client: AgentClient;
   /** Human-readable description of what was forked (session id / agent name). */
   label: string;
@@ -333,10 +332,9 @@ export interface AgentClient {
    *  'branch_status' broadcast events). Returns false when no turn is active —
    *  use send() instead. */
   branch(prompt: AgentPrompt, opts?: AgentClientSendOptions): boolean;
-  /** Walk-back fork: start a new conversation containing the history strictly
-   *  BEFORE the given user message. Local agents re-point this client to a
-   *  forked CLI session + copied conversation; cloud agents fork the agent DO
-   *  (forkAgent RPC) and return a sibling client for it. */
+  /** Walk-back: continue the conversation from strictly BEFORE the given user
+   *  message, on the context the agent held there. Both backends revert the
+   *  workspace in place and hand this client back. */
   fork(point: ForkPoint): Promise<AgentForkResult>;
   /** Interrupt the in-flight turn (Esc / Ctrl+C / /stop). Returns steer texts
    *  that were accepted mid-turn but never delivered to the model — surfaces

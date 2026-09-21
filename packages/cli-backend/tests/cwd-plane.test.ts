@@ -385,7 +385,7 @@ test('local Plan file inspection remains useful without granting native project 
   const { state, project } = roots('plan-cwd-inspection');
   writeFileSync(join(project, 'inspect.txt'), 'alpha\nneedle\nomega');
   const rt = agentRuntime(state, 'inspector', project);
-  const planned = buildBuiltinTools({ rt, workMode: 'plan' });
+  const planned = buildBuiltinTools({ rt, workMode: 'plan', history: rt.stores.history });
   const file = planned.file;
 
   if (file === undefined) throw new Error('No Plan file tool');
@@ -396,7 +396,7 @@ test('local Plan file inspection remains useful without granting native project 
   expect(await inspect({ action: 'read', path: 'inspect.txt' })).toEqual(expect.stringContaining('needle'));
   await expect(inspect({ action: 'write', path: 'inspect.txt', content: 'changed' })).rejects.toMatchObject({ code: 'denied' });
   expect(readFileSync(join(project, 'inspect.txt'), 'utf8')).toBe('alpha\nneedle\nomega');
-  const buildFile = buildBuiltinTools({ rt, workMode: 'build' }).file;
+  const buildFile = buildBuiltinTools({ rt, workMode: 'build', history: rt.stores.history }).file;
 
   if (buildFile === undefined) throw new Error('No Build file tool');
   const build = toolExecute(buildFile);

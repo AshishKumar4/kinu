@@ -4,7 +4,7 @@
  * and the provisional-lesson corroboration mechanics.
  */
 import { describe, test, expect } from 'bun:test';
-import { makeSql, createMockLLM, createTestActor, createTestWorkspace, SDK_SESSION_DDL } from './helpers';
+import { makeSql, createMockLLM, createTestActor, createTestWorkspace } from './helpers';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import {
   isTrivialTurn, classifyTurnOutcome, buildOutcomeClassifierPrompt,
@@ -16,6 +16,8 @@ import {
   recordLesson, listLessons, corroborateLessonsForTurn,
 } from '../src/evolution/outcomes';
 import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
+import { SessionHistory } from '../src/session/history';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import type { ScaffoldArchiveEntry } from '../src/scaffold/archive';
 import { RunEventRecorder } from '../src/events/recorder';
 import type { ToolCallRecord } from '../src/evolution/types';
@@ -29,9 +31,16 @@ function setup() {
   const ws = createTestWorkspace();
 
   // A REAL workspace main actor, not a stand-in: the split's evidence reader
-  // goes through `conversationTurnPair`, so the `actor_messages` rows seeded below
+  // goes through `conversationTurnPair`, so the transcript entries seeded below
   // have to carry the same `actor_id` the reader scopes by.
-  return { ...ws, actor: createTestActor(ws.sql, ws.execRaw, 'ws-outcomes', 'outcomes') };
+  const actor = createTestActor(ws.sql, ws.execRaw, 'ws-outcomes', 'outcomes');
+
+  const history = new SessionHistory({
+    sql: ws.sql, actor, transactionSync: write => ws.db.transaction(write)(),
+    files: async () => ({ vfs: ws.vfs, artifactDirectory: '/actor/.kinu/context' }),
+  });
+
+  return { ...ws, actor, history, transcript: history.transcript(CHAT_SESSION_ID) };
 }
 
 describe('isTrivialTurn — the LLM-call pre-filter', () => {
@@ -373,28 +382,31 @@ describe('real-outcome scaffold rates (route into R2 archive priors)', () => {
   });
 });
 
-describe('advisor negatives use the canonical pane conversation', () => {
-  test('a pane-only cloud turn supplies advisor input and answer', () => {
+describe('advisor negatives read the canonical conversation', () => {
+  test('a note resolves its turn through the transcript', async () => {
     const ws = setup();
-    // The pane store as Think's boot creates it (`SDK_SESSION_DDL`, the
-    // vendor's shape): the note, the answer and the ask it climbs to are the
-    // root actor's rows, the only actor `usesPaneStore` answers for.
-    ws.execRaw(SDK_SESSION_DDL);
-    void ws.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'u-pane'}, ${''}, ${null}, ${'user'},
-              ${JSON.stringify({ id: 'u-pane', role: 'user', parts: [{ type: 'text', text: 'inspect the deploy' }] })},
-              ${'2026-08-16 22:00:00'})`;
-    void ws.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'a-pane'}, ${''}, ${'u-pane'}, ${'assistant'},
-              ${JSON.stringify({ id: 'a-pane', role: 'assistant', parts: [{ type: 'text', text: 'I only guessed' }] })},
-              ${'2026-08-16 22:00:01'})`;
+    await ws.history.record(CHAT_SESSION_ID, { id: 'u-chat', parentId: null, origin: 'input',
+      message: { role: 'user', content: 'inspect the deploy' } });
+    await ws.history.record(CHAT_SESSION_ID, { id: 'a-chat', parentId: 'u-chat', origin: 'output',
+      message: { role: 'assistant', content: 'I only guessed' } });
     void ws.sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)
-      VALUES (${ws.actor.actorId}, ${'advisor-pane'}, ${'advisor_note'}, ${'should have delegated'},
-              ${JSON.stringify({ severity: 'concern', class: 'missed-capability', turnId: 'a-pane' })}, ${2000})`;
+      VALUES (${ws.actor.actorId}, ${'advisor-chat'}, ${'advisor_note'}, ${'should have delegated'},
+              ${JSON.stringify({ severity: 'concern', class: 'missed-capability', turnId: 'a-chat' })}, ${2000})`;
 
-    const split = buildOutcomeEvalSplit(ws.sql, ws.actor, 2);
+    const split = await buildOutcomeEvalSplit(ws.sql, ws.actor, ws.transcript, 2);
     const instance = [...split.train, ...split.val].find((row) => row.input === 'inspect the deploy');
     expect(instance?.expected?.recordedResponse).toBe('I only guessed');
+  });
+
+  test('a note whose turn id names no assistant entry is dropped, not scored blank', async () => {
+    const ws = setup();
+    void ws.sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)
+      VALUES (${ws.actor.actorId}, ${'advisor-orphan'}, ${'advisor_note'}, ${'should have delegated'},
+              ${JSON.stringify({ severity: 'concern', class: 'missed-capability', turnId: 'gone' })}, ${2000})`;
+
+    const split = await buildOutcomeEvalSplit(ws.sql, ws.actor, ws.transcript, 2);
+    expect(split.train).toHaveLength(0);
+    expect(split.degeneracy).toBe('no_labeled_turns');
   });
 });
 
@@ -421,10 +433,10 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
    *  both sides of the split. */
   const turnOf = (instance: { id: string }) => instance.id.split('-').slice(2).join('-');
 
-  test('train = failures to fix; val = HELD-OUT failures + accepted guards, with no overlap', () => {
-    const { sql, actor } = setup();
+  test('train = failures to fix; val = HELD-OUT failures + accepted guards, with no overlap', async () => {
+    const { sql, actor, transcript } = setup();
     seed(sql, actor, 5, 5);
-    const split = buildOutcomeEvalSplit(sql, actor, 8);
+    const split = await buildOutcomeEvalSplit(sql, actor, transcript, 8);
 
     // Budget 8 → 4 failures drawn, of which round(4/3) = 1 is held out.
     expect(split.train).toHaveLength(3);
@@ -446,8 +458,8 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
     expect(split.val.filter((i) => trainTurns.has(turnOf(i)))).toEqual([]);
   });
 
-  test('failures far older than the accepted rows still reach train/val', () => {
-    const { sql, actor } = setup();
+  test('failures far older than the accepted rows still reach train/val', async () => {
+    const { sql, actor, transcript } = setup();
     seed(sql, actor, 5, 0);
 
     // The optimizer's targets are the OLDEST rows here. A bounded pre-filter
@@ -459,18 +471,18 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
       });
     }
 
-    const split = buildOutcomeEvalSplit(sql, actor, 8);
+    const split = await buildOutcomeEvalSplit(sql, actor, transcript, 8);
     expect(split.degeneracy).toBeNull();
     expect(split.train).toHaveLength(3);
     expect(split.heldOutNegatives).toBe(1);
   });
 
-  test('no instance is ever on both sides, across every budget', () => {
-    const { sql, actor } = setup();
+  test('no instance is ever on both sides, across every budget', async () => {
+    const { sql, actor, transcript } = setup();
     seed(sql, actor, 9, 9);
 
     for (const budget of [2, 3, 4, 5, 6, 8, 12, 18, 24]) {
-      const split = buildOutcomeEvalSplit(sql, actor, budget);
+      const split = await buildOutcomeEvalSplit(sql, actor, transcript, budget);
       const trainTurns = new Set(split.train.map(turnOf));
       expect(split.val.some((i) => trainTurns.has(turnOf(i)))).toBe(false);
       expect(split.heldOutNegatives)
@@ -478,13 +490,12 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
     }
   });
 
-  test('instances carry process evidence reconstructed from the existing run ledger', () => {
-    const { sql, actor } = setup();
-    const now = Date.now();
-    void sql`INSERT INTO actor_messages (actor_id, id, parent_id, role, content, created_at)
-        VALUES (${actor.actorId}, ${'u0'}, ${null}, ${'user'}, ${'fix task 0'}, ${now - 1_000})`;
-    void sql`INSERT INTO actor_messages (actor_id, id, parent_id, role, content, created_at)
-        VALUES (${actor.actorId}, ${'n0'}, ${'u0'}, ${'assistant'}, ${'bad answer 0'}, ${now + 1_000})`;
+  test('instances carry process evidence reconstructed from the existing run ledger', async () => {
+    const { sql, actor, history, transcript } = setup();
+    // The ask is recorded before the run and the answer after it, so the pair
+    // the evidence reader resolves brackets the window it then reads.
+    await history.record(CHAT_SESSION_ID, { id: 'u0', parentId: null, origin: 'input',
+      message: { role: 'user', content: 'fix task 0' } });
     const recorder = new RunEventRecorder(sql, actor);
     recorder.emit('run-1', { type: 'run_start', agentId: 'agent', caused_by: 'chat', userMessage: 'fix task 0' });
     // The step transcript, which is what the evidence reader reads. Rebuilding
@@ -511,39 +522,41 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
     });
     recorder.emit('run-1', { type: 'tool_call_end', name: 'eval', toolCallId: 'tc-2', result: 'done', outcome: { success: true } });
     recorder.emit('run-1', { type: 'run_end', reason: 'completed' });
+    await history.record(CHAT_SESSION_ID, { id: 'n0', parentId: 'u0', origin: 'output',
+      message: { role: 'assistant', content: 'bad answer 0' } });
     seed(sql, actor, 1, 0);
 
-    const instance = buildOutcomeEvalSplit(sql, actor, 2).train[0];
+    const instance = (await buildOutcomeEvalSplit(sql, actor, transcript, 2)).train[0];
     expect(instance.evidence).toContain('Outcome: corrected');
     expect(instance.evidence).toContain(
       'Turn process: 2 sequential steps, 1 hiring, 0 exploration, 0 messaging, 1 eval',
     );
   });
 
-  test('negatives backfill when accepted turns are scarce (and vice versa)', () => {
-    const { sql, actor } = setup();
+  test('negatives backfill when accepted turns are scarce (and vice versa)', async () => {
+    const { sql, actor, transcript } = setup();
     seed(sql, actor, 6, 1);
     // 5 failures drawn (backfilling the 2 the accepted pool can't cover) →
     // round(5/3) = 2 held out, 3 to train on, plus the 1 accepted guard.
-    const split = buildOutcomeEvalSplit(sql, actor, 6);
+    const split = await buildOutcomeEvalSplit(sql, actor, transcript, 6);
     expect(split.train).toHaveLength(3);
     expect(split.val).toHaveLength(3);
     expect(split.heldOutNegatives).toBe(2);
     expect(split.degeneracy).toBeNull();
   });
 
-  test('the newest failures are the held-out ones — a forward-in-time holdout', () => {
-    const { sql, actor } = setup();
+  test('the newest failures are the held-out ones — a forward-in-time holdout', async () => {
+    const { sql, actor, transcript } = setup();
     seed(sql, actor, 4, 0); // recorded oldest-first: "fix task 0" … "fix task 3"
-    const split = buildOutcomeEvalSplit(sql, actor, 8);
+    const split = await buildOutcomeEvalSplit(sql, actor, transcript, 8);
     expect(split.val.map((i) => i.input)).toEqual(['fix task 3']);
     expect(split.train.map((i) => i.input)).toEqual(['fix task 2', 'fix task 1', 'fix task 0']);
   });
 
-  test('a single failure cannot be held out — the split says so instead of overlapping', () => {
-    const { sql, actor } = setup();
+  test('a single failure cannot be held out — the split says so instead of overlapping', async () => {
+    const { sql, actor, transcript } = setup();
     seed(sql, actor, 1, 3);
-    const split = buildOutcomeEvalSplit(sql, actor, 8);
+    const split = await buildOutcomeEvalSplit(sql, actor, transcript, 8);
     expect(split.train).toHaveLength(1);
     expect(split.heldOutNegatives).toBe(0);
     expect(split.val.every((i) => i.expected?.outcome === 'accepted')).toBe(true);
@@ -551,19 +564,19 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
     expect(describeSplitDegeneracy(split.degeneracy!)).toContain('not evidence');
   });
 
-  test('no negatives yet → empty train set, flagged (never the accepted set)', () => {
-    const { sql, actor } = setup();
+  test('no negatives yet → empty train set, flagged (never the accepted set)', async () => {
+    const { sql, actor, transcript } = setup();
     seed(sql, actor, 0, 3);
-    const split = buildOutcomeEvalSplit(sql, actor, 6);
+    const split = await buildOutcomeEvalSplit(sql, actor, transcript, 6);
     expect(split.val).toHaveLength(3);
     expect(split.train).toHaveLength(0);
     expect(split.heldOutNegatives).toBe(0);
     expect(split.degeneracy).toBe('no_negatives');
   });
 
-  test('empty ledger → empty split, flagged', () => {
-    const { sql, actor } = setup();
-    const split = buildOutcomeEvalSplit(sql, actor, 8);
+  test('empty ledger → empty split, flagged', async () => {
+    const { sql, actor, transcript } = setup();
+    const split = await buildOutcomeEvalSplit(sql, actor, transcript, 8);
     expect(split.val).toHaveLength(0);
     expect(split.train).toHaveLength(0);
     expect(split.degeneracy).toBe('no_labeled_turns');

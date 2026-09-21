@@ -20,7 +20,6 @@ import {
   createFactsStore,
   openWorkspaceMainActor,
   readSoul,
-  type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
 } from '../packages/core/src/index';
@@ -96,7 +95,7 @@ function storedMemoryFact(db: Database, memoryFile: string | null): string | nul
 
 async function chatTurn(
   model: LanguageModel,
-  rt: AgentRuntime,
+  rt: CLIRuntime,
   tools: ToolSet,
   userMessage: string,
 ): Promise<CompletedTurn> {
@@ -124,10 +123,10 @@ async function chatTurn(
   const responseText = collectStepText(result);
 
   const id = crypto.randomUUID();
-  void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content)
-    VALUES (${rt.actor.actorId}, ${id}, ${'e2e-full'}, ${'user'}, ${userMessage})`;
-  void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
-    VALUES (${rt.actor.actorId}, ${crypto.randomUUID()}, ${'e2e-full'}, ${id}, ${'assistant'}, ${responseText})`;
+  await rt.stores.history.record('e2e-full', { id, parentId: null, message: { role: 'user', content: userMessage }, origin: 'input' });
+  await rt.stores.history.record('e2e-full', {
+    id: crypto.randomUUID(), parentId: id, message: { role: 'assistant', content: responseText }, origin: 'output',
+  });
 
   return {
     userMessage,
@@ -195,7 +194,7 @@ describe('E2E Full Lifecycle', () => {
       .map(t => t.name);
 
     expect(tables).toContain('workspace_identity');
-    expect(tables).toContain('actor_messages');
+    expect(tables).toContain('conversation_entries');
     expect(tables).toContain('inodes');
     expect(tables).toContain('search_nodes');
     expect(tables).toContain('scaffold_versions');
@@ -334,7 +333,7 @@ describe('E2E Full Lifecycle', () => {
     expect(info.scaffoldVersion).toBeGreaterThanOrEqual(0);
 
     // Messages survived (at minimum: turns that completed × 2 messages each)
-    const msgCount = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM actor_messages').get()?.c ?? 0;
+    const msgCount = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM conversation_entries').get()?.c ?? 0;
     expect(msgCount).toBeGreaterThanOrEqual(2); // at least 1 turn completed
     expect(storedMemoryFact(db2, await rt2.memory.read('memory/MEMORY.md')),
       'the memory note did not survive the close and reopen — neither memory/MEMORY.md nor '
@@ -386,13 +385,19 @@ describe('E2E Full Lifecycle', () => {
 
     for (const f of vfsFiles) console.log(`    ${f.path} (${f.size} bytes)`);
 
-    const messages = db.query<{ role: string; preview: string }, []>(
-      'SELECT role, substr(content, 1, 80) as preview FROM actor_messages ORDER BY created_at',
+    const entries = db.query<{ id: string; role: string }, []>(
+      'SELECT id, role FROM conversation_entries ORDER BY recorded_at, rowid',
     ).all();
 
-    console.log(`\n  Messages (${messages.length}):`);
+    const transcript = rt.stores.history.transcript('e2e-full');
 
-    for (const m of messages) console.log(`    [${m.role}] ${m.preview}...`);
+    console.log(`\n  Messages (${entries.length}):`);
+
+    for (const entry of entries) {
+      const projected = await transcript.project(entry.id);
+
+      console.log(`    [${entry.role}] ${(projected?.content ?? '').slice(0, 80)}...`);
+    }
 
     console.log('  ═══ END SUMMARY ═══\n');
 
@@ -400,7 +405,7 @@ describe('E2E Full Lifecycle', () => {
     // persistence claim, not a second copy of step 1. A bare `length > 0`
     // stood here and passed over any store that opened at all.
     for (const table of [
-      'workspace_identity', 'actor_messages', 'inodes', 'search_nodes',
+      'workspace_identity', 'conversation_entries', 'inodes', 'search_nodes',
       'scaffold_versions', 'crafted_tools', 'fibers',
     ]) {
       expect(tables).toContain(table);

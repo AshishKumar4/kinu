@@ -606,28 +606,24 @@ describe('CloudAgentClient protocol', () => {
 
     const rpc = await waitFor(
       () => mock.frames.find((f) => f.type === 'rpc'),
-      'forkAgent rpc frame',
+      'revertConversation rpc frame',
     );
 
-    // The fork point is the message BEFORE the picked user message.
-    expect(rpc.method).toBe('forkAgent');
-    expect(rpc.args).toEqual(['m2']);
-    mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: { id: 'do-2', name: 'helios-fork-ab12', url: '/workspace/helios-fork-ab12', forkPointMs: 2 } });
+    // The workspace reverts to before the picked user message, in place.
+    expect(rpc.method).toBe('revertConversation');
+    expect(rpc.args).toEqual(['m3']);
+    mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: null });
 
     const result = await forkPromise;
-    expect(result.label).toBe('agent helios-fork-ab12');
-    expect(result.client).not.toBe(client);
-    expect(result.client.agentName).toBe('helios-fork-ab12');
+    expect(result.label).toBe('before m3');
+    expect(result.client).toBe(client);
     await client.close();
-    await result.client.close();
   });
 
-  test('fork refuses to walk back before the first message', async () => {
+  test('fork refuses a message that is not in the history', async () => {
     const mock = startMockAgentServer();
     mock.chatMessages.push({ id: 'm1', role: 'user', content: 'first words', createdAt: 1 });
     const client = newClient(mock);
-    await expect(client.fork({ text: 'first words', occurrenceFromEnd: 1 }))
-      .rejects.toThrow('Cannot walk back before the first message');
     await expect(client.fork({ text: 'never said this', occurrenceFromEnd: 1 }))
       .rejects.toThrow('Could not locate that message');
     await client.close();

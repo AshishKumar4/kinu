@@ -21,6 +21,8 @@ import { proposeNextTasks, type ProposedTask } from '../curriculum/proposer';
 import {
   buildTakeContinuationPrompt, recordTakePick, type TakePickOutcome,
 } from '../mcts/takes';
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
+import type { SessionHistory } from '../session/history';
 import { getCurrentScaffoldVersion } from '../scaffold/shadow';
 import type { AgentInbox } from '../types/signals';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -84,6 +86,9 @@ export interface TakePickDeps {
   readonly sql: SqlExecutor;
   /** The actor whose scaffold lineage and take ledger this pick answers for. */
   readonly actor: ActorHandle;
+  /** The conversation the picked take's turn was answered in — where the
+   *  ledger row's request and response text is read from. */
+  readonly history: SessionHistory;
   readonly engine: EvolutionEngine;
   readonly inbox: AgentInbox;
 }
@@ -104,7 +109,7 @@ export async function pickAlternateTake(
     throw new Error('pickAlternateTake requires takeId and nodeId');
   }
 
-  const record = recordTakePick(deps.sql, deps.actor, {
+  const record = await recordTakePick(deps.sql, deps.actor, deps.history.transcript(CHAT_SESSION_ID), {
     takeId, nodeId,
     scaffoldVersion: getCurrentScaffoldVersion(deps.sql, deps.actor),
   });

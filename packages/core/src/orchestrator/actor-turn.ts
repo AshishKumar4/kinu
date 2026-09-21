@@ -58,7 +58,7 @@ export function startActorTurn(input: ActorTurnInput): AsyncIterable<ChatEvent> 
         ...control, spend: input.scaffoldSpend,
       }),
       callTool: createScaffoldCallTool(() => chat.tools, undefined, chat.signal, input.assertActive),
-      history: createScaffoldHistory(() => chat.history),
+      history: createScaffoldHistory(async () => chat.history),
     },
   }));
 

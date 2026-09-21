@@ -90,7 +90,7 @@ function buildSurface(opts?: {
   input?: HeadInput;
   split?: (request: HeadSplitRequest) => Promise<HeadSplitResult>;
 }) {
-  const { rt } = createTestRuntime();
+  const { rt, stores } = createTestRuntime();
   const capture = new HeadCapture();
 
   const codemodeTool = tool({ description: 'eval', inputSchema: jsonSchema<{ code: string }>({
@@ -101,6 +101,7 @@ function buildSurface(opts?: {
     input: opts?.input ?? headInput(),
     capture,
     rt,
+    history: stores.history,
     codemodeTool,
     webSearch: noopWebSearch,
     split: opts?.split ?? (async () => ({

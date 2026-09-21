@@ -52,7 +52,7 @@ test('a successful tool call records the value it returned, and a text tool reco
   try {
     const lease = actor.session.beginTurn({ runId: 'run-record', turnId: 'turn-record' }, 'build', 0);
     actor.session.bindProfile(lease, profile, inputs);
-    actor.session.appendInput(lease, { role: 'user', content: 'Write the notes.' });
+    await actor.session.openTurnInput(lease, { item: {}, message: { role: 'user', content: 'Write the notes.' }, birthContext: async () => [] });
 
     try {
       await actor.session.execute(lease, {
@@ -109,7 +109,7 @@ test('a narrated multi-step turn answers with its final step, whatever it stream
   try {
     const lease = actor.session.beginTurn({ runId: 'run-answer', turnId: 'turn-answer' }, 'build', 0);
     actor.session.bindProfile(lease, profile, inputs);
-    actor.session.appendInput(lease, { role: 'user', content: 'Run the test and reply with only PASS or FAIL.' });
+    await actor.session.openTurnInput(lease, { item: {}, message: { role: 'user', content: 'Run the test and reply with only PASS or FAIL.' }, birthContext: async () => [] });
 
     try {
       const streamed: string[] = [];
