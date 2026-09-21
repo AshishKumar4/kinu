@@ -268,7 +268,7 @@ export async function provisionWorkspaceRuntimes(deps: {
   // resolves to nothing, `rehydrateInstalledRuntimesView` registers no bin for
   // it, and `python3` stays "command not found" instead of becoming a command
   // that throws.
-  const runnerDeps = deps.facets ? { facets: deps.facets, vfs: workspace.vfs } : null;
+  const runnerDeps = deps.facets ? { facets: deps.facets, filesystem: workspace.filesystem } : null;
 
   const runners: Record<string, RunnerFactory> = runnerDeps
     ? {
