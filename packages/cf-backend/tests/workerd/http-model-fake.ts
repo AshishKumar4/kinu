@@ -324,6 +324,19 @@ async function wakeBody(body: OutboundBody): Promise<Response> {
   return call('call_wake_run_1', 'shell', { runtime: 'workspace', command: `sleep 45 && echo ${WAKE_MARKER}` });
 }
 
+/** A long streamed answer: the user line names the delta count (`long:N`). */
+function longBody(body: OutboundBody): Response {
+  const users = (body.messages ?? []).filter((m) => m.role === 'user').map((m) => textOf(m.content));
+  const spec = users.filter((u) => u.startsWith('long:')).at(-1) ?? 'long:100';
+  const deltas = Number.parseInt(spec.slice('long:'.length), 10);
+  const chunks: string[] = [];
+
+  for (let i = 0; i < deltas; i += 1) chunks.push(sseChunk({ content: `w${i} ` }));
+  chunks.push(sseChunk({ role: 'assistant' }, 'stop'), sseDone());
+
+  return sseResponse(chunks);
+}
+
 async function echoBody(body: OutboundBody): Promise<Response> {
   const users = (body.messages ?? []).filter((m) => m.role === 'user').map((m) => textOf(m.content));
   const text = users.filter((u) => !u.startsWith('<')).at(-1) ?? '';
@@ -531,6 +544,7 @@ async function modelsBody(): Promise<Response> {
       { id: 'probe-early-done' },
       { id: 'probe-tools' },
       { id: 'probe-tools-only' },
+      { id: 'probe-long' },
       { id: 'probe-error' },
       { id: 'probe-queue' },
       { id: 'probe-parity' },
@@ -707,6 +721,7 @@ export async function probeOutbound(request: Request): Promise<Response> {
         }
 
         case 'probe': return echoBody(body);
+        case 'probe-long': return longBody(body);
         case 'probe-parity': return parityBody(body);
         case 'probe-wake': return wakeBody(body);
         case 'probe-early-done': return earlyDoneBody();

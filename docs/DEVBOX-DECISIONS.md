@@ -802,29 +802,37 @@ red on a tree whose manifests and lock were already correct. A
 cycle, not of the new ranges: the primary checkout's tree holds one copy.
 Re-cut a patch, then install clean before believing any suite.
 
-D23. A streamed delta extends a message and mints no context revision
-(2026-09-21, this commit). Measured cause of the Durable Object CPU resets
-on the eval workspaces: the observability API (`$workers.durableObjectId`
-filter on object `c0f37b02c8…`, workspace `eval-kinu-task-evals-del-hsi814`,
-13:20 to 13:46 UTC) shows 17 alarm events at `exceededCpu` with
-`cpuTimeMs` 30,000 and wall 36 to 55 s, and the "ok" alarms around them at
-32,500 ms; 649 s of CPU in 26 minutes, all inside alarms. Each frame logs
-the same sequence: activation, `subordinate.assignment_repended`, a model
-call whose first byte arrives in 3 to 7 s, then the budget. Wall minus CPU
-is 6 s, so the burn is computation, not waiting.
-The path: `SessionStream.publish` committed the working context on EVERY
-streamed delta, which reads the whole membership set, writes a
-`context_revisions` row and a `context_memberships` row, and asserts the
-epoch. Measured over bun:sqlite before the change: a 2,000-delta answer
-minted 2,002 revisions and cost 2.1 s with no history, 5.2 s after 60
-turns; the per-delta cost grows with the context. A delta changes no
-membership, so the context's cutoff for the message now moves once, at
-`finishStep`, to the sealed sequence, and each delta is one fenced append
-(`SessionHistory.extendOutput`). After: 3 revisions per turn, 0.95 s and
-2.1 s for the same two cases. Pin: `packages/cli-backend/tests/local-session.test.ts`
-"a streamed answer mints a revision per step", red on the old code by 299
-revisions. The remaining growth with history is `context.base()` per step,
-linear, and is not this defect.
+D23. A sealed message is projected once; a delta mints no revision
+(2026-09-21, commits 558ce4165 and this one). Measured cause of the Durable
+Object CPU resets on the eval workspaces. The observability API with a
+`$workers.durableObjectId` filter shows the eval objects' alarm and RPC
+invocations at `exceededCpu` (cpuTimeMs 30,000, wall 36 to 100 s; one
+object burned 649 s of CPU in 26 minutes), every frame the same: activation,
+`subordinate.assignment_repended` (the interrupted delegated turn re-run
+from its start), a model call, the budget. Output tokens are small (2,370
+over 8 calls for `durable-continuity`), so the burn is not the stream. It
+is the READ: every step materializes every message in its context from its
+`message_updates` rows, and a streamed answer is one row per delta, so the
+cost of a step grows with every answer ever streamed in the workspace and
+a delegated turn of ten steps re-pays it ten times. Measured under the
+workerd pool (`tests/workerd/long/transcript-cost.test.ts`): a 500-delta
+turn cost 396 ms on an empty transcript and 2,474 ms after twenty
+2,000-delta answers, and the twenty priors themselves took 44.8 s.
+Three changes, each measured: (1) a delta extends its message under the
+fence and mints no context revision; the cutoff moves once at the step's
+seal (2,002 revisions per 2,000-delta answer became 3; bun:sqlite 5.2 s to
+2.1 s over 60 turns). (2) `append` asks the two partial indexes with literal
+operations instead of walking every update of the part (8,000 deltas 3.97 s
+to 2.12 s; a bound parameter defeats a partial index, so the operation is in
+the statement text). (3) `message_projections`: a sealed message's
+materialized form is written once on the first read after its seal and read
+as one row thereafter; the update rows stay the truth and a missing
+projection is rebuilt from them. The same turn after twenty long answers
+measured 375 ms (1.03x the empty transcript; the priors 22.4 s). The gate
+above holds the ratio under 3x and is red on the old reader at 6.3x.
+Pins: `packages/cli-backend/tests/local-session.test.ts` "a streamed answer
+mints a revision per step" and `packages/core/tests/unit-session-context-store.test.ts`
+"a sealed message is projected once", both red on the old code.
 
 ## Measurement contract for a strategy comparison
 

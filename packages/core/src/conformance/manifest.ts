@@ -698,6 +698,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     session_messages: EVERYWHERE,
     message_parts: EVERYWHERE,
     message_updates: EVERYWHERE,
+    message_projections: EVERYWHERE,
     actor_contexts: EVERYWHERE,
     actor_context_selection: EVERYWHERE,
     context_revisions: EVERYWHERE,

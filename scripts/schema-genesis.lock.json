@@ -710,6 +710,14 @@
     "reply_to_part_no",
     "stream_order"
   ],
+  "message_projections@packages/core/src/session/schema.ts": [
+    "actor_id",
+    "message_id",
+    "sequence",
+    "payload_json",
+    "payload_path",
+    "payload_digest"
+  ],
   "message_updates@packages/core/src/session/schema.ts": [
     "actor_id",
     "message_id",

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { initSessionContextTables } from '../src/session/schema';
-import { SessionMessages } from '../src/session/messages';
+import { SessionMessages, type MessageReference } from '../src/session/messages';
 import { SessionPayloads } from '../src/session/payload';
 import { SessionContext } from '../src/session/context';
 import { PreparedMessageUpdate } from '../src/session/updates';
@@ -63,6 +63,50 @@ test('stream cutoffs retain partial text while final replacement and late metada
     selected = s.context.commit(selected, 'output', 'turn', () => [{ ...s.messages.append('answer', second.sequence, updates), entryId: 'answer', position: 0 }], () => s.rt.actor.assertCurrent());
     expect(await s.messages.materialize(s.context.entries(selected)[0]!)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'final' }], providerOptions: { test: { late: true } } });
     expect(await s.messages.materialize(second)).toEqual({ role: 'assistant', content: [{ type: 'text', text: '😀' }] });
+  } finally { s.testSql.close(); }
+});
+
+test('a sealed message is projected once at its seal and read as one row after', async () => {
+  // Every step of every turn materializes every message in its context. A
+  // streamed answer is one row per delta, so without the projection each
+  // step re-joined every delta of every past answer (D23). The rows stay the
+  // truth: the projection is derived from them, and only for the sealed
+  // cutoff — an open message still grows, and an earlier cutoff is history.
+  const s = setup();
+
+  try {
+    const prepared = await s.messages.prepare({ role: 'assistant', content: [{ type: 'text', text: 'a' }] }, 'answer');
+    let selected = s.context.initialize();
+    selected = s.context.commit(selected, 'output', 'turn', () => [{ ...s.messages.insert(prepared, 'output'), entryId: 'answer', position: 0 }], () => s.rt.actor.assertCurrent());
+    const opened = s.context.entries(selected)[0]!;
+    const projections = () => s.testSql.db.query<{ n: number }, []>('SELECT count(*) AS n FROM message_projections').get()!.n;
+
+    // Open: read from its rows, projected by nobody.
+    expect(await s.messages.materialize(opened)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'a' }] });
+    expect(projections()).toBe(0);
+
+    let reference: MessageReference = opened;
+
+    for (const piece of ['b', 'c', 'd']) {
+      const suffix = await PreparedMessageUpdate.prepare({ operation: 'append', part: 0, value: piece }, s.payloads);
+      reference = s.messages.append('answer', reference.sequence, [suffix]);
+    }
+
+    const ended = await PreparedMessageUpdate.prepare({ part: 0, operation: 'content-end' }, s.payloads);
+    reference = s.messages.append('answer', reference.sequence, [ended]);
+    s.messages.seal(reference);
+
+    // Sealed: the first read joins the rows and stores the projection; the
+    // second reads the projection alone — proven by changing a delta row
+    // underneath it and reading the same answer.
+    expect(await s.messages.materialize(reference)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'abcd' }] });
+    expect(projections()).toBe(1);
+    s.testSql.db.run('UPDATE message_updates SET payload_json = \'"X"\' WHERE operation = \'append\' AND payload_json = \'"b"\'');
+    expect(await s.messages.materialize(reference)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'abcd' }] });
+    // An earlier cutoff of the same message is history: read from its rows
+    // as they are now, and never projected.
+    expect(await s.messages.materialize({ ...opened, sequence: opened.sequence + 1 })).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'aX' }] });
+    expect(projections()).toBe(1);
   } finally { s.testSql.close(); }
 });
 

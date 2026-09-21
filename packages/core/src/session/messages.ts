@@ -43,6 +43,17 @@ function payloadOf(row: UpdateRow): SessionPayload {
   throw new KinuError('io', 'invalid session payload reference');
 }
 
+/** A message at one cutoff, as the model sees it: what the update rows join
+ *  to, and what a projection stores. */
+const StoredMessageSchema = v.object({
+  envelope: JsonObjectSchema,
+  role: v.string(),
+  contentKind: v.picklist(['string', 'parts']),
+  parts: v.array(v.object({ partNo: v.number(), value: JsonObjectSchema })),
+});
+
+type StoredMessage = v.InferOutput<typeof StoredMessageSchema>;
+
 export interface ActorReadAuthority {
   readonly actorId: string;
   assertCurrent(): void;
@@ -58,7 +69,23 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     return { ...stored.envelope, role: stored.role, content: stored.contentKind === 'string' ? v.parse(v.string(), stored.parts[0]?.value.text ?? '') : stored.parts.map(part => part.value) };
   }
 
-  private async materializeEnvelope(reference: MessageReference): Promise<{ readonly envelope: JsonObject; readonly role: string; readonly contentKind: 'string' | 'parts'; readonly parts: readonly { partNo: number; value: JsonObject }[] }> {
+  /** The projection stored for this exact cutoff, if one has been written. */
+  protected async storedProjection(reference: MessageReference): Promise<StoredMessage | null> {
+    const row = this.sql<UpdateRow>`SELECT sequence,NULL AS part_no,'open' AS operation,payload_json,payload_path,payload_digest FROM message_projections
+      WHERE actor_id=${this.actor.actorId} AND message_id=${reference.messageId} AND sequence=${reference.sequence}`[0];
+
+    if (row === undefined) return null;
+
+    return v.parse(StoredMessageSchema, await this.payloads.read(payloadOf(row)));
+  }
+
+  /** A sealed message at its sealed cutoff reads as one row once its
+   *  projection is stored; `SessionMessages` stores it on the first such read. */
+  protected async materializeEnvelope(reference: MessageReference): Promise<StoredMessage> {
+    return (await this.storedProjection(reference)) ?? this.materializeFromUpdates(reference);
+  }
+
+  private async materializeFromUpdates(reference: MessageReference): Promise<StoredMessage> {
     this.actor.assertCurrent();
     const actorId = this.actor.actorId;
     const message = this.sql<MessageRow>`SELECT role,native_content_kind,sealed_sequence FROM session_messages WHERE actor_id=${actorId} AND message_id=${reference.messageId}`[0];
@@ -149,6 +176,25 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
 /** Native message bytes and their ordered, immutable updates. Selection is owned by the context store. */
 export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPayloads> {
   private readonly sources = new WeakMap<ModelMessage, MessageReference>();
+
+  protected override async materializeEnvelope(reference: MessageReference): Promise<StoredMessage> {
+    const stored = await this.storedProjection(reference);
+
+    if (stored !== null) return stored;
+    const joined = await super.materializeEnvelope(reference);
+    const sealed = this.sql<{ sealed_sequence: number | null }>`SELECT sealed_sequence FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${reference.messageId}`[0];
+
+    // Only a SEALED message at its sealed cutoff is projected: an open one
+    // still grows, and an earlier cutoff is a fork's or a history's, read once.
+    if (sealed?.sealed_sequence === reference.sequence) {
+      const payload = await this.payloads.prepare(joined);
+      this.actor.assertCurrent();
+      void this.sql`INSERT OR IGNORE INTO message_projections(actor_id,message_id,sequence,payload_json,payload_path,payload_digest)
+        VALUES(${this.actor.actorId},${reference.messageId},${reference.sequence},${payload.json},${payload.path},${payload.digest})`;
+    }
+
+    return joined;
+  }
 
   sourceOf(message: ModelMessage): MessageReference | null {
     this.actor.assertCurrent();
@@ -243,11 +289,13 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
 
     for (const update of updates) {
       if (update.part !== null && update.operation !== 'open') {
-        const state = this.sql<{ operation: string }>`SELECT operation FROM message_updates WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${update.part} AND operation IN ('open','content-end') ORDER BY sequence`;
+        // One equality per fact, so each is a covering read of its partial
+        // index (`message_part_open`, `message_part_end`). The `IN` form
+        // walked every update of the part per delta — the square of a
+        // streamed answer's length, measured 2026-09-21 (D23).
+        if (!this.partOpened(messageId, update.part)) throw new KinuError('denied', 'part update precedes open');
 
-        if (!state.some(item => item.operation === 'open')) throw new KinuError('denied', 'part update precedes open');
-
-        if (update.operation === 'append' && state.some(item => item.operation === 'content-end')) throw new KinuError('denied', 'stream content already ended');
+        if (update.operation === 'append' && this.partEnded(messageId, update.part)) throw new KinuError('denied', 'stream content already ended');
       }
 
       if (!(update instanceof PreparedMessageUpdate)) throw new KinuError('bad_input', 'message update was not prepared');
@@ -258,6 +306,16 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     }
 
     return { messageId, sequence };
+  }
+
+  /** The operation is a literal in each query, not a bound value: SQLite
+   *  proves a partial index applies only from the statement's own text. */
+  private partOpened(messageId: string, part: number): boolean {
+    return (this.sql<{ n: number }>`SELECT count(*) AS n FROM message_updates WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${part} AND operation='open'`[0]?.n ?? 0) > 0;
+  }
+
+  private partEnded(messageId: string, part: number): boolean {
+    return (this.sql<{ n: number }>`SELECT count(*) AS n FROM message_updates WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${part} AND operation='content-end'`[0]?.n ?? 0) > 0;
   }
 
   seal(reference: MessageReference): void {

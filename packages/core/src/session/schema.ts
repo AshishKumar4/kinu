@@ -37,6 +37,20 @@ export function initSessionContextTables(exec: RawSqlExec): void {
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS message_part_open ON message_updates(actor_id,message_id,part_no) WHERE operation = 'open'`);
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS message_part_end ON message_updates(actor_id,message_id,part_no) WHERE operation = 'content-end'`);
   exec(`CREATE INDEX IF NOT EXISTS message_part_updates ON message_updates(actor_id,message_id,part_no,sequence)`);
+  // A sealed message's materialized form at its sealed cutoff, written once
+  // on the first read after the seal and read as ONE row thereafter. The
+  // update rows stay the source of truth: a projection is derived, and a
+  // missing one is rebuilt from them. Every step of every turn reads every
+  // message in its context, so without this a streamed answer's delta rows
+  // were re-read and re-joined on each step for the rest of the workspace's
+  // life (D23: 20 answers of 2,000 deltas made a one-step turn cost 2.5 s).
+  exec(`CREATE TABLE IF NOT EXISTS message_projections (
+    actor_id TEXT NOT NULL, message_id TEXT NOT NULL, sequence INTEGER NOT NULL,
+    payload_json TEXT, payload_path TEXT, payload_digest TEXT,
+    PRIMARY KEY(actor_id,message_id,sequence),
+    FOREIGN KEY(actor_id,message_id,sequence) REFERENCES message_updates(actor_id,message_id,sequence),
+    CHECK((payload_json IS NOT NULL AND payload_path IS NULL AND payload_digest IS NULL)
+      OR (payload_json IS NULL AND payload_path IS NOT NULL AND payload_digest IS NOT NULL)))`);
   exec(`CREATE TABLE IF NOT EXISTS actor_contexts (
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), context_id TEXT NOT NULL, fork_context_id TEXT, fork_revision INTEGER,
     PRIMARY KEY(actor_id,context_id), CHECK((fork_context_id IS NULL) = (fork_revision IS NULL)),

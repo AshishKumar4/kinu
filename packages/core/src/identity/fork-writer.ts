@@ -200,6 +200,7 @@ export class ForkTargetWriter {
     void this.target`DELETE FROM context_revisions WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM actor_contexts WHERE actor_id = ${actorId}`;
     void this.target`UPDATE session_messages SET sealed_sequence = ${null} WHERE actor_id = ${actorId}`;
+    void this.target`DELETE FROM message_projections WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM message_updates WHERE actor_id = ${actorId}`;
     void this.target`UPDATE message_parts SET reply_to_message_id = ${null}, reply_to_part_no = ${null} WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM message_parts WHERE actor_id = ${actorId}`;
