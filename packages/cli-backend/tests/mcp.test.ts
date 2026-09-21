@@ -1,10 +1,11 @@
 // Local MCP integration — verifies that the CLI backend can connect to a stdio
 // MCP server, expose its tools, proxy calls, and merge them into a local turn.
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import { isMcpToolKey, mcpToolKey, type LLMProviderConfig } from '@kinu.run/core';
+import { isMcpToolKey, mcpToolKey, NO_TIMER_DEADLINE_MS, type LLMProviderConfig } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
@@ -90,6 +91,38 @@ describe('connectMcpServers', () => {
       );
     } finally {
       await conn.close();
+    }
+  });
+
+  test('no configured timeout means no deadline at the SDK seam, not the SDK\'s own 60 s default', async () => {
+    // The SDK reads an ABSENT `timeout` as 60_000 ms, so the only way to spell
+    // "no deadline" to it is the sentinel on every request. Observed at the
+    // seam itself: the options the connector hands the SDK client.
+    const connect = spyOn(Client.prototype, 'connect');
+    const listTools = spyOn(Client.prototype, 'listTools');
+    const callTool = spyOn(Client.prototype, 'callTool');
+
+    try {
+      const conn = await connectMcpServers({
+        echo: { command: 'node', args: [fixtureServer] },
+        bounded: { command: 'node', args: [fixtureServer], timeoutMs: 1_234 },
+      });
+
+      try {
+        await conn.call('echo', 'echo', { text: 'x' });
+        await conn.call('bounded', 'echo', { text: 'y' });
+      } finally {
+        await conn.close();
+      }
+
+      expect(connect.mock.calls.map(([, options]) => options?.timeout)).toEqual([NO_TIMER_DEADLINE_MS, NO_TIMER_DEADLINE_MS]);
+      expect(listTools.mock.calls.map(([, options]) => options?.timeout)).toEqual([NO_TIMER_DEADLINE_MS, NO_TIMER_DEADLINE_MS]);
+      // A server's own configured bound is the one exception, and only for its calls.
+      expect(callTool.mock.calls.map(([, , options]) => options?.timeout)).toEqual([NO_TIMER_DEADLINE_MS, 1_234]);
+    } finally {
+      connect.mockRestore();
+      listTools.mockRestore();
+      callTool.mockRestore();
     }
   });
 
