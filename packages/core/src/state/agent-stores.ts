@@ -33,11 +33,14 @@ import { ActorClaimStore } from '../orchestrator/actor-claims';
 import { PlanReviewStore } from '../plans/review';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
 import { createAppDataStore, type AppDataStore } from '../tools/db-codemode';
+import { SessionHistory } from '../orchestrator/session-history';
+import type { SessionFilePlane } from '../orchestrator/session-payload';
 
 /** Field names match what both backends already called these, so a backend
  *  reads its stores through one object without renaming any call site. */
 export interface AgentStores {
   readonly config: AgentConfigStore;
+  readonly history: SessionHistory;
   readonly facts: FactsStore;
   readonly taskList: TaskListStore;
   /** The head journal a session's controller writes to — also the live fork
@@ -73,7 +76,7 @@ export interface AgentStores {
  * not yet resolvable at construction time can still build the bundle up front;
  * the provider is called at most once per store, on first access.
  */
-export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHandle, transactionSync: <T>(write: () => T) => T): AgentStores {
+export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHandle, transactionSync: <T>(write: () => T) => T, files: () => Promise<SessionFilePlane>): AgentStores {
   // One memo per store: the provider is only invoked when a store is first
   // reached, and each store is constructed exactly once thereafter.
   let facts: FactsStore | undefined;
@@ -85,6 +88,7 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
   let planReviews: PlanReviewStore | undefined;
   let mctsSearchStore: MctsSearchStore | undefined;
   let appData: AppDataStore | undefined;
+  let history: SessionHistory | undefined;
 
   // Named, because two members reach the others: `appData` writes its evidence
   // through this bundle's own recorder and files it under the run of this
@@ -108,7 +112,10 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
       return (eventRecorder ??= new RunEventRecorder(sql(), actor()));
     },
     get claims(): ActorClaimStore {
-      return (claims ??= new ActorClaimStore(sql(), actor(), transactionSync));
+      return (claims ??= new ActorClaimStore(sql(), actor(), transactionSync, bundle.history));
+    },
+    get history(): SessionHistory {
+      return history ??= new SessionHistory({ sql: sql(), actor: actor(), transactionSync, files });
     },
     get jobs(): BackgroundJobStore {
       return (jobs ??= new BackgroundJobStore(sql(), actor()));

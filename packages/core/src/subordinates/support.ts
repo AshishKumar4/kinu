@@ -616,9 +616,9 @@ export function createTeamToolDeps(deps: {
   runtime: SubordinateRuntime;
   createName(role: string): string;
   now(): number;
-  inheritedContext(): SerializedMessage[];
+  inheritedContext(): Promise<SerializedMessage[]>;
   /** The live conversation the swarm dispatch reads, including this turn. */
-  originContext?(): readonly ModelMessage[];
+  originContext?(): Promise<readonly ModelMessage[]>;
   /** THIS actor's own mission — the workspace's purpose as it knows it. What
    *  an owner-created additional agent inherits when the owner gave it none,
    *  because an agent added to a workspace is there for what the workspace is
@@ -757,8 +757,8 @@ export function createTeamToolDeps(deps: {
   };
 
   const team: TeamToolDeps = {
-    inheritedContext: () => deps.originContext
-      ? inheritedContextFromHistory(deps.originContext())
+    inheritedContext: async () => deps.originContext
+      ? inheritedContextFromHistory(await deps.originContext())
       : deps.inheritedContext(),
     delegation: deps.delegation,
     snapshot: () => deps.roster.list(),

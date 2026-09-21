@@ -141,7 +141,7 @@ test('the real head caller executes its selected program and retains its produce
   });
 
   expect(report.summary).toBe('version one');
-  expect(produced).toEqual([{ role: 'assistant', content: 'version one' }]);
+  expect(produced).toEqual([{ role: 'assistant', content: [{ type: 'text', text: 'version one' }] }]);
   expect(chatModel.doStreamCalls).toHaveLength(0);
 });
 

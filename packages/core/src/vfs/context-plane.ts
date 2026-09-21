@@ -1,677 +1,499 @@
-/**
- * `/context` — the actor's own working history and request evidence, as files.
- *
- * WHAT THIS IS. A projection of the two context ledgers
- * (`orchestrator/working-context.ts`, `orchestrator/actor-claims.ts`) onto the
- * file plane every surface already uses: the native `file` tool, codemode's
- * `workspace.readFile/writeFile/editFile`, and the owner's UI editor all reach
- * it through ONE dispatcher over ONE VFS (`tools/file-tool.ts`), so an edit
- * from a model and an edit from a person take the same path, hit the same
- * compare-and-set, and produce the same revision. There is no second writable
- * copy of context anywhere: the bytes below are rendered from the rows on every
- * read, and a write goes straight back into them.
- *
- * WHY A MOUNT. The mount table is the workspace plane's existing extension
- * point (`vfs/mounts.ts`): a reserved root name, routed on the first path
- * segment, absent-aware, and — like `/pc` and `/sandbox` — NOT visible to the
- * workspace shell, which runs on the Nimbus workspace tree and knows nothing of
- * mount points. Reusing it means no new addressing convention, no shadowing of
- * a real workspace file, and no second file plane to keep in step. The agent's
- * own home paths (`scaffold/agent.js`, `memory/`, `.kinu/agents/<key>/…`) keep
- * their meanings; a child's context lives under `/context/agents/<key>/`, which
- * is the same `agents/<storage-key>` segment the scaffold paths already use.
- *
- * WHAT IS WRITABLE. Exactly one path per actor: `working.jsonl`. Everything
- * else — the claim, the rendered requests, the revision history — is evidence,
- * and evidence that an ordinary context edit could rewrite would not be
- * evidence (spec §6.4). Writes elsewhere are `EACCES`, and there is no
- * `unlink`, `mkdir` or `rename`: a projection has no free-floating files to
- * create or remove, and pretending otherwise would invent state the store
- * cannot hold.
- *
- * THE LOOP SOURCE IS NOT HERE. `scaffold/agent.js[.vN]` is already the real,
- * versioned loop source with its own promotion boundary (`scaffold/surface.ts`,
- * `scaffold/shadow.ts`). Projecting a second copy of it under this mount would
- * create exactly the two-writable-copies problem this design forbids, so the
- * loop is read and edited where it already lives.
- */
-
-import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import type { VFS, VfsEntryStat } from '../types/primitives';
+import type { VFS, VfsEntryStat, VfsRevision } from '../types/primitives';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { ActorClaimStore } from '../orchestrator/actor-claims';
-import {
-  createActorContextPlane, type ActorContextPlane, type ContextEditReceipt,
-} from '../orchestrator/context-plane';
-import type { WorkingRevisionContent } from '../types/context-plane';
-import { decodeModelMessages, encodeModelMessages } from '../prompting/message-codec';
+import type { ContextEntry, ContextSelection } from '../orchestrator/session-context';
+import type { PreparedMessage } from '../orchestrator/session-messages';
+import type { ContextChange } from '../orchestrator/session-proposals';
+import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
 import { FileRefusalError } from '../tools/file-edit';
 import { isVfsError, makeVfsError } from './errno';
-import type { VfsMount } from './mounts';
+import type { VfsMount, VfsNativeReads } from './mounts';
+import { toolPairingGaps } from '../prompting/tool-pairing';
 
-/** The reserved root this plane is served under. */
-const CONTEXT_MOUNT_NAME = 'context';
+export interface ActorContextStores { readonly claims: ActorClaimStore; readonly events: ContextEventRecorder | null }
 
-const CONTEXT_MOUNT = `/${CONTEXT_MOUNT_NAME}`;
+export interface ChildContextResolver { list(): readonly string[]; resolve(storageKey: string): ActorContextStores | null }
 
-/** The one editable path, relative to the actor's context root. */
-const WORKING_FILE = 'working.jsonl';
+export interface ContextMountDeps { readonly stores: () => ActorContextStores; readonly children?: ChildContextResolver | null }
 
-/**
- * The stores one actor's context is served from.
- *
- * Handle-bound, never id-bound: the claim store carries the actor's own
- * `ActorHandle`, so every statement re-validates the identity and a retired or
- * re-parented actor stops authorising writes. This is also what makes a
- * parent's edit of a child use "the same checks" (spec §6.3) rather than a
- * parallel code path — the parent acts through the CHILD's store.
- */
-export interface ActorContextStores {
-  readonly actorId: string;
-  readonly claims: ActorClaimStore;
-  /**
-   * Where this actor's `context_edit` evidence goes.
-   *
-   * The narrow port rather than the whole recorder: this plane emits ONE
-   * variant, and saying so is what lets a caller hand it the real
-   * `RunEventRecorder` (which satisfies the port) without this module
-   * depending on every event the recorder knows.
-   */
-  readonly events: ContextEventRecorder | null;
-}
-
-/**
- * The children an actor may manage, as the HOST resolves them.
- *
- * Authority lives here, in the host's actor directory — never in a path
- * segment and never in the file header. The plane asks for a storage key and
- * gets either the child's own stores or null; a sibling, an unrelated actor or
- * a retired child is null, which the plane reports as an absent path. Nothing
- * a caller writes can widen this: the header's actor field is CHECKED against
- * the resolved actor, and a mismatch is refused.
- */
-export interface ChildContextResolver {
-  list(): readonly string[];
-  resolve(storageKey: string): ActorContextStores | null;
-}
-
-export interface ContextMountDeps {
-  /** Read live at every call: a plane outlives one turn, and a mount must not
-   *  capture a store bound to an identity that has since been retired. */
-  readonly stores: () => ActorContextStores;
-  readonly children?: ChildContextResolver | null;
-}
-
-/** The header line of `working.jsonl`: what the read observed, in the words the
- *  write must send back. */
 export interface ContextFileHeader {
-  readonly actor: string;
-  readonly revision: number;
-  readonly messages: number;
-  /**
-   * The three fields below are what a READ tells the editor, and they are
-   * optional because a WRITE is not required to echo them: only `actor` and
-   * `revision` decide anything, and inventing values for the rest on the way
-   * back in would report a state nobody observed.
-   */
-  readonly status?: 'active' | 'staged' | 'empty';
-  readonly effectiveAt?: 'step' | 'turn';
-  readonly turn?: string | null;
-  /** Why a pending edit has not landed yet, when one is pending and blocked. */
-  readonly blocked?: string;
+  readonly actor: string; readonly contextId: string | null; readonly revision: number; readonly proposalId: string | null;
+  readonly version: string; readonly messages: number; readonly status: 'active' | 'staged' | 'empty';
+  readonly effectiveAt: 'step' | 'turn'; readonly turn: string | null; readonly blocked?: string;
 }
 
-/** The header under construction — the same contract, writable, so an absent
- *  field is simply never assigned rather than spread in as an empty object. */
-type MutableContextFileHeader = { -readonly [K in keyof ContextFileHeader]: ContextFileHeader[K] };
+export interface ObservedWorkingFile { readonly header: ContextFileHeader; readonly entries: readonly WorkingEntry[] }
 
-const StatusSchema = v.picklist(['active', 'staged', 'empty']);
+type WorkingEntry =
+  | { readonly entryId: string; readonly messageId: string; readonly cutoff: number; readonly message: JsonObject }
+  | { readonly new: true; readonly message: JsonObject };
 
-const EffectSchema = v.picklist(['step', 'turn']);
+const HeaderSchema = v.object({ actor: v.string(), contextId: v.nullable(v.string()), revision: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  proposalId: v.nullable(v.string()), version: v.string() });
 
-const HeaderSchema = v.object({
-  $context: v.object({
-    actor: v.pipe(v.string(), v.nonEmpty()),
-    revision: v.pipe(v.number(), v.integer(), v.minValue(0)),
-    messages: v.optional(v.number()),
-    status: v.optional(StatusSchema),
-    effectiveAt: v.optional(EffectSchema),
-    turn: v.optional(v.nullable(v.string())),
-    blocked: v.optional(v.string()),
-  }),
-});
+const RevisionSchema = v.tuple([v.string(), v.nullable(v.string()), v.pipe(v.number(), v.integer(), v.minValue(0)),
+  v.nullable(v.string()), v.nullable(v.string()), v.nullable(v.string()), v.nullable(v.number()), v.nullable(v.string())]);
 
-/**
- * `working.jsonl` as text: a header line naming the revision this content IS,
- * then one codec-encoded message per line.
- *
- * JSONL rather than one JSON document because an edit is a text edit: the
- * `file` tool's `edit` action matches literal text, and a per-line encoding
- * lets a model replace one message without re-emitting the whole array. The
- * encoding is the durable codec's, so a tool call, a tool result or an image
- * attachment survives read-edit-write byte-for-byte instead of degrading into
- * prose that would not parse back.
- */
-function encodeWorkingFile(header: ContextFileHeader, messages: readonly ModelMessage[]): string {
-  const encoded = v.parse(v.array(v.unknown()), JSON.parse(encodeModelMessages(messages)));
-  const lines = [JSON.stringify({ $context: header }), ...encoded.map((message) => JSON.stringify(message))];
+const EntrySchema = v.union([
+  v.object({ entryId: v.string(), messageId: v.string(), cutoff: v.pipe(v.number(), v.integer(), v.minValue(0)), message: JsonObjectSchema }),
+  v.object({ new: v.literal(true), message: JsonObjectSchema }),
+]);
 
-  return `${lines.join('\n')}\n`;
+const PairingView = v.object({ role: v.string(), content: v.array(v.object({ type: v.string(), toolCallId: v.optional(v.string()) })) });
+
+const encoder = new TextEncoder();
+
+const token = (value: JsonValue): string => `context:${bytesToBase64(encoder.encode(JSON.stringify(value)))}`;
+
+const absent = (path: string): Error => makeVfsError('ENOENT', 'no such context path', path);
+
+const readOnly = (path: string): Error => makeVfsError('EACCES', 'context evidence is immutable; edit working.jsonl instead', path);
+
+function contextRevision(revision: VfsRevision): v.InferOutput<typeof RevisionSchema> {
+  if (!v.is(v.string(), revision) || !revision.startsWith('context:')) throw new KinuError('bad_input', 'invalid context revision');
+  const json = new TextDecoder('utf-8', { fatal: true }).decode(base64ToBytes(revision.slice(8)));
+
+  return v.parse(RevisionSchema, JSON.parse(json));
 }
 
-/** `working.jsonl` as a caller reads it back: the header the writer observed,
- *  and the array it carried. */
-export interface ObservedWorkingFile {
-  readonly header: ContextFileHeader;
-  readonly messages: ModelMessage[];
+interface Target { readonly stores: ActorContextStores; readonly author: string; readonly segments: readonly string[]; readonly child: boolean }
+
+interface WorkingView {
+  readonly target: Target; readonly selection: ContextSelection | null; readonly entries: readonly ContextEntry[];
+  readonly header: ContextFileHeader; readonly modified: number;
 }
 
-/** The inverse. Every refusal here is `bad_input`: the writer sent something
- *  this file cannot be, and naming which line is what lets it fix it. */
-function decodeWorkingFile(text: string): ObservedWorkingFile {
-  const lines = text.split('\n').filter((line) => line.trim().length > 0);
-  const first = lines[0];
+interface Document { readonly owner: ActorClaimStore; readonly writable: boolean; readonly version: string; readonly modified: number; readonly chunks: () => AsyncGenerator<string> }
 
-  if (first === undefined) {
-    throw new KinuError('bad_input',
-      `${WORKING_FILE} must begin with its {"$context":{…}} header line — the revision an edit is written against `
-      + 'is in that line, and without it the write has nothing to compare against');
-  }
+function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readRange'> {
+  const target = (path: string): Target => {
+    const parts = path.split('/').filter(part => part !== '' && part !== '.');
 
-  let parsedHeader: unknown;
-
-  try {
-    parsedHeader = JSON.parse(first);
-  } catch (error) {
-    throw new KinuError('bad_input',
-      `line 1 of ${WORKING_FILE} is not JSON, so it cannot be the $context header`, { cause: error });
-  }
-
-  const header = v.safeParse(HeaderSchema, parsedHeader);
-
-  if (!header.success) {
-    throw new KinuError('bad_input',
-      `line 1 of ${WORKING_FILE} is not the $context header: it needs {"$context":{"actor":"…","revision":N}}`);
-  }
-
-  const messages = decodeModelMessages(`[${lines.slice(1).join(',')}]`);
-  const observed = header.output.$context;
-
-  // Passed through, never filled in: what the writer sent back is what this
-  // says it observed.
-  const decoded: MutableContextFileHeader = {
-    actor: observed.actor,
-    revision: observed.revision,
-    messages: observed.messages ?? messages.length,
-  };
-
-  if (observed.status !== undefined) decoded.status = observed.status;
-
-  if (observed.effectiveAt !== undefined) decoded.effectiveAt = observed.effectiveAt;
-
-  if (observed.turn !== undefined) decoded.turn = observed.turn;
-
-  if (observed.blocked !== undefined) decoded.blocked = observed.blocked;
-
-  return { header: decoded, messages };
-}
-
-/** The header a read serves, from the plane's own state. */
-function headerOf(state: {
-  readonly actorId: string;
-  readonly head: WorkingRevisionContent | null;
-  readonly staged: WorkingRevisionContent | null;
-  readonly liveTurnId: string | null;
-  readonly effectiveAt: 'step' | 'turn';
-}): ContextFileHeader {
-  const head = state.head;
-
-  const header: ContextFileHeader = {
-    actor: state.actorId,
-    revision: head?.revision ?? 0,
-    messages: head?.messageCount ?? 0,
-    status: head === null ? 'empty' : head.status === 'staged' ? 'staged' : 'active',
-    effectiveAt: state.effectiveAt,
-    turn: state.liveTurnId,
-  };
-
-  const blocked = state.staged?.deferredReason ?? null;
-
-  return blocked === null ? header : { ...header, blocked };
-}
-
-/** What a revision looks like as a file: metadata, then its array. */
-function revisionDocument(revision: WorkingRevisionContent): string {
-  return `${JSON.stringify({
-    revision: revision.revision,
-    baseRevision: revision.baseRevision,
-    baseMessageCount: revision.baseMessageCount,
-    source: revision.source,
-    status: revision.status,
-    via: revision.via,
-    author: revision.author,
-    digest: revision.digest,
-    messageCount: revision.messageCount,
-    turnId: revision.turnId,
-    activatedTurnId: revision.activatedTurnId,
-    activatedStep: revision.activatedStep,
-    activatedAt: revision.activatedAt,
-    deferredReason: revision.deferredReason,
-    closedReason: revision.closedReason,
-    recordedAt: revision.recordedAt,
-    messages: JSON.parse(encodeModelMessages(revision.messages)),
-  }, null, 2)}\n`;
-}
-
-/** Where a path inside the mount points. */
-type ContextRoute =
-  | { readonly kind: 'root' }
-  | { readonly kind: 'working' }
-  | { readonly kind: 'claim' }
-  | { readonly kind: 'history' }
-  | { readonly kind: 'revisions' }
-  | { readonly kind: 'revision'; readonly revision: number }
-  | { readonly kind: 'requests' }
-  | { readonly kind: 'turn'; readonly turnId: string }
-  | { readonly kind: 'request'; readonly turnId: string; readonly revision: number }
-  | { readonly kind: 'agents' }
-  | { readonly kind: 'child'; readonly storageKey: string; readonly rest: string };
-
-const NUMBERED = /^(\d+)\.json$/;
-
-function routeOf(path: string): ContextRoute | null {
-  const segments = path.split('/').filter((segment) => segment.length > 0 && segment !== '.');
-
-  if (segments.some((segment) => segment === '..')) return null;
-  const [head, second, third] = segments;
-
-  if (head === undefined) return { kind: 'root' };
-
-  if (segments.length === 1) {
-    if (head === WORKING_FILE) return { kind: 'working' };
-
-    if (head === 'claim.json') return { kind: 'claim' };
-
-    if (head === 'history.json') return { kind: 'history' };
-
-    if (head === 'revisions') return { kind: 'revisions' };
-
-    if (head === 'requests') return { kind: 'requests' };
-
-    if (head === 'agents') return { kind: 'agents' };
-
-    return null;
-  }
-
-  if (head === 'revisions' && segments.length === 2 && second !== undefined) {
-    const matched = NUMBERED.exec(second);
-
-    return matched?.[1] === undefined ? null : { kind: 'revision', revision: Number(matched[1]) };
-  }
-
-  if (head === 'requests' && second !== undefined) {
-    if (segments.length === 2) return { kind: 'turn', turnId: second };
-
-    if (segments.length === 3 && third !== undefined) {
-      const matched = NUMBERED.exec(third);
-
-      return matched?.[1] === undefined
-        ? null
-        : { kind: 'request', turnId: second, revision: Number(matched[1]) };
-    }
-
-    return null;
-  }
-
-  if (head === 'agents' && second !== undefined) {
-    return { kind: 'child', storageKey: second, rest: segments.slice(2).join('/') };
-  }
-
-  return null;
-}
-
-const DIRECTORY: VfsEntryStat = { size: 0, mtimeMs: 0, isDir: true };
-
-function absent(path: string): Error {
-  return makeVfsError('ENOENT', 'no such path under the context plane', path);
-}
-
-function readOnly(path: string): Error {
-  return makeVfsError('EACCES',
-    `${path} is context evidence and is not writable — the working history is the one editable path `
-    + `(${CONTEXT_MOUNT}/${WORKING_FILE})`, path);
-}
-
-/**
- * What a path resolved to: the actor whose context it names, that actor's
- * plane, the route inside its tree, and the actor doing the writing.
- *
- * `stores.actorId` and `author` differ exactly when a parent is managing a
- * child: the target is the child's own handle-bound store, and the author is
- * the actor that actually wrote — which is what the revision row and the run
- * event record.
- */
-interface ContextTarget {
-  readonly stores: ActorContextStores;
-  readonly plane: ActorContextPlane;
-  readonly route: ContextRoute;
-  readonly author: string;
-}
-
-
-/**
- * One actor's context plane, plus the planes of the children it may manage.
- *
- * `writeFileIfRevision` is declared, so the owner's UI editor gets a real
- * compare-and-write instead of the read-only refusal the read model shows for
- * planes that cannot protect an in-place save. It maps onto the same
- * compare-and-set the header does: `expectedRevision` IS the working revision.
- */
-function createContextPlane(deps: ContextMountDeps): VFS {
-  const planes = new Map<string, ActorContextPlane>();
-
-  const planeFor = (stores: ActorContextStores): ActorContextPlane => {
-    const existing = planes.get(stores.actorId);
-
-    if (existing !== undefined) return existing;
-    const created = createActorContextPlane({ claims: stores.claims, events: stores.events });
-    planes.set(stores.actorId, created);
-
-    return created;
-  };
-
-  /** Resolve a path to the actor whose context it names, and the route inside
-   *  that actor's own tree. A child's subtree is the SAME routes over the
-   *  child's own stores — one implementation, one set of checks. */
-  const target = (path: string): ContextTarget => {
+    if (parts.includes('..')) throw absent(path);
     const own = deps.stores();
-    const route = routeOf(path);
 
-    if (route === null) throw absent(path);
-    const resolver = deps.children ?? null;
+    if (parts[0] !== 'agents') return { stores: own, author: own.claims.actorId, segments: parts, child: false };
 
-    if (route.kind === 'agents' || route.kind === 'child') {
-      // An actor with no managed children has no `agents` tree at all, rather
-      // than an empty directory that would read as "no children right now".
-      if (resolver === null) throw absent(path);
-    }
+    if (parts.length === 1) return { stores: own, author: own.claims.actorId, segments: parts, child: false };
+    const key = parts[1];
+    const child = key === undefined ? null : deps.children?.resolve(key);
 
-    if (route.kind !== 'child') {
-      return { stores: own, plane: planeFor(own), route, author: own.actorId };
-    }
+    if (!child || parts[2] === 'agents') throw absent(path);
 
-    const child = resolver?.resolve(route.storageKey) ?? null;
-
-    if (child === null) throw absent(path);
-    const inner = routeOf(route.rest);
-
-    if (inner === null || inner.kind === 'child') throw absent(path);
-
-    // The AUTHOR of a child edit is this actor, and the target is the child's
-    // own store: authority came from the resolver, the recorded author is the
-    // actor that actually wrote, and neither is taken from the path.
-    return { stores: child, plane: planeFor(child), route: inner, author: own.actorId };
+    return { stores: child, author: own.claims.actorId, segments: parts.slice(2), child: true };
   };
 
-  const requestNames = (stores: ActorContextStores, turnId: string): string[] =>
-    stores.claims.revisions(turnId).map((revision) => `${revision.revision}.json`);
+  const working = (resolved: Target): WorkingView => {
+    const history = resolved.stores.claims.history;
+    const selection = history.context.selected();
+    const pending = selection === null ? undefined : history.proposals.pending(selection.contextId).at(-1);
+    let entries = selection === null ? [] : history.context.entries(selection);
+    let blocked = pending?.deferred_reason ?? undefined;
+    let staged = pending !== undefined;
 
-  const readRoute = async (path: string): Promise<string> => {
-    const { stores, plane, route } = target(path);
-
-    switch (route.kind) {
-      case 'working': {
-        const state = plane.read();
-
-        return encodeWorkingFile(headerOf(state), state.head?.messages ?? []);
+    if (pending !== undefined) {
+      try { entries = [...history.proposals.preview(pending.proposal_id)]; }
+      catch (cause) {
+        if (!(cause instanceof KinuError) || cause.code !== 'denied') throw cause;
+        blocked = 'history_rewritten';
+        staged = false;
       }
+    }
 
-      case 'claim': {
-        const state = plane.read();
-        const latest = stores.claims.latestTurn();
+    const claim = resolved.stores.claims.latestTurn();
+    const revision = selection?.revision ?? 0;
 
-        return `${JSON.stringify({
-          actor: stores.actorId,
-          turn: latest,
-          liveTurnId: state.liveTurnId,
-          workingRevision: state.active?.revision ?? null,
-          headRevision: state.head?.revision ?? 0,
-          stagedRevision: state.staged?.revision ?? null,
-          stagedBlockedBy: state.staged?.deferredReason ?? null,
-          editsTakeEffect: state.effectiveAt,
-        }, null, 2)}\n`;
-      }
+    const version = token([resolved.stores.claims.actorId, selection?.contextId ?? null, revision, pending?.proposal_id ?? null,
+      blocked ?? null, claim?.turnId ?? null, claim?.epoch ?? null, claim?.status ?? null]);
 
-      case 'history':
-        return `${JSON.stringify(stores.claims.working.history(), null, 2)}\n`;
-      case 'revision': {
-        const revision = stores.claims.working.revision(route.revision);
+    const head = selection === null ? undefined : history.context.revisions(selection.contextId).find(row => row.revision === revision);
 
-        if (revision === null) throw absent(path);
+    const header: ContextFileHeader = {
+      actor: resolved.stores.claims.actorId, contextId: selection?.contextId ?? null, revision, proposalId: pending?.proposal_id ?? null,
+      version, messages: entries.length, status: staged ? 'staged' : selection === null ? 'empty' : 'active',
+      effectiveAt: claim?.status === 'admitted' ? 'step' : 'turn', turn: claim?.status === 'admitted' ? claim.turnId : null,
+    };
 
-        return revisionDocument(revision);
-      }
+    if (blocked !== undefined) Object.assign(header, { blocked });
 
-      case 'request': {
-        const consumed = stores.claims.consumedContext(route.turnId, route.revision);
+    return { target: resolved, selection, entries, header, modified: Math.max(head?.recorded_at ?? 0, pending?.recorded_at ?? 0) };
+  };
 
-        if (consumed === null) throw absent(path);
+  const entryChunks = async function* (view: WorkingView, entries: readonly ContextEntry[], jsonl: boolean): AsyncGenerator<string> {
+    let first = true;
 
-        return `${JSON.stringify({
-          turnId: route.turnId,
-          revision: consumed.revision,
-          epoch: consumed.epoch,
-          stepIndex: consumed.stepIndex,
-          workingRevision: consumed.workingRevision,
-          digest: consumed.digest,
-          messageCount: consumed.messageCount,
-          request: JSON.parse(encodeModelMessages(consumed.messages)),
-        }, null, 2)}\n`;
-      }
+    for (const entry of entries) {
+      const message = await view.target.stores.claims.history.messages.projection(entry);
+      const row = { entryId: entry.entryId, messageId: entry.messageId, cutoff: entry.sequence, message };
 
-      default:
-        throw makeVfsError('EISDIR', 'this context path is a directory', path);
+      if (jsonl) yield `${JSON.stringify(row)}\n`;
+      else { yield `${first ? '' : ','}${JSON.stringify(row)}`; first = false; }
     }
   };
 
-  const listRoute = async (path: string): Promise<string[]> => {
-    const { stores, route } = target(path);
+  const atRevision = (resolved: Target, revision: VfsRevision): WorkingView => {
+    const versionToken = v.parse(v.string(), revision);
+    const [actor, contextId, version, proposalId, blocked, turn, , status] = contextRevision(versionToken);
 
-    switch (route.kind) {
-      case 'root': {
-        const entries = [WORKING_FILE, 'claim.json', 'history.json', 'revisions', 'requests'];
+    if (actor !== resolved.stores.claims.actorId) throw new KinuError('denied', 'context revision belongs to another actor');
+    const history = resolved.stores.claims.history;
+    const selection = contextId === null ? null : { contextId, revision: version };
 
-        return (deps.children?.list().length ?? 0) > 0 ? [...entries, 'agents'] : entries;
-      }
+    if (selection === null && (version !== 0 || proposalId !== null)) throw new KinuError('bad_input', 'empty context revision has content');
 
-      case 'revisions':
-        return stores.claims.working.history().map((revision) => `${revision.revision}.json`);
-      case 'requests':
-        return stores.claims.turns().map((claim) => claim.turnId);
-      case 'turn': {
-        const entries = requestNames(stores, route.turnId);
+    const entries = selection === null ? [] : proposalId !== null && blocked !== 'history_rewritten'
+      ? history.proposals.previewAt(proposalId, selection) : history.context.entries(selection);
 
-        if (entries.length === 0) throw absent(path);
+    const metadata = selection === null ? undefined : history.context.revisions(selection.contextId).find(row => row.revision === version);
+    const proposal = proposalId === null ? null : history.proposals.inspect(proposalId);
 
-        return [...entries];
-      }
+    const header: ContextFileHeader = { actor, contextId, revision: version, proposalId, version: versionToken, messages: entries.length,
+        status: proposalId !== null && blocked !== 'history_rewritten' ? 'staged' : selection === null ? 'empty' : 'active',
+        effectiveAt: status === 'admitted' ? 'step' : 'turn', turn: status === 'admitted' ? turn : null };
 
-      case 'agents':
-        return [...(deps.children?.list() ?? [])];
-      default:
-        throw makeVfsError('ENOTDIR', 'this context path is a file', path);
-    }
+    if (blocked !== null) Object.assign(header, { blocked });
+
+    return { target: resolved, selection, entries, modified: Math.max(metadata?.recorded_at ?? 0, proposal?.metadata.recorded_at ?? 0), header };
   };
 
-  /** `mtimeMs` per route: the moment the row it projects was recorded, never a
-   *  wall clock read at stat time — a projection whose mtime moves on its own
-   *  would make every reader's cached read look stale. */
-  const modifiedAt = (resolved: ContextTarget): number => {
-    const { stores, plane, route } = resolved;
+  const workingDocument = (view: WorkingView): Document => ({
+    owner: view.target.stores.claims, writable: true, version: view.header.version, modified: view.modified,
+    chunks: async function* () {
+      yield `${JSON.stringify({ $context: view.header })}\n`;
+      yield* entryChunks(view, view.entries, true);
+    },
+  });
 
-    switch (route.kind) {
-      case 'working':
-        return plane.read().head?.recordedAt ?? 0;
-      case 'revision':
-        return stores.claims.working.revision(route.revision)?.recordedAt ?? 0;
-      case 'request':
-        return stores.claims.revisions(route.turnId)
-          .find((row) => row.revision === route.revision)?.recordedAt ?? 0;
-      default:
-        return stores.claims.latestTurn()?.claimedAt ?? 0;
+  const document = (path: string): Document => {
+    const resolved = target(path);
+    const [head, second, third] = resolved.segments;
+    const history = resolved.stores.claims.history;
+    const view = working(resolved);
+
+    const simple = (value: string, version = view.header.version, modified = view.modified): Document => ({ owner: resolved.stores.claims, writable: false, version, modified,
+      chunks: async function* () { yield `${value}\n`; } });
+
+    if (head === 'working.jsonl' && resolved.segments.length === 1) return workingDocument(view);
+
+    if (head === 'claim.json' && resolved.segments.length === 1) return simple(JSON.stringify(resolved.stores.claims.latestTurn(), null, 2));
+
+    if (head === 'history.json' && resolved.segments.length === 1) return simple(JSON.stringify({ context: view.selection,
+      revisions: view.selection === null ? [] : history.context.revisions(view.selection.contextId),
+      proposals: view.selection === null ? [] : history.proposals.list(view.selection.contextId) }, null, 2));
+
+    if (head === 'revisions' && second !== undefined && resolved.segments.length === 2) {
+      const match = /^(\d+)\.json$/u.exec(second);
+
+      if (!match || view.selection === null) throw absent(path);
+      const revision = Number(match[1]);
+      const metadata = history.context.revisions(view.selection.contextId).find(row => row.revision === revision);
+
+      if (metadata === undefined) throw absent(path);
+      const entries = history.context.entries({ contextId: view.selection.contextId, revision });
+
+      return { owner: resolved.stores.claims, writable: false, version: token([resolved.stores.claims.actorId, view.selection.contextId, revision]), modified: metadata.recorded_at,
+        chunks: async function* () { yield `{"context":${JSON.stringify({ ...metadata, contextId: view.selection?.contextId })},"entries":[`; yield* entryChunks(view, entries, false); yield ']}\n'; } };
     }
+
+    if (head === 'proposals' && second?.endsWith('.json') && resolved.segments.length === 2) {
+      const inspected = history.proposals.inspect(decodeURIComponent(second.slice(0, -5)));
+
+      if (inspected === null) throw absent(path);
+
+      return { owner: resolved.stores.claims, writable: false, version: token(v.parse(JsonValueSchema, inspected.metadata)), modified: inspected.metadata.recorded_at,
+        chunks: async function* () { yield `{"proposal":${JSON.stringify(inspected.metadata)},"entries":[`; yield* entryChunks(view, inspected.entries, false); yield ']}\n'; } };
+    }
+
+    if (head === 'requests' && second !== undefined && third !== undefined && resolved.segments.length === 3) {
+      const match = /^(\d+)-(\d+)\.json$/u.exec(third);
+
+      if (!match) throw absent(path);
+      const turnId = decodeURIComponent(second);
+      const request = history.requests.forTurn(turnId).find(row => row.epoch === Number(match[1]) && row.revision === Number(match[2]));
+
+      if (request === undefined) throw absent(path);
+
+      return { owner: resolved.stores.claims, writable: false, version: token([resolved.stores.claims.actorId, request.id]), modified: view.modified,
+        chunks: async function* () {
+          const metadata = await history.messages.payloads.read(request.metadata);
+          const { messages, ...header } = request;
+          yield `{"request":${JSON.stringify({ ...header, metadata })},"messages":[`;
+
+          for (const [index, reference] of messages.entries()) yield `${index === 0 ? '' : ','}${JSON.stringify(await history.messages.projection(reference))}`;
+          yield ']}\n';
+        } };
+    }
+
+    if (head === undefined || head === 'agents' || (head === 'requests' && third === undefined) || (head === 'revisions' && second === undefined) || (head === 'proposals' && second === undefined)) throw makeVfsError('EISDIR', 'context path is a directory', path);
+    throw absent(path);
   };
 
-  const statRoute = async (path: string): Promise<VfsEntryStat | null> => {
-    let resolved: ContextTarget;
+  const list = (path: string): string[] => {
+    const resolved = target(path);
+    const [head, second] = resolved.segments;
+    const history = resolved.stores.claims.history;
+    const selected = history.context.selected();
 
-    try {
-      resolved = target(path);
-    } catch (err) {
-      // ONLY absence becomes null, because null is `stat`'s word for absent.
-      // Anything else — a retired handle refusing at `assertCurrent`, a decode
-      // failure — is a real failure and must not read as "no such path".
-      if (isVfsError(err) && err.code === 'ENOENT') return null;
-      throw err;
+    if (head === undefined) return ['working.jsonl', 'claim.json', 'history.json', 'revisions', 'requests', 'proposals', ...(!resolved.child && (deps.children?.list().length ?? 0) > 0 ? ['agents'] : [])];
+
+    if (head === 'agents' && second === undefined && !resolved.child) return [...(deps.children?.list() ?? [])];
+
+    if (head === 'revisions' && second === undefined) return selected === null ? [] : history.context.revisions(selected.contextId).map(row => `${row.revision}.json`);
+
+    if (head === 'proposals' && second === undefined) return selected === null ? [] : history.proposals.list(selected.contextId).map(row => `${encodeURIComponent(row.proposal_id)}.json`);
+
+    if (head === 'requests' && second === undefined) return resolved.stores.claims.turns().map(row => encodeURIComponent(row.turnId));
+
+    if (head === 'requests' && second !== undefined && resolved.segments.length === 2) {
+      const rows = history.requests.forTurn(decodeURIComponent(second));
+
+      if (rows.length === 0) throw absent(path);
+
+      return rows.map(row => `${row.epoch}-${row.revision}.json`);
     }
 
-    const { stores, plane, route } = resolved;
+    throw makeVfsError('ENOTDIR', 'context path is a file', path);
+  };
 
-    switch (route.kind) {
-      case 'root': case 'revisions': case 'requests': case 'agents':
-        return DIRECTORY;
-      case 'turn':
-        return requestNames(stores, route.turnId).length === 0 ? null : DIRECTORY;
-      case 'working': {
-        const state = plane.read();
-        const text = encodeWorkingFile(headerOf(state), state.head?.messages ?? []);
+  const write = async (path: string, data: string | Uint8Array, expected?: VfsRevision): Promise<{ ok: true; revision: VfsRevision } | { ok: false; revision: VfsRevision }> => {
+    const resolved = target(path);
 
-        return {
-          size: text.length,
-          mtimeMs: state.head?.recordedAt ?? 0,
-          isDir: false,
-          // The authoritative revision, which is what makes a conditional write
-          // possible for the UI editor: not a size or an mtime, which two
-          // different edits can share.
-          revision: state.head?.revision ?? 0,
-        };
+    if (resolved.segments.length !== 1 || resolved.segments[0] !== 'working.jsonl') throw readOnly(path);
+    const current = working(resolved);
+    const observed = expected === undefined ? current : atRevision(resolved, expected);
+    const observedRevision = contextRevision(observed.header.version);
+
+    const assertBase = () => {
+      const latest = working(target(path));
+      const latestRevision = contextRevision(latest.header.version);
+
+      if (latest.header.contextId !== observed.header.contextId || latest.header.proposalId !== observed.header.proposalId || latest.header.turn !== observed.header.turn) {
+        throw new FileRefusalError('stale', 'context selection or pending edit changed');
       }
 
-      default: {
-        // Same rule as above: an absent revision or request is null, and every
-        // other failure propagates rather than being flattened into absence.
-        try {
-          const text = await readRoute(path);
+      if (latestRevision[5] !== observedRevision[5] || latestRevision[6] !== observedRevision[6] || latestRevision[7] !== observedRevision[7]) {
+        throw new FileRefusalError('stale', 'context execution ownership changed');
+      }
 
-          return { size: text.length, mtimeMs: modifiedAt(resolved), isDir: false };
-        } catch (err) {
-          if (isVfsError(err) && err.code === 'ENOENT') return null;
-          throw err;
+      for (const [position, entry] of observed.entries.entries()) {
+        const now = latest.entries[position];
+
+        if (now?.entryId !== entry.entryId || now.messageId !== entry.messageId || now.sequence !== entry.sequence) {
+          throw new FileRefusalError('stale', 'observed context content changed');
         }
       }
-    }
-  };
+    };
 
-  /**
-   * The one write.
-   *
-   * Order matters and is the spec's own checklist (§6.3): the array is decoded
-   * and schema-validated by the codec, the header's actor must be the actor
-   * whose plane this is, the observed revision must still be current, and only
-   * then is a revision staged. A stale write is refused with the word the file
-   * ledger already uses for it — `stale` — and leaves the active version
-   * untouched.
-   */
-  const write = async (path: string, data: string | Uint8Array, expected?: number): Promise<ContextEditReceipt> => {
-    const { stores, plane, route, author } = target(path);
+    assertBase();
+    const text = v.is(v.string(), data) ? data : new TextDecoder('utf-8', { fatal: true }).decode(data);
+    const lines = text.split('\n').filter(line => line.trim() !== '');
+    const firstLine = lines[0];
 
-    if (route.kind !== 'working') throw readOnly(path);
-    const asText = v.safeParse(v.string(), data);
-    const text = asText.success ? asText.output : new TextDecoder().decode(v.parse(v.instance(Uint8Array), data));
-    const decoded = decodeWorkingFile(text);
-    const state = plane.read();
+    if (firstLine === undefined) throw new KinuError('bad_input', 'working.jsonl requires its observed $context header');
+    const header = v.parse(v.object({ $context: HeaderSchema }), JSON.parse(firstLine)).$context;
 
-    if (decoded.header.actor !== stores.actorId) {
-      // The header names a different actor. Refused rather than retargeted: a
-      // caller-supplied id is not authority, and writing this array into
-      // whatever actor the path resolved to would be the opposite of what the
-      // writer asked for.
-      throw makeVfsError('EACCES',
-        `this working history is addressed to actor ${decoded.header.actor}, and ${path} is actor `
-        + `${stores.actorId}'s context`, path);
-    }
+    if (header.actor !== resolved.stores.claims.actorId) throw new KinuError('denied', 'the context header names another actor');
 
-    const observed = expected ?? decoded.header.revision;
-    const current = state.head?.revision ?? 0;
+    if (header.version !== observed.header.version || header.contextId !== observed.header.contextId || header.revision !== observed.header.revision || header.proposalId !== observed.header.proposalId) throw new FileRefusalError('stale', 'context changed; read working.jsonl again before editing');
+    const entries = lines.slice(1).map(line => v.parse(EntrySchema, JSON.parse(line)));
+    const visible = new Map(observed.entries.map(entry => [entry.entryId, entry]));
+    const desired: Array<{ entryId: string; messageId: string; sequence: number | null; message: JsonObject; prepare: boolean }> = [];
+    const seen = new Set<string>();
+    const beforeViews = new Map<string, v.InferOutput<typeof PairingView>>();
 
-    if (observed !== current) {
-      throw new FileRefusalError('stale',
-        `${path} moved on: you wrote against working revision ${observed}, and revision ${current} is current. `
-        + 'Read it again and re-apply your change, so you can see the progress you would otherwise replace.');
+    for (const entry of entries) {
+      if ('new' in entry) {
+        const id = crypto.randomUUID();
+        desired.push({ entryId: id, messageId: id, sequence: null, message: entry.message, prepare: true });
+        continue;
+      }
+
+      if (seen.has(entry.entryId)) throw new KinuError('bad_input', 'a working entry appears more than once');
+      seen.add(entry.entryId);
+      const previous = visible.get(entry.entryId);
+
+      if (previous === undefined || previous.messageId !== entry.messageId || previous.sequence !== entry.cutoff) throw new FileRefusalError('stale', 'entry identity or cutoff differs from the observed context');
+      const original = await resolved.stores.claims.history.messages.projection(previous);
+
+      if ((original.role === 'assistant' || original.role === 'tool') && !v.is(v.string(), original.content)) beforeViews.set(entry.entryId, v.parse(PairingView, original));
+      const changed = JSON.stringify(original) !== JSON.stringify(entry.message);
+      desired.push({ entryId: entry.entryId, messageId: changed ? crypto.randomUUID() : entry.messageId, sequence: entry.cutoff, message: entry.message, prepare: changed });
     }
 
-    return plane.edit({
-      base: current,
-      messages: decoded.messages,
-      author,
-      via: author === stores.actorId ? 'file' : 'owner',
-    });
+    const calls = new Map<string, { messageId: string; part: number }>();
+    const prepared: PreparedMessage[] = [];
+
+    for (const entry of desired) {
+      if (entry.message.role === 'assistant' && !v.is(v.string(), entry.message.content)) {
+        let parts: readonly { partNo: number; value: JsonObject }[];
+
+        if (entry.prepare) parts = v.parse(v.array(JsonObjectSchema), entry.message.content).map((value, partNo) => ({ partNo, value }));
+        else {
+          if (entry.sequence === null) throw new KinuError('io', 'existing context message has no cutoff');
+          parts = await resolved.stores.claims.history.messages.materializeParts({ messageId: entry.messageId, sequence: entry.sequence });
+        }
+
+        for (const part of parts) if (part.value.type === 'tool-call') calls.set(v.parse(v.string(), part.value.toolCallId), { messageId: entry.messageId, part: part.partNo });
+      }
+
+      if (entry.prepare) {
+        const message = await resolved.stores.claims.history.messages.prepareProjection(entry.message, entry.messageId, calls);
+        prepared.push(message);
+        entry.sequence = message.updates.length - 1;
+      }
+    }
+
+    for (const entry of observed.entries) if (!seen.has(entry.entryId)) {
+      const original = await resolved.stores.claims.history.messages.projection(entry);
+
+      if ((original.role === 'assistant' || original.role === 'tool') && !v.is(v.string(), original.content)) beforeViews.set(entry.entryId, v.parse(PairingView, original));
+    }
+
+    const afterViews = desired.filter(entry => (entry.message.role === 'assistant' || entry.message.role === 'tool') && !v.is(v.string(), entry.message.content)).map(entry => v.parse(PairingView, entry.message));
+
+    const beforePairs = toolPairingGaps(observed.entries.flatMap(entry => { const view = beforeViews.get(entry.entryId);
+
+ return view === undefined ? [] : [view]; }));
+
+    const afterPairs = toolPairingGaps(afterViews);
+
+    if ([...afterPairs.calls].some(id => !beforePairs.calls.has(id)) || [...afterPairs.results].some(id => !beforePairs.results.has(id))) throw new KinuError('bad_input', 'context edit severs a tool call/result pair');
+    const history = resolved.stores.claims.history;
+
+    const assertOwner = () => {
+      const current = working(target(path));
+
+      if (current.target.author !== resolved.author) throw new KinuError('denied', 'context edit authority changed');
+      assertBase();
+    };
+
+    assertOwner();
+    const selection = observed.selection;
+    const base = selection === null ? [] : history.context.entries(selection);
+    const baseById = new Map(base.map(entry => [entry.entryId, entry]));
+    const wantedIds = new Set(desired.map(entry => entry.entryId));
+    const changes: ContextChange[] = base.filter(entry => !wantedIds.has(entry.entryId)).map(entry => ({ entryId: entry.entryId, expected: entry, replacement: null }));
+
+    for (const [position, entry] of desired.entries()) {
+      const previous = baseById.get(entry.entryId);
+
+      if (entry.sequence === null) throw new KinuError('io', 'context message was not prepared');
+
+      if (previous !== undefined && previous.messageId === entry.messageId && previous.sequence === entry.sequence && previous.position === position) continue;
+      changes.push({ entryId: entry.entryId, expected: previous ?? null, replacement: { messageId: entry.messageId, sequence: entry.sequence, position } });
+    }
+
+    const proposalId = crypto.randomUUID();
+    history.stagePrepared({ id: proposalId, base: selection, expectedPending: observed.header.proposalId, author: resolved.author,
+      via: resolved.child ? 'owner' : 'file', cause: 'edit', turnId: observed.header.turn, changes }, prepared, assertOwner, resolved.stores.events);
+
+    return { ok: true, revision: working(target(path)).header.version };
   };
 
-  return {
-    async readFile(path, opts) {
-      const text = await readRoute(path);
+  const readDocumentRange = async (source: Document, offset: number, length: number): Promise<Uint8Array> => {
+    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 || offset > Number.MAX_SAFE_INTEGER - length) throw new KinuError('bad_input', 'range must use nonnegative safe byte offsets');
 
-      return opts?.encoding === undefined ? new TextEncoder().encode(text) : text;
-    },
-    async writeFile(path, data) {
-      await write(path, data);
-    },
-    async writeFileIfRevision(path, data, expectedRevision) {
-      const receipt = await write(path, data, expectedRevision);
+    if (length === 0) { source.owner.history.context.selected();
 
-      return { ok: true, revision: receipt.revision };
-    },
-    readdir: listRoute,
-    stat: statRoute,
-    async exists(path) {
-      return (await statRoute(path)) !== null;
-    },
-    async unlink(path) {
-      throw readOnly(path);
-    },
-    async mkdir(path, opts) {
-      // The one write path in the file surface calls `ensureDir` on the parent
-      // before it writes (`tools/file-tool.ts`), so a directory that already
-      // exists must answer success under `recursive` — otherwise every write
-      // through the native `file` tool fails on its own preflight. Creating a
-      // directory that does NOT exist stays refused: this plane's shape follows
-      // the revision ledger and has no free-floating directories.
-      const existing = await statRoute(path);
+ return new Uint8Array(0); }
 
-      if (existing?.isDir === true && opts?.recursive === true) return;
-      throw makeVfsError('EACCES',
-        'the context plane has no directories to create — its shape follows the revision ledger', path);
-    },
+    const chunks: Uint8Array[] = [];
+    let skipped = 0;
+    let kept = 0;
+
+    for await (const chunk of source.chunks()) {
+      const bytes = encoder.encode(chunk);
+      const end = skipped + bytes.byteLength;
+
+      if (end > offset && kept < length) {
+        const start = Math.max(0, offset - skipped);
+        const take = Math.min(bytes.byteLength - start, length - kept);
+        chunks.push(bytes.slice(start, start + take));
+        kept += take;
+      }
+
+      skipped = end;
+
+      if (kept === length) break;
+    }
+
+    const result = new Uint8Array(kept);
+    let position = 0;
+
+    for (const chunk of chunks) { result.set(chunk, position); position += chunk.byteLength; }
+
+    source.owner.history.context.selected();
+
+    return result;
   };
+
+  const readRange = (path: string, offset: number, length: number): Promise<Uint8Array> => readDocumentRange(document(path), offset, length);
+
+  const files: VFS & Pick<VfsNativeReads, 'readRange'> = {
+    async readFile(path) { const source = document(path); let text = '';
+
+ for await (const chunk of source.chunks()) text += chunk; source.owner.history.context.selected();
+
+ return text; },
+    async readFileAtRevision(path, revision, range) {
+      const resolved = target(path);
+
+      if (resolved.segments.length !== 1 || resolved.segments[0] !== 'working.jsonl') throw readOnly(path);
+      const view = atRevision(resolved, revision);
+      const source = workingDocument(view);
+
+      if (range !== undefined) return readDocumentRange(source, range.offset, range.length);
+      let text = '';
+
+      for await (const chunk of source.chunks()) text += chunk;
+      resolved.stores.claims.history.context.selected();
+
+      return text;
+    },
+    readRange,
+    async readdir(path) { return list(path); },
+    async stat(path): Promise<VfsEntryStat | null> {
+      try { list(path);
+
+ return { isDir: true, size: 0, mtimeMs: 0 }; }
+      catch (cause) { if ((isVfsError(cause) && cause.code === 'ENOENT')) return null;
+
+ if ((!isVfsError(cause) || cause.code !== 'ENOTDIR')) throw cause; }
+
+      try {
+        const source = document(path);
+        let size = 0;
+
+        for await (const chunk of source.chunks()) size += encoder.encode(chunk).byteLength;
+        source.owner.history.context.selected();
+        const stat: VfsEntryStat = { isDir: false, size, mtimeMs: source.modified };
+
+        return source.writable ? { ...stat, revision: source.version } : stat;
+      } catch (cause) { if ((isVfsError(cause) && cause.code === 'ENOENT')) return null; throw cause; }
+    },
+    async exists(path) { try { list(path);
+
+ return true; } catch (cause) { if ((isVfsError(cause) && cause.code === 'ENOENT')) return false;
+
+ if ((!isVfsError(cause) || cause.code !== 'ENOTDIR')) throw cause; }
+
+ try { document(path);
+
+ return true; } catch (cause) { if ((isVfsError(cause) && cause.code === 'ENOENT')) return false; throw cause; } },
+    async writeFile(path, data) { await write(path, data); },
+    async writeFileIfRevision(path, data, expectedRevision) { return write(path, data, expectedRevision); },
+    async unlink(path) { throw readOnly(path); },
+    async mkdir(path) { throw readOnly(path); },
+  };
+
+  return files;
 }
 
-/**
- * The mount entry both backends compose next to `standardMounts`.
- *
- * Always live: unlike a device or a container, an actor's own context is never
- * absent — a fresh actor has revision 0 and an empty working history, which is
- * an answer rather than an outage. `absentReason` therefore states the one
- * thing that could make it unreachable at all.
- */
 export function contextMount(deps: ContextMountDeps): VfsMount {
-  const files = createContextPlane(deps);
+  const files = contextFiles(deps);
 
-  return {
-    name: CONTEXT_MOUNT_NAME,
-    files: () => files,
-    absentReason: () => 'this actor has no context store bound',
-  };
+  return { name: 'context', files: () => files, absentReason: () => 'actor context is unavailable' };
 }

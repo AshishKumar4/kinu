@@ -102,7 +102,7 @@ describe('a proposal written against the documented API', () => {
 });
 
 test('a prose-wrapped typescript fence stores only the scaffold source', async () => {
-  const { rt } = createTestRuntime({
+  const { rt, stores } = createTestRuntime({
     llmResponses: {
       'Recent lessons': 'The loop re-reads files it already read.',
       'Return ONLY the JavaScript code': `Here is the revision:\n\n\`\`\`typescript\n${CONTRACT_PROPOSAL}\n\`\`\`\n\nDone.`,
@@ -112,7 +112,7 @@ test('a prose-wrapped typescript fence stores only the scaffold source', async (
   initScaffoldTables(rt.storage.execRaw);
   rt.executor = createEvalExecutor();
   await rt.identity.scaffold.write(CONTRACT_PROPOSAL);
-  const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 1000 });
+  const engine = new EvolutionEngine(rt, stores.history, { lifetimeEvolutionInterval: 1000 });
   recordLesson(rt.storage.sql, rt.actor, {
     turnIds: ['t1'],
     text: 'The loop re-read the same file.',

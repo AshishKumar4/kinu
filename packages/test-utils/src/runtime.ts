@@ -5,10 +5,10 @@
 // tests focus on the slice they're exercising.
 import type {
   AgentRuntime, LLM, Memory, Executor, Schedule, Identity, ExecutionRouter,
-  CraftStore, BranchHandle, FiberCtx,
+  CraftStore, BranchHandle, FiberCtx, AgentStores,
 } from '@kinu.run/core';
 import { createTestSql, type TestSql } from './sql';
-import { WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, WorkspaceActorDirectory, initAgentConfigTable, initCodemodeStateTable } from '@kinu.run/core';
+import { WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, WorkspaceActorDirectory, initAgentConfigTable, initCodemodeStateTable, createAgentStores } from '@kinu.run/core';
 import { createEchoLLM } from './llm';
 import { createMemoryVfs } from './vfs';
 
@@ -30,6 +30,8 @@ export interface TestRuntime {
   testSql: TestSql;
   /** Returns the recorded LLM (when default scripted/echo) for assertions. */
   llm: LLM;
+  /** The same store bundle both backends build, over this runtime's database. */
+  stores: AgentStores;
 }
 
 function emptyMemory(): Memory {
@@ -136,7 +138,14 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
     executionRouter: opts.executionRouter ?? emptyRouter(),
   };
 
-  return { rt, testSql, llm };
+  const stores = createAgentStores(
+    () => rt.storage.sql,
+    () => rt.actor,
+    write => rt.storage.transactionSync(write),
+    async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' }),
+  );
+
+  return { rt, testSql, llm, stores };
 }
 
 /**

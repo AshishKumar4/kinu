@@ -43,7 +43,7 @@ import {
 } from '../src/obs/index';
 import { refusalText } from '../src/execution/exec-result';
 import { JsonObjectSchema } from '../src/utils/json';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, storesFor } from './helpers';
 import type { RunEvent } from '../src/events/types';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 
@@ -426,7 +426,7 @@ describe('the classification the `shell` tool actually produced reaches the read
   }> {
     const { rt } = createTestRuntime();
     const logger = createRecordingLogger();
-    const tools = buildBuiltinTools({ rt, logger });
+    const tools = buildBuiltinTools({ rt, logger, history: storesFor(rt).history });
     const run = { execute: toolExecute<{ command: string; runtime: string }, string>(tools.shell) };
 
     return { record: await recordInvocation(run.execute({ command: 'pytest -q', runtime })), logger };
@@ -476,7 +476,7 @@ describe('the classification the `shell` tool actually produced reaches the read
     // a permanent capability gap as a cold start.
     const { rt } = createTestRuntime();
     const logger = createRecordingLogger();
-    const tools = buildBuiltinTools({ rt: { ...rt, shell: undefined }, logger });
+    const tools = buildBuiltinTools({ rt: { ...rt, shell: undefined }, logger, history: storesFor(rt).history });
     const run = { execute: toolExecute<{ command: string }, string>(tools.shell) };
     const record = await recordInvocation(run.execute({ command: 'pytest -q' }));
     expect(classifyToolFailure(record)).toMatchObject({
@@ -593,7 +593,7 @@ describe('each executor tool files its own failure in the right part', () => {
     const { rt } = createTestRuntime();
     const router = new DefaultExecutionRouter();
     router.register(provider);
-    const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router } });
+    const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router }, history: storesFor(rt).history });
     const run = { execute: toolExecute<{ command: string; runtime: string }, string>(tools.shell) };
 
     return recordInvocation(run.execute({ command, runtime: provider.name }));

@@ -57,7 +57,7 @@ import { createCraftLedger, type CraftLedger } from '../craft/in-episode';
 import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import { readSoul, summarizeSoul } from '../identity/soul';
-import { conversationTurnPair } from '../identity/conversation-store';
+import { CHAT_SESSION_ID, conversationTurnPair } from '../identity/conversation-store';
 import {
   ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, normalizeNote,
   type AdvisorNote, type AdvisorRowData,
@@ -111,6 +111,7 @@ const GeneralizedToolSchema = v.object({
 
 import { runMCTS } from '../mcts/engine';
 import { createDurableMctsSession } from '../orchestrator/mcts-session';
+import type { SessionHistory } from '../orchestrator/session-history';
 import type { AgentConfigStore } from '../config/store';
 import type { WorkspaceActor } from '../identity/workspace-actors';
 import { diagnostics, toKinuError, KinuError } from '../obs/index';
@@ -281,6 +282,9 @@ const TURN_REVIEW_STEP_SCOPE = 'turn_review_step';
 
 export class EvolutionEngine {
   private rt: AgentRuntime;
+  /** The canonical session store: lifetime search trajectories are recorded
+   *  there, in their own transcript session, beside the chat. */
+  private readonly history: SessionHistory;
   private config: EvolutionConfig;
   private listeners: EvolutionListener[] = [];
   /** Operator-tuned actor_config (MCTS overrides for lifetime evolution) —
@@ -302,8 +306,9 @@ export class EvolutionEngine {
   readonly recordsTurns: boolean;
   private recoveryPending = true;
 
-  constructor(rt: AgentRuntime, config?: Partial<EvolutionConfig>) {
+  constructor(rt: AgentRuntime, history: SessionHistory, config?: Partial<EvolutionConfig>) {
     this.rt = rt;
+    this.history = history;
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
     rt.actor.assertCurrent();
 
@@ -453,11 +458,11 @@ export class EvolutionEngine {
    * which of those it was.
    *
    * The row carries the note's CLASS and the id of the turn it graded, which is
-   * what turns it from prose into evidence: `advisorNegatives` joins on that id
-   * to reach the conversation the note is about, and `buildOutcomeEvalSplit`
-   * draws the result as a scoring instance. Neither the message nor the response
-   * is copied here — the `actor_messages` rows already hold them, and a second copy is
-   * a second thing to keep true.
+   * what turns it from prose into evidence: `advisorNegatives` resolves that id
+   * through the transcript to reach the conversation the note is about, and
+   * `buildOutcomeEvalSplit` draws the result as a scoring instance. Neither the
+   * message nor the response is copied here — the transcript already holds
+   * them, and a second copy is a second thing to keep true.
    */
   recordAdvisorNote(note: AdvisorNote, turnId?: string): void {
     const data: AdvisorRowData = {
@@ -896,7 +901,7 @@ export class EvolutionEngine {
     // empty texts — a ledger row that reads as a graded turn whose request and
     // response were blank, which is what every downstream eval then trained
     // against.
-    const pair = conversationTurnPair(this.rt.storage.sql, this.rt.actor, messageId);
+    const pair = await conversationTurnPair(this.history.transcript(CHAT_SESSION_ID), messageId);
     recordTurnOutcome(this.rt.storage.sql, this.rt.actor, {
       turnId: messageId,
       sessionId: pair?.sessionId ?? 'default',
@@ -1269,7 +1274,7 @@ export class EvolutionEngine {
     // No writer supplied → the DURABLE one. An in-memory mirror lost a branch's
     // ancestry the moment the process exited or the Durable Object was evicted,
     // which is exactly what a resumed search re-enters needing.
-    const writer = session ?? createDurableMctsSession(this.rt.storage.sql, this.rt.actor);
+    const writer = session ?? createDurableMctsSession(this.history);
 
     const task = `Given my purpose: "${purpose}", identify one specific improvement ` +
       `to be more effective. Consider: new tools, knowledge gaps, workflow improvements.`;

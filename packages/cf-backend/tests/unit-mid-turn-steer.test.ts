@@ -49,7 +49,7 @@ interface SteerHarness {
   /** The steer rows the turn's drains committed at their step boundaries —
    *  durable user rows beside the turn's own, each carrying the step it
    *  landed in. Read fresh each time: the rows are the observation. */
-  appended(): SessionMessage[];
+  appended(): Promise<SessionMessage[]>;
   /** Programmatic turns the loop was asked to admit through the host (the
    *  leftover rerun path). The turn still runs; this is what the seam handed
    *  over. */
@@ -69,7 +69,7 @@ function steerHarness(): SteerHarness {
   return {
     agent, db, frames,
     enqueued: agent.harnessEnqueued,
-    appended: () => agent.harnessTranscript.history()
+    appended: async () => (await agent.harnessTranscript.history())
       .filter((message) => message.role === 'user' && v.is(v.object({ metadata: v.object({ kinuSteer: v.literal(true) }) }), message)),
     startTurn: async (liveTurnId) => {
       if (liveTurnId !== undefined) chatSessionTurns(agent).open(liveTurnId);
@@ -102,9 +102,9 @@ async function stepMessages(
 
 
 describe('a message typed while the agent is working', () => {
-  test('recovers the active durable turn id after a reset before a device sweep', () => {
+  test('recovers the active durable turn id after a reset before a device sweep', async () => {
     const h = steerHarness();
-    h.agent.harnessPersistActiveTurn('turn-before-reset');
+    await h.agent.harnessPersistActiveTurn('turn-before-reset');
 
     expect(h.agent.harnessDurableTurnId()).toBe('turn-before-reset');
   });
@@ -120,7 +120,7 @@ describe('a message typed while the agent is working', () => {
     // The loop admitted it as a turn of its own, under the operator's
     // authorship and the turn mode: the user row it left, and the claim the
     // turn ran under, say so. The reservation was spent by that row.
-    const admitted = h.agent.harnessTranscript.history().filter((message) => message.role === 'user');
+    const admitted = (await h.agent.harnessTranscript.history()).filter((message) => message.role === 'user');
     expect(admitted).toHaveLength(1);
     expect(admitted[0]?.parts).toEqual([{ type: 'text', text: 'nothing is running' }]);
     expect(turnAuthor(admitted[0]!)).toBe('operator');
@@ -139,7 +139,7 @@ describe('a message typed while the agent is working', () => {
   test('a plan-mode steer that missed its turn queues a plan turn, not a build one', async () => {
     const h = steerHarness();
     await h.agent.send('tighten the rollout plan first', [], 'plan');
-    const admitted = h.agent.harnessTranscript.history().filter((message) => message.role === 'user');
+    const admitted = (await h.agent.harnessTranscript.history()).filter((message) => message.role === 'user');
     expect(turnAuthor(admitted[0]!)).toBe('operator');
     expect(h.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0]!.id)).toEqual({ work_mode: 'plan' });
   });
@@ -167,7 +167,7 @@ describe('a message typed while the agent is working', () => {
     expect(steerFrames(h.frames)).toEqual([
       { type: 'steer_status', status: 'queued', steerId: expect.any(String), text: 'also check staging' },
     ]);
-    expect(h.appended()).toEqual([]);
+    expect((await h.appended())).toEqual([]);
 
     // The step the model runs next carries it verbatim, at the tail — after the
     // latest results, which is what keeps role alternation provider-safe.
@@ -204,7 +204,7 @@ describe('a message typed while the agent is working', () => {
     expect(JSON.stringify(reference?.content)).toContain('### slates');
     expect(JSON.stringify(reference?.content)).toContain('fetch(request)');
     // Only the steer is a durable row; the reference rides the step.
-    expect(h.appended().filter((row) => row.role === 'user')).toHaveLength(1);
+    expect((await h.appended()).filter((row) => row.role === 'user')).toHaveLength(1);
   });
 
   test('restores a reset-lost steer from SQL before the resumed turn reaches its next step', async () => {
@@ -237,7 +237,7 @@ describe('a message typed while the agent is working', () => {
     // the index a reader can only be told the steer happened somewhere in it —
     // which is how the operator's words ended up drawn under twenty steps of
     // work that preceded them.
-    expect(h.appended().map((row) => JSON.parse(JSON.stringify(row)))).toEqual([{
+    expect((await h.appended()).map((row) => JSON.parse(JSON.stringify(row)))).toEqual([{
       id: steerFrames(h.frames)[0]!.steerId,
       role: 'user',
       parts: [{ type: 'text', text: 'also check staging' }],
@@ -260,7 +260,7 @@ describe('a message typed while the agent is working', () => {
     ]);
     // One message to the model (role alternation), two rows in history (the
     // fork pivot matches an individual user message).
-    expect(h.appended().map((m) => m.parts)).toEqual([
+    expect((await h.appended()).map((m) => m.parts)).toEqual([
       [{ type: 'text', text: 'also check staging' }],
       [{ type: 'text', text: 'and the logs' }],
     ]);
@@ -333,7 +333,7 @@ describe('stopping a turn with a steer still pending', () => {
     await stepMessages(h.agent, 0, HISTORY);
 
     expect(await h.agent.cancelCurrentWork()).not.toHaveProperty('returnedSteers');
-    expect(h.appended()).toHaveLength(1);
+    expect((await h.appended())).toHaveLength(1);
   });
 
   test('two queued steers become the next turn text in order once the abort settles', async () => {
@@ -460,7 +460,7 @@ describe('an eviction with acknowledged steers', () => {
 
     // The dead turn's rows rerun as ONE user-origin turn, the words in typed
     // order, mode-stamped by their narrower grant: plan.
-    const rerun = restarted.agent.harnessTranscript.history().filter((message) => message.role === 'user').at(-1);
+    const rerun = (await restarted.agent.harnessTranscript.history()).filter((message) => message.role === 'user').at(-1);
     expect(rerun?.parts).toEqual([{ type: 'text', text: 'orphaned by an eviction\n\nalso orphaned' }]);
     expect(turnAuthor(rerun!)).toBe('operator');
     expect(restarted.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(rerun!.id)).toEqual({ work_mode: 'plan' });

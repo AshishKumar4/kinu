@@ -29,7 +29,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Executor, ResolvedProvider } from '../src/types/primitives';
 import { decodeJsonValue } from '../src/utils/json';
 import type { ModelMessage } from 'ai';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, storesFor } from './helpers';
 import { createTestSql, testActorHandle } from '@kinu.run/test-utils';
 import { RunEventRecorder } from '../src/events/recorder';
 
@@ -109,6 +109,7 @@ function countedControl(
     events: new RunEventRecorder(rt.storage.sql, rt.actor),
     rt,
     sql: rt.storage.sql,
+    history: storesFor(rt).history,
     config: {
       getShadowSampleRate: () => opts?.sampleRate ?? 1,
       getAutoPromoteScaffold: () => opts?.autoPromote ?? false,
@@ -347,7 +348,7 @@ describe('auto-evolution off runs no trial and leaves no trial to run', () => {
   /** Both halves of the loop as a host wires them — the ports the backends
    *  supply, over the counted control plane. */
   function hostEngine(rt: AgentRuntime, control: ScaffoldControl, enabled: boolean): EvolutionEngine {
-    return new EvolutionEngine(rt, {
+    return new EvolutionEngine(rt, storesFor(rt).history, {
       enabled,
       shadowTrialQueue: (turn, opts) => queueTurnShadowTrial(control, turn, opts),
       shadowTrialRunner: () => runQueuedShadowTrials(control),

@@ -1,4 +1,5 @@
-import { DefaultExecutionRouter, createAgentStores, contextMount, createInlineExecutor, observeWrites, withApprovalGatedShell, withMountTable, standardMounts } from '@kinu.run/core';
+import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, createInlineExecutor, observeWrites, withApprovalGatedShell, withMountTable, standardMounts } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
 import type { ActorHandle, AgentRuntime, NodeWorkspace, ShellApprovalPolicy, WriteObserver } from '@kinu.run/core';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
 import type { CLIRuntime } from './runtime';
@@ -25,10 +26,19 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
   return async (node, actor, origin, observer) => {
     requireLocalActorWorkspace(deps.origin.actor, actor);
     requireLocalActorWorkspace(deps.origin.actor, origin.actor);
+
     // THIS node's stores, over the shared SQL. A node reading the parent's
     // claim ledger would present the parent's turns as its own working
     // history, which is the one thing `/context` must never do.
-    const stores = createAgentStores(() => origin.storage.sql, () => actor, origin.storage.transactionSync);
+    const stores = createAgentStores(() => origin.storage.sql, () => actor, origin.storage.transactionSync, async () => {
+      requireLocalActorWorkspace(origin.actor, actor);
+
+      if (node.isolation === 'private-home') return { vfs, artifactDirectory: agentArtifactDirectory(node.home) };
+
+      if (!deps.origin.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
+
+      return deps.origin.filesForActor(actor);
+    });
 
     const ownContext = contextMount({
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),

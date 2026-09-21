@@ -41,14 +41,14 @@ function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
 
 describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () => {
   test('prompt tail, search and session reflection all derive from the ledger', async () => {
-    const { rt } = createTestRuntime({
+    const { rt, stores } = createTestRuntime({
       llmResponses: {
         [CLASSIFY]: '{"outcome":"corrected","confidence":0.9,"evidence":"test"}',
         'In one sentence': 'check the cluster name before rotating keys',
       },
     });
 
-    const engine = new EvolutionEngine(rt);
+    const engine = new EvolutionEngine(rt, stores.history);
 
     // A wrong turn graded through the user's own reply: the lesson is born
     // corroborated — a row in the ledger, never a MEMORY.md copy.

@@ -143,6 +143,9 @@ export interface ChatOptions {
    *  first safe boundary. Absent for unclaimed work — a head's own inference,
    *  a shadow-eval replay. */
   stepContext?: StepContextPlane;
+  /** Durable native stream sink, awaited before the corresponding public event. */
+  persistStreamPart?: (part: TextStreamPart<ToolSet>) => Promise<void>;
+  persistStep?: (messages: readonly ModelMessage[]) => Promise<void>;
   /** Turn-local context (skill activation reasons, device notice) — spliced
    *  at the tail of the turn's initial array for THIS turn only; never visible
    *  to a transform and never treated as durable history. */
@@ -777,7 +780,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     limits: { contextWindow, modelOutputLimit },
   };
 
-  const turnMessages = await assembleTurnMessages(assembly);
+  const initialContext = opts.stepContext === undefined ? null : await opts.stepContext.base();
+  const turnMessages = await assembleTurnMessages({ ...assembly, history: initialContext?.messages ?? assembly.history });
+  let initialContextAvailable = initialContext !== null;
 
   // Provider prompt-cache plan: cache-eligible system + request-level cache
   // routing at turn assembly; marker strategies additionally re-roll the tail
@@ -919,11 +924,32 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           dynamic: opts.dynamicContext,
           destinationProviderId: opts.cache?.providerId,
           meter: opts.meter,
-          context: opts.stepContext,
+          context: opts.stepContext === undefined ? undefined : {
+            base: async () => {
+              if (initialContextAvailable) {
+                initialContextAvailable = false;
+
+                return { messages: turnMessages, changed: initialContext?.changed ?? false };
+              }
+
+              const base = await opts.stepContext!.base();
+              const messages = await assembleTurnMessages({ ...assembly, history: base.messages, admission: undefined });
+
+              return { messages, changed: base.changed };
+            },
+            consume: step => opts.stepContext!.consume(step),
+          },
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
       },
+      experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
+        async transform(part, controller) {
+          await opts.persistStreamPart?.(part);
+          controller.enqueue(part);
+        },
+      }),
       onStepFinish: async (step) => {
         stepCount++;
+        await opts.persistStep?.(step.response.messages);
         call.stepFinished(step, stepCount);
         await opts.onStep?.(step);
       },
@@ -992,10 +1018,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     settleModelOperation(operation, result, cut);
     const steps = cut ? call.recordedSteps : await result.steps;
     const produced = call.produced();
+    const paired = settleUnpairedToolCalls(produced) ?? produced;
+
+    if (cut) await opts.persistStep?.(paired);
 
     return {
       steps,
-      produced: settleUnpairedToolCalls(produced) ?? produced,
+      produced: paired,
       finishReason: call.lastFinishReason,
       interrupted: cut,
     };

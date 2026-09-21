@@ -24,7 +24,7 @@ import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import {
   PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY,
-  stampTurnAuthor, transcriptRole, turnAuthor, uiMessageRow,
+  stampTurnAuthor, transcriptRole, turnAuthor,
 } from '../src/utils/ui-message';
 import { Inbox } from '../src/orchestrator/inbox';
 import { FORK_INTERRUPTED_SIGNAL } from '../src/heads/reconcile';
@@ -174,20 +174,5 @@ describe('a row that carries no stamp is read from what it does carry', () => {
     expect(transcriptRole(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}x`, 'user')).toBe('system');
     // Assistant rows are never touched, whatever they carry.
     expect(transcriptRole(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}x`, 'assistant')).toBe('assistant');
-  });
-
-  test('the projection reads text and provenance out of one stored row', () => {
-    const content = JSON.stringify({
-      id: 'programmatic:x', role: 'user',
-      parts: [{ type: 'text', text: '23 head(s) across 6 fork run(s)…' }],
-      metadata: { kinuEvent: 'fork_interrupted', [TURN_AUTHOR_METADATA_KEY]: 'harness' },
-    });
-
-    expect(uiMessageRow(content)).toEqual({
-      text: '23 head(s) across 6 fork run(s)…', toolCalls: [],
-      metadata: { kinuEvent: 'fork_interrupted', [TURN_AUTHOR_METADATA_KEY]: 'harness' },
-    });
-    // The plain mirror holds text, not JSON, and must survive being asked.
-    expect(uiMessageRow('find me a domain')).toEqual({ text: 'find me a domain', toolCalls: [] });
   });
 });

@@ -24,8 +24,11 @@ import {
   delegationExhausted,
   SUBORDINATE_REPORT_STATUSES,
   HeadCapture, runHeadInference, codenameFor,
+  bindActorHandle,
+  type ActorHandle,
   type HostedAgentRef,
   type LLMProviderConfig,
+  type SqlExecutor,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
 import type { Subprocess } from 'bun';
@@ -38,6 +41,7 @@ import {
   type LocalHostedAgent,
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
+import { createMemoryVfs, readTranscriptRows } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -529,16 +533,17 @@ describe('LocalAgentHost', () => {
 
     expect(delivered).toHaveLength(deliveredBeforeDisconnect);
     const db = new Database(dbPath);
+    const sql = makeSql(db);
+    const main = openWorkspaceMainActor(sql);
 
-    const sessions = db.query<{ session_id: string }, []>(
-      'SELECT DISTINCT session_id FROM actor_messages ORDER BY session_id',
-    ).all();
+    const sessions = sql<{ session_id: string }>`
+      SELECT DISTINCT session_id FROM conversation_entries WHERE actor_id = ${main.actorId} ORDER BY session_id`;
 
-    const rows = db.query<{ n: number }, []>(
-      "SELECT COUNT(*) AS n FROM actor_messages WHERE role IN ('user','assistant')",
-    ).get();
+    const rows = sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM conversation_entries
+      WHERE actor_id = ${main.actorId} AND role IN ('user','assistant')`[0];
 
-    const config = openWorkspaceMainActor(makeSql(db)).config;
+    const config = main.config;
     expect(sessions).toEqual([{ session_id: 'default' }]);
     expect(rows?.n).toBe(4);
     expect(config.get('conversation.id')).toBe('default');
@@ -586,15 +591,16 @@ describe('LocalAgentHost', () => {
     await redriven.close();
 
     const check = new Database(dbPath);
+    const checkSql = makeSql(check);
+    const checkActorId = openWorkspaceMainActor(checkSql).actorId;
     const wakeId = `programmatic:${backgroundJobWakeTrigger(jobId)}`;
 
-    const wakeRows = check.query<{ n: number }, [string]>(
-      'SELECT COUNT(*) AS n FROM actor_messages WHERE id = ?',
-    ).get(wakeId);
+    const wakeRows = checkSql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM conversation_entries WHERE actor_id = ${checkActorId} AND id = ${wakeId}`[0];
 
-    const assistantRows = check.query<{ n: number }, [string]>(
-      "SELECT COUNT(*) AS n FROM actor_messages WHERE parent_id = ? AND role = 'assistant'",
-    ).get(wakeId);
+    const assistantRows = checkSql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM conversation_entries
+      WHERE actor_id = ${checkActorId} AND parent_id = ${wakeId} AND role = 'assistant'`[0];
 
     const orphanRows = check.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM fibers WHERE id = 'orphan-fiber'",
@@ -781,7 +787,7 @@ describe('LocalAgentHost', () => {
     // The task it was assigned, as its own turn read it: a message of its own,
     // carrying the brief and nothing else. The reactor used to wrap an ingress
     // line around it, which left the child working from a summary.
-    expect(userMessages(dbPath, reference.actorId))
+    expect(await userMessages(dbPath, reference.actorId))
       .toContain('Find the root cause and report it.');
     await expect(team.assign({ name: 'researcher', task: 'again', mode: 'build' }))
       .rejects.toThrow('subordinate "researcher" is dismissed');
@@ -1155,7 +1161,7 @@ describe('LocalAgentHost', () => {
     await host.close();
     const actorId = childActorId(dbPath, child.name);
     expect(requests.some((prompt) => prompt.includes(note))).toBe(true);
-    expect(userMessages(dbPath, actorId).some((message) => message.includes(note))).toBe(true);
+    expect((await userMessages(dbPath, actorId)).some((message) => message.includes(note))).toBe(true);
     expect(evolutionRows(dbPath, actorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
     const db = new Database(dbPath, { readonly: true });
 
@@ -1846,9 +1852,9 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       // The state: three separate SQLite files, so a turn on one is invisible
       // in the others' conversations.
       await (await host.acquire('alpha')).send('only alpha said this');
-      expect(userMessages(join(state, 'alpha', 'agent.db'))).toContain('only alpha said this');
-      expect(userMessages(join(state, 'beta', 'agent.db'))).not.toContain('only alpha said this');
-      expect(userMessages(
+      expect(await userMessages(join(state, 'alpha', 'agent.db'))).toContain('only alpha said this');
+      expect(await userMessages(join(state, 'beta', 'agent.db'))).not.toContain('only alpha said this');
+      expect(await userMessages(
         join(state, 'alpha', 'agent.db'),
         childActorId(join(state, 'alpha', 'agent.db'), 'scout'),
       )).not.toContain('only alpha said this');
@@ -1985,21 +1991,37 @@ function evolutionRows(dbPath: string, actorId: string) {
   } finally { db.close(); }
 }
 
-function userMessages(dbPath: string, actorId?: string): string[] {
+/** A read handle for any actor this database holds, including the one a
+ *  retained dismissal left behind: presence in the workspace is the fence, not
+ *  lifecycle, so a released subordinate's conversation still reads. */
+function readHandle(sql: SqlExecutor, actorId: string): ActorHandle {
+  const row = sql<{ workspace_id: string; parent_actor_id: string | null; name: string; storage_key: string }>`
+    SELECT workspace_id, parent_actor_id, name, storage_key FROM workspace_actors WHERE actor_id = ${actorId}`[0];
+
+  if (row === undefined) throw new Error('The actor is not in this workspace.');
+
+  return bindActorHandle(sql, {
+    actorId, workspaceId: row.workspace_id, parentActorId: row.parent_actor_id, name: row.name, storageKey: row.storage_key,
+  }, () => {
+    if (sql<{ x: number }>`SELECT 1 AS x FROM workspace_actors WHERE actor_id = ${actorId} LIMIT 1`.length === 0) {
+      throw new Error('The actor left this workspace mid-read.');
+    }
+  });
+}
+
+async function userMessages(dbPath: string, actorId?: string): Promise<string[]> {
   const db = new Database(dbPath, { readonly: true });
 
   try {
     // ACTOR-SCOPED when asked. One database holds every actor's transcript, so
     // "what did THIS agent hear" is a predicate now rather than a file choice.
-    if (actorId !== undefined) {
-      return db.query<{ content: string }, [string]>(
-        "SELECT content FROM actor_messages WHERE role = 'user' AND actor_id = ?",
-      ).all(actorId).map((row) => row.content);
-    }
+    const sql = makeSql(db);
+    const actor = actorId === undefined ? openWorkspaceMainActor(sql) : readHandle(sql, actorId);
+    // An empty plane is enough: a message this short is an inline payload, so
+    // a read that reaches the VFS at all is a spill this helper should surface.
+    const rows = await readTranscriptRows(sql, actor, createMemoryVfs().vfs);
 
-    return db.query<{ content: string }, []>(
-      "SELECT content FROM actor_messages WHERE role = 'user'",
-    ).all().map((row) => row.content);
+    return rows.filter((row) => row.role === 'user').map((row) => row.content);
   } finally {
     db.close();
   }
@@ -2138,8 +2160,9 @@ describe('LocalAgentHost — the driver lease', () => {
     const db = new Database(dbPath);
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
 
-    const claim = rt.stores.claims.admit({
-      runId: 'live-run', turnId: 'live-turn', workMode: 'build', context: [], workingRevision: 0,
+    const claim = await rt.stores.claims.admit({
+      runId: 'live-run', turnId: 'live-turn', workMode: 'build',
+      context: rt.stores.history.context.selected() ?? rt.stores.history.context.initialize(),
       program: { kind: 'builtin', version: 0, digest: null, build: null },
     });
 
@@ -2283,7 +2306,7 @@ describe('LocalAgentHost — the driver lease', () => {
       await after.host.acquire('root');
       expect(turns).toBe(1);
       expect(pendingEventCount(dbPath)).toBe(0);
-      expect(userMessages(dbPath).join('\n')).toContain('a build finished');
+      expect((await userMessages(dbPath)).join('\n')).toContain('a build finished');
     } finally {
       unsubscribe();
       await after.host.close();

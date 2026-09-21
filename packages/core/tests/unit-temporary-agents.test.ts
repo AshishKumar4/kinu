@@ -222,8 +222,8 @@ function makeScene(options: {
     runtime,
     createName: (role) => `${role}-a1b2c3`,
     now: () => NOW,
-    inheritedContext: () => [],
-    originContext: () => options.originContext ?? [],
+    inheritedContext: async () => [],
+    originContext: async () => options.originContext ?? [],
     ownMission: () => 'Keep the release train moving.',
     broadcast: () => { /* no listeners in this scene */ },
     broadcastTask: () => { /* no listeners in this scene */ },
@@ -339,8 +339,8 @@ describe('a task-lifetime hire returns one completed answer', () => {
     const conversation: ModelMessage[] = [{ role: 'user', content: 'The ledger uses integer cents.' }];
     const scene = makeScene({ originContext: conversation });
     const run = startRun(scene, { role: 'auditor', mission: 'Audit the ledger.', context: 'inherit' });
-    conversation[0] = { role: 'user', content: 'Changed after dispatch.' };
     await run.ready;
+    conversation[0] = { role: 'user', content: 'Changed after dispatch.' };
     expect(scene.assignments[0]?.inheritedContext).toEqual({ kind: 'fork', messages: [
       { id: 'ctx-0', role: 'user', content: 'The ledger uses integer cents.', createdAt: 0 },
     ] });

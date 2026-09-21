@@ -26,6 +26,8 @@ import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrat
 import type { AgentRuntime, Identity, VFS, SqlExecutor } from '../src/index';
 import { actorReferenceOf, type ActorReference } from '../src/identity/actor-handle';
 import type { ActorProgramIdentity, ActorTurnClaim } from '../src/orchestrator/actor-claims';
+import type { ContextSelection } from '../src/orchestrator/session-context';
+import { agentArtifactDirectory } from '../src/vfs/agent-home';
 import { sha256Hex } from '../src/safety/argument-digest';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test-build' };
@@ -98,18 +100,30 @@ function build(donor?: Database, unreadableActor?: string, automatic = false): F
       // `void fn()` discarded the rejection of exactly that fault.
       setTimer: () => { throw new Error(`${bound.record.name} armed a drain timer outside a turn`); },
     },
-    engine: new EvolutionEngine(bound.runtime, { enabled: automatic }),
+    engine: new EvolutionEngine(bound.runtime, bound.stores.history, { enabled: automatic }),
     eventLog: new EventLog(exec, bound.handle),
   });
+
+  // The actor's own file plane, memoized per actor so the session store and the
+  // runtime address the same bytes. Hosted actors live under their own id.
+  const planeFor = (actorId: string): VFS => {
+    const plane = planes.get(actorId) ?? createMemoryVfs().vfs;
+    planes.set(actorId, plane);
+
+    return plane;
+  };
 
   const host = createActorHost({
     storage: { sql, transactionSync: (write) => db.transaction(write)(), exec: exec.exec },
     directory,
     installedBuild: 'test-build',
+    filesFor: async (bound) => ({
+      vfs: planeFor(bound.record.actorId),
+      artifactDirectory: agentArtifactDirectory(`/actors/${bound.record.actorId}`),
+    }),
     runtimeFor: (bound) => {
       if (bound.record.name === unreadableActor) throw new Error('actor file plane is unreadable');
-      const plane = planes.get(bound.record.actorId) ?? createMemoryVfs().vfs;
-      planes.set(bound.record.actorId, plane);
+      const plane = planeFor(bound.record.actorId);
 
       return {
         ...template,
@@ -142,9 +156,16 @@ function build(donor?: Database, unreadableActor?: string, automatic = false): F
   };
 }
 
+/** The working selection a turn is fenced against — initialized on first use,
+ *  because an actor that has never spoken has no context row yet. */
+function contextOf(actor: BoundActor): ContextSelection {
+  return actor.stores.history.context.selected() ?? actor.stores.history.context.initialize();
+}
+
 /** The claim object a settle needs, for a turn this test admitted itself. */
-function claimOf(actorId: string, turnId: string, epoch: number, runId: string): ActorTurnClaim {
-  return { actorId, turnId, runId, epoch, workMode: 'build', program: BUILTIN, workingRevision: 0 };
+function claimOf(actorId: string, turnId: string, epoch: number, runId: string, context: ContextSelection): ActorTurnClaim {
+  return { actorId, turnId, runId, epoch, workMode: 'build', program: BUILTIN,
+    workingRevision: context.revision, workingContextId: context.contextId };
 }
 
 describe('one workspace database, many logical actors', () => {
@@ -216,8 +237,8 @@ describe('one workspace database, many logical actors', () => {
     const beta = await fx.host.acquire(fx.child('beta', 'c-beta', 'subordinate'));
     expect(alpha.handle.actorId).not.toBe(beta.handle.actorId);
 
-    alpha.stores.claims.admit({ runId: 'run-a', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: [], workingRevision: 0 });
-    beta.stores.claims.admit({ runId: 'run-b', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: [], workingRevision: 0 });
+    await alpha.stores.claims.admit({ runId: 'run-a', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
+    await beta.stores.claims.admit({ runId: 'run-b', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(beta) });
 
     expect(alpha.stores.claims.read('turn-1')?.runId).toBe('run-a');
     expect(beta.stores.claims.read('turn-1')?.runId).toBe('run-b');
@@ -231,7 +252,7 @@ describe('one workspace database, many logical actors', () => {
     const ref = fx.child('alpha', 'c-alpha', 'subordinate');
     const alpha = await fx.host.acquire(ref);
     const claims = alpha.stores.claims;
-    claims.admit({ runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: [], workingRevision: 0 });
+    await claims.admit({ runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
     expect(claims.read('t')?.runId).toBe('r');
 
     fx.host.release(ref);
@@ -251,7 +272,7 @@ describe('one workspace database, many logical actors', () => {
     const second = await fx.host.acquire(ref);
     expect(second.handle).not.toBe(first.handle);
     // The NEW binding works…
-    second.stores.claims.admit({ runId: 'r2', turnId: 't2', workMode: 'build', program: BUILTIN, context: [], workingRevision: 0 });
+    await second.stores.claims.admit({ runId: 'r2', turnId: 't2', workMode: 'build', program: BUILTIN, context: contextOf(second) });
     expect(second.stores.claims.read('t2')?.runId).toBe('r2');
     // …and the old one stays dead. A fence keyed on the actor ID rather than on
     // the binding would be reset by this acquisition and hand a caller who still
@@ -263,7 +284,7 @@ describe('one workspace database, many logical actors', () => {
     const fx = build();
     const ref = fx.child('gone', 'c-gone', 'subordinate');
     const hosted = await fx.host.acquire(ref);
-    hosted.stores.claims.admit({ runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: [], workingRevision: 0 });
+    await hosted.stores.claims.admit({ runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: contextOf(hosted) });
     fx.host.release(ref);
 
     const cold = fx.rebuild();
@@ -333,22 +354,22 @@ describe('one workspace database, many logical actors', () => {
     const b = fx.child('beta', 'c-beta', 'subordinate');
     const alpha = await fx.host.acquire(a);
     const beta = await fx.host.acquire(b);
-    const claim = alpha.stores.claims.admit({ runId: 'r1', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: [], workingRevision: 0 });
-    beta.stores.claims.admit({ runId: 'r2', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: [], workingRevision: 0 });
+    const claim = await alpha.stores.claims.admit({ runId: 'r1', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
+    await beta.stores.claims.admit({ runId: 'r2', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(beta) });
     alpha.stores.claims.settle(claim, 'completed');
 
     await expect(fx.host.retire(fx.main, { reference: a, name: 'not-alpha', destroy: true }))
       .rejects.toThrow(/alias this actor no longer holds/);
 
     // A newer epoch admitted the same turn since the caller looked at it.
-    alpha.stores.claims.admit({ runId: 'r3', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: [], workingRevision: 0 });
+    await alpha.stores.claims.admit({ runId: 'r3', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
     await expect(fx.host.retire(fx.main, {
       reference: a, name: 'alpha', destroy: true, observed: { turnId: 'turn-1', epoch: 1 },
     })).rejects.toThrow(/epoch 1/);
 
     await fx.host.retire(fx.main, { reference: a, name: 'alpha', destroy: true });
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${a.actorId}`[0]?.n).toBe(0);
-    expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_context_revisions WHERE actor_id = ${a.actorId}`[0]?.n).toBe(0);
+    expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM context_revisions WHERE actor_id = ${a.actorId}`[0]?.n).toBe(0);
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM scaffold_versions WHERE actor_id = ${a.actorId}`[0]?.n).toBe(0);
     // The sibling that shared every one of those tables is untouched.
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${b.actorId}`[0]?.n).toBe(1);
@@ -359,8 +380,8 @@ describe('one workspace database, many logical actors', () => {
     const fx = build();
     const a = fx.child('alpha', 'c-alpha', 'subordinate');
     const alpha = await fx.host.acquire(a);
-    alpha.stores.claims.admit({ runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: [], workingRevision: 0 });
-    alpha.stores.claims.settle(claimOf(a.actorId, 't', 1, 'r'), 'completed');
+    await alpha.stores.claims.admit({ runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
+    alpha.stores.claims.settle(claimOf(a.actorId, 't', 1, 'r', contextOf(alpha)), 'completed');
 
     await fx.host.retire(fx.main, { reference: a, name: 'alpha', destroy: false });
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${a.actorId}`[0]?.n).toBe(1);
@@ -377,8 +398,8 @@ describe('one workspace database, many logical actors', () => {
     const alpha = await fx.host.acquire(a);
     const beta = await fx.host.acquire(b);
     const program: ActorProgramIdentity = { kind: 'scaffold', version: 3, digest: 'digest-3', build: null };
-    alpha.stores.claims.admit({ runId: 'run-a', turnId: 'turn-live', workMode: 'build', program, context: [], workingRevision: 0 });
-    const settled = beta.stores.claims.admit({ runId: 'run-b', turnId: 'turn-done', workMode: 'build', program, context: [], workingRevision: 0 });
+    await alpha.stores.claims.admit({ runId: 'run-a', turnId: 'turn-live', workMode: 'build', program, context: contextOf(alpha) });
+    const settled = await beta.stores.claims.admit({ runId: 'run-b', turnId: 'turn-done', workMode: 'build', program, context: contextOf(beta) });
     beta.stores.claims.settle(settled, 'completed');
 
     // Eviction: every session, queue and in-memory object is gone.
@@ -397,8 +418,8 @@ describe('one workspace database, many logical actors', () => {
     const source = 'export default async function main() { return "retained"; }';
     await actor.runtime.storage.vfs.writeFile(`${actor.runtime.identity.scaffold.path}.v1`, source);
 
-    const admitted = actor.stores.claims.admit({
-      runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: [], workingRevision: 0,
+    const admitted = await actor.stores.claims.admit({
+      runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
       program: { kind: 'scaffold', version: 1, digest: sha256Hex(source), build: null },
     });
 
@@ -413,7 +434,7 @@ describe('one workspace database, many logical actors', () => {
   test('recovery leaves an unreadable actor claim owed across repeated opens', async () => {
     const fx = build();
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'subordinate'));
-    actor.stores.claims.admit({ runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: [], workingRevision: 0, program: BUILTIN });
+    await actor.stores.claims.admit({ runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program: BUILTIN });
     const cold = build(fx.db, 'alpha');
 
     const first = await recoverActorTurns(cold.host);
@@ -428,8 +449,8 @@ describe('one workspace database, many logical actors', () => {
   test('recovery refuses changed program bytes once but does not settle a live actor', async () => {
     const fx = build();
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'subordinate'));
-    actor.stores.claims.admit({
-      runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: [], workingRevision: 0,
+    await actor.stores.claims.admit({
+      runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
       program: { kind: 'scaffold', version: 1, digest: sha256Hex('missing'), build: null },
     });
     const lease = actor.session.beginTurn({ runId: 'run-a', turnId: 'turn-a' }, 'build', 0);
@@ -449,8 +470,8 @@ describe('one workspace database, many logical actors', () => {
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'subordinate'));
     const path = `${actor.runtime.identity.scaffold.path}.v1`;
     await actor.runtime.storage.vfs.writeFile(path, 'changed source');
-    actor.stores.claims.admit({
-      runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: [], workingRevision: 0,
+    await actor.stores.claims.admit({
+      runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
       program: { kind: 'scaffold', version: 1, digest: sha256Hex('expected source'), build: null },
     });
     const reading = Promise.withResolvers<void>();
@@ -486,8 +507,8 @@ describe('one workspace database, many logical actors', () => {
     const b = fx.child('beta', 'c-beta', 'subordinate');
     const alpha = await fx.host.acquire(a);
     const beta = await fx.host.acquire(b);
-    alpha.stores.claims.admit({ runId: 'r-a', turnId: 't-a', workMode: 'build', program: BUILTIN, context: [], workingRevision: 0 });
-    beta.stores.claims.admit({ runId: 'r-b', turnId: 't-b', workMode: 'build', program: BUILTIN, context: [], workingRevision: 0 });
+    await alpha.stores.claims.admit({ runId: 'r-a', turnId: 't-a', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
+    await beta.stores.claims.admit({ runId: 'r-b', turnId: 't-b', workMode: 'build', program: BUILTIN, context: contextOf(beta) });
     // A table this workspace grew AFTER the host was built, carrying `actor_id`
     // the way every actor-scoped table does. This is the property, and the rows
     // are where it is observable: the purge reads its table set off the schema
@@ -530,7 +551,7 @@ describe('one workspace database, many logical actors', () => {
 
     const storageKey = fx.host.describe(a.actorId)?.storageKey ?? '';
     expect(resolver.list()).toContain(storageKey);
-    expect(resolver.resolve(storageKey)?.actorId).toBe(a.actorId);
+    expect(resolver.resolve(storageKey)?.claims.actorId).toBe(a.actorId);
     expect(resolver.resolve('not-a-child')).toBeNull();
     // The child's own store, bound to the CHILD's handle: an edit made through
     // it is refused by the same fence the child's own edit meets.

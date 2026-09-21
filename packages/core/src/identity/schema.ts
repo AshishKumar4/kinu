@@ -52,28 +52,6 @@ const ACTOR_DDL = [
   `CREATE INDEX IF NOT EXISTS idx_fibers_actor_name ON fibers(actor_id, name)`,
 
 
-  // ── Conversation messages (simplified session tree) ────────────
-  // ACTOR-SCOPED, in the primary key. A shared host holds several issued
-  // actors in one database and a message id is minted per actor, so without the
-  // actor in the key one actor's transcript is another's ancestry: the
-  // recursive walks in identity/conversation-store.ts climb `parent_id` to
-  // `id`, and an id that resolved in the wrong actor's rows would splice two
-  // conversations into one chain. Both indexes lead with the actor for the same
-  // reason — a session listing and a parent walk are per-actor questions.
-  `CREATE TABLE IF NOT EXISTS actor_messages (
-    actor_id   TEXT NOT NULL,
-    id         TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT 'default',
-    parent_id  TEXT,
-    role       TEXT NOT NULL,
-    content    TEXT NOT NULL,
-    metadata   TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    PRIMARY KEY (actor_id, id)
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_actor_messages_session ON actor_messages(actor_id, session_id, created_at, id)`,
-  `CREATE INDEX IF NOT EXISTS idx_actor_messages_parent ON actor_messages(actor_id, parent_id)`,
-
   // ── Memory chunks — schema owned by MemoryStore (agent-utils) ──
   // NOT created here. MemoryStore.ensureSchema() creates the table
   // with its own schema (id TEXT, path, start_line, end_line, hash,
@@ -149,32 +127,40 @@ const FORK_LINEAGE_DDL = `CREATE TABLE IF NOT EXISTS fork_lineage (
  * they are a TABLE rather than instance fields is written down there.
  */
 const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
-    id                       INTEGER PRIMARY KEY CHECK (id = 1),
-    head_declared            INTEGER NOT NULL DEFAULT 0,
-    head_source_id           TEXT    NOT NULL DEFAULT '',
-    head_source_name         TEXT    NOT NULL DEFAULT '',
-    head_cut_message_id      TEXT    NOT NULL DEFAULT '',
-    head_cut_created_at      INTEGER NOT NULL DEFAULT 0,
-    mission                  TEXT    NOT NULL DEFAULT '',
-    staged_agent_config      INTEGER NOT NULL DEFAULT 0,
-    staged_crafted_tools     INTEGER NOT NULL DEFAULT 0,
-    staged_memory_chunks     INTEGER NOT NULL DEFAULT 0,
-    staged_pane_messages     INTEGER NOT NULL DEFAULT 0,
-    staged_messages          INTEGER NOT NULL DEFAULT 0,
-    staged_files             INTEGER NOT NULL DEFAULT 0,
-    transfer_id              TEXT,
-    expected_seq             INTEGER NOT NULL DEFAULT 0,
-    section_cursor           INTEGER NOT NULL DEFAULT 0,
-    stream                   TEXT    NOT NULL DEFAULT '',
-    file_path                TEXT,
-    file_bytes               INTEGER NOT NULL DEFAULT 0,
-    want_agent_config        INTEGER NOT NULL DEFAULT 0,
-    want_crafted_tools       INTEGER NOT NULL DEFAULT 0,
-    want_memory_chunks       INTEGER NOT NULL DEFAULT 0,
-    want_pane_messages       INTEGER NOT NULL DEFAULT 0,
-    want_messages            INTEGER NOT NULL DEFAULT 0,
-    want_files               INTEGER NOT NULL DEFAULT 0,
-    published                INTEGER NOT NULL DEFAULT 0
+    id                              INTEGER PRIMARY KEY CHECK (id = 1),
+    head_declared                   INTEGER NOT NULL DEFAULT 0,
+    head_source_id                  TEXT    NOT NULL DEFAULT '',
+    head_source_name                TEXT    NOT NULL DEFAULT '',
+    head_cut_message_id             TEXT    NOT NULL DEFAULT '',
+    head_cut_created_at             INTEGER NOT NULL DEFAULT 0,
+    mission                         TEXT    NOT NULL DEFAULT '',
+    staged_agent_config             INTEGER NOT NULL DEFAULT 0,
+    staged_crafted_tools            INTEGER NOT NULL DEFAULT 0,
+    staged_memory_chunks            INTEGER NOT NULL DEFAULT 0,
+    staged_session_messages         INTEGER NOT NULL DEFAULT 0,
+    staged_message_parts            INTEGER NOT NULL DEFAULT 0,
+    staged_message_updates          INTEGER NOT NULL DEFAULT 0,
+    staged_conversation_entries     INTEGER NOT NULL DEFAULT 0,
+    staged_conversation_entry_parts INTEGER NOT NULL DEFAULT 0,
+    staged_context_members          INTEGER NOT NULL DEFAULT 0,
+    staged_files                    INTEGER NOT NULL DEFAULT 0,
+    transfer_id                     TEXT,
+    expected_seq                    INTEGER NOT NULL DEFAULT 0,
+    section_cursor                  INTEGER NOT NULL DEFAULT 0,
+    stream                          TEXT    NOT NULL DEFAULT '',
+    file_path                       TEXT,
+    file_bytes                      INTEGER NOT NULL DEFAULT 0,
+    want_agent_config               INTEGER NOT NULL DEFAULT 0,
+    want_crafted_tools              INTEGER NOT NULL DEFAULT 0,
+    want_memory_chunks              INTEGER NOT NULL DEFAULT 0,
+    want_session_messages           INTEGER NOT NULL DEFAULT 0,
+    want_message_parts              INTEGER NOT NULL DEFAULT 0,
+    want_message_updates            INTEGER NOT NULL DEFAULT 0,
+    want_conversation_entries       INTEGER NOT NULL DEFAULT 0,
+    want_conversation_entry_parts   INTEGER NOT NULL DEFAULT 0,
+    want_context_members            INTEGER NOT NULL DEFAULT 0,
+    want_files                      INTEGER NOT NULL DEFAULT 0,
+    published                       INTEGER NOT NULL DEFAULT 0
   )`;
 
 /** The files an unpublished transfer has already published into the target's

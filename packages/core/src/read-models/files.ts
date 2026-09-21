@@ -21,7 +21,7 @@ import {
 } from '../vfs/mounts';
 import { isVfsError } from '../vfs/errno';
 import { inlineFileType } from './file-types';
-import type { VFS } from '../types/primitives';
+import type { VFS, VfsRevision } from '../types/primitives';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 
@@ -95,8 +95,8 @@ export interface DirEntry {
 
 
 export type ExecutorWriteResult =
-  | { ok: true; revision?: number }
-  | { conflict: true; revision: number }
+  | { ok: true; revision?: VfsRevision }
+  | { conflict: true; revision: VfsRevision }
   | { unsupported: true; error: string }
   | { error: string }
   /** A partial tree removal: the refusal shape plus the two sets it names —
@@ -117,7 +117,7 @@ export { FILE_CHUNK_BYTES } from '../types/read-models';
 export interface ExecutorTextFile {
   content?: string;
   truncated?: boolean;
-  revision?: number;
+  revision?: VfsRevision;
   readOnlyReason?: string;
   error?: string;
 }
@@ -145,7 +145,7 @@ export class ExecutorFileUpload {
     private readonly router: ExecutorFileLookup,
     private readonly executorId: string,
     private readonly path: string,
-    private readonly expectedRevision?: number,
+    private readonly expectedRevision?: VfsRevision,
   ) {}
 
   /** True once finalized or aborted — the holder must stop feeding it. */
@@ -497,7 +497,7 @@ export async function writeExecutorFileOp(
   executorId: string,
   path: string,
   bytes: Uint8Array,
-  expectedRevision?: number,
+  expectedRevision?: VfsRevision,
 ): Promise<ExecutorWriteResult> {
   if (!path || path.endsWith('/')) return { error: 'file path required' };
   const vfs = executorFiles(router, executorId);

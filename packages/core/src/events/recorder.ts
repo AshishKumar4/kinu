@@ -132,7 +132,7 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('db_op'), op: v.picklist(APP_MUTATIONS),
     table: v.string(), scope: v.picklist(APP_TABLE_SCOPES), rowsAffected: v.number(),
     batch: v.nullable(v.number()) }),
-  v.object({ ...BaseFields, type: v.literal('context_edit'), revision: v.number(),
+  v.object({ ...BaseFields, type: v.literal('context_edit'), contextId: v.string(), proposalId: v.string(), revision: v.number(),
     baseRevision: v.number(), messageCount: v.number(), author: v.string(),
     via: v.picklist(CONTEXT_EDIT_VIA), status: v.picklist(CONTEXT_EDIT_STATUSES),
     effectiveAt: v.picklist(CONTEXT_EDIT_BOUNDARIES),

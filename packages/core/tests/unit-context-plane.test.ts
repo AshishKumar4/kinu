@@ -13,19 +13,22 @@
 import { expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { createTestSql, testActorHandle } from '@kinu.run/test-utils';
-import { ActorClaimStore, initActorClaimTables } from '../src/orchestrator/actor-claims';
-import { createActorContextPlane, type ContextEditEvent } from '../src/orchestrator/context-plane';
+import { createTestSql, createTestActors, testActorHandle, createMemoryVfs } from '@kinu.run/test-utils';
+import { ActorClaimStore, initActorClaimTables, type ActorTurnClaim } from '../src/orchestrator/actor-claims';
+import { SessionHistory } from '../src/orchestrator/session-history';
+import type { ContextSelection } from '../src/orchestrator/session-context';
+import type { PendingContextProposal } from '../src/orchestrator/session-proposals';
 import { contextMount } from '../src/vfs/context-plane';
 import { withMountTable } from '../src/vfs/mounts';
 import { makeVfsError } from '../src/vfs/errno';
 import { decodeModelMessages, encodeModelMessages } from '../src/prompting/message-codec';
-import { composePrepareStep } from '../src/prompting/prepare-step';
+import { composePrepareStep, type StepContextPlane } from '../src/prompting/prepare-step';
 import { DynamicContextLedger } from '../src/prompting/volatile-context';
 import { createFileDispatcher } from '../src/tools/file-tool';
 import { TurnFileLedger } from '../src/tools/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import type { ActorContextStores, ChildContextResolver, ContextFileHeader } from '../src/vfs/context-plane';
+import type { ContextEditEvent } from '../src/types/context-plane';
 import type { VFS } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { JsonValue } from '../src/utils/json';
@@ -35,6 +38,7 @@ const PROGRAM = { kind: 'builtin' as const, version: 0, digest: null, build: nul
 interface Bound {
   readonly handle: ActorHandle;
   readonly claims: ActorClaimStore;
+  readonly history: SessionHistory;
   readonly stores: ActorContextStores;
 }
 
@@ -69,30 +73,104 @@ function emptyTree(): VFS {
 
 interface Workspace {
   readonly bind: (actorId: string) => Bound;
+  readonly files: VFS;
   readonly close: () => void;
 }
 
 function workspace(): Workspace {
   const { sql, execRaw, close } = createTestSql();
+  const actors = createTestActors(sql, execRaw);
   initActorClaimTables(execRaw);
   const transactionSync = <T>(write: () => T): T => write();
+  const { vfs } = createMemoryVfs();
 
   return {
     bind: (actorId) => {
-      const handle = testActorHandle(sql, { actorId });
-      const claims = new ActorClaimStore(sql, handle, transactionSync);
+      const handle = actorId === actors.main.actorId ? actors.main : actors.sibling(actorId);
+
+      const history = new SessionHistory({ sql, actor: handle, transactionSync,
+        files: async () => ({ vfs, artifactDirectory: `/actors/${actorId}/.kinu/context` }) });
+
+      const claims = new ActorClaimStore(sql, handle, transactionSync, history);
 
       // `events: null` here: the emission contract has its own test with a
       // capture port, and every OTHER test in this file is about the bytes and
       // the rows, which are the durable record either way.
-      return { handle, claims, stores: { actorId, claims, events: null } };
+      return { handle, claims, history, stores: { claims, events: null } };
     },
+    files: vfs,
     close,
   };
 }
 
 function planeFor(bound: Bound, children?: ChildContextResolver): VFS {
   return withMountTable(emptyTree(), [contextMount({ stores: () => bound.stores, children })]);
+}
+
+/** The settled working history, committed straight through the session store —
+ *  what a session-authored replacement (`ActorSession.restoreHistory` with no
+ *  live turn) leaves behind. */
+async function hydrate(bound: Bound, messages: readonly ModelMessage[]): Promise<void> {
+  await bound.history.replaceHistory(messages, {
+    author: bound.handle.actorId, via: 'session', turnId: null, stage: false,
+    assertOwner: () => { bound.handle.assertCurrent(); },
+  });
+}
+
+/** The COMMITTED working history — what the next request is built from. */
+async function committed(bound: Bound): Promise<readonly ModelMessage[]> {
+  return (await bound.history.materialize()).messages;
+}
+
+function selectionOf(bound: Bound): ContextSelection {
+  return bound.history.context.selected() ?? bound.history.context.initialize();
+}
+
+/** The pending proposal, if one is staged against the selected context. */
+function staged(bound: Bound): PendingContextProposal | null {
+  const selection = bound.history.context.selected();
+
+  return selection === null ? null : bound.history.proposals.pending(selection.contextId).at(-1) ?? null;
+}
+
+/** What a staged proposal WOULD make the working history, materialized through
+ *  the same store the activation would read. */
+async function stagedMessages(bound: Bound): Promise<readonly ModelMessage[]> {
+  const pending = staged(bound);
+
+  if (pending === null) throw new Error('no context edit is staged');
+  const messages: ModelMessage[] = [];
+
+  for (const entry of bound.history.proposals.preview(pending.proposal_id)) {
+    messages.push(await bound.history.messages.materialize(entry));
+  }
+
+  return messages;
+}
+
+/** The committed revision log, newest first. */
+function revisions(bound: Bound) {
+  const selection = bound.history.context.selected();
+
+  return selection === null ? [] : bound.history.context.revisions(selection.contextId);
+}
+
+/** Admit one turn against this actor's selected working context — the
+ *  production admission, through the production store. */
+async function admitOn(bound: Bound, ids: { readonly runId: string; readonly turnId: string }): Promise<ActorTurnClaim> {
+  return bound.claims.admit({ ...ids, workMode: 'build', program: PROGRAM, context: selectionOf(bound) });
+}
+
+/** The step plane a claimed turn runs under, wired exactly as `ActorSession`
+ *  wires it: the staged edit lands in `base()`, the request is recorded in
+ *  `consume()`. */
+function stepsOf(bound: Bound, claim: ActorTurnClaim): StepContextPlane {
+  return {
+    base: () => bound.history.stepBase(
+      () => { bound.history.assertEpoch(claim.turnId, claim.epoch); }, claim.turnId, bound.stores.events,
+    ),
+    consume: async ({ stepNumber, messages }) => { await bound.claims.consume(claim, { index: stepNumber, messages }); },
+  };
 }
 
 /** The `file` tool's own dispatcher over a plane, with the read ledger the
@@ -116,13 +194,15 @@ async function readText(vfs: VFS, path: string): Promise<string> {
 /** The header fields these tests observe, named by the plane's OWN published
  *  header type. The projection is checked by the compiler, so what is read out
  *  of line 1 below cannot drift from the contract the plane serves. */
-type ServedHeader = Pick<ContextFileHeader, 'actor' | 'revision' | 'effectiveAt'>;
+type ServedHeader = Pick<ContextFileHeader, 'actor' | 'revision' | 'effectiveAt' | 'status' | 'proposalId'>;
 
 const ServedLine = v.object({
   $context: v.object({
     actor: v.string(),
     revision: v.number(),
-    effectiveAt: v.optional(v.picklist(['step', 'turn'])),
+    effectiveAt: v.picklist(['step', 'turn']),
+    status: v.picklist(['active', 'staged', 'empty']),
+    proposalId: v.nullable(v.string()),
   }),
 });
 
@@ -134,24 +214,25 @@ function servedHeader(text: string): ServedHeader {
 }
 
 /** The message lines, through the durable codec the file states it carries them
- *  in. */
+ *  in. Each line is an ENTRY; the message it references is the payload. */
 function servedMessages(text: string): ModelMessage[] {
   const lines = text.split('\n').filter((line) => line.trim().length > 0);
+  const entries = lines.slice(1).map((line) => v.parse(v.object({ message: v.unknown() }), JSON.parse(line)).message);
 
-  return decodeModelMessages(`[${lines.slice(1).join(',')}]`);
+  return decodeModelMessages(JSON.stringify(entries));
 }
 
 /** The served bytes with more messages after them: every line the read produced
- *  left exactly as it arrived, then one encoded message per new line — the
- *  append half of a real read-modify-write. */
+ *  left exactly as it arrived, then one new entry per new message — the append
+ *  half of a real read-modify-write. */
 function appended(text: string, extra: readonly ModelMessage[]): string {
   const encoded = v.parse(v.array(v.unknown()), JSON.parse(encodeModelMessages(extra)));
   const head = text.endsWith('\n') ? text : `${text}\n`;
 
-  return head + encoded.map((message) => `${JSON.stringify(message)}\n`).join('');
+  return head + encoded.map((message) => `${JSON.stringify({ new: true, message })}\n`).join('');
 }
 
-test('a fresh actor serves an empty working history at revision 0, and an edit of it becomes revision 1', async () => {
+test('a fresh actor serves an empty working history at revision 0, and an edit of it is staged, not in effect', async () => {
   const ws = workspace();
   const actor = ws.bind('actor-fresh');
   const vfs = planeFor(actor);
@@ -159,23 +240,21 @@ test('a fresh actor serves an empty working history at revision 0, and an edit o
   // Before ANY turn: the path exists, reads, and names a revision. This is the
   // arm a claims getter with no claim lands in.
   const before = await readText(vfs, '/context/working.jsonl');
-  expect(servedHeader(before)).toMatchObject({ actor: 'actor-fresh', revision: 0 });
+  expect(servedHeader(before)).toMatchObject({ actor: actor.handle.actorId, revision: 0, status: 'empty', proposalId: null });
   expect(servedMessages(before)).toEqual([]);
 
   const edited: ModelMessage[] = [{ role: 'user', content: 'seeded before the first turn' }];
   // A fresh file has no message lines yet, so the edit IS the served header
-  // line with the array written under it.
+  // line with the new entries written under it.
   await vfs.writeFile('/context/working.jsonl', appended(before, edited));
 
   const after = await readText(vfs, '/context/working.jsonl');
-  expect(servedHeader(after).revision).toBe(1);
   expect(servedMessages(after)).toEqual(edited);
   // Staged, not active: nothing has consumed it yet, and the plane says so
   // rather than claiming the edit is in effect.
-  const state = createActorContextPlane({ claims: actor.claims }).read();
-  expect(state.staged?.revision).toBe(1);
-  expect(state.active).toBeNull();
-  expect(state.effectiveAt).toBe('turn');
+  expect(servedHeader(after)).toMatchObject({ status: 'staged', revision: 0, effectiveAt: 'turn' });
+  expect(servedHeader(after).proposalId).not.toBeNull();
+  expect(await committed(actor)).toEqual([]);
   ws.close();
 });
 
@@ -183,8 +262,7 @@ test('two edits from the same read: the second is refused stale and the first su
   const ws = workspace();
   const actor = ws.bind('actor-cas');
   const vfs = planeFor(actor);
-  const plane = createActorContextPlane({ claims: actor.claims });
-  plane.hydrate([{ role: 'user', content: 'original' }]);
+  await hydrate(actor, [{ role: 'user', content: 'original' }]);
 
   // One read, two edits of the bytes it served — a literal replacement in the
   // text, which is the change an editor of this file actually makes.
@@ -196,9 +274,10 @@ test('two edits from the same read: the second is refused stale and the first su
   await expect(vfs.writeFile('/context/working.jsonl', served.replace('original', 'second edit')))
     .rejects.toMatchObject({ verdict: 'stale' });
 
-  const head = plane.read().head;
-  expect(head?.messages).toEqual([{ role: 'user', content: 'first edit' }]);
-  expect(head?.revision).toBe(2);
+  expect(await stagedMessages(actor)).toEqual([{ role: 'user', content: 'first edit' }]);
+  expect(staged(actor)?.base_revision).toBe(1);
+  // Nothing activated it, so the committed history is still what it was.
+  expect(await committed(actor)).toEqual([{ role: 'user', content: 'original' }]);
   ws.close();
 });
 
@@ -207,23 +286,23 @@ test('a header naming another actor is refused, and the caller cannot retarget b
   const actor = ws.bind('actor-self');
   const other = ws.bind('actor-other');
   const vfs = planeFor(actor);
-  createActorContextPlane({ claims: actor.claims }).hydrate([{ role: 'user', content: 'mine' }]);
-  createActorContextPlane({ claims: other.claims }).hydrate([{ role: 'user', content: 'theirs' }]);
+  await hydrate(actor, [{ role: 'user', content: 'mine' }]);
+  await hydrate(other, [{ role: 'user', content: 'theirs' }]);
 
   // The actor name rewritten in place in the served header line, carrying new
   // content: the whole retarget an editor of this file can attempt.
   const retargeted = (await readText(vfs, '/context/working.jsonl'))
-    .replace('actor-self', 'actor-other')
+    .replace(actor.handle.actorId, other.handle.actorId)
     .replace('mine', 'written through the wrong plane');
 
   await expect(vfs.writeFile('/context/working.jsonl', retargeted))
-    .rejects.toMatchObject({ code: 'EACCES' });
+    .rejects.toMatchObject({ code: 'denied' });
 
-  // Neither actor's history moved.
-  expect(createActorContextPlane({ claims: actor.claims }).read().head?.messages)
-    .toEqual([{ role: 'user', content: 'mine' }]);
-  expect(createActorContextPlane({ claims: other.claims }).read().head?.messages)
-    .toEqual([{ role: 'user', content: 'theirs' }]);
+  // Neither actor's history moved, and neither has an edit waiting.
+  expect(await committed(actor)).toEqual([{ role: 'user', content: 'mine' }]);
+  expect(await committed(other)).toEqual([{ role: 'user', content: 'theirs' }]);
+  expect(staged(actor)).toBeNull();
+  expect(staged(other)).toBeNull();
   ws.close();
 });
 
@@ -231,8 +310,7 @@ test('a working history that severs a tool call from its result is refused befor
   const ws = workspace();
   const actor = ws.bind('actor-pairing');
   const vfs = planeFor(actor);
-  const plane = createActorContextPlane({ claims: actor.claims });
-  plane.hydrate([{ role: 'user', content: 'ask' }]);
+  await hydrate(actor, [{ role: 'user', content: 'ask' }]);
   const served = await readText(vfs, '/context/working.jsonl');
 
   // The served history with a tool call appended and no result behind it. Every
@@ -242,8 +320,8 @@ test('a working history that severs a tool call from its result is refused befor
     { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c9', toolName: 'probe', input: {} }] },
   ]))).rejects.toMatchObject({ code: 'bad_input' });
 
-  expect(plane.read().staged).toBeNull();
-  expect(plane.read().head?.revision).toBe(1);
+  expect(staged(actor)).toBeNull();
+  expect(selectionOf(actor).revision).toBe(1);
   ws.close();
 });
 
@@ -251,17 +329,9 @@ test('evidence under /context is readable and not writable, and the plane invent
   const ws = workspace();
   const actor = ws.bind('actor-evidence');
   const vfs = planeFor(actor);
-  const plane = createActorContextPlane({ claims: actor.claims });
-  const admitted = plane.startTurn({ turnId: 'turn-1', history: [{ role: 'user', content: 'q' }] });
-
-  const claim = actor.claims.admit({
-    runId: 'run-1', turnId: 'turn-1', workMode: 'build', program: PROGRAM,
-    context: admitted.messages, workingRevision: admitted.workingRevision,
-  });
-
-  plane.steps(claim).consume({
-    stepNumber: 0, messages: admitted.messages, base: null, deferred: null,
-  });
+  await hydrate(actor, [{ role: 'user', content: 'q' }]);
+  const claim = await admitOn(actor, { runId: 'run-1', turnId: 'turn-1' });
+  await actor.claims.consume(claim, { index: 0, messages: [{ role: 'user', content: 'q' }] });
 
   const listing = await vfs.readdir('/context');
   expect(listing).toContain('working.jsonl');
@@ -269,12 +339,14 @@ test('evidence under /context is readable and not writable, and the plane invent
   expect(listing).toContain('requests');
 
   expect(await vfs.readdir('/context/requests')).toEqual(['turn-1']);
-  expect(await vfs.readdir('/context/requests/turn-1')).toEqual(['0.json', '1.json']);
-  const request = JSON.parse(await readText(vfs, '/context/requests/turn-1/1.json'));
-  expect(request).toMatchObject({ turnId: 'turn-1', stepIndex: 0, workingRevision: admitted.workingRevision });
+  // Two requests under the turn's ONE epoch: the admission at revision 0 and
+  // the step that consumed it at revision 1.
+  expect(await vfs.readdir('/context/requests/turn-1')).toEqual(['1-0.json', '1-1.json']);
+  const request = JSON.parse(await readText(vfs, '/context/requests/turn-1/1-1.json'));
+  expect(request).toMatchObject({ request: { turnId: 'turn-1', step: 0, source: { revision: claim.workingRevision } } });
 
   await expect(vfs.writeFile('/context/claim.json', '{}')).rejects.toMatchObject({ code: 'EACCES' });
-  await expect(vfs.writeFile('/context/requests/turn-1/1.json', '{}')).rejects.toMatchObject({ code: 'EACCES' });
+  await expect(vfs.writeFile('/context/requests/turn-1/1-1.json', '{}')).rejects.toMatchObject({ code: 'EACCES' });
   await expect(vfs.unlink('/context/working.jsonl')).rejects.toMatchObject({ code: 'EACCES' });
   await expect(vfs.mkdir('/context/whatever')).rejects.toMatchObject({ code: 'EACCES' });
   expect(await vfs.exists('/context/nothing-here.json')).toBe(false);
@@ -285,37 +357,39 @@ test('a rollback is a new revision written from a retained one, and the audit it
   const ws = workspace();
   const actor = ws.bind('actor-rollback');
   const vfs = planeFor(actor);
-  const plane = createActorContextPlane({ claims: actor.claims });
-  plane.hydrate([{ role: 'user', content: 'the good history' }]);
+  await hydrate(actor, [{ role: 'user', content: 'the good history' }]);
+  const good = selectionOf(actor).revision;
   const first = await readText(vfs, '/context/working.jsonl');
 
+  // An edit, activated the way a boundary activates one, so the regret is a
+  // committed revision rather than a proposal still waiting.
   await vfs.writeFile('/context/working.jsonl', first.replace('the good history', 'a regrettable edit'));
-  const regret = await readText(vfs, '/context/working.jsonl');
-  expect(servedMessages(regret)).toEqual([{ role: 'user', content: 'a regrettable edit' }]);
+  await actor.history.stepBase(() => { actor.handle.assertCurrent(); });
+  expect(await committed(actor)).toEqual([{ role: 'user', content: 'a regrettable edit' }]);
 
-  // Roll back BY WRITING the validated prior revision's OWN retained bytes
+  // Roll back BY WRITING the validated prior revision's OWN retained payloads
   // back, read out of its revision file rather than retyped: that is what
   // makes a rollback a real path rather than an assertion about one.
-  const prior = JSON.parse(await readText(vfs, `/context/revisions/${servedHeader(first).revision}.json`));
-  expect(prior).toMatchObject({ revision: servedHeader(first).revision, source: 'hydrate' });
-  const priorMessages = v.parse(v.array(v.unknown()), prior.messages);
+  const prior = v.parse(v.object({ context: v.object({ revision: v.number(), cause: v.string() }), entries: v.array(v.object({ message: v.unknown() })) }),
+    JSON.parse(await readText(vfs, `/context/revisions/${good}.json`)));
+
+  expect(prior.context).toMatchObject({ revision: good, cause: 'edit' });
+  const regret = await readText(vfs, '/context/working.jsonl');
+
   await vfs.writeFile('/context/working.jsonl', [
     regret.split('\n', 1)[0] ?? '',
-    ...priorMessages.map((message) => JSON.stringify(message)),
+    ...prior.entries.map((entry) => JSON.stringify({ new: true, message: entry.message })),
   ].join('\n') + '\n');
 
-  const rolled = plane.read().head;
-  expect(rolled?.revision).toBe(3);
-  expect(rolled?.messages).toEqual([{ role: 'user', content: 'the good history' }]);
-  // The regretted revision is still there, with its own author and base — a
+  await actor.history.stepBase(() => { actor.handle.assertCurrent(); });
+  expect(await committed(actor)).toEqual([{ role: 'user', content: 'the good history' }]);
+  // The regretted revision is still there, with its own author and cause — a
   // rollback does not erase what it rolled back.
-  const history = actor.claims.working.history();
-  expect(history.map((row) => row.revision)).toEqual([3, 2, 1]);
-  expect(history.find((row) => row.revision === 2)).toMatchObject({
-    source: 'edit', via: 'file', author: 'actor-rollback', baseRevision: 1,
-  });
+  const log = revisions(actor);
+  expect(log.map((row) => row.revision)).toEqual([3, 2, 1, 0]);
+  expect(log.find((row) => row.revision === 2)).toMatchObject({ cause: 'edit', author: actor.handle.actorId });
   expect(JSON.parse(await readText(vfs, '/context/revisions/2.json')))
-    .toMatchObject({ messageCount: 1, status: 'superseded' });
+    .toMatchObject({ context: { revision: 2 }, entries: [{ message: { content: 'a regrettable edit' } }] });
   ws.close();
 });
 
@@ -324,8 +398,8 @@ test('an authorized parent edits a child through the child\'s own store; a sibli
   const parent = ws.bind('actor-parent');
   const child = ws.bind('actor-child');
   const stranger = ws.bind('actor-stranger');
-  createActorContextPlane({ claims: child.claims }).hydrate([{ role: 'user', content: 'child history' }]);
-  createActorContextPlane({ claims: stranger.claims }).hydrate([{ role: 'user', content: 'stranger history' }]);
+  await hydrate(child, [{ role: 'user', content: 'child history' }]);
+  await hydrate(stranger, [{ role: 'user', content: 'stranger history' }]);
 
   const resolver: ChildContextResolver = {
     list: () => ['agent:child'],
@@ -336,37 +410,41 @@ test('an authorized parent edits a child through the child\'s own store; a sibli
 
   expect(await vfs.readdir('/context/agents')).toEqual(['agent:child']);
   const seen = await readText(vfs, '/context/agents/agent:child/working.jsonl');
-  expect(servedHeader(seen).actor).toBe('actor-child');
+  expect(servedHeader(seen).actor).toBe(child.handle.actorId);
   expect(servedMessages(seen)).toEqual([{ role: 'user', content: 'child history' }]);
 
   await vfs.writeFile('/context/agents/agent:child/working.jsonl',
     seen.replace('child history', 'parent corrected this'));
-  const staged = child.claims.working.staged();
   // The child's row, authored by the PARENT, through the child's own handle.
-  expect(staged).toMatchObject({ author: 'actor-parent', via: 'owner', messageCount: 1 });
-  expect(staged?.messages).toEqual([{ role: 'user', content: 'parent corrected this' }]);
+  expect(staged(child)).toMatchObject({ author: parent.handle.actorId, via: 'owner' });
+  expect(await stagedMessages(child)).toEqual([{ role: 'user', content: 'parent corrected this' }]);
 
   // A key the resolver does not own is absent, whatever the caller writes.
   await expect(readText(vfs, '/context/agents/agent:stranger/working.jsonl'))
     .rejects.toMatchObject({ code: 'ENOENT' });
   await expect(vfs.writeFile('/context/agents/agent:stranger/working.jsonl', 'x'))
     .rejects.toMatchObject({ code: 'ENOENT' });
-  expect(stranger.claims.working.staged()).toBeNull();
+  expect(staged(stranger)).toBeNull();
   ws.close();
 });
 
 test('a retired actor stops authorising context reads and writes at its own handle', async () => {
   const { sql, execRaw, close } = createTestSql();
+  const actors = createTestActors(sql, execRaw);
   initActorClaimTables(execRaw);
+  const { vfs: files } = createMemoryVfs();
   let live = true;
-  const handle = testActorHandle(sql, { actorId: 'actor-retired', live: () => live });
-  const claims = new ActorClaimStore(sql, handle, (write) => write());
+  const handle = testActorHandle(sql, { actorId: actors.main.actorId, live: () => live });
 
-  const vfs = withMountTable(emptyTree(), [contextMount({
-    stores: () => ({ actorId: 'actor-retired', claims, events: null }),
-  })]);
+  const history = new SessionHistory({ sql, actor: handle, transactionSync: (write) => write(),
+    files: async () => ({ vfs: files, artifactDirectory: '/actors/actor-retired/.kinu/context' }) });
 
-  createActorContextPlane({ claims }).hydrate([{ role: 'user', content: 'while live' }]);
+  const claims = new ActorClaimStore(sql, handle, (write) => write(), history);
+  const bound: Bound = { handle, claims, history, stores: { claims, events: null } };
+
+  const vfs = withMountTable(emptyTree(), [contextMount({ stores: () => bound.stores })]);
+
+  await hydrate(bound, [{ role: 'user', content: 'while live' }]);
   const served = await readText(vfs, '/context/working.jsonl');
 
   live = false;
@@ -375,7 +453,7 @@ test('a retired actor stops authorising context reads and writes at its own hand
     .rejects.toThrow();
 
   live = true;
-  expect(claims.working.staged()).toBeNull();
+  expect(staged(bound)).toBeNull();
   close();
 });
 
@@ -383,8 +461,7 @@ test('the native file tool reads, edits and re-reads the working history over th
   const ws = workspace();
   const actor = ws.bind('actor-native');
   const vfs = planeFor(actor);
-  const plane = createActorContextPlane({ claims: actor.claims });
-  plane.hydrate([
+  await hydrate(actor, [
     { role: 'user', content: 'remember the wrong fact' },
     { role: 'assistant', content: 'noted' },
   ]);
@@ -403,10 +480,10 @@ test('the native file tool reads, edits and re-reads the working history over th
 
   expect(applied).toMatchObject({ ok: true });
 
-  const staged = plane.read().staged;
-  expect(staged?.messages[0]).toEqual({ role: 'user', content: 'remember the RIGHT fact' });
+  const pending = await stagedMessages(actor);
+  expect(pending[0]).toEqual({ role: 'user', content: 'remember the RIGHT fact' });
   // The assistant turn the edit did not touch is still there, and still typed.
-  expect(staged?.messages[1]).toEqual({ role: 'assistant', content: 'noted' });
+  expect(pending[1]).toEqual({ role: 'assistant', content: 'noted' });
   // A second edit from the SAME read is refused: the tool's own ledger sees the
   // header move, before the store is even asked.
   await expect(file({
@@ -421,9 +498,8 @@ test('binary and tool-result parts survive a read/write round trip through the f
   const ws = workspace();
   const actor = ws.bind('actor-codec');
   const vfs = planeFor(actor);
-  const plane = createActorContextPlane({ claims: actor.claims });
   const attachment = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
-  plane.hydrate([
+  await hydrate(actor, [
     { role: 'user', content: [
       { type: 'text', text: 'look at this' },
       { type: 'file', data: attachment, mediaType: 'image/png' },
@@ -433,25 +509,29 @@ test('binary and tool-result parts survive a read/write round trip through the f
   ]);
 
   const text = await readText(vfs, '/context/working.jsonl');
-  // Not a lossy JSON dump of the bytes: `{"0":137,…}` is exactly what the codec
-  // exists to avoid, and it would not decode back to a Uint8Array.
+  // The bytes live in the workspace, not in the file: the served line carries
+  // the attachment reference, never a JSON dump of the bytes.
   expect(text).not.toContain('"0":137');
+  const served = JSON.parse(text.split('\n')[1] ?? '');
+  const reference = v.parse(v.object({ message: v.object({ content: v.tuple([v.unknown(), v.object({ type: v.literal('file'), data: v.object({ $sessionAttachment: v.object({ path: v.string(), digest: v.string() }) }) })]) }) }), served);
+  const stored = reference.message.content[1].data.$sessionAttachment;
+  expect(v.parse(v.instance(Uint8Array), await ws.files.readFile(stored.path))).toEqual(attachment);
 
-  // Write the SERVED BYTES straight back and read them again: the attachment
-  // and the tool pairing must survive the plane decoding its own text, or an
-  // edit would quietly corrupt the context it claims to preserve.
-  await vfs.writeFile('/context/working.jsonl', text);
-  const roundTripped = plane.read().head?.messages ?? [];
+  // Write the SERVED BYTES straight back with one new line: the attachment
+  // reference and the tool pairing survive the plane decoding its own text.
+  await vfs.writeFile('/context/working.jsonl', `${text}${JSON.stringify({ new: true, message: { role: 'user', content: 'and then' } })}\n`);
+  const roundTripped = await stagedMessages(actor);
   const parts = Array.isArray(roundTripped[0]?.content) ? roundTripped[0].content : [];
   const attached = parts.find((part) => part.type === 'file');
   const data = attached && 'data' in attached ? attached.data : undefined;
 
-  if (!(data instanceof Uint8Array)) throw new Error('the attachment must decode to its own bytes');
+  if (!(data instanceof Uint8Array)) throw new Error('the attachment must materialize to its own bytes');
   expect([...data]).toEqual([...attachment]);
   expect(roundTripped[2]).toEqual({
     role: 'tool',
     content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'probe', output: { type: 'json', value: { ok: true } } }],
   });
+  expect(roundTripped[3]).toEqual({ role: 'user', content: 'and then' });
   ws.close();
 });
 
@@ -459,22 +539,27 @@ test('the owner UI path gets a real conditional write, and a conflicting revisio
   const ws = workspace();
   const actor = ws.bind('actor-ui');
   const vfs = planeFor(actor);
-  createActorContextPlane({ claims: actor.claims }).hydrate([{ role: 'user', content: 'from the browser' }]);
+  await hydrate(actor, [{ role: 'user', content: 'from the browser' }]);
 
   const stat = await vfs.stat('/context/working.jsonl');
-  expect(stat?.revision).toBe(1);
+  const revision = stat?.revision;
+
+  if (revision === undefined) throw new Error('the context plane must publish a revision token');
   const served = await readText(vfs, '/context/working.jsonl');
   const conditional = vfs.writeFileIfRevision;
 
   if (conditional === undefined) throw new Error('the context plane must offer a conditional write');
 
   const saved = await conditional.call(vfs, '/context/working.jsonl',
-    new TextEncoder().encode(served.replace('from the browser', 'edited in the browser')), 1);
+    new TextEncoder().encode(served.replace('from the browser', 'edited in the browser')), revision);
 
-  expect(saved).toMatchObject({ ok: true, revision: 2 });
+  expect(saved).toMatchObject({ ok: true });
+  expect(await stagedMessages(actor)).toEqual([{ role: 'user', content: 'edited in the browser' }]);
 
+  // The token the first write consumed no longer describes the file, and a
+  // second tab still holding it cannot overwrite what landed.
   await expect(conditional.call(vfs, '/context/working.jsonl',
-    new TextEncoder().encode(served.replace('from the browser', 'from a stale tab')), 1))
+    new TextEncoder().encode(served.replace('from the browser', 'from a stale tab')), revision))
     .rejects.toMatchObject({ verdict: 'stale' });
   ws.close();
 });
@@ -482,19 +567,18 @@ test('the owner UI path gets a real conditional write, and a conflicting revisio
 /**
  * THE DEFECT, at the seam it lived in.
  *
- * The step pipeline holds two arrays: the live RAW one the SDK rebuilds each
- * step, and the FINAL rendered one a provider receives. A landed edit's
- * protected tail is a slice of the raw array, and the count it slices at is
- * read off that same raw array. Read it off a RENDERED revision instead and
- * one woven `<dynamic_context>` block moves the boundary by one message and
- * the tail loses its head. With an assistant tool call as the first tail
- * message, that is a tool result with no call in front of it: the shape a
- * provider rejects outright.
+ * The step pipeline holds two arrays: the durable one the store owns, and the
+ * FINAL rendered one a provider receives. A landed edit's tail is what the
+ * turn has already recorded, and an edit that replaces the head must leave
+ * that tail alone. Move the boundary by one — one woven `<dynamic_context>`
+ * block was enough — and the tail loses its head. With an assistant tool call
+ * as the first tail message, that is a tool result with no call in front of
+ * it: the shape a provider rejects outright.
  */
-test('a landed edit preserves the raw tail exactly, with a woven block and a pruned tool output in play', async () => {
+test('a landed edit preserves the recorded tail exactly, with a woven block and a pruned tool output in play', async () => {
   const ws = workspace();
   const actor = ws.bind('actor-coordinates');
-  const plane = createActorContextPlane({ claims: actor.claims });
+  const vfs = planeFor(actor);
   const ledger = new DynamicContextLedger();
   // Live state that renders a block, so the rendered array is LONGER than the
   // raw one — the whole premise of the bug.
@@ -512,51 +596,51 @@ test('a landed edit preserves the raw tail exactly, with a woven block and a pru
     { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'old', toolName: 'probe', output: { type: 'text', value: bulky } }] },
   ];
 
-  const admitted = plane.startTurn({ turnId: 'turn-coord', history: older });
+  await hydrate(actor, older);
+  const claim = await admitOn(actor, { runId: 'run-coord', turnId: 'turn-coord' });
+  const admitted = await actor.claims.admittedFor(claim);
   expect(admitted.messages).toHaveLength(3);
 
-  const claim = actor.claims.admit({
-    runId: 'run-coord', turnId: 'turn-coord', workMode: 'build', program: PROGRAM,
-    context: admitted.messages, workingRevision: admitted.workingRevision,
-  });
-
-  const steps = plane.steps(claim);
+  const steps = stepsOf(actor, claim);
 
   // STEP 0 — the array the turn was admitted with. The rendered request is
   // LONGER than the raw array, because the ledger froze a block: that gap
   // between the two counts is the whole premise of the defect.
-  const first = composePrepareStep({ prune, dynamic, context: steps },
+  const first = await composePrepareStep({ prune, dynamic, context: steps },
     { stepNumber: 0, messages: [...admitted.messages], steps: [] });
 
-  if (first instanceof Promise) throw new Error('this pipeline is synchronous');
   expect(first?.messages).toHaveLength(4);
-  const renderedFirst = actor.claims.consumedContext('turn-coord');
-  expect(renderedFirst?.messageCount).toBe(4);
+  const renderedFirst = await actor.claims.consumedContext('turn-coord');
+  expect(renderedFirst?.messages).toHaveLength(4);
   // The rendered row points at the RAW revision it came from, and that
   // revision's own count is 3: two spaces, one pointer, no arithmetic between.
-  expect(renderedFirst?.workingRevision).toBe(admitted.workingRevision);
-  expect(actor.claims.working.revision(admitted.workingRevision)?.messageCount).toBe(3);
+  expect(renderedFirst?.workingRevision).toBe(claim.workingRevision);
+  expect(actor.history.context.entries({ contextId: claim.workingContextId, revision: claim.workingRevision })).toHaveLength(3);
 
-  // The model called a tool; its result came back. This is the protected tail.
-  const live: ModelMessage[] = [
-    ...older,
+  // The model called a tool; its result came back, and the turn recorded both
+  // the way a streaming turn records its output. This is the protected tail.
+  const assertOwner = () => { actor.handle.assertCurrent(); };
+
+  const tail: ModelMessage[] = [
     { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'probe', input: { path: 'a' } }] },
     { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'probe', output: { type: 'text', value: 'fresh output' } }] },
   ];
 
   // The edit keeps the old exchange (it is real work that happened) and
-  // rewrites only the question that framed it.
-  plane.edit({
-    base: 1,
-    messages: [{ role: 'user', content: 'corrected question' }, ...older.slice(1)],
-    author: 'actor-coordinates', via: 'file',
-  });
+  // rewrites only the question that framed it, through the file the author
+  // actually edits. Authored BEFORE the tail is recorded, so the landing has
+  // to carry a tail its author never saw.
+  const served = await readText(vfs, '/context/working.jsonl');
+  await vfs.writeFile('/context/working.jsonl', served.replace('original question', 'corrected question'));
+
+  for (const [index, message] of tail.entries()) {
+    await actor.history.append({ id: `tail-${index}`, message, origin: 'output', turnId: 'turn-coord', assertOwner });
+  }
 
   // STEP 1 — the edit lands here.
-  const second = composePrepareStep({ prune, dynamic, context: steps },
-    { stepNumber: 1, messages: [...live], steps: [] });
+  const second = await composePrepareStep({ prune, dynamic, context: steps },
+    { stepNumber: 1, messages: [], steps: [] });
 
-  if (second instanceof Promise) throw new Error('this pipeline is synchronous');
   const request = second?.messages ?? [];
   // The edited message replaced the original, and BOTH tail messages rode
   // after it, in order: the assistant call and its result are still a pair.
@@ -578,18 +662,18 @@ test('a landed edit preserves the raw tail exactly, with a woven block and a pru
   expect(request[5]?.role).toBe('user');
   expect(String(request[5]?.content)).toContain('a finding proven by execution');
 
-  // The edit is now the working history, activated at the step that took it.
-  const active = actor.claims.working.active();
-  expect(active).toMatchObject({ revision: 2, status: 'active', activatedStep: 1, activatedTurnId: 'turn-coord' });
-  expect(actor.claims.consumedContext('turn-coord')?.workingRevision).toBe(2);
+  // The edit is now the working history, activated at the step that took it,
+  // with the tail the turn recorded after it still behind it.
+  expect(await committed(actor)).toEqual([{ role: 'user', content: 'corrected question' }, ...older.slice(1), ...tail]);
+  expect(staged(actor)).toBeNull();
+  expect((await actor.claims.consumedContext('turn-coord'))?.workingRevision).toBe(selectionOf(actor).revision);
 
-  // STEP 2 — nothing new is staged, and the edit must STILL be applied: a
+  // STEP 2 — nothing new is staged, and the edit is still in effect: a
   // prepareStep override shapes one request and never becomes the SDK's next
   // input, so an edit that landed once has to keep landing.
-  const third = composePrepareStep({ prune, dynamic, context: steps },
-    { stepNumber: 2, messages: [...live], steps: [] });
+  const third = await composePrepareStep({ prune, dynamic, context: steps },
+    { stepNumber: 2, messages: [], steps: [] });
 
-  if (third instanceof Promise) throw new Error('this pipeline is synchronous');
   expect(third?.messages?.[0]).toEqual({ role: 'user', content: 'corrected question' });
   ws.close();
 });
@@ -597,49 +681,44 @@ test('a landed edit preserves the raw tail exactly, with a woven block and a pru
 test('an edit mid-exchange is deferred with its reason, then lands at the next safe boundary', async () => {
   const ws = workspace();
   const actor = ws.bind('actor-defer');
-  const plane = createActorContextPlane({ claims: actor.claims });
-  const admitted = plane.startTurn({ turnId: 'turn-defer', history: [{ role: 'user', content: 'ask' }] });
+  const vfs = planeFor(actor);
+  await hydrate(actor, [{ role: 'user', content: 'ask' }]);
+  const claim = await admitOn(actor, { runId: 'run-defer', turnId: 'turn-defer' });
+  const steps = stepsOf(actor, claim);
+  const assertOwner = () => { actor.handle.assertCurrent(); };
 
-  const claim = actor.claims.admit({
-    runId: 'run-defer', turnId: 'turn-defer', workMode: 'build', program: PROGRAM,
-    context: admitted.messages, workingRevision: admitted.workingRevision,
-  });
-
-  const steps = plane.steps(claim);
-  plane.edit({ base: 1, messages: [{ role: 'user', content: 'edited ask' }], author: 'actor-defer', via: 'session' });
+  const served = await readText(vfs, '/context/working.jsonl');
+  await vfs.writeFile('/context/working.jsonl', served.replace('"ask"', '"edited ask"'));
 
   // A tool call whose result has not arrived: substituting history under a
   // half-finished exchange is what this defers.
-  const midExchange: ModelMessage[] = [
-    { role: 'user', content: 'ask' },
-    { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c2', toolName: 'probe', input: {} }] },
-  ];
+  const call: ModelMessage = { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c2', toolName: 'probe', input: {} }] };
+  await actor.history.append({ id: 'call', message: call, origin: 'output', turnId: 'turn-defer', assertOwner });
+  const midExchange: ModelMessage[] = [{ role: 'user', content: 'ask' }, call];
 
-  const deferred = composePrepareStep({ context: steps }, { stepNumber: 1, messages: [...midExchange], steps: [] });
+  const deferred = await composePrepareStep({ context: steps }, { stepNumber: 1, messages: [], steps: [] });
 
-  if (deferred instanceof Promise) throw new Error('this pipeline is synchronous');
-  // The request went out on the UNEDITED history — the pipeline changed
-  // nothing, so it returns no override at all — and the edit is still staged
+  // The request went out on the UNEDITED history, and the edit is still staged
   // with the reason recorded: reported, not dropped, and not half-applied.
-  expect(deferred).toBeUndefined();
-  const rendered = actor.claims.consumedContext('turn-defer');
-  expect(rendered?.messages).toEqual(midExchange);
-  const staged = actor.claims.working.staged();
-  expect(staged).toMatchObject({ revision: 2, status: 'staged', deferredReason: 'unpaired_tool_call' });
-  expect(actor.claims.consumedContext('turn-defer')?.workingRevision).toBe(claim.workingRevision);
+  expect(deferred?.messages).toEqual(midExchange);
+  expect((await actor.claims.consumedContext('turn-defer'))?.messages).toEqual(midExchange);
+  expect(staged(actor)).toMatchObject({ base_revision: 1, deferred_reason: 'unpaired_tool_call' });
+  // Not half-applied either: the working history the next reader sees is the
+  // one the request ran on, with the edit still waiting behind it.
+  expect(await committed(actor)).toEqual(midExchange);
 
   // The result arrives; the very next boundary takes the edit.
-  const settled: ModelMessage[] = [...midExchange, {
+  const result: ModelMessage = {
     role: 'tool',
     content: [{ type: 'tool-result', toolCallId: 'c2', toolName: 'probe', output: { type: 'json', value: { ok: true } } }],
-  }];
+  };
 
-  const landed = composePrepareStep({ context: steps }, { stepNumber: 2, messages: [...settled], steps: [] });
+  await actor.history.append({ id: 'result', message: result, origin: 'output', turnId: 'turn-defer', assertOwner });
+  const landed = await composePrepareStep({ context: steps }, { stepNumber: 2, messages: [], steps: [] });
 
-  if (landed instanceof Promise) throw new Error('this pipeline is synchronous');
   expect(landed?.messages?.map((message) => message.role)).toEqual(['user', 'assistant', 'tool']);
   expect(landed?.messages?.[0]).toEqual({ role: 'user', content: 'edited ask' });
-  expect(actor.claims.working.active()).toMatchObject({ revision: 2, activatedStep: 2, deferredReason: null });
+  expect(staged(actor)).toBeNull();
   ws.close();
 });
 
@@ -647,23 +726,16 @@ test('an edit authored between turns is consumed by the next turn with the new i
   const ws = workspace();
   const actor = ws.bind('actor-between');
   const vfs = planeFor(actor);
-  const plane = createActorContextPlane({ claims: actor.claims });
 
   // A settled turn leaves the working history it produced.
-  const first = plane.startTurn({ turnId: 'turn-one', history: [{ role: 'user', content: 'first question' }] });
-
-  const claim = actor.claims.admit({
-    runId: 'run-one', turnId: 'turn-one', workMode: 'build', program: PROGRAM,
-    context: first.messages, workingRevision: first.workingRevision,
-  });
-
+  await hydrate(actor, [{ role: 'user', content: 'first question' }]);
+  const claim = await admitOn(actor, { runId: 'run-one', turnId: 'turn-one' });
   actor.claims.settle(claim, 'completed');
 
-  const settled = plane.endTurn({ turnId: 'turn-one', history: [
-    { role: 'user', content: 'first question' }, { role: 'assistant', content: 'first answer' },
-  ] });
+  const assertOwner = () => { actor.handle.assertCurrent(); };
 
-  expect(settled.messages).toHaveLength(2);
+  await actor.history.append({ id: 'answer-one', message: { role: 'assistant', content: 'first answer' }, origin: 'output', turnId: 'turn-one', assertOwner });
+  expect(await committed(actor)).toHaveLength(2);
 
   // Between turns: the file serves the settled history, and an edit of it says
   // it becomes effective at the next TURN rather than the next step.
@@ -673,39 +745,34 @@ test('an edit authored between turns is consumed by the next turn with the new i
   await vfs.writeFile('/context/working.jsonl',
     served.replace('first question', 'first question, corrected'));
 
-  // The next turn's input arrives after the edit was authored.
-  const next = plane.startTurn({ turnId: 'turn-two', history: [
-    { role: 'user', content: 'first question' },
-    { role: 'assistant', content: 'first answer' },
-    { role: 'user', content: 'second question' },
-  ] });
+  // The next turn's input arrives after the edit was authored: the boundary
+  // takes the edit first, then the input lands on top of it.
+  const landed = await actor.history.stepBase(assertOwner, null, null);
+  expect(landed.changed).toBe(true);
+  await actor.history.append({ id: 'input-two', message: { role: 'user', content: 'second question' }, origin: 'input', turnId: 'turn-two', assertOwner });
 
-  expect(next.messages).toEqual([
+  const next = await committed(actor);
+  expect(next).toEqual([
     { role: 'user', content: 'first question, corrected' },
     { role: 'assistant', content: 'first answer' },
     { role: 'user', content: 'second question' },
   ]);
-  // Exactly once: the new input is neither dropped nor duplicated, and the
-  // admitted revision is a NEW one that re-anchors the offset to this array.
-  expect(next.messages.filter((message) => message.content === 'second question')).toHaveLength(1);
-  const admittedRevision = actor.claims.working.revision(next.workingRevision);
-  expect(admittedRevision).toMatchObject({ source: 'turn', messageCount: 3, baseMessageCount: 3 });
-  // The edit is recorded as effective at that turn boundary, not at a step.
-  expect(actor.claims.working.revision(3)).toMatchObject({
-    source: 'edit', activatedTurnId: 'turn-two', activatedStep: null,
-  });
+  // Exactly once: the new input is neither dropped nor duplicated.
+  expect(next.filter((message) => message.content === 'second question')).toHaveLength(1);
+  // The edit is recorded as its own committed revision, with the author and
+  // route that made it, ahead of the revision the new input added.
+  const log = revisions(actor);
+  expect(log[0]).toMatchObject({ revision: selectionOf(actor).revision, cause: 'input' });
+  expect(log[1]).toMatchObject({ cause: 'edit', turn_id: null });
+  expect(log[1]?.proposal_id).not.toBeNull();
   ws.close();
 });
 
 test('a cold reader with no live turn can read and edit the working history it will resume on', async () => {
   const ws = workspace();
   const actor = ws.bind('actor-cold');
-  const plane = createActorContextPlane({ claims: actor.claims });
-  const admitted = plane.startTurn({ turnId: 'turn-crash', history: [{ role: 'user', content: 'before the crash' }] });
-  actor.claims.admit({
-    runId: 'run-crash', turnId: 'turn-crash', workMode: 'build', program: PROGRAM,
-    context: admitted.messages, workingRevision: admitted.workingRevision,
-  });
+  await hydrate(actor, [{ role: 'user', content: 'before the crash' }]);
+  await admitOn(actor, { runId: 'run-crash', turnId: 'turn-crash' });
 
   // A SECOND store bundle over the same database, bound to the same issued
   // actor: what an activation that did not run the turn can see.
@@ -718,50 +785,51 @@ test('a cold reader with no live turn can read and edit the working history it w
   // revision it read — no live turn required, and no getter that throws.
   await coldVfs.writeFile('/context/working.jsonl',
     seen.replace('before the crash', 'recovered and corrected'));
-  expect(cold.claims.working.staged()).toMatchObject({ revision: 2, via: 'file' });
+  expect(staged(cold)).toMatchObject({ base_revision: 1, via: 'file' });
   ws.close();
 });
 
 test('an edit emits its authoring and its activation, and a refused edit emits nothing', async () => {
   const ws = workspace();
-  const actor = ws.bind('actor-events');
+  const base = ws.bind('actor-events');
   const emitted: Array<{ runId: string; event: ContextEditEvent }> = [];
 
-  const plane = createActorContextPlane({
-    claims: actor.claims,
-    events: { emit: (runId, event) => { emitted.push({ runId, event }); } },
-  });
+  const actor: Bound = {
+    ...base,
+    stores: {
+      claims: base.claims,
+      events: {
+        emit: (runId, event) => { emitted.push({ runId, event }); },
+        emitDeferred: (runId, event) => ({ publish: () => { emitted.push({ runId, event }); } }),
+      },
+    },
+  };
 
-  const admitted = plane.startTurn({ turnId: 'turn-ev', history: [{ role: 'user', content: 'ask' }] });
-
-  const claim = actor.claims.admit({
-    runId: 'run-ev', turnId: 'turn-ev', workMode: 'build', program: PROGRAM,
-    context: admitted.messages, workingRevision: admitted.workingRevision,
-  });
+  const vfs = planeFor(actor);
+  await hydrate(actor, [{ role: 'user', content: 'ask' }]);
+  const claim = await admitOn(actor, { runId: 'run-ev', turnId: 'turn-ev' });
 
   // Authoring: one event, naming the author, both revisions and where it lands.
-  plane.edit({ base: 1, messages: [{ role: 'user', content: 'edited ask' }], author: 'actor-events', via: 'file' });
+  const served = await readText(vfs, '/context/working.jsonl');
+  await vfs.writeFile('/context/working.jsonl', served.replace('"ask"', '"edited ask"'));
   expect(emitted).toHaveLength(1);
   expect(emitted[0]).toMatchObject({ runId: 'run-ev', event: {
-    type: 'context_edit', revision: 2, baseRevision: 1, messageCount: 1,
-    author: 'actor-events', via: 'file', status: 'staged', effectiveAt: 'step',
+    type: 'context_edit', revision: 1, baseRevision: 1, messageCount: 1,
+    author: actor.handle.actorId, via: 'file', status: 'staged', effectiveAt: 'step',
     turnId: 'turn-ev', stepIndex: null,
   } });
 
   // A refused edit — stale base — adds nothing: there is no activation to
   // report, and reporting one would record something that did not happen.
-  expect(() => plane.edit({
-    base: 1, messages: [{ role: 'user', content: 'from a stale read' }], author: 'actor-events', via: 'file',
-  })).toThrow();
+  await expect(vfs.writeFile('/context/working.jsonl', served.replace('"ask"', '"from a stale read"')))
+    .rejects.toMatchObject({ verdict: 'stale' });
   expect(emitted).toHaveLength(1);
 
-  // Activation: the boundary that took it says which turn and step.
-  const steps = plane.steps(claim);
-  const base = steps.base();
-  steps.consume({ stepNumber: 3, messages: admitted.messages, base, deferred: null });
+  // Activation: the boundary that took it says which turn it landed on.
+  await stepsOf(actor, claim).base();
   expect(emitted).toHaveLength(2);
   expect(emitted[1]?.event).toMatchObject({
-    type: 'context_edit', revision: 2, status: 'activated', turnId: 'turn-ev', stepIndex: 3, effectiveAt: 'step',
+    type: 'context_edit', revision: 2, status: 'activated', turnId: 'turn-ev', effectiveAt: 'step',
   });
   ws.close();
 });

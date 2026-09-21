@@ -69,9 +69,7 @@ function interruptedWorkspace() {
   // is not that one (actor-identity.ts `requireLocalDatabasePath`) — which an
   // in-memory handle can never satisfy.
   const db = new Database(scratchPath('local-session-fork-resume', 'agent.db'), { create: true });
-  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
-  // silently pinned a schema nothing else maintains.
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
   const execRaw = makeExecRaw(db);
@@ -142,10 +140,8 @@ describe('resuming a workspace whose fork was interrupted', () => {
 
   test('a clean workspace resumes silently', async () => {
     const db = new Database(scratchPath('local-session-fork-clean', 'agent.db'), { create: true });
-    // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
-  // silently pinned a schema nothing else maintains.
-  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    // THE PRODUCTION INITIALIZER, not a copy of its DDL.
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
     const events: SessionEvent[] = [];
 

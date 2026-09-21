@@ -2,6 +2,7 @@ import * as v from 'valibot';
 import { RunEventRecorder, RunEventSchema, RUN_EVENT_LIMIT_MAX } from '../events/recorder';
 import { getRunSummaries } from '../read-models/runs';
 import { getChatHistoryPage } from '../read-models/status';
+import type { SessionTranscriptReader } from '../orchestrator/session-transcript';
 import { pageSchema, SeekCursorSchema, type Page, type PageRequest } from '../read-models/page';
 import type { RunEvent } from '../events/types';
 import { ERROR_CODES, KinuError, refusalOf } from '../obs/error';
@@ -82,12 +83,13 @@ export function missingSubordinateHistory(path: string[]): SubordinateInspection
 }
 
 /** Reads existing actor tables. No schema initialization or live actor state. */
-export function readSubordinateInspection(
+export async function readSubordinateInspection(
   sql: SqlExecutor,
   actor: ActorHandle,
   raw: SqlExec,
   request: SubordinateInspectionRequest,
-): SubordinateInspectionResult {
+  transcriptFor: (actor: ActorHandle) => SessionTranscriptReader,
+): Promise<SubordinateInspectionResult> {
   const path = request.path;
 
   switch (request.view) {
@@ -117,9 +119,9 @@ export function readSubordinateInspection(
     }
 
     case 'history':
-      if (!tableExists(sql, 'assistant_messages') && !tableExists(sql, 'actor_messages')) return missingSubordinateHistory(path);
+      if (!tableExists(sql, 'conversation_entries')) return missingSubordinateHistory(path);
 
-      return { view: 'history', path, page: getChatHistoryPage(sql, actor, request.page) };
+      return { view: 'history', path, page: await getChatHistoryPage(transcriptFor(actor), request.page) };
     case 'runs':
       if (!tableExists(sql, 'run_events')) return missingSubordinateHistory(path);
 

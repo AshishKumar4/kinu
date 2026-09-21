@@ -56,11 +56,12 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import { ActorSession } from '../orchestrator/actor-session';
 import type { AgentOrchestratorDeps } from '../orchestrator/agent-orchestrator';
 import type { StoredActorClaim } from '../orchestrator/actor-claims';
+import type { SessionFilePlane } from '../orchestrator/session-payload';
 import { actorReferenceOf, sameActorReference, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import { createAgentStores, type AgentStores } from './agent-stores';
 import type { WorkspaceActor, WorkspaceActorDirectory } from '../identity/workspace-actors';
 import type { ActorContextStores, ChildContextResolver } from '../vfs/context-plane';
-import type { ContextEventRecorder } from '../orchestrator/context-plane';
+import type { ContextEventRecorder } from '../types/context-plane';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { verifyClaimedProgram } from '../orchestrator/actor-claims';
 import { readVersionedScaffoldSource } from '../scaffold/shadow';
@@ -140,6 +141,7 @@ export interface ActorHostDeps {
   readonly installedBuild: string | null;
   /** Build this actor's runtime over the handle and stores the host bound. */
   runtimeFor(bound: BoundActor): AgentRuntime | Promise<AgentRuntime>;
+  filesFor(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): Promise<SessionFilePlane>;
   /**
    * Where this actor's agentic loop comes from, and the parent whose retained
    * source an inheriting origin reads.
@@ -335,13 +337,16 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       }
     });
 
+    const binding = { reference: actorReferenceOf(reference), record, handle };
+
     const stores = createAgentStores(
       () => deps.storage.sql,
       () => handle,
       (write) => deps.storage.transactionSync(write),
+      () => deps.filesFor(binding),
     );
 
-    return { bound: { reference: actorReferenceOf(reference), record, handle, stores }, fence };
+    return { bound: { ...binding, stores }, fence };
   };
 
   const build = async (reference: ActorReference): Promise<{ actor: HostedActor; fence: ReleaseFence }> => {
@@ -377,6 +382,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
     const session = new ActorSession({
       runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
+      history: bound.stores.history,
       events: deps.contextEvents(bound),
       advisor: reference.parentActorId === null ? undefined : {
         config: deps.directory.main().config,
@@ -597,6 +603,9 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 function purgeActorRows(storage: Pick<Storage, 'sql' | 'transactionSync'> & SqlExec, actorId: string): void {
   const tables = actorScopedTables(storage.sql);
   storage.transactionSync(() => {
+    // All actor-owned references disappear in this transaction; validate at commit, not discovery order.
+    storage.exec('PRAGMA defer_foreign_keys = ON');
+
     for (const table of tables) {
       // Positional binding, because the table name is read from the live schema
       // and a tagged template would bind it as a value. The name came from
@@ -680,7 +689,7 @@ export function childContextResolver(deps: {
         actorId: child.actorId, workspaceId: child.workspaceId, parentActorId: child.parentActorId,
       });
 
-      return { actorId: child.actorId, claims: bound.stores.claims, events: deps.events(bound) };
+      return { claims: bound.stores.claims, events: deps.events(bound) };
     },
   };
 }

@@ -20,7 +20,7 @@ import {
 import { estimateTokens } from '../src/llm';
 import { TurnContextBudget } from '../src/context-budget';
 import { buildBuiltinTools } from '../src/tools/builtins';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, storesFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { VFS } from '../src/types/primitives';
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../src/utils/json';
@@ -247,7 +247,7 @@ describe('tool result budget (behavior through the public tool surface)', () => 
     };
 
     const rtWithShell: AgentRuntime = { ...rt, shell: { exec: fakeShellExec } };
-    const tools = buildBuiltinTools({ rt: rtWithShell });
+    const tools = buildBuiltinTools({ rt: rtWithShell, history: storesFor(rtWithShell).history });
     const invoke = toolExecute<ShellToolInput, string>(tools.shell);
 
     const clamped = await invoke({ command: 'generate-huge-log' });
@@ -272,7 +272,7 @@ describe('tool result budget (behavior through the public tool surface)', () => 
     };
 
     const rtWithShell: AgentRuntime = { ...rt, shell };
-    const tools = buildBuiltinTools({ rt: rtWithShell });
+    const tools = buildBuiltinTools({ rt: rtWithShell, history: storesFor(rtWithShell).history });
     const invoke = toolExecute<ShellToolInput, string>(tools.shell);
     const pending = invoke({ command: 'boom' });
     await expect(pending).rejects.toMatchObject({ code: 'io', execution: { exitCode: 2 } });
@@ -291,7 +291,7 @@ describe('tool result budget (behavior through the public tool surface)', () => 
     const stdout = 'L'.repeat(200_000);
     const shell = { exec: async () => ({ stdout, stderr: '', exitCode: 0 }) };
     const rtWithShell: AgentRuntime = { ...rt, shell };
-    const invoke = toolExecute<ShellToolInput, string>(buildBuiltinTools({ rt: rtWithShell }).shell);
+    const invoke = toolExecute<ShellToolInput, string>(buildBuiltinTools({ rt: rtWithShell, history: storesFor(rtWithShell).history }).shell);
 
     const steered = await invoke({ command: "sed -i 's/a/b/' src/app.ts" });
     expect(steered).toStartWith('[Kinu note: that command used an in-place stream edit.');
@@ -307,7 +307,7 @@ describe('tool result budget (behavior through the public tool surface)', () => 
     // The file is already addressable at its own path, so a capped read names
     // the next offset instead of writing a second copy of the file.
     const { rt } = createTestRuntime();
-    const tools = buildBuiltinTools({ rt });
+    const tools = buildBuiltinTools({ rt, history: storesFor(rt).history });
     const file = toolExecute<FileToolInput, JsonValue>(tools.file);
     const lines = Array.from({ length: 4_000 }, (_, i) => `line ${i + 1} ${'padding '.repeat(5)}`);
     await file({ action: 'write', path: 'big.txt', content: lines.join('\n') });
@@ -330,7 +330,7 @@ describe('tool result budget (behavior through the public tool surface)', () => 
     const budget = new TurnContextBudget();
     const shell = { exec: async () => ({ stdout: 'L'.repeat(200_000), stderr: '', exitCode: 0 }) };
     const rtWithShell: AgentRuntime = { ...rt, shell };
-    const invoke = toolExecute<ShellToolInput, string>(buildBuiltinTools({ rt: rtWithShell, contextBudget: budget }).shell);
+    const invoke = toolExecute<ShellToolInput, string>(buildBuiltinTools({ rt: rtWithShell, contextBudget: budget, history: storesFor(rtWithShell).history }).shell);
 
     const sizes: number[] = [];
 
@@ -348,7 +348,7 @@ describe('tool result budget (behavior through the public tool surface)', () => 
     const budget = new TurnContextBudget();
     const shell = { exec: async () => ({ stdout: 'ok'.repeat(10), stderr: '', exitCode: 0 }) };
     const rtWithShell: AgentRuntime = { ...rt, shell };
-    const invoke = toolExecute<ShellToolInput, string>(buildBuiltinTools({ rt: rtWithShell, contextBudget: budget }).shell);
+    const invoke = toolExecute<ShellToolInput, string>(buildBuiltinTools({ rt: rtWithShell, contextBudget: budget, history: storesFor(rtWithShell).history }).shell);
     await invoke({ command: 'small' });
     expect(budget.snapshot()).toMatchObject({ admittedChars: 20, omittedChars: 0, trips: {} });
   });

@@ -14,7 +14,7 @@ import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provid
 import {
   HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture, MergeOutputSchema,
   MissionGovernor, CRAFT_NEUTRAL_PRIOR, reasoningEffortOptions, explorationActorKey, headAgentName, defaultLoopOrigin,
-  initWorkspaceSchema, RunEventRecorder, startBranchHead, workspaceSpend,
+  initWorkspaceSchema, RunEventRecorder, startBranchHead, workspaceSpend, createAgentStores,
   type ReasoningEffort,
   type HeadInput, type WebSearchProvider, type JsonObject, type WriteObserver,
   type ModelCallReport, type ModelOperationEvent,
@@ -636,6 +636,8 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
 
     const tools = buildHeadToolSet({
       input: aHeadInput(), capture, rt,
+      history: createAgentStores(() => rt.storage.sql, () => rt.actor, write => rt.storage.transactionSync(write),
+        async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' })).history,
       codemodeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
       webSearch: stubWeb,
       split: async () => ({ narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }),

@@ -44,7 +44,6 @@ import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import type { AgentDatabase } from './inline-primitives';
 import type { SqlExec } from '../types/primitives';
 import type { JsonPrimitive } from '../utils/json';
-import { uiMessageText } from '../utils/ui-message';
 
 type ArchiveDatabaseValue = JsonPrimitive | ArrayBuffer;
 
@@ -880,8 +879,6 @@ export async function restoreWorkspaceArchive(
 
   finishSql();
 
-  normalizeImportedPaneRows(sql);
-
   return {
     workspace: header.workspace,
     source: header.source,
@@ -891,90 +888,4 @@ export async function restoreWorkspaceArchive(
     actors: restoredActors,
     files,
   };
-}
-
-/**
- * Which actor owns an imported conversation: the workspace's MAIN actor, read
- * back out of the directory this restore has just landed.
- *
- * `kind = 'main'` is unique per workspace by schema — `workspace_actors` carries
- * a partial unique index on it (`identity/workspace-actors.ts`) — so this is
- * exactly one row or none. None means an archive that carries a chat pane but
- * no actor directory to file it under, which cannot be attributed at all.
- *
- * Read here rather than taken as a parameter because the caller has nothing to
- * pass: `restoreWorkspaceArchive` is handed an EMPTY database and the identity
- * only exists once its rows have landed, which is the moment this runs.
- */
-function importedConversationActorId(sql: SqlExec): string {
-  const directory = sql.exec(
-    `SELECT name FROM sqlite_master
-     WHERE type = 'table' AND name IN ('workspace_identity', 'workspace_actors')`,
-  ).toArray();
-
-  const rows = directory.length === 2
-    ? sql.exec(
-      `SELECT a.actor_id AS actor_id FROM workspace_actors a
-       JOIN workspace_identity w ON w.id = a.workspace_id
-       WHERE a.kind = 'main'`,
-    ).toArray()
-    : [];
-
-  if (rows.length !== 1) {
-    throw new Error(
-      'This archive carries a chat pane but no single main actor to attribute it to, '
-      + 'so the imported conversation cannot be filed.',
-    );
-  }
-
-  return v.parse(v.object({ actor_id: v.pipe(v.string(), v.nonEmpty()) }), rows[0]).actor_id;
-}
-
-/**
- * An export may carry the pane store (`assistant_messages`); the
- * workspace this archive was restored into may be LOCAL, where `actor_messages` is
- * the only default-chat store. Normalize once, here — project every pane row
- * into the plain store and drop the pane schema — so "does assistant_messages
- * exist" keeps meaning exactly one thing to every reader downstream
- * (`identity/conversation-store.ts` states the invariant).
- */
-function normalizeImportedPaneRows(sql: SqlExec): void {
-  const pane = sql.exec(
-    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'assistant_messages'`,
-  ).toArray();
-
-  if (pane.length === 0) return;
-
-  // WHOSE rows these are: the pane is the vendor's shape and carries no owner
-  // column (`identity/conversation-store.ts` says why, and
-  // `unit-pane-store-shape.test.ts` holds it to the installed SDK), and the
-  // vendor's session belongs to the workspace object, so every pane row is the
-  // root actor's. The directory this restore just landed is where that actor
-  // is, and a workspace with no single main actor is refused rather than
-  // guessed at.
-  const owner = importedConversationActorId(sql);
-
-  const rows = sql.exec(
-    `SELECT id, parent_id, role, content, created_at FROM assistant_messages
-     ORDER BY rowid ASC`,
-  ).toArray();
-
-  for (const raw of rows) {
-    const row = v.parse(v.object({
-      id: v.string(), parent_id: v.nullable(v.string()), role: v.string(),
-      content: v.string(), created_at: v.string(),
-    }), raw);
-
-    const text = uiMessageText(row.content);
-    const ms = Date.parse(`${row.created_at.replace(' ', 'T')}Z`);
-
-    if (!Number.isFinite(ms)) throw new Error(`imported pane row ${row.id} has an unreadable stamp`);
-    sql.exec(
-      `INSERT OR IGNORE INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      owner, row.id, 'default', row.parent_id, row.role, text, ms,
-    );
-  }
-
-  sql.exec(`DROP TABLE assistant_messages`);
 }

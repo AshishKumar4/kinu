@@ -5,6 +5,8 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { makeSql, createTestActor, createTestWorkspace } from './helpers';
+import { SessionHistory } from '../src/orchestrator/session-history';
+import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
@@ -21,14 +23,19 @@ import {
  *  feeds reconstructs process evidence from the message and run-event ledgers,
  *  so a hand-picked subset here would test a workspace shape that never ships. */
 function setup() {
-  const { db, sql, execRaw } = createTestWorkspace();
+  const { db, sql, execRaw, vfs } = createTestWorkspace();
   initAlternateTakesTable(execRaw);
   // A real directory row, not a bare handle: the pick reads the turn pair out
   // of the actor-scoped conversation store, so the fixture needs the actor the
   // production readers would resolve for this workspace.
   const actor = createTestActor(sql, execRaw, 'ws-takes', 'takes');
 
-  return { db, sql, execRaw, actor };
+  const history = new SessionHistory({
+    sql, actor, transactionSync: write => db.transaction(write)(),
+    files: async () => ({ vfs, artifactDirectory: '/actor/.kinu/context' }),
+  });
+
+  return { db, sql, execRaw, actor, history, transcript: history.transcript(CHAT_SESSION_ID) };
 }
 
 /** `search_nodes` is keyed `(actor_id, id)` now, so the owning actor is part of
@@ -152,26 +159,26 @@ describe('claimAlternateTakesForTurn — attaching mid-turn captures to the turn
   });
 });
 
-function capturedSet(sql: ReturnType<typeof makeSql>, actor: ActorHandle) {
+async function capturedSet(sql: ReturnType<typeof makeSql>, actor: ActorHandle, history: SessionHistory) {
   insertNode(sql, actor, { id: 'win', value: 0.9, text: 'winning approach' });
   insertNode(sql, actor, { id: 'alt', value: 0.85, text: 'alternative approach' });
   captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
   claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-9', sessionId: 'default', startedAt: 0 });
-  // The pair the pick attributes from, under the actor that owns the turn:
-  // `recordTakePick` resolves it through the actor-scoped conversation store.
-  void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content)
-    VALUES (${actor.actorId}, 'u-9', 'default', 'user', 'please solve it')`;
-  void sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
-    VALUES (${actor.actorId}, 'msg-9', 'default', 'u-9', 'assistant', 'I used the winning approach')`;
+  // The pair the pick attributes from: `recordTakePick` resolves it through the
+  // canonical transcript, so the fixture writes it with the canonical writer.
+  await history.record(CHAT_SESSION_ID, { id: 'u-9', parentId: null, origin: 'input',
+    message: { role: 'user', content: 'please solve it' } });
+  await history.record(CHAT_SESSION_ID, { id: 'msg-9', parentId: 'u-9', origin: 'output',
+    message: { role: 'assistant', content: 'I used the winning approach' } });
 
   return latestAlternateTakeSet(sql, actor)!;
 }
 
 describe('recordTakePick — the preference signal', () => {
-  test('picking the answered winner records an accepted take_pick row and moves nothing', () => {
-    const { sql, actor } = setup();
-    const set = capturedSet(sql, actor);
-    const result = recordTakePick(sql, actor, { takeId: set.id, nodeId: 'win', scaffoldVersion: 3 });
+  test('picking the answered winner records an accepted take_pick row and moves nothing', async () => {
+    const { sql, actor, history, transcript } = setup();
+    const set = await capturedSet(sql, actor, history);
+    const result = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'win', scaffoldVersion: 3 });
     expect(result).toMatchObject({ outcome: 'accepted', changedAnswer: false });
 
     const rows = listTurnOutcomes(sql, actor);
@@ -186,10 +193,10 @@ describe('recordTakePick — the preference signal', () => {
     expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: 'win', winnerNodeId: 'win' });
   });
 
-  test('picking a sibling records the correction AND re-points the convergence record', () => {
-    const { sql, actor } = setup();
-    const set = capturedSet(sql, actor);
-    const result = recordTakePick(sql, actor, { takeId: set.id, nodeId: 'alt' });
+  test('picking a sibling records the correction AND re-points the convergence record', async () => {
+    const { sql, actor, history, transcript } = setup();
+    const set = await capturedSet(sql, actor, history);
+    const result = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'alt' });
     expect(result).toMatchObject({ outcome: 'corrected', changedAnswer: true });
     expect(result.chosen.text).toBe('alternative approach');
 
@@ -205,19 +212,19 @@ describe('recordTakePick — the preference signal', () => {
     expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: 'alt', winnerNodeId: 'alt' });
   });
 
-  test('a re-pick replaces the previous ledger row (one outcome per turn)', () => {
-    const { sql, actor } = setup();
-    const set = capturedSet(sql, actor);
-    recordTakePick(sql, actor, { takeId: set.id, nodeId: 'alt' });
-    recordTakePick(sql, actor, { takeId: set.id, nodeId: 'alt' });
+  test('a re-pick replaces the previous ledger row (one outcome per turn)', async () => {
+    const { sql, actor, history, transcript } = setup();
+    const set = await capturedSet(sql, actor, history);
+    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'alt' });
+    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'alt' });
     expect(listTurnOutcomes(sql, actor)).toHaveLength(1);
   });
 
-  test('switching the pick moves the terminal marker to the newly chosen take', () => {
-    const { sql, actor } = setup();
-    const set = capturedSet(sql, actor);
-    recordTakePick(sql, actor, { takeId: set.id, nodeId: 'alt' });
-    const switched = recordTakePick(sql, actor, { takeId: set.id, nodeId: 'win' });
+  test('switching the pick moves the terminal marker to the newly chosen take', async () => {
+    const { sql, actor, history, transcript } = setup();
+    const set = await capturedSet(sql, actor, history);
+    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'alt' });
+    const switched = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'win' });
     expect(switched).toMatchObject({ outcome: 'corrected', changedAnswer: true });
     const win = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0]!;
     const alt = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0]!;
@@ -227,17 +234,17 @@ describe('recordTakePick — the preference signal', () => {
     expect(listTurnOutcomes(sql, actor)).toHaveLength(1);
   });
 
-  test('rejects unknown take sets and non-candidate nodes', () => {
-    const { sql, actor } = setup();
-    const set = capturedSet(sql, actor);
-    expect(() => recordTakePick(sql, actor, { takeId: 'take-nope', nodeId: 'win' })).toThrow('Unknown take set');
-    expect(() => recordTakePick(sql, actor, { takeId: set.id, nodeId: 'stranger' })).toThrow('not a candidate');
+  test('rejects unknown take sets and non-candidate nodes', async () => {
+    const { sql, actor, history, transcript } = setup();
+    const set = await capturedSet(sql, actor, history);
+    await expect(recordTakePick(sql, actor, transcript, { takeId: 'take-nope', nodeId: 'win' })).rejects.toThrow('Unknown take set');
+    await expect(recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'stranger' })).rejects.toThrow('not a candidate');
   });
 
-  test('the continuation prompt carries the task and the chosen take', () => {
-    const { sql, actor } = setup();
-    const set = capturedSet(sql, actor);
-    const { chosen } = recordTakePick(sql, actor, { takeId: set.id, nodeId: 'alt' });
+  test('the continuation prompt carries the task and the chosen take', async () => {
+    const { sql, actor, history, transcript } = setup();
+    const set = await capturedSet(sql, actor, history);
+    const { chosen } = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'alt' });
     const prompt = buildTakeContinuationPrompt(set, chosen);
     expect(prompt).toContain('the task');
     expect(prompt).toContain('alternative approach');
@@ -246,12 +253,12 @@ describe('recordTakePick — the preference signal', () => {
 });
 
 describe('the take_pick signal feeds R3’s routes for free', () => {
-  test('GEPA eval split and scaffold priors consume the pick row', () => {
-    const { sql, actor } = setup();
-    const set = capturedSet(sql, actor);
-    recordTakePick(sql, actor, { takeId: set.id, nodeId: 'alt', scaffoldVersion: 5 });
+  test('GEPA eval split and scaffold priors consume the pick row', async () => {
+    const { sql, actor, history, transcript } = setup();
+    const set = await capturedSet(sql, actor, history);
+    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'alt', scaffoldVersion: 5 });
 
-    const split = buildOutcomeEvalSplit(sql, actor, 4);
+    const split = await buildOutcomeEvalSplit(sql, actor, transcript, 4);
     expect(split.train).toHaveLength(1);
     expect(split.train[0]!.expected).toMatchObject({ outcome: 'corrected', followup: 'alternative approach' });
 

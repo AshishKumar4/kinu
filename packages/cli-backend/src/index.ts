@@ -3,7 +3,7 @@
  */
 
 export {
-  createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql,
+  createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, inspectionFiles,
   createHostShell,
   type CLIRuntime, type CLIRuntimeConfig, type LocalDb,
 } from './runtime';

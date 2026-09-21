@@ -124,7 +124,7 @@ export async function converge(
   }
 
   const trajectory = winner.msg_id
-    ? session.getHistory(winner.msg_id)
+    ? await session.getHistory(winner.msg_id)
     : [];
 
   if (mode === 'build') {

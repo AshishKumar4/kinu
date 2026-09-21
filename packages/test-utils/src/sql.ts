@@ -49,6 +49,7 @@ export function sqlOver(db: Database): SqlExecutor {
  *  this gets an isolated database. */
 export function createTestSql(): TestSql {
   const db = new Database(':memory:');
+  db.exec('PRAGMA foreign_keys = ON');
 
   return {
     sql: sqlOver(db),

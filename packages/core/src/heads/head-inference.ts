@@ -53,6 +53,8 @@ import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from 
 import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
 import type { BuiltinToolName } from '../tools/registry';
 import { agentAffinityKey } from '../providers/workers-ai';
+import type { ActorTurnClaim } from '../orchestrator/actor-claims';
+import type { MessageReference, MessagePartReference } from '../orchestrator/session-messages';
 import { snapshotCompletedTurn } from '../orchestrator/turn-lifecycle';
 
 /**
@@ -477,9 +479,7 @@ export interface HeadInferenceDeps {
    * the same turn rather than an untraceable second run.
    */
   runId: string;
-  /** A durable subordinate appends one assignment to its own working history.
-   * Heads and swarm nodes omit this: each invocation explicitly re-seeds their
-   * exploration, including a claim re-drive of the same branch. */
+  /** Durable assignments append input; a re-drive resumes the same canonical context. */
   delegation?: {
     readonly assignmentId: string;
     readonly birthContext: readonly ModelMessage[];
@@ -772,9 +772,11 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     if (gate.exhausted) throw new Error(gate.reason + ' budget exhausted');
   };
 
+  // Only the mission ledger is asked here; a cancelled or budget-exhausted head
+  // is cut by the turn's own signal and `assertActive`, which the session runs.
   const prepareModelStep = async () => {
+    if (deps.isAborted()) return undefined;
     await outOfBudget();
-    assertActive();
 
     if (refusal !== null) throw new MissionBudgetExhausted(refusal);
 
@@ -794,24 +796,27 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // never wanted: the summary is the agent's final answer, not its commentary.
   let lastText = '';
   let lastReasoning = '';
+  let canonicalClaim: ActorTurnClaim | null = null;
+  const canonicalOutput: MessageReference[] = [];
+  const canonicalParts: MessagePartReference[] = [];
 
-  // The conversation this run issues, extended at every turn boundary by the
-  // turn's own output and then by the wake that resumed it. ONE array and
-  // append-only, which is *Inherited context*'s rule and also what makes a
-  // resumed turn's request a prefix of the previous one that a provider can
-  // cache. The seed is the prefix a child inherits UP TO, so what this run
-  // produced is everything past it.
-  //
-  // The array is the SESSION's, not a second copy: the session is what admits
-  // the claim whose revisions record the exact array each step consumed, so a
-  // private array here would be a working history no revision could be checked
-  // against. An exploration re-seeds through the hydration arm. A durable
-  // assignment instead opens its existing revision after acquiring its lease.
+  // Input and output ownership lives in canonical context, not a prefix length.
   const session = deps.actor.session;
   const seed = deps.framing ? [...deps.framing.messages] : buildHeadMessages(input);
 
-  if (!deps.delegation) session.restoreHistory(seed);
-  let seeded = seed.length;
+  // The spawner's cancellation, bridged onto the session's own abort rather than
+  // handed to the SDK as `deps.signal`: the session owns the signal its steps run
+  // under, so an external cancel becomes the same interrupt an actor's own cancel
+  // is — one cancellation path for every kind. Bridged before the first await,
+  // so a cancel that lands while the seed is being restored still interrupts.
+  const cancelled = (): void => { session.interrupt(); };
+
+  deps.signal?.addEventListener('abort', cancelled, { once: true });
+
+  // An exploration is re-executed from its seed; a delegated turn continues the actor's own working history.
+  if (deps.delegation) await session.restoreWorkingHistory();
+  else await session.restoreHistory(seed);
+  const conversation: ModelMessage[] = [];
 
   const system = deps.framing?.system
     ?? buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout);
@@ -881,20 +886,13 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     });
   };
 
-  // The spawner's cancellation, bridged onto the session's own abort rather than
-  // handed to the SDK as `deps.signal`: the session owns the signal its steps run
-  // under, so an external cancel becomes the same interrupt an actor's own cancel
-  // is — one cancellation path for every kind.
-  const cancelled = (): void => { session.interrupt(); };
-
-  deps.signal?.addEventListener('abort', cancelled, { once: true });
-
   try {
     for (let index = 0; ; index++) {
       // Before the first call, between steps, AND between turns: an agent
       // spawned into an already-spent mission must not get one free inference
-      // out of it, and neither must a resumed one.
-      if (await outOfBudget()) break;
+      // out of it, and neither must a resumed one. A cancel that landed before
+      // this turn opened is honoured here, where there is no turn to interrupt.
+      if (deps.isAborted() || await outOfBudget()) break;
 
       // ONE turn id per iteration, derived from the run's own id rather than
       // minted: a recovered activation re-admits the SAME turn under the next
@@ -913,8 +911,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       try {
         if (index === 0 && deps.delegation) {
           const { birthContext } = deps.delegation;
-          session.openDelegatedTurn(lease, { messages: seed, birthContext: () => birthContext });
-          seeded = session.history.length;
+          await session.openDelegatedTurn(lease, { messages: seed, birthContext: async () => birthContext });
         }
 
         const resolved = await deps.profile({ availableTools: Object.keys(deps.tools), workMode: input.mode });
@@ -972,6 +969,14 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
           settled = true;
         });
 
+        if (outcome.claim !== null) {
+          canonicalClaim = outcome.claim;
+          canonicalOutput.push(...outcome.outputReferences);
+          canonicalParts.push(...outcome.outputPartReferences);
+
+          for (const reference of outcome.outputReferences) conversation.push(await session.canonical.messages.materialize(reference));
+        }
+
         if (outcome.failure !== null) {
           turnFailed = true;
           failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: outcome.failure, otherwise: 'unavailable' });
@@ -1019,16 +1024,22 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       if (failure !== undefined || deps.isAborted() || budgetExhausted(input.budget).exhausted) break;
 
       if (advice.length > 0) {
-        session.restoreHistory([...session.history, ...advice]);
+        for (const [part, message] of advice.entries()) {
+          const reference = await session.canonical.append({ id: `${turnId}#${index + 1}:advice:${part}`, message, origin: 'input', turnId: `${turnId}#${index + 1}`, assertOwner: () => deps.actor.handle.assertCurrent() });
+          conversation.push(await session.canonical.messages.materialize(reference));
+        }
+
         continue;
       }
 
       const resumed = await deps.resume?.();
 
       if (!resumed) break;
-      // Appended through the session's own hydration arm, between turns, so the
-      // next turn's claim is admitted against the array the wake produced.
-      session.restoreHistory([...session.history, ...resumed]);
+
+      for (const [part, message] of resumed.entries()) {
+        const reference = await session.canonical.append({ id: `${turnId}#${index + 1}:resume:${part}`, message, origin: 'input', turnId: `${turnId}#${index + 1}`, assertOwner: () => deps.actor.handle.assertCurrent() });
+        conversation.push(await session.canonical.messages.materialize(reference));
+      }
     }
   } catch (err) {
     failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: err, otherwise: 'unavailable' });
@@ -1038,7 +1049,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
 
   if (settled) {
     try {
-      deps.reportMessages?.(session.history.slice(seeded));
+      deps.reportMessages?.(conversation);
     } catch (cause) {
       failure = toKinuError({
         doing: `report agent ${input.id} conversation`,
@@ -1062,8 +1073,14 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       ? `Head ${input.id} errored: ${stopReason ?? 'no reason reported'}`
       : incompleteHeadSummary(input, status, capture, stopReason);
 
+  const canonicalCompletion = canonicalClaim === null ? undefined : {
+    turnId: canonicalClaim.turnId, runId: canonicalClaim.runId, outputReferences: canonicalOutput, outputPartReferences: canonicalParts,
+    finalTextReference: await session.recordTranscriptText(canonicalClaim, 'report', summary, canonicalOutput),
+  };
+
   return {
     id: input.id, status, summary,
+    canonicalCompletion,
     evidence: [...capture.evidence],
     decisions: [...capture.decisions],
     artifactRefs: [...capture.artifacts],

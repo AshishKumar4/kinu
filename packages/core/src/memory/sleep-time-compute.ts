@@ -36,7 +36,7 @@ import * as v from 'valibot';
 import type { LLM } from '../types/primitives';
 import type { FactsStore } from './facts';
 import { normalizeFactKey } from './facts';
-import type { TranscriptRow } from '../utils/ui-message';
+import type { ConversationProjection } from '../orchestrator/session-transcript';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
@@ -144,7 +144,7 @@ export interface SleepTimeWindow {
  * because everything older was that run's evidence or an earlier one's.
  */
 export function sleepTimeWindow(
-  newestFirst: readonly TranscriptRow[],
+  newestFirst: readonly ConversationProjection[],
   processed: (answerId: string) => boolean,
 ): SleepTimeWindow {
   let completedTurns = 0;

@@ -5,13 +5,13 @@
 // tests; here we verify the loop: turns stream + persist, programmatic turns run
 // serialized (reactor / job wake), broadcast fans out, end() flushes.
 import { describe, test, expect } from 'bun:test';
-import { createTestActorsOver, createTestSql, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
+import { createTestActorsOver, createTestSql, readTranscriptRows, scratchDir, scratchPath, toolExecute, scriptedTurnModel, type TranscriptRow } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { LanguageModel } from 'ai';
+import type { LanguageModel, ModelMessage } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type {
@@ -19,21 +19,21 @@ import type {
   LanguageModelV2Usage,
   LanguageModelV2StreamPart,
 } from '@ai-sdk/provider';
-import type { LLMProviderConfig } from '@kinu.run/core';
+import type { LLMProviderConfig, VFS, VfsNativeReads } from '@kinu.run/core';
 import { inWorkMode } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider,
   initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox,
   backgroundJobNotice,
-  backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage,
+  backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID,
   JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
   profileCatalogDigest, BUILTIN_ROLE_DEFINITIONS,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   EventLog, TriggerRegistry, listTriggers,
   readActivityLog,
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
-  type ModelCallSink, type ProfileCatalogEnvelope, type SqlExecutor, type SqlValue,
+  type ModelCallSink, type ProfileCatalogEnvelope, type SqlExecutor,
   type EventVariant,
   createAgentSelfProvider, openWorkspaceMainActor, defaultLoopOrigin,
   InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER,
@@ -197,11 +197,7 @@ function systemCapturingModel(answer: string, sink: (system: string) => void): T
  *  runtime factory's parameter. */
 function workspaceRuntime() {
   const db = new Database(scratchPath('local-session', 'agent.db'));
-  // The agent DB carries an actor_messages table in production (created on `kinu
-  // create`); the runtime factory doesn't, so provision it for the test.
-  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
-  // silently pinned a schema nothing else maintains.
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
 
@@ -214,12 +210,15 @@ test('parallel native calls retain their SDK identities after reverse completion
   await files.writeFile('identical.txt', 'same result');
   rt.actor.config.setDisplayNameOrigin('Identity pin', 'user');
   const first = Promise.withResolvers<void>();
-  const readFile = files.readFile.bind(files);
+  const plane: VFS & Partial<VfsNativeReads> = files;
+  const readRange = plane.readRange;
+
+  if (readRange === undefined) throw new Error('the workspace file plane reads by range');
   let reads = 0;
-  files.readFile = async (...args) => {
+  plane.readRange = async (...args) => {
     if (args[0] === 'identical.txt' && reads++ === 0) await first.promise;
 
-    return await readFile(...args);
+    return await readRange.apply(files, args);
   };
 
   let step = 0;
@@ -258,30 +257,28 @@ test('parallel native calls retain their SDK identities after reverse completion
     expect(completed?.turn.toolCalls.map((call) => call.toolCallId)).toEqual(['call-B', 'call-A']);
   } finally {
     first.resolve();
-    files.readFile = readFile;
+    plane.readRange = readRange;
     await session.end();
     db.close();
   }
 });
 
-/** The workspace's SQL executor with ONE statement-level failure armed — the
- *  storage fault (full disk, corrupt page) that a durability test needs to
- *  observe, injected where the real one lands: at a single write, with every
- *  statement before and after it working normally. */
-function sqlFailingOnce(
-  real: SqlExecutor,
-  match: (query: string, values: readonly SqlValue[]) => boolean,
-): SqlExecutor {
-  let armed = true;
+/** The storage fault (full disk, corrupt page) a durability test needs to
+ *  observe, armed where the real one lands: the answer's own conversation
+ *  entry, inside the terminal transaction, with every other write working. */
+function failAssistantEntryWrite(db: Database): void {
+  db.exec(`CREATE TRIGGER fail_assistant_entry
+    BEFORE INSERT ON conversation_entries
+    WHEN NEW.role = 'assistant'
+    BEGIN
+      SELECT RAISE(FAIL, 'database disk image is malformed');
+    END`);
+}
 
-  return function <T = unknown>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] {
-    if (armed && match(strings.join('?'), values)) {
-      armed = false;
-      throw new Error('database disk image is malformed');
-    }
-
-    return real<T>(strings, ...values);
-  };
+/** The durable conversation as a reader sees it: the head's ancestry, root
+ *  first, each entry projected to its text. */
+function transcript(rt: CLIRuntime, sessionId = CHAT_SESSION_ID): Promise<TranscriptRow[]> {
+  return readTranscriptRows(rt.storage.sql, rt.actor, rt.storage.vfs, sessionId);
 }
 
 function setup(answer = 'hello there', model?: LanguageModel, extra?: Partial<LocalAgentSessionOpts>) {
@@ -547,7 +544,7 @@ const steerStatuses = (events: SessionEvent[]) => events.flatMap((event) =>
 
 describe('LocalAgentSession.send — a user turn', () => {
   test('streams text, persists the exchange, and ends the turn', async () => {
-    const { db, session, events } = setup('hello there');
+    const { rt, session, events } = setup('hello there');
     await session.send('hi');
 
     expect(kinds(events)).toContain('turn-start');
@@ -571,20 +568,21 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(turnEnd.turn.userMessage).toBe('hi');
     expect(turnEnd.turn.assistantResponse).toBe('hello there');
 
-    const rows = db.query<{ role: string; content: string }, []>(
-      `SELECT role, content FROM actor_messages ORDER BY created_at`,
-    ).all();
+    const rows = await transcript(rt);
 
-    expect(rows.map((r) => r.role)).toEqual(['user', 'assistant']);
+    expect(rows.map((row) => row.role)).toEqual(['user', 'assistant']);
     expect(rows[1]!.content).toBe('hello there');
   });
 
   test('a post-stream persistence failure ends the turn and does not stall the queue', async () => {
-    const { db, session, events } = setup('streamed answer');
+    const { db, rt, session, events } = setup('streamed answer');
+    // The answer to the conversation's root message — turn one's, and only
+    // turn one's, since a second turn answers a message that has a parent.
     db.exec(`CREATE TRIGGER fail_first_turn_persist
-      BEFORE INSERT ON actor_messages
+      BEFORE INSERT ON conversation_entries
       WHEN NEW.role = 'assistant'
-        AND EXISTS (SELECT 1 FROM actor_messages WHERE id = NEW.parent_id AND content = 'first')
+        AND (SELECT parent_id FROM conversation_entries
+             WHERE actor_id = NEW.actor_id AND session_id = NEW.session_id AND id = NEW.parent_id) IS NULL
       BEGIN
         SELECT RAISE(FAIL, 'forced persist failure');
       END`);
@@ -612,16 +610,14 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(turns[1]!.turn.userMessage).toBe('second');
     expect(turns[1]!.turn.hadError).toBe(false);
 
-    const assistants = db.query<{ content: string }, []>(
-      `SELECT content FROM actor_messages WHERE role = 'assistant'`,
-    ).all();
+    const assistants = (await transcript(rt)).filter((row) => row.role === 'assistant');
 
-    expect(assistants).toEqual([{ content: 'streamed answer' }]);
+    expect(assistants.map((row) => row.content)).toEqual(['streamed answer']);
   });
 
   test('attachments reach the model as [file…, text] user content parts', async () => {
     let observed: PromptMessage[] = [];
-    const { db, session } = setup('a red square', historyCapturingModel('a red square', (messages) => { observed = messages; }));
+    const { rt, session } = setup('a red square', historyCapturingModel('a red square', (messages) => { observed = messages; }));
 
     await session.send({
       text: 'what is in this image?',
@@ -646,11 +642,9 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(parts[1]).toMatchObject({ type: 'text', text: 'what is in this image?' });
 
     // The durable transcript persists the text — never the data-URL payload.
-    const rows = db.query<{ role: string; content: string }, []>(
-      `SELECT role, content FROM actor_messages ORDER BY created_at`,
-    ).all();
+    const rows = await transcript(rt);
 
-    expect(rows[0]).toEqual({ role: 'user', content: 'what is in this image?' });
+    expect(rows[0]).toMatchObject({ role: 'user', content: 'what is in this image?' });
   });
 
   test('a PDF the model cannot accept is sanitized to a VFS reference before the model sees it', async () => {
@@ -747,8 +741,8 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(texts).toContain(turn1Block!); // byte-identical, still in place
 
     // Dynamic blocks are step state — never persisted.
-    const rows = db.query<{ content: string }, []>(`SELECT content FROM actor_messages`).all();
-    expect(rows.some((r) => r.content.includes('<dynamic_context'))).toBe(false);
+    const rows = await transcript(rt);
+    expect(rows.some((row) => row.content.includes('<dynamic_context'))).toBe(false);
   });
 
   test('the MEMORY.md tail (newest lessons) rides the dynamic block, never the system prefix', async () => {
@@ -845,18 +839,20 @@ describe('LocalAgentSession.send — a user turn', () => {
     const alternatingRole = (index: number): 'user' | 'assistant' =>
       index % 2 === 0 ? 'user' : 'assistant';
 
-    /** The transcript a resume restores, under the runtime's OWN actor — the
-     *  restore reads this actor's rows, so a seed written under any other is a
-     *  transcript no session can resume. */
-    function seed(
-      db: Database, actorId: string,
-      messages: Array<{ role: 'user' | 'assistant'; content: string }>,
-    ): void {
-      messages.forEach((m, i) => {
-        db.query(
-          `INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
-           VALUES (?, ?, 'default', ?, ?, ?)`,
-        ).run(actorId, `m-${i}`, m.role, m.content, 1_000 + i);
+    /** The conversation a resume restores, published under the runtime's OWN
+     *  actor — the restore reads this actor's working history, so a seed made
+     *  under any other is a conversation no session can resume. */
+    async function seed(
+      rt: CLIRuntime,
+      messages: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }>,
+    ): Promise<void> {
+      const history: ModelMessage[] = messages.map((message) => message.role === 'user'
+        ? { role: 'user', content: message.content }
+        : { role: 'assistant', content: message.content });
+
+      await rt.stores.history.replaceHistory(history, {
+        author: rt.actor.actorId, via: 'runtime', turnId: null, stage: false,
+        assertOwner: () => { rt.actor.assertCurrent(); },
       });
     }
 
@@ -878,7 +874,7 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     test('a transcript far past the old 40-message cap is restored whole', async () => {
       const { db, rt } = setup();
-      seed(db, rt.actor.actorId, Array.from({ length: 120 }, (_, i) => ({
+      await seed(rt, Array.from({ length: 120 }, (_, i) => ({
         role: alternatingRole(i),
         content: `turn-${i}`,
       })));
@@ -891,36 +887,6 @@ describe('LocalAgentSession.send — a user turn', () => {
       expect(text).toContain('turn-0');
       expect(text).toContain('turn-119');
       expect(text.some((t) => t.includes('earlier message'))).toBe(false);
-    });
-
-    test('what does not fit the context window is stated, with its count and where it lives', async () => {
-      const { db, rt } = setup();
-      // The static fallback window is 128k tokens ≈ 512k characters, so 80
-      // messages of 10k characters cannot be restored whole.
-      seed(db, rt.actor.actorId, Array.from({ length: 80 }, (_, i) => ({
-        role: alternatingRole(i),
-        content: `turn-${i} ${'z'.repeat(10_000)}`,
-      })));
-
-      const { session, seen } = resume(db, rt);
-      await session.send('and now?');
-      await session.end();
-
-      const text = seen();
-      const notice = text.find((t) => t.includes('earlier message'));
-      expect(notice).toBeDefined();
-      // The newest end is what survived, and the count names exactly how much
-      // of the old end did not — the boundary the model can reason about.
-      expect(text.some((t) => t.startsWith('turn-79'))).toBe(true);
-      expect(text.some((t) => t.startsWith('turn-0 '))).toBe(false);
-      const omitted = Number(/(\d+) earlier messages/.exec(notice!)![1]);
-      expect(omitted).toBeGreaterThan(0);
-      expect(omitted).toBeLessThan(80);
-      expect(text.some((t) => t.startsWith(`turn-${omitted - 1} `))).toBe(false);
-      // Not lost, and it says so — an agent that knows it is reading the tail
-      // of its own conversation can ask for the rest.
-      expect(notice).toContain('local session store');
-      expect(notice).toContain('"default"');
     });
   });
 });
@@ -1137,11 +1103,11 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
 
     const expectedId = `${'programmatic:'}${backgroundJobWakeTrigger(JOB)}`;
 
-    const row = sql<{ metadata: string | null }>`
-      SELECT metadata FROM actor_messages WHERE id = ${expectedId}`[0];
+    const row = sql<{ metadata_json: string | null }>`
+      SELECT metadata_json FROM conversation_entries WHERE id = ${expectedId}`[0];
 
     expect(row).toBeDefined();
-    expect(JSON.parse(row!.metadata!)).toMatchObject({
+    expect(JSON.parse(row!.metadata_json!)).toMatchObject({
       kinuEvent: 'background_job',
       jobId: JOB,
       [TURN_AUTHOR_METADATA_KEY]: 'harness',
@@ -1153,7 +1119,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     // may read as one. The one-shot surface's completion gate adds its own
     // programmatic turn after the wake — a producer whose queue item names
     // only its event — and the write seam stamps that one too.
-    const page = getChatHistoryPage(sql, rt.actor);
+    const page = await getChatHistoryPage(rt.stores.history.transcript(CHAT_SESSION_ID));
     expect(page.items.some((entry) => entry.role === 'user')).toBe(false);
     const wake = page.items.find((entry) => entry.id === expectedId)!;
     expect(wake.role).toBe('system');
@@ -1708,9 +1674,10 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       .toEqual(['from b', 'from a']);
   });
 
-  test('broadcast fans out as a SessionEvent', () => {
+  test('broadcast fans out as a SessionEvent', async () => {
     const { session, events } = setup();
     session.broadcast({ type: 'job_update', jobId: 'x' });
+    await session.flushEvents();
     const b = events.find((event) => event.type === 'broadcast');
 
     if (!b || b.type !== 'broadcast') throw new Error('broadcast event was not emitted');
@@ -1842,6 +1809,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     next.reclaimStrandedEventDeliveries();
     expect(hub(db).pending().map((e) => e.id)).toEqual([published]);
+    await next.flushEvents();
     expect(events.some((e) => e.type === 'background' && e.event === 'events_reclaimed')).toBe(true);
 
     await next.flushPendingDrains();
@@ -2488,10 +2456,8 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     opts: { oneShot?: boolean; gate?: Promise<void>; model?: LanguageModel } = {},
   ) {
     const db = new Database(scratchPath('local-session-review', 'agent.db'));
-    // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
-  // silently pinned a schema nothing else maintains.
-  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    // THE PRODUCTION INITIALIZER, not a copy of its DDL.
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
     // The classifier + reflection ride rt.llm.complete — stub it so the review
     const completions: string[] = [];
@@ -2531,7 +2497,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
   }
 
   test('the next user message grades the previous turn into the durable outcome ledger', async () => {
-    const { db, session } = setupWithEvolution('{"outcome":"corrected","confidence":0.9,"evidence":"user re-asked"}');
+    const { db, rt, session } = setupWithEvolution('{"outcome":"corrected","confidence":0.9,"evidence":"user re-asked"}');
 
     await session.send('please rotate the API keys for the staging cluster');
     await session.send('no — I said STAGING, you rotated production');
@@ -2550,12 +2516,10 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     expect(row.followup).toContain('STAGING');
     expect(row.session_id).toBe('default');
 
-    // Tied to the FIRST turn's durable assistant message id.
-    const firstAssistant = db.query<{ id: string }, []>(
-      `SELECT id FROM actor_messages WHERE role = 'assistant' ORDER BY created_at, rowid LIMIT 1`,
-    ).get();
+    // Tied to the FIRST turn's durable assistant entry id.
+    const firstAssistant = (await transcript(rt)).find((entry) => entry.role === 'assistant');
 
-    if (!firstAssistant) throw new Error('first assistant message row is missing');
+    if (!firstAssistant) throw new Error('first assistant entry is missing');
     expect(row.turn_id).toBe(firstAssistant.id);
 
     // The corrected outcome reflects a corroborated lesson into MEMORY.md.
@@ -3016,16 +2980,17 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     const { rt, session } = setup('the staging deploy used wrangler version three');
     await session.send('how did we deploy to staging?');
 
-    // Same seam the memory tool's `conversations` action uses: rt.storage.sql.
-    const store = new ConversationSearchStore(rt.storage.sql, rt.actor);
-    const hits = store.search('wrangler staging');
+    // Same seam the memory tool's `conversations` action uses: this actor's
+    // canonical conversation, read through its own transcript.
+    const store = new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId));
+    const hits = await store.search('wrangler staging');
     expect(hits.length).toBeGreaterThan(0);
     expect(hits[0]!.conversationId).toBe('default');
 
-    const view = store.scroll(hits[0]!.messageId, 2)!;
+    const view = (await store.scroll(hits[0]!.messageId, 2))!;
     expect(view.messages.some((m) => m.content.includes('how did we deploy'))).toBe(true);
 
-    const conversations = store.browse();
+    const conversations = await store.browse();
     expect(conversations[0]!.conversationId).toBe('default');
     expect(conversations[0]!.preview).toContain('how did we deploy');
     await session.end();
@@ -3131,7 +3096,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
   test('two rapid steers drain into ONE merged user message at the step boundary, after the tool results', async () => {
     const { model, prompts, release } = toolThenAnswerModel('done, checked both');
-    const { db, session, events } = setup('unused', model);
+    const { rt, session, events } = setup('unused', model);
 
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
@@ -3156,11 +3121,9 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     // Durable conversation keeps ONE row per steer (verbatim, as surfaces
     // recorded them) so the walk-back fork pivot can match each individually —
     // only the model-facing injection is merged.
-    const rows = db.query<{ role: string; content: string }, []>(
-      `SELECT role, content FROM actor_messages WHERE session_id = 'default' ORDER BY created_at, rowid`,
-    ).all();
+    const rows = await transcript(rt);
 
-    expect(rows.map((r) => r.role)).toEqual(['user', 'user', 'user', 'assistant']);
+    expect(rows.map((row) => row.role)).toEqual(['user', 'user', 'user', 'assistant']);
     expect(rows[1]!.content).toBe('also check X');
     expect(rows[2]!.content).toBe('and Y');
     await session.end();
@@ -3172,7 +3135,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     // two channels stay separate — the wake is model-visible only, the steer
     // keeps its verbatim durable row, and neither spawns a second turn.
     const { model, prompts, release } = toolThenAnswerModel('handled both');
-    const { db, session, events } = setup('unused', model);
+    const { db, rt, session, events } = setup('unused', model);
 
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
@@ -3199,12 +3162,10 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     // The steer persists verbatim; the signal is ephemeral — model-visible at
     // the tip of the live turn and nowhere in durable history.
-    const rows = db.query<{ role: string; content: string }, []>(
-      `SELECT role, content FROM actor_messages WHERE session_id = 'default' ORDER BY created_at, rowid`,
-    ).all();
+    const rows = await transcript(rt);
 
-    expect(rows.map((r) => r.content)).toContain('also check X');
-    expect(rows.some((r) => r.content.includes('mail from bob'))).toBe(false);
+    expect(rows.map((row) => row.content)).toContain('also check X');
+    expect(rows.some((row) => row.content.includes('mail from bob'))).toBe(false);
     await session.end();
   });
 
@@ -3223,7 +3184,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
   test('a steer with no remaining step boundary runs as the immediate next user turn', async () => {
     const { model, release } = gatedTextModel('first answer');
-    const { db, session, events } = setup('unused', model);
+    const { rt, session, events } = setup('unused', model);
 
     const turn = session.send('first question');
     await waitFor(() => events.some((e) => e.type === 'text-delta'));
@@ -3236,11 +3197,9 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     expect(starts).toHaveLength(2);
     expect(starts[1]!).toMatchObject({ kind: 'user', text: 'follow up please' });
 
-    const rows = db.query<{ role: string; content: string }, []>(
-      `SELECT role, content FROM actor_messages WHERE session_id = 'default' ORDER BY created_at, rowid`,
-    ).all();
+    const rows = await transcript(rt);
 
-    expect(rows.map((r) => `${r.role}:${r.content}`)).toContain('user:follow up please');
+    expect(rows.map((row) => `${row.role}:${row.content}`)).toContain('user:follow up please');
     await session.end();
   });
 
@@ -3320,7 +3279,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
       },
     });
 
-    const { db, session, events } = setup('unused', model);
+    const { rt, session, events } = setup('unused', model);
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
 
@@ -3359,21 +3318,19 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     // The durable half. A row carrying the steer key WITHOUT the step key is
     // indistinguishable from an ordinary user turn, which is why core's
     // describeLandedSteers stamps the two together and this asserts both.
-    const row = db.query<{ role: string; content: string; metadata: string | null }, [string]>(
-      `SELECT role, content, metadata FROM actor_messages WHERE id = ?`,
-    ).get(steerId ?? '');
+    const row = await rt.stores.history.transcript(CHAT_SESSION_ID).project(steerId ?? '');
 
-    if (!row) throw new Error('the landed steer left no durable row');
+    if (!row) throw new Error('the landed steer left no durable entry');
     expect(row.role).toBe('user');
     expect(row.content).toBe('also check X');
-    expect(v.parse(JsonObjectSchema, JSON.parse(row.metadata ?? 'null'))).toMatchObject({
+    expect(row.metadata).toMatchObject({
       [STEER_METADATA_KEY]: true,
       [STEER_STEP_METADATA_KEY]: landed.atStep,
     });
     // The returned steer was never seen by the model, so it left nothing behind.
-    expect(db.query<{ c: number }, [string]>(
-      `SELECT count(*) AS c FROM actor_messages WHERE content = ?`,
-    ).get('and Y')?.c).toBe(0);
+    expect(rt.storage.sql<{ c: number }>`SELECT count(*) AS c FROM conversation_entries
+      WHERE actor_id = ${rt.actor.actorId} AND id = ${returned[0]?.steerId ?? ''}`[0]?.c).toBe(0);
+    expect((await transcript(rt)).some((entry) => entry.content === 'and Y')).toBe(false);
 
     await session.end();
   });
@@ -3702,7 +3659,7 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
 
   test('a mid-turn send is in SQLite before send() resolves, and the drain retires it', async () => {
     const { model, stepGate, endGate } = drainWindowModel('done');
-    const { db, session, events } = setup('unused', model);
+    const { db, rt, session, events } = setup('unused', model);
 
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
@@ -3730,17 +3687,15 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     // steer's own id, and nothing is left to restore.
     expect(pendingSends(db)).toEqual([]);
 
-    const row = db.query<{ role: string; content: string }, []>(
-      `SELECT role, content FROM actor_messages WHERE content = 'also check X'`,
-    ).all();
+    const row = (await transcript(rt)).filter((entry) => entry.content === 'also check X');
 
-    expect(row).toEqual([{ role: 'user', content: 'also check X' }]);
+    expect(row.map((entry) => entry.role)).toEqual(['user']);
     await session.end();
   });
 
   test("a landed steer's durable row exists at the step boundary, not only at turn end", async () => {
     const { model, stepGate, endGate } = drainWindowModel('done');
-    const { db, session, events } = setup('unused', model);
+    const { db, rt, session, events } = setup('unused', model);
 
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
@@ -3751,9 +3706,8 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     // dying HERE used to lose the landed row.
     await waitFor(() => steerStatuses(events).some((s) => s.status === 'landed'));
     const landedId = steerStatuses(events).find((s) => s.status === 'landed')!.steerId!;
-    expect(db.query<{ c: number }, [string]>(
-      `SELECT count(*) AS c FROM actor_messages WHERE id = ? AND role = 'user'`,
-    ).get(landedId)?.c).toBe(1);
+    expect(rt.storage.sql<{ c: number }>`SELECT count(*) AS c FROM conversation_entries
+      WHERE actor_id = ${rt.actor.actorId} AND id = ${landedId} AND role = 'user'`[0]?.c).toBe(1);
     // The steer's reservation is spent; the opening send's own row (turn_id
     // NULL) is still owed — its turn has not committed yet.
     expect(pendingSends(db).map((row) => row.text)).toEqual(['main question']);
@@ -3805,13 +3759,11 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     expect(texts.some((t) => t.includes('lost mid-turn'))).toBe(true);
     expect(pendingSends(db)).toEqual([]);
 
-    // The durable thread carries it as a steer-stamped user row.
-    const row = db.query<{ metadata: string | null }, []>(
-      `SELECT metadata FROM actor_messages WHERE content = 'lost mid-turn'`,
-    ).all();
+    // The durable thread carries it as a steer-stamped user entry.
+    const steered = (await transcript(rt)).filter((entry) => entry.content === 'lost mid-turn');
 
-    expect(row).toHaveLength(1);
-    expect(v.parse(JsonObjectSchema, JSON.parse(row[0]!.metadata ?? 'null')))
+    expect(steered).toHaveLength(1);
+    expect(await rt.stores.history.transcript(CHAT_SESSION_ID).metadata(steered[0]!.id))
       .toMatchObject({ [STEER_METADATA_KEY]: true });
 
     // The dead session's turn is still parked; interrupt releases it cleanly.
@@ -3855,12 +3807,10 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     ]);
     expect(pendingSends(db)).toEqual([]);
 
-    const rows = db.query<{ role: string; content: string }, []>(
-      `SELECT role, content FROM actor_messages WHERE content IN ('queued behind nothing', 'the follow-up')`,
-    ).all();
+    const rows = (await transcript(rt)).map((entry) => `${entry.role}:${entry.content}`);
 
-    expect(rows).toContainEqual({ role: 'user', content: 'queued behind nothing' });
-    expect(rows).toContainEqual({ role: 'user', content: 'the follow-up' });
+    expect(rows).toContain('user:queued behind nothing');
+    expect(rows).toContain('user:the follow-up');
 
     session.interrupt();
     await turn;
@@ -3890,9 +3840,7 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     });
 
     await next.send('something else');
-    expect(db.query<{ c: number }, [string]>(
-      `SELECT count(*) AS c FROM actor_messages WHERE content = ?`,
-    ).get('change of plans')?.c).toBe(0);
+    expect((await transcript(rt)).some((entry) => entry.content === 'change of plans')).toBe(false);
 
     release();
     await session.end();
@@ -3916,9 +3864,7 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     });
 
     expect(await next.send('real work')).toBe('turn');
-    expect(db.query<{ c: number }, [string]>(
-      `SELECT count(*) AS c FROM actor_messages WHERE content = ?`,
-    ).get('not mine to run')?.c).toBe(0);
+    expect((await transcript(rt)).some((entry) => entry.content === 'not mine to run')).toBe(false);
 
     await session.end();
     await next.end();
@@ -4005,8 +3951,7 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
     seedTakes(rt);
     await session.send('solve it');
 
-    const turnId = rt.storage.sql<{ id: string }>`
-      SELECT id FROM actor_messages WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1`[0]!.id;
+    const turnId = (await transcript(rt)).filter((entry) => entry.role === 'assistant').at(-1)!.id;
 
     expect(session.latestAlternateTakes()).toMatchObject({ turnId, sessionId: 'default', chosenNodeId: null });
     await session.end();
@@ -4097,8 +4042,7 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.hadError).toBe(true);
 
-    const turnId = rt.storage.sql<{ id: string }>`
-      SELECT id FROM actor_messages WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1`[0]!.id;
+    const turnId = (await transcript(rt)).filter((entry) => entry.role === 'assistant').at(-1)!.id;
 
     expect(session.latestAlternateTakes()).toMatchObject({ turnId, sessionId: 'default' });
     await session.end();
@@ -4228,11 +4172,12 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
 
   test('branch while running settles into a claimed two-candidate takes set; the live turn is never touched', async () => {
     const { model, release, streamPrompts } = branchableModel('the live answer', () => 'the branch answer');
-    const { db, session, events } = setup('unused', model);
+    const { rt, session, events } = setup('unused', model);
 
     const turn = session.send('original question');
     await waitFor(() => events.some((e) => e.type === 'text-delta'));
     expect(session.branch('what about the other approach?')).toBe(true);
+    await session.flushEvents();
     expect(branchEvents(events)).toMatchObject([{ status: 'running', task: 'what about the other approach?' }]);
 
     release();
@@ -4256,11 +4201,9 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     expect(set.candidates.map((c) => c.origin)).toEqual(['live', 'branch']);
     expect(set.winnerNodeId).toBe(set.candidates[0]!.nodeId);
 
-    const assistant = db.query<{ id: string }, []>(
-      `SELECT id FROM actor_messages WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1`,
-    ).get();
+    const assistant = (await transcript(rt)).filter((entry) => entry.role === 'assistant').at(-1);
 
-    if (!assistant) throw new Error('assistant message row is missing');
+    if (!assistant) throw new Error('assistant entry is missing');
     const assistantId = assistant.id;
     expect(set.turnId).toBe(assistantId);
     const settled = branchEvents(events).find((e) => e.status === 'settled')!;
@@ -4430,7 +4373,7 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
         sessionAffinity: 'kinu-jarvis',
       });
 
-      const { db, session, events } = setupWithResolver(resolver);
+      const { rt, session, events } = setupWithResolver(resolver);
       expect(session.getEffectiveModelSpec()).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
 
       await session.send('hi from the device');
@@ -4446,8 +4389,7 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
       if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
       expect(turnEnd.turn.assistantResponse).toBe('local cloud turn');
       expect(turnEnd.turn.hadError).toBe(false);
-      const rows = db.query<{ role: string }, []>(`SELECT role FROM actor_messages ORDER BY created_at`).all();
-      expect(rows.map((r) => r.role)).toEqual(['user', 'assistant']);
+      expect((await transcript(rt)).map((entry) => entry.role)).toEqual(['user', 'assistant']);
 
       expect(completions).toEqual([{
         auth: `Bearer ${TOKEN}`,
@@ -4622,17 +4564,23 @@ describe('LocalAgentSession — the durable run-event log', () => {
       onEvent: (e) => {
         if (e.type !== 'turn-end') return;
 
-        const row = db
-          .query<{ content: string }, []>(`SELECT content FROM actor_messages WHERE role = 'assistant'`)
-          .get();
+        const entry = rt.storage.sql<{ id: string }>`SELECT id FROM conversation_entries
+          WHERE actor_id = ${rt.actor.actorId} AND role = 'assistant'`[0];
 
-        durableAtPublish.push(row ? row.content : null);
+        durableAtPublish.push(entry?.id ?? null);
       },
     });
 
     await session.send('where is the rollback step?');
 
-    expect(durableAtPublish).toEqual(['the rollback step is in the runbook']);
+    expect(durableAtPublish).toHaveLength(1);
+    const published = durableAtPublish[0];
+
+    if (published === null || published === undefined) throw new Error('turn-end published an answer the conversation did not hold');
+    // The entry and its parts land in one transaction, so an entry that
+    // existed at publish held the answer the observer was handed.
+    expect((await rt.stores.history.transcript(CHAT_SESSION_ID).project(published))?.content)
+      .toBe('the rollback step is in the runbook');
 
     await session.end();
   });
@@ -4645,19 +4593,12 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { db, rt } = workspaceRuntime();
     const events: SessionEvent[] = [];
 
+    // Fails exactly where a full disk or a corrupt page fails: the assistant
+    // entry, after the turn's user entry already landed.
+    failAssistantEntryWrite(db);
+
     const session = new LocalAgentSession({
-      rt: {
-        ...rt,
-        storage: {
-          ...rt.storage,
-          // Fails exactly where a full disk or a corrupt page fails: the
-          // assistant row, after the turn's user row already landed.
-          sql: sqlFailingOnce(
-            rt.storage.sql,
-            (query, values) => query.includes('INTO actor_messages') && values.includes('assistant'),
-          ),
-        },
-      },
+      rt,
       db, model: fakeModel('the rollback step is in the runbook'),
       onEvent: (e) => events.push(e), noAutoEvolve: true,
     });
@@ -4678,9 +4619,10 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]!.type === 'error' && errors[0].message).toContain('disk image is malformed');
 
-    // Nothing durable claims otherwise: no answer row, and the run is sealed
+    // Nothing durable claims otherwise: no answer entry, and the run is sealed
     // as the failure it was.
-    expect(db.query(`SELECT id FROM actor_messages WHERE role = 'assistant'`).all()).toEqual([]);
+    expect(rt.storage.sql<{ id: string }>`SELECT id FROM conversation_entries
+      WHERE actor_id = ${rt.actor.actorId} AND role = 'assistant'`).toEqual([]);
     const runs = session.listRuns().items;
     expect(runs).toHaveLength(1);
     const runEnd = session.getRunEvents(runs[0]!.runId).find((e) => e.type === 'run_end');
@@ -4697,17 +4639,10 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { db, rt } = workspaceRuntime();
     const leaseAtTurnEnd: Array<number | null> = [];
 
+    failAssistantEntryWrite(db);
+
     const session = new LocalAgentSession({
-      rt: {
-        ...rt,
-        storage: {
-          ...rt.storage,
-          sql: sqlFailingOnce(
-            rt.storage.sql,
-            (query, values) => query.includes('INTO actor_messages') && values.includes('assistant'),
-          ),
-        },
-      },
+      rt,
       db, model: fakeModel('handled event'), noAutoEvolve: true,
       onEvent: (e) => {
         if (e.type !== 'turn-end') return;
@@ -5543,6 +5478,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
 
     // And its spend reached THIS session's ledger: `judge` is what core files a
     // head merge under, and both sinks the roots were grepped for write here.
+    await session.flushEvents();
     const rows = events.flatMap((event) => event.type === 'run-event' ? [event.event] : []);
     expect(rows.some((row) => row.type === 'model_call' && row.source === 'judge')).toBe(true);
     expect(rows.some((row) => row.type === 'model_operation' && row.source === 'judge')).toBe(true);

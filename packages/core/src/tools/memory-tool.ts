@@ -14,6 +14,7 @@ import { appendMemoryNote } from '../memory/note';
 import { normalizeFactKey, searchFacts, type FactSearchHit, type FactsStore } from '../memory/facts';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search';
 import { ConversationSearchStore } from '../memory/conversation-search';
+import type { SessionTranscriptReader } from '../orchestrator/session-transcript';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 import {
   memoryActionsFor, unknownActionError,
@@ -38,6 +39,10 @@ export interface MemoryToolDeps {
    *  one actor, so a dispatcher built for this runtime can only ever read the
    *  rows this runtime owns. */
   readonly actor: ActorHandle;
+  /** Reader for one session's canonical transcript. Entry text is not a
+   *  column: recall materializes it through this, so the recalled words are
+   *  the ones the canonical message parts hold. */
+  readonly transcriptFor: (sessionId: string) => SessionTranscriptReader;
 }
 
 /** The durable-state tool's one input shape. `key` names a fact, `content` /
@@ -127,12 +132,12 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
   // `conversations` action: zero-LLM FTS5 transcript recall over the canonical
   // conversation store. Mode is inferred from the input:
   // around_message_id -> scroll, query -> search, neither -> browse.
-  const conversationSearch = new ConversationSearchStore(deps.sql, deps.actor);
+  const conversationSearch = new ConversationSearchStore(deps.sql, deps.actor, deps.transcriptFor);
 
-  const runConversationsAction = (args: MemoryToolInput): JsonValue => {
+  const runConversationsAction = async (args: MemoryToolInput): Promise<JsonValue> => {
     try {
       if (args.around_message_id) {
-        const view = conversationSearch.scroll(args.around_message_id, args.window ?? 5, args.max_chars);
+        const view = await conversationSearch.scroll(args.around_message_id, args.window ?? 5, args.max_chars);
 
         if (!view) throw new KinuError('missing', 'no message with id ' + args.around_message_id);
 
@@ -140,7 +145,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
       }
 
       if (args.query?.trim()) {
-        const hits = conversationSearch.search(args.query, args.limit ?? 5);
+        const hits = await conversationSearch.search(args.query, args.limit ?? 5);
 
         return decodeJsonValue({ value: {
           mode: 'search', query: args.query, hits,
@@ -151,7 +156,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
       }
 
       return decodeJsonValue({
-        value: { mode: 'browse', conversations: conversationSearch.browse(args.limit ?? 10) },
+        value: { mode: 'browse', conversations: await conversationSearch.browse(args.limit ?? 10) },
       });
     } catch (err) {
       if (err instanceof KinuError) throw err;

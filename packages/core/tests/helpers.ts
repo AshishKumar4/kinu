@@ -29,6 +29,7 @@ import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-p
 import { createWorkspace, workspaceGenerationStorage, type WorkspaceVFS } from '../src/vfs/nimbus-workspace';
 import type { VfsNativeReads } from '../src/vfs/mounts';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
+import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff';
@@ -75,17 +76,6 @@ export function createTestWorkspace(): TestWorkspace {
 
   return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs };
 }
-
-/**
- * Re-exported so every suite keeps one import path; the constant's doc and
- * definition live in `helpers/pane-session-ddl.ts`, reachable by runtimes that
- * cannot import this module's `bun:sqlite` (cf-backend's workerd probes).
- * Deliberately NOT part of `createTestWorkspace`: the pane store appears on
- * Think's first session read, so a real workspace that has never run a turn
- * does not have it, and the code under test has to keep answering that
- * absence correctly.
- */
-export { SDK_SESSION_DDL } from './helpers/pane-session-ddl';
 
 // ── SqlExecutor from bun:sqlite ──────────────────────────────────
 
@@ -508,7 +498,18 @@ export function createTestRuntime(opts?: {
     abortBranch: async () => {},
   };
 
-  return { rt, db };
+  return { rt, db, stores: storesFor(rt) };
+}
+
+/** The store bundle over an already-built runtime — what a fixture that hands
+ *  back a bare `AgentRuntime` reaches for to name its one `SessionHistory`. */
+export function storesFor(rt: AgentRuntime): AgentStores {
+  return createAgentStores(
+    () => rt.storage.sql,
+    () => rt.actor,
+    write => rt.storage.transactionSync(write),
+    async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' }),
+  );
 }
 
 // ── Mock session writer ──────────────────────────────────────────
@@ -521,8 +522,7 @@ export function createMockSession(): import('../src/mcts/record-node').SessionWr
       const content = msg.parts.map((part) => part.text).join('');
       messages.push({ id: msg.id, parentId, role: msg.role, content });
     },
-    getHistory(leafId) {
-      if (!leafId) return messages.map(m => ({ role: m.role, content: m.content }));
+    async getHistory(leafId) {
       // Walk up via parentId
       const result: Array<{ role: string; content: string }> = [];
       let current = messages.find(m => m.id === leafId);

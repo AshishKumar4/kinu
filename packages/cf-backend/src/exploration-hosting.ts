@@ -312,7 +312,7 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
             clock: REAL_CLOCK,
             model: seams.resolveModel(spec),
             tools: buildHeadToolSet({
-              input, capture, rt: runtime,
+              input, capture, rt: runtime, history: actor.stores.history,
               codemodeTool: seams.codemodeTool(runtime, webSearch),
               webSearch,
               split: seams.split(actor, runtime, input),

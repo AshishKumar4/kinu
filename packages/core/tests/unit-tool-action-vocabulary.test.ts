@@ -27,6 +27,7 @@ import {
   type AgentRuntime, type WebSearchProvider,
 } from '../src/index';
 import type { ToolSet } from 'ai';
+import { storesFor } from './helpers';
 
 /** The malformed argument the owner's model actually emitted. A `">` fragment
  *  inside a tool argument, kept verbatim so this gate is anchored to the real
@@ -51,25 +52,25 @@ const noopWebSearch: WebSearchProvider = {
 const SURFACES: readonly DispatchSurface[] = [
   {
     tool: 'tasks', field: 'action', vocabulary: TASKS_TOOL_ACTIONS,
-    build: (rt) => buildBuiltinTools({ rt }),
+    build: (rt) => buildBuiltinTools({ rt, history: storesFor(rt).history }),
   },
   {
     tool: 'web', field: 'action', vocabulary: WEB_TOOL_ACTIONS,
-    build: (rt) => buildBuiltinTools({ rt, webSearch: noopWebSearch }),
+    build: (rt) => buildBuiltinTools({ rt, webSearch: noopWebSearch, history: storesFor(rt).history }),
   },
   {
     // Facts NOT wired, deliberately: the refusal must name the reachable set,
     // so offering `remember` here would be the drift memoryActionsFor prevents.
     tool: 'memory', field: 'action', vocabulary: memoryActionsFor(false),
-    build: (rt) => buildBuiltinTools({ rt }),
+    build: (rt) => buildBuiltinTools({ rt, history: storesFor(rt).history }),
   },
   {
     tool: 'report', field: 'status', vocabulary: SUBORDINATE_REPORT_STATUSES,
-    build: (rt) => buildBuiltinTools({ rt, report: { report: async () => ({ ok: true }) } }),
+    build: (rt) => buildBuiltinTools({ rt, report: { report: async () => ({ ok: true }) }, history: storesFor(rt).history }),
   },
   {
     tool: 'file', field: 'action', vocabulary: FILE_TOOL_ACTIONS,
-    build: (rt) => buildBuiltinTools({ rt }),
+    build: (rt) => buildBuiltinTools({ rt, history: storesFor(rt).history }),
   },
 ];
 
@@ -123,6 +124,7 @@ describe('a model-supplied discriminant is refused with its vocabulary', () => {
 
     const tools = buildBuiltinTools({
       rt,
+      history: storesFor(rt).history,
       webSearch: noopWebSearch,
       report: { report: async () => ({ ok: true }) },
     });

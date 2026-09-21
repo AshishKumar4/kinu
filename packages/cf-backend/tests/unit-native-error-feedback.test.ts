@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { MockLanguageModelV3 } from 'ai/test';
-import { createProviderRegistry } from '@kinu.run/core';
+import { createProviderRegistry, type VFS, type VfsNativeReads } from '@kinu.run/core';
 import { hostedSubordinateHarness, chatSessionTurns, orchestratorHarness } from './helpers/actor-harness';
 
 function modelCallingFile() {
@@ -53,12 +53,15 @@ test('parallel hosted native calls retain their SDK identities after reverse com
   const files = agent.observeRuntime().storage.vfs;
   await files.writeFile('identical.txt', 'same result');
   const first = Promise.withResolvers<void>();
-  const readFile = files.readFile.bind(files);
+  const plane: VFS & Partial<VfsNativeReads> = files;
+  const readRange = plane.readRange;
+
+  if (readRange === undefined) throw new Error('the hosted file plane reads by range');
   let reads = 0;
-  files.readFile = async (...args) => {
+  plane.readRange = async (...args) => {
     if (args[0] === 'identical.txt' && reads++ === 0) await first.promise;
 
-    return await readFile(...args);
+    return await readRange.apply(files, args);
   };
 
   // The order the tools SETTLED in, read where the loop's runner reports each
@@ -109,7 +112,7 @@ test('parallel hosted native calls retain their SDK identities after reverse com
     expect(returned?.flatMap((part) => part.type === 'tool-result' ? [part.toolCallId] : []).sort()).toEqual(requested?.sort());
   } finally {
     first.resolve();
-    files.readFile = readFile;
+    plane.readRange = readRange;
   }
 });
 

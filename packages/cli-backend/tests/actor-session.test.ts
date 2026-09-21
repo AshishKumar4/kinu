@@ -46,18 +46,18 @@ function sessions() {
     const enqueued: ProgrammaticTurn[] = [];
     // The REAL store bundle, so a turn's claim is written through the same
     // memoized ledger production uses rather than a fixture beside it.
-    const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync);
+    const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
 
-    const actor: ActorSession = new ActorSession({ runtime, claims: stores.claims, installedBuild: null, orchestration: {
-      engine: new EvolutionEngine(runtime, { enabled: false }), eventLog: new EventLog(eventSql, handle),
+    const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null, orchestration: {
+      engine: new EvolutionEngine(runtime, stores.history, { enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
         broadcast: event => { broadcasts.push(event); },
-
+    
         // Captured rather than thrown: what the seam hands a steer back as —
         // the user-origin rerun turn — is the assertion.
         enqueueTurn: async (turn) => {
           enqueued.push(turn);
-
+    
           return { status: 'queued' as const };
         },
         turnInFlight: () => actor.inFlight,
@@ -71,11 +71,11 @@ function sessions() {
   return { left: create('left'), right: create('right'), db };
 }
 
-function bind(actor: ActorSession, turnId: string, mode: WorkMode, message: ModelMessage, tools: ToolSet = {}) {
+async function bind(actor: ActorSession, turnId: string, mode: WorkMode, message: ModelMessage, tools: ToolSet = {}) {
   const lease = actor.beginTurn({ runId: `run-${turnId}`, turnId }, mode, Date.now());
   actor.bindProfile(lease, resolveTurnProfile({ ...profiles, roleId: 'task', workMode: mode,
     availableTools: Object.keys(tools), activeSkills: [] }), profiles);
-  actor.appendInput(lease, message);
+  await actor.openTurnInput(lease, { item: {}, message, birthContext: async () => [] });
 
   return lease;
 }
@@ -120,8 +120,8 @@ test('logical actors in one store keep live context, mode and structured tool da
     { type: 'file', data: new Uint8Array([1, 2, 3]), mediaType: 'application/pdf' },
   ] };
 
-  const leftLease = bind(left.actor, 'left-turn', 'build', leftInput, tools);
-  const rightLease = bind(right.actor, 'right-turn', 'plan', { role: 'user', content: 'right private input' });
+  const leftLease = await bind(left.actor, 'left-turn', 'build', leftInput, tools);
+  const rightLease = await bind(right.actor, 'right-turn', 'plan', { role: 'user', content: 'right private input' });
   const events: ChatEvent[] = [];
 
   const leftRun = left.actor.execute(leftLease, { task: 'left', loopVersion: 0,
@@ -189,10 +189,10 @@ test('a released lease cannot mutate or execute a newer turn of the same actor',
 
   try {
     expect(() => actor.bindProfile(old, profile, profiles)).toThrow(KinuError);
-    expect(() => actor.appendInput(old, { role: 'user', content: 'stale private input' })).toThrow(KinuError);
+    await expect(actor.openTurnInput(old, { item: {}, message: { role: 'user', content: 'stale private input' }, birthContext: async () => [] })).rejects.toThrow(KinuError);
     await expect(actor.execute(old, input, event => { events.push(event); })).rejects.toMatchObject({ code: 'denied' });
     actor.bindProfile(current, profile, profiles);
-    actor.appendInput(current, { role: 'user', content: 'new input' });
+    await actor.openTurnInput(current, { item: {}, message: { role: 'user', content: 'new input' }, birthContext: async () => [] });
     expect(await actor.execute(current, input, event => { events.push(event); })).toMatchObject({ text: 'new answer', failure: null });
     expect(actor.inFlight).toBe(false);
     // A refused steer — no turn in flight — is never queued into the seam, so
@@ -238,8 +238,8 @@ test.each(['dispatch', 'published'])('interrupting one actor at %s preserves its
     },
   }) };
 
-  const first = bind(left.actor, 'cancelled-turn', 'build', { role: 'user', content: 'hold this tool' }, tools);
-  const second = bind(right.actor, 'sibling-turn', 'build', { role: 'user', content: 'finish your work' });
+  const first = await bind(left.actor, 'cancelled-turn', 'build', { role: 'user', content: 'hold this tool' }, tools);
+  const second = await bind(right.actor, 'sibling-turn', 'build', { role: 'user', content: 'finish your work' });
   const events: ChatEvent[] = [];
 
   const running = left.actor.execute(first, { task: 'hold', loopVersion: 0, chat: { model, system: 'sys', tools }, extensions: [], dynamic: () => ({}) }, event => {
@@ -283,7 +283,7 @@ test('bound steer persistence reserves on accept and lands rows at the drain', a
   const drained: string[][] = [];
   actor.bindSteerPersistence({
     onAccept: (steer) => { accepted.push(steer.id); },
-    onDrain: (rows) => { drained.push(rows.map((row) => row.id)); },
+    prepareDrain: async rows => () => { drained.push(rows.map(row => row.id)); },
   });
 
   // Gating the tool's execution holds the turn open past the tool call's own
@@ -315,7 +315,7 @@ test('bound steer persistence reserves on accept and lands rows at the drain', a
       return 'held';
     } }) };
 
-  const lease = bind(actor, 'steer-turn', 'build', { role: 'user', content: 'hold on' }, tools);
+  const lease = await bind(actor, 'steer-turn', 'build', { role: 'user', content: 'hold on' }, tools);
 
   const run = actor.execute(lease, {
     task: 'hold', loopVersion: 0,

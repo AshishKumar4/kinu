@@ -38,6 +38,18 @@ async function stepMessages(
   return [...await chatSessionTurns(agent).step(stepNumber, messages)];
 }
 
+/** One conversation as role plus flattened text — the comparison that survives
+ *  the same message being carried as a string on one side and as one text part
+ *  on the other. */
+function spoken(messages: readonly ModelMessage[]): { role: string; text: string }[] {
+  return messages.map((message) => ({
+    role: message.role,
+    text: v.is(v.string(), message.content)
+      ? message.content
+      : message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''),
+  }));
+}
+
 /** The turn-local block the ledger weaves into every step's request. */
 function isDynamicContextBlock(message: ModelMessage): boolean {
   if (message.role !== 'user') return false;
@@ -256,7 +268,12 @@ describe('turn-pipeline correctness wiring', () => {
 
     if (trial === undefined || prepared?.messages === undefined) throw new Error('the turn did not retain its request and trial');
     expect(prepared.messages[0]).toEqual({ role: 'user', content: 'use the NEW premise' });
-    expect(trial.context).toEqual(prepared.messages);
+    // The trial retains what the model was CALLED with — the admitted history
+    // plus the dynamic block the step pipeline splices in — so the edit has to
+    // be in both. Compared on role and text: the request carries the
+    // assistant's answer as one text part and the retained revision as a
+    // string, and that shape is not what this case is about.
+    expect(spoken(trial.context)).toEqual(spoken(prepared.prompt));
     expect(trial.context.filter((message) => message.content === 'follow-up input')).toHaveLength(1);
   });
 
@@ -725,7 +742,7 @@ describe('turn-pipeline correctness wiring', () => {
       actor.indexOf('private async readTurnInputs(tools: ToolSet)'),
     );
 
-    const transcript = clear.indexOf('this.chatTranscript.clear()');
+    const transcript = clear.indexOf('this.stores.history.clearConversation(CHAT_SESSION_ID,');
     const reset = clear.indexOf('this.dynamicLedger.reset()');
     const clearPlan = clear.indexOf('this.compactionState.plans.save(this.name, null)');
     expect(transcript).toBeGreaterThan(-1);
@@ -757,27 +774,24 @@ describe('turn-pipeline correctness wiring', () => {
   test('an INTERRUPTED turn is complete through every reader, with no mirror write', async () => {
     // The bug the operator hit: he forked from a message the chat pane was
     // showing and got `fork point not found`, because every reader but the
-    // fork cut read the `actor_messages` projection, and the projection skipped
-    // anything that had not been reconciled. Every reader goes through the
-    // canonical conversation store — the SDK's own transcript — so nothing
-    // may be written into `actor_messages` for the default chat, and the
-    // interrupted turn must still be served by the paged history read.
+    // fork cut read a projection beside the canonical store, and the
+    // projection skipped anything that had not been reconciled. Every reader
+    // goes through the canonical conversation store now, so no projection of
+    // the default chat may exist to skip anything, and the interrupted turn
+    // must still be served by the paged history read.
     const harness = orchestratorHarness();
-    // The SDK's own transcript table, as the transcript store creates it — no
-    // owner column; `usesPaneStore` is what scopes the canonical store's reads
-    // to the workspace's root actor. A table carrying `actor_id` would be a
-    // shape no workspace has, and every pane read would pass against it while
-    // failing on the real one. The rows are the loop's own: the turn it opened
-    // under the user's id, and the answer it was streaming when it was cut.
+    // The rows are the loop's own: the turn it opened under the user's id,
+    // and the answer it was streaming when it was cut.
     chatSessionTurns(harness.agent).open('u-live');
     await chatSessionTurns(harness.agent).settle({ messageId: 'a-live', text: 'partial answer', requestId: 'req-interrupted', status: 'aborted' });
 
-    // No projection row anywhere.
-    const mirrored = harness.db.prepare<{ c: number }, []>(
-      `SELECT COUNT(*) AS c FROM actor_messages WHERE session_id = 'default'`,
-    ).get();
+    // No projection to write into: the mirror tables are gone from the
+    // workspace, not merely left unwritten.
+    const projections = harness.db.prepare<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('actor_messages', 'assistant_messages')`,
+    ).all();
 
-    expect(mirrored?.c).toBe(0);
+    expect(projections).toEqual([]);
 
     // The paged history read serves the interrupted turn straight from the
     // authority, text flattened, edges intact.
@@ -1035,7 +1049,7 @@ describe('turn-pipeline correctness wiring', () => {
     const parked = await chatSessionTurns(drained.agent).prepare({ messages: [{ role: 'user', content: 'the drain text' }] });
     expect(parked?.messages.at(-1)).toEqual({ role: 'user', content: 'the drain text' });
     await chatSessionTurns(drained.agent).settle({ messageId: 'a-9', text: 'the answer' });
-    const rows = drained.agent.harnessTranscript.history();
+    const rows = (await drained.agent.harnessTranscript.history());
     expect(rows.at(-2)).toMatchObject({ role: 'user', parts: [{ type: 'text', text: 'the drain text' }], metadata: expect.objectContaining({ drainTurnId: 'drain-1' }) });
     expect(rows.at(-1)).toMatchObject({ role: 'assistant', parts: expect.arrayContaining([expect.objectContaining({ type: 'text', text: 'the answer' })]) });
   });

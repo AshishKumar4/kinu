@@ -25,7 +25,7 @@ function localRuntime() {
 describe('clamped run output on the local backend', () => {
   test('the marker remedy round-trips: a ranged read restores what the host shell cannot see', async () => {
     const rt = localRuntime();
-    const tools = buildBuiltinTools({ rt });
+    const tools = buildBuiltinTools({ rt, history: rt.stores.history });
     const run = toolExecute<{ command: string; runtime?: string }, string>(tools.shell);
 
     // A real host command whose output blows the clamp budget, on the one

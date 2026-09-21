@@ -3,6 +3,7 @@
 // network LLM). Verifies the unified seam: event stream, turn results, JSONL
 // recording, history hydration, walk-back fork, and stop() reaching the abort.
 import { scratchDir } from '../../test-utils/src/scratch';
+import { readTranscriptRows } from '@kinu.run/test-utils';
 import { existsSync } from 'node:fs';
 
 import { join } from 'node:path';
@@ -10,9 +11,9 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
-import { NO_COUNT_ENDPOINT, type LLMProviderConfig } from '@kinu.run/core';
+import { NO_COUNT_ENDPOINT, openWorkspaceMainActor, type LLMProviderConfig } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
-import { createCLIRuntime, type LocalModelResolver , makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
+import { createCLIRuntime, makeSql, type LocalModelResolver , makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { LocalAgentClient } from '../src/local-agent-client';
 import type { CliSessionOptions } from '../src/session';
@@ -99,9 +100,7 @@ function setup(model: LanguageModel) {
   // not that one (actor-identity.ts `requireLocalDatabasePath`), which no
   // in-memory handle can satisfy. `create: true` is what puts the file there.
   const db = new Database(dbPath, { create: true });
-  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
-  // silently pinned a schema nothing else maintains.
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
 
@@ -137,9 +136,7 @@ function openPersistentClient(
 ): LocalAgentClient {
   const dbPath = join(home, 'agent.db');
   const db = new Database(dbPath);
-  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
-  // silently pinned a schema nothing else maintains.
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
 
@@ -225,10 +222,11 @@ describe('LocalAgentClient', () => {
     await recorded.close();
 
     const db = new Database(join(home, 'agent.db'));
+    const sql = makeSql(db);
+    const actorId = openWorkspaceMainActor(sql).actorId;
 
-    const sessions = db.query<{ session_id: string }, []>(
-      'SELECT DISTINCT session_id FROM actor_messages ORDER BY session_id',
-    ).all();
+    const sessions = sql<{ session_id: string }>`
+      SELECT DISTINCT session_id FROM conversation_entries WHERE actor_id = ${actorId} ORDER BY session_id`;
 
     const conversation = db.query<{ value: string }, []>(
       "SELECT value FROM actor_config WHERE key = 'conversation.id'",
@@ -398,14 +396,19 @@ describe('LocalAgentClient', () => {
       const pivot = empty ? 'first question' : 'second question';
       await client.fork({ text: pivot, occurrenceFromEnd: 1 });
 
-      const working = rt.storage.sql<{ messages: string }>`
-        SELECT messages FROM actor_working_revisions
-        WHERE actor_id = ${rt.actor.actorId} AND status = 'active'`;
+      // The walk-back re-points the conversation in place: the entries before
+      // the pivot are the head's whole ancestry, and the working history the
+      // fork's first turn will run on is exactly those messages.
+      const rows = await readTranscriptRows(rt.storage.sql, rt.actor, rt.storage.vfs);
 
-      expect(working).toHaveLength(1);
-      expect(JSON.parse(working[0]!.messages)).toEqual(empty ? [] : [
+      expect(rows.map((row) => `${row.role}:${row.content}`))
+        .toEqual(empty ? [] : ['user:first question', 'assistant:answer']);
+
+      const working = await rt.stores.history.materialize();
+
+      expect(working.messages).toEqual(empty ? [] : [
         { role: 'user', content: 'first question' },
-        { role: 'assistant', content: 'answer' },
+        { role: 'assistant', content: [{ type: 'text', text: 'answer' }] },
       ]);
       await client.close();
 

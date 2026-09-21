@@ -16,6 +16,7 @@ import {
   buildBuiltinTools, createFactsStore, initAllTables, initFactsTable,
   type MemoryToolInput, type JsonValue,
 } from '../src/index';
+import { storesFor } from './helpers';
 
 const FactAnswerSchema = v.object({ ok: v.boolean(), key: v.string() });
 
@@ -30,7 +31,7 @@ function memoryTool() {
   rt.memory.search = async () => [];
 
   return toolExecute<MemoryToolInput, JsonValue | string>(
-    buildBuiltinTools({ rt, facts: createFactsStore(testSql.sql, rt.actor) }).memory);
+    buildBuiltinTools({ rt, facts: createFactsStore(testSql.sql, rt.actor), history: storesFor(rt).history }).memory);
 }
 
 describe('the memory tool names a fact by its stored key', () => {

@@ -172,7 +172,7 @@ describe('listReplayEvals — the quality-panel data series', () => {
 
 describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
   test('the lifetime cycle does NOT run it — the same ledger is not re-executed twice', async () => {
-    const { rt } = createTestRuntime({
+    const { rt, stores } = createTestRuntime({
       llmResponses: {
         'Accepted response': '{"score": 0.8, "note": "ok"}',
         "User's correction": '{"score": 0.8, "note": "ok"}',
@@ -182,7 +182,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
 
-    const engine = new EvolutionEngine(rt, {
+    const engine = new EvolutionEngine(rt, stores.history, {
       replayTaskRunner: async (task) => `current-config answer: ${task}`,
     });
 
@@ -197,7 +197,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
   });
 
   test('called explicitly, it runs through the backend runner and emits the loss', async () => {
-    const { rt } = createTestRuntime({
+    const { rt, stores } = createTestRuntime({
       llmResponses: {
         'Accepted response': '{"score": 0.8, "note": "ok"}',
         "User's correction": '{"score": 0.8, "note": "ok"}',
@@ -207,7 +207,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
 
-    const engine = new EvolutionEngine(rt, {
+    const engine = new EvolutionEngine(rt, stores.history, {
       replayTaskRunner: async (task) => `current-config answer: ${task}`,
     });
 
@@ -225,8 +225,8 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
   });
 
   test('no runner configured → replay skipped, returns null', async () => {
-    const { rt } = createTestRuntime();
-    const engine = new EvolutionEngine(rt);
+    const { rt, stores } = createTestRuntime();
+    const engine = new EvolutionEngine(rt, stores.history);
     seedOutcomes(rt.storage.sql, rt.actor);
     expect(await engine.runReplayEval()).toBeNull();
     expect(listReplayEvals(rt.storage.sql, rt.actor)).toHaveLength(0);

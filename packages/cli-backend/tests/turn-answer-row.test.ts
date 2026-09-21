@@ -4,16 +4,16 @@
  * `runChat` selects the answer (the final step's text, chat.ts
  * `answerFromSteps`); the durable assistant row must hold exactly that. The
  * defect measured 2026-09-16 on build cba44dcb9 was every consumer keeping its
- * own rule: the session accumulated every delta it saw and the row read
+ * the session accumulated every delta it saw and the row read
  * "narration + answer" concatenated. Driven through `LocalAgentSession`, read
- * back off `actor_messages`.
+ * back off the conversation.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { scratchPath } from '@kinu.run/test-utils';
+import { readTranscriptRows, scratchPath } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, type LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2Usage } from '@ai-sdk/provider';
-import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
+import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
 
@@ -83,17 +83,20 @@ function parkedModel(delta: string): TestLanguageModelV2 {
   });
 }
 
-function assistantRows(db: Database): string[] {
-  return db.query<{ content: string }, []>("SELECT content FROM actor_messages WHERE role = 'assistant' ORDER BY rowid").all()
-    .map((row) => row.content);
-}
+interface OpenedSession { readonly db: Database; readonly rt: CLIRuntime }
 
-function openSession(name: string) {
+function openSession(name: string): OpenedSession {
   const db = new Database(scratchPath('turn-answer-row', `${name}.db`));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
 
   return { db, rt };
+}
+
+async function rowsOf(session: OpenedSession, role: 'user' | 'assistant'): Promise<string[]> {
+  const rows = await readTranscriptRows(makeSql(session.db), session.rt.actor, session.rt.storage.vfs);
+
+  return rows.filter((row) => row.role === role).map((row) => row.content);
 }
 
 /** Parks before any token until aborted. */
@@ -131,8 +134,8 @@ describe('an interrupted turn', () => {
     a.interrupt();
     await turn;
     await a.end();
-    expect(assistantRows(silent.db)).toEqual([]);
-    expect(silent.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM actor_messages WHERE role = 'user'").get()?.n).toBe(1);
+    expect(await rowsOf(silent, 'assistant')).toEqual([]);
+    expect(await rowsOf(silent, 'user')).toEqual(['say nothing']);
     silent.db.close();
 
     const cut = openSession('cut');
@@ -148,14 +151,15 @@ describe('an interrupted turn', () => {
     b.interrupt();
     await cutTurn;
     await b.end();
-    expect(assistantRows(cut.db)).toEqual(['part-']);
+    expect(await rowsOf(cut, 'assistant')).toEqual(['part-']);
     cut.db.close();
   });
 });
 
 describe('the assistant row holds the answer', () => {
   test('a narrated multi-step turn stores its final step; the deltas still stream', async () => {
-    const { db, rt } = openSession('narrated');
+    const opened = openSession('narrated');
+    const { db, rt } = opened;
     const events: SessionEvent[] = [];
 
     const session = new LocalAgentSession({
@@ -167,14 +171,15 @@ describe('the assistant row holds the answer', () => {
 
     const streamed = events.filter((event) => event.type === 'text-delta').map((event) => event.type === 'text-delta' ? event.delta : '');
     expect(streamed).toEqual(['Running the test in the sandbox:', 'FAIL']);
-    expect(assistantRows(db)).toEqual(['FAIL']);
+    expect(await rowsOf(opened, 'assistant')).toEqual(['FAIL']);
     db.close();
   });
 
   test('a continuation that went on to call tools stores the answer, not the cut narration in front of it', async () => {
     // Process A dies inside a narration step; process B continues, calls a
     // tool and answers. The cut text is that narration step's, not the answer's.
-    const { db, rt } = openSession('continued');
+    const opened = openSession('continued');
+    const { db, rt } = opened;
     const streamedA = Promise.withResolvers<void>();
 
     const a = new LocalAgentSession({
@@ -199,13 +204,14 @@ describe('the assistant row holds the answer', () => {
     await b.end();
 
     expect(eventsB.filter((event) => event.type === 'tool-call')).toHaveLength(1);
-    expect(assistantRows(db)).toEqual(['FAIL']);
+    expect(await rowsOf(opened, 'assistant')).toEqual(['FAIL']);
     await Promise.race([dying, Promise.resolve()]);
     db.close();
   });
 
   test('a continuation of the cut answer step joins the cut text to what it finished', async () => {
-    const { db, rt } = openSession('joined');
+    const opened = openSession('joined');
+    const { db, rt } = opened;
     const streamedA = Promise.withResolvers<void>();
 
     const a = new LocalAgentSession({
@@ -243,7 +249,7 @@ describe('the assistant row holds the answer', () => {
     await ended.promise;
     await b.end();
 
-    expect(assistantRows(db)).toEqual(['part-two']);
+    expect(await rowsOf(opened, 'assistant')).toEqual(['part-two']);
     await Promise.race([dying, Promise.resolve()]);
     db.close();
   });

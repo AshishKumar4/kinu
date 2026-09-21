@@ -32,20 +32,21 @@ function begin(transferId: string): ForkFrame {
   return sealForkFrame({
     version: FORK_TRANSFER_VERSION, transferId, seq: 0, kind: 'begin',
     head: { source: { workspaceId: 'S', workspaceName: 'source' }, cut: { messageId: 'm1', createdAtMs: 1 } },
-    targetAuthority: 'plain',
-    counts: { agentConfig: 0, craftedTools: 0, memoryChunks: 0, assistantMessages: 0, messages: 0, files: 1 },
+    counts: {
+      agentConfig: 0, craftedTools: 0, memoryChunks: 0,
+      sessionMessages: 0, messageParts: 0, messageUpdates: 0,
+      conversationEntries: 0, conversationEntryParts: 0, contextMembers: 0,
+      files: 1,
+    },
   });
 }
 
 function range(transferId: string, seq: number, offset: number, end: number, last: boolean): ForkFrame {
-  let body: Parameters<typeof sealForkFrame>[0] = {
+  return sealForkFrame({
     version: FORK_TRANSFER_VERSION, transferId, seq, kind: 'file',
     path: 'memory/replaced.md', offset, bytes: CONTENT.subarray(offset, end), last,
-  };
-
-  if (last) body = { ...body, fileDigest: DIGEST };
-
-  return sealForkFrame(body);
+    artifact: false, fileDigest: last ? DIGEST : undefined,
+  });
 }
 
 describe('a replacement transfer stages under its OWN suffix', () => {

@@ -26,7 +26,7 @@ import {
 } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import { scratchPath } from '@kinu.run/test-utils';
+import { readTranscriptRows, scratchPath } from '@kinu.run/test-utils';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 
@@ -64,9 +64,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   // file its handle is not open on. `scratchPath` is mkdtemp-backed, so each
   // setup gets its own directory. Same convention as local-session.test.ts.
   const db = new Database(scratchPath('scaffold-turn', 'agent.db'), { create: true });
-  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
-  // silently pinned a schema nothing else maintains.
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
   // What `kinu create` provisions (identity/create.ts): the scaffold
@@ -131,6 +129,7 @@ for (const mode of ['promote', 'auto', 'veto'] as const) {
       const decision = await session.applyScaffoldDecision(mode === 'auto' ? 'auto' : 'promote');
       expect(decision).toMatchObject({ ok: true, action: mode === 'veto' ? 'rollback' : 'promote' });
       rt.stores.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'scaffold', usage: { input: 4, output: 2 } });
+      await session.flushEvents();
       const retained = session.getRunEvents(WORKSPACE_RUN_ID);
       const live = events.flatMap((event) => event.type === 'run-event' ? [event.event] : []);
 
@@ -178,7 +177,7 @@ describe('a promoted scaffold drives a local turn', () => {
   // A processTurn that drives runChat directly streams "the default loop
   // answered" no matter what the scaffold says.
   test('the scaffold answers, not the default loop', async () => {
-    const { db, rt, session, events } = await setup('the default loop answered');
+    const { rt, session, events } = await setup('the default loop answered');
     await installScaffold(rt, {
       version: 1, status: 'current',
       code: `async function* run(rt, task) {
@@ -192,11 +191,10 @@ describe('a promoted scaffold drives a local turn', () => {
     expect(streamed(events)).not.toContain('default loop');
 
     // The reply the user saw is what the durable history keeps.
-    const rows = db.query<{ role: string; content: string }, []>(
-      `SELECT role, content FROM actor_messages ORDER BY created_at`,
-    ).all();
+    const rows = await readTranscriptRows(rt.storage.sql, rt.actor, rt.storage.vfs);
 
-    expect(rows.map((r) => r.content)).toEqual(['who answers?', 'the scaffold answered: who answers?']);
+    expect(rows.map((row) => row.content)).toEqual(['who answers?', 'the scaffold answered: who answers?']);
+    expect(rows.map((row) => row.role)).toEqual(['user', 'assistant']);
   });
 
   test('a delegating scaffold still runs the default loop, faithfully', async () => {

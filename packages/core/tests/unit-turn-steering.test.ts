@@ -63,14 +63,14 @@ function newTurn(): AgentOrchestrator {
     setTimer: () => {},
   };
 
-  const { rt, testSql } = createTestRuntime();
+  const { rt, testSql, stores } = createTestRuntime();
   // The orchestrator's inbox over the runtime's OWN database and actor: a log
   // bound to a second database would drain an inbox no turn ever writes to.
   const sql = makeSqlExec(testSql.db);
   initEventsHubTables(sql);
 
   return new AgentOrchestrator({
-    host, engine: new EvolutionEngine(rt, { enabled: false }),
+    host, engine: new EvolutionEngine(rt, stores.history, { enabled: false }),
     eventLog: new EventLog(sql, rt.actor),
   });
 }

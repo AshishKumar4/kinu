@@ -51,10 +51,6 @@ export interface ScriptedAnswer {
   /** The user message this answer is for, when the suite needs one on disk
    *  first (the loop's own admission writes it in production). */
   readonly turnId?: string;
-  /** A stored row the converter REFUSES — the one reason to say a role the
-   *  SDK's own type forbids. Production never writes one; recovery can meet
-   *  one, and the suite that pins that arm needs it. */
-  readonly unreadableRole?: 'tool';
   /** How the model's step ended: `length` is an answer the provider cut at
    *  its output limit, which the loop continues once and the roster then
    *  reads off the last step. Stop by default. */

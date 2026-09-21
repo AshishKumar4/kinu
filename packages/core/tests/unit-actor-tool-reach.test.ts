@@ -32,7 +32,7 @@ test('a bound role governs provider tools, actual execution and the dynamic read
       const profile = resolveTurnProfile({ ...inputs, roleId: 'reader', workMode: 'build', availableTools: Object.keys(tools), activeSkills: [] });
       const lease = actor.session.beginTurn({ runId: `run-${permitted}`, turnId: `turn-${permitted}` }, 'build', 0);
       actor.session.bindProfile(lease, profile, inputs);
-      actor.session.appendInput(lease, { role: 'user', content: 'Try the effect under current permissions.' });
+      await actor.session.openTurnInput(lease, { item: {}, message: { role: 'user', content: 'Try the effect under current permissions.' }, birthContext: async () => [] });
       const seen: string[][] = [];
       let calls = 0;
 

@@ -55,8 +55,12 @@ interface ForkStagingRow {
   staged_agent_config: number;
   staged_crafted_tools: number;
   staged_memory_chunks: number;
-  staged_pane_messages: number;
-  staged_messages: number;
+  staged_session_messages: number;
+  staged_message_parts: number;
+  staged_message_updates: number;
+  staged_conversation_entries: number;
+  staged_conversation_entry_parts: number;
+  staged_context_members: number;
   staged_files: number;
   transfer_id: string | null;
   expected_seq: number;
@@ -67,8 +71,12 @@ interface ForkStagingRow {
   want_agent_config: number;
   want_crafted_tools: number;
   want_memory_chunks: number;
-  want_pane_messages: number;
-  want_messages: number;
+  want_session_messages: number;
+  want_message_parts: number;
+  want_message_updates: number;
+  want_conversation_entries: number;
+  want_conversation_entry_parts: number;
+  want_context_members: number;
   want_files: number;
   published: number;
 }
@@ -92,10 +100,14 @@ export class ForkStagingState {
       SELECT head_declared, head_source_id, head_source_name,
              head_cut_message_id, head_cut_created_at, mission,
              staged_agent_config, staged_crafted_tools, staged_memory_chunks,
-             staged_pane_messages, staged_messages, staged_files,
+             staged_session_messages, staged_message_parts, staged_message_updates,
+             staged_conversation_entries, staged_conversation_entry_parts, staged_context_members,
+             staged_files,
              transfer_id, expected_seq, section_cursor, stream, file_path, file_bytes,
              want_agent_config, want_crafted_tools, want_memory_chunks,
-             want_pane_messages, want_messages, want_files, published
+             want_session_messages, want_message_parts, want_message_updates,
+             want_conversation_entries, want_conversation_entry_parts, want_context_members,
+             want_files, published
       FROM fork_transfer WHERE id = 1 LIMIT 1
     `[0];
 
@@ -111,8 +123,12 @@ export class ForkStagingState {
         agentConfig: row.staged_agent_config,
         craftedTools: row.staged_crafted_tools,
         memoryChunks: row.staged_memory_chunks,
-        assistantMessages: row.staged_pane_messages,
-        messages: row.staged_messages,
+        sessionMessages: row.staged_session_messages,
+        messageParts: row.staged_message_parts,
+        messageUpdates: row.staged_message_updates,
+        conversationEntries: row.staged_conversation_entries,
+        conversationEntryParts: row.staged_conversation_entry_parts,
+        contextMembers: row.staged_context_members,
         files: row.staged_files,
       },
       transferId: row.transfer_id,
@@ -125,8 +141,12 @@ export class ForkStagingState {
         agentConfig: row.want_agent_config,
         craftedTools: row.want_crafted_tools,
         memoryChunks: row.want_memory_chunks,
-        assistantMessages: row.want_pane_messages,
-        messages: row.want_messages,
+        sessionMessages: row.want_session_messages,
+        messageParts: row.want_message_parts,
+        messageUpdates: row.want_message_updates,
+        conversationEntries: row.want_conversation_entries,
+        conversationEntryParts: row.want_conversation_entry_parts,
+        contextMembers: row.want_context_members,
         files: row.want_files,
       },
       published: row.published === 1,
@@ -153,8 +173,14 @@ export class ForkStagingState {
     void this.sql`UPDATE fork_transfer SET
       transfer_id = ${input.transferId}, expected_seq = ${input.expectedSeq}, stream = ${input.stream},
       want_agent_config = ${input.declared.agentConfig}, want_crafted_tools = ${input.declared.craftedTools},
-      want_memory_chunks = ${input.declared.memoryChunks}, want_pane_messages = ${input.declared.assistantMessages},
-      want_messages = ${input.declared.messages}, want_files = ${input.declared.files}
+      want_memory_chunks = ${input.declared.memoryChunks},
+      want_session_messages = ${input.declared.sessionMessages},
+      want_message_parts = ${input.declared.messageParts},
+      want_message_updates = ${input.declared.messageUpdates},
+      want_conversation_entries = ${input.declared.conversationEntries},
+      want_conversation_entry_parts = ${input.declared.conversationEntryParts},
+      want_context_members = ${input.declared.contextMembers},
+      want_files = ${input.declared.files}
       WHERE id = 1`;
   }
 
@@ -175,12 +201,16 @@ export class ForkStagingState {
    *  over every section, because a column name cannot be bound. */
   count(delta: Partial<ForkStagedCounts>): void {
     void this.sql`UPDATE fork_transfer SET
-      staged_agent_config  = staged_agent_config  + ${delta.agentConfig ?? 0},
-      staged_crafted_tools = staged_crafted_tools + ${delta.craftedTools ?? 0},
-      staged_memory_chunks = staged_memory_chunks + ${delta.memoryChunks ?? 0},
-      staged_pane_messages = staged_pane_messages + ${delta.assistantMessages ?? 0},
-      staged_messages      = staged_messages      + ${delta.messages ?? 0},
-      staged_files         = staged_files         + ${delta.files ?? 0}
+      staged_agent_config             = staged_agent_config             + ${delta.agentConfig ?? 0},
+      staged_crafted_tools            = staged_crafted_tools            + ${delta.craftedTools ?? 0},
+      staged_memory_chunks            = staged_memory_chunks            + ${delta.memoryChunks ?? 0},
+      staged_session_messages         = staged_session_messages         + ${delta.sessionMessages ?? 0},
+      staged_message_parts            = staged_message_parts            + ${delta.messageParts ?? 0},
+      staged_message_updates          = staged_message_updates          + ${delta.messageUpdates ?? 0},
+      staged_conversation_entries     = staged_conversation_entries     + ${delta.conversationEntries ?? 0},
+      staged_conversation_entry_parts = staged_conversation_entry_parts + ${delta.conversationEntryParts ?? 0},
+      staged_context_members          = staged_context_members          + ${delta.contextMembers ?? 0},
+      staged_files                    = staged_files                    + ${delta.files ?? 0}
       WHERE id = 1`;
   }
 

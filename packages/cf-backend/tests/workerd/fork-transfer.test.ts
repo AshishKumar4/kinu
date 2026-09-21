@@ -18,7 +18,10 @@
 import { env } from 'cloudflare:workers';
 import { abortAllDurableObjects } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { PROBE_CUT_MESSAGE_ID, PROBE_SOUL_MISSION, PROBE_SOURCE_NAME } from './fork-probe';
+import { FORK_ROW_SECTIONS } from '@kinu.run/core';
+import {
+  PROBE_CUT_MESSAGE_ID, PROBE_CUT_RECORDED_AT, PROBE_SOUL_MISSION, PROBE_SOURCE_NAME,
+} from './fork-probe';
 
 /** A stub held across a reset is itself broken by the reset; the id survives.
  *  Re-acquiring is what a real caller does on its next request. */
@@ -26,9 +29,9 @@ const source = (name: string) => env.FORK_SOURCE.get(env.FORK_SOURCE.idFromName(
 
 const target = (name: string) => env.FORK_TARGET.get(env.FORK_TARGET.idFromName(name));
 
-/** The cut point's own stamp, as the pane stores it. The fork point is the cut
- *  message's time, so the published result names this exact millisecond. */
-const CUT_MS = Date.parse('2026-01-01T00:00:03.000Z');
+/** The cut entry's own stamp. The fork point is that entry's time, so the
+ *  published result names this exact millisecond. */
+const CUT_MS = PROBE_CUT_RECORDED_AT;
 
 describe('a fork transfer interrupted by a real eviction', () => {
   it('resumes at the exact frame, stays invisible until the commit, and publishes once', async () => {
@@ -43,13 +46,14 @@ describe('a fork transfer interrupted by a real eviction', () => {
     const rows = await source(name).deliver({ target: name, from: 0, stop: 'files' });
     expect(rows.refusal).toBeNull();
     expect(rows.staged).toBe(rows.sent);
-    // begin, two config frames, the crafted tool, two memory chunks, three pane
-    // rows, and the three plain rows elided to one frame: the rows genuinely
-    // span frames, so the boundary is a real one.
-    expect(rows.sent).toBe(10);
+    // More frames than there are sections: at sixty-four payload bytes the
+    // config rows, the crafted tool, the memory chunks and the message updates
+    // each span frames, so the boundary this activation ends at is a real one.
+    expect(rows.sent).toBeGreaterThan(FORK_ROW_SECTIONS.length);
 
     const staged = await target(name).state();
-    expect(staged.paneRows).toBe(3);
+    expect(staged.entries).toBe(3);
+    expect(staged.contextMembers).toBe(3);
     expect(staged.craftedTools).toBe(1);
     // Staged and unreachable: no lineage, no fork marker, no display name, no
     // mission, and the identity row still the one the target came up with.
@@ -108,10 +112,11 @@ describe('a fork transfer interrupted by a real eviction', () => {
     expect(published.identity?.name).toBe('fork-target');
     expect(published.displayName).toBe('fork-target');
     expect(published.markers).toBe(1);
-    expect(published.paneRows).toBe(3);
-    // The transcript landed in ONE store: the pane, because that is the declared
-    // authority. The plain rows crossed the wire and were dropped.
-    expect(published.plainRows).toBe(0);
+    expect(published.entries).toBe(3);
+    // The carried conversation, plus the marker's own message: the public chain
+    // and the working context are two selections over ONE canonical store.
+    expect(published.messages).toBe(4);
+    expect(published.contextMembers).toBe(3);
     expect(published.files).toEqual(inherited);
 
     // ── Re-delivery of the tail: the last file frame and the commit again. ──

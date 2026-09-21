@@ -15,7 +15,7 @@ import { runChat, collectStepText, ExtensionHost, createAgentsTool, createAgents
 import { synthesizeToolFallback } from '../src/prompts/evidence-window';
 import { isFailingToolResult } from '../src/orchestrator/turn-steering';
 import { buildBuiltinTools } from '../src/tools/builtins';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, storesFor } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 
 type FinishPart = Extract<LanguageModelV3StreamPart, { type: 'finish' }>;
@@ -103,7 +103,7 @@ describe('ChatEvent tool success/error fidelity', () => {
     };
 
     const { rt } = createTestRuntime();
-    const tools = buildBuiltinTools({ rt: { ...rt, shell: { exec: async () => ({ stdout, stderr: '', exitCode: 0 }) } } });
+    const tools = buildBuiltinTools({ rt: { ...rt, shell: { exec: async () => ({ stdout, stderr: '', exitCode: 0 }) } }, history: storesFor(rt).history });
     const model = toolThenTextModel({ toolName: 'shell', input: JSON.stringify({ command: 'cat incident.json' }) });
     const events = await collect(model, tools, new ExtensionHost().register(extension));
     expect(failures).toEqual([false]);
@@ -115,7 +115,7 @@ describe('ChatEvent tool success/error fidelity', () => {
 
     const tools = buildBuiltinTools({ rt: { ...rt, shell: {
       exec: async () => ({ stdout: 'tests failed', stderr: 'detail', exitCode: 7 }),
-    } } });
+    } }, history: storesFor(rt).history });
 
     const model = toolThenTextModel({ toolName: 'shell', input: JSON.stringify({ command: 'test' }) });
     const events = await collect(model, tools);

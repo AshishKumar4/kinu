@@ -8,7 +8,7 @@ import type { FilesRouteAgent } from "../src/files-routes"; // type-only: erased
 import type {
   ExecutorFileDownload as ExecutorFileDownloadInstance,
   ExecutorFileUpload as ExecutorFileUploadInstance,
-  VFS,
+  VFS, VfsRevision,
 } from "@kinu.run/core";
 // The route module statically imports the agents SDK, whose dist imports
 // workerd-only `cloudflare:*` modules that crash bun's loader on evaluation.
@@ -22,7 +22,7 @@ mockAgentsSdk();
 const { handleFilesRequest } = await import("../src/files-routes");
 
 const {
-  ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
+  ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, VfsRevisionSchema,
 } = await import("@kinu.run/core");
 
 const URL_ = "https://kinu.test/api/workspaces/ws/files?executor=workspace&path=/home/user/blob.bin";
@@ -31,15 +31,15 @@ const ErrorReplySchema = v.object({ error: v.string() });
 
 const OkReplySchema = v.object({ ok: v.literal(true) });
 
-const ConditionalOkReplySchema = v.object({ ok: v.literal(true), revision: v.number() });
+const ConditionalOkReplySchema = v.object({ ok: v.literal(true), revision: VfsRevisionSchema });
 
-const ConflictReplySchema = v.object({ error: v.string(), revision: v.number() });
+const ConflictReplySchema = v.object({ error: v.string(), revision: VfsRevisionSchema });
 
 /** What a route test drives: the fake actor plus the recorders its assertions
  *  read. */
 interface Harness {
   agent: FilesRouteAgent;
-  seed(path: string, bytes: Uint8Array): Promise<void>;
+  seed(path: string, bytes: Uint8Array, revision?: VfsRevision): Promise<void>;
   files: Map<string, Uint8Array>;
   reads: { count: number };
   aborted: string[];
@@ -50,13 +50,13 @@ interface Harness {
  *  end to end without instantiating the DO. */
 function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWrites?: boolean } = {}): Harness {
   const files = new Map<string, Uint8Array>();
-  const revisions = new Map<string, number>();
+  const revisions = new Map<string, VfsRevision>();
   const reads = { count: 0 };
   const aborted: string[] = [];
 
   const uploads = new Map<string, {
     readonly path: string;
-    readonly expectedRevision: number | undefined;
+    readonly expectedRevision: VfsRevision | undefined;
     readonly upload: ExecutorFileUploadInstance;
   }>();
 
@@ -73,7 +73,8 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
     },
     writeFile: async (path: string, data: Uint8Array | string) => {
       files.set(path, data instanceof Uint8Array ? data : new TextEncoder().encode(data));
-      revisions.set(path, (revisions.get(path) ?? 0) + 1);
+      const previous = revisions.get(path) ?? 0;
+      revisions.set(path, v.is(v.number(), previous) ? previous + 1 : previous + ':next');
     },
     readdir: async (): Promise<string[]> => [],
     stat: async (path: string) => {
@@ -92,7 +93,7 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
 
       if (expectedRevision !== revision) return { ok: false, revision };
       files.set(path, data);
-      const nextRevision = revision + 1;
+      const nextRevision = v.is(v.number(), revision) ? revision + 1 : revision + ':next';
       revisions.set(path, nextRevision);
 
       return { ok: true, revision: nextRevision };
@@ -167,8 +168,10 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
         return Promise.resolve();
       },
     },
-    seed: async (path, bytes) => {
+    seed: async (path, bytes, revision) => {
       await vfs.writeFile(path, bytes);
+
+      if (revision !== undefined) revisions.set(path, revision);
     },
     files,
     reads,
@@ -375,16 +378,26 @@ describe("files route — PUT", () => {
     expect(new TextDecoder().decode(harness.files.get("/home/user/blob.bin"))).toBe("current");
   });
 
-  test("If-Match accepts only an exact non-negative integer revision", async () => {
+  test('malformed and non-scalar revisions refuse before writing', async () => {
+    for (const revision of ['not-json', '{"revision":1}']) {
+      const harness = makeAgent();
+      const response = await route(put('new bytes', { 'If-Match': revision }), harness);
+      expect(response.status).toBe(400);
+      expect(harness.files.has('/home/user/blob.bin')).toBe(false);
+    }
+  });
+
+  test('a quoted numeric-looking revision remains distinct from a numeric revision', async () => {
     const harness = makeAgent();
+    await harness.seed('/home/user/blob.bin', new TextEncoder().encode('original'), '7');
+    const stale = await route(put('wrong revision', { 'If-Match': '7' }), harness);
+    expect(stale.status).toBe(412);
+    expect(v.parse(ConflictReplySchema, await stale.json()).revision).toBe('7');
+    expect(new TextDecoder().decode(harness.files.get('/home/user/blob.bin'))).toBe('original');
 
-    const response = await route(put("current", { "If-Match": "1.5" }), harness);
-
-    expect(response.status).toBe(400);
-    expect(v.parse(ErrorReplySchema, await response.json())).toEqual({
-      error: 'If-Match must be a non-negative integer revision',
-    });
-    expect(harness.files.has("/home/user/blob.bin")).toBe(false);
+    const written = await route(put('matching revision', { 'If-Match': JSON.stringify('7') }), harness);
+    expect(written.status).toBe(200);
+    expect(new TextDecoder().decode(harness.files.get('/home/user/blob.bin'))).toBe('matching revision');
   });
 
   test("concurrent same-path uploads never share buffered chunks", async () => {

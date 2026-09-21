@@ -133,7 +133,7 @@ describe('scaffoldChatTransform', () => {
     expect(done.text).toBe('scaffold answer for: the task');
     // The reply the user saw must survive into the durable history.
     expect(done.responseMessages).toEqual([
-      { role: 'assistant', content: 'scaffold answer for: the task' },
+      { role: 'assistant', content: [{ type: 'text', text: 'scaffold answer for: the task' }] },
     ]);
   });
 

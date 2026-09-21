@@ -6,7 +6,8 @@
 // stated as an absence, and every boundary the owning executor enforces
 // (device consent) still enforced on the mounted path.
 import { describe, expect, test } from 'bun:test';
-import type { VFS } from '../src/types/primitives';
+import * as v from 'valibot';
+import type { VFS, VfsRevision } from '../src/types/primitives';
 import { walkRecursive } from '@kinu.run/agent-utils/vfs';
 import { isVfsError } from '../src/vfs/errno';
 import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
@@ -97,7 +98,7 @@ describe('the workspace plane mount table', () => {
 
 	test('routes mkdir, stat, exists, unlink, and revision writes through a live mount', async () => {
 		const backing = fakeTree({ '/home/dev/remove.txt': 'remove me' });
-		const revisionWrites: Array<[string, number]> = [];
+		const revisionWrites: Array<[string, VfsRevision]> = [];
 
 		const device: VFS = {
 			...backing,
@@ -105,7 +106,7 @@ describe('the workspace plane mount table', () => {
 				revisionWrites.push([path, expectedRevision]);
 				await backing.writeFile(path, data);
 
-				return { ok: true, revision: expectedRevision + 1 };
+				return { ok: true, revision: v.parse(v.number(), expectedRevision) + 1 };
 			},
 		};
 

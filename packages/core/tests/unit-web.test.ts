@@ -15,7 +15,7 @@ import { describe, test, expect } from 'bun:test';
 import { handClock, toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, storesFor } from './helpers';
 import {
   buildActorTools,
   buildBuiltinTools,
@@ -557,6 +557,7 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
 
   return buildActorTools({
     rt,
+    history: storesFor(rt).history,
     craftedToolExecute: unusedCraftedExecute,
     codemode: createNodeCodemodeBuilder([createWebCodemodeProvider(provider)]),
     effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
@@ -567,7 +568,7 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
 describe('web builtin', () => {
   test('gated on the webSearch dep', () => {
     const { rt } = createTestRuntime();
-    const without = buildBuiltinTools({ rt, craftedToolExecute: unusedCraftedExecute });
+    const without = buildBuiltinTools({ rt, craftedToolExecute: unusedCraftedExecute, history: storesFor(rt).history });
     expect(Object.keys(without)).not.toContain('web');
 
     const withWeb = buildWithWeb(rt);

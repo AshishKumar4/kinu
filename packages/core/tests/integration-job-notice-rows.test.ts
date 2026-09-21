@@ -42,49 +42,55 @@ import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
 import { Inbox } from '../src/orchestrator/inbox';
 import { EventLog, initEventsHubTables } from '../src/events/hub/index';
 import { getChatHistoryPage } from '../src/read-models/status';
-import { PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, uiMessageText } from '../src/utils/ui-message';
+import { SessionHistory } from '../src/orchestrator/session-history';
+import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
+import { PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY } from '../src/utils/ui-message';
 import type { BackendHost } from '../src/types/backend-host';
-import type { Schedule, SqlExecutor } from '../src/types/primitives';
-import { createTestWorkspace, makeSql, makeExecRaw, makeSqlExec, SDK_SESSION_DDL } from './helpers';
+import type { Schedule } from '../src/types/primitives';
+import { createTestWorkspace, createWorkspaceBundle, makeSql, makeSqlExec } from './helpers';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { createTestActors } from '@kinu.run/test-utils';
 
 const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';
 
 /**
- * The durable chat store as the cloud backend actually reaches it: the agents
- * SDK's `assistant_messages` table, and `BackendHost.enqueueTurn`'s row
- * derivation (actor-agent.ts) on top of it.
+ * The durable chat store as a backend actually reaches it: the canonical
+ * session store, and `BackendHost.enqueueTurn`'s entry derivation
+ * (actor-agent.ts) on top of it.
  *
- * Both halves are copied deliberately rather than stubbed. `appendMessage`
- * returns early for an id already present (agents, AgentSessionProvider), which
- * is the mechanism a stable id relies on — a harness that appended
- * unconditionally would report the fix working when production would still
- * duplicate, and a harness that deduped on text would report it working for the
- * wrong reason.
+ * Both halves are copied deliberately rather than stubbed. `appendUser`
+ * returns early for an id already present, which is the mechanism a stable id
+ * relies on — a harness that appended unconditionally would report the fix
+ * working when production would still duplicate, and a harness that deduped on
+ * text would report it working for the wrong reason.
  */
 function chatStore(db: Database) {
   const sql = makeSql(db);
-  makeExecRaw(db)(SDK_SESSION_DDL);
-  // The pane rows are keyed on their OWNER, and the transcript read below is
+  // The entries are keyed on their OWNER, and the transcript read below is
   // actor-scoped, so the copied derivation writes the same workspace main the
   // registry and the read use. A row written without it is a row no read finds.
+  const actor = openWorkspaceMainActor(sql);
+
+  const history = new SessionHistory({
+    sql, actor, transactionSync: (write) => db.transaction(write)(),
+    files: async () => ({ vfs: createWorkspaceBundle(db).vfs, artifactDirectory: '/actor/.kinu/context' }),
+  });
+
+  const transcript = history.transcript(CHAT_SESSION_ID);
 
   const host: BackendHost = {
     broadcast: () => {},
     enqueueTurn: async ({ text, metadata, idempotencyKey }) => {
       const id = `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${idempotencyKey ?? crypto.randomUUID()}`;
 
-      const present = sql<{ id: string }>`SELECT id FROM assistant_messages WHERE id = ${id}`;
+      const message = await history.admitInput({
+        id, turnId: id, message: { role: 'user', content: text },
+        assertOwner: () => { actor.assertCurrent(); },
+      });
 
-      if (present.length === 0) {
-        void sql`
-          INSERT INTO assistant_messages (id, session_id, role, content)
-          VALUES (${id}, ${''}, ${'user'}, ${JSON.stringify({
-            id, role: 'user', parts: [{ type: 'text', text }], metadata,
-          })})
-        `;
-      }
+      transcript.appendUser(await transcript.prepareUser(
+        metadata === undefined ? { id, turnId: id, message } : { id, turnId: id, message, metadata },
+      ));
 
       return { status: 'queued' };
     },
@@ -92,7 +98,7 @@ function chatStore(db: Database) {
     setTimer: () => {},
   };
 
-  return { host, sql };
+  return { host, sql, history, transcript };
 }
 
 /** One activation over the given durable rows: fresh runner, fresh in-memory
@@ -139,9 +145,21 @@ function evictedWorkspace() {
   return { db: ws.db, store, now, actor };
 }
 
-function noticeRows(sql: SqlExecutor) {
-  return sql<{ id: string; content: string }>`
-    SELECT id, content FROM assistant_messages ORDER BY rowid ASC`;
+/** The durable entries at rest, oldest first — read off the canonical store
+ *  rather than through the paged view, so a duplicate cannot hide behind a
+ *  projection. */
+async function noticeRows(db: Database): Promise<{ id: string; content: string }[]> {
+  const transcript = chatStore(db).transcript;
+  const rows: { id: string; content: string }[] = [];
+
+  for (const entry of transcript.ancestry()) {
+    const projected = await transcript.project(entry.id);
+
+    if (projected === null) throw new Error(`entry ${entry.id} vanished between read and projection`);
+    rows.push({ id: projected.id, content: projected.content });
+  }
+
+  return rows;
 }
 
 describe('a settled background job announces itself once, and not as the owner', () => {
@@ -157,7 +175,7 @@ describe('a settled background job announces itself once, and not as the owner',
       await runner.wake(JOB);
     }
 
-    const rows = noticeRows(makeSql(ws.db));
+    const rows = await noticeRows(ws.db);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.id).toBe(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${backgroundJobWakeTrigger(JOB)}`);
     expect(rows[0]!.content).toContain(`Background agents job ${JOB} completed`);
@@ -182,7 +200,7 @@ describe('a settled background job announces itself once, and not as the owner',
     const second = activation(ws.db);
     await second.runner.recover({ jobId: JOB, phase: 'running' });
 
-    const rows = noticeRows(makeSql(ws.db));
+    const rows = await noticeRows(ws.db);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.content).toContain('gave up after 5 resume attempts');
   });
@@ -193,13 +211,13 @@ describe('a settled background job announces itself once, and not as the owner',
     const { runner } = activation(ws.db);
     await runner.wake(JOB);
 
-    const history = getChatHistoryPage(makeSql(ws.db), ws.actor).items;
+    const history = (await getChatHistoryPage(chatStore(ws.db).transcript)).items;
     expect(history).toHaveLength(1);
     expect(history[0]!.role).toBe('system');
 
     // The stored row is untouched: the model still reads its turn input as the
     // user message it has to be. Only the claim about authorship changed.
-    const stored = makeSql(ws.db)<{ role: string }>`SELECT role FROM assistant_messages`;
+    const stored = makeSql(ws.db)<{ role: string }>`SELECT role FROM conversation_entries`;
 
     expect(stored[0]!.role).toBe('user');
   });
@@ -207,19 +225,18 @@ describe('a settled background job announces itself once, and not as the owner',
   test('a walk-back list built from the transcript offers no machine notice', async () => {
     const ws = evictedWorkspace();
     ws.store.settle(JOB, 0, '"done"', ws.now + 1_000);
-    const { runner, sql } = activation(ws.db);
+    const { runner } = activation(ws.db);
     await runner.wake(JOB);
     // Something the owner really did type, before the notice.
-    void sql`
-      INSERT INTO assistant_messages (id, session_id, role, content)
-      VALUES (${'typed-1'}, ${''}, ${'user'}, ${JSON.stringify({
-        id: 'typed-1', role: 'user', parts: [{ type: 'text', text: 'find me a domain' }],
-      })})
-    `;
+    const owner = chatStore(ws.db);
+    await owner.history.record(CHAT_SESSION_ID, {
+      id: 'typed-1', parentId: owner.transcript.newestId(), origin: 'input',
+      message: { role: 'user', content: 'find me a domain' },
+    });
 
     // forkCandidates' predicate, which is `role === 'user'` and nothing else —
     // the reason the owner's picker showed ten copies of one notice.
-    const pivots = getChatHistoryPage(makeSql(ws.db), ws.actor).items
+    const pivots = (await getChatHistoryPage(owner.transcript)).items
       .filter((row) => row.role === 'user')
       .map((row) => row.content);
 
@@ -238,10 +255,10 @@ describe('a settled background job announces itself once, and not as the owner',
     // Six rows, byte-identical content, distinct ids — the shape measured on
     // stone-ash-71f2. Nothing about the seam prevents this; the producer naming
     // its fact is what does.
-    const rows = noticeRows(makeSql(ws.db));
+    const rows = await noticeRows(ws.db);
     expect(rows).toHaveLength(6);
     expect(new Set(rows.map((row) => row.id)).size).toBe(6);
-    expect(new Set(rows.map((row) => uiMessageText(row.content))).size).toBe(1);
+    expect(new Set(rows.map((row) => row.content)).size).toBe(1);
   });
 
   test('authorship covers every programmatic writer, keyed or not', async () => {
@@ -259,7 +276,7 @@ describe('a settled background job announces itself once, and not as the owner',
       text: '23 head(s) across 6 fork run(s) were still marked running…',
     });
 
-    const history = getChatHistoryPage(makeSql(ws.db), ws.actor).items;
+    const history = (await getChatHistoryPage(chatStore(ws.db).transcript)).items;
     expect(history.map((row) => row.role)).toEqual(['system']);
   });
 
@@ -299,26 +316,30 @@ describe('a settled background job announces itself once, and not as the owner',
     expect(events[0]!.payload).toContain(backgroundJobWakeTrigger(JOB));
   });
 
-  test('the plain mirror carries the stamp at rest, and the paged read serves it', () => {
-    // The CLI backend has no assistant_messages — its `actor_messages` table IS the
-    // transcript. A notice written there must state its authorship in the row
-    // itself, not lean on the id-prefix fallback that reads rows predating
-    // stamps; and the paged read must serve what the row states.
+  test('the entry carries the stamp at rest, and the paged read serves it', async () => {
+    // A notice must state its authorship in the entry itself, not lean on the
+    // id-prefix fallback that reads rows predating stamps; and the paged read
+    // must serve what the entry states. The id here carries NO prefix, so only
+    // the stamp can answer.
     const ws = evictedWorkspace();
-    const sql = makeSql(ws.db);
-    void sql`
-      INSERT INTO actor_messages (actor_id, id, session_id, role, content, metadata)
-      VALUES (${ws.actor.actorId},
-              ${`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${backgroundJobWakeTrigger(JOB)}`},
-              ${'default'}, ${'user'},
-              ${`Background agents job ${JOB} completed. Read the full result with agent.jobResult.`},
-              ${JSON.stringify({
-                kinuEvent: 'background_job', jobId: JOB, kind: 'agents', status: 'completed',
-                [TURN_AUTHOR_METADATA_KEY]: 'harness',
-              })})
-    `;
+    const store = chatStore(ws.db);
+    const id = backgroundJobWakeTrigger(JOB);
+    const text = `Background agents job ${JOB} completed. Read the full result with agent.jobResult.`;
 
-    const history = getChatHistoryPage(sql, ws.actor).items;
+    const message = await store.history.admitInput({
+      id, turnId: id, message: { role: 'user', content: text },
+      assertOwner: () => { ws.actor.assertCurrent(); },
+    });
+
+    store.transcript.appendUser(await store.transcript.prepareUser({
+      id, turnId: id, message,
+      metadata: {
+        kinuEvent: 'background_job', jobId: JOB, kind: 'agents', status: 'completed',
+        [TURN_AUTHOR_METADATA_KEY]: 'harness',
+      },
+    }));
+
+    const history = (await getChatHistoryPage(store.transcript)).items;
     expect(history).toHaveLength(1);
     expect(history[0]!.role).toBe('system');
     expect(history[0]!.metadata).toMatchObject({ kinuEvent: 'background_job', jobId: JOB });

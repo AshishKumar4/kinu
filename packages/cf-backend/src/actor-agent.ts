@@ -17,7 +17,7 @@ import {
   type WSMessage,
 } from "agents";
 import {
-  TierIdSchema, usesPaneStore, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
+  TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute,
   type SubordinateInspectionAuthority,
 } from '@kinu.run/core';
@@ -25,7 +25,6 @@ import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage } from "agents/chat";
-import { AssistantMessagesTranscript } from './chat-transcript';
 import {
   ActorChatRooms, ChatWireTransport, type ChatWire,
 } from './chat-transport';
@@ -50,7 +49,7 @@ import {
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@kinu.run/compaction";
 import { generateText, convertToModelMessages } from "ai";
-import type { LanguageModel, ModelMessage, ToolSet, UIMessage, UIMessageChunk } from "ai";
+import type { LanguageModel, ModelMessage, ToolSet, UIMessageChunk } from "ai";
 import {
   McpToolSurfaceCache,
 } from "./user/mcp";
@@ -65,7 +64,6 @@ import {
   // Durable admission — the claim a turn is issued under, and the per-step
   // context plane its revisions are recorded on.
   initActorClaimTables, ActorClaimStore, initPendingSendTables, PendingSendStore,
-  createActorContextPlane, type ActorContextPlane,
   createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory,
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
   // Continual refinement — the lane's deps come from four seams this class
@@ -141,6 +139,8 @@ import {
   // The stores every agent has, built once from its one SQL handle, and the
   // one binding of the live per-step planes to them.
   createAgentStores, type AgentConfigStore, collectDynamicContext, subordinateDelegatesOf,
+  nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
+  CHAT_SESSION_ID, type SessionTranscript,
   type SqlExecutor,
   // The agents tool's shared swarm substrate
   agentsActionsFor,
@@ -162,8 +162,7 @@ import {
   resolveTurnSkills, filterToolNamesBySkills, skillsVfsOver,
   type ActiveSkillSet, type SkillsVfs,
   // Heads support (inherited-context digest)
-  INHERITED_CONTEXT_CAP,
-  inheritedContextFromRows,
+  inheritedContextFromTranscript,
   type ReleaseToolDeps,
   PlanReviewStore, admitPlanReviewAnnotations, formatPlanWithLineNumbers,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation,
@@ -202,7 +201,6 @@ import {
   type InstructionSourceRow, type InstructionSourceView,
   stepContextLimit,
   reasoningEffortOptions,
-  uiMessageText,
   // memory.* / tasks.* — codemode projections of the same-named native tools
   JsonObjectSchema, JsonValueSchema, changeActiveRole,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
@@ -394,42 +392,6 @@ function jsonObject<Input>(input: Input): JsonObject {
   const parsed = v.safeParse(JsonObjectSchema, input);
 
   return parsed.success ? parsed.output : {};
-}
-
-/** The envelope a stored assistant message is read back through. The PARTS are
- *  the SDK's own discriminated union and restating it here would drift on every
- *  release, so what is validated is the shape the conversion indexes and the
- *  parts travel as the JSON the row stored them as. */
-const RecordedUiMessageSchema = v.object({
-  role: v.picklist(['user', 'assistant', 'system']),
-  metadata: v.optional(JsonValueSchema),
-  parts: v.array(v.looseObject({ type: v.string() })),
-});
-
-/**
- * The assistant message a terminal effect row recorded, back at the SDK boundary
- * it came from.
- *
- * `convertToModelMessages` is an AWAIT, so the conversion runs inside the
- * effect where the claim already exists. On the live path between the
- * persisted answer and that claim, an eviction leaves a durable answer with
- * no incomplete transition and `resumeAll()` finds nothing to replay. The
- * row carries the message instead.
- */
-function recordedUiMessage(value: JsonValue): Omit<UIMessage, 'id'> {
-  const row = v.parse(RecordedUiMessageSchema, value);
-
-  const recorded: Omit<UIMessage, 'id'> = {
-    role: row.role,
-    // SAFETY: the part union is the SDK's, and `convertToModelMessages` is its
-    // only reader. Validating `type` is what makes the array a part list; the
-    // conversion itself rejects a part it cannot read.
-    parts: row.parts as UIMessage['parts'],
-  };
-
-  if (row.metadata !== undefined) recorded.metadata = row.metadata;
-
-  return recorded;
 }
 
 const PlanApprovalMetadataSchema = v.looseObject({
@@ -651,11 +613,13 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
     createMemoryCodemodeProvider(() => ({
       memory: runtime.memory, vectorStore: runtime.vectorStore,
       facts: actor.stores.facts, sql: runtime.storage.sql, actor: actor.handle,
+      transcriptFor: (sessionId) => actor.stores.history.transcript(sessionId),
     })),
   ];
 
   const native = buildBuiltinTools({
     rt: runtime, vectorStore: runtime.vectorStore, facts: actor.stores.facts, webSearch,
+    history: actor.stores.history,
     fileLedger: actor.session.orchestrator.acc.files, contextBudget: actor.session.orchestrator.acc.context,
   });
 
@@ -819,7 +783,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // ONE pending-send ledger, declared once in core (`initPendingSendTables`)
     // because the CLI backend carries the same-named tables with a nullable
     // `turn_id` (NULL = idle-queued — a state this backend does not have; cf
-    // admits the send as an `assistant_messages` row first). Two declarations
+    // admits the send as a transcript entry first). Two declarations
     //  would let first-creation order pick the shape, so the shared function
     //  is the only writer.
     initPendingSendTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
@@ -1288,7 +1252,7 @@ export abstract class ActorAgent extends Agent<Env> {
       temporary: this.temporaryAgentPort(),
       now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(),
-      originContext: () => this._turnOriginContext,
+      originContext: async () => this._turnOriginContext,
       ownMission: () => this.ownMission(),
       createName: mintSubordinateName,
       broadcast: (event) => this.broadcastSubordinatesChanged(event),
@@ -1513,7 +1477,7 @@ export abstract class ActorAgent extends Agent<Env> {
       this.connectionOpened();
 
       await baseOnConnect.call(this, connection, ctx);
-      this.chatRoomFor(connection)?.onConnect(connection);
+      await this.chatRoomFor(connection)?.onConnect(connection);
     };
 
     this.onClose = async (connection, code, reason, wasClean) => {
@@ -1540,7 +1504,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // socket opens, so a hosted actor's pane is seeded from that actor's
         // own rows and the workspace's from the root's.
         const hosted = hostedActorRoute(url.pathname);
-        const history = hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted.name)?.history();
+        const history = await (hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted.name)?.history());
 
         if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
 
@@ -1637,7 +1601,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected sharedTerminalEffects(): TerminalEffectTable {
     return {
       turn_end_extensions: terminalEffect({
-        input: v.object({ text: v.string(), message: JsonValueSchema }),
+        input: v.object({ messageId: v.string() }),
         // Keyed on the assistant message by its row, and replayed from the
         // recorded text and the recorded message rather than from a live tree,
         // which an interrupted activation cannot supply. The host's own
@@ -1647,7 +1611,14 @@ export abstract class ActorAgent extends Agent<Env> {
         //
         // Convert inside the durable effect: an eviction during conversion
         // must leave an owed announcement, not an untracked persisted answer.
-        run: async ({ text, message }) => {
+        run: async ({ messageId }) => {
+          const message = await this.chatTranscript.message(messageId);
+
+          if (message === null) throw new KinuError('missing', 'terminal effect has no canonical answer');
+          const projected = await this.chatTranscript.project(messageId);
+
+          if (projected === null) throw new KinuError('missing', 'terminal effect has no canonical answer');
+          const text = projected.content;
           // A REFUSAL, not a retry. The stored message is fixed, so a part tree
           // the converter rejects will not start parsing on a later attempt, and
           // an owed row over it would retry forever. The announcement's own
@@ -1658,7 +1629,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
           try {
             responseMessages = await convertToModelMessages(
-              [recordedUiMessage(message)], { ignoreIncompleteToolCalls: true },
+              [message], { ignoreIncompleteToolCalls: true },
             );
           } catch (err) {
             const failure = toKinuError({
@@ -2035,29 +2006,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
 
 
-  /**
-   * THE actor's context plane, ONE per activation.
-   *
-   * One object rather than a plane rebuilt per read, because the plane holds
-   * the turn's rebase: an edit that lands mid-turn produces a later revision,
-   * and the array the SDK is still carrying begins with the PRE-edit prefix —
-   * a `prepareStep` override shapes one request and never becomes the next
-   * step's input. A host that kept its own array and shaped requests around it
-   * therefore discarded every mid-turn edit at the turn boundary, silently. So
-   * admission takes `startTurn`'s messages AS the turn's history and the
-   * boundary adopts `endTurn`'s, on every path including failure and interrupt.
-   */
-  private _contextPlane: ActorContextPlane | null = null;
-  private get contextPlane(): ActorContextPlane {
-    // LAZY, and it has to be: field initialisers run in declaration order and
-    // `stores` is declared below this one, so forcing it here read an
-    // uninitialised bundle. Lazy also matches what the rest of this class does
-    // with storage — a Durable Object must not touch SQL while its fields
-    // initialise.
-    this._contextPlane ??= createActorContextPlane({ claims: this.stores.claims, events: this.stores.eventRecorder });
-
-    return this._contextPlane;
-  }
 
   /**
    * The installed build this host publishes for its BUILTIN loop.
@@ -2524,6 +2472,7 @@ export abstract class ActorAgent extends Agent<Env> {
       this._actorSession = new ActorSession({
         runtime: this.rt,
         claims: this.stores.claims,
+        history: this.stores.history,
         installedBuild: this.installedBuildIdentity(),
         events: this.stores.eventRecorder,
         orchestration: this.orchestrationDeps(),
@@ -2587,16 +2536,7 @@ export abstract class ActorAgent extends Agent<Env> {
           }),
         },
       });
-      this.chatTranscript.answersFrom({
-        answer: (id) => this.chatTransport.answer(id),
-        streamed: (id) => this.chatTransport.streamed(id),
-      });
       this.observeFleetRows();
-      // The working history this activation resumes from — the recorded
-      // working revision, else the transcript — BEFORE the loop's first pump,
-      // which the constructor deferred to a microtask: a turn re-opened from
-      // the ledger continues over the conversation it was admitted against.
-      this._chatLoop.restoreHistory();
     }
 
     return this._chatLoop;
@@ -3137,10 +3077,15 @@ export abstract class ActorAgent extends Agent<Env> {
       rt: this.rt,
       events: this.eventRecorder,
       sql: this.boundSql,
+      history: this.stores.history,
       config: this.config,
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
         rt: this.rt,
-        profile: () => this.routingProfile([...Object.keys(this.getRawTools()), ...codemodeCapabilitiesFor(this.turnCodemodeProviders('build'))]),
+        profile: async () => {
+          const mode = await this.preparedWorkMode();
+
+          return this.routingProfile([...Object.keys(this.getRawToolsForWorkMode(mode)), ...codemodeCapabilitiesFor(this.turnCodemodeProviders('build'))], mode);
+        },
         bindModel: spec => this.ownedModelServices.resolveModel(spec),
         modelContext: spec => this.modelCatalog.contextFor(spec),
         tools: () => this.getRawToolsForWorkMode(this.turnWorkMode(), callScope),
@@ -3208,7 +3153,11 @@ export abstract class ActorAgent extends Agent<Env> {
   protected makeScaffoldLLMStream(signal?: AbortSignal): ScaffoldRunOptions['llmStream'] {
     return createScaffoldCandidateSurface({
       rt: this.rt,
-      profile: () => this.routingProfile([...Object.keys(this.getRawTools()), ...codemodeCapabilitiesFor(this.turnCodemodeProviders('build'))]),
+      profile: async () => {
+        const mode = await this.preparedWorkMode();
+
+        return this.routingProfile([...Object.keys(this.getRawToolsForWorkMode(mode)), ...codemodeCapabilitiesFor(this.turnCodemodeProviders('build'))], mode);
+      },
       bindModel: spec => this.ownedModelServices.resolveModel(spec),
       modelContext: spec => this.modelCatalog.contextFor(spec),
       tools: () => this.getRawTools(),
@@ -3240,14 +3189,17 @@ export abstract class ActorAgent extends Agent<Env> {
    * nothing to recognise.
    */
   protected makeScaffoldCallTool(callScope?: string, signal?: AbortSignal): NonNullable<ScaffoldRunOptions['callTool']> {
-    if (callScope === undefined) return createScaffoldCallTool(() => this.getRawTools(), undefined, signal);
-    // Built ONCE for the rollout and held: the thunk is asked per dispatch.
-    let scoped: ToolSet | undefined;
+    let prepared: Promise<NonNullable<ScaffoldRunOptions['callTool']>> | undefined;
 
-    return createScaffoldCallTool(
-      () => (scoped ??= this.getRawToolsForWorkMode(this.turnWorkMode(), callScope)),
-      callScope, signal,
-    );
+    return async (name, args) => {
+      prepared ??= this.preparedWorkMode().then((mode) => {
+        const tools = this.getRawToolsForWorkMode(mode, callScope);
+
+        return createScaffoldCallTool(() => tools, callScope, signal);
+      });
+
+      return (await prepared)(name, args);
+    };
   }
 
   /** The scaffold's host.history bridge (core scaffold-host): a read-only,
@@ -3255,7 +3207,7 @@ export abstract class ActorAgent extends Agent<Env> {
    *  scaffold is the inference loop for. Read per call, so a scaffold running
    *  across a turn sees the messages as they stand when it looks. */
   protected makeScaffoldHistory(): NonNullable<ScaffoldRunOptions['history']> {
-    return createScaffoldHistory(() => this.actorSession.history);
+    return createScaffoldHistory(async () => (await this.stores.history.materialize()).messages);
   }
 
   // Platform fan-out and wake ownership around core's serialized chat loop.
@@ -3398,7 +3350,13 @@ export abstract class ActorAgent extends Agent<Env> {
    *  so a store added there exists for this actor too. Lazy inside: the bundle
    *  never touches `boundSql` until a store is first read, which is what lets
    *  it be built here rather than in the constructor body. */
-  private readonly stores = createAgentStores(() => this.boundSql, () => this.actorHandle(), write => this.ctx.storage.transactionSync(write));
+  protected readonly stores = createAgentStores(
+    () => this.boundSql, () => this.actorHandle(), write => this.ctx.storage.transactionSync(write),
+    async () => ({
+      vfs: nimbusSessionFiles(this.workspaceBox(this.shellId()), CRED_SESSION_USER),
+      artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
+    }),
+  );
 
   private _liveHeadJournal: LiveHeadJournal | null = null;
 
@@ -4293,17 +4251,10 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._boundSql;
   }
 
-  /** The root's transcript, through the SDK's own session provider — core's
-   *  TranscriptStore over `assistant_messages`. Lazy for the reason every store
-   *  here is: `actorHandle()` resolves the directory row `ensureSchema` creates. */
-  private _chatTranscript: AssistantMessagesTranscript | null = null;
-  /** Build the transcript store, and with it its table, before anything asks. */
-  protected resumeChatTranscript(): AssistantMessagesTranscript {
-    return this.chatTranscript;
-  }
-
-  protected get chatTranscript(): AssistantMessagesTranscript {
-    return this._chatTranscript ??= new AssistantMessagesTranscript(this, this.boundSql, this.actorHandle());
+  /** Public conversation references; reading it never acquires a running actor. */
+  private _chatTranscript: SessionTranscript | null = null;
+  protected get chatTranscript(): SessionTranscript {
+    return this._chatTranscript ??= this.stores.history.transcript(CHAT_SESSION_ID);
   }
 
 
@@ -4818,6 +4769,7 @@ export abstract class ActorAgent extends Agent<Env> {
       createMemoryCodemodeProvider(() => ({
         memory: this.rt.memory, vectorStore: this.rt.vectorStore,
         facts: this.facts, sql: this.rt.storage.sql, actor: this.actorHandle(),
+        transcriptFor: (sessionId) => this.stores.history.transcript(sessionId),
       })),
       createTasksCodemodeProvider(this.taskList, this.config),
     ];
@@ -5111,14 +5063,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Native owner inspection. Does not initialize the SDK or application tables. */
   async inspectSubordinateStorage(request: SubordinateInspectionRequest, authority: SubordinateInspectionAuthority): Promise<SubordinateInspectionResult> {
-    // SYNCHRONOUS. Core walks `directory.resolveChild` from the caller's own
-    // actor and reads the target's rows in this one database, so there is no
-    // per-hop RPC port to resolve, no stored parent path to check and no
-    // class-name comparison — the last two being values a worker reports about
-    // itself.
+    // Core authorizes the directory path before resolving its canonical
+    // transcript. Payload reads may await VFS; they never acquire an actor.
     return inspectSubordinateStorage({
       sql: this.boundSql, raw: this.ctx.storage.sql,
       actor: this.actorHandle(), directory: this.actorDirectoryStore(),
+      transcriptFor: (actor) => this.transcriptFor(actor),
     }, request, authority);
   }
 
@@ -5138,7 +5088,9 @@ export abstract class ActorAgent extends Agent<Env> {
     this.ensureSchema();
     const { actor, ...page } = request ?? {};
 
-    return getChatHistoryPage(this.boundSql, actor === undefined ? this.actorHandle() : this.hostedChatActor(actor), page);
+    const transcript = actor === undefined ? this.chatTranscript : this.transcriptFor(this.hostedChatActor(actor));
+
+    return getChatHistoryPage(transcript, page);
   }
 
   /**
@@ -5562,6 +5514,8 @@ export abstract class ActorAgent extends Agent<Env> {
       const builtinDeps: Parameters<typeof buildActorTools>[0] = {
         rt: this.rt,
         workMode: mode,
+        // The canonical conversation the `memory` tool's recall reads.
+        history: this.stores.history,
         // The once-only boundary for tools whose effects leave this object.
         // `turnId` is a closure because the toolset is cached across turns; the
         // checkpoint's turn id is the DURABLE id of the message this turn opened
@@ -5689,40 +5643,10 @@ export abstract class ActorAgent extends Agent<Env> {
    * root has: a hire handed the root's transcript inherits a conversation it
    * was never party to.
    */
-  protected readInheritedContext(actor: ActorHandle = this.actorHandle()): SerializedMessage[] {
-    // Only the root uses the provider-backed pane store. Read failures must
-    // propagate rather than masquerading as an empty conversation.
-    if (!usesPaneStore(this.boundSql, actor)) return [];
+  protected abstract transcriptFor(actor: ActorHandle): SessionTranscript;
 
-    type Row = { id: string; role: string; content: string; created_at: string };
-
-    // `created_at` is second-grained, and a turn writes its rows inside one
-    // second: the rowid is the order they were written in, and the only
-    // order two rows of one second have.
-    const rows = this.sql<Row>`
-      SELECT id, role, content, created_at
-      FROM (
-        SELECT id, role, content, created_at, rowid AS written
-        FROM assistant_messages
-        ORDER BY created_at DESC, rowid DESC
-        LIMIT ${INHERITED_CONTEXT_CAP}
-      ) sub
-      ORDER BY created_at ASC, written ASC`;
-
-    // The SAME predicate on the total: a count over every actor's transcript
-    // beside a page from one actor's would report a fork inheriting context it
-    // was never given, which is the reading this cap exists to bound.
-    const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM assistant_messages`[0]?.n ?? rows.length;
-
-    return inheritedContextFromRows(
-      rows.map((r) => ({
-        id: r.id,
-        role: r.role,
-        content: uiMessageText(r.content),
-        createdAt: Date.parse(r.created_at) || 0,
-      })),
-      total,
-    );
+  protected readInheritedContext(actor: ActorHandle = this.actorHandle()): Promise<SerializedMessage[]> {
+    return inheritedContextFromTranscript(this.transcriptFor(actor));
   }
 
   /**
@@ -5962,7 +5886,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // The turn's input is already on the working history: the loop placed it
     // there (core's one rule for where a turn's conversation comes from)
     // before handing the turn here.
-    const history = this.actorSession.history;
+    const { messages: history } = await this.stores.history.materialize();
     // The conversation this turn was opened over, its own message included —
     // what a hire with context:'inherit' is born from, frozen here so a
     // background re-drive carries the conversation the caller actually had.
@@ -6030,10 +5954,12 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The conversation cleared, on the client's ask: the transcript, the
    *  working history, the dynamic ledger, the compaction plan. */
   private async clearConversation(): Promise<void> {
-    this.chatTranscript.clear();
+    this.stores.history.clearConversation(CHAT_SESSION_ID, () => {
+      if (this._chatLoop?.turnInFlight() === true || this._actorSession?.inFlight === true) {
+        throw new KinuError('denied', 'Stop the active turn before clearing its conversation');
+      }
+    });
     this.dynamicLedger.reset();
-    this.contextPlane.hydrate([]);
-    this.actorSession.restoreWorkingHistory(() => []);
 
     try {
       await this.compactionState.plans.save(this.name, null);
@@ -6468,7 +6394,17 @@ export abstract class ActorAgent extends Agent<Env> {
   /** What the turn may do. Plan is explicit user intent on the driving
    * message; everything else is ordinary unconstrained work. */
   protected turnWorkMode(): WorkMode {
-    return this.operationProfile()?.profile.workMode ?? workModeForTurnMetadata(this.turnDrivingMetadata());
+    return this.workModeForMetadata(this.turnDrivingMetadata());
+  }
+
+  protected workModeForMetadata(metadata: JsonObject | undefined): WorkMode {
+    return this.operationProfile()?.profile.workMode ?? workModeForTurnMetadata(metadata);
+  }
+
+  protected async preparedWorkMode(): Promise<WorkMode> {
+    if (this._chatLoop?.turnInFlight() === true) return this.turnWorkMode();
+
+    return this.workModeForMetadata(await this.chatTranscript.lastUserMetadata());
   }
 
   /** Why the turn is running — read from the event alone, never from the work
@@ -6477,25 +6413,20 @@ export abstract class ActorAgent extends Agent<Env> {
     return turnProvenanceForMetadata(this.turnDrivingMetadata());
   }
 
-  /** The metadata of the message driving this turn: the active programmatic
-   * message when one drove it, else the last durable user message. Parsed at
-   * this boundary so both axes read one already-narrowed shape. */
+  /** Admitted turn metadata shared by work-mode and provenance policy. */
   private turnDrivingMetadata(): JsonObject | undefined {
     return this.turnUserMetadata();
   }
 
-  /** What this turn was started BY: the metadata on the item the loop admitted
-   *  — a signal's `kinuEvent` / `signalId` / mission labels, the composer's
-   *  mode, or nothing at all for a chat turn the operator typed. With no turn
-   *  running, the newest user row's: the idle reads (the tool listing) narrow
-   *  their mode off the last durable user message. */
+  /** Active turn metadata only. Idle operations await canonical metadata in
+   *  preparedWorkMode before constructing their synchronous tool surface. */
   protected turnUserMetadata(): JsonObject | undefined {
     // The item is the turn's for as long as the loop holds the turn — through
     // its settle — and a finished turn's item names nothing any more. Read off
     // the loop only when one exists: an idle read must not build it.
     const metadata = this._chatLoop?.turnInFlight() === true ? this._turnItem?.metadata : undefined;
 
-    if (metadata === undefined) return this.chatTranscript.lastUserMetadata();
+    if (metadata === undefined) return undefined;
     const parsed = v.safeParse(JsonObjectSchema, metadata);
 
     return parsed.success ? parsed.output : undefined;
@@ -6572,13 +6503,13 @@ export abstract class ActorAgent extends Agent<Env> {
    * MODEL_ROUTE_POLICY is read against THIS, so a producer that resolves a
    * model any other way has bypassed the one routing table.
    */
-  protected async routingProfile(availableTools: readonly string[] = []): Promise<ResolvedTurnProfile> {
+  protected async routingProfile(availableTools: readonly string[] = [], preparedMode?: WorkMode): Promise<ResolvedTurnProfile> {
     return resolveRoutingProfile({
       actor: this.actorHandle(),
       resolve: async () => resolveAgentTurnProfile({
         ...(await this.profileInputs()),
         activeRoleId: this.activeRoleLabel(),
-        workMode: this.turnWorkMode(),
+        workMode: preparedMode ?? await this.preparedWorkMode(),
         availableTools,
         activeSkills: [],
         explicitTier: this.config.getAssignedTier() ?? undefined,

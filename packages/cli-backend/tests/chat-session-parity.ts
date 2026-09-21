@@ -6,7 +6,7 @@
  * a send mid-turn carrying a file, an interrupt that returns a steer, a process
  * that dies after acknowledging a send and before the drain, and the restart
  * that replays what it left. What is compared is the durable record —
- * `actor_messages`, the pending-send ledger, the event log, the terminal
+ * the transcript, the pending-send ledger, the event log, the terminal
  * ledger — and the event stream the frontend saw, with every minted id and
  * every clock reading normalized so the same conversation reads the same on
  * any run.
@@ -26,7 +26,7 @@ import { parityNormalizer, scratchPath, type ParityNormalizer } from '@kinu.run/
 import * as v from 'valibot';
 import { decodeJsonValue, initWorkspaceSchema, JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import type { LanguageModelV2CallOptions, LanguageModelV2Usage } from '@ai-sdk/provider';
-import type { LLMProviderConfig } from '@kinu.run/core';
+import type { LLMProviderConfig, SessionTranscriptReader } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -91,7 +91,7 @@ function drainWindowModel(answer: string) {
               }, { once: true });
               controller.enqueue({ type: 'stream-start', warnings: [] });
               controller.enqueue({
-                type: 'tool-call', toolCallId: 'call-1', toolName: 'fact',
+                type: 'tool-call', toolCallId: 'call-1', toolName: 'memory',
                 input: JSON.stringify({ action: 'recall', key: 'probe' }),
               });
               await stepGate.promise;
@@ -281,17 +281,22 @@ export const ParitySnapshotSchema = v.object({
 
 export type ParitySnapshot = v.InferOutput<typeof ParitySnapshotSchema>;
 
-function durableRows(db: Database, norm: ParityNormalizer): DurableRows {
+async function durableRows(db: Database, norm: ParityNormalizer, transcript: SessionTranscriptReader): Promise<DurableRows> {
   const parseJson = (column: string | null): JsonValue => column === null ? null : norm.json(decodeJsonValue({ value: JSON.parse(column) }));
 
-  const actorMessages = db.query<{
-    id: string; session_id: string; parent_id: string | null; role: string; content: string; metadata: string | null;
-  }, []>(`SELECT id, session_id, parent_id, role, content, metadata FROM actor_messages ORDER BY rowid`).all()
-    .map((row) => ({
-      id: norm.text(row.id), sessionId: row.session_id,
-      parentId: row.parent_id === null ? null : norm.text(row.parent_id),
-      role: row.role, content: row.content, metadata: parseJson(row.metadata),
-    }));
+  const actorMessages: JsonValue[] = [];
+  const page = transcript.pageIds({ limit: 200 });
+
+  if (page.status !== 'end') throw new Error('scripted transcript exceeds its expected page');
+
+  for (const { id } of [...page.items].reverse()) {
+    const row = await transcript.project(id);
+
+    if (row === null) throw new Error('scripted transcript entry disappeared');
+    actorMessages.push({ id: norm.text(row.id), sessionId: transcript.sessionId,
+      parentId: row.parentId === null ? null : norm.text(row.parentId),
+      role: row.role, content: row.content, metadata: row.metadata === undefined ? null : norm.json(row.metadata) });
+  }
 
   const pendingSteers = db.query<{ id: string; turn_id: string | null; mode: string; text: string }, []>(
     `SELECT id, turn_id, mode, text FROM pending_steers ORDER BY seq`,
@@ -337,10 +342,11 @@ function durableRows(db: Database, norm: ParityNormalizer): DurableRows {
  * Drive the scripted conversation over a fresh workspace and return the
  * durable record it leaves.
  */
-export async function runParityScenario(): Promise<ParitySnapshot> {
+export async function runParityScenario(interruptRecovery = false): Promise<ParitySnapshot> {
   const db = new Database(scratchPath('chat-session-parity', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+  const transcript = rt.stores.history.transcript('default');
 
   // Session A: the conversation, and the process that dies mid-drain.
   const eventsA: SessionEvent[] = [];
@@ -353,6 +359,7 @@ export async function runParityScenario(): Promise<ParitySnapshot> {
     two.model, two.model,
     three.model,
     four.model,
+    ...(interruptRecovery ? [four.model] : []),
   ]);
 
   const a = new LocalAgentSession({ rt, db, model: modelA, noAutoEvolve: true, onEvent: (event) => eventsA.push(event) });
@@ -369,7 +376,7 @@ export async function runParityScenario(): Promise<ParitySnapshot> {
   await waitFor(() => two.prompts.length === 2);
   two.endGate.resolve();
   await turnTwo;
-  const afterTwo = durableRows(db, norm);
+  const afterTwo = await durableRows(db, norm, transcript);
 
   // 3. An interrupt hands the pending steer back and cuts the turn.
   const turnThree = a.send('three');
@@ -386,7 +393,16 @@ export async function runParityScenario(): Promise<ParitySnapshot> {
   const turnFour = a.send('four');
   await waitFor(() => turnEvents(eventsA, 4).some((event) => event.type === 'tool-call'));
   const landingFour = await a.send({ text: 'four-steer', files: [NOTE_FILE] });
-  const beforeRestart = durableRows(db, norm);
+  const beforeRestart = await durableRows(db, norm, transcript);
+
+  if (interruptRecovery) {
+    four.stepGate.resolve();
+    await waitFor(() => four.prompts.length === 2);
+    const recoveryEvents: SessionEvent[] = [];
+    const recovery = gatedTextModel('recovery paused');
+    new LocalAgentSession({ rt, db, model: recovery.model, noAutoEvolve: true, onEvent: (event) => recoveryEvents.push(event) });
+    await waitFor(() => recoveryEvents.some((event) => event.type === 'text-delta'));
+  }
 
   // 5. The restart: the next process replays what the dead one acknowledged,
   //    then takes a fresh send.
@@ -400,7 +416,7 @@ export async function runParityScenario(): Promise<ParitySnapshot> {
   const record: ParitySnapshot = {
     afterTwo,
     beforeRestart,
-    end: durableRows(db, norm),
+    end: await durableRows(db, norm, transcript),
     events: [eventsA, eventsB].map((stream) => stream.map((event) => norm.json(frontendView(event)))),
     landings: { landingTwo, landingThree, returned, landingFour, landingFive },
     restartedCalls: restartedPrompts.map((prompt) => norm.json(promptView(prompt))),

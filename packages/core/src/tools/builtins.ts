@@ -67,6 +67,7 @@ import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
+import type { SessionHistory } from '../orchestrator/session-history';
 import type { ExecutorProviderSurface } from '../execution/types';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
@@ -177,6 +178,10 @@ export interface BuiltinToolDeps {
    *  remember/recall/forget, and search joins remembered facts to the note
    *  hits through the same RRF merge. */
   facts?: import('../memory/facts').FactsStore;
+  /** The actor's canonical conversation. Required: the `memory` tool's
+   *  `conversations` action recalls transcript text through it, and a surface
+   *  built without one would answer recall with silence. */
+  history: SessionHistory;
   /** Voyager/Tool-Search-style relevance filter for crafted tool surfacing.
    *  Default 'all'. In 'relevant' mode, only top-K matches (FTS5 by `query`
    *  ∪ frequently-used recent) are injected — saves context as the store
@@ -649,6 +654,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
 
   const runMemoryAction = createMemoryDispatcher({
     memory, vectorStore: deps.vectorStore, facts, sql: rt.storage.sql, actor: rt.actor,
+    transcriptFor: (sessionId) => deps.history.transcript(sessionId),
   });
 
   tools.memory = permitInPlan(tool({

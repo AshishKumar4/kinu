@@ -67,9 +67,7 @@ function episode(blocks: readonly string[]) {
   // reading the database's own filename back, and refuses a runtime whose path
   // does not match it (`requireLocalDatabasePath`).
   const db = new Database(scratchPath('in-episode-craft', 'agent.db'), { create: true });
-  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
-  // silently pinned a schema nothing else maintains.
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   const rt = createCLIRuntime(db, {
@@ -188,10 +186,8 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
 
     const off = (() => {
       const dbOff = new Database(scratchPath('in-episode-craft-off', 'agent.db'), { create: true });
-      // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
-  // silently pinned a schema nothing else maintains.
-  initWorkspaceSchema(makeWorkspaceSchemaSql(dbOff));
+      // THE PRODUCTION INITIALIZER, not a copy of its DDL.
+      initWorkspaceSchema(makeWorkspaceSchemaSql(dbOff));
 
       const rt = createCLIRuntime(dbOff, {
         dbPath: dbOff.filename, llm: DUMMY_LLM,

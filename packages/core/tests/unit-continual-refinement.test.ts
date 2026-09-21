@@ -34,6 +34,8 @@ import {
 import { initAllTables } from '../src/identity/schema';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
+import type { SessionHistory } from '../src/orchestrator/session-history';
+import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
 import { initTurnOutcomeTables } from '../src/evolution/outcomes';
 import { buildChangelog } from '../src/evolution/changelog';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
@@ -48,6 +50,7 @@ import { SKILLS_DIR } from '../src/skills/types';
 import { gatherApprovableInstructions } from '../src/read-models/instruction-approvals';
 import type { ActiveSkill, ActiveSkillSet } from '../src/skills/types';
 import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { AgentStores } from '../src/state/agent-stores';
 import type {
   TemporaryAgentPort, TemporaryRunOutcome, TemporaryRunRequest,
 } from '../src/subordinates/temporary';
@@ -117,7 +120,7 @@ function promptText(prompt: LanguageModelV3Prompt): string {
  * be paying a whole turn to answer a counterfactual about prose, and this is
  * the assertion that says so.
  */
-function scriptedControl(rt: AgentRuntime, score: (candidate: string) => number): ScaffoldControl {
+function scriptedControl(rt: AgentRuntime, history: SessionHistory, score: (candidate: string) => number): ScaffoldControl {
   const usage = {
     inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
     outputTokens: { total: 7, text: 7, reasoning: undefined },
@@ -127,6 +130,7 @@ function scriptedControl(rt: AgentRuntime, score: (candidate: string) => number)
     events: new RunEventRecorder(rt.storage.sql, rt.actor),
     rt,
     sql: rt.storage.sql,
+    history,
     config,
     surface: () => { throw new Error('a refinement pass must not roll out a scaffold'); },
     model: () => new MockLanguageModelV3({
@@ -224,13 +228,14 @@ function deferredRefiner(...answers: readonly RefinementProposal[]) {
 
 interface Fixture {
   rt: AgentRuntime;
+  stores: AgentStores;
   facts: FactsStore;
   approvals: InstructionApprovalStore;
   deps(refiner: TemporaryAgentPort, score?: (candidate: string) => number): RefinementDeps;
 }
 
 function fixture(): Fixture {
-  const { rt } = createTestRuntime();
+  const { rt, stores } = createTestRuntime();
   initAllTables(rt.storage.execRaw, rt.storage.sql);
   initTurnOutcomeTables(rt.storage.execRaw);
   initGepaTables(rt.storage.execRaw);
@@ -245,10 +250,11 @@ function fixture(): Fixture {
 
   return {
     rt,
+    stores,
     facts,
     approvals,
     deps: (refiner, score = (candidate) => (candidate === CANDIDATE ? 0.9 : 0.4)) => ({
-      control: scriptedControl(rt, score),
+      control: scriptedControl(rt, stores.history, score),
       facts,
       refiner,
       approvals,
@@ -1362,7 +1368,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
 
     // The real recovery caller, at the moment it really runs: an engine built on
     // the turn AFTER the nudge started this planner.
-    const recovery = new EvolutionEngine(fx.rt, { enabled: false });
+    const recovery = new EvolutionEngine(fx.rt, fx.stores.history, { enabled: false });
     // Its constructor recovered what it owns — an empty review queue — and left
     // the live refinement claim exactly where it was.
     expect(recovery.sessionWindow.countQueuedReviews()).toBe(0);
@@ -1828,7 +1834,7 @@ describe('the refiner never sees the set its proposal is scored on', () => {
     await advanceRefinementLane(deps);
     const brief = requests[0]!.task;
 
-    const split = buildOutcomeEvalSplit(fx.rt.storage.sql, fx.rt.actor, EVAL_SIZE);
+    const split = await buildOutcomeEvalSplit(fx.rt.storage.sql, fx.rt.actor, fx.stores.history.transcript(CHAT_SESSION_ID), EVAL_SIZE);
     expect(split.heldOutNegatives).toBeGreaterThan(0);
 
     // Every val instance is a turn the section metric will score a candidate

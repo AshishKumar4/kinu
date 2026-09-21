@@ -35,10 +35,13 @@ import {
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
-import { ActorMessagesTranscript, CHAT_SESSION_ID, recordedAnswer } from '@kinu.run/core';
-import type { UIMessage } from 'ai';
-import { actorChatClear, actorChatHistory, actorChatNewestId } from './chat-transcript';
+import { CHAT_SESSION_ID, turnInputMessage, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
+// The main actor's payload plane, on both halves of a fork: the carried
+// conversation references payload files by absolute path, and the fork is a cut
+// of the MAIN actor's conversation.
+import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
+import type { HostedTaskResult } from './subordinate-hosting';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
@@ -225,7 +228,7 @@ import {
   type EvolutionConfigView, type MctsConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   planReviewAwaitingDecision,
-  JsonValueSchema, type JsonValue, type KinuEvent,
+  JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
   // The one declaration of the event-variant set, and the one classifier that
   // names how a run ended. Both were hand-mirrored here.
   EVENT_VARIANTS,
@@ -877,6 +880,9 @@ export class OrchestratorAgent extends ActorAgent {
     const deps: ActorToolsetDeps = {
       rt: turn.runtime,
       workMode: turn.input.mode,
+      // This actor's own conversation — the rows the `memory` tool recalls are
+      // the ones this actor wrote, never the workspace's.
+      history: turn.actor.stores.history,
       // Keyed on the TURN this surface was built for, because that is the id a
       // recovery re-admits: an effect claimed under a fresh id would replay on
       // the turn that is already holding it.
@@ -1037,7 +1043,7 @@ export class OrchestratorAgent extends ActorAgent {
       now: () => Date.now(),
       // This actor's own transcript, capped — what a child it hires inherits.
       inheritedContext: () => this.readInheritedContext(actor.handle),
-      originContext: () => actor.session.history,
+      originContext: async () => actor.session.history,
       // The WORKSPACE's purpose, which is the same fact for every actor in it:
       // an agent added here is here for what this workspace is for.
       ownMission: () => this.ownMission(),
@@ -1192,10 +1198,10 @@ export class OrchestratorAgent extends ActorAgent {
     return await super.fetch(request);
   }
 
-  protected override turnWorkMode(): WorkMode {
-    const requested = super.turnWorkMode();
+  protected override workModeForMetadata(metadata: JsonObject | undefined): WorkMode {
+    const requested = super.workModeForMetadata(metadata);
 
-    const approvedHandoff = this.turnUserMessageEvent() === 'plan_approved';
+    const approvedHandoff = metadata?.kinuEvent === 'plan_approved';
 
     return requested === 'build'
       && !approvedHandoff
@@ -1241,12 +1247,12 @@ export class OrchestratorAgent extends ActorAgent {
    * recovery may run on an activation that has hydrated nothing, and the
    * transcript is the authority either way.
    */
-  private owedDrainReplies(): ReadonlyMap<string, string> {
+  private async owedDrainReplies(): Promise<ReadonlyMap<string, string>> {
     const leases = this.eventLog.openDrainLeases();
 
     return leases.length === 0
       ? new Map<string, string>()
-      : answersForDrainTurns(this.boundSql, this.actorHandle(), leases);
+      : answersForDrainTurns(this.chatTranscript, leases);
   }
 
   /**
@@ -1378,17 +1384,17 @@ export class OrchestratorAgent extends ActorAgent {
             const room = this.chatRooms.hostedRoom(record.name);
             const answerId = crypto.randomUUID();
 
-            room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined });
+            await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined });
 
             try {
-              const { text } = await runHostedTask(seams, reference, task, room === null ? undefined : (chunks) => room.observe(chunks));
+              const result = await runHostedTask(seams, reference, task, room === null ? undefined : (chunks) => room.observe(chunks));
 
-              this.recordHostedChatAnswer(reference, answerId, text, room?.answer(answerId) ?? null);
+              await this.recordHostedChatAnswer(reference, answerId, result.canonicalCompletion);
             } catch (cause) {
-              room?.deliver({ type: 'error', message: renderThrownChain({ cause }) });
+              await room?.deliver({ type: 'error', message: renderThrownChain({ cause }) });
               throw cause;
             } finally {
-              room?.closeTurn();
+              await room?.closeTurn();
             }
           },
           onFailure: ({ cause }) => {
@@ -1512,7 +1518,7 @@ export class OrchestratorAgent extends ActorAgent {
     let owed: ReadonlyMap<string, string> = new Map<string, string>();
 
     try {
-      owed = this.owedDrainReplies();
+      owed = await this.owedDrainReplies();
 
       const reconciledEventIds = this.eventLog.unbindStale(
         STALE_EVENT_DELIVERY_MS, Date.now(), new Set(owed.keys()),
@@ -1665,7 +1671,7 @@ export class OrchestratorAgent extends ActorAgent {
             // the same rows a redial reads — with the reply appended.
             this.broadcast(JSON.stringify({
               type: 'cf_agent_chat_messages',
-              messages: [...this.chatTranscript.history(), message],
+              messages: [...await this.chatTranscript.history(), message],
             }));
 
             return { delivered: true };
@@ -2090,7 +2096,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   protected get engine(): EvolutionEngine {
     if (!this._engine) {
-      this._engine = new EvolutionEngine(this.rt, {
+      this._engine = new EvolutionEngine(this.rt, this.stores.history, {
         // The grading pass's verdict row, craft scores, tombstone and
         // announcement as ONE unit. A synchronous run inside a Durable Object is
         // already atomic, so this is the honest identity — but answering through
@@ -2302,24 +2308,39 @@ export class OrchestratorAgent extends ActorAgent {
    * list on every request, so `admitted` has to recognise it — and the answer
    * is recorded when the turn ends ({@link recordHostedChatAnswer}).
    */
+  protected override transcriptFor(actor: ActorHandle): SessionTranscript {
+    return this.actorHost().bindStores(actor).stores.history.transcript(CHAT_SESSION_ID);
+  }
+
   protected override hostedChatWire(name: string): ChatWire | null {
     const row = this.subordinateRoster.get(name);
 
     if (!row || row.status === 'dismissed' || !row.actorReference) return null;
     const reference = row.actorReference;
-    const rows = new ActorMessagesTranscript(this.boundSql, reference, CHAT_SESSION_ID);
+    const bound = this.actorHost().bindStores(reference);
+    const history = bound.stores.history;
+    const rows = history.transcript(CHAT_SESSION_ID);
 
     return {
       sql: null,
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(name, message, exclude); },
-      history: () => actorChatHistory(this.boundSql, reference),
+      history: () => rows.history(),
       admitted: (id) => rows.has(id),
       send: async (input) => {
         // The opening row FIRST, under the id the client renders it by: the
         // hook resends its whole list, and `admitted` is what stops the same
         // words becoming a second turn.
-        rows.appendUser({ id: input.id, text: input.text });
+        const message = await history.admitInput({
+          id: input.id, turnId: input.id, message: turnInputMessage(input),
+          assertOwner: () => bound.handle.assertCurrent(),
+        });
+
+        const prepared = await rows.prepareUser({
+          id: input.id, turnId: input.id, message, metadata: { kinuMode: input.mode },
+        });
+
+        this.ctx.storage.transactionSync(() => rows.appendUser(prepared));
 
         const handoff = await admitHostedTask(this.subordinateSeams(), reference, {
           kind: 'message', body: input.text, mode: input.mode, messageId: input.id,
@@ -2341,7 +2362,11 @@ export class OrchestratorAgent extends ActorAgent {
       },
       interrupt: () => { this.actorHost().hosted(reference)?.session.interrupt(); },
       clear: () => {
-        actorChatClear(this.boundSql, reference);
+        history.clearConversation(CHAT_SESSION_ID, () => {
+          if (this.actorHost().hosted(reference)?.session.inFlight === true) {
+            throw new KinuError('denied', 'Stop the active turn before clearing its conversation');
+          }
+        });
 
         return Promise.resolve();
       },
@@ -2357,12 +2382,20 @@ export class OrchestratorAgent extends ActorAgent {
    * root's leaked into it. The row lands here, at the one place a hosted turn
    * ends, and the pane is told in the same breath.
    */
-  private recordHostedChatAnswer(reference: ActorReference, id: string, text: string, streamed: UIMessage | null): void {
-    const parentId = actorChatNewestId(this.boundSql, reference);
+  private async recordHostedChatAnswer(reference: ActorReference, id: string, completion: HostedTaskResult['canonicalCompletion']): Promise<void> {
+    if (completion === undefined) return;
+    const history = this.actorHost().bindStores(reference).stores.history;
+    const transcript = history.transcript(CHAT_SESSION_ID);
+    const parentId = transcript.newestId();
 
-    if (parentId === null || (text.trim().length === 0 && streamed === null)) return;
-    new ActorMessagesTranscript(this.boundSql, reference, CHAT_SESSION_ID)
-      .appendAssistant({ id, parentId, text, message: recordedAnswer(streamed, id, text) });
+    if (parentId === null) return;
+
+    const entry = await transcript.prepareAssistant({
+      id, parentId, turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
+      finalText: completion.finalTextReference,
+    });
+
+    this.ctx.storage.transactionSync(() => transcript.appendAssistant(entry));
   }
   /** The agents tool's peer deps over the cross-workspace transport. Owner
    *  resolution is lazy inside each action (the toolset is cached across
@@ -2708,9 +2741,7 @@ export class OrchestratorAgent extends ActorAgent {
     const parts: TerminalTurnParts = {
       // Over the row the transcript is about to persist, so the announcement a
       // cut turn still owes replays from what the row holds.
-      turnEndExtensions: {
-        message: projectJsonValue({ value: this.chatTranscript.recordedAssistant(input.messageId, input.assistantText) }),
-      },
+      turnEndExtensions: true,
       takes: {
         credited: input.credited,
         startedAt: input.startedAt,
@@ -2815,7 +2846,7 @@ export class OrchestratorAgent extends ActorAgent {
         // actually finishes.
         run: async () => {
           if (!this.config.getSleepTimeComputeEnabled()) return { status: 'completed', detail: 'the lane is off' };
-          const window = this.sleepTimeWindow();
+          const window = await this.sleepTimeWindow();
 
           // THE TURN-COUNT TRIGGER. A turn that does not reach the cadence is
           // left for a later one, or for the idle and closed-tab wakes, which
@@ -2876,9 +2907,9 @@ export class OrchestratorAgent extends ActorAgent {
    * hold the cadence, and a wake and a turn-count trigger cannot both run over
    * one set of turns — the second finds the first's tombstone and nothing owed.
    */
-  private sleepTimeWindow(): SleepTimeWindow {
+  private async sleepTimeWindow(): Promise<SleepTimeWindow> {
     return sleepTimeWindow(
-      this.chatTranscript.newestFirst(SLEEP_TIME_READ_ROWS),
+      await this.chatTranscript.newestFirst(SLEEP_TIME_READ_ROWS),
       (answerId) => effectAlreadyDone(this.boundSql, this.actorHandle(), SLEEP_TIME_APPLIED, answerId),
     );
   }
@@ -2936,7 +2967,7 @@ export class OrchestratorAgent extends ActorAgent {
     if (settledAt === null) return false;
     // The lane switched off after the arm is one more window nothing can run
     // over, and releases the instant for the same reason the others do.
-    const window = this.config.getSleepTimeComputeEnabled() ? this.sleepTimeWindow() : null;
+    const window = this.config.getSleepTimeComputeEnabled() ? await this.sleepTimeWindow() : null;
 
     if (window === null || window.completedTurns < 2 || window.turns.length === 0 || window.inputPending) {
       this.config.delete(SLEEP_TIME_SETTLED_AT);
@@ -3598,7 +3629,6 @@ export class OrchestratorAgent extends ActorAgent {
   async onStart(): Promise<void> {
     this.installClientMessageGate();
     this.ensureSchema();
-    this.resumeChatTranscript();
     // EVERY budgeted sweep this actor owns, through the seam the alarm frame
     // runs — one list, not a hand-folded copy of it, so a sweep added to the
     // seam cannot be missing from the gate. They run inside `Agent.alarm()`'s
@@ -4415,10 +4445,11 @@ export class OrchestratorAgent extends ActorAgent {
     }
 
     const id = newBranchId();
+    const inheritedContext = await this.readInheritedContext();
     this._pendingBranches.push({
       id, task,
       handle: startBranchHead(runtime, this.headJournal, {
-        id, task, inheritedContext: this.readInheritedContext(),
+        id, task, inheritedContext,
       }),
     });
     this.broadcastBranchStatus({ type: 'branch_status', status: 'running', branchId: id, task });
@@ -4446,7 +4477,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     const outcome = await pickAlternateTake(
-      { sql: this.boundSql, actor: this.rt.actor, engine: this.engine, inbox: this.orch.inbox },
+      { sql: this.boundSql, actor: this.rt.actor, history: this.stores.history, engine: this.engine, inbox: this.orch.inbox },
       takeId, nodeId);
 
     this.logActivity('take_pick', `${outcome.outcome} (${nodeId})`);
@@ -5728,7 +5759,8 @@ export class OrchestratorAgent extends ActorAgent {
     // on a subordinate. The two facts are reported separately, because they
     // are two facts: what the capability IS (declared) and what this actor
     // WIRES (observed from the ToolSet the turn actually built).
-    const wiredNames = new Set(Object.keys(this.getRawTools()));
+    const mode = await this.preparedWorkMode();
+    const wiredNames = new Set(Object.keys(this.getRawToolsForWorkMode(mode)));
 
     const builtIn = BUILTIN_TOOLS.map(name => ({
       name,
@@ -5809,9 +5841,12 @@ export class OrchestratorAgent extends ActorAgent {
     const signal = workspaceGenesisSignal(readMission(this.boundSql));
 
     if (!signal) return { started: false };
+    // Queued on this stack: the send admits the turn before its first await, and
+    // only the wait for the turn itself is detached under the heartbeat.
+    const sent = this.orch.inbox.send(signal);
     this.detachOwned(async () => {
       try {
-        await this.keepAliveWhile(() => this.orch.inbox.send(signal));
+        await this.keepAliveWhile(() => sent);
       } catch (cause) {
         diagnostics.failure('genesis.turn_failed', toKinuError({
           doing: "taking the workspace's first turn", cause, otherwise: 'unavailable',
@@ -6170,7 +6205,7 @@ export class OrchestratorAgent extends ActorAgent {
   private executorFileUploads = new Map<string, {
     readonly executorId: string;
     readonly path: string;
-    readonly expectedRevision: number | undefined;
+    readonly expectedRevision: VfsRevision | undefined;
     readonly upload: ExecutorFileUpload;
   }>();
   private executorFileDownloads = new Map<string, ExecutorFileDownload>();
@@ -6242,7 +6277,7 @@ export class OrchestratorAgent extends ActorAgent {
     offset: number,
     chunk: Uint8Array,
     final: boolean,
-    expectedRevision?: number,
+    expectedRevision?: VfsRevision,
   ): Promise<ExecutorWriteResult> {
     const router = this.rt.executionRouter;
 
@@ -6493,6 +6528,16 @@ export class OrchestratorAgent extends ActorAgent {
    *
    * See docs/WORKSPACES.md for the full spec.
    */
+  /** Continue the chat from before `entryId`, on the context the actor held there. */
+  @callable()
+  async revertConversation(entryId: string): Promise<void> {
+    this.stores.history.revertTo(CHAT_SESSION_ID, entryId, () => {
+      if (this.chatLoop.turnInFlight() || this.actorSession.inFlight) throw new KinuError('denied', 'Stop the active turn before reverting its conversation');
+    });
+    this.dynamicLedger.reset();
+    await this.actorSession.restoreWorkingHistory();
+  }
+
   @callable()
   async forkAgent(
     untilMessageId: string,
@@ -6510,6 +6555,7 @@ export class OrchestratorAgent extends ActorAgent {
       // through a native ranged read: a fork holds one frame of one file, never
       // the file.
       vfs: createWorkspaceForkSource(this.hostedWorkspace().bundle, this.rt.localVfs),
+      artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
       sourceName: this.name,
       busy: () => this._inFlight,
       transport: this.forkTransport,
@@ -6597,12 +6643,12 @@ export class OrchestratorAgent extends ActorAgent {
   #forkReceiverFor(forkName: string, transferId: string, ownerUserId: string): ForkTransferReceiver {
     if (this.forkReceiver?.transferId === transferId) return this.forkReceiver.receiver;
 
-    // No targetAuthority here: the begin frame declares it, and the writer's
-    // own inference from the provider-backed pane table is the
-    // right answer for an activation that resumes mid-transfer and never sees
-    // its transfer's begin.
     const writer = new ForkTargetWriter(this.boundSql, this.rt.storage.vfs, {
       workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
+      // This target's OWN payload plane. Every carried payload reference and
+      // payload file is re-rooted here, so the fork never reads the workspace
+      // it was cut from.
+      artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
       writeSoulFile: (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
       transaction: (rows) => this.ctx.storage.transactionSync(rows),
     });

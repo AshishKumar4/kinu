@@ -1,12 +1,13 @@
 /**
  * Workspace archive — the portable backup format both backends produce.
  *
- * Driven against the REAL production schema (initAllTables + the FTS5 session
- * index + a memory-store table), because the properties that matter are all
- * schema-shaped: BLOB fidelity through the VFS chunk store, an external-content
- * FTS index that must be rebuilt rather than dumped, the capability secret that
- * must never leave the workspace, and a paged export reassembling into exactly
- * the archive an unpaged one would have written.
+ * Driven against the REAL production schema (initAllTables + the canonical
+ * conversation store + the FTS5 session index + a memory-store table), because
+ * the properties that matter are all schema-shaped: BLOB fidelity through the
+ * VFS chunk store, an external-content FTS index that must be rebuilt rather
+ * than dumped, the capability secret that must never leave the workspace, and a
+ * paged export reassembling into exactly the archive an unpaged one would have
+ * written.
  */
 
 import * as v from 'valibot';
@@ -14,24 +15,40 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   archiveSqlFromDatabase,
+  initActorClaimTables,
   initAllTables,
   readWorkspaceArchivePage,
   restoreWorkspaceArchive,
   writeWorkspaceArchive,
   workspaceArchiveFiles,
+  CHAT_SESSION_ID,
+  SessionHistory,
+  type ActorHandle,
   type ArchiveCursor,
+  type SessionTranscriptReader,
   type SqlValue,
 } from '../src/index';
-import { createTestActor, createWorkspaceBundle, makeExecRaw, makeSql, SDK_SESSION_DDL } from './helpers';
+import { createTestActor, createWorkspaceBundle, makeExecRaw, makeSql } from './helpers';
 import { ConversationSearchStore } from '../src/memory/conversation-search';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
+import type { WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
 import { testActorHandle } from '@kinu.run/test-utils';
 
-function fresh() {
+/** One in-memory database with every handle this suite drives it through. */
+interface Workspace {
+  readonly db: Database;
+  readonly sql: SqlExecutor;
+  readonly execRaw: RawSqlExec;
+  readonly archive: SqlExec;
+  readonly vfs: WorkspaceVFS;
+}
+
+function fresh(): Workspace {
   const db = new Database(':memory:');
   // The filesystem is built on demand: a database used only as a RESTORE
   // TARGET must stay genuinely empty, and building one creates tables.
-  let vfs: ReturnType<typeof createWorkspaceBundle>['vfs'] | null = null;
+  let vfs: WorkspaceVFS | null = null;
 
   return {
     db, sql: makeSql(db), execRaw: makeExecRaw(db), archive: archiveSqlFromDatabase(db),
@@ -39,18 +56,51 @@ function fresh() {
   };
 }
 
+/** Actor-local state PLUS the canonical conversation store, which the workspace
+ *  schema mints beside the claim ledger rather than with the actor tables. */
+function initSchema(ws: Workspace): void {
+  initAllTables(ws.execRaw, ws.sql);
+  initActorClaimTables(ws.execRaw);
+}
+
+/** The canonical conversation writer, over the file plane this workspace owns. */
+function historyOver(ws: Workspace, actor: ActorHandle): SessionHistory {
+  return new SessionHistory({
+    sql: ws.sql, actor, transactionSync: (write) => ws.db.transaction(write)(),
+    files: async () => ({ vfs: ws.vfs, artifactDirectory: '/actor/.kinu/context' }),
+  });
+}
+
+/** A transcript's text, oldest first — entry content lives in message parts,
+ *  so only a projection can answer what a conversation says. */
+async function transcriptText(transcript: SessionTranscriptReader): Promise<string[]> {
+  const text: string[] = [];
+
+  for (const entry of transcript.ancestry()) {
+    const projected = await transcript.project(entry.id);
+
+    if (projected === null) throw new Error(`conversation entry ${entry.id} disappeared while reading it back`);
+    text.push(projected.content);
+  }
+
+  return text;
+}
+
 /** A workspace with the production schema plus content of every awkward kind. */
 async function seeded() {
   const ws = fresh();
-  initAllTables(ws.execRaw, ws.sql);
+  initSchema(ws);
   // The identity AND the actor directory row: an archive is restored into a
-  // database whose `actor_messages` rows name an actor, and the restore resolves the
+  // database whose conversation rows name an actor, and the restore resolves the
   // main actor out of the directory it just landed.
   const actor = createTestActor(ws.sql, ws.execRaw, 'w1', 'scout');
+  const history = historyOver(ws, actor);
 
   for (let i = 0; i < 5; i++) {
-    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-           VALUES (${actor.actorId}, ${`m${i}`}, ${'default'}, ${null}, ${'user'}, ${`hello sqlite ${i}`}, ${100 + i})`;
+    await history.record(CHAT_SESSION_ID, {
+      id: `m${i}`, parentId: i === 0 ? null : `m${i - 1}`, origin: 'input',
+      message: { role: 'user', content: `hello sqlite ${i}` },
+    });
   }
 
   // Binary content through the canonical VFS writer — the chunked BLOB path.
@@ -62,9 +112,9 @@ async function seeded() {
   await ws.vfs.mkdir('notes', { recursive: true });
   await ws.vfs.writeFile('notes/plan.md', 'a plan with a "quote" and a \\ backslash');
   // The disposable search index is derived from the conversation authority.
-  new ConversationSearchStore(ws.sql, actor).search('sqlite');
+  await new ConversationSearchStore(ws.sql, actor, (sessionId) => history.transcript(sessionId)).search('sqlite');
 
-  return { ...ws, bytes, actor };
+  return { ...ws, bytes, actor, history };
 }
 
 describe('workspace archive', () => {
@@ -110,8 +160,8 @@ describe('workspace archive', () => {
 
     const identity = target.sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity`;
     expect(identity).toEqual([{ id: 'w1', name: 'scout' }]);
-    const messages = target.sql<{ id: string; content: string }>`SELECT id, content FROM actor_messages ORDER BY id`;
-    expect(messages.map((m) => m.content)).toEqual([
+    const transcript = historyOver(target, openWorkspaceMainActor(target.sql)).transcript(CHAT_SESSION_ID);
+    expect(await transcriptText(transcript)).toEqual([
       'hello sqlite 0', 'hello sqlite 1', 'hello sqlite 2', 'hello sqlite 3', 'hello sqlite 4',
     ]);
 
@@ -132,7 +182,8 @@ describe('workspace archive', () => {
     // The restore landed the source's actor directory too, so the target's own
     // main actor is who the restored transcript belongs to.
     const restored = openWorkspaceMainActor(target.sql);
-    const hits = new ConversationSearchStore(target.sql, restored).search('sqlite');
+    const history = historyOver(target, restored);
+    const hits = await new ConversationSearchStore(target.sql, restored, (sessionId) => history.transcript(sessionId)).search('sqlite');
     expect(hits.length).toBe(5);
     // The FTS shadow tables are the index's private storage: rebuilt on the
     // target, never carried as rows.
@@ -140,11 +191,11 @@ describe('workspace archive', () => {
 
     // A local archive carries none of the disposable trigger/state pair; its
     // next durable message mutation therefore remains valid after import.
-    void target.sql`
-      INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-      VALUES (${restored.actorId}, ${'m5'}, ${'default'}, ${null}, ${'user'}, ${'local post-import'}, ${200})`;
-    expect(new ConversationSearchStore(target.sql, restored).search('post-import').map((hit) => hit.messageId))
-      .toEqual(['m5']);
+    await history.record(CHAT_SESSION_ID, {
+      id: 'm5', parentId: 'm4', origin: 'input', message: { role: 'user', content: 'local post-import' },
+    });
+    const after = await new ConversationSearchStore(target.sql, restored, (sessionId) => history.transcript(sessionId)).search('post-import');
+    expect(after.map((hit) => hit.messageId)).toEqual(['m5']);
   });
   test('the workspace capability secret is never in an archive', async () => {
     const source = await seeded();
@@ -189,7 +240,7 @@ describe('workspace archive', () => {
 
     const target = fresh();
     await restoreWorkspaceArchive(target.archive, paged);
-    expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_messages`[0]!.n).toBe(5);
+    expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM conversation_entries`[0]!.n).toBe(5);
   });
 
   test('external workspace files page in the same stream and restore byte-exactly', async () => {
@@ -338,41 +389,37 @@ describe('workspace archive', () => {
     const target = fresh();
     await expect(restoreWorkspaceArchive(target.archive, ['SQLite format 3']))
       .rejects.toThrow(/not a Kinu workspace archive/);
-    await expect(restoreWorkspaceArchive(target.archive, ['{"t":"row","table":"actor_messages","values":{}}']))
+    await expect(restoreWorkspaceArchive(target.archive, ['{"t":"row","table":"conversation_entries","values":{}}']))
       .rejects.toThrow(/not a Kinu workspace archive/);
   });
 
   test('an empty workspace archives and restores to an empty workspace', async () => {
     const source = fresh();
-    initAllTables(source.execRaw, source.sql);
+    initSchema(source);
     const lines = await writeWorkspaceArchive(source.archive, { workspace: 'blank', source: 'local' });
 
     const target = fresh();
     const result = await restoreWorkspaceArchive(target.archive, lines);
     expect(result.tables).toBeGreaterThan(0);
-    expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_messages`[0]!.n).toBe(0);
+    expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM conversation_entries`[0]!.n).toBe(0);
   });
 
-  test('omits derived conversation revision triggers and restores a cloud pane into a mutable local transcript', async () => {
+  test('omits derived conversation revision triggers and restores a mutable transcript', async () => {
     const source = fresh();
-    initAllTables(source.execRaw, source.sql);
-    // A cloud export always carries its workspace identity and actor directory,
-    // and a pane produced by THIS tree names the actor that wrote each row —
-    // so the projection on restore keeps that owner rather than attributing the
-    // transcript to whoever the archive's main actor turns out to be.
+    initSchema(source);
+    // The export carries the workspace identity and actor directory, and every
+    // transcript row names the actor that wrote it — so a restore files the
+    // conversation under that owner and not under whoever the archive's main
+    // actor turns out to be.
     const cloudActor = createTestActor(source.sql, source.execRaw, 'cloud', 'cloud');
-    source.execRaw(SDK_SESSION_DDL);
-    void source.sql`
-      INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'u1'}, ${''}, ${null}, ${'user'},
-              ${JSON.stringify({ parts: [{ type: 'text', text: 'cloud question' }] })},
-              ${'2026-08-26 12:00:00'})`;
-    void source.sql`
-      INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'a1'}, ${''}, ${'u1'}, ${'assistant'},
-              ${JSON.stringify({ parts: [{ type: 'text', text: 'cloud answer' }] })},
-              ${'2026-08-26 12:00:01'})`;
-    new ConversationSearchStore(source.sql, openWorkspaceMainActor(source.sql)).search('cloud');
+    const cloud = historyOver(source, cloudActor);
+    await cloud.record(CHAT_SESSION_ID, {
+      id: 'u1', parentId: null, origin: 'input', message: { role: 'user', content: 'cloud question' },
+    });
+    await cloud.record(CHAT_SESSION_ID, {
+      id: 'a1', parentId: 'u1', origin: 'output', message: { role: 'assistant', content: 'cloud answer' },
+    });
+    await new ConversationSearchStore(source.sql, openWorkspaceMainActor(source.sql), (sessionId) => cloud.transcript(sessionId)).search('cloud');
 
     const lines = await writeWorkspaceArchive(source.archive, { workspace: 'cloud', source: 'cloud' });
     expect(lines.some((line) => line.includes('conversation_fts'))).toBe(false);
@@ -381,42 +428,40 @@ describe('workspace archive', () => {
     const target = fresh();
     await restoreWorkspaceArchive(target.archive, lines);
 
-    const pane = target.sql<{ name: string }>`
-      SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${'assistant_messages'}`;
-
-    expect(pane).toEqual([]);
-    // …and every pane row landed in `actor_messages` under the actor that WROTE it,
-    // not under whoever the restore would have attributed it to. Read UNSCOPED
-    // on purpose: a row filed under a different owner shows up here as a wrong
-    // `actor_id`, where an actor-predicated read would answer an empty set and
-    // pass for the wrong reason.
-    expect(target.sql<{ id: string; actor_id: string; content: string }>`
-      SELECT id, actor_id, content FROM actor_messages ORDER BY id`).toEqual([
-      { id: 'a1', actor_id: cloudActor.actorId, content: 'cloud answer' },
-      { id: 'u1', actor_id: cloudActor.actorId, content: 'cloud question' },
+    // Read UNSCOPED on purpose: a row filed under a different owner shows up
+    // here as a wrong `actor_id`, where an actor-predicated read would answer
+    // an empty set and pass for the wrong reason.
+    expect(target.sql<{ id: string; actor_id: string }>`
+      SELECT id, actor_id FROM conversation_entries ORDER BY id`).toEqual([
+      { id: 'a1', actor_id: cloudActor.actorId },
+      { id: 'u1', actor_id: cloudActor.actorId },
     ]);
     const landed = openWorkspaceMainActor(target.sql);
-    void target.sql`
-      INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-      VALUES (${landed.actorId}, ${'u2'}, ${'default'}, ${'a1'}, ${'user'}, ${'local continuation'}, ${1_000})`;
-    expect(new ConversationSearchStore(target.sql, landed).search('local continuation').map((hit) => hit.messageId))
-      .toEqual(['u2']);
+    const history = historyOver(target, landed);
+    expect(await transcriptText(history.transcript(CHAT_SESSION_ID))).toEqual(['cloud question', 'cloud answer']);
+    await history.record(CHAT_SESSION_ID, {
+      id: 'u2', parentId: 'a1', origin: 'input', message: { role: 'user', content: 'local continuation' },
+    });
+    const continued = await new ConversationSearchStore(target.sql, landed, (sessionId) => history.transcript(sessionId)).search('local continuation');
+    expect(continued.map((hit) => hit.messageId)).toEqual(['u2']);
   });
 });
 
 describe('the table set an export walks is pinned by its first page', () => {
   test('a table born mid-export never joins it, so the archive stays restorable', async () => {
     const source = fresh();
-    initAllTables(source.execRaw, source.sql);
+    initSchema(source);
     // A bare bound handle, not a directory row: this test counts the rows an
     // archive carries, and a fixture that registered an actor would add two of
-    // its own to the number under assertion. The restore's pane projection is
-    // the only path that resolves a directory, and there is no pane here.
+    // its own to the number under assertion.
     const actor = testActorHandle(source.sql);
+    const history = historyOver(source, actor);
 
     for (let i = 0; i < 5; i++) {
-      void source.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-        VALUES (${actor.actorId}, ${'m'+i}, ${'default'}, ${null}, ${'user'}, ${`page boundary ${i}`}, ${100+i})`;
+      await history.record(CHAT_SESSION_ID, {
+        id: `m${i}`, parentId: i === 0 ? null : `m${i - 1}`, origin: 'input',
+        message: { role: 'user', content: `page boundary ${i}` },
+      });
     }
 
     // Drive page by page with a budget that forces several pages, and between
@@ -447,9 +492,12 @@ describe('the table set an export walks is pinned by its first page', () => {
     expect(pages.some((l) => l.includes('"name":"late_arrival"'))).toBe(false);
 
     // And the archive is RESTORABLE — the property the missing pin destroyed.
+    // The total is the seeded conversation exactly: five messages with their
+    // parts and updates, five entries with their part references, and the one
+    // head pointer. The late table's row is not among them.
     const target = fresh();
     const result = await restoreWorkspaceArchive(target.archive, pages);
-    expect(result.rows).toBe(5);
+    expect(result.rows).toBe(36);
   });
 
   test('a WITHOUT ROWID table pages stably under concurrent writes', async () => {

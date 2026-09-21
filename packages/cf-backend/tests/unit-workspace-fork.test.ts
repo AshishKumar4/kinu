@@ -1,21 +1,25 @@
 import { describe, expect, test } from 'bun:test';
 import { writeSoul } from '@kinu.run/core';
-import { deliverCloudFork, type CloudForkRegistry, type CloudForkTarget } from '../src/user/workspace-fork';
+import {
+  deliverCloudFork, type CloudForkRegistry, type CloudForkSource, type CloudForkTarget,
+} from '../src/user/workspace-fork';
 import type { UserCaller } from '@kinu.run/core';
 import { createTestWorkspace, createTestActor } from '../../core/tests/helpers';
+import { ForkConversation, SOURCE_ARTIFACTS } from '../../core/tests/helpers/fork-conversation';
 
 const caller = { workspaceToken: 'source-token' } satisfies UserCaller;
 
-async function source() {
+async function source(): Promise<CloudForkSource> {
   const ws = createTestWorkspace();
   // The conversation store is actor-private, so the source transcript is
   // seeded under the actor the fork reads it as — its workspace's main.
   const actor = createTestActor(ws.sql, ws.execRaw, 'SRC', 'source');
   await writeSoul(ws.vfs, ws.sql, 'p');
-  void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
-    VALUES (${actor.actorId}, ${'m1'}, ${'default'}, ${'user'}, ${'hello'}, ${1})`;
+  await new ForkConversation(ws, SOURCE_ARTIFACTS).say({ id: 'm1', role: 'user', text: 'hello' });
 
-  return { ...ws, actor };
+  return {
+    sql: ws.sql, vfs: ws.vfs, actor, untilMessageId: 'm1', artifactDirectory: SOURCE_ARTIFACTS,
+  };
 }
 
 function harness(options: {
@@ -73,7 +77,7 @@ describe('cloud fork ownership transaction', () => {
     const h = harness();
     await expect(deliverCloudFork({
       registry: h.registry, caller, target: h.target, name: 'source-fork',
-      source: { sql: src.sql, vfs: src.vfs, actor: src.actor, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+      source: src, ownerUserId: '0'.repeat(32),
     })).resolves.toEqual({ workspaceId: 'TGT', forkPointMs: 1 });
     expect(h.calls[0]).toBe('reserve:source-fork');
     expect(h.calls.some((call) => call.includes(':begin:'))).toBe(true);
@@ -86,7 +90,7 @@ describe('cloud fork ownership transaction', () => {
     const h = harness({ conflict: true });
     await expect(deliverCloudFork({
       registry: h.registry, caller, target: h.target, name: 'source-fork',
-      source: { sql: src.sql, vfs: src.vfs, actor: src.actor, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+      source: src, ownerUserId: '0'.repeat(32),
     })).rejects.toThrow('agent name already exists');
     expect(h.calls).toEqual(['reserve:source-fork']);
   });
@@ -96,14 +100,14 @@ describe('cloud fork ownership transaction', () => {
     const frame = harness({ copyError: new Error('frame failed') });
     await expect(deliverCloudFork({
       registry: frame.registry, caller, target: frame.target, name: 'source-fork',
-      source: { sql: src.sql, vfs: src.vfs, actor: src.actor, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+      source: src, ownerUserId: '0'.repeat(32),
     })).rejects.toThrow('frame failed');
     expect(frame.calls.at(-1)).toBe(`destroy:source-fork:${'0'.repeat(32)}`);
 
     const publish = harness({ publishError: new Error('publish failed') });
     await expect(deliverCloudFork({
       registry: publish.registry, caller, target: publish.target, name: 'source-fork',
-      source: { sql: src.sql, vfs: src.vfs, actor: src.actor, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+      source: src, ownerUserId: '0'.repeat(32),
     })).rejects.toThrow('publish failed');
     expect(publish.calls.at(-1)).toBe(`destroy:source-fork:${'0'.repeat(32)}`);
   });
@@ -116,7 +120,7 @@ describe('cloud fork ownership transaction', () => {
     const h = harness();
     await deliverCloudFork({
       registry: h.registry, caller, target: h.target, name: 'source-fork',
-      source: { sql: src.sql, vfs: src.vfs, actor: src.actor, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+      source: src, ownerUserId: '0'.repeat(32),
     });
 
     const staged = h.calls.filter((call) => call.startsWith('frame:') && !call.includes(':commit:'));
@@ -133,7 +137,7 @@ describe('cloud fork ownership transaction', () => {
     const h = harness({ renewed: false });
     await expect(deliverCloudFork({
       registry: h.registry, caller, target: h.target, name: 'source-fork',
-      source: { sql: src.sql, vfs: src.vfs, actor: src.actor, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+      source: src, ownerUserId: '0'.repeat(32),
     })).rejects.toThrow('no longer held by this transfer');
     expect(h.calls.at(-1)).toBe(`destroy:source-fork:${'0'.repeat(32)}`);
   });

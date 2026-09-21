@@ -15,17 +15,31 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
-  snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage, writeSoul, summarizeSoul, SOUL_PATH,
+  snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage, summarizeSoul, SOUL_PATH,
   ForkTargetWriter, ForkTransferReceiver, NativeSinkPlan, forkTransferFrames, sealForkFrame,
-  FORK_TRANSFER_VERSION, FORK_ROW_SECTIONS, FORK_STREAM_SEED, FORK_FRAME_BYTES, foldForkStream,
+  FORK_TRANSFER_VERSION, FORK_STREAM_SEED, FORK_FRAME_BYTES, foldForkStream,
   type ForkFileSink, type ForkNativeFilePort,
   type ForkFileSource,
-  type ForkSnapshot, type ForkFrame, type ForkWriteTarget, type UnsealedForkFrame,
+  type ForkSectionCounts, type ForkSnapshot, type ForkFrame, type ForkWriteTarget, type UnsealedForkFrame,
 } from '../src/index';
 import { createTestWorkspace as fresh, type TestWorkspace } from './helpers';
+import {
+  seedForkSource, SOURCE_ARTIFACTS, SPILLED_BYTES, TARGET_ARTIFACTS,
+} from './helpers/fork-conversation';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 
-const OWNER: ForkWriteTarget = { workspaceId: 'FORK-ID', workspaceName: 'my-fork', now: 4242 };
+const OWNER: ForkWriteTarget = {
+  workspaceId: 'FORK-ID', workspaceName: 'my-fork', artifactDirectory: TARGET_ARTIFACTS, now: 4242,
+};
+
+/** A transfer that carries no rows and one file — the minimum a receiver needs
+ *  to be driven through its file path. */
+const EMPTY_COUNTS: ForkSectionCounts = {
+  agentConfig: 0, craftedTools: 0, memoryChunks: 0,
+  sessionMessages: 0, messageParts: 0, messageUpdates: 0,
+  conversationEntries: 0, conversationEntryParts: 0, contextMembers: 0,
+  files: 1,
+};
 
 /** The one big-file fixture both 256 MiB arms stream, and the digest of the
  *  bytes its generator produces. Never materialized: the digest is folded a
@@ -62,34 +76,29 @@ type FrameBody = UnsealedForkFrame extends infer Frame
     : never
   : never;
 
-async function source(opts: { files?: Array<{ path: string; content: string }> } = {}) {
+/** A source workspace with a three-turn canonical conversation, seeded through
+ *  the production session writers. */
+async function source(opts: { files?: Array<{ path: string; content: string }>; spill?: boolean } = {}) {
   const src = fresh();
-  void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'origin'}, ${100})`;
-  const actor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'SRC', ownerUserId: '' }).createMain({ name: 'origin' });
-  await writeSoul(src.vfs, src.sql, 'help with testing');
 
-  const chain = [
-    { id: 'm1', parent: null, role: 'user', text: 'first' },
-    { id: 'm2', parent: 'm1', role: 'assistant', text: 'second' },
-    { id: 'm3', parent: 'm2', role: 'user', text: 'third' },
-  ] as const;
+  const chat = await seedForkSource(src, {
+    purpose: 'help with testing',
+    craftedTools: [{ name: 'helper', description: 'utility', code: 'async (x) => x' }],
+  });
 
-  for (const [i, m] of chain.entries()) {
-    void src.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-      VALUES (${actor.actorId}, ${m.id}, ${'default'}, ${m.parent}, ${m.role}, ${m.text}, ${1000 + i})`;
-  }
+  await chat.say({ id: 'm1', role: 'user', text: 'first', parentId: null });
+  await chat.say({ id: 'm2', role: 'assistant', text: opts.spill ? 'p'.repeat(SPILLED_BYTES) : 'second' });
+  await chat.say({ id: 'm3', role: 'user', text: 'third' });
 
-  void src.sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
-    VALUES (${'helper'}, ${'utility'}, ${null}, ${'async (x) => x'}, ${'local'}, ${500}, ${500})`;
-  void src.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
-    VALUES (${'c1'}, ${'memory/MEMORY.md'}, ${1}, ${2}, ${'h'}, ${'key insight'}, ${700})`;
-  actor.config.setModel('m');
-  await src.vfs.mkdir('memory', { recursive: true });
-  await src.vfs.writeFile('memory/MEMORY.md', 'key insight');
-
-  for (const f of opts.files ?? []) await src.vfs.writeFile(f.path, f.content);
+  for (const file of opts.files ?? []) await src.vfs.writeFile(file.path, file.content);
 
   return src;
+}
+
+function snapshotOf(src: TestWorkspace, untilMessageId: string): Promise<ForkSnapshot> {
+  return snapshotWorkspaceForFork({
+    sql: src.sql, vfs: src.vfs, untilMessageId, artifactDirectory: SOURCE_ARTIFACTS,
+  });
 }
 
 /**
@@ -120,72 +129,95 @@ function framesFor(snapshot: ForkSnapshot, opts: {
   push({
     kind: 'begin',
     head: { source: snapshot.source, cut: snapshot.cut },
-    targetAuthority: 'plain',
     counts: {
       agentConfig: snapshot.agentConfig.length,
       craftedTools: snapshot.craftedTools.length,
       memoryChunks: snapshot.memoryChunks.length,
-      assistantMessages: snapshot.assistantMessages.length,
-      messages: snapshot.messages.length,
-      files: snapshot.files.length,
+      sessionMessages: snapshot.sessionMessages.length,
+      messageParts: snapshot.messageParts.length,
+      messageUpdates: snapshot.messageUpdates.length,
+      conversationEntries: snapshot.conversationEntries.length,
+      conversationEntryParts: snapshot.conversationEntryParts.length,
+      contextMembers: snapshot.contextMembers.length,
+      files: snapshot.files.length + snapshot.artifacts.length,
     },
   });
 
-  for (const section of FORK_ROW_SECTIONS) {
-    if (section === 'agentConfig') {
-      for (let at = 0; at < snapshot.agentConfig.length; at += rowsPerFrame) {
-        push({ kind: section, rows: snapshot.agentConfig.slice(at, at + rowsPerFrame) });
-      }
-    } else if (section === 'craftedTools') {
-      for (let at = 0; at < snapshot.craftedTools.length; at += rowsPerFrame) {
-        push({ kind: section, rows: snapshot.craftedTools.slice(at, at + rowsPerFrame) });
-      }
-    } else if (section === 'memoryChunks') {
-      for (let at = 0; at < snapshot.memoryChunks.length; at += rowsPerFrame) {
-        push({ kind: section, rows: snapshot.memoryChunks.slice(at, at + rowsPerFrame) });
-      }
-    } else if (section === 'assistantMessages') {
-      for (let at = 0; at < snapshot.assistantMessages.length; at += rowsPerFrame) {
-        push({ kind: section, rows: snapshot.assistantMessages.slice(at, at + rowsPerFrame) });
-      }
-    } else {
-      for (let at = 0; at < snapshot.messages.length; at += rowsPerFrame) {
-        push({ kind: section, rows: snapshot.messages.slice(at, at + rowsPerFrame) });
-      }
-    }
+  // The sections, in the order FORK_ROW_SECTIONS fixes — which is the order the
+  // canonical store's foreign keys require.
+  for (let at = 0; at < snapshot.agentConfig.length; at += rowsPerFrame) {
+    push({ kind: 'agentConfig', rows: snapshot.agentConfig.slice(at, at + rowsPerFrame) });
+  }
+
+  for (let at = 0; at < snapshot.craftedTools.length; at += rowsPerFrame) {
+    push({ kind: 'craftedTools', rows: snapshot.craftedTools.slice(at, at + rowsPerFrame) });
+  }
+
+  for (let at = 0; at < snapshot.memoryChunks.length; at += rowsPerFrame) {
+    push({ kind: 'memoryChunks', rows: snapshot.memoryChunks.slice(at, at + rowsPerFrame) });
+  }
+
+  for (let at = 0; at < snapshot.sessionMessages.length; at += rowsPerFrame) {
+    push({ kind: 'sessionMessages', rows: snapshot.sessionMessages.slice(at, at + rowsPerFrame) });
+  }
+
+  for (let at = 0; at < snapshot.messageParts.length; at += rowsPerFrame) {
+    push({ kind: 'messageParts', rows: snapshot.messageParts.slice(at, at + rowsPerFrame) });
+  }
+
+  for (let at = 0; at < snapshot.messageUpdates.length; at += rowsPerFrame) {
+    push({ kind: 'messageUpdates', rows: snapshot.messageUpdates.slice(at, at + rowsPerFrame) });
+  }
+
+  for (let at = 0; at < snapshot.conversationEntries.length; at += rowsPerFrame) {
+    push({ kind: 'conversationEntries', rows: snapshot.conversationEntries.slice(at, at + rowsPerFrame) });
+  }
+
+  for (let at = 0; at < snapshot.conversationEntryParts.length; at += rowsPerFrame) {
+    push({ kind: 'conversationEntryParts', rows: snapshot.conversationEntryParts.slice(at, at + rowsPerFrame) });
+  }
+
+  for (let at = 0; at < snapshot.contextMembers.length; at += rowsPerFrame) {
+    push({ kind: 'contextMembers', rows: snapshot.contextMembers.slice(at, at + rowsPerFrame) });
   }
 
   const encoder = new TextEncoder();
 
-  for (const file of snapshot.files) {
-    const bytes = encoder.encode(file.content);
+  const file = (path: string, content: string, artifact: boolean): void => {
+    const bytes = encoder.encode(content);
     const digest = new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
 
     if (bytes.byteLength === 0) {
-      push({ kind: 'file', path: file.path, offset: 0, bytes, last: true, fileDigest: digest });
-      continue;
+      push({ kind: 'file', path, offset: 0, bytes, last: true, fileDigest: digest, artifact });
+
+      return;
     }
 
     for (let at = 0; at < bytes.byteLength; at += fileBytes) {
       const last = at + fileBytes >= bytes.byteLength;
       push({
-        kind: 'file', path: file.path, offset: at,
-        bytes: bytes.slice(at, at + fileBytes), last,
+        kind: 'file', path, offset: at, bytes: bytes.slice(at, at + fileBytes), last, artifact,
         fileDigest: last ? digest : undefined,
       });
     }
-  }
+  };
+
+  for (const carried of snapshot.files) file(carried.path, carried.content, false);
+
+  for (const carried of snapshot.artifacts) file(carried.path, carried.content, true);
 
   push({ kind: 'commit', stream });
 
   return out;
 }
 
-function receiverFor(tgt: TestWorkspace, opts: Partial<ForkWriteTarget> = {}) {
-  const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, { ...OWNER, targetAuthority: 'plain', ...opts });
+/** A sink that reassembles each file in memory and publishes it to the target's
+ *  own plane — the caller half `NativeSinkPlan` serves in production, reduced to
+ *  what a receiver test needs to observe. */
+function sinkFor(tgt: TestWorkspace): ForkFileSink {
   const ranges = new Map<string, Uint8Array[]>();
 
-  const sink: ForkFileSink = {
+  return {
     async beginFile(path, staged) {
       // A fixture with no persistence cannot adopt a staging it never kept, and
       // nothing here evicts, so an adopting call would be a defect in the test.
@@ -213,6 +245,9 @@ function receiverFor(tgt: TestWorkspace, opts: Partial<ForkWriteTarget> = {}) {
       for (const part of parts) { bytes.set(part, at); at += part.byteLength; }
 
       const content = new TextDecoder().decode(bytes);
+      const directory = path.slice(0, path.lastIndexOf('/'));
+
+      if (directory) await tgt.vfs.mkdir(directory, { recursive: true });
       await tgt.vfs.writeFile(path, content);
       ranges.delete(path);
 
@@ -220,8 +255,10 @@ function receiverFor(tgt: TestWorkspace, opts: Partial<ForkWriteTarget> = {}) {
     },
     async abortFile(path) { ranges.delete(path); },
   };
+}
 
-  return new ForkTransferReceiver(writer, sink);
+function receiverFor(tgt: TestWorkspace, opts: Partial<ForkWriteTarget> = {}): ForkTransferReceiver {
+  return new ForkTransferReceiver(new ForkTargetWriter(tgt.sql, tgt.vfs, { ...OWNER, ...opts }), sinkFor(tgt));
 }
 
 /** Everything that only exists once a transfer has published. A workspace that
@@ -248,20 +285,28 @@ describe('fork transfer receiver', () => {
     const src = await source();
     const streamed = fresh();
     const direct = fresh();
-    const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2');
+    const snapshot = await snapshotOf(src, 'm2');
 
     const outcomes = await drain(receiverFor(streamed), framesFor(snapshot));
-    const final = outcomes[outcomes.length - 1]!;
+    const final = outcomes[outcomes.length - 1];
 
-    if (final.status !== 'published') throw new Error(`expected published, got ${final.status}`);
+    if (final?.status !== 'published') throw new Error(`expected published, got ${final?.status ?? 'nothing'}`);
     // Only the commit publishes. Everything before it staged.
-    expect(outcomes.slice(0, -1).every((o) => o.status === 'staged')).toBe(true);
+    expect(outcomes.slice(0, -1).every((outcome) => outcome.status === 'staged')).toBe(true);
 
-    await writeForkSnapshot(direct.sql, direct.vfs, snapshot, { ...OWNER, targetAuthority: 'plain' });
+    await writeForkSnapshot(direct.sql, direct.vfs, snapshot, OWNER);
 
     const rowsOf = (ws: TestWorkspace) => ({
-      messages: ws.sql<{ id: string; parent_id: string | null; content: string }>`
-        SELECT id, parent_id, content FROM actor_messages ORDER BY created_at, id`,
+      entries: ws.sql<{ id: string; parent_id: string | null; role: string }>`
+        SELECT id, parent_id, role FROM conversation_entries ORDER BY rowid`,
+      entryParts: ws.sql<{ entry_id: string; message_id: string; through_sequence: number }>`
+        SELECT entry_id, message_id, through_sequence FROM conversation_entry_parts ORDER BY entry_id, position`,
+      messages: ws.sql<{ message_id: string; role: string; origin: string; sealed_sequence: number | null }>`
+        SELECT message_id, role, origin, sealed_sequence FROM session_messages ORDER BY rowid`,
+      updates: ws.sql<{ message_id: string; sequence: number; operation: string; payload_json: string | null }>`
+        SELECT message_id, sequence, operation, payload_json FROM message_updates ORDER BY message_id, sequence`,
+      members: ws.sql<{ entry_id: string; position: number; message_id: string }>`
+        SELECT entry_id, position, message_id FROM context_memberships WHERE to_revision IS NULL ORDER BY position`,
       tools: ws.sql<{ name: string }>`SELECT name FROM crafted_tools ORDER BY name`,
       chunks: ws.sql<{ id: string; text: string }>`SELECT id, text FROM memory_chunks ORDER BY id`,
       config: ws.sql<{ key: string; value: string }>`SELECT key, value FROM actor_config ORDER BY key`,
@@ -271,62 +316,106 @@ describe('fork transfer receiver', () => {
     expect(rowsOf(streamed)).toEqual(rowsOf(direct));
     expect(await streamed.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toBe('key insight');
     // m3 is past the cut and must not have crossed.
-    expect(rowsOf(streamed).messages.map((r) => r.id)).not.toContain('m3');
+    expect(rowsOf(streamed).entries.map((row) => row.id)).not.toContain('m3');
+  });
+
+  test('the counts the source declared are the counts the target staged', async () => {
+    const src = await source();
+    const tgt = fresh();
+    const frames = framesFor(await snapshotOf(src, 'm3'), { rowsPerFrame: 1 });
+    const begin = frames[0];
+
+    if (begin?.kind !== 'begin') throw new Error('expected a begin frame');
+    const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, OWNER);
+    await drain(new ForkTransferReceiver(writer, sinkFor(tgt)), frames);
+
+    // Section for section, what the wire promised is what the write took — the
+    // same equality the commit refuses to publish without.
+    expect(writer.staged).toEqual(begin.counts);
   });
 
   test('a target mid-transfer holds staged rows and is still not a fork', async () => {
     const src = await source();
     const tgt = fresh();
-    const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3');
-    const frames = framesFor(snapshot);
+    const frames = framesFor(await snapshotOf(src, 'm3'));
 
     await drain(receiverFor(tgt), frames.slice(0, -1));
 
     // The rows ARE there — this is staging, not buffering.
-    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM actor_messages`[0]!.c).toBe(3);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_entries`[0]?.c).toBe(3);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM context_memberships`[0]?.c).toBe(3);
     expect(await tgt.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toBe('key insight');
     // And none of it is a fork.
     expect(isFork(tgt)).toBe(false);
     expect(readForkLineage(tgt.sql)).toBeNull();
   });
 
+  test('a carried payload file lands under the target\'s artifact directory', async () => {
+    const src = await source({ spill: true });
+    const tgt = fresh();
+    const snapshot = await snapshotOf(src, 'm2');
+
+    expect(snapshot.artifacts.length).toBeGreaterThan(0);
+    expect(snapshot.artifacts.every((file) => !file.path.startsWith('/'))).toBe(true);
+
+    await drain(receiverFor(tgt), framesFor(snapshot, { fileBytes: 64 * 1024 }));
+
+    for (const artifact of snapshot.artifacts) {
+      expect(await tgt.vfs.readFile(`${TARGET_ARTIFACTS}/${artifact.path}`, { encoding: 'utf8' }))
+        .toBe(artifact.content);
+      // The path the SOURCE used is not the path the fork reads.
+      expect(await tgt.vfs.exists(`${SOURCE_ARTIFACTS}/${artifact.path}`)).toBe(false);
+    }
+
+    expect(tgt.sql<{ payload_path: string }>`
+      SELECT payload_path FROM message_updates WHERE payload_path IS NOT NULL`
+      .every((row) => row.payload_path.startsWith(`${TARGET_ARTIFACTS}/`))).toBe(true);
+  });
+
   test('a gap is refused and leaves no fork', async () => {
     const src = await source();
     const tgt = fresh();
-    const frames = framesFor(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3'));
+    const frames = framesFor(await snapshotOf(src, 'm3'));
     const receiver = receiverFor(tgt);
-    await receiver.accept(frames[0]!);
-    await expect(receiver.accept(frames[2]!)).rejects.toThrow(/frame 2 arrived where frame 1 was expected/);
+    const [begin, , third] = frames;
+
+    if (begin === undefined || third === undefined) throw new Error('expected at least three frames');
+    await receiver.accept(begin);
+    await expect(receiver.accept(third)).rejects.toThrow(/frame 2 arrived where frame 1 was expected/);
     expect(isFork(tgt)).toBe(false);
   });
 
   test('a frame delivered twice is refused rather than silently re-staged', async () => {
     const src = await source();
     const tgt = fresh();
-    const frames = framesFor(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3'));
+    const frames = framesFor(await snapshotOf(src, 'm3'));
     const receiver = receiverFor(tgt);
-    await receiver.accept(frames[0]!);
-    await receiver.accept(frames[1]!);
-    await expect(receiver.accept(frames[1]!)).rejects.toThrow(/arrived where frame 2 was expected/);
+    const [begin, second] = frames;
+
+    if (begin === undefined || second === undefined) throw new Error('expected at least two frames');
+    await receiver.accept(begin);
+    await receiver.accept(second);
+    await expect(receiver.accept(second)).rejects.toThrow(/arrived where frame 2 was expected/);
     expect(isFork(tgt)).toBe(false);
   });
 
   test('sections out of the order the protocol fixes are refused', async () => {
     const src = await source();
     const tgt = fresh();
-    const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3');
-    // messages before agentConfig: the elision contract depends on the pane
-    // section preceding the plain one, so the order is enforced, not advisory.
-    const begin = framesFor(snapshot)[0]!;
+    const snapshot = await snapshotOf(src, 'm3');
+    // The order is the canonical store's foreign-key order: a part references a
+    // message identity that must already be staged, so it is enforced rather
+    // than advisory.
+    const begin = framesFor(snapshot)[0];
+
+    if (begin === undefined) throw new Error('expected a begin frame');
     const receiver = receiverFor(tgt);
     await receiver.accept(begin);
 
-    const messagesFirst = sealForkFrame({
+    await receiver.accept(sealForkFrame({
       version: FORK_TRANSFER_VERSION, transferId: 'tx-1', seq: 1,
-      kind: 'messages', rows: snapshot.messages,
-    });
-
-    await receiver.accept(messagesFirst);
+      kind: 'sessionMessages', rows: snapshot.sessionMessages,
+    }));
 
     const configAfter = sealForkFrame({
       version: FORK_TRANSFER_VERSION, transferId: 'tx-1', seq: 2,
@@ -340,12 +429,16 @@ describe('fork transfer receiver', () => {
   test('a foreign transfer id mid-stream is refused', async () => {
     const src = await source();
     const tgt = fresh();
-    const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3');
+    const snapshot = await snapshotOf(src, 'm3');
     const mine = framesFor(snapshot, { transferId: 'tx-mine' });
     const theirs = framesFor(snapshot, { transferId: 'tx-theirs' });
     const receiver = receiverFor(tgt);
-    await receiver.accept(mine[0]!);
-    await expect(receiver.accept(theirs[1]!))
+    const opening = mine[0];
+    const foreign = theirs[1];
+
+    if (opening === undefined || foreign === undefined) throw new Error('expected two streams of frames');
+    await receiver.accept(opening);
+    await expect(receiver.accept(foreign))
       .rejects.toThrow(/belongs to transfer tx-theirs, and tx-mine is the transfer open here/);
     expect(isFork(tgt)).toBe(false);
   });
@@ -354,15 +447,8 @@ describe('fork transfer receiver', () => {
     const firstSource = await source({ files: [{ path: 'memory/abandoned.md', content: 'old bytes' }] });
     const secondSource = await source({ files: [{ path: 'memory/replacement.md', content: 'new bytes' }] });
     const tgt = fresh();
-
-    const first = framesFor(await snapshotWorkspaceForFork(firstSource.sql, firstSource.vfs, 'm3'), {
-      transferId: 'tx-first', fileBytes: 3,
-    });
-
-    const second = framesFor(await snapshotWorkspaceForFork(secondSource.sql, secondSource.vfs, 'm1'), {
-      transferId: 'tx-second', fileBytes: 3,
-    });
-
+    const first = framesFor(await snapshotOf(firstSource, 'm3'), { transferId: 'tx-first', fileBytes: 3 });
+    const second = framesFor(await snapshotOf(secondSource, 'm1'), { transferId: 'tx-second', fileBytes: 3 });
     const receiver = receiverFor(tgt);
     const lastFirstFile = first.findIndex((frame) => frame.kind === 'file' && frame.path === 'memory/abandoned.md' && frame.last);
     await drain(receiver, first.slice(0, lastFirstFile + 1));
@@ -374,41 +460,44 @@ describe('fork transfer receiver', () => {
     await drain(receiver, second);
     expect(await tgt.vfs.exists('memory/abandoned.md')).toBe(false);
     expect(await tgt.vfs.readFile('memory/replacement.md', { encoding: 'utf8' })).toBe('new bytes');
-    expect(readForkLineage(tgt.sql)!.sourceMessageId).toBe('m1');
+    expect(readForkLineage(tgt.sql)?.sourceMessageId).toBe('m1');
   });
 
   test('a concurrent transfer takes the target and the abandoned one is refused', async () => {
     const src = await source();
     const tgt = fresh();
-    const first = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3');
-    const second = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm1');
-    const a = framesFor(first, { transferId: 'tx-a' });
-    const b = framesFor(second, { transferId: 'tx-b' });
+    const a = framesFor(await snapshotOf(src, 'm3'), { transferId: 'tx-a' });
+    const b = framesFor(await snapshotOf(src, 'm1'), { transferId: 'tx-b' });
     const receiver = receiverFor(tgt);
 
     await drain(receiver, a.slice(0, 3));
     // A second source opens its own transfer into the same target. Its begin
     // clears whatever the abandoned one staged.
     const outcomes = await drain(receiver, b);
-    expect(outcomes[outcomes.length - 1]!.status).toBe('published');
-    await expect(receiver.accept(a[3]!)).rejects.toThrow(/belongs to transfer tx-a/);
+    expect(outcomes[outcomes.length - 1]?.status).toBe('published');
+    const stale = a[3];
+
+    if (stale === undefined) throw new Error('expected a fourth frame in the abandoned stream');
+    await expect(receiver.accept(stale)).rejects.toThrow(/belongs to transfer tx-a/);
 
     // The winner's cut, whole, with none of the loser's rows.
-    const landed = tgt.sql<{ id: string }>`SELECT id FROM actor_messages WHERE role != 'system' ORDER BY created_at`;
-    expect(landed.map((r) => r.id)).toEqual(['m1']);
-    expect(readForkLineage(tgt.sql)!.sourceMessageId).toBe('m1');
+    const landed = tgt.sql<{ id: string }>`
+      SELECT id FROM conversation_entries WHERE role != 'system' ORDER BY rowid`;
+
+    expect(landed.map((row) => row.id)).toEqual(['m1']);
+    expect(readForkLineage(tgt.sql)?.sourceMessageId).toBe('m1');
   });
 
   test('a file range whose offset does not match what arrived is refused', async () => {
     const src = await source({ files: [{ path: 'memory/big.md', content: 'x'.repeat(64) }] });
     const tgt = fresh();
-    const frames = framesFor(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3'), { fileBytes: 16 });
-    const firstRange = frames.findIndex((f) => f.kind === 'file');
+    const frames = framesFor(await snapshotOf(src, 'm3'), { fileBytes: 16 });
+    const firstRange = frames.findIndex((frame) => frame.kind === 'file');
     const receiver = receiverFor(tgt);
     await drain(receiver, frames.slice(0, firstRange + 1));
-    const skewed = frames[firstRange + 1]!;
+    const skewed = frames[firstRange + 1];
 
-    if (skewed.kind !== 'file') throw new Error('expected a second file range');
+    if (skewed?.kind !== 'file') throw new Error('expected a second file range');
     await expect(receiver.accept(sealForkFrame({ ...skewed, offset: skewed.offset + 1 })))
       .rejects.toThrow(/declares offset \d+ where \d+ bytes have arrived/);
     expect(isFork(tgt)).toBe(false);
@@ -417,38 +506,40 @@ describe('fork transfer receiver', () => {
   test('a file that reassembles to different bytes is refused before it is written', async () => {
     const src = await source({ files: [{ path: 'memory/big.md', content: 'y'.repeat(40) }] });
     const tgt = fresh();
-    const frames = framesFor(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3'), { fileBytes: 16 });
+    const frames = framesFor(await snapshotOf(src, 'm3'), { fileBytes: 16 });
     const receiver = receiverFor(tgt);
 
     // Corrupt one range and reseal it, so only the whole-file digest can see it.
-    const forged = frames.map((f) => {
-      if (f.kind !== 'file' || f.path !== 'memory/big.md' || f.offset !== 0) return f;
-      const bytes = f.bytes.slice();
-      bytes[0] = bytes[0]! ^ 0xff;
+    const forged = frames.map((frame) => {
+      if (frame.kind !== 'file' || frame.path !== 'memory/big.md' || frame.offset !== 0) return frame;
+      const bytes = frame.bytes.slice();
+      bytes[0] = (bytes[0] ?? 0) ^ 0xff;
 
-      return sealForkFrame({ ...f, bytes });
+      return sealForkFrame({ ...frame, bytes });
     });
 
-    const upTo = forged.findIndex((f) => f.kind === 'file' && f.path === 'memory/big.md' && f.last);
+    const upTo = forged.findIndex((frame) => frame.kind === 'file' && frame.path === 'memory/big.md' && frame.last);
     await drain(receiver, forged.slice(0, upTo));
-    await expect(receiver.accept(forged[upTo]!))
-      .rejects.toThrow(/does not match the digest the source declared/);
+    const last = forged[upTo];
+
+    if (last === undefined) throw new Error('expected a last range for the corrupted file');
+    await expect(receiver.accept(last)).rejects.toThrow(/does not match the digest the source declared/);
     expect(isFork(tgt)).toBe(false);
   });
 
   test('a dropped row batch is refused at commit by the declared counts', async () => {
     const src = await source();
     const tgt = fresh();
-    const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3');
+    const snapshot = await snapshotOf(src, 'm3');
     const frames = framesFor(snapshot, { rowsPerFrame: 1 });
-    // Drop one `messages` batch and renumber, so the sequence itself is
-    // consistent and only the counts can catch it.
-    const dropAt = frames.findIndex((f) => f.kind === 'messages');
+    // Drop one `conversationEntries` batch and renumber, so the sequence itself
+    // is consistent and only the counts can catch it.
+    const dropAt = frames.findIndex((frame) => frame.kind === 'conversationEntries');
     let stream = FORK_STREAM_SEED;
-    const kept = frames.filter((_, i) => i !== dropAt).filter((f) => f.kind !== 'commit');
+    const kept = frames.filter((_, index) => index !== dropAt).filter((frame) => frame.kind !== 'commit');
 
-    const renumbered = kept.map((f, i) => {
-      const resealed = sealForkFrame({ ...f, seq: i });
+    const renumbered = kept.map((frame, index) => {
+      const resealed = sealForkFrame({ ...frame, seq: index });
       stream = foldForkStream(stream, resealed.digest);
 
       return resealed;
@@ -459,27 +550,29 @@ describe('fork transfer receiver', () => {
     await expect(receiver.accept(sealForkFrame({
       version: FORK_TRANSFER_VERSION, transferId: 'tx-1', seq: renumbered.length,
       kind: 'commit', stream,
-    }))).rejects.toThrow(/declared 3 messages and staged 2; refusing to publish an incomplete fork/);
+    }))).rejects.toThrow(/declared 3 conversationEntries and staged 2; refusing to publish an incomplete fork/);
     expect(isFork(tgt)).toBe(false);
   });
 
   test('a stream whose frames were substituted is refused at commit by the rolling digest', async () => {
     const src = await source();
     const tgt = fresh();
-    const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3');
-    const frames = framesFor(snapshot);
+    const frames = framesFor(await snapshotOf(src, 'm3'));
 
     // Same counts, same sequence, one batch's CONTENT changed and resealed —
     // only the rolling digest over the frames that actually arrived can see it.
-    const forged = frames.map((f) => {
-      if (f.kind !== 'agentConfig') return f;
+    const forged = frames.map((frame) => {
+      if (frame.kind !== 'agentConfig') return frame;
 
-      return sealForkFrame({ ...f, rows: [{ key: 'model', value: 'substituted' }] });
+      return sealForkFrame({ ...frame, rows: [{ key: 'model', value: 'substituted' }] });
     });
 
     const receiver = receiverFor(tgt);
     await drain(receiver, forged.slice(0, -1));
-    await expect(receiver.accept(forged[forged.length - 1]!))
+    const commit = forged[forged.length - 1];
+
+    if (commit === undefined) throw new Error('expected a commit frame');
+    await expect(receiver.accept(commit))
       .rejects.toThrow(/does not match the sequence of frames that arrived/);
     expect(isFork(tgt)).toBe(false);
   });
@@ -487,20 +580,21 @@ describe('fork transfer receiver', () => {
   test('a frame re-delivered after publication answers with the fork that landed', async () => {
     const src = await source();
     const tgt = fresh();
-    const frames = framesFor(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3'));
+    const frames = framesFor(await snapshotOf(src, 'm3'));
     const receiver = receiverFor(tgt);
     const outcomes = await drain(receiver, frames);
-    const published = outcomes[outcomes.length - 1]!;
+    const published = outcomes[outcomes.length - 1];
 
-    if (published.status !== 'published') throw new Error('expected published');
+    if (published?.status !== 'published') throw new Error('expected published');
+    const commit = frames[frames.length - 1];
 
-    const again = await receiver.accept(frames[frames.length - 1]!);
-    expect(again.status).toBe('settled');
+    if (commit === undefined) throw new Error('expected a commit frame');
+    const again = await receiver.accept(commit);
 
     if (again.status !== 'settled') throw new Error('expected settled');
     expect(again.result).toEqual(published.result);
     // Exactly one fork, not two.
-    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM fork_lineage`[0]!.c).toBe(1);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM fork_lineage`[0]?.c).toBe(1);
   });
 
   test('the receiver retains no file ranges', async () => {
@@ -510,7 +604,7 @@ describe('fork transfer receiver', () => {
     ] });
 
     const tgt = fresh();
-    const frames = framesFor(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3'), { fileBytes: 10 });
+    const frames = framesFor(await snapshotOf(src, 'm3'), { fileBytes: 10 });
     const receiver = receiverFor(tgt);
 
     for (const frame of frames) {
@@ -558,12 +652,10 @@ describe('fork transfer receiver', () => {
     };
 
     const src = fresh();
-    void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'BIG'}, ${'big'}, ${1})`;
-    const bigActor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'BIG', ownerUserId: '' }).createMain({ name: 'big' });
-    void src.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-      VALUES (${bigActor.actorId}, ${'m1'}, ${'default'}, ${null}, ${'user'}, ${'only'}, ${1000})`;
+    const chat = await seedForkSource(src, { workspaceId: 'BIG', workspaceName: 'big', memory: [] });
+    await chat.say({ id: 'm1', role: 'user', text: 'only', parentId: null });
     const tgt = fresh();
-    const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, { ...OWNER, targetAuthority: 'plain' });
+    const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, OWNER);
     const receiver = new ForkTransferReceiver(writer, sink);
 
     let peakRetained = 0;
@@ -589,8 +681,8 @@ describe('fork transfer receiver', () => {
     };
 
     for await (const frame of forkTransferFrames({
-      sql: src.sql, actor: bigActor, vfs: plane, untilMessageId: 'm1', transferId: 'tx-256m',
-      targetAuthority: 'plain', frameBytes: HUGE_FRAME,
+      sql: src.sql, actor: chat.actor, vfs: plane, artifactDirectory: SOURCE_ARTIFACTS,
+      untilMessageId: 'm1', transferId: 'tx-256m', frameBytes: HUGE_FRAME,
     })) {
       if (frame.kind === 'file') {
         peakFrameBytes = Math.max(peakFrameBytes, frame.bytes.byteLength);
@@ -797,20 +889,19 @@ describe('fork transfer receiver', () => {
     };
 
     const tgt = fresh();
-    const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, { ...OWNER, targetAuthority: 'plain' });
+    const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, OWNER);
     const receiver = new ForkTransferReceiver(writer, new NativeSinkPlan(native, 'refusal'));
 
     const begin = sealForkFrame({
       version: FORK_TRANSFER_VERSION, transferId: 'tx-refuse', seq: 0, kind: 'begin',
       head: { source: { workspaceId: 'S', workspaceName: 's' }, cut: { messageId: 'm1', createdAtMs: 1 } },
-      targetAuthority: 'plain',
-      counts: { agentConfig: 0, craftedTools: 0, memoryChunks: 0, assistantMessages: 0, messages: 0, files: 1 },
+      counts: EMPTY_COUNTS,
     });
 
     await receiver.accept(begin);
     await receiver.accept(sealForkFrame({
       version: FORK_TRANSFER_VERSION, transferId: 'tx-refuse', seq: 1, kind: 'file', path: 'memory/keep.md',
-      offset: 0, bytes: new TextEncoder().encode('new'), last: false,
+      offset: 0, bytes: new TextEncoder().encode('new'), last: false, artifact: false,
     }));
     expect(temps.size).toBe(1);
 
@@ -862,26 +953,20 @@ describe('fork transfer receiver', () => {
     // The file plane and the target's SQLite persist; the receiver, the writer
     // and the sink plan do not. That pair is what a Durable Object reset leaves.
     const activation = (): ForkTransferReceiver => new ForkTransferReceiver(
-      new ForkTargetWriter(tgt.sql, tgt.vfs, { ...OWNER, targetAuthority: 'plain' }),
+      new ForkTargetWriter(tgt.sql, tgt.vfs, OWNER),
       new NativeSinkPlan(native, transferId),
     );
 
-    const range = (seq: number, offset: number, last: boolean): ForkFrame => {
-      let frame: Parameters<typeof sealForkFrame>[0] = {
-        version: FORK_TRANSFER_VERSION, transferId, seq, kind: 'file', path: 'memory/resume.md',
-        offset, bytes: content.subarray(offset, offset + 10), last,
-      };
-
-      if (last) frame = { ...frame, fileDigest: digest };
-
-      return sealForkFrame(frame);
-    };
+    const range = (seq: number, offset: number, last: boolean): ForkFrame => sealForkFrame({
+      version: FORK_TRANSFER_VERSION, transferId, seq, kind: 'file', path: 'memory/resume.md',
+      offset, bytes: content.subarray(offset, offset + 10), last, artifact: false,
+      fileDigest: last ? digest : undefined,
+    });
 
     const begin = sealForkFrame({
       version: FORK_TRANSFER_VERSION, transferId, seq: 0, kind: 'begin',
       head: { source: { workspaceId: 'S', workspaceName: 's' }, cut: { messageId: 'm1', createdAtMs: 1 } },
-      targetAuthority: 'plain',
-      counts: { agentConfig: 0, craftedTools: 0, memoryChunks: 0, assistantMessages: 0, messages: 0, files: 1 },
+      counts: EMPTY_COUNTS,
     });
 
     const first = activation();
@@ -966,17 +1051,16 @@ describe('fork transfer receiver', () => {
       .rejects.toThrow(/spans more than one frame/);
   });
 
-  test('a 100 MiB transcript and a large file keep target staging bounded to one file', async () => {
+  test('a 90 MiB transcript and a large file keep target staging bounded to one file', async () => {
     const src = fresh();
-    void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'BIG'}, ${'big'}, ${1})`;
-    const bigActor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'BIG', ownerUserId: '' }).createMain({ name: 'big' });
-    await writeSoul(src.vfs, src.sql, 'p');
-    const megabyte = 'x'.repeat(1024 * 1024);
+    const chat = await seedForkSource(src, { workspaceId: 'BIG', workspaceName: 'big', memory: [] });
+    // Just under the payload store's inline ceiling, so each turn's text is one
+    // oversized ROW rather than a spilled file: the section that cannot batch
+    // is the one that proves the receiver stages nothing between frames.
+    const chunk = 'x'.repeat(900 * 1024);
 
-    for (let i = 0; i < 100; i += 1) {
-      void src.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-        VALUES (${bigActor.actorId}, ${`m${i}`}, ${'default'}, ${i === 0 ? null : `m${i - 1}`}, ${'user'},
-                ${megabyte}, ${1000 + i})`;
+    for (let index = 0; index < 100; index += 1) {
+      await chat.say({ id: `m${index}`, role: 'user', text: chunk, parentId: index === 0 ? null : undefined });
     }
 
     await src.vfs.mkdir('memory', { recursive: true });
@@ -988,8 +1072,8 @@ describe('fork transfer receiver', () => {
     let frames = 0;
 
     for await (const frame of forkTransferFrames({
-      sql: src.sql, actor: bigActor, vfs: src.vfs, untilMessageId: 'm99', transferId: 'tx-100m',
-      targetAuthority: 'plain', frameBytes: 1024 * 1024,
+      sql: src.sql, actor: chat.actor, vfs: src.vfs, artifactDirectory: SOURCE_ARTIFACTS,
+      untilMessageId: 'm99', transferId: 'tx-long', frameBytes: 1024 * 1024,
     })) {
       await receiver.accept(frame);
       peak = Math.max(peak, receiver.stagingBytes);
@@ -997,21 +1081,22 @@ describe('fork transfer receiver', () => {
     }
 
     // The receiver forwards each range immediately. Its transfer state stays
-    // constant even while the source emits a 100 MiB logical transcript.
+    // constant even while the source emits a transcript many frames long.
     expect(frames).toBeGreaterThan(100);
     expect(peak).toBe(0);
     expect(receiver.stagingBytes).toBe(0);
-    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM actor_messages WHERE role != 'system'`[0]!.c).toBe(100);
+    expect(tgt.sql<{ c: number }>`
+      SELECT COUNT(*) AS c FROM conversation_entries WHERE role != 'system'`[0]?.c).toBe(100);
     expect(await tgt.vfs.readFile('memory/large.md', { encoding: 'utf8' })).toHaveLength(8 * 1024 * 1024);
   });
 
   test('a frame whose content and digest disagree is refused before staging', async () => {
     const src = await source();
     const tgt = fresh();
-    const frames = framesFor(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3'));
+    const frames = framesFor(await snapshotOf(src, 'm3'));
     const frame = frames.find((candidate) => candidate.kind === 'agentConfig');
 
-    if (!frame || frame.kind !== 'agentConfig') throw new Error('expected agent config frame');
+    if (frame?.kind !== 'agentConfig') throw new Error('expected agent config frame');
     await expect(receiverFor(tgt).accept({ ...frame, rows: [{ key: 'model', value: 'tampered' }] }))
       .rejects.toThrow(/digest does not match its content/);
     expect(isFork(tgt)).toBe(false);
@@ -1020,11 +1105,14 @@ describe('fork transfer receiver', () => {
   test('a version this tree does not implement is refused', async () => {
     const src = await source();
     const tgt = fresh();
-    const frames = framesFor(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3'));
+    const frames = framesFor(await snapshotOf(src, 'm3'));
     const receiver = receiverFor(tgt);
+    const begin = frames[0];
+
+    if (begin === undefined) throw new Error('expected a begin frame');
     // SAFETY: this is deliberately malformed wire input. The schema rejects
     // it before any staged target state can mutate, which is the behavior under test.
-    await expect(receiver.accept({ ...frames[0]!, version: FORK_TRANSFER_VERSION + 1 } as ForkFrame))
+    await expect(receiver.accept({ ...begin, version: FORK_TRANSFER_VERSION + 1 } as ForkFrame))
       .rejects.toThrow(new RegExp(`not valid for protocol version ${String(FORK_TRANSFER_VERSION)}`));
     expect(isFork(tgt)).toBe(false);
   });
@@ -1032,9 +1120,46 @@ describe('fork transfer receiver', () => {
   test('a continuation with no open transfer is refused', async () => {
     const src = await source();
     const tgt = fresh();
-    const frames = framesFor(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm3'));
-    await expect(receiverFor(tgt).accept(frames[1]!))
-      .rejects.toThrow(/has no open transfer to continue/);
+    const frames = framesFor(await snapshotOf(src, 'm3'));
+    const second = frames[1];
+
+    if (second === undefined) throw new Error('expected a second frame');
+    await expect(receiverFor(tgt).accept(second)).rejects.toThrow(/has no open transfer to continue/);
     expect(isFork(tgt)).toBe(false);
+  });
+});
+
+/** The writer's own preconditions, driven directly rather than through a
+ *  stream: a publication needs a head, and a target must match its identity. */
+describe('fork target writer', () => {
+  test('a publication before any head is refused', async () => {
+    const tgt = fresh();
+    const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, OWNER);
+
+    await expect(writer.publish()).rejects.toThrow(/before the transfer declared its head/);
+    expect(isFork(tgt)).toBe(false);
+  });
+
+  test('a target whose durable identity is another workspace is refused', async () => {
+    const tgt = fresh();
+    void tgt.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SOMEONE-ELSE'}, ${'other'}, ${1})`;
+    new WorkspaceActorDirectory(tgt.sql, { workspaceId: 'SOMEONE-ELSE', ownerUserId: '' }).createMain({ name: 'other' });
+    const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, OWNER);
+
+    expect(() => writer.begin({
+      source: { workspaceId: 'S', workspaceName: 's' }, cut: { messageId: 'm1', createdAtMs: 1 },
+    })).toThrow(/does not match its durable workspace identity/);
+  });
+
+  test('a cut that recorded no context still lands one empty working context', async () => {
+    const src = await source();
+    const tgt = fresh();
+    const snapshot = await snapshotOf(src, 'm1');
+    await writeForkSnapshot(tgt.sql, tgt.vfs, { ...snapshot, contextMembers: [] }, OWNER);
+
+    const selected = tgt.sql<{ context_id: string }>`SELECT context_id FROM actor_context_selection`;
+    expect(selected).toHaveLength(1);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM context_memberships`[0]?.c).toBe(0);
+    expect(tgt.sql<{ revision: number }>`SELECT revision FROM context_revisions`).toEqual([{ revision: 1 }]);
   });
 });

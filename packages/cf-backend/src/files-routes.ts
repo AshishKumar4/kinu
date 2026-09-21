@@ -32,8 +32,8 @@
  */
 
 import { getAgentByName } from "agents";
-import type { ExecutorWriteResult } from "@kinu.run/core";
-import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES } from "@kinu.run/core";
+import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, VfsRevisionSchema, type ExecutorWriteResult, type VfsRevision } from "@kinu.run/core";
+import * as v from 'valibot';
 import type { OrchestratorAgent } from "./orchestrator";
 import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
 import { err, fileResponseHeaders, json, readBoundedStream } from "@kinu.run/core";
@@ -50,7 +50,7 @@ export interface FilesRouteAgent {
   abortExecutorFileDownload(transferId: string): Promise<void>;
   writeExecutorFileChunk(
     executorId: string, path: string, transferId: string, offset: number,
-    chunk: Uint8Array, final: boolean, expectedRevision?: number,
+    chunk: Uint8Array, final: boolean, expectedRevision?: VfsRevision,
   ): Promise<ExecutorWriteResult>;
   abortExecutorFileWrite(transferId: string): Promise<void>;
 }
@@ -89,22 +89,20 @@ export async function handleFilesRequest(
     const expectedRevision = expectedRevisionFrom(request);
 
     return expectedRevision === null
-      ? err(400, 'If-Match must be a non-negative integer revision')
+      ? err(400, 'If-Match must encode a numeric or string revision')
       : upload(request, agent, executorId, path, expectedRevision);
   }
 
   return download(agent, executorId, path, url);
 }
 
-function expectedRevisionFrom(request: Request): number | undefined | null {
+function expectedRevisionFrom(request: Request): VfsRevision | undefined | null {
   const value = request.headers.get('if-match');
 
   if (value === null) return undefined;
+  const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), VfsRevisionSchema), value);
 
-  if (!/^(?:0|[1-9]\d*)$/.test(value)) return null;
-  const revision = Number(value);
-
-  return Number.isSafeInteger(revision) ? revision : null;
+  return parsed.success ? parsed.output : null;
 }
 
 /**
@@ -122,7 +120,7 @@ async function upload(
   agent: FilesRouteAgent,
   executorId: string,
   path: string,
-  expectedRevision: number | undefined,
+  expectedRevision: VfsRevision | undefined,
 ): Promise<Response> {
   if (request.body === null) return err(400, 'request body required');
 

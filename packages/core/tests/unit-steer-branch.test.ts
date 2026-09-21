@@ -6,6 +6,8 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { createTestActor, createTestWorkspace } from './helpers';
+import { SessionHistory } from '../src/orchestrator/session-history';
+import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
 import {
   recordBranchTakeSet, claimAlternateTakesForTurn,
   latestAlternateTakeSet, listAlternateTakeSets, recordTakePick, buildTakeContinuationPrompt,
@@ -30,7 +32,14 @@ function setup() {
   // The journal is actor-private and the pick reads its turn pair from the
   // actor-scoped conversation store, so the workspace issues the one actor that
   // owns the branch heads written below and that the production readers resolve.
-  return { ...ws, actor: createTestActor(ws.sql, ws.execRaw, 'ws-steer', 'steer') };
+  const actor = createTestActor(ws.sql, ws.execRaw, 'ws-steer', 'steer');
+
+  const history = new SessionHistory({
+    sql: ws.sql, actor, transactionSync: write => ws.db.transaction(write)(),
+    files: async () => ({ vfs: ws.vfs, artifactDirectory: '/actor/.kinu/context' }),
+  });
+
+  return { ...ws, actor, transcript: history.transcript(CHAT_SESSION_ID) };
 }
 
 function completedReport(id: string, summary: string, status: HeadReport['status'] = 'completed'): HeadReport {
@@ -261,16 +270,16 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
 });
 
 describe('recordTakePick over a branch-sourced set — the pipeline unchanged', () => {
-  test('picking the branch records corrected + the branch text as the follow-up, without search_nodes', () => {
+  test('picking the branch records corrected + the branch text as the follow-up, without search_nodes', async () => {
     // The re-point only applies to mcts-sourced sets (see setup()).
-    const { sql, actor } = setup();
+    const { sql, actor, transcript } = setup();
 
     const set = recordBranchTakeSet(sql, actor, {
       task: 'use approach B instead', turnId: 'turn-9', sessionId: 'default',
       liveText: 'A-style answer', branchText: 'B-style answer',
     })!;
 
-    const record = recordTakePick(sql, actor, { takeId: set.id, nodeId: set.candidates[1]!.nodeId });
+    const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[1]!.nodeId });
     expect(record.outcome).toBe('corrected');
     expect(record.changedAnswer).toBe(true);
     expect(record.chosen.text).toBe('B-style answer');
@@ -287,15 +296,15 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
     expect(prompt).toContain('B-style answer');
   });
 
-  test('confirming the live answer records acceptance', () => {
-    const { sql, actor } = setup();
+  test('confirming the live answer records acceptance', async () => {
+    const { sql, actor, transcript } = setup();
 
     const set = recordBranchTakeSet(sql, actor, {
       task: 't', turnId: 'turn-9', sessionId: 'default',
       liveText: 'live answer', branchText: 'branch answer',
     })!;
 
-    const record = recordTakePick(sql, actor, { takeId: set.id, nodeId: set.candidates[0]!.nodeId });
+    const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[0]!.nodeId });
     expect(record.outcome).toBe('accepted');
     expect(record.changedAnswer).toBe(false);
   });

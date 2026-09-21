@@ -36,6 +36,23 @@ describe('StepInjections', () => {
     expect(texts(step2!)).toEqual(['q', 'a1', 'steer', 'a2']);
   });
 
+  test('a re-applied injection never lands between a tool call and its result', () => {
+    const inj = new StepInjections<{ message: ModelMessage; readonly durable: boolean }>();
+    const call = (id: string): ModelMessage => ({ role: 'assistant', content: [{ type: 'tool-call', toolCallId: id, toolName: 'probe', input: {} }] });
+    const result = (id: string): ModelMessage => ({ role: 'tool', content: [{ type: 'tool-result', toolCallId: id, toolName: 'probe', output: { type: 'text', value: 'ok' } }] });
+    const roles = (messages: ReadonlyArray<ModelMessage>) => messages.map((m) => m.role);
+
+    // Step 1 drains an event notice at the tail, index 4: after the call the
+    // model just issued, whose result is not in yet.
+    const step1 = inj.drain({ stepNumber: 1, messages: [user('q'), call('c1'), result('c1'), call('c2')] }, [{ message: user('notice'), durable: false }]);
+    expect(roles(step1!)).toEqual(['user', 'assistant', 'tool', 'assistant', 'user']);
+
+    // Step 2 rebuilt the array with that result landed at index 4: the notice
+    // re-applies after the pair, never between its halves.
+    const step2 = inj.drain({ stepNumber: 2, messages: [user('q'), call('c1'), result('c1'), call('c2'), result('c2')] }, []);
+    expect(roles(step2!)).toEqual(['user', 'assistant', 'tool', 'assistant', 'tool', 'user']);
+  });
+
   test('injections at different steps keep their own entry positions', () => {
     const inj = new StepInjections<{ message: ModelMessage; readonly durable: boolean }>();
     inj.drain({ stepNumber: 0, messages: [user('q')] }, [{ message: user('first'), durable: true }]);

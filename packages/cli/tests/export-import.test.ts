@@ -14,7 +14,7 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
-import { archiveSqlFromDatabase, readWorkspaceArchivePage, type ArchiveCursor } from '@kinu.run/core';
+import { archiveSqlFromDatabase, initActorClaimTables, readWorkspaceArchivePage, type ArchiveCursor } from '@kinu.run/core';
 import { JsonArraySchema, JsonObjectSchema, parseJsonObject } from '@kinu.run/core';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import * as v from 'valibot';
@@ -34,17 +34,43 @@ function scratch(prefix: string): string {
   return dir;
 }
 
+const ACTOR = 'a1';
+
+/** One conversation entry and the message text it references — the canonical
+ *  pair, written straight to SQL because this suite is about what the archive
+ *  copies, not about how a turn publishes. */
+function seedEntry(db: Database, id: string, text: string, position: number): void {
+  db.query(`INSERT INTO session_messages (actor_id, message_id, role, native_content_kind, origin, recorded_at)
+    VALUES (?, ?, 'user', 'parts', 'input', ?)`).run(ACTOR, id, 100 + position);
+  db.query(`INSERT INTO message_parts (actor_id, message_id, part_no, kind) VALUES (?, ?, 0, 'text')`).run(ACTOR, id);
+  db.query(`INSERT INTO message_updates (actor_id, message_id, sequence, part_no, operation, payload_json)
+    VALUES (?, ?, 0, 0, 'open', ?)`).run(ACTOR, id, JSON.stringify({ type: 'text', text }));
+  db.query(`INSERT INTO conversation_entries (actor_id, session_id, id, parent_id, role, recorded_at)
+    VALUES (?, 'default', ?, NULL, 'user', ?)`).run(ACTOR, id, 100 + position);
+  db.query(`INSERT INTO conversation_entry_parts (actor_id, session_id, entry_id, position, message_id, part_no, through_sequence)
+    VALUES (?, 'default', ?, 0, ?, 0, 0)`).run(ACTOR, id, id);
+}
+
+/** The text of one seeded entry, read back the way it was written. */
+function entryText(db: Database, id: string): string {
+  const row = db.query<{ payload_json: string }, [string]>(
+    `SELECT payload_json FROM message_updates WHERE message_id = ?`,
+  ).get(id);
+
+  if (!row) throw new Error(`no message payload for ${id}`);
+
+  return v.parse(v.string(), v.parse(JsonObjectSchema, JSON.parse(row.payload_json)).text);
+}
+
 /** A workspace database with the awkward content: text, BLOBs, many rows. */
 function seedWorkspace(path: string): void {
   const db = new Database(path, { create: true });
   db.exec(`CREATE TABLE workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL)`);
-  db.exec(`CREATE TABLE actor_messages (id TEXT PRIMARY KEY, content TEXT NOT NULL)`);
+  initActorClaimTables((ddl) => { db.exec(ddl); });
   db.exec(`CREATE TABLE vfs_files (path TEXT PRIMARY KEY, data BLOB)`);
   db.query(`INSERT INTO workspace_identity (id, name, created_at) VALUES (?, ?, ?)`).run('w1', 'scout', 100);
 
-  for (let i = 0; i < 300; i++) {
-    db.query(`INSERT INTO actor_messages (id, content) VALUES (?, ?)`).run(`m${i}`, `note ${i} with "quotes"`);
-  }
+  for (let i = 0; i < 300; i++) seedEntry(db, `m${i}`, `note ${i} with "quotes"`, i);
 
   const bytes = new Uint8Array(256);
 
@@ -52,7 +78,7 @@ function seedWorkspace(path: string): void {
   db.query(`INSERT INTO vfs_files (path, data) VALUES (?, ?)`).run('logo.bin', bytes);
   // Multi-byte text long enough that the reader's 64 KiB chunks land mid-
   // character: a decoder that does not stream corrupts a real transcript here.
-  db.query(`INSERT INTO actor_messages (id, content) VALUES (?, ?)`).run('unicode', '→ café 🌍 '.repeat(9000));
+  seedEntry(db, 'unicode', '→ café 🌍 '.repeat(9000), 300);
   db.close();
 }
 
@@ -153,10 +179,9 @@ describe('kinu export / import', () => {
     expect(imported.stdout).toContain('Imported workspace scout-restored');
 
     const db = restoredDb(home, 'scout-restored');
-    expect(db.query(`SELECT COUNT(*) AS n FROM actor_messages`).get()).toEqual({ n: 301 });
+    expect(db.query(`SELECT COUNT(*) AS n FROM conversation_entries`).get()).toEqual({ n: 301 });
     expect(db.query(`SELECT name FROM workspace_identity`).get()).toEqual({ name: 'scout' });
-    expect(db.query(`SELECT content FROM actor_messages WHERE id = 'unicode'`).get())
-      .toEqual({ content: '→ café 🌍 '.repeat(9000) });
+    expect(entryText(db, 'unicode')).toBe('→ café 🌍 '.repeat(9000));
     const blob = db.query<{ data: Uint8Array }, []>(`SELECT data FROM vfs_files WHERE path = 'logo.bin'`).get();
 
     if (!blob) throw new Error('restored logo missing');
@@ -232,9 +257,8 @@ describe('kinu export / import', () => {
       expect(imported.stdout).toContain('Imported workspace skywriter');
 
       const db = restoredDb(home, 'skywriter');
-      expect(db.query(`SELECT COUNT(*) AS n FROM actor_messages`).get()).toEqual({ n: 301 });
-      expect(db.query(`SELECT content FROM actor_messages WHERE id = 'm7'`).get())
-        .toEqual({ content: 'note 7 with "quotes"' });
+      expect(db.query(`SELECT COUNT(*) AS n FROM conversation_entries`).get()).toEqual({ n: 301 });
+      expect(entryText(db, 'm7')).toBe('note 7 with "quotes"');
       db.close();
     } finally {
       await server.stop(true);
@@ -253,7 +277,7 @@ describe('kinu export / import', () => {
     expect(imported.exitCode).toBe(0);
 
     const db = restoredDb(home, 'oldbot');
-    expect(db.query(`SELECT COUNT(*) AS n FROM actor_messages`).get()).toEqual({ n: 301 });
+    expect(db.query(`SELECT COUNT(*) AS n FROM conversation_entries`).get()).toEqual({ n: 301 });
     db.close();
   });
 

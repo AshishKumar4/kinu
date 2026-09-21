@@ -21,7 +21,7 @@
 import { describe, test, expect } from 'bun:test';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { toolExecute } from '@kinu.run/test-utils';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, storesFor } from './helpers';
 import type { Fact, FactsStore } from '../src/memory/facts';
 import type { JsonValue } from '../src/utils/json';
 
@@ -76,7 +76,7 @@ function recordingFacts(): RecordingFacts {
 
 function memoryTool(facts: FactsStore) {
   const { rt } = createTestRuntime();
-  const tools = buildBuiltinTools({ rt, facts });
+  const tools = buildBuiltinTools({ rt, facts, history: storesFor(rt).history });
 
   return {
     execute: toolExecute<MemoryToolProbeInput, JsonValue>(tools.memory),

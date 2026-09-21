@@ -42,7 +42,7 @@ import type {
   ReleaseStore, ReleaseToolDeps, BuiltinToolName,
   FileCheckpoints, FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   CheckpointAvailability,
-  WorkMode, JsonValue,
+  WorkMode, JsonValue, SessionHistory,
 } from '@kinu.run/core';
 import { TierIdSchema,
   ActorSession, type ActorTurnLease, type ActorExecutionInput,
@@ -176,7 +176,7 @@ import { TierIdSchema,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
   // The ONE turn loop, and the transcript store the local backend keeps it over.
-  ChatSession, ActorMessagesTranscript,
+  ChatSession, CHAT_SESSION_ID,
   type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
@@ -237,6 +237,8 @@ export interface LocalOrchestration {
 
 export interface LocalOrchestrationInput {
   readonly runtime: AgentRuntime;
+  /** This actor's canonical session store, bound to the same handle as the runtime. */
+  readonly history: SessionHistory;
   /** This actor's durable event rail — the queue both ingresses publish into. */
   readonly eventLog: EventLog;
   /** The session that drives this actor, read at call time. */
@@ -260,7 +262,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     onExhausted: ({ error: _error, ...refusal }) => { input.session().reportBudgetRefusal(refusal); },
   });
 
-  const engine = new EvolutionEngine(input.runtime, {
+  const engine = new EvolutionEngine(input.runtime, input.history, {
     enabled: input.noAutoEvolve !== true,
     // The turn review's own model calls debit the mission the reviewed turn
     // ran under — the same ledger, through the same seam, as the work it
@@ -420,9 +422,6 @@ export type ShellApprovalHandler =
 
 export interface LocalAgentSessionOpts {
   rt: CLIRuntime;
-  /** A new conversation's authored prefix, including an explicitly empty one.
-   *  Ordinary reconnects omit this and restore the actor's working revision. */
-  historySeed?: readonly ModelMessage[];
   /** Raw bun:sqlite handle — backs the EventsHub SqlExec adapter. */
   db: LocalSessionDb;
   /** The ai-SDK chat model runChat drives on a STATIC session — one built
@@ -759,6 +758,7 @@ export class LocalAgentSession implements BackendHost {
     // event rail per logical actor.
     const own = opts.hosted ? null : createLocalOrchestration({
       runtime: this.rt,
+      history: this.rt.stores.history,
       eventLog: new EventLog(hubSql, this.rt.actor),
       session: () => this,
       oneShot: this.oneShot,
@@ -878,6 +878,7 @@ export class LocalAgentSession implements BackendHost {
     this.actorSession = 'actor' in orchestration ? orchestration.actor.session : new ActorSession({
       runtime: this.rt,
       claims: this.stores.claims,
+      history: this.stores.history,
       // The local host publishes NO installed build identity for its builtin
       // loop: there is no build stamp on a `bun`-run checkout and the package
       // version in this repo is a placeholder, so a claim for a builtin turn
@@ -898,7 +899,7 @@ export class LocalAgentSession implements BackendHost {
     this.chat = new ChatSession({
       actorSession: this.actorSession,
       sessionId: this.sessionId,
-      transcript: new ActorMessagesTranscript(this.rt.storage.sql, this.rt.actor, this.sessionId),
+      transcript: this.stores.history.transcript(CHAT_SESSION_ID),
       // An answer's id is a random UUID here; the hosted root names its own
       // through the same seam.
       mintAnswerId: () => crypto.randomUUID(),
@@ -909,7 +910,7 @@ export class LocalAgentSession implements BackendHost {
       // The raw handle's transaction: `rt.storage.sql` and this session's
       // `db` are the same connection — the runtime is built over it.
       transaction: (body) => this.db.transaction(body)(),
-      transport: { deliver: opts.onEvent },
+      transport: { deliver: (event) => { opts.onEvent(event); } },
       ports: {
         prepareTurn: (item, lease) => this.prepareTurn(item, lease),
         // No review surface here: a plan is reviewed in the hosted workspace UI.
@@ -1040,8 +1041,8 @@ export class LocalAgentSession implements BackendHost {
     // tracked so end()/settleEvolution joins it before the process exits.
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
 
-    if (opts.historySeed === undefined) this.chat.restoreHistory();
-    else this.actorSession.restoreHistory(opts.historySeed);
+    // Tracked by the actor session: the next turn awaits it before admitting input.
+    this.actorSession.orchestrator.track(this.chat.restoreHistory().then(() => {}), 'restoring working history');
     this.ensureModelState();
     this.rearmLocalAlarm();
   }
@@ -1438,7 +1439,7 @@ export class LocalAgentSession implements BackendHost {
    *  asking the agent to continue with the chosen approach. */
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     return pickAlternateTake(
-      { sql: this.rt.storage.sql, actor: this.rt.actor, engine: this.engine, inbox: this.actorSession.orchestrator.inbox },
+      { sql: this.rt.storage.sql, actor: this.rt.actor, history: this.stores.history, engine: this.engine, inbox: this.actorSession.orchestrator.inbox },
       takeId, nodeId);
   }
 
@@ -1700,6 +1701,7 @@ export class LocalAgentSession implements BackendHost {
     await this.joinBackgroundFibers(this.drainDeadline());
     const t2 = Date.now();
     await this.mcpClose?.();
+    await this.chat.flushEvents();
     const t3 = Date.now();
 
     // The exit tail, attributed — see evolution.settled for WHAT the first
@@ -2168,6 +2170,11 @@ export class LocalAgentSession implements BackendHost {
    * Waiting on work that has NOT settled is bounded by the surface's grace:
    * that work may be a server which never settles at all.
    */
+  /** Every session event emitted so far has reached the frontend listener. */
+  flushEvents(): Promise<void> {
+    return this.chat.flushEvents();
+  }
+
   async settleBackgroundWork(): Promise<void> {
     const deadline = this.drainDeadline();
 
@@ -3363,6 +3370,7 @@ export class LocalAgentSession implements BackendHost {
       rt: this.rt,
       events: this.eventRecorder,
       sql: this.rt.storage.sql,
+      history: this.stores.history,
       config: this.config,
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
         rt: this.rt,
@@ -3519,7 +3527,7 @@ export class LocalAgentSession implements BackendHost {
    *  scaffold is the inference loop for. Resolved per call, so a scaffold that
    *  reads twice in one turn sees the second read's state. */
   private makeScaffoldHistory(): NonNullable<ScaffoldRunOptions['history']> {
-    return createScaffoldHistory(() => this.actorSession.history);
+    return createScaffoldHistory(async () => this.actorSession.history);
   }
 
   /** Re-run a task for the replay-eval harness: the current system prompt
@@ -3689,8 +3697,14 @@ export class LocalAgentSession implements BackendHost {
       // session's own slot for the same reason: a swarm node's seat is a head
       // row, and only `nodeSeats` tells the builder it seats a node.
       runtimeFor: (bound) => buildLocalActorRuntime(this.rt, bound, this.pendingWriteObserver(bound.reference.actorId), this.nodeSeats.has(bound.reference.actorId)),
+      filesFor: async (bound) => {
+        if (!this.rt.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
+
+        return this.rt.filesForActor(bound.handle);
+      },
       orchestrationFor: (bound) => createLocalOrchestration({
         runtime: bound.runtime,
+        history: bound.stores.history,
         eventLog: new EventLog(hubSql, bound.handle),
         // A head and a node run in THIS process, so this session is their
         // client fan-out and their turn queue — which is what a local fork is.
@@ -4095,6 +4109,7 @@ export class LocalAgentSession implements BackendHost {
       createMemoryCodemodeProvider(() => ({
         memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,
         actor: this.rt.actor,
+        transcriptFor: (sessionId) => this.stores.history.transcript(sessionId),
         vectorStore: null,
       })),
       createTasksCodemodeProvider(
@@ -4347,6 +4362,8 @@ export class LocalAgentSession implements BackendHost {
     const deps: ActorToolsetDeps = {
       rt: this.rt,
       workMode: mode,
+      // The canonical conversation the `memory` tool's recall reads.
+      history: this.stores.history,
       // The once-only boundary for tools whose effects leave this process.
       effectClaims: { sql: this.rt.storage.sql, actor: this.rt.actor, turnId },
       // No shellApprovalMode/requestShellApproval here — the gate lives at the

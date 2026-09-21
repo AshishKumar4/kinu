@@ -31,7 +31,8 @@ import { initAllTables } from '../src/identity/schema';
 import { initTurnOutcomeTables } from '../src/evolution/outcomes';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
 import type { AgentRuntime } from '../src/types/agent-runtime';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, storesFor } from './helpers';
+import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
 import { RunEventRecorder } from '../src/events/recorder';
 
 const EVAL_SIZE = 8;
@@ -96,6 +97,7 @@ function scriptedControl(rt: AgentRuntime, judgeScore: (candidate: string) => nu
       events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt,
       sql: rt.storage.sql,
+      history: storesFor(rt).history,
       config,
       surface: () => { throw new Error('a prompt-section pass must not roll out a scaffold'); },
       model: () => new MockLanguageModelV3({
@@ -164,19 +166,20 @@ function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number
  * one-shot invocation, and the case the owner asked about — the agent grinding
  * serially through work a search capability was sitting right there for — all
  * leave it silent. Each note goes through the REAL writer and needs a real
- * `actor_messages` pair, because the row stores a turn id and never a copy of the
+ * conversation pair, because the row stores a turn id and never a copy of the
  * text: a fixture that INSERTed the row by hand would certify a shape the
  * writer does not produce.
  */
-function seedAdvisorNotes(rt: AgentRuntime, count: number): void {
-  const engine = new EvolutionEngine(rt);
+async function seedAdvisorNotes(rt: AgentRuntime, count: number): Promise<void> {
+  const history = storesFor(rt).history;
+  const engine = new EvolutionEngine(rt, history);
 
   for (let i = 0; i < count; i++) {
     const turnId = `adv-${String(i)}`;
-    void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, parent_id, role, content, created_at)
-      VALUES (${rt.actor.actorId}, ${`ask-${String(i)}`}, ${null}, ${'user'}, ${failureTask(i)}, ${3_000 + i})`;
-    void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, parent_id, role, content, created_at)
-      VALUES (${rt.actor.actorId}, ${turnId}, ${`ask-${String(i)}`}, ${'assistant'}, ${'{"files":["a.txt"]}'}, ${3_100 + i})`;
+    await history.record(CHAT_SESSION_ID, { id: `ask-${String(i)}`, parentId: null, origin: 'input',
+      message: { role: 'user', content: failureTask(i) } });
+    await history.record(CHAT_SESSION_ID, { id: turnId, parentId: `ask-${String(i)}`, origin: 'output',
+      message: { role: 'assistant', content: '{"files":["a.txt"]}' } });
     engine.recordAdvisorNote({
       note: `you answered this alone; agents was reachable and the work had ${String(i + 2)} angles`,
       severity: 'concern',
@@ -251,7 +254,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
   test('an advisor note is a failure to optimise toward, where the ledger has none', async () => {
     const rt = evolvableRuntime();
     seedRotationPast(rt, TARGET_ID);
-    seedAdvisorNotes(rt, 3);
+    await seedAdvisorNotes(rt, 3);
 
     const { control, judgePrompts, reflectionPrompts } = scriptedControl(
       rt, (candidate) => (candidate === CANDIDATE ? 0.9 : 0.2),
@@ -285,7 +288,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
 
   test('a note about a turn the ledger already graded is not counted twice', async () => {
     const rt = evolvableRuntime();
-    seedAdvisorNotes(rt, 3);
+    await seedAdvisorNotes(rt, 3);
     // The user came back and corrected `adv-1` after all. The ledger is the
     // verdict where it spoke, so that turn must appear once — as a ledger row.
     recordTurnOutcome(rt.storage.sql, rt.actor, {
@@ -294,7 +297,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
       followup: 'just tell me in prose', now: 4_000,
     });
 
-    const split = buildOutcomeEvalSplit(rt.storage.sql, rt.actor, EVAL_SIZE);
+    const split = await buildOutcomeEvalSplit(rt.storage.sql, rt.actor, storesFor(rt).history.transcript(CHAT_SESSION_ID), EVAL_SIZE);
     const negatives = [...split.train, ...split.val.slice(0, split.heldOutNegatives)];
     expect(negatives).toHaveLength(3);
     expect(new Set(negatives.map((i) => i.input)).size).toBe(3);

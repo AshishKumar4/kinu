@@ -79,7 +79,7 @@ export {
   forkWorkspaceStorage, snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage,
   ForkSnapshotSchema, ForkTargetWriter,
   type ForkOpts, type ForkResult, type ForkLineageRow, type ForkSnapshot,
-  type ForkSnapshotHead, type ForkMessageRow, type ForkPaneRow,
+  type ForkSnapshotHead, type ForkSnapshotSource,
   type ForkMemoryChunkRow, type ForkCraftedToolRow, type ForkConfigRow, type ForkFile,
   type ForkWriteTarget, type ForkStagedCounts,
 } from './identity/fork';
@@ -102,12 +102,8 @@ export {
 } from './identity/fork-sink';
 
 export {
-  sessionTreeAncestry, chatPaneAncestry, hasPaneStore, usesPaneStore, forkPointExists, normalizeImportedConversation,
-  answersForDrainTurns,
-  conversationCount, conversationTurnPair, conversationPageRows, operatorMessageAdmitted,
-  SESSION_TREE_MAX_DEPTH, CHAT_SESSION_ID,
-  type SessionTreeNode, type ChatPaneRow,
-  type ConversationTurnPair, type ConversationPageRow,
+  forkPointExists, answersForDrainTurns, conversationCount, conversationTurnPair, CHAT_SESSION_ID,
+  type ConversationTurnPair,
 } from './identity/conversation-store';
 
 export {
@@ -282,6 +278,8 @@ export {
 
 // Types
 export type * from './types/primitives';
+
+export { VfsRevisionSchema } from './types/primitives';
 
 export { REAL_CLOCK, waitOn, every, type Clock } from './types/clock';
 
@@ -462,33 +460,26 @@ export {
   type StepPrepareResult, type StepPrepareContext,
 } from './prompting/prepare-step';
 
-export {
-  applyStagedContext, unpairedToolCallIds, STAGED_CONTEXT_DEFERRALS,
-  type StagedContextEdit, type StagedContextDeferral, type StagedContextOutcome,
-} from './prompting/staged-context';
+export { toolPairingGaps } from './prompting/tool-pairing';
 
-// The actor's editable working history, and the `/context` projection of it.
-export {
-  ActorWorkingContextStore, initActorWorkingContextTables,
-  type WorkingRevision, type WorkingRevisionContent, type WorkingSource,
-  type WorkingStatus, type WorkingVia, type WorkingClosedReason,
-} from './orchestrator/working-context';
+export { STAGED_CONTEXT_DEFERRALS, type StagedContextDeferral, type ContextEditEffect, type ContextEventRecorder, type ContextEditEvent } from './types/context-plane';
 
-export {
-  createActorContextPlane,
-  type ActorContextPlane, type ActorContextPlaneDeps, type AdmittedContext,
-  type SettledContext, type ContextEditReceipt, type ContextEditEffect, type ContextPlaneState,
-  // The audit port every host wires per actor, and the event it takes. Exported
-  // because the hosts that construct a session are in other packages: a
-  // recorder that satisfies this is what turns a landed context edit into
-  // evidence, and `null` is the stated spelling for a host that publishes none.
-  type ContextEventRecorder, type ContextEditEvent,
-} from './orchestrator/context-plane';
+export { SessionHistory, type SessionHistoryDependencies } from './orchestrator/session-history';
+
+export type { ContextSelection, ContextEntry } from './orchestrator/session-context';
+
+export type { ContextProposal, ContextChange } from './orchestrator/session-proposals';
 
 export {
   contextMount,
   type ActorContextStores, type ChildContextResolver, type ContextMountDeps, type ContextFileHeader,
 } from './vfs/context-plane';
+
+export type { SessionFilePlane } from './orchestrator/session-payload';
+
+export type { MessageReference, MessagePartReference, ActorReadAuthority } from './orchestrator/session-messages';
+
+export { SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './orchestrator/session-transcript';
 
 export { encodeModelMessages, decodeModelMessages, modelMessagesDigest } from './prompting/message-codec';
 
@@ -1275,7 +1266,7 @@ export {
 } from './vfs/workspace-path';
 
 export {
-  agentHome, agentTmpRoot, agentCred, agentIdentity,
+  agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements,
   subordinateAgentName, headAgentName,
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
@@ -1822,11 +1813,10 @@ export {
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
 export {
-  ChatSession, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
+  ChatSession, turnInputMessage, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from './orchestrator/chat-session';
 
-export { ActorMessagesTranscript, type TranscriptStore } from './orchestrator/transcript-store';
 
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
 
@@ -1906,7 +1896,7 @@ export { ModelCatalogSession, resolveEffectiveModelSpec } from './orchestrator/m
 
 export {
   serializeContentForHeads, narrowInheritedRole,
-  inheritedContextFromHistory, inheritedContextFromRows, inheritedContextFromConversation,
+  inheritedContextFromHistory, inheritedContextFromRows, inheritedContextFromTranscript, type InheritedContextRow,
   INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
 } from './orchestrator/heads-support';
 
@@ -2187,12 +2177,11 @@ export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } fro
 export type { Page, PageRequest, SeekCursor } from './read-models/page';
 
 export {
-  mergeTranscript, restoredRows, uiMessageRow, uiMessageText, transcriptRole, recordedAnswer, storedUiMessageParts,
-  transcriptRow, type TranscriptRow, type TranscriptSourceRow,
+  mergeTranscript, restoredRows, transcriptRole,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 
-export type { TurnAuthor, StoredRowProjection } from './utils/ui-message';
+export type { TurnAuthor } from './utils/ui-message';
 
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions';
 

@@ -18,7 +18,7 @@ import { formatReference, type ReferenceRoot } from '../vfs/references';
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
-import type { Memory, VFS } from '../types/primitives';
+import type { Memory, VFS, VfsRevision } from '../types/primitives';
 import type { TurnContextBudget } from '../context-budget';
 import { isVfsError, vfsAddressingHint } from '../vfs/errno';
 import { ensureDir, vfsDirname } from '../utils/vfs-helpers';
@@ -174,12 +174,22 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
    *  step failing must not leave the ledger denying content already on disk —
    *  and differs only in what the caller now knows: a `write` authored the whole
    *  file, an `edit` changed one span of what it already knew. */
-  const persist = async (path: string, content: string, observe: () => void): Promise<void> => {
+  const persist = async (path: string, content: string, observe: (revision?: VfsRevision) => void, expected?: VfsRevision): Promise<void> => {
     const dir = vfsDirname(path);
 
     if (dir) await ensureDir(vfs, dir);
-    await vfs.writeFile(path, content);
-    observe();
+
+    if (expected === undefined) {
+      await vfs.writeFile(path, content);
+      observe();
+    } else {
+      if (!vfs.writeFileIfRevision) throw new KinuError('unsupported', 'versioned edits require revision-checked writes');
+      const result = await vfs.writeFileIfRevision(path, new TextEncoder().encode(content), expected);
+
+      if (!result.ok) throw new FileRefusalError('stale', `${path} changed since the observed revision`);
+      observe(result.revision);
+    }
+
     const indexed = memoryIndexPath(path);
 
     if (deps.memory && indexed) await deps.memory.index(indexed);
@@ -277,7 +287,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
         const slice = formatFileSlice(scanned.window, { path, limit: args.limit, maxChars });
 
-        ledger.observeRange(path, scanned.fingerprint, slice.first, slice.last, slice.total);
+        ledger.observeRange(path, scanned.fingerprint, slice.first, slice.last, slice.total, scanned.revision);
         budget.admit(slice.output.length);
 
         if (slice.omitted > 0) {
@@ -344,9 +354,16 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
           .map((edit) => ({ oldText: edit.old_text, newText: edit.new_text }));
 
         let current: string;
+        let revision = ledger.readRevision(path);
 
         try {
-          current = await readFileText(vfs, path);
+          try {
+            current = await readFileText(vfs, path, revision);
+          } catch (cause) {
+            if (!isVfsError(cause) || cause.code !== 'ENOTSUP') throw cause;
+            revision = undefined;
+            current = await readFileText(vfs, path);
+          }
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
           ledger.recordEdit(path, vfsFail.reason);
@@ -373,7 +390,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         try {
           // Coverage carries across the edit: only the span the model named
           // itself changed, so what it knew about the file it still knows.
-          await persist(path, outcome.content, () => ledger.observeEdited(path, current, outcome.content));
+          await persist(path, outcome.content, writtenRevision => ledger.observeEdited(path, current, outcome.content, writtenRevision), revision);
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
           ledger.recordEdit(path, vfsFail.reason);

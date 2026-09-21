@@ -579,6 +579,13 @@ export function withMountTable(
 		readFile(path, opts) {
 			return delegate(path, (files, native) => files.readFile(native, opts));
 		},
+		readFileAtRevision(path, revision, range) {
+			return delegate(path, (files, native) => {
+				if (!files.readFileAtRevision) throw makeVfsError('ENOTSUP', 'this file plane does not retain file revisions', path);
+
+				return files.readFileAtRevision(native, revision, range);
+			});
+		},
 		writeFile(path, data) {
 			return mutate(path, 'written', (files, native) => files.writeFile(native, data));
 		},

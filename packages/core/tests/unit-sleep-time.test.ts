@@ -3,7 +3,7 @@ import {
   runSleepTimeCompute, applySleepTimeUpdate,
   SLEEP_TIME_CADENCE,
   sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
-  type TranscriptRow,
+  type ConversationProjection,
 } from '../src/index';
 import { createTestFactsStore, createJSONLLM, createScriptedLLM } from '@kinu.run/test-utils';
 
@@ -52,8 +52,8 @@ describe('sleepTimeWakeAt', () => {
 });
 
 describe('sleepTimeWindow', () => {
-  const user = (id: string, content: string): TranscriptRow => ({ id, role: 'user', content, toolCalls: [] });
-  const answer = (id: string, content: string, toolCalls: string[] = []): TranscriptRow => ({ id, role: 'assistant', content, toolCalls });
+  const user = (id: string, content: string): ConversationProjection => ({ id, parentId: null, role: 'user', content, toolCalls: [], recordedAt: 0 });
+  const answer = (id: string, content: string, toolCalls: string[] = []): ConversationProjection => ({ id, parentId: null, role: 'assistant', content, toolCalls, recordedAt: 0 });
   const never = () => false;
 
   test('an empty transcript, and one with only an unanswered opening row', () => {

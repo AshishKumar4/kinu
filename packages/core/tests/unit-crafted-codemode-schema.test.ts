@@ -26,7 +26,7 @@
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, storesFor } from './helpers';
 import {
   buildActorTools,
   type ActorToolsetDeps,
@@ -75,6 +75,7 @@ function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'cr
   // handle here would let this actor's tool call replay under nobody's turn.
   return buildActorTools({
     rt,
+    history: storesFor(rt).history,
     effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
     ...deps,
   });

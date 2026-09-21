@@ -15,6 +15,7 @@
  */
 import { Database } from 'bun:sqlite';
 import { makeSqlExec } from '../../../core/tests/helpers';
+import type { SessionHistory } from '@kinu.run/core';
 import type { AgentContext, Connection, FiberRecoveryContext, FiberRecoveryResult, WSMessage } from 'agents';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
@@ -24,7 +25,7 @@ import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from '
 import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, SpendSource, BackendHost } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { Refusal } from '@kinu.run/core/obs';
-import type { AssistantMessagesTranscript } from '../../src/chat-transcript';
+import type { SessionTranscript } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
 import type { ChatTurnInput, ActorTurnLease, PreparedTurn, RunEventRecorder } from '@kinu.run/core';
 import type { ChatWireTransport } from '../../src/chat-transport';
@@ -136,15 +137,18 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  actor whose working history has been written — by a turn it ran, by an
    *  authored edit — keeps it, since that history is what such a suite is
    *  asserting on. */
-  harnessSeedHistory(messages: readonly ModelMessage[]): void {
-    if (this.actorSession.history.length > 0) return;
-    this.actorSession.restoreHistory(messages);
+  async harnessSeedHistory(messages: readonly ModelMessage[]): Promise<void> {
+    const current = await this.actorSession.canonical.materialize();
+
+    if (current.entries.length > 0) return;
+    await this.actorSession.restoreHistory(messages);
   }
   /** An observer on the actor's own extension host — the seam the loop's chat
    *  runner reports each tool call and result through, in the order the
    *  tools settled. A suite that watches completion order registers here. */
   harnessRegisterExtension(extension: KinuExtension): void { this.extensions.register(extension); }
-  get harnessTranscript(): AssistantMessagesTranscript { return this.chatTranscript; }
+  get harnessTranscript(): SessionTranscript { return this.chatTranscript; }
+  get harnessHistory(): SessionHistory { return this.actorSession.canonical; }
   /** A programmatic turn admitted the way every producer admits one. */
   harnessEnqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> { return this.chatLoop.enqueueTurn(input); }
   /** The answer id the NEXT turn is persisted under, when a suite named one:
@@ -162,6 +166,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  stream the transport delivers, so a suite sees exactly what a client would. */
   private _lastTurnStart: { turnId: string; messageId: string } | null = null;
   harnessLastTurnStart(): { turnId: string; messageId: string } | null { return this._lastTurnStart; }
+  /** Every text delta the transport delivered, in order: what a client has seen so far. */
+  private readonly _deliveredText: string[] = [];
+  harnessDeliveredText(): string { return this._deliveredText.join(''); }
   protected override get chatTransport(): ChatWireTransport {
     const transport = super.chatTransport;
 
@@ -171,52 +178,16 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
       transport.deliver = (event) => {
         if (event.type === 'turn-start') this._lastTurnStart = { turnId: event.turnId, messageId: event.messageId };
-        deliver(event);
+
+        if (event.type === 'text-delta') this._deliveredText.push(event.delta);
+
+        return deliver(event);
       };
     }
 
     return transport;
   }
   private _observedTransport = false;
-  /** The next answer row is one the converter refuses — a tool-role message
-   *  under the assistant's id. Production never writes one; the arm that pins
-   *  what a refusal costs needs the row to exist, and this is the one seam
-   *  the transcript reads the streamed answer through. */
-  harnessNextAnswerUnreadable(role: 'tool'): void {
-    // The loop's own construction installs the production source; built first
-    // so this arm is the LAST installer, not the one it overwrites.
-    this.resumeChatLoop();
-    const transcript = this.harnessTranscript;
-    let armed: string | null = null;
-
-    const unreadable = (id: string) => {
-      const message = { id, role: 'assistant', parts: [{ type: 'text', text: 'the answer' }] };
-      // Past the type on purpose: the SDK forbids the shape and that is the
-      // point of the arm that asks for it.
-      Reflect.set(message, 'role', role);
-
-      return message;
-    };
-
-    // The roster reads the answer first (streamed), the row spends it (answer):
-    // both see the one unreadable message, so the recorded input and the stored
-    // row are the same shape the converter refuses.
-    transcript.answersFrom({
-      streamed: (id) => {
-        if (armed === null && this.chatTransport.streamed(id) !== null) armed = id;
-
-        return armed === id ? unreadable(id) : this.chatTransport.streamed(id);
-      },
-      answer: (id) => {
-        const real = this.chatTransport.answer(id);
-
-        if (armed !== id) return real;
-        armed = null;
-
-        return unreadable(id);
-      },
-    });
-  }
 
   /** The next assistant row fails to write — the one way a turn the model
    *  answered leaves no durable answer on the loop. The commit is one
@@ -233,9 +204,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     });
   }
 
-  harnessAdmitChat(trigger = 'ws-chat'): void {
-    this._emit('chat:turn:start', { requestId: 'harness-admitted', trigger, admission: 'queue' });
-  }
   /** The head-stream broadcaster, which is `protected` because only this
    *  actor's own reporters call it — `reportNodeDelta` and the exploration
    *  seams' `publishDelta`. Exposed so a suite asserting what a client
@@ -625,16 +593,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    */
 
   /** The persisted identity a fresh activation uses to stop old device work. */
-  harnessPersistActiveTurn(turnId: string): void {
-    // A durable CLAIM, which is what a real `beforeTurn` writes: a fresh
-    // activation identifies old device work through the claim ledger.
-    this.claims.admit({
-      runId: `harness-${turnId}`, turnId, workMode: 'build',
+  async harnessPersistActiveTurn(turnId: string): Promise<void> {
+    const history = this.actorSession.canonical;
+    const context = history.context.selected() ?? history.context.initialize();
+    await this.claims.admit({
+      runId: 'harness-' + turnId, turnId, workMode: 'build',
       program: { kind: 'builtin', version: 0, digest: null, build: null },
-      context: [],
-      // Zero, and honest: this harness drives no context plane, so the actor
-      // has no recorded working revision for the claim to name.
-      workingRevision: 0,
+      context,
     });
   }
 
@@ -1441,6 +1406,10 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       // The stream, so a CUT answer is what a cut answer is on the loop: the
       // text it streamed before the interrupt, then the abort.
       doStream: async (options) => {
+        const delivered = async (text: string): Promise<void> => {
+          while (!agent.harnessDeliveredText().endsWith(text)) await new Promise<void>((resolve) => { setTimeout(resolve, 1); });
+        };
+
         const scripted = await script(options);
         const text = textOf(scripted);
         const parts: ModelStreamPart[] = [{ type: 'stream-start', warnings: [] }];
@@ -1463,11 +1432,14 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
 
                 return;
               }
-              // Everything the answer had streamed is out; the turn is cut
-              // here — the cut a Stop makes, which keeps queued steers queued.
 
-              agent.harnessChatLoop.stop();
-              controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+              // Everything the answer had streamed is out and seen by the
+              // client; the turn is cut here — the cut a Stop makes, which
+              // keeps queued steers queued.
+              return delivered(text).then(() => {
+                agent.harnessChatLoop.stop();
+                controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+              });
             },
           }),
         };
@@ -1589,7 +1561,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       if (installed !== undefined && !seamFactories.has(installed)) {
         const landing = await agent.harnessChatLoop.send(text);
         await agent.harnessChatLoop.pumpPromise;
-        const last = agent.harnessTranscript.history().at(-1);
+        const last = (await agent.harnessTranscript.history()).at(-1);
 
         return { status: landing === 'turn' ? 'completed' : 'skipped', message: last?.role === 'assistant' ? last : undefined };
       }
@@ -1598,7 +1570,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       parked.answer.resolve({ messageId: parked.identity.messageId, text: 'ok' });
       const landing = await parked.landed;
       await agent.harnessChatLoop.pumpPromise;
-      const last = agent.harnessTranscript.history().at(-1);
+      const last = (await agent.harnessTranscript.history()).at(-1);
 
       return { status: landing === 'turn' ? 'completed' : 'skipped', message: last?.role === 'assistant' ? last : undefined };
     },
@@ -1672,7 +1644,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       // revision holds it.
       const prior = lastUser === -1 ? [...input.messages] : input.messages.slice(0, lastUser);
 
-      if (prior.length > 0) agent.harnessSeedHistory(prior);
+      if (prior.length > 0) await agent.harnessSeedHistory(prior);
       const content = user?.content;
       const text = content === undefined ? '' : v.is(v.string(), content) ? content : content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('');
       // ONE mode carrier, the product's: the composer stamps `kinuMode` on
@@ -1690,7 +1662,6 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     },
 
     async settle(answer) {
-      if (answer.unreadableRole !== undefined) agent.harnessNextAnswerUnreadable(answer.unreadableRole);
 
       if (answer.persistFails === true) agent.harnessNextAnswerUndurable();
       // A prepared turn is parked at its model call and settles under the

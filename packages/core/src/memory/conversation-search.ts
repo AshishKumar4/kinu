@@ -1,8 +1,7 @@
 /**
  * Zero-LLM transcript search over the canonical conversation store. FTS5 covers
- * the workspace's default-chat authority (the SDK pane store where a backend
- * keeps one, `actor_messages` on the CLI) plus the independent non-default sessions
- * (`actor_messages` rows that are neither the default chat nor MCTS trees).
+ * every session this actor owns in `conversation_entries` except the MCTS
+ * trees — the default chat and the independent sessions alike, one regime.
  *
  * Three operations:
  *   - search(query)        — ranked FTS5 snippets with conversation/message refs
@@ -10,22 +9,28 @@
  *   - browse()             — recent conversation roots with counts
  *
  * The index is DERIVED and disposable: a plain fts5 table fed from the
- * authority by a watermark sync, never an authority itself. It carries its own
- * reference columns, so no join back into any mirror table can make stale
- * projection rows answer a query.
+ * canonical store by a rowid watermark, never an authority itself. It carries
+ * its own reference columns, so no join back into the source can make a stale
+ * projection row answer a query.
+ *
+ * Entry text is not a column: it lives in the canonical message parts and is
+ * materialized by `SessionTranscriptReader.project`, which awaits. That is why
+ * every operation here is async.
  */
 
 import { fillToCapacity, relaxFtsQuery, sanitizeFtsQuery } from '@kinu.run/agent-utils/memory';
 import * as v from 'valibot';
-import { CHAT_SESSION_ID, paneStampMs, usesPaneStore } from '../identity/conversation-store';
+import { CHAT_SESSION_ID } from '../identity/conversation-store';
 import { boundedInt } from '../utils/bounds';
+import { KinuError } from '../obs/error';
+// The MCTS session holds tree nodes, not conversation: excluded from indexing
+// and from browse below. A scroll may still anchor one — a search tree is a
+// different tree, not a hidden one.
+import { MCTS_SESSION_ID } from '../orchestrator/mcts-session';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { uiMessageText } from '../utils/ui-message';
+import type { SessionTranscriptReader } from '../orchestrator/session-transcript';
 
-// session_id 'mcts' holds MCTS tree nodes, not conversation — excluded from
-// indexing, search and browse below. A scroll may still anchor one: a
-// non-default tree is a different tree, not a hidden one.
 /** Default per-message budget in scroll/browse results. A DEFAULT, not a
  *  ceiling: scroll honours the caller's max_chars, because scroll IS the
  *  read-back path — a recall surface whose reads are capped with no way to
@@ -80,31 +85,9 @@ function truncate(text: string, maxChars = MAX_MESSAGE_CHARS): string {
     : text;
 }
 
-/** A row as its owning store writes it: the pane stamps whole-second
- *  datetimes, plain rows stamp ms numbers. */
-interface PaneRaw { id: string; session_id: string; role: string; content: string; created_at: string; rid: number }
+interface EntryRow { id: string; session_id: string; role: string; recorded_at: number; rid: number }
 
-interface PlainRaw { id: string; session_id: string; role: string; content: string; created_at: number; rid: number }
-
-/** A fetched row with its stamp already normalized to UTC ms — done at the
- *  fetch site, where the owning store is statically known. */
-interface FetchedRow extends Omit<PaneRaw, 'created_at'> {
-  createdAtMs: number;
-}
-
-function withPaneStamp(row: PaneRaw): FetchedRow {
-  const { created_at, ...rest } = row;
-
-  return { ...rest, createdAtMs: paneStampMs(created_at) };
-}
-
-function withPlainStamp(row: PlainRaw): FetchedRow {
-  const { created_at, ...rest } = row;
-
-  return { ...rest, createdAtMs: created_at };
-}
-
-interface HitRow { id: string; msg_id: string; session_id: string; role: string; created_at: number; snip: string }
+interface HitRow { msg_id: string; session_id: string; role: string; created_at: number; snip: string }
 
 function toHit(row: HitRow): ConversationSearchHit {
   return {
@@ -117,18 +100,55 @@ function toHit(row: HitRow): ConversationSearchHit {
 }
 
 /**
- * Which regime the index was built under. When the SDK creates its pane store
- * mid-life (its first hosted append), the plain default rows stop being chat —
- * they become retired mirror rows — so the regime flip forces a rebuild rather
- * than letting pre-pane rows answer queries beside their rich twins.
+ * What the index has already absorbed.
+ *
+ * `rev`/`purges` are bumped by the source triggers; the `synced_*` twins are
+ * what the last completed sync saw. A purge cannot be followed from a
+ * watermark — SQLite reissues the rowids a delete freed — so any purge forces
+ * a rebuild, while the common insert-only case appends from `synced_rowid`.
  */
-type IndexRegime = 'pane' | 'plain';
+interface SyncState { actor_id: string; rev: number; purges: number; synced_rev: number; synced_purges: number; synced_rowid: number }
+
+/** The index tables, shared by the store and by {@link invalidateConversationSearchIndex}:
+ *  either may be the first to touch a database, and one DDL keeps them from
+ *  disagreeing about the shape they then write. */
+function ensureIndexTables(sql: SqlExecutor): void {
+  void sql`
+    CREATE VIRTUAL TABLE IF NOT EXISTS conversation_fts USING fts5(
+      content, msg_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, created_at UNINDEXED
+    )`;
+  // `actor_id` names WHOSE rows the index currently holds. The index is a
+  // single-actor cache over an actor-scoped source: a shared host keeps
+  // several issued actors in one database, so without it a reader would be
+  // served the PREVIOUS actor's hits whenever the revision happened to match.
+  // A mismatch rebuilds — over-invalidating disposable state is the safe
+  // direction.
+  void sql`
+    CREATE TABLE IF NOT EXISTS conversation_fts_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      actor_id TEXT NOT NULL,
+      rev INTEGER NOT NULL DEFAULT 0,
+      purges INTEGER NOT NULL DEFAULT 0,
+      synced_rev INTEGER NOT NULL DEFAULT -1,
+      synced_purges INTEGER NOT NULL DEFAULT -1,
+      synced_rowid INTEGER NOT NULL DEFAULT 0
+    )`;
+  void sql`
+    INSERT OR IGNORE INTO conversation_fts_state (id, actor_id, rev, purges, synced_rev, synced_purges, synced_rowid)
+    VALUES (1, ${''}, 0, 0, -1, -1, 0)`;
+}
 
 export class ConversationSearchStore {
   private ensured = false;
+  /** The in-flight sync, if any — see {@link refreshIndex}. */
+  private syncing: Promise<void> | null = null;
   private readonly actorId: string;
 
-  constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle) {
+  constructor(
+    private readonly sql: SqlExecutor,
+    private readonly actor: ActorHandle,
+    private readonly transcriptFor: (sessionId: string) => SessionTranscriptReader,
+  ) {
     this.actorId = actor.actorId;
   }
 
@@ -141,10 +161,9 @@ export class ConversationSearchStore {
    * Broadening only when the strict query came back EMPTY left an underfull page
    * underfull and silently dropped every relevant partial.
    */
-  search(query: string, limit = 5): ConversationSearchHit[] {
+  async search(query: string, limit = 5): Promise<ConversationSearchHit[]> {
     this.actor.assertCurrent();
-    this.ensure();
-    this.refreshIndex();
+    await this.ensure();
 
     if (!query.trim()) return [];
     const capacity = boundedInt(limit, 1, 1, 10);
@@ -161,89 +180,39 @@ export class ConversationSearchStore {
 
   /** A window of ±`window` messages around the anchor message, in transcript
    *  order. Returns null when the anchor id doesn't exist. */
-  scroll(aroundMessageId: string, window = 5, maxChars?: number): ConversationScrollResult | null {
+  async scroll(aroundMessageId: string, window = 5, maxChars?: number): Promise<ConversationScrollResult | null> {
     this.actor.assertCurrent();
-    this.ensure();
-    this.refreshIndex();
-    // The anchor resolves in whichever store owns it: the pane for default-chat
-    // ids, `actor_messages` for non-default trees.
-    const pane = usesPaneStore(this.sql, this.actor);
+    await this.ensure();
 
-    const paneAnchor = pane
-      ? this.sql<PaneRaw>`
-          SELECT id, session_id, role, content, created_at, rowid AS rid
-          FROM assistant_messages WHERE id = ${aroundMessageId}`[0]
-      : undefined;
+    // An entry id is unique within its session, not across them: the chat
+    // answers an ambiguous anchor, every other session in rowid order.
+    const anchor = this.sql<EntryRow>`
+      SELECT id, session_id, role, recorded_at, rowid AS rid FROM conversation_entries
+      WHERE actor_id = ${this.actorId} AND id = ${aroundMessageId}
+      ORDER BY session_id = ${CHAT_SESSION_ID} DESC, rowid ASC LIMIT 1`[0];
 
-    let anchor: FetchedRow;
-
-    if (paneAnchor !== undefined) {
-      anchor = withPaneStamp(paneAnchor);
-    } else {
-      // A miss in the pane store falls to `actor_messages` — the non-default trees
-      // (mcts, local peers) live only there.
-      // Where the pane owns the backend, plain `default` rows are the retired
-      // mirror — a non-pane id must not resolve against them. Without the pane
-      // they ARE the chat (the CLI), so every session anchors.
-      const plainAnchor = (pane
-        ? this.sql<PlainRaw>`
-            SELECT id, session_id, role, content, created_at, rowid AS rid
-            FROM actor_messages
-            WHERE actor_id = ${this.actorId} AND id = ${aroundMessageId}
-              AND session_id <> ${CHAT_SESSION_ID}`[0]
-        : this.sql<PlainRaw>`
-            SELECT id, session_id, role, content, created_at, rowid AS rid
-            FROM actor_messages WHERE actor_id = ${this.actorId} AND id = ${aroundMessageId}`[0]);
-
-      if (plainAnchor === undefined) return null;
-      anchor = withPlainStamp(plainAnchor);
-    }
-
-    const source: IndexRegime = paneAnchor !== undefined ? 'pane' : 'plain';
-    const row = anchor;
+    if (anchor === undefined) return null;
     const w = boundedInt(window, 1, 1, 20);
 
     // Rowid is total and is insertion order, so the window needs no timestamp
-    // tie-break — the same reason history paging seeks on it. The four
-    // window/count queries are written out per store: the operators are SQL,
-    // and SQL cannot ride a binding.
-    const paneSide = source === 'pane';
+    // tie-break — the same reason history paging seeks on it.
+    const before = this.sql<EntryRow>`
+      SELECT id, session_id, role, recorded_at, rowid AS rid FROM conversation_entries
+      WHERE actor_id = ${this.actorId} AND session_id = ${anchor.session_id} AND rowid < ${anchor.rid}
+      ORDER BY rowid DESC LIMIT ${w}`.reverse();
 
-    const before = (paneSide
-      ? this.sql<PaneRaw>`
-          SELECT id, role, content, created_at, rowid AS rid FROM assistant_messages
-          WHERE session_id = ${row.session_id} AND rowid < ${row.rid}
-          ORDER BY rowid DESC LIMIT ${w}`.map(withPaneStamp)
-      : this.sql<PlainRaw>`
-          SELECT id, role, content, created_at, rowid AS rid FROM actor_messages
-          WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid < ${row.rid}
-          ORDER BY rowid DESC LIMIT ${w}`.map(withPlainStamp)).reverse();
+    const after = this.sql<EntryRow>`
+      SELECT id, session_id, role, recorded_at, rowid AS rid FROM conversation_entries
+      WHERE actor_id = ${this.actorId} AND session_id = ${anchor.session_id} AND rowid > ${anchor.rid}
+      ORDER BY rowid ASC LIMIT ${w}`;
 
-    const after = paneSide
-      ? this.sql<PaneRaw>`
-          SELECT id, role, content, created_at, rowid AS rid FROM assistant_messages
-          WHERE session_id = ${row.session_id} AND rowid > ${row.rid}
-          ORDER BY rowid ASC LIMIT ${w}`.map(withPaneStamp)
-      : this.sql<PlainRaw>`
-          SELECT id, role, content, created_at, rowid AS rid FROM actor_messages
-          WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid > ${row.rid}
-          ORDER BY rowid ASC LIMIT ${w}`.map(withPlainStamp);
+    const totalBefore = this.sql<{ c: number }>`
+      SELECT COUNT(*) AS c FROM conversation_entries
+      WHERE actor_id = ${this.actorId} AND session_id = ${anchor.session_id} AND rowid < ${anchor.rid}`[0]?.c ?? 0;
 
-    const totalBefore = (paneSide
-      ? this.sql<{ c: number }>`
-          SELECT COUNT(*) AS c FROM assistant_messages
-          WHERE session_id = ${row.session_id} AND rowid < ${row.rid}`
-      : this.sql<{ c: number }>`
-          SELECT COUNT(*) AS c FROM actor_messages
-          WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid < ${row.rid}`)[0]!.c;
-
-    const totalAfter = (paneSide
-      ? this.sql<{ c: number }>`
-          SELECT COUNT(*) AS c FROM assistant_messages
-          WHERE session_id = ${row.session_id} AND rowid > ${row.rid}`
-      : this.sql<{ c: number }>`
-          SELECT COUNT(*) AS c FROM actor_messages
-          WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid > ${row.rid}`)[0]!.c;
+    const totalAfter = this.sql<{ c: number }>`
+      SELECT COUNT(*) AS c FROM conversation_entries
+      WHERE actor_id = ${this.actorId} AND session_id = ${anchor.session_id} AND rowid > ${anchor.rid}`[0]?.c ?? 0;
 
     const parsedMaxChars = v.safeParse(MaxCharsSchema, maxChars);
 
@@ -251,199 +220,150 @@ export class ConversationSearchStore {
       ? parsedMaxChars.output
       : MAX_MESSAGE_CHARS;
 
-    // Pane rows carry the serialized UI message; its text parts are what a
-    // recall surface quotes. Plain rows already hold plain text.
-    const toMessage = (m: FetchedRow): ConversationScrollMessage => ({
-      id: m.id, role: m.role,
-      content: truncate(source === 'pane' ? uiMessageText(m.content) : m.content, perMessage),
-      createdAt: m.createdAtMs,
+    // An entry that disappeared between its row read and its projection quotes
+    // as empty: the window is still the transcript the caller asked for, and
+    // the next sync drops the entry from the index.
+    const quote = async (row: EntryRow): Promise<ConversationScrollMessage> => ({
+      id: row.id,
+      role: row.role,
+      content: truncate((await this.transcriptFor(row.session_id).project(row.id))?.content ?? '', perMessage),
+      createdAt: row.recorded_at,
     });
 
+    const messages: ConversationScrollMessage[] = [];
+
+    for (const row of before) messages.push(await quote(row));
+    messages.push({ ...await quote(anchor), anchor: true });
+
+    for (const row of after) messages.push(await quote(row));
+
     return {
-      conversationId: sessionIdOf(row.session_id),
-      messages: [...before.map(toMessage), { ...toMessage(row), anchor: true }, ...after.map(toMessage)],
+      conversationId: anchor.session_id,
+      messages,
       messagesBefore: totalBefore - before.length,
       messagesAfter: totalAfter - after.length,
     };
   }
 
   /** Recent conversation roots, most recently active first. */
-  browse(limit = 10): ConversationSummary[] {
+  async browse(limit = 10): Promise<ConversationSummary[]> {
     this.actor.assertCurrent();
-    this.ensure();
-    this.refreshIndex();
+    await this.ensure();
     const lim = boundedInt(limit, 1, 1, 20);
 
-    interface GroupBase { session_id: string; n: number }
+    const groups = this.sql<{ session_id: string; n: number; started_at: number; last_active: number }>`
+      SELECT session_id, COUNT(*) AS n, MIN(recorded_at) AS started_at, MAX(recorded_at) AS last_active
+      FROM conversation_entries
+      WHERE actor_id = ${this.actorId} AND session_id <> ${MCTS_SESSION_ID}
+      GROUP BY session_id ORDER BY last_active DESC LIMIT ${lim}`;
 
-    interface PaneGroup extends GroupBase { started_at: string; last_active: string }
+    const conversations: ConversationSummary[] = [];
 
-    interface PlainGroup extends GroupBase { started_at: number; last_active: number }
+    for (const group of groups) {
+      const first = this.sql<{ id: string }>`
+        SELECT id FROM conversation_entries
+        WHERE actor_id = ${this.actorId} AND session_id = ${group.session_id} AND role = 'user'
+        ORDER BY rowid ASC LIMIT 1`[0];
 
-    interface Group extends GroupBase {
-      source: 'pane' | 'plain';
-      startedAtMs: number;
-      lastActiveAtMs: number;
+      const opening = first === undefined ? null : await this.transcriptFor(group.session_id).project(first.id);
+
+      conversations.push({
+        conversationId: group.session_id,
+        messageCount: group.n,
+        startedAt: group.started_at,
+        lastActiveAt: group.last_active,
+        preview: truncate(opening?.content ?? ''),
+      });
     }
 
-    /** Each source's aggregates are stamped in its own encoding and normalized
-     *  at the fetch site — the pane's datetimes via {@link paneStampMs}. */
-    const withPaneStamps = (g: PaneGroup): Group =>
-      ({ source: 'pane', session_id: g.session_id, n: g.n, startedAtMs: paneStampMs(g.started_at), lastActiveAtMs: paneStampMs(g.last_active) });
-
-    const withPlainStamps = (g: PlainGroup): Group =>
-      ({ source: 'plain', session_id: g.session_id, n: g.n, startedAtMs: g.started_at, lastActiveAtMs: g.last_active });
-
-    let groups: Group[];
-
-    if (usesPaneStore(this.sql, this.actor)) {
-      groups = [
-        // Default chat lives in the pane; plain default rows would be the
-        // retired mirror — never listed beside their rich twins.
-        ...this.sql<PaneGroup>`
-          SELECT session_id, COUNT(*) AS n, MIN(created_at) AS started_at, MAX(created_at) AS last_active
-          FROM assistant_messages GROUP BY session_id`.map(withPaneStamps),
-        ...this.sql<PlainGroup>`
-          SELECT session_id, COUNT(*) AS n, MIN(created_at) AS started_at, MAX(created_at) AS last_active
-          FROM actor_messages
-          WHERE actor_id = ${this.actorId} AND session_id NOT IN (${CHAT_SESSION_ID}, 'mcts')
-          GROUP BY session_id`.map(withPlainStamps),
-      ];
-    } else {
-      groups = this.sql<PlainGroup>`
-        SELECT session_id, COUNT(*) AS n, MIN(created_at) AS started_at, MAX(created_at) AS last_active
-        FROM actor_messages
-        WHERE actor_id = ${this.actorId} AND session_id NOT IN ('mcts')
-        GROUP BY session_id`.map(withPlainStamps);
-    }
-
-    return groups
-      .map((conversation) => {
-        const firstUser: FetchedRow | undefined = conversation.source === 'pane'
-          ? this.sql<PaneRaw>`
-              SELECT id, session_id, role, content, created_at, rowid AS rid
-              FROM assistant_messages
-              WHERE session_id = ${conversation.session_id} AND role = 'user'
-              ORDER BY rowid ASC LIMIT 1`.map(withPaneStamp)[0]
-          : this.sql<PlainRaw>`
-              SELECT id, session_id, role, content, created_at, rowid AS rid
-              FROM actor_messages
-              WHERE actor_id = ${this.actorId} AND session_id = ${conversation.session_id}
-                AND role = 'user'
-              ORDER BY rowid ASC LIMIT 1`.map(withPlainStamp)[0];
-
-        return {
-          conversationId: sessionIdOf(conversation.session_id),
-          messageCount: conversation.n,
-          startedAt: conversation.startedAtMs,
-          lastActiveAt: conversation.lastActiveAtMs,
-          preview: truncate(firstUser ? uiMessageText(firstUser.content) : ''),
-        };
-      })
-      .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
-      .slice(0, lim);
+    return conversations;
   }
 
   // ── Derived index maintenance ─────────────────────────────────────────────
 
-  /** Create the derived index and sync it from the conversation authority. */
-  private ensure(): void {
-    if (this.ensured) return;
-    void this.sql`
-      CREATE VIRTUAL TABLE IF NOT EXISTS conversation_fts USING fts5(
-        content, msg_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, created_at UNINDEXED
-      )`;
-    // `actor_id` names WHOSE rows the index currently holds. The index is a
-    // single-actor cache over an actor-scoped source: a shared host keeps
-    // several issued actors in one database, so without it a reader would be
-    // served the PREVIOUS actor's hits whenever the revision happened to match.
-    // A mismatch rebuilds — the same answer this table already gives a regime
-    // flip, and for the same reason.
-    void this.sql`
-      CREATE TABLE IF NOT EXISTS conversation_fts_state (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        actor_id TEXT NOT NULL,
-        regime TEXT NOT NULL,
-        rev INTEGER NOT NULL DEFAULT 0,
-        synced_rev INTEGER NOT NULL DEFAULT -1
-      )`;
-    void this.sql`
-      INSERT OR IGNORE INTO conversation_fts_state (id, actor_id, regime, rev, synced_rev)
-      VALUES (1, ${''}, 'uninitialized', 0, -1)`;
-    this.ensured = true;
-    this.refreshIndex();
+  /** Create the derived index and its source triggers, then sync. The triggers
+   * observe every write to the canonical store, so the index never has to guess
+   * whether a same-count mutation happened. Table-wide rather than per-actor: a
+   * trigger cannot carry a bound actor, and a bump from a sibling actor only
+   * costs a rebuild of disposable state. */
+  private async ensure(): Promise<void> {
+    if (!this.ensured) {
+      ensureIndexTables(this.sql);
+      void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_entries_ai AFTER INSERT ON conversation_entries BEGIN
+        UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
+      void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_entries_ad AFTER DELETE ON conversation_entries BEGIN
+        UPDATE conversation_fts_state SET rev = rev + 1, purges = purges + 1 WHERE id = 1; END`;
+      this.ensured = true;
+    }
+
+    await this.refreshIndex();
   }
 
-  /** Install source-table revision triggers. They observe direct SDK pane
-   * writes as well as local SQL writes; the index never has to guess whether a
-   * same-count mutation happened. Table-wide rather than per-actor: a trigger
-   * cannot carry a bound actor, and a bump from a sibling actor only costs a
-   * rebuild of disposable state — over-invalidating is the safe direction. */
-  private ensureRevisionTriggers(pane: boolean): void {
-    void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_actor_messages_ai AFTER INSERT ON actor_messages BEGIN
-      UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
-    void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_actor_messages_au AFTER UPDATE ON actor_messages BEGIN
-      UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
-    void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_actor_messages_ad AFTER DELETE ON actor_messages BEGIN
-      UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
+  /** One sync at a time. Projection awaits, so two interleaved syncs would read
+   * the same watermark and index the same entries twice; a caller that arrives
+   * during a sync reads behind it, which is the freshness every reader already
+   * has against a store still being written. A sync that throws leaves the
+   * index half-fed, so it is invalidated before the failure is rethrown. */
+  private async refreshIndex(): Promise<void> {
+    const pending = this.syncing;
 
-    if (!pane) return;
-    void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_pane_ai AFTER INSERT ON assistant_messages BEGIN
-      UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
-    void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_pane_au AFTER UPDATE ON assistant_messages BEGIN
-      UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
-    void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_pane_ad AFTER DELETE ON assistant_messages BEGIN
-      UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
+    if (pending !== null) {
+      await pending;
+
+      return;
+    }
+
+    const run = this.sync();
+    this.syncing = run;
+
+    try { await run; }
+    catch (cause) {
+      invalidateConversationSearchIndex(this.sql);
+      throw cause;
+    }
+    finally { this.syncing = null; }
   }
 
-  /** Rebuild deterministically when the SOURCE revision, the store regime or
-   * the ACTOR the index was built for changes. Rebuilding an index is cheaper
-   * than serving one stale — or one foreign — row; it runs only after a real
-   * INSERT/UPDATE/DELETE, not every read. */
-  private refreshIndex(): void {
-    const pane = usesPaneStore(this.sql, this.actor);
-    this.ensureRevisionTriggers(pane);
-    const regime: IndexRegime = pane ? 'pane' : 'plain';
+  private async sync(): Promise<void> {
+    const state = this.sql<SyncState>`
+      SELECT actor_id, rev, purges, synced_rev, synced_purges, synced_rowid
+      FROM conversation_fts_state WHERE id = 1`[0];
 
-    const state = this.sql<{ actor_id: string; regime: string; rev: number; synced_rev: number }>`
-      SELECT actor_id, regime, rev, synced_rev FROM conversation_fts_state WHERE id = 1`[0]!;
+    if (state === undefined) throw new KinuError('io', 'the transcript search index lost its sync state');
+    const rebuild = state.actor_id !== this.actorId || state.purges !== state.synced_purges;
 
-    if (state.actor_id === this.actorId && state.regime === regime && state.rev === state.synced_rev) return;
+    if (!rebuild && state.rev === state.synced_rev) return;
 
-    void this.sql`DELETE FROM conversation_fts`;
+    if (rebuild) void this.sql`DELETE FROM conversation_fts`;
+    const watermark = rebuild ? 0 : state.synced_rowid;
 
-    const paneRows = pane
-      ? this.sql<PaneRaw>`
-          SELECT id, session_id, role, content, created_at, rowid AS rid
-          FROM assistant_messages ORDER BY rowid ASC`.map(withPaneStamp)
-      : [];
+    const rows = this.sql<EntryRow>`
+      SELECT id, session_id, role, recorded_at, rowid AS rid FROM conversation_entries
+      WHERE actor_id = ${this.actorId} AND session_id <> ${MCTS_SESSION_ID}
+        AND role IN ('user', 'assistant') AND rowid > ${watermark}
+      ORDER BY rowid ASC`;
 
-    const plainRows = pane
-      ? this.sql<PlainRaw>`
-          SELECT id, session_id, role, content, created_at, rowid AS rid FROM actor_messages
-          WHERE actor_id = ${this.actorId}
-            AND session_id <> ${CHAT_SESSION_ID} AND session_id <> 'mcts' ORDER BY rowid ASC`.map(withPlainStamp)
-      : this.sql<PlainRaw>`
-          SELECT id, session_id, role, content, created_at, rowid AS rid FROM actor_messages
-          WHERE actor_id = ${this.actorId} AND session_id <> 'mcts' ORDER BY rowid ASC`.map(withPlainStamp);
+    let synced = watermark;
 
-    this.indexRows(paneRows, true);
-    this.indexRows(plainRows, false);
+    for (const row of rows) {
+      const projected = await this.transcriptFor(row.session_id).project(row.id);
+
+      if (projected !== null) {
+        void this.sql`
+          INSERT INTO conversation_fts (content, msg_id, session_id, role, created_at)
+          VALUES (${projected.content}, ${row.id}, ${row.session_id}, ${row.role}, ${row.recorded_at})`;
+      }
+
+      synced = row.rid;
+    }
+
+    // The counters this sync answered for are the ones it READ: a write that
+    // landed while the projection awaited is left for the next pass rather
+    // than marked absorbed by a scan that never saw it.
     void this.sql`
       UPDATE conversation_fts_state
-      SET actor_id = ${this.actorId}, regime = ${regime}, synced_rev = rev WHERE id = 1`;
-  }
-
-  /** Index a source snapshot. The caller has already proved the source revision
-   * stable for this synchronous read. */
-  private indexRows(rows: readonly FetchedRow[], paneRows: boolean): void {
-    for (const row of rows) {
-      void this.sql`
-        INSERT INTO conversation_fts (content, msg_id, session_id, role, created_at)
-        VALUES (${paneRows ? uiMessageText(row.content) : row.content},
-                ${row.id}, ${sessionIdOf(row.session_id)},
-                ${row.role}, ${row.createdAtMs})`;
-    }
+      SET actor_id = ${this.actorId}, synced_rev = ${state.rev}, synced_purges = ${state.purges}, synced_rowid = ${synced}
+      WHERE id = 1`;
   }
 
   /** Insertion order breaks a bm25 tie, for the same reason the scroll window
@@ -463,33 +383,16 @@ export class ConversationSearchStore {
 }
 
 /**
- * The session id surfaces report: hosted pane sessions stamp `''`, and every
- * reader says `default`. Lives beside the store because the pane's own stamping
- * convention is what it translates.
- */
-function sessionIdOf(sessionId: string): string {
-  return sessionId === '' ? CHAT_SESSION_ID : sessionId;
-}
-
-/**
  * Deterministic invalidation of the derived transcript-search index, called by
- * EVERY chat-row mutation that a rowid watermark cannot see: a fork restore's
- * purge-and-reseed, a session reassignment (`UPDATE actor_messages SET session_id`),
- * any delete. The next `ensure()`/refresh observes the poisoned regime marker,
- * discards the index, and rebuilds it from the canonical store — disposable
+ * EVERY conversation mutation that a rowid watermark cannot see: a fork
+ * restore's purge-and-reseed, a session reassignment, any rewrite that reuses
+ * an id. The next `ensure()`/refresh observes the impossible sync markers,
+ * discards the index and rebuilds it from the canonical store — disposable
  * state, so correctness here is one rebuild away, never a dual-read.
  */
 export function invalidateConversationSearchIndex(sql: SqlExecutor): void {
+  ensureIndexTables(sql);
   void sql`
-    CREATE TABLE IF NOT EXISTS conversation_fts_state (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      actor_id TEXT NOT NULL,
-      regime TEXT NOT NULL,
-      rev INTEGER NOT NULL DEFAULT 0,
-      synced_rev INTEGER NOT NULL DEFAULT -1
-    )`;
-  void sql`
-    INSERT INTO conversation_fts_state (id, actor_id, regime, rev, synced_rev)
-    VALUES (1, ${''}, 'invalidated', 0, -1)
-    ON CONFLICT(id) DO UPDATE SET regime = 'invalidated', synced_rev = -1`;
+    UPDATE conversation_fts_state
+    SET actor_id = ${''}, synced_rev = -1, synced_purges = -1, synced_rowid = 0 WHERE id = 1`;
 }

@@ -55,7 +55,7 @@ import {
 } from '../src/index';
 import { CODE_IS_REFUSAL, KinuError } from '../src/obs/index';
 import { codenameFor } from '../src/identity/naming';
-import { createMemoryVfs, createTestActors } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActors, type MemoryVfs } from '@kinu.run/test-utils';
 import {
   makeSql as makeTagged, makeSqlExec, makeExecRaw, createTestActor, createTestWorkspace,
 } from './helpers';
@@ -515,7 +515,7 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
     runtime,
     createName: () => 'researcher-a1b2c3',
     now: () => 1_700_000_000_000,
-    inheritedContext: () => inheritedContext,
+    inheritedContext: async () => inheritedContext,
     ownMission: () => HARNESS_OWN_MISSION,
     broadcast: (event) => { broadcasts.push(Date.now()); events.push(event); },
     broadcastTask: (event) => { tasks.push(event); },
@@ -906,7 +906,7 @@ describe('team action routing', () => {
       runtime,
       createName: () => 'researcher-a1b2c3',
       now: () => 123,
-      inheritedContext: () => [],
+      inheritedContext: async () => [],
       ownMission: () => HARNESS_OWN_MISSION,
       broadcast: () => {},
       broadcastTask: () => {},
@@ -1280,7 +1280,7 @@ describe('oversize subordinate reports stay reachable', () => {
 interface ParentScene {
   log: EventLog;
   roster: SubordinateRosterStore;
-  files: Map<string, string>;
+  files: MemoryVfs['files'];
   /** The ordered trace of ingress side effects, for the ordering assertions. */
   seen: string[];
   announced: Array<{ id: string; content: string }>;

@@ -59,6 +59,7 @@ import {
   facetHomeProvisioner, facetHomeReleaser, isVfsError,
   headAgentName, subordinateAgentName, parseActorKey,
   actorStateRoot, actorScaffoldPath,
+  nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
   type ActorHost, type ActorHostDeps, type ActorRetirement, type BoundActor,
   type ActorHandle, type ActorReference, type AgentOrchestratorDeps, type AgentRuntime,
   type BackendHost, type BroadcastEvent, type ContextEventRecorder,
@@ -360,6 +361,20 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     },
     directory: seams.directory,
     installedBuild: seams.installedBuild(),
+    filesFor: async (bound) => {
+      const provisioning = homeFor(bound.record, bound.reference);
+      const box = seams.workspaceBox(hostedActorShellId(bound.record));
+
+      if (provisioning === null) {
+        if (bound.record.kind !== 'main') throw new KinuError('denied', 'Actor has no credentialed artifact home');
+
+        return { vfs: nimbusSessionFiles(box), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) };
+      }
+
+      const home = await provisioning;
+
+      return { vfs: nimbusSessionFiles(box, home.cred), artifactDirectory: agentArtifactDirectory(home.home) };
+    },
 
     /**
      * The actor's runtime, over the handle the host bound.
@@ -532,7 +547,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         pricing: () => seams.pricing(),
       });
 
-      const engine = new EvolutionEngine(runtime, {
+      const engine = new EvolutionEngine(runtime, stores.history, {
         // The grading group as ONE unit. A synchronous run inside a Durable
         // Object is already atomic; answering through the platform's own
         // primitive keeps it so whatever core comes to put between the

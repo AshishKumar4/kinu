@@ -26,7 +26,7 @@ import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, storesFor } from './helpers';
 import {
   narrowToolSurface, codemodeCapabilitiesFor, TOOL_REACH,
   buildActorTools,
@@ -129,6 +129,7 @@ function tools(
 ) {
   return buildActorTools({
     rt,
+    history: storesFor(rt).history,
     escalations,
     craftedToolExecute: nodeCraftedExecute,
     codemode: nodeCodemodeBuilder,
@@ -224,6 +225,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     const t = buildActorTools({
       rt,
+      history: storesFor(rt).history,
       craftedToolExecute: nodeCraftedExecute,
       codemode: nodeCodemodeBuilder,
       facts: stubFacts,
@@ -308,6 +310,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     const t = buildBuiltinTools({
       rt, craftedToolExecute: nodeCraftedExecute,
+      history: storesFor(rt).history,
       facts,
     });
 
@@ -336,6 +339,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     const t = buildBuiltinTools({
       rt, craftedToolExecute: nodeCraftedExecute,
+      history: storesFor(rt).history,
       facts: { upsert: () => 'created' as const, recall: () => null, forget: () => {}, recentTopK: () => [], all: () => [] },
     });
 
@@ -502,7 +506,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('memory.* dispatches through the SAME store the native `memory` tool reads/writes', async () => {
     const { rt } = createTestRuntime();
-    const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, actor: rt.actor }));
+    const { history } = storesFor(rt);
+
+    const provider = createMemoryCodemodeProvider(() => ({
+      memory: rt.memory, sql: rt.storage.sql, actor: rt.actor,
+      transcriptFor: (sessionId) => history.transcript(sessionId),
+    }));
+
     // No facts wired: remember/recall/forget are absent, matching the native
     // tool's own action-enum gating.
     expect(Object.keys(provider.tools).sort()).toEqual(['conversations', 'save', 'search']);
@@ -514,6 +524,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('memory.* exposes remember/recall/forget only when a FactsStore is wired, over the SAME store', async () => {
     const { rt } = createTestRuntime();
+    const { history } = storesFor(rt);
     const store = new Map<string, { key: string; value: JsonValue; confidence: number; source: string; lastObservedAt: number }>();
 
     const facts = {
@@ -527,7 +538,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       recentTopK: () => [], all: () => [],
     };
 
-    const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, actor: rt.actor, facts }));
+    const provider = createMemoryCodemodeProvider(() => ({
+      memory: rt.memory, sql: rt.storage.sql, actor: rt.actor, facts,
+      transcriptFor: (sessionId) => history.transcript(sessionId),
+    }));
+
     expect(Object.keys(provider.tools)).toContain('remember');
     await codemodeExecute(provider, 'remember')('user.tz', 'UTC', 0.9);
     expect(store.get('user.tz')?.value).toBe('UTC');
@@ -597,7 +612,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     const propertiesOf = (report: ReportToolDeps): string[] => Object.keys(v.parse(
       v.object({ jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }) }),
-      buildBuiltinTools({ rt, report }).report?.inputSchema,
+      buildBuiltinTools({ rt, report, history: storesFor(rt).history }).report?.inputSchema,
     ).jsonSchema.properties);
 
     const sink: ReportToolDeps['report'] = async () => ({ ok: true });
@@ -747,6 +762,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     try {
       buildActorTools({
         rt,
+        history: storesFor(rt).history,
         craftedToolExecute: nodeCraftedExecute,
         codemode: (surface) => {
           injected = Object.keys(surface.craftedTools());

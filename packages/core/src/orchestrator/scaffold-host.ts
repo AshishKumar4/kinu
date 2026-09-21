@@ -206,10 +206,10 @@ function safeJson<Value>(value: Value): string {
  * total-character ceiling regardless of what was asked for.
  */
 export function createScaffoldHistory(
-  source: () => readonly ModelMessage[],
+  source: () => Promise<readonly ModelMessage[]>,
 ): ScaffoldHistoryReader {
   return async (query: ScaffoldHistoryQuery = {}) => {
-    const messages = source();
+    const messages = await source();
     const total = messages.length;
     const limit = boundedInt(query.limit, SCAFFOLD_HISTORY_DEFAULT_LIMIT, 1, SCAFFOLD_HISTORY_MAX_LIMIT);
 

@@ -202,7 +202,7 @@ describe('a provisioned node gets a real home', () => {
     // that set it moves both sides of the comparison together — a home narrowed
     // to 0o700 satisfies that equality and locks both readers out.
     const origin = f.workspace.vfs.as(ORIGIN);
-    expect(origin.readdir(provisioned.home).map((entry) => entry.name)).toEqual(['candidate.md']);
+    expect(origin.readdir(provisioned.home).map((entry) => entry.name)).toEqual(['.kinu', 'candidate.md']);
     expect(origin.readFileString(`${provisioned.home}/candidate.md`)).toBe('my answer\n');
     // The literal, once: owner writes, everyone reads.
     expect(statOf(f.workspace, provisioned.home).mode).toBe(0o755);
@@ -535,7 +535,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     // Byte-exact, and the ORIGIN's uid-0 view agrees these are the same rows.
     expect(await asA.readFile('/home/head-aX9/candidate.bin')).toEqual(bytes);
     expect(f.workspace.vfs.as(ROOT).readFile('/home/head-aX9/candidate.bin')).toEqual(bytes);
-    expect(await asA.readdir('/home/head-aX9')).toEqual(['candidate.bin']);
+    expect(await asA.readdir('/home/head-aX9')).toEqual(['.kinu', 'candidate.bin']);
     expect((await asA.stat('/home/head-aX9/candidate.bin'))?.size).toBe(bytes.byteLength);
     // The read window: a sibling reads a 0o755 home, which the grader and
     // merge-back need too.
@@ -584,14 +584,14 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
       await asA.writeFile(`/home/head-aX9/${name}`, `body ${String(index)}`);
     }
 
-    expect((await asA.readdir('/home/head-aX9')).sort()).toEqual([...names].sort());
+    expect((await asA.readdir('/home/head-aX9')).sort()).toEqual(['.kinu', ...names].sort());
     expect(await asA.readFile(`/home/head-aX9/${names[0]}`, { encoding: 'utf8' })).toBe('body 0');
     await asA.rename(`/home/head-aX9/${names[0]}`, '/home/head-aX9/clean');
     expect(await asA.exists(`/home/head-aX9/${names[0]}`)).toBe(false);
     expect(await asA.readFile('/home/head-aX9/clean', { encoding: 'utf8' })).toBe('body 0');
     await asA.unlink(`/home/head-aX9/${names[1]}`);
     expect((await asA.readdir('/home/head-aX9')).sort())
-      .toEqual(['back\\slash$dollar', 'clean', 'two  spaces\ttab']);
+      .toEqual(['.kinu', 'back\\slash$dollar', 'clean', 'two  spaces\ttab']);
     await asA.mkdir('/home/head-aX9/nest/deep', { recursive: true });
     await asA.writeFile('/home/head-aX9/nest/deep/leaf', 'leaf');
     await asA.removeRecursive('/home/head-aX9/nest');
@@ -633,7 +633,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
 
     expect(await asA.readFile('/home/head-aX9/keeper', { encoding: 'utf8' })).toBe('the old bytes\n');
     expect(await asA.readFile('/home/head-aX9/occupied/child', { encoding: 'utf8' })).toBe('child');
-    expect((await asA.readdir('/home/head-aX9')).sort()).toEqual(['keeper', 'occupied']);
+    expect((await asA.readdir('/home/head-aX9')).sort()).toEqual(['.kinu', 'keeper', 'occupied']);
   });
 });
 

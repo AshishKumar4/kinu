@@ -15,7 +15,7 @@
 
 import * as v from 'valibot';
 import { Fnv1a64 } from '../utils/fnv1a';
-import type { VFS } from '../types/primitives';
+import type { VFS, VfsRevision } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
 import { isVfsError, makeVfsError } from '../vfs/errno';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
@@ -34,6 +34,7 @@ const SCAN_CHUNK_BYTES = 64 * 1024;
  *  read ledger keys on. */
 export interface ScannedFile {
   readonly window: SliceWindow;
+  readonly revision?: VfsRevision;
   /** `fnv1a64` of the file's ENTIRE text, byte-order mark included, identical
    *  to hashing the string a whole-file read would have produced — which is
    *  what lets a scanned read and a later edit agree on what was seen. */
@@ -49,8 +50,13 @@ export interface ScannedFile {
  * decoder that dropped it would give an edit a different fingerprint from the
  * read that authorized it, and would write the file back with its BOM gone.
  */
-export async function readFileText(vfs: VFS, path: string): Promise<string> {
-  const raw = await vfs.readFile(path, { encoding: 'utf8' });
+export async function readFileText(vfs: VFS, path: string, revision?: VfsRevision): Promise<string> {
+  if (revision !== undefined && !vfs.readFileAtRevision) throw makeVfsError('ENOTSUP', 'this file plane does not retain file revisions', path);
+
+  const raw = revision !== undefined && vfs.readFileAtRevision
+    ? await vfs.readFileAtRevision(path, revision)
+    : await vfs.readFile(path, { encoding: 'utf8' });
+
   const text = v.safeParse(v.string(), raw);
 
   return text.success
@@ -78,6 +84,19 @@ export async function scanFileWindow(
   // version that never existed. Size and mtime are NOT consulted for this —
   // a same-size, same-mtime write is still a different file.
   const before = await vfs.stat(path);
+  const revision = before?.revision;
+  const historical = vfs.readFileAtRevision;
+
+  if (revision !== undefined && historical !== undefined) {
+    const pinned = await feedRanges(scan, vfs, async (file, offset, length) => {
+      const result = await historical.call(vfs, file, revision, { offset, length });
+
+      return v.is(v.string(), result) ? new TextEncoder().encode(result) : result;
+    }, path);
+
+    if (pinned) return { ...scan.done(), revision };
+  }
+
   // The plane's own ranged read, where it declares one. A widening assignment,
   // not a cast: the member is optional, and the planes that have it
   // (execution/{nimbus,sandbox}.ts, vfs/nimbus-workspace.ts, the routed tree in
@@ -85,14 +104,9 @@ export async function scanFileWindow(
   const probed: VFS & Partial<VfsNativeReads> = vfs;
   const ranged = probed.readRange;
 
-  // Only the chunked path is checked afterwards, because it is the one that
-  // splices separate windows together here. Whether a single whole-file read
-  // is a snapshot is the backend's guarantee to make, not a claim this code
-  // is in any position to verify.
+  // Without immutable reads, the scanned bytes must still name one revision.
   if (!ranged || !await feedRanges(scan, vfs, ranged, path)) {
     scan.feed(await readUnranged(vfs, path, before?.size ?? null));
-
-    return scan.done();
   }
 
   if (before?.revision !== undefined && (await vfs.stat(path))?.revision !== before.revision) {
@@ -101,7 +115,9 @@ export async function scanFileWindow(
       + `part of another. Read it again (action=read path=${path}).`);
   }
 
-  return scan.done();
+  const result = scan.done();
+
+  return before?.revision === undefined ? result : { ...result, revision: before.revision };
 }
 
 /**

@@ -22,10 +22,10 @@ import type {
 } from '@kinu.run/core';
 import type { DeferredApprovalChannel, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync, chmodSync } from 'node:fs';
 import { join, resolve as resolvePath } from 'node:path';
 import {
-  type LLMProviderConfig, actorScaffoldPath, buildRuntime, agentHome, headAgentName, facetHomeProvisioner, agentAffinityKey,
+  type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
   observeWrites, type WriteObserver,
   WORKSPACE_IDENTITY_DDL,
   createParentExecutor, createParentWorkspaceVfs,
@@ -49,6 +49,8 @@ import { tolerate, tolerateAsync } from '@kinu.run/core/obs';
 import { localNodeRuntime } from './node-runtime';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import { localFacetHost } from '@nimbus-sh/core/runtime/local-facet-host.js';
+import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { MemoryStore } from '@kinu.run/agent-utils';
@@ -71,7 +73,7 @@ import {
 import type { LocalCodexAuthStore } from './codex-auth-store';
 import type { FileCheckpoints } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
-import { adoptLocalActorHandle, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
+import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
 import * as v from 'valibot';
 
 interface CLIRuntimeOptions {
@@ -119,6 +121,7 @@ export type CLIRuntimeConfig = CLIRuntimeOptions & LocalActorConfig;
  * states rather than hides.
  */
 export interface CLIRuntime extends AgentRuntime {
+  filesForActor?: (actor: ActorHandle) => Promise<SessionFilePlane>;
   setApprovalDeferrals?(channel: DeferredApprovalChannel | null): void;
   setModelCallSink?(sink: ModelCallSink | null): void;
   /** Where direct model operations record their lifecycle; the session binds
@@ -266,6 +269,15 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
  * returned by iteration. `makeSqlExec` already speaks this shape; Nimbus wants
  * the iterable directly rather than a `toArray` cursor.
  */
+/** Session payload reads over a database opened for inspection: the cwd plane when the
+ *  workspace binds one, else the Nimbus filesystem read as the kernel. */
+export function inspectionFiles(db: Database, cwd: string | null): Pick<VFS, 'readFile'> {
+  if (cwd !== null) return createCwdPlaneVFS(cwd, undefined);
+  const vfs = new SqliteVFS(nimbusSql(db), localTransactions(db)).as(CRED_KERNEL);
+
+  return { readFile: (path, opts) => Promise.resolve(opts?.encoding === undefined ? vfs.readFile(path) : vfs.readFileString(path)) };
+}
+
 export function nimbusSql(db: Database): WorkspaceSql {
   const exec: WorkspaceSql['exec'] = (query, ...bindings) => {
     const bound = bindings.map((value) => bunSqlBinding({ value }));
@@ -392,6 +404,7 @@ export function createCLIRuntime(
   db: Database,
   config: CLIRuntimeConfig,
 ): CLIRuntime {
+  db.exec('PRAGMA foreign_keys = ON');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   requireLocalDatabasePath(db, config.dbPath);
@@ -621,7 +634,33 @@ export function createCLIRuntime(
     : withApprovalGatedShell(workspace.shell, approvalPolicy);
 
   const executionRouter = new DefaultExecutionRouter(approvalPolicy);
-  const stores = createAgentStores(() => sql, () => actor, (write) => db.transaction(write)());
+
+  const filesForActor = async (target: ActorHandle): Promise<SessionFilePlane> => {
+    const record = localActorDirectory(actor).directory.describe(target);
+    adoptLocalActorHandle(actor, actorReferenceOf(target), target);
+    requireLocalActorWorkspace(actor, target);
+
+    if (cwd !== null) {
+      const home = target.actorId === actor.actorId ? cwd : join(cwd, '.kinu', 'actors', target.actorId);
+      const artifactDirectory = agentArtifactDirectory(home);
+      mkdirSync(artifactDirectory, { recursive: true, mode: 0o700 });
+      chmodSync(artifactDirectory, 0o700);
+      target.assertCurrent();
+
+      return { vfs: fileVfs, artifactDirectory };
+    }
+
+    const name = record.kind === 'main' ? MAIN_AGENT : record.kind === 'subordinate' ? subordinateAgentName(record.name) : headAgentName(record.storageKey);
+    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: workspaceSql }))(), () => target.assertCurrent())(name);
+
+    if (home.isolation !== 'private-home') throw new KinuError('io', 'actor home provisioner returned a shared plane');
+    const plane = await workspace.asAgent(home);
+    target.assertCurrent();
+
+    return { vfs: plane.vfs, artifactDirectory: agentArtifactDirectory(home.home) };
+  };
+
+  const stores = createAgentStores(() => sql, () => actor, (write) => db.transaction(write)(), () => filesForActor(actor));
   let childContext: ChildContextResolver | null = null;
 
   const agentVfs = withMountTable(fileVfs, [
@@ -678,6 +717,7 @@ export function createCLIRuntime(
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
   }), {
     stores,
+    filesForActor,
     setApprovalDeferrals: (channel: DeferredApprovalChannel | null) => { approvalDeferrals = channel; },
     setChildContext: (resolver: ChildContextResolver | null) => { childContext = resolver; },
     cwd,
@@ -897,7 +937,12 @@ async function buildCLIHeadRuntime(
   if (opts.actorBinding.kind !== 'head') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
   const actor = opts.actor;
   const physicalName = headAgentName(actor.storageKey);
-  const stores = createAgentStores(() => sql, () => actor, parent.storage.transactionSync);
+
+  const stores = createAgentStores(() => sql, () => actor, parent.storage.transactionSync, async () => {
+    if (!parent.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
+
+    return parent.filesForActor(actor);
+  });
 
   const agentStateVfs = parent.agentStateVfs ?? parent.storage.vfs;
   const cwdPlane = parent.cwd ? createCwdPlaneVFS(parent.cwd, parent.checkpoints) : null;

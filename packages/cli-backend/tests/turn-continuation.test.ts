@@ -111,7 +111,7 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
     await c.end();
     expect(eventsC.filter((event) => event.type === 'background' && event.event === 'turn_reopened')).toHaveLength(0);
     expect(callsC.n).toBe(0);
-    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM actor_messages WHERE role = 'assistant'").get()?.n).toBe(1);
+    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM conversation_entries WHERE role = 'assistant'").get()?.n).toBe(1);
 
     // The dead process is never resumed; racing its landing against the last
     // close is what lets the test end without awaiting it.

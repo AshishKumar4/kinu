@@ -36,6 +36,7 @@ import {
 import { renderThrownChain } from '../src/obs/index';
 import { inWorkMode } from '../src/execution/work-mode';
 import { buildToolSurface } from '../src/tools/builtins';
+import { storesFor } from './helpers';
 
 async function recordedFailure(pending: Promise<AgentsTestResult>, args: AgentsToolInput) {
   try { await pending; }
@@ -288,7 +289,7 @@ describe('agents tool — registration and dep-gating', () => {
 
   test('no deps groups → no agents tool at all', () => {
     const { rt } = createTestRuntime();
-    const tools = buildBuiltinTools({ rt });
+    const tools = buildBuiltinTools({ rt, history: storesFor(rt).history });
     expect(Object.keys(tools)).not.toContain('agents');
     expect(Object.keys(tools)).not.toContain('think');
     expect(Object.keys(tools)).not.toContain('team');
@@ -672,7 +673,7 @@ describe('agents tool — subordinate actions', () => {
       temporary: {
         ...temporaryPortStub,
         run: async (request) => {
-          const tools = buildToolSurface({ rt, workMode: request.mode });
+          const tools = buildToolSurface({ rt, workMode: request.mode, history: storesFor(rt).history });
           const file = tools.file;
 
           if (file === undefined) throw new Error('Child has no file tool');

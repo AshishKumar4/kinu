@@ -10,7 +10,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, storesFor } from './helpers';
 import {
   buildActorTools,
   craftFailureMarker,
@@ -65,7 +65,7 @@ function createTestCodemodeBuilder(
 
 /** An actor surface over `rt` whose sandbox is `codemode`. */
 function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'craftedToolExecute' | 'codemode'>) {
-  return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' }, ...deps });
+  return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' }, ...deps, history: storesFor(rt).history });
 }
 
 function requiredCraftedTool(tools: CraftedToolSet, name: string) {

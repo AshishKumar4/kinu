@@ -10,7 +10,8 @@
  */
 
 import type { ActorHandle } from '../identity/actor-handle';
-import { conversationCount, conversationPageRows, type ConversationPageRow } from '../identity/conversation-store';
+import { conversationCount } from '../identity/conversation-store';
+import type { SessionTranscriptReader } from '../orchestrator/session-transcript';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
 import { readSoul, summarizeSoul } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
@@ -19,11 +20,8 @@ import type { CraftStore } from '../types/agent-runtime';
 import type { VFS, SqlExecutor } from '../types/primitives';
 import type { CraftedTool } from '../types/craft';
 import type { ReasoningEffort } from '../strategy/effort';
-import * as v from 'valibot';
-import { tolerate } from '../obs/index';
-import { transcriptRole, uiMessageRow, type StoredRowProjection } from '../utils/ui-message';
+import { transcriptRole } from '../utils/ui-message';
 import type { ChatHistoryEntry } from '../types/chat';
-import { JsonObjectSchema, parseJsonValue } from '../utils/json';
 import { mapPage, type Page, type PageRequest } from './page';
 
 export type { ChatHistoryEntry } from '../types/chat';
@@ -122,62 +120,25 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
   };
 }
 
-/**
- * One page of the conversation, newest page first, each page oldest-first.
- *
- * The rows come from the canonical conversation store; this is the projection
- * that turns a stored row into what a surface renders. A row the harness
- * enqueued is reported as `system`, not as the operator's words — see
- * {@link transcriptRole}: the pane-encoded rows carry the author stamp inside
- * their serialized message, plain rows carry it in their `metadata` column —
- * with the row id left as the fallback for rows written before either stamp
- * existed.
- *
- * The page is built over the RAW rows and only then mapped, because a row this
- * projection drops must still count against the page and must still be able to
- * be the cursor's anchor. Anchoring on the last SURVIVING entry instead would
- * re-deliver every dropped row on the next page. Why the cursor is rowid and
- * not created_at is written down once, in `identity/conversation-store.ts`.
- */
-export function getChatHistoryPage(
-  sql: SqlExecutor,
-  actor: ActorHandle,
+/** Newest page first, each page displayed oldest-first; cursors count raw entries. */
+export async function getChatHistoryPage(
+  transcript: SessionTranscriptReader,
   request: PageRequest = {},
-): Page<ChatHistoryEntry> {
-  return mapPage(conversationPageRows(sql, actor, request), (rows) => rows.flatMap((row) => {
+): Promise<Page<ChatHistoryEntry>> {
+  return mapPage(await transcript.page(request), rows => rows.flatMap(row => {
     const role = normalizeUiRole(row.role);
 
     if (!role) return [];
-    const { text, metadata } = projectStoredRow(row);
 
     const entry: ChatHistoryEntry = {
-      id: row.id, role: transcriptRole(row.id, role, metadata),
-      content: text, createdAt: row.createdAt,
+      id: row.id, role: transcriptRole(row.id, role, row.metadata),
+      content: row.content, createdAt: row.recordedAt,
     };
 
-    if (metadata !== undefined) entry.metadata = metadata;
+    if (row.metadata !== undefined) entry.metadata = row.metadata;
 
     return [entry];
   }).reverse());
-}
-
-const MirrorStampSchema = v.optional(JsonObjectSchema);
-
-/** A stored row's display shape: its plain text and provenance from ONE parse.
- *  Pane-encoded rows state provenance inside the serialized message; plain
- *  rows state it in their column. A NULL or unparseable stamp leaves the id-
- *  prefix fallback inside {@link transcriptRole} in charge — the rule for
- *  everything written before stamps existed. */
-function projectStoredRow(row: ConversationPageRow): StoredRowProjection {
-  const projected = uiMessageRow(row.content);
-
-  if (projected.metadata !== undefined || !row.metadata) return projected;
-  const decoded = tolerate(() => parseJsonValue(row.metadata!), 'malformed-input');
-  const parsed = decoded === undefined ? undefined : v.safeParse(MirrorStampSchema, decoded);
-
-  return parsed?.success && parsed.output !== undefined
-    ? { ...projected, metadata: parsed.output }
-    : projected;
 }
 
 /** The agent's tool inventory: the fixed builtins plus every crafted tool with

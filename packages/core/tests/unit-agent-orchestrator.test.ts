@@ -412,7 +412,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
       messageId: 'answer-1', status: 'completed', workMode: 'build',
       continuity: 'conversation', completed: true, userText: 'q', assistantText: 'a',
       scopedTurn: {}, recordedAt: 1, evolutionEnabled: true,
-    }, { turnEndExtensions: { message: {} } });
+    }, { turnEndExtensions: true });
 
     const at = (name: string): number => owed.findIndex((effect) => effect.name === name);
 

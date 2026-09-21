@@ -1,59 +1,21 @@
 /**
- * A stored conversation row, as the transcript read models see it: its plain
- * text, and whether the harness wrote it rather than the operator.
+ * Turn authorship and the client-side transcript projection.
  *
- * `assistant_messages.content` holds a serialized UI message, not text, and two
- * places need the flattened form: the transcript read model, and the fork write
- * — which reconstructs the plain `actor_messages` mirror from the rich rows instead of
- * carrying the same conversation across an RPC twice. Lives here rather than in
- * either of them because `read-models/status.ts` already imports
- * `identity/fork.ts`, so the projection cannot be owned by either without a
- * cycle.
- *
- * Authorship lives here for the same reason. A turn the backend enqueues on the
- * agent's behalf — a settled background job, the reactor draining hub events —
- * is stored `role: 'user'` because that is what the model must read it as, and
- * the row is the turn's input. Nothing about that makes the operator its
- * author, and every consumer that asks "what did the owner say" was answering
- * with these: the transcript read model rendered them as the owner's words, and
- * the walk-back fork (`findForkPivot`, which pivots on user rows) offered them
- * as fork points, so a workspace whose recovery re-announced one job filled its
- * whole walk-back list with the same machine notice.
- *
- * The provenance is stated at the write, in the order the fallbacks degrade:
- * the author stamp the enqueue seam puts on every programmatic row (in the
- * serialized message on the rich table, in the `actor_messages` mirror's metadata
- * column), then the `kinuEvent` name, then the row id —
- * `BackendHost.enqueueTurn` derives a programmatic turn's message id from
- * {@link programmaticMessageId}, which is durable on both backends and
- * survives the fork copy (which preserves primary keys but not metadata).
- * A row leans on its stamp; the id decides only where the stamp did not cross.
+ * A turn the backend enqueues on the agent's behalf (a settled background job,
+ * the reactor draining hub events) is stored `role: 'user'` because that is
+ * what the model must read it as. Nothing about that makes the operator its
+ * author: the read models render it as the harness's words and the walk-back
+ * fork declines to pivot on it. Provenance is stated at the write, in the order
+ * the fallbacks degrade: the author stamp the enqueue seam puts on every
+ * programmatic row, then the `kinuEvent` name, then the row id (which
+ * {@link programmaticMessageId} derives, and which survives a fork copy that
+ * preserves keys but not metadata).
  */
 
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import { tolerate } from '../obs/index';
-import { JsonObjectSchema, parseJsonValue, type JsonObject } from './json';
+import type { JsonObject } from './json';
 import type { ChatHistoryEntry } from '../types/chat';
-
-const UiMessageSchema = v.object({
-  parts: v.optional(v.array(v.object({
-    type: v.string(),
-    text: v.optional(v.string()),
-    toolName: v.optional(v.string()),
-  }))),
-  metadata: v.optional(JsonObjectSchema),
-});
-
-/** The tool a stored part records a call to, or null for a part that is not
- *  one. The AI SDK's UI message names a static tool in the part's type
- *  (`tool-<name>`) and a dynamic one in its `toolName` — the same two forms
- *  `recordedAnswer` keeps from the streamed message. */
-function toolNameOf(part: { type: string; toolName?: string }): string | null {
-  if (part.type === 'dynamic-tool') return part.toolName ?? null;
-
-  return part.type.startsWith('tool-') ? part.type.slice('tool-'.length) : null;
-}
 
 /**
  * The id prefix a programmatic turn's durable message carries, and the whole
@@ -155,118 +117,6 @@ export function transcriptRole<Metadata>(
   return role === 'user' && turnAuthor({ id, metadata }) === 'harness' ? 'system' : role;
 }
 
-/** A stored conversation row projected for a transcript: its plain text, the
- *  tools it recorded calls to, and the provenance metadata that decides who
- *  wrote it. */
-export interface StoredRowProjection {
-  text: string;
-  /** Names of the tools the row's parts record calls to, in call order — empty
-   *  for a user row and for an answer stored as plain text. */
-  toolCalls: string[];
-  metadata?: JsonObject;
-}
-
-/** A stored row's plain text, tool calls and the provenance metadata beside
- *  them, from ONE parse. `assistant_messages` rows hold the serialized UI
- *  message and `actor_messages` rows hold plain text; both reach this, so text
- *  that is not JSON is a value here and nothing else is. */
-export function uiMessageRow(content: string): StoredRowProjection {
-  const decoded = tolerate(() => parseJsonValue(content), 'malformed-input');
-
-  if (decoded === undefined) return { text: content, toolCalls: [] };
-  const parsed = v.safeParse(UiMessageSchema, decoded);
-
-  if (!parsed.success || !parsed.output.parts) return { text: content, toolCalls: [] };
-
-  const text = parsed.output.parts
-    .flatMap((part) => part.type === 'text' && part.text !== undefined ? [part.text] : [])
-    .join('');
-
-  const toolCalls = parsed.output.parts.flatMap((part) => {
-    const name = toolNameOf(part);
-
-    return name === null ? [] : [name];
-  });
-
-  const metadata = parsed.output.metadata;
-
-  return metadata === undefined ? { text, toolCalls } : { text, toolCalls, metadata };
-}
-
-/** A stored row as the restore and the between-turn readers see it: the row's
- *  identity, its plain text and the tools its answer recorded calls to. */
-export interface TranscriptRow {
-  readonly id: string;
-  readonly role: string;
-  readonly content: string;
-  readonly toolCalls: readonly string[];
-}
-
-/** The columns a stored row is projected from, on either table. */
-export interface TranscriptSourceRow {
-  readonly id: string;
-  readonly role: string;
-  readonly content: string;
-}
-
-/** A stored row as a reader sees it — one projection for both tables, so the
- *  text and the tools come out of one parse. */
-export function transcriptRow(row: TranscriptSourceRow): TranscriptRow {
-  const projected = uiMessageRow(row.content);
-
-  return { id: row.id, role: row.role, content: projected.text, toolCalls: projected.toolCalls };
-}
-
-/**
- * The assistant row as it is persisted: what the client was streamed — its
- * tool calls, step markers and reasoning — carrying the turn's ANSWER as its
- * last text part, else the text alone. A row that kept both the streamed
- * narration and the answer read as the two concatenated to every text
- * projection; the narration is on each step's own ledger row.
- */
-export function recordedAnswer<Part extends { readonly type: string }, Message extends { readonly parts: readonly Part[] }>(
-  streamed: Message | null, id: string, text: string,
-): (Omit<Message, 'parts'> & { parts: Array<Part | { type: 'text'; text: string }> }) | { id: string; role: 'assistant'; parts: [{ type: 'text'; text: string }] } {
-  const answer = { type: 'text' as const, text };
-
-  if (streamed === null) return { id, role: 'assistant', parts: [answer] };
-  let last = -1;
-
-  for (const [index, part] of streamed.parts.entries()) if (part.type === 'text') last = index;
-  const parts: Array<Part | { type: 'text'; text: string }> = [];
-
-  for (const [index, part] of streamed.parts.entries()) {
-    if (part.type !== 'text') parts.push(part);
-    else if (index === last) parts.push({ ...part, text });
-  }
-
-  if (last === -1) parts.push(answer);
-
-  return { ...streamed, parts };
-}
-
-/** A stored row's parts as the client renders them: the serialized UIMessage's
- *  own, else one text part over the plain text the row holds. */
-export function storedUiMessageParts(content: string): UIMessage['parts'] {
-  const decoded = tolerate(() => parseJsonValue(content), 'malformed-input');
-  const parsed = decoded === undefined ? null : v.safeParse(StoredUiMessagePartsSchema, decoded);
-
-  if (parsed === null || !parsed.success) return [{ type: 'text', text: content }];
-
-  // SAFETY: the row was written from a UIMessage's own parts (`recordedAnswer`);
-  // the schema admits the discriminant and the client renders the rest.
-  return parsed.output.parts as UIMessage['parts'];
-}
-
-const StoredUiMessagePartsSchema = v.object({
-  parts: v.array(v.looseObject({ type: v.string() })),
-});
-
-/** {@link uiMessageRow}'s text half, for the callers that need nothing else. */
-export function uiMessageText(content: string): string {
-  return uiMessageRow(content).text;
-}
-
 /**
  * The stored rows of older pages as renderable messages, oldest first,
  * self-deduplicated: a page boundary that re-delivered a row would render it
@@ -311,8 +161,8 @@ export function restoredRows(older: readonly ChatHistoryEntry[]): UIMessage[] {
  * its anchor, but the anchor is minted from a list the socket keeps extending,
  * and a reconnect can re-seed a wider window — so the same message can
  * legitimately arrive both ways. The live copy wins whenever it does: it
- * carries the parts — tool calls, reasoning, attachments — that the stored copy
- * has been flattened out of by `uiMessageRow` above.
+ * carries the parts — tool calls, reasoning, attachments — that a restored
+ * page renders from its stored text alone.
  *
  * What the restored copy DOES keep is the row's metadata, because that is not
  * presentation: it is the author stamp and the `kinuEvent` name a surface

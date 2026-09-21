@@ -27,14 +27,14 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  archiveSqlFromDatabase, prepareActorProgram, programIdentityOf, readWorkspaceArchivePage,
-  restoreWorkspaceArchive, type ArchivePage, type HostedActor,
+  archiveSqlFromDatabase, CHAT_SESSION_ID, prepareActorProgram, programIdentityOf,
+  readWorkspaceArchivePage, restoreWorkspaceArchive, type ArchivePage, type HostedActor,
 } from '@kinu.run/core';
 import {
   databasesOpened, fixtureProfile, hostedWorkspace, resetDatabases,
   type HostedWorkspaceFixture,
 } from './helpers/hosted-workspace';
-import { sqlOver } from '@kinu.run/test-utils';
+import { readTranscriptRows, sqlOver } from '@kinu.run/test-utils';
 
 /** One scripted turn on one actor: admit it, name its outcome, release it. The
  *  smallest thing that leaves a durable claim, which is what every assertion
@@ -44,7 +44,10 @@ async function scriptedTurn(actor: HostedActor, text: string): Promise<string> {
   const { profile, inputs } = fixtureProfile();
   const lease = actor.session.beginTurn({ runId: `run-${actor.record.name}`, turnId }, 'build', Date.now());
   actor.session.bindProfile(lease, profile, inputs);
-  actor.session.appendInput(lease, { role: 'user', content: text });
+  await actor.session.openTurnInput(lease, {
+    item: {}, message: { role: 'user', content: text },
+    birthContext: () => { throw new Error('this fixture opens no delegated turn'); },
+  });
 
   // The claim, admitted through the same store the session admits through and
   // settled through the same store the session settles through — the session
@@ -57,15 +60,26 @@ async function scriptedTurn(actor: HostedActor, text: string): Promise<string> {
     version: await actor.runtime.identity.scaffold.version(),
   });
 
-  const admitted = actor.stores.claims.admit({
+  const selected = actor.stores.history.context.selected();
+
+  if (selected === null) throw new Error('an opened turn must have a working context');
+
+  const admitted = await actor.stores.claims.admit({
     runId: lease.runId, turnId, workMode: 'build',
     program: programIdentityOf(program, 'harness-build'),
-    context: actor.session.history,
-    workingRevision: 0,
+    context: selected,
   });
 
   actor.stores.claims.settle(admitted, 'completed');
   actor.session.finishTurn(lease);
+
+  // The public chain, through the canonical writer that publishes the message
+  // and its entry together. What the archive has to bring back is the
+  // TRANSCRIPT, and a working context alone leaves nothing for a reader to
+  // walk.
+  await actor.stores.history.record(CHAT_SESSION_ID, {
+    id: `${turnId}:said`, parentId: null, message: { role: 'user', content: text }, origin: 'input',
+  });
 
   return turnId;
 }
@@ -168,13 +182,14 @@ describe('one SQLite for every logical actor', () => {
     // PER ACTOR, not in aggregate: a restore that merged two actors or dropped
     // one satisfies a total and fails this.
     for (const actor of roster) {
-      const before = fixture.sql<{ n: number }>`
-        SELECT COUNT(*) AS n FROM actor_messages WHERE actor_id = ${actor.handle.actorId}`[0]?.n ?? 0;
+      const files = actor.runtime.storage.vfs;
+      const before = await readTranscriptRows(fixture.sql, actor.handle, files);
+      const after = await readTranscriptRows(sqlOver(restored), actor.handle, files);
 
-      const after = sqlOver(restored)<{ n: number }>`
-        SELECT COUNT(*) AS n FROM actor_messages WHERE actor_id = ${actor.handle.actorId}`[0]?.n ?? 0;
-
-      expect(after).toBe(before);
+      // Non-empty first: a restore that rebuilt nothing satisfies "equal
+      // transcripts" over two empty reads.
+      expect(before.map((row) => row.content)).toEqual([`work for ${actor.record.name}`]);
+      expect(after).toEqual(before);
 
       const claims = sqlOver(restored)<{ turn_id: string }>`
         SELECT turn_id FROM actor_turn_claims WHERE actor_id = ${actor.handle.actorId}`;

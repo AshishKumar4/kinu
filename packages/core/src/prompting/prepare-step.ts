@@ -34,7 +34,6 @@ import { MissionBudgetExhausted, type MissionGovernor } from '../mission-budget'
 import { markCacheTail, type PromptCacheStrategy } from './cache-breakpoints';
 import { pruneStepToolOutputs, type StepPruneBudget } from './step-prune';
 import { normalizeReplayForDestination } from './replay-normalization';
-import { applyStagedContext, type StagedContextDeferral, type StagedContextEdit } from './staged-context';
 import type { DynamicContext, DynamicContextLedger } from './volatile-context';
 import { projectToolErrorFeedback, type ToolErrorStep } from './tool-error-feedback';
 
@@ -65,41 +64,10 @@ export interface StepDynamicContext {
   readonly snapshot: () => DynamicContext;
 }
 
-/**
- * The durable context plane of the claim this turn runs under.
- *
- * Three obligations, all at this seam because this is the only place that holds
- * both the live raw array and the FINAL rendered one:
- *
- *  • the actor's working base is asked for at every boundary and applied, so a
- *    landed edit stays applied for the rest of the turn instead of surfacing for
- *    one request and vanishing at the next (the SDK rebuilds each step from the
- *    array the stream started with, so a per-step override is not history);
- *  • a PENDING edit lands at the first safe boundary (`staged-context.ts`
- *    decides which) and its deferral is reported with a reason, so an edit is
- *    never silently dropped and never silently ignored;
- *  • the array the step actually consumes is recorded as the rendered revision
- *    that step ran on — after error projection, steering, pruning, the
- *    dynamic-context weave and the destination re-key, and before the request
- *    goes out — pointing at the working revision it was rendered from.
- *
- * Both backends wire this: the CLI through `ActorSession.execute`, the hosted
- * root through its `beforeStep` hook. A pipeline with no claim — a shadow-eval
- * replay, a head's own inference — leaves it absent and records nothing, which
- * is correct: that work is not a claimed actor turn.
- */
+/** Raw context ownership is settled before ephemeral render transforms run. */
 export interface StepContextPlane {
-  /** The working base this step must render from, or null when the turn still
-   *  runs on exactly the array it was admitted with. */
-  base(): (StagedContextEdit & { readonly revision: number }) | null;
-  /** Record the exact array this step consumes, the working revision it came
-   *  from, and — when a pending revision could not land here — why. */
-  consume(step: {
-    readonly stepNumber: number;
-    readonly messages: readonly ModelMessage[];
-    readonly base: (StagedContextEdit & { readonly revision: number }) | null;
-    readonly deferred: StagedContextDeferral | null;
-  }): void;
+  base(): Promise<{ readonly messages: ModelMessage[]; readonly changed: boolean }>;
+  consume(step: { readonly stepNumber: number; readonly messages: readonly ModelMessage[] }): Promise<void>;
 }
 
 /** Everything the step pipeline composes, wired once per turn by the backend. */
@@ -151,44 +119,36 @@ export interface StepPrepareContext {
  *  it, the governor has already written the `budget_exhausted` run event, and
  *  the turn ends with the refusal as its error. A turn with no mission scope
  *  (the default) can never reach that branch. */
-export function composePrepareStep(
-  pipeline: StepPipeline,
-  ctx: StepPrepareContext,
-): StepPrepareResult | Promise<StepPrepareResult> {
+export function composePrepareStep(pipeline: StepPipeline, ctx: StepPrepareContext): StepPrepareResult | Promise<StepPrepareResult> {
   const refusal = pipeline.budget?.guard('model_call');
 
   if (refusal) throw new MissionBudgetExhausted(refusal);
+
+  if (pipeline.context !== undefined) return pipeline.context.base().then(base => {
+    if (base.changed) pipeline.dynamic?.ledger.reset();
+
+    return prepareFromContext(pipeline, { ...ctx, messages: base.messages });
+  });
+
+  return prepareFromContext(pipeline, ctx);
+}
+
+function prepareFromContext(pipeline: StepPipeline, ctx: StepPrepareContext): StepPrepareResult | Promise<StepPrepareResult> {
   const projected = projectToolErrorFeedback(ctx.messages, ctx.steps);
   const prepared = { ...ctx, messages: projected ?? ctx.messages, abortSignal: pipeline.abortSignal };
   const steered = pipeline.extensions?.runPrepareStep(prepared);
 
-  if (steered instanceof Promise) {
-    return steered.then((messages) => finishPrepareStep(pipeline, ctx, messages ?? projected));
-  }
-
-  return finishPrepareStep(pipeline, ctx, steered ?? projected);
+  return steered instanceof Promise
+    ? steered.then(messages => finishPrepareStep(pipeline, ctx, messages ?? projected))
+    : finishPrepareStep(pipeline, ctx, steered ?? projected);
 }
 
 function finishPrepareStep(
   pipeline: StepPipeline,
   ctx: StepPrepareContext,
   steered: ModelMessage[] | undefined,
-): StepPrepareResult {
-  const steeredBase = steered ?? ctx.messages;
-  // The working base is applied HERE — after steering, so a steer that landed
-  // mid-turn is part of the tail the edit preserves, and before pruning, so the
-  // edited array is what the window budget is applied to.
-  const workingBase = pipeline.context?.base() ?? null;
-  const applied = workingBase === null ? null : applyStagedContext(steeredBase, workingBase);
-  const rebased = applied?.kind === 'landed' ? applied.messages : null;
-  const base = rebased ?? steeredBase;
-
-  // A LANDING moves every message index in the array, and the ledger's frozen
-  // blocks are indices. `weave` self-heals only when a block runs past the end
-  // or backwards; an edit that shortens the history BETWEEN two block positions
-  // leaves both in range and both wrong, so the landing step resets the ledger
-  // and the next weave starts over with one fresh block at the tail.
-  if (rebased !== null && workingBase?.pending === true) pipeline.dynamic?.ledger.reset();
+): StepPrepareResult | Promise<StepPrepareResult> {
+  const base = steered ?? ctx.messages;
 
   // The weave runs AFTER pruning: frozen block positions refer to the final
   // message array. Reserve its overhead before pruning, or the request would
@@ -214,14 +174,11 @@ function finishPrepareStep(
   pipeline.meter?.measure(messages);
   // Recorded on that same final array, and BEFORE this request is issued: the
   // revision a step ran on is durable by the time the step can have an effect.
-  pipeline.context?.consume({
-    stepNumber: ctx.stepNumber,
-    messages,
-    base: rebased === null ? null : workingBase,
-    deferred: applied?.kind === 'deferred' ? applied.reason : null,
-  });
+  const consumed = pipeline.context?.consume({ stepNumber: ctx.stepNumber, messages });
 
-  if (!plan) return steered || rebased || pruned || woven || replayed ? { messages } : undefined;
+  const result = !plan
+    ? pipeline.context !== undefined || steered || pruned || woven || replayed ? { messages } : undefined
+    : plan.system !== undefined ? { system: plan.system, messages } : { messages };
 
-  return plan.system !== undefined ? { system: plan.system, messages } : { messages };
+  return consumed instanceof Promise ? consumed.then(() => result) : result;
 }

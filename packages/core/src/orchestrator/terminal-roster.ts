@@ -91,7 +91,7 @@ export interface TerminalTurnParts {
    *  effect body, on the first attempt and on a replay alike. A backend whose
    *  turn stream already fired the turn-end inside the turn owes nothing here,
    *  and a row would either double-fire or block the close forever. */
-  readonly turnEndExtensions?: { readonly message: JsonValue };
+  readonly turnEndExtensions?: boolean;
   /** The completion gate's subject, for a backend that runs one. Its armed state
    *  is RAM-only, so the row is the only record that the confirming turn it
    *  enqueues was already enqueued. */
@@ -237,7 +237,7 @@ export function declareTerminalRoster(
   if (parts.turnEndExtensions) {
     owed.push({
       name: 'turn_end_extensions', scope: messageId, lane: 'inline',
-      input: { messageId, text: assistantText, message: parts.turnEndExtensions.message },
+      input: { messageId },
     });
   }
 

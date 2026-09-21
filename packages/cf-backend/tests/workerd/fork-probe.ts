@@ -30,13 +30,13 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import {
+  agentArtifactDirectory, agentHome, CHAT_SESSION_ID, MAIN_AGENT,
   FORK_STREAM_SEED, ForkStagingState, ForkTargetWriter, ForkTransferReceiver, NativeSinkPlan, SOUL_PATH,
   foldForkStream, forkTransferFrames, initWorkspaceSchema, readForkLineage, sealForkFrame,
-  summarizeSoulBytes, WorkspaceActorDirectory, openWorkspaceMainActor,
+  SessionHistory, summarizeSoulBytes, WorkspaceActorDirectory, openWorkspaceMainActor,
   type ForkFrame, type ForkLineageRow, type ForkNativeFilePort, type ForkResult,
   type ForkStaging, type SqlExecutor, type VFS, type VfsEntryStat,
 } from '@kinu.run/core';
-import { SDK_SESSION_DDL } from '../../../core/tests/helpers/pane-session-ddl';
 
 /**
  * Bytes of payload per frame.
@@ -49,8 +49,22 @@ import { SDK_SESSION_DDL } from '../../../core/tests/helpers/pane-session-ddl';
  */
 const PROBE_FRAME_BYTES = 64;
 
-/** The cut point: the newest of the three seeded pane rows. */
+/** The cut point: the newest of the three seeded conversation entries. */
 export const PROBE_CUT_MESSAGE_ID = 'm3';
+
+/** Where both halves keep their payload files — the hosted main actor's own
+ *  artifact directory, so the probe re-roots exactly what production re-roots. */
+const PROBE_ARTIFACTS = agentArtifactDirectory(agentHome(MAIN_AGENT));
+
+/**
+ * When the cut entry was recorded.
+ *
+ * The production writer stamps `Date.now()`, which no assertion can name, so
+ * the seed restamps its three entries onto this second. The fork point the
+ * target publishes is the cut ENTRY's stamp, and that is what makes this
+ * constant worth asserting against.
+ */
+export const PROBE_CUT_RECORDED_AT = Date.parse('2026-01-01T00:00:03.000Z');
 
 /** The source workspace's own name, so the published lineage is asserted
  *  against a value the test did not invent. */
@@ -61,14 +75,6 @@ const SOUL_CONTENT = '# Mission\nProve a fork survives an eviction.\n';
 /** The mission the target must end up carrying, read from SOUL's bytes by the
  *  same summarizer the protected publisher uses. */
 export const PROBE_SOUL_MISSION = summarizeSoulBytes(new TextEncoder().encode(SOUL_CONTENT));
-
-/** The SDK session provider's own DDL — the statement Think's boot runs, which
- *  is why a source workspace that has served a hosted turn has this table and
- *  its ancestry is read from it. The ONE fixture definition, pinned to the
- *  installed SDK by `unit-pane-store-shape.test.ts`; imported from its leaf
- *  rather than `tests/helpers` because this file runs under workerd, where
- *  `bun:sqlite` does not exist. */
-const PANE_DDL = SDK_SESSION_DDL;
 
 /** workerd's streaming digest, which is how an object hashes bytes it must not
  *  hold. It lives on the runtime's `crypto`, and the ambient `Crypto` type this
@@ -348,7 +354,13 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
 
   /**
    * One workspace worth forking: identity, config, a crafted tool, memory
-   * chunks, a three-row pane ancestry and three files.
+   * chunks, a three-entry canonical conversation and three files.
+   *
+   * The conversation is written through the PRODUCTION session writers — one
+   * message and one public entry per turn, each entry stamped with the working
+   * context the message was added to — because the rows a fork reads are the
+   * rows a turn writes, and a fixture that INSERTed them by hand would be a
+   * second writer of the shape under test.
    *
    * The transfer id is stored in the object's own storage rather than minted per
    * call, because a resumed run has to regenerate the SAME stream and the id is
@@ -377,20 +389,46 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
                 ${1_760_000_000_003})`;
     }
 
-    this.ctx.storage.sql.exec(PANE_DDL);
-
-    const pane = [
-      { id: 'm1', parent: null, role: 'user', text: 'Fork me.' },
-      { id: 'm2', parent: 'm1', role: 'assistant', text: 'Reading the workspace first.' },
-      { id: PROBE_CUT_MESSAGE_ID, parent: 'm2', role: 'assistant', text: 'Done. This is the cut point.' },
-    ];
-
-    pane.forEach((row, index) => {
-      void this.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${row.id}, ${'default'}, ${row.parent}, ${row.role},
-                ${JSON.stringify({ id: row.id, role: row.role, parts: [{ type: 'text', text: row.text }] })},
-                ${`2026-01-01 00:00:0${index + 1}.000`})`;
+    const history = new SessionHistory({
+      actor,
+      sql: this.sql,
+      transactionSync: <Result>(write: () => Result): Result => this.ctx.storage.transactionSync(write),
+      files: async () => ({ vfs: this.plane, artifactDirectory: PROBE_ARTIFACTS }),
     });
+
+    const transcript = history.transcript(CHAT_SESSION_ID);
+
+    const turns = [
+      { id: 'm1', role: 'user', text: 'Fork me.' },
+      { id: 'm2', role: 'assistant', text: 'Reading the workspace first.' },
+      { id: PROBE_CUT_MESSAGE_ID, role: 'assistant', text: 'Done. This is the cut point.' },
+    ] as const;
+
+    let parentId: string | null = null;
+
+    for (const [index, turn] of turns.entries()) {
+      // `append` publishes the message AND adds it to the working context; the
+      // transcript entry is the public half, and it is stamped with the context
+      // that append just committed.
+      const reference = await history.append({
+        id: turn.id,
+        message: { role: turn.role, content: turn.text },
+        origin: turn.role === 'user' ? 'input' : 'output',
+        turnId: null,
+        assertOwner: () => actor.assertCurrent(),
+      });
+
+      transcript.record({
+        id: turn.id, parentId, role: turn.role, turnId: null, runId: null, metadata: null,
+        parts: [{ messageId: reference.messageId, partNo: 0, throughSequence: reference.sequence }],
+      });
+
+      parentId = turn.id;
+      // The writer stamps the wall clock; the fork point has to be a value an
+      // assertion can name, so the fixture restamps its own entries.
+      void this.sql`UPDATE conversation_entries SET recorded_at = ${PROBE_CUT_RECORDED_AT - (turns.length - 1 - index) * 1000}
+        WHERE actor_id = ${actor.actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${turn.id}`;
+    }
 
     await this.plane.writeFile(SOUL_PATH, SOUL_CONTENT);
     await this.plane.writeFile('memory/notes.md', 'Everything the parent learned. '.repeat(7));
@@ -431,14 +469,14 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
     try {
       for await (const frame of forkTransferFrames({
         sql: this.sql,
-        // The probe's own actor: the seed issued a main and the pane rows
-        // above are keyed to it, so forking under any other handle would read
-        // an empty transcript and pass while proving nothing.
+        // The probe's own actor: the seed issued a main and the conversation
+        // rows above are keyed to it, so forking under any other handle would
+        // read an empty transcript and pass while proving nothing.
         actor: openWorkspaceMainActor(this.sql),
         vfs: this.plane,
+        artifactDirectory: PROBE_ARTIFACTS,
         untilMessageId: PROBE_CUT_MESSAGE_ID,
         transferId,
-        targetAuthority: 'pane',
         frameBytes: PROBE_FRAME_BYTES,
       })) {
         // Frames that landed before this run are folded but not re-sent: the
@@ -508,9 +546,14 @@ export interface ForkTargetState {
   lineage: ForkLineageRow | null;
   identity: { id: string; name: string; mission: string | null } | null;
   displayName: string | null;
-  paneRows: number;
-  plainRows: number;
+  /** Public chain entries the fork carried, excluding its own marker. */
+  entries: number;
+  /** The fork's own boundary entry: one once published, none before. */
   markers: number;
+  /** Canonical messages, so the marker's own message is visible too. */
+  messages: number;
+  /** Live members of the restored working context. */
+  contextMembers: number;
   configRows: number;
   craftedTools: number;
   memoryChunks: number;
@@ -559,6 +602,9 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
       new ForkTargetWriter(this.sql, this.plane, {
         workspaceId: this.ctx.id.toString(),
         workspaceName: 'fork-target',
+        // This target's OWN payload plane: every carried payload reference and
+        // payload file is re-rooted under it.
+        artifactDirectory: PROBE_ARTIFACTS,
         transaction: (rows) => this.ctx.storage.transactionSync(rows),
       }),
       new NativeSinkPlan(this.plane.native, frame.transferId, {
@@ -596,10 +642,6 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
 
   async state(): Promise<ForkTargetState> {
     this.ensureSchema();
-
-    const pane = this.sql<{ name: string }>`
-      SELECT name FROM sqlite_master WHERE type = ${'table'} AND name = ${'assistant_messages'}`.length > 0;
-
     const tally = (rows: { count: number }[]): number => rows[0]?.count ?? 0;
 
     return {
@@ -607,11 +649,13 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
       identity: this.sql<{ id: string; name: string; mission: string | null }>`
         SELECT id, name, mission FROM workspace_identity LIMIT 1`[0] ?? null,
       displayName: openWorkspaceMainActor(this.sql).config.getDisplayName(),
-      paneRows: !pane ? 0 : tally(this.sql<{ count: number }>`
-        SELECT COUNT(*) AS count FROM assistant_messages WHERE role <> ${'system'}`),
-      markers: !pane ? 0 : tally(this.sql<{ count: number }>`
-        SELECT COUNT(*) AS count FROM assistant_messages WHERE role = ${'system'}`),
-      plainRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM actor_messages`),
+      entries: tally(this.sql<{ count: number }>`
+        SELECT COUNT(*) AS count FROM conversation_entries WHERE role <> ${'system'}`),
+      markers: tally(this.sql<{ count: number }>`
+        SELECT COUNT(*) AS count FROM conversation_entries WHERE role = ${'system'}`),
+      messages: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM session_messages`),
+      contextMembers: tally(this.sql<{ count: number }>`
+        SELECT COUNT(*) AS count FROM context_memberships WHERE to_revision IS NULL`),
       configRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM actor_config`),
       craftedTools: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`),
       memoryChunks: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`),
@@ -626,10 +670,6 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
       sql: this.sql,
       exec: this.ctx.storage.sql,
     });
-    // A pane-authority target carries the vendor's table because Think's wake
-    // creates it before a frame can arrive; the writer refuses one that is
-    // missing rather than creating the vendor's store itself.
-    this.ctx.storage.sql.exec(PANE_DDL);
     this.ctx.storage.sql.exec(ProbeFilePlane.DDL);
     this.schemaReady = true;
   }

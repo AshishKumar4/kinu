@@ -41,10 +41,12 @@ function setup(): Fixture {
   const actors = createTestActors(testSql.sql, testSql.execRaw);
   const sibling = actors.sibling('sibling');
 
+  const files = async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' });
+
   return {
     rt,
-    stores: createAgentStores(() => testSql.sql, () => rt.actor, rt.storage.transactionSync),
-    sibling: createAgentStores(() => testSql.sql, () => sibling, rt.storage.transactionSync),
+    stores: createAgentStores(() => testSql.sql, () => rt.actor, rt.storage.transactionSync, files),
+    sibling: createAgentStores(() => testSql.sql, () => sibling, rt.storage.transactionSync, files),
   };
 }
 

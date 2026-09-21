@@ -18,146 +18,151 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
-  readForkLineage, readSoul, writeSoul,
-  snapshotWorkspaceForFork, writeForkSnapshot, SOUL_PATH,
+  readForkLineage, readSoul, snapshotWorkspaceForFork, writeForkSnapshot, SOUL_PATH,
 } from '../src/index';
-import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers';
-import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
+import { createTestWorkspace as fresh, type TestWorkspace } from './helpers';
+import {
+  readChain, readWorkingContext, seedForkSource, seedForkTarget,
+  SOURCE_ARTIFACTS, SPILLED_BYTES, TARGET_ARTIFACTS, type ForkConversation,
+} from './helpers/fork-conversation';
 
+const TARGET = {
+  workspaceId: 'FORK-DO-ID', workspaceName: 'my-fork', artifactDirectory: TARGET_ARTIFACTS, now: 88888,
+} as const;
 
-async function seedSource(src: TestWorkspace) {
-  // The SDK creates its store on first append, so a fixture that seeds pane rows
-  // has to seed the table too — production's own DDL, from one definition.
-  src.execRaw(SDK_SESSION_DDL);
-  void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC-1'}, ${'source-agent'}, ${100})`;
-  const actor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'SRC-1', ownerUserId: '' }).createMain({ name: 'source-agent' });
-  await writeSoul(src.vfs, src.sql, 'help with testing');
+async function seedSource(src: TestWorkspace): Promise<ForkConversation> {
+  const chat = await seedForkSource(src, {
+    workspaceId: 'SRC-1', workspaceName: 'source-agent',
+    craftedTools: [{ name: 'helper', description: 'utility', code: 'async (x) => x + 1' }],
+  });
 
-  // Both stores, same ids and same edges — which is what the projection
-  // maintains in production. `m3` is past the cut and must not come across.
-  const chain = [
-    { id: 'm1', parent: null, role: 'user', text: 'hello', at: '1970-01-01 00:00:01' },
-    { id: 'm2', parent: 'm1', role: 'assistant', text: 'hi there', at: '1970-01-01 00:00:02' },
-    { id: 'm3', parent: 'm2', role: 'user', text: 'post-fork-point', at: '1970-01-01 00:00:03' },
-  ] as const;
+  await chat.say({ id: 'm1', role: 'user', text: 'hello', parentId: null });
+  await chat.say({ id: 'm2', role: 'assistant', text: 'hi there' });
+  // Past the cut below, and so never carried.
+  await chat.say({ id: 'm3', role: 'user', text: 'post-fork-point' });
 
-  for (const m of chain) {
-    void src.sql`INSERT INTO actor_messages (actor_id, id, parent_id, role, content, created_at)
-      VALUES (${actor.actorId}, ${m.id}, ${m.parent}, ${m.role}, ${m.text},
-              ${Date.parse(`${m.at.replace(' ', 'T')}Z`)})`;
-    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${m.id}, ${''}, ${m.parent}, ${m.role},
-              ${JSON.stringify({ id: m.id, role: m.role, parts: [{ type: 'text', text: m.text }] })},
-              ${m.at})`;
-  }
+  return chat;
+}
 
-  void src.sql`INSERT INTO crafted_tools (name, description, code, scope, created_at, updated_at) VALUES (${'helper'}, ${'utility'}, ${'async (x) => x + 1'}, ${'local'}, ${500}, ${500})`;
-  await src.vfs.mkdir('memory', { recursive: true });
-  await src.vfs.writeFile('memory/MEMORY.md', 'key insight');
-  actor.config.setModel('@cf/moonshotai/kimi-k2.6');
+function snapshotOf(src: TestWorkspace, untilMessageId: string) {
+  return snapshotWorkspaceForFork({
+    sql: src.sql, vfs: src.vfs, untilMessageId, artifactDirectory: SOURCE_ARTIFACTS,
+  });
 }
 
 describe('fork pipeline (end-to-end)', () => {
-  test('payload round-trips across the RPC boundary (structured clone) and replays into the fork DB', async () => {
+  test('a cloned snapshot replays into the fork database as one conversation', async () => {
     const src = fresh();
     const tgt = fresh();
-    // Simulate the fork DO's onStart bootstrap — including the pane table
-    // Think's wake created and the write now requires rather than creates.
-    void tgt.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'FORK-DO-ID'}, ${'fork-bootstrap'}, ${999})`;
-    new WorkspaceActorDirectory(tgt.sql, { workspaceId: 'FORK-DO-ID', ownerUserId: '' }).createMain({ name: 'fork-bootstrap' });
-    tgt.execRaw(SDK_SESSION_DDL);
-    await writeSoul(tgt.vfs, tgt.sql, 'default');
-
+    // The fork DO's onStart bootstrap: an identity and a main actor exist
+    // before any frame arrives.
+    await seedForkTarget(tgt, { workspaceId: 'FORK-DO-ID', workspaceName: 'fork-bootstrap' });
     await seedSource(src);
 
-    // Source side: materialize the snapshot, then cross the RPC boundary.
     // DO RPC uses structured clone, which preserves the canonical BLOB
     // (Uint8Array/ArrayBuffer) vfs rows.
-    const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
+    const snapshot = structuredClone(await snapshotOf(src, 'm2'));
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, TARGET);
 
-    // Fork side: land it.
-    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
-      workspaceId: 'FORK-DO-ID', workspaceName: 'my-fork', now: 88888,
-      targetAuthority: 'pane',
-    });
-
-    // Assertions — the fork has correct state after the round-trip
-    const ident = tgt.sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity`;
-    expect(ident.length).toBe(1);
-    expect(ident[0]!.id).toBe('FORK-DO-ID');
-    expect(ident[0]!.name).toBe('my-fork');
-
+    expect(tgt.sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity`)
+      .toEqual([{ id: 'FORK-DO-ID', name: 'my-fork' }]);
     expect(await readSoul(tgt.vfs)).toBe('help with testing');
 
-    // The snapshot carried rich rows, so the transcript lands in the pane
-    // store — ONCE. No plain mirror rows exist on the target.
-    const msgs = tgt.sql<{ id: string }>`
-      SELECT id FROM assistant_messages WHERE role != 'system' ORDER BY rowid ASC`;
+    const chain = await readChain(tgt);
+    // m3 is not an ancestor of m2, so it did not cross; the marker is the
+    // fork's own leaf.
+    expect(chain.ids.slice(0, 2)).toEqual(['m1', 'm2']);
+    expect(chain.ids).toHaveLength(3);
+    expect(chain.ids[2]?.startsWith('fork-marker-')).toBe(true);
+    expect(chain.text.slice(0, 2)).toEqual(['hello', 'hi there']);
 
-    expect(msgs.map(m => m.id)).toEqual(['m1', 'm2']);  // m3 is not an ancestor of m2
-    const mirrorRows = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM actor_messages`[0]!.c;
-    expect(mirrorRows).toBe(0);
+    // The model's context came with it, in its positions.
+    expect((await readWorkingContext(tgt, TARGET_ARTIFACTS)).entryIds).toEqual(['m1', 'm2']);
 
-    const tools = tgt.sql<{ name: string }>`SELECT name FROM crafted_tools`;
-    expect(tools.map(t => t.name)).toEqual(['helper']);
-
+    expect(tgt.sql<{ name: string }>`SELECT name FROM crafted_tools`).toEqual([{ name: 'helper' }]);
     // The memory arrived as a FILE the fork can open, not as copied rows.
     expect(await tgt.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toBe('key insight');
 
     const lineage = readForkLineage(tgt.sql);
-    expect(lineage).not.toBeNull();
-    expect(lineage!.sourceWorkspaceId).toBe('SRC-1');
-    expect(lineage!.sourceWorkspaceName).toBe('source-agent');
-    expect(lineage!.sourceMessageId).toBe('m2');
-    expect(lineage!.forkedAt).toBe(88888);
+    expect(lineage?.sourceWorkspaceId).toBe('SRC-1');
+    expect(lineage?.sourceWorkspaceName).toBe('source-agent');
+    expect(lineage?.sourceMessageId).toBe('m2');
+    expect(lineage?.forkedAt).toBe(88888);
 
-    // The fork marker is a node of the tree, parented on the cut point, so
-    // an ancestry walk from it reaches the whole inherited chain.
-    const marker = tgt.sql<{ id: string; parent_id: string | null; content: string; created_at: string }>`
-      SELECT id, parent_id, content, created_at FROM assistant_messages WHERE role = 'system'
-    `;
+    const config = new Map(tgt.sql<{ key: string; value: string }>`
+      SELECT key, value FROM actor_config`.map((row) => [row.key, row.value]));
 
-    expect(marker.length).toBe(1);
-    expect(marker[0]!.parent_id).toBe('m2');
-    expect(Date.parse(`${marker[0]!.created_at.replace(' ', 'T')}Z`)).toBe(snapshot.cut.createdAtMs + 1);
-    expect(marker[0]!.content).toContain('forked from workspace');
-    expect(marker[0]!.content).toContain('source-agent');
-
-    // actor_config — model copied, display_name overwritten
-    const cfg = new Map(tgt.sql<{ key: string; value: string }>`SELECT key, value FROM actor_config`.map(r => [r.key, r.value]));
-    expect(cfg.get('model')).toBe('@cf/moonshotai/kimi-k2.6');
-    expect(cfg.get('display_name')).toBe('my-fork');
+    expect(config.get('model')).toBe('@cf/moonshotai/kimi-k2.6');
+    expect(config.get('display_name')).toBe('my-fork');
   });
 
-  test('a snapshot with zero crafted tools and zero memory is safe', async () => {
+  test('the marker the round trip lands is parented on the cut and names the source', async () => {
     const src = fresh();
     const tgt = fresh();
-    void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'S'}, ${'s'}, ${100})`;
-    const actor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'S', ownerUserId: '' }).createMain({ name: 's' });
-    await writeSoul(src.vfs, src.sql, 'p');
-    void src.sql`INSERT INTO actor_messages (actor_id, id, role, content, created_at)
-      VALUES (${actor.actorId}, ${'m1'}, ${'user'}, ${'hi'}, ${1000})`;
+    await seedForkTarget(tgt, { workspaceId: 'FORK-DO-ID' });
+    await seedSource(src);
+    const snapshot = structuredClone(await snapshotOf(src, 'm2'));
 
-    const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm1'));
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, TARGET);
+
+    const marker = tgt.sql<{ id: string; parent_id: string | null; recorded_at: number }>`
+      SELECT id, parent_id, recorded_at FROM conversation_entries WHERE role = 'system'`;
+
+    expect(marker).toHaveLength(1);
+    expect(marker[0]?.parent_id).toBe('m2');
+    expect(marker[0]?.recorded_at).toBe(snapshot.cut.createdAtMs + 1);
+    const chain = await readChain(tgt);
+    expect(chain.text[chain.text.length - 1]).toContain('forked from workspace');
+    expect(chain.text[chain.text.length - 1]).toContain('source-agent');
+  });
+
+  test('a snapshot with no crafted tools and no memory is safe', async () => {
+    const src = fresh();
+    const tgt = fresh();
+    const chat = await seedForkSource(src, { workspaceId: 'S', workspaceName: 's', memory: [] });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+
+    const snapshot = structuredClone(await snapshotOf(src, 'm1'));
 
     await expect(writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
-      workspaceId: 'F', workspaceName: 'empty-fork', now: 7000,
+      workspaceId: 'F', workspaceName: 'empty-fork', artifactDirectory: TARGET_ARTIFACTS, now: 7000,
     })).resolves.toBeDefined();
 
-    const tools = tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
-    expect(tools[0]!.c).toBe(0);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`[0]?.c).toBe(0);
+    expect((await readChain(tgt)).ids[0]).toBe('m1');
   });
 
-  test('hosted fork identity preserves the owner established before file copy', async () => {
+  test('a cloned spilled payload lands on the fork\'s own plane and reads back', async () => {
     const src = fresh();
     const tgt = fresh();
-    // A hosted target carries the vendor's pane table: Think's wake made it.
-    tgt.execRaw(SDK_SESSION_DDL);
+    await seedForkTarget(tgt, { workspaceId: 'FORK-DO-ID' });
+    const chat = await seedForkSource(src, { workspaceId: 'SRC-1', workspaceName: 'source-agent' });
+    const spilled = 's'.repeat(SPILLED_BYTES);
+    await chat.say({ id: 'm1', role: 'user', text: spilled, parentId: null });
+
+    const snapshot = structuredClone(await snapshotOf(src, 'm1'));
+    expect(snapshot.artifacts.length).toBeGreaterThan(0);
+
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, TARGET);
+
+    for (const artifact of snapshot.artifacts) {
+      expect(await tgt.vfs.exists(`${TARGET_ARTIFACTS}/${artifact.path}`)).toBe(true);
+    }
+
+    // Read through the production reader: it resolves the re-rooted path and
+    // refuses a payload whose digest differs from the row's.
+    expect((await readChain(tgt)).text[0]).toBe(spilled);
+  });
+
+  test('hosted fork identity preserves the owner established before the file copy', async () => {
+    const src = fresh();
+    const tgt = fresh();
     await seedSource(src);
-    const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
+    const snapshot = structuredClone(await snapshotOf(src, 'm2'));
 
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
-      workspaceId: 'OWNED-FORK', workspaceName: 'owned-fork', ownerUserId: 'user-123', now: 9000,
+      workspaceId: 'OWNED-FORK', workspaceName: 'owned-fork', artifactDirectory: TARGET_ARTIFACTS,
+      ownerUserId: 'user-123', now: 9000,
     });
 
     expect(tgt.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM workspace_identity`).toEqual([
@@ -168,9 +173,8 @@ describe('fork pipeline (end-to-end)', () => {
   test('hosted forks route SOUL.md through the owner-only writer on every delivery', async () => {
     const src = fresh();
     const tgt = fresh();
-    tgt.execRaw(SDK_SESSION_DDL);
     await seedSource(src);
-    const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
+    const snapshot = structuredClone(await snapshotOf(src, 'm2'));
     const soul = snapshot.files.find((file) => file.path === SOUL_PATH);
 
     if (!soul) throw new Error('fork snapshot did not include SOUL.md');
@@ -179,6 +183,7 @@ describe('fork pipeline (end-to-end)', () => {
     const options = {
       workspaceId: 'PROTECTED-FORK',
       workspaceName: 'protected-fork',
+      artifactDirectory: TARGET_ARTIFACTS,
       ownerUserId: 'user-123',
       now: 9000,
       writeSoulFile: async (content: string) => {
@@ -197,30 +202,23 @@ describe('fork pipeline (end-to-end)', () => {
     const src = fresh();
     const tgt = fresh();
     await seedSource(src);
-    const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
-    // A pane-authority target carries the vendor's table before frames arrive.
-    tgt.execRaw(SDK_SESSION_DDL);
+    const snapshot = structuredClone(await snapshotOf(src, 'm2'));
 
     const options = {
-      workspaceId: 'FINAL', workspaceName: 'recovered-fork', now: 99999,
-      targetAuthority: 'pane',
+      workspaceId: 'FINAL', workspaceName: 'recovered-fork', artifactDirectory: TARGET_ARTIFACTS, now: 99999,
     } as const;
 
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
 
-    const ident = tgt.sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity`;
-    expect(ident.length).toBe(1);
-    expect(ident[0]!.id).toBe('FINAL');
-    const lin = tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM fork_lineage`;
-    expect(lin[0]!.c).toBe(1);
-    const l = readForkLineage(tgt.sql);
-    expect(l!.forkedAt).toBe(99999);
-
-    // The transcript landed once, in the pane store; the plain mirror is gone.
-    const messages = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM actor_messages`;
-    const assistant = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM assistant_messages`;
-    expect(messages[0]!.c).toBe(0);
-    expect(assistant[0]!.c).toBe(snapshot.assistantMessages.length + 1);
+    expect(tgt.sql<{ id: string }>`SELECT id FROM workspace_identity`).toEqual([{ id: 'FINAL' }]);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM fork_lineage`[0]?.c).toBe(1);
+    expect(readForkLineage(tgt.sql)?.forkedAt).toBe(99999);
+    // The transcript landed ONCE: a redelivery replaces what the last attempt
+    // staged rather than duplicating the conversation.
+    expect((await readChain(tgt)).ids.slice(0, 2)).toEqual(['m1', 'm2']);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_entries`[0]?.c).toBe(3);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM session_messages`[0]?.c).toBe(3);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM context_memberships`[0]?.c).toBe(2);
   });
 });
