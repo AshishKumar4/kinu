@@ -243,14 +243,19 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', imports: ['tools/oxlint/anti-slop/rules/'] },
   },
   {
-    run: 'bun test --timeout=0 packages/agent-core/drift.test.ts',
-    label: 'Vendored runtime drift',
+    run: 'bun test --timeout=0 packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts',
+    label: 'Vendored upstream drift',
     tier: 'commit',
-    // Measured 2026-09-15 on the 24-thread workstation, quiet: 0.1 s solo.
-    seconds: 0.1,
-    catches: 'a byte of the vendored agent-core runtime that no longer matches its digest-pinned '
-      + 'upstream. Its closure is that dist and nothing else, which is why it is its own row.',
-    blind: 'whether the pinned upstream is the one that should ship.',
+    // Measured 2026-09-20 on the 24-thread workstation, quiet: 0.18 s solo for
+    // both files in one invocation — the same figure the agent-core file alone
+    // carried, because the cost here is process start, not the digests.
+    seconds: 0.2,
+    catches: 'a byte of vendored upstream that no longer matches its digest-pinned commit — the '
+      + 'agent-core runtime dist, and the Mossaic SDK source closure. The Mossaic half also holds '
+      + 'the file SET, so a path in the tree that the manifest never pinned is a finding: that is '
+      + 'what a declaration generator writing beside the sources looks like, and every digest '
+      + 'still matches while it happens.',
+    blind: 'whether the pinned upstream commit is the one that should ship.',
     inputs: AMBIENT_BY_NAME,
   },
   {

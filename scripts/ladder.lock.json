@@ -1,14 +1,14 @@
 {
-  "reason": "re-key only: scripts/release-manifest.test.ts joins the Gate self-tests row, which shipped claimed by no tier; the row's declared 24s is unchanged",
+  "reason": "the vendored-upstream drift row now runs the Mossaic source closure beside the agent-core dist: 0.06 s to 0.18 s solo, one bun process over two files",
   "tiers": {
     "commit": {
-      "seconds": 78.74,
-      "measuredAt": "2026-09-18",
+      "seconds": 78.84,
+      "measuredAt": "2026-09-20",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
         "bun run lint": 21.4,
-        "bun test --timeout=0 packages/agent-core/drift.test.ts": 0.1,
+        "bun test --timeout=0 packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts": 0.2,
         "bun run typecheck": 12,
         "bun run gate:do-init": 0.71,
         "bun run gate:duplication": 1.7,
@@ -35,15 +35,15 @@
       }
     },
     "push": {
-      "seconds": 399.15,
-      "measuredAt": "2026-09-18",
+      "seconds": 399.25,
+      "measuredAt": "2026-09-20",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
         "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts": 0.2,
         "bun scripts/pattern-inventory.ts": 2.5,
         "bun run lint": 21.4,
-        "bun test --timeout=0 packages/agent-core/drift.test.ts": 0.1,
+        "bun test --timeout=0 packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts": 0.2,
         "bun run typecheck": 12,
         "bun run gate:do-init": 0.71,
         "bun run gate:duplication": 1.7,

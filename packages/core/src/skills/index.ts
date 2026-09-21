@@ -28,11 +28,12 @@ export {
 
 export {
   discoverSkills, readSkillFile, readSkillBody, skillPath, compareSkillNames,
-  BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES,
+  BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES, SKILL_FOLDER_FILE,
   type SkillsVfs, type DiscoverOpts, type SkillsDiscovery, type UnreadSkillFile,
 } from './discover';
 
 export { BUILTIN_SKILLS } from './builtins';
+
 
 export {
   resolveActiveSkills,
@@ -52,3 +53,10 @@ export {
   toolAllowedBySkills,
   trustedActiveSkills,
 } from './render';
+
+export {
+  normalizeDrivePath, listDrive, makeDriveFolder, renameDriveEntry,
+  deleteDriveEntry, markAsSkill, addSkill, receiveDriveUpload, packDriveFolder, driveFailure,
+  DriveListingSchema, MarkedSkillSchema, DriveUploadTargetSchema,
+  type DriveEntry, type DriveListing, type MarkedSkill, type DriveFailure, type DriveUploadTarget, type DriveUploadOutcome,
+} from './drive';

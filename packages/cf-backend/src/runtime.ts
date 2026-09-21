@@ -41,6 +41,7 @@ import {
   type WorkspaceVFS,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
   withMountTable, standardMounts, contextMount,
+  sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
   withApprovalGatedShell, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   type EgressSecretBinding,
@@ -63,6 +64,7 @@ export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
 import { kinuEgressParams } from "./egress/configure";
+import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox, SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 import { previewHostSuffix } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
@@ -603,6 +605,30 @@ export function createCFRuntime(
   // context mount is LAST because it is the only entry that is per-actor: two
   // actors share every other mount and never share this one.
   const mounts = [...standardMounts((name) => executionRouter.getProvider(name))];
+
+  // `/shared` — the owner's Drive, one Mossaic tenant per user, the same
+  // tenant in every workspace that user owns. The owner is resolved at every
+  // call, never captured: a claim that lands after this plane is built mounts
+  // the Drive from that moment, and an unclaimed workspace states its absence.
+  let drive: { tenant: string; files: MossaicVfs } | null = null;
+
+  mounts.push(sharedDriveMount(
+    () => {
+      const tenant = actor.ownerUserId();
+
+      if (tenant === null) return null;
+
+      if (drive === null || drive.tenant !== tenant) {
+        const files = tenantDrive(env, tenant);
+
+        if (files === null) return null;
+        drive = { tenant, files };
+      }
+
+      return drive.files;
+    },
+    () => (driveBound(env) ? SHARED_DRIVE_UNCLAIMED : SHARED_DRIVE_UNBOUND),
+  ));
   const plane = hooks.contextPlane;
 
   if (plane) {

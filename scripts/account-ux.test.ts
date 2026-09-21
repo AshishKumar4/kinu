@@ -293,7 +293,7 @@ describe('account panels', () => {
     });
   });
 
-  test('the primary nav, the workspaces page, the plugins page and the shared page render at both widths in both themes', async () => {
+  test('the primary nav, the workspaces page, the plugins page and the blueprints folder render at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
       const shots: string[] = [];
 
@@ -308,7 +308,7 @@ describe('account panels', () => {
               const links = await home.$$eval('nav[aria-label="Primary"] a', (anchors) =>
                 anchors.map((a) => ({ label: a.textContent?.trim() ?? '', current: a.getAttribute('aria-current') })));
 
-              expect(links.map((link) => link.label)).toEqual(['Home', 'Workspaces', 'Shared', 'Plugins', 'Devices']);
+              expect(links.map((link) => link.label)).toEqual(['Home', 'Workspaces', 'Drive', 'Devices', 'Plugins', 'Settings']);
               expect(links[0]?.current).toBe('page');
               expect(await activeNavRow(home)).toBe('Home');
               // The rail's own furniture is untouched around it: the roster
@@ -450,13 +450,15 @@ describe('account panels', () => {
           try {
             const body = await shared.evaluate(() => document.body.innerText);
 
-            // One grid behind five counted segments — the lists are tabs now.
-            expect(body).toContain('Shared');
+            // One grid behind five counted segments — the lists are tabs now,
+            // drawn as the Drive's blueprints folder.
+            expect(body).toContain('Drive');
+            expect(body).toContain('blueprints');
             expect(await shared.$$eval('[aria-label="Shared lists"] [role="tab"]', (els) => els.length)).toBe(5);
 
             for (const label of ['All', 'Mine', 'With me', 'Public', 'People I know']) expect(body).toContain(label);
 
-            if (viewport === 'desktop') expect(await activeNavRow(shared)).toBe('Shared');
+            if (viewport === 'desktop') expect(await activeNavRow(shared)).toBe('Drive');
             shots.push(await shoot(shared, `shared-segments-${viewport}-${theme}`));
           } finally {
             await shared.close();

@@ -23,7 +23,6 @@ import {
   FingerprintIcon, PackageIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon, BrainIcon,
   CaretRightIcon, GitBranchIcon,
 } from "@phosphor-icons/react";
-import { ScoreBar } from "@/components/ui/score-bar";
 import type { AgentStatus } from "@/hooks/use-kinu";
 import type { ToolInfo, MemoryEntry, Rpc } from "@kinu.run/core";
 import { MarkdownContent, EmptyState, Section } from "./shared";
@@ -110,7 +109,6 @@ function ExposureBadge({ exposure, wired }: { exposure: ToolInfo["exposure"]; wi
  */
 function ToolCard({ tool }: { tool: ToolInfo }) {
   const [open, setOpen] = useState(false);
-  // A crafted tool's description IS its summary; there is nothing behind it.
   const hasDetail = tool.description.trim() !== tool.summary.trim();
 
   return (
@@ -124,7 +122,6 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <PackageIcon size={13} className="p-accent shrink-0" />
           <span className="p-title font-mono p-text">{tool.name}</span>
-          <Badge variant="secondary">{tool.learned ? "Learned" : "Built-in"}</Badge>
           <ExposureBadge exposure={tool.exposure} wired={tool.wired} />
           {tool.usageCount > 0 && <span className="p-meta p-text-3 ml-auto">{tool.usageCount} uses</span>}
           {hasDetail && (
@@ -142,8 +139,6 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
           ? <span className="p-meta p-text-2 whitespace-pre-line">{tool.description}</span>
           : <span className="p-row-text p-text-2">{tool.summary}</span>}
       </button>
-      {tool.learned && <div className="px-3 pb-1"><ScoreBar value={tool.qualityScore} /></div>}
-      {tool.learned && <div className="px-3 pb-2.5 p-meta p-text-3">EMA {tool.qualityScore.toFixed(2)} over {tool.usageCount} use{tool.usageCount === 1 ? "" : "s"}</div>}
     </div>
   );
 }
@@ -195,7 +190,6 @@ export function AgentSurface(
               ["Model", as.model],
               ["Scaffold", `v${as.scaffoldVersion}`],
               ["MCTS Nodes", String(as.searchNodeCount)],
-              ["Crafted Tools", String(as.craftedToolCount)],
               ["Messages", String(as.messageCount)],
               ["Created", new Date(as.createdAt).toLocaleString()],
             ]).map(([l, v]) => (

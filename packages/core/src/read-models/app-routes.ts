@@ -36,6 +36,8 @@ export const APP_ROUTES = {
   agentSettings: '/settings/:agentId',
   triggers: '/triggers/:agentId',
   shared: '/shared',
+  /** The Drive below its root: `*` is the folder path, any depth. */
+  driveFolder: '/shared/*',
   sharedBlueprint: '/shared/blueprint/:id',
   deploy: '/deploy',
   updates: '/updates',
@@ -67,11 +69,12 @@ export const REPORTED_ROUTES: readonly ReportedRoute[] = [
 /**
  * The template a pathname resolves to.
  *
- * Matched on segments rather than by regex: a `:param` segment matches anything
- * and a literal segment matches itself, which is react-router's own rule for the
- * paths this table holds (none uses a splat or an optional segment). No two
- * templates share a segment count and a first literal, so the scan cannot be
- * order-dependent.
+ * Matched on segments rather than by regex: a `:param` segment matches anything,
+ * a literal segment matches itself, and a trailing `*` matches every deeper
+ * path, which is react-router's own rule for the paths this table holds (none
+ * uses an optional segment). No two exact templates share a segment count and a
+ * first literal, so the scan cannot be order-dependent; the one splat is tried
+ * last.
  *
  * A trailing slash is dropped before the split so `/control/` and `/control`
  * are one route. Query strings never arrive here: the caller passes
@@ -80,13 +83,25 @@ export const REPORTED_ROUTES: readonly ReportedRoute[] = [
  */
 export function routeTemplateOf(pathname: string): ReportedRoute {
   const segments = pathname.replace(/\/+$/u, '').split('/');
+  const templates = Object.values(APP_ROUTES);
 
-  for (const template of Object.values(APP_ROUTES)) {
+  for (const template of templates) {
     const wanted = template.replace(/\/+$/u, '').split('/');
 
-    if (wanted.length !== segments.length) continue;
+    if (wanted.length !== segments.length || wanted.includes('*')) continue;
 
     if (wanted.every((part, at) => part.startsWith(':') || part === segments[at])) return template;
+  }
+
+  // A splat template matches whatever is left below its literal prefix, and
+  // only after every exact template declined: `/shared/blueprint/:id` is a
+  // page of its own under the Drive's prefix.
+  for (const template of templates) {
+    const wanted = template.split('/');
+
+    if (wanted.at(-1) !== '*' || segments.length <= wanted.length - 1) continue;
+
+    if (wanted.slice(0, -1).every((part, at) => part === segments[at])) return template;
   }
 
   return UNMATCHED_ROUTE;

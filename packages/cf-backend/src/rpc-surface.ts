@@ -327,6 +327,17 @@ const USER_DO_METHODS = [
   'sharesReceived_add',
   'sharesReceived_forget',
   'sharesReceived_list',
+  'drive_list',
+  'drive_mkdir',
+  'drive_rename',
+  'drive_delete',
+  'drive_markAsSkill',
+  'drive_addSkill',
+  'drive_writeChunk',
+  'drive_abortUpload',
+  'drive_startDownload',
+  'drive_readChunk',
+  'drive_abortDownload',
 ] as const satisfies readonly (keyof UserDO)[];
 
 /** A method name on the UserDO surface above, for typing a stub of it. */

@@ -28,7 +28,11 @@ import type { VfsEntryStat } from '../types/primitives';
 import { parseSkillFile, skillNameProblem } from './parse';
 import { BUILTIN_SKILLS } from './builtins';
 
-import { SKILLS_DIR, workspaceSkillIndexLine, type DiscoveredSkill, type ParsedSkill, type SkillBodyRef } from './types';
+import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
+import { isVfsError } from '../vfs/errno';
+import {
+  SKILLS_DIR, workspaceSkillIndexLine, type DiscoveredSkill, type ParsedSkill, type SkillBodyRef, type SkillSource,
+} from './types';
 
 /** Minimal VFS shape — duck-typed against any file view. */
 export interface SkillsVfs {
@@ -130,77 +134,77 @@ export async function discoverSkills(
     opts.admissionTokens / estimateTokens(workspaceSkillIndexLine('a').length + 1),
   );
 
-  let entries: string[] = [];
+  // Two directories, one order: the workspace's own skills first, then the
+  // owner's shared Drive. THE WORKSPACE WINS A NAME CLASH — a shared skill is
+  // the owner's default for every workspace, and a workspace that carries the
+  // same name has overridden it on purpose. The shared file is refused with
+  // that reason rather than silently skipped, so the author is told.
+  const directories: { dir: string; source: SkillSource }[] = [{ dir, source: 'vfs' }, { dir: SHARED_SKILLS_DIR, source: 'shared' }];
 
-  try {
-    if (vfs.readdir) entries = await vfs.readdir(dir);
-  } catch (error) {
-    if (classify({ cause: error }) !== 'enoent') throw error;
-    // No directory yet — just the built-ins.
-    entries = [];
-  }
+  for (const { dir: scanned, source } of directories) {
+    // Candidates in the one total order BEFORE any are opened: readdir order is
+    // filesystem-dependent, and the bound below decides which names are ever
+    // read at all.
+    const candidates = (await listSkillCandidates(vfs, scanned)).sort((a, b) => compareSkillNames(a.stem, b.stem));
 
-  // Candidates in the one total order BEFORE any are opened: readdir order is
-  // filesystem-dependent, and the bound below decides which names are ever
-  // read at all.
-  const candidates = entries
-    .filter((entry) => entry.endsWith('.md'))
-    .map((entry) => entry.replace(/\.md$/, ''))
-    .sort(compareSkillNames);
+    for (const { stem, path } of candidates) {
+      // The filename stem (or the folder name) IS the skill's name (Anthropic's
+      // spec lets the directory name supply it), so an illegal stem is not a
+      // skill at all — and learning that costs no read.
+      const stemProblem = skillNameProblem(stem);
 
-  for (const stem of candidates) {
-    const path = skillPath(stem, dir);
-    // The filename stem IS the skill's name (Anthropic's spec lets the
-    // directory name supply it), so an illegal stem is not a skill at all —
-    // and learning that costs no read.
-    const stemProblem = skillNameProblem(stem);
+      if (stemProblem) { onErr(path, `filename stem ${stemProblem}`); continue; }
 
-    if (stemProblem) { onErr(path, `filename stem ${stemProblem}`); continue; }
-
-    // A built-in name is RESERVED (KINU-N028). This directory is writable by
-    // the agent's own `file` tool and shell, so letting a file here take a
-    // built-in's name would let the agent replace shipped doctrine — including
-    // the `allowed_tools` a built-in declares — by choosing a filename. The
-    // file is refused rather than silently ignored, so the author is told why.
-    if (Object.hasOwn(BUILTIN_SKILL_NAMES, stem)) {
-      onErr(path, `"${stem}" is a built-in skill name and cannot be overridden by a workspace file`);
-      continue;
-    }
-
-    if (slots <= 0) { omitted += 1; continue; }
-
-    try {
-      const size = vfs.stat ? (await vfs.stat(path))?.size : undefined;
-
-      if (size !== undefined && size > ceiling) {
-        slots -= 1;
-        unread.push({ name: stem, path, bytes: size });
+      // A built-in name is RESERVED (KINU-N028). This directory is writable by
+      // the agent's own `file` tool and shell, so letting a file here take a
+      // built-in's name would let the agent replace shipped doctrine — including
+      // the `allowed_tools` a built-in declares — by choosing a filename. The
+      // file is refused rather than silently ignored, so the author is told why.
+      if (Object.hasOwn(BUILTIN_SKILL_NAMES, stem)) {
+        onErr(path, `"${stem}" is a built-in skill name and cannot be overridden by a workspace file`);
         continue;
       }
 
-      const text = await readTextFile(vfs, path, ceiling);
-      // The stem doubles as the fallback `name` so Claude-Code skills authored
-      // without a `name:` line still parse. If frontmatter DOES specify a name,
-      // we still require it to match the filename to avoid drift.
-      const parsed = parseSkillFile(text, 'vfs', stem);
-
-      if (!parsed.ok) { onErr(path, parsed.error); slots -= 1; continue; }
-
-      if (parsed.skill.name !== stem) {
-        onErr(path, `filename "${stem}.md" does not match front-matter name "${parsed.skill.name}"`);
-        slots -= 1;
+      if (source === 'shared' && byName.has(stem)) {
+        onErr(path, `"${stem}" is shadowed by the workspace skill of the same name`);
         continue;
       }
 
-      slots -= 1;
-      byName.set(parsed.skill.name, discovered(parsed.skill, {
-        kind: 'file',
-        path,
-        chars: parsed.skill.body.length,
-      }));
-    } catch (error) {
-      slots -= 1;
-      onErr(path, renderThrownChain({ cause: error }));
+      if (slots <= 0) { omitted += 1; continue; }
+
+      try {
+        const size = vfs.stat ? (await vfs.stat(path))?.size : undefined;
+
+        if (size !== undefined && size > ceiling) {
+          slots -= 1;
+          unread.push({ name: stem, path, bytes: size });
+          continue;
+        }
+
+        const text = await readTextFile(vfs, path, ceiling);
+        // The stem doubles as the fallback `name` so Claude-Code skills authored
+        // without a `name:` line still parse. If frontmatter DOES specify a name,
+        // we still require it to match the filename to avoid drift.
+        const parsed = parseSkillFile(text, source, stem);
+
+        if (!parsed.ok) { onErr(path, parsed.error); slots -= 1; continue; }
+
+        if (parsed.skill.name !== stem) {
+          onErr(path, `"${path}" does not match front-matter name "${parsed.skill.name}"`);
+          slots -= 1;
+          continue;
+        }
+
+        slots -= 1;
+        byName.set(parsed.skill.name, discovered(parsed.skill, {
+          kind: 'file',
+          path,
+          chars: parsed.skill.body.length,
+        }));
+      } catch (error) {
+        slots -= 1;
+        onErr(path, renderThrownChain({ cause: error }));
+      }
     }
   }
 
@@ -209,6 +213,51 @@ export async function discoverSkills(
     unread: unread.sort((a, b) => compareSkillNames(a.name, b.name)),
     omitted,
   };
+}
+
+/** The file a skill FOLDER carries its front matter and body in (Anthropic's layout). */
+export const SKILL_FOLDER_FILE = 'SKILL.md';
+
+/** The skill file that names `name` inside a skills directory, in folder form. */
+function skillFolderPath(name: string, skillsDir = SKILLS_DIR): string {
+  return `${skillsDir.replace(/\/$/, '')}/${name}/${SKILL_FOLDER_FILE}`;
+}
+
+/**
+ * Every candidate skill in one directory, unopened: the flat `<name>.md`
+ * files Kinu has always read, and the `<name>/SKILL.md` folders the Drive
+ * adds (a folder skill can carry scripts and references beside its
+ * instructions). Both forms yield the same `stem`; the caller decides which
+ * names are legal and how many are ever read. An absent directory — or an
+ * absent MOUNT, which is how an unclaimed workspace's `/shared` answers — is
+ * an empty list, never a failure.
+ */
+async function listSkillCandidates(vfs: SkillsVfs, dir: string): Promise<{ stem: string; path: string }[]> {
+  let entries: string[] = [];
+
+  try {
+    if (vfs.readdir) entries = await vfs.readdir(dir);
+  } catch (error) {
+    if (classify({ cause: error }) === 'enoent') return [];
+
+    if (isVfsError(error) && error.code === 'ENXIO') return [];
+    throw error;
+  }
+
+  const candidates: { stem: string; path: string }[] = [];
+
+  for (const entry of entries) {
+    if (entry.endsWith('.md')) {
+      candidates.push({ stem: entry.replace(/\.md$/, ''), path: skillPath(entry.replace(/\.md$/, ''), dir) });
+      continue;
+    }
+
+    const folderFile = skillFolderPath(entry, dir);
+
+    if (await vfs.exists(folderFile)) candidates.push({ stem: entry, path: folderFile });
+  }
+
+  return candidates;
 }
 
 /**

@@ -325,8 +325,34 @@ export const isAntiSlopSuite = (file: string): boolean =>
 export const isAntiSlopRuleSuite = (file: string): boolean =>
   file.startsWith(ANTI_SLOP_RULES) && isRunnableSuite(file);
 
-/** Pinned upstream bytes: drift.test.ts owns them rather than Kinu's source gates. */
-export const isVendoredSource = (file: string): boolean => file.startsWith('packages/agent-core/dist/');
+/** Where the vendored Mossaic SDK closure lives, at its upstream-relative layout. */
+export const MOSSAIC_ROOT = 'third_party/mossaic';
+
+/** The SDK workspace inside that closure — the one directory that is a package. */
+export const MOSSAIC_SDK = `${MOSSAIC_ROOT}/sdk`;
+
+/** The provenance record: upstream commit and a sha256 per vendored path. Kinu's
+ *  file, not upstream's, which is why it is the one path under `MOSSAIC_ROOT`
+ *  that is not itself vendored. */
+export const MOSSAIC_MANIFEST = `${MOSSAIC_ROOT}/upstream.json`;
+
+/** Upstream source bytes of `@mossaic/sdk`, pinned per file by `MOSSAIC_MANIFEST`.
+ *  Measured 2026-09-20 with the prefix inside the lint corpus: oxlint 4,657
+ *  findings, all of them here, and `worker/core/objects/user/user-do-core.ts`
+ *  carries two upstream lint-suppression comments that
+ *  `reportUnusedDisableDirectives` plus `live-tree.gate.test.ts` make a hard
+ *  failure. The bytes may not be edited, so the closure is governed the way
+ *  `packages/agent-core/dist` is: by its digest manifest (`mossaic-sdk.test.ts`),
+ *  not by Kinu's source gates. */
+export const isMossaicVendored = (file: string): boolean =>
+  file.startsWith(`${MOSSAIC_ROOT}/`) && file !== MOSSAIC_MANIFEST;
+
+/** The vendored agent-core runtime dist, pinned per file by its own `upstream.json`. */
+export const isAgentCoreVendored = (file: string): boolean => file.startsWith('packages/agent-core/dist/');
+
+/** Pinned upstream bytes of either closure: each closure's drift test owns
+ *  them rather than Kinu's source gates. */
+export const isVendoredSource = (file: string): boolean => isAgentCoreVendored(file) || isMossaicVendored(file);
 
 /** Kinu-maintained code parseable by `syntax.ts`. */
 export const isParseable = (file: string): boolean => PARSEABLE.test(file) && !isVendoredSource(file);

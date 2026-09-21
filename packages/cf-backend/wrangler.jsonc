@@ -138,7 +138,16 @@
       // unit that resumes and this door has no signed-in user to key on, so the
       // object is named by the run id and holds that run's step ledger and the
       // Cloudflare tokens until the last step hands them to the new Worker.
-      { "class_name": "DeployRunDO", "name": "DeployRunDO" }
+      { "class_name": "DeployRunDO", "name": "DeployRunDO" },
+      // The user-level shared Drive (Mossaic, built from vendored source under
+      // third_party/mossaic). The binding NAMES are the SDK's contract:
+      // `createVFS` reads `env.MOSSAIC_USER`, and the tenant object reads
+      // `env.MOSSAIC_SHARD` for its content-addressed chunks. The class names
+      // are Kinu's re-exports (src/server.ts), because `UserDO` already names
+      // Kinu's own per-user object. Tenant = Kinu user id; every workspace an
+      // account owns mounts the same tenant at `/shared`.
+      { "class_name": "MossaicUserDO", "name": "MOSSAIC_USER" },
+      { "class_name": "MossaicShardDO", "name": "MOSSAIC_SHARD" }
       //
       // SSH/device (user's local machine via WebSocket tunnel):
       //   No binding needed — users run a local daemon. The executor becomes
@@ -206,7 +215,8 @@
         "MonitorDO", "ControlPlaneDO"
       ]
     },
-    { "tag": "v2", "new_sqlite_classes": ["DeployRunDO"] }
+    { "tag": "v2", "new_sqlite_classes": ["DeployRunDO"] },
+    { "tag": "v3", "new_sqlite_classes": ["MossaicUserDO", "MossaicShardDO"] }
   ],
   // Synthetic monitoring. Every 15 minutes the worker probes its own public
   // surface and emails OPS_ALERT_EMAIL when something breaks — the checks

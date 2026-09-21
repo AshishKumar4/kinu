@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { isVendoredSource, trackedFiles } from '../../scripts/sources';
+import { isAgentCoreVendored, trackedFiles } from '../../scripts/sources';
 
 const root = import.meta.dirname;
 
@@ -15,7 +15,7 @@ const Manifest = v.object({
 
 test('every agent-core runtime file matches the pinned upstream bytes', () => {
   const manifest = v.parse(Manifest, JSON.parse(readFileSync(join(root, 'upstream.json'), 'utf8')));
-  const files = trackedFiles().filter(isVendoredSource).map((file) => file.slice('packages/agent-core/'.length)).sort();
+  const files = trackedFiles().filter(isAgentCoreVendored).map((file) => file.slice('packages/agent-core/'.length)).sort();
   expect(files).toEqual(Object.keys(manifest.vendored).sort());
   expect(files.some((file) => file.endsWith('.js'))).toBe(true);
   expect(files.some((file) => file.endsWith('.d.ts'))).toBe(true);

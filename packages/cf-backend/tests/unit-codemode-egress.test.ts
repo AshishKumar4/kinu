@@ -30,11 +30,16 @@ import { CodemodeEgress, EGRESS_FAILURE_HEADER } from '../src/codemode-egress';
 /** The loopback entrypoint under test, outside workerd. Its fetch override
  *  reads no instance state, so an empty env and a bare execution context are
  *  the whole construction. */
-const entryContext: ExecutionContext = {
+const partialContext: Partial<ExecutionContext> = {
   waitUntil: () => {},
   passThroughOnException: () => {},
   props: {},
 };
+
+// SAFETY: the fetch override reads exactly the three members constructed
+// above; `tracing` (required since workers-types 4.20260702.1) is never
+// reached by the code under test.
+const entryContext = partialContext as ExecutionContext;
 
 const entry = new CodemodeEgress(entryContext, {});
 

@@ -1294,6 +1294,22 @@ export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observ
 
 export { ensureDir } from './utils/vfs-helpers';
 
+export { mossaicVfs, type MossaicClient, type MossaicVfs, type MossaicStat, type MossaicChild } from './vfs/mossaic-vfs';
+
+export {
+  sharedDriveMount, SHARED_SKILLS_DIR, DRIVE_SKILLS_DIR, DRIVE_BLUEPRINTS_DIR, DRIVE_RESERVED_DIRS,
+  SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND,
+} from './vfs/shared-drive';
+
+export { packZip, unpackZip, looksLikeZip, type ZipEntry } from './utils/zip';
+
+export {
+  normalizeDrivePath, listDrive, makeDriveFolder, renameDriveEntry,
+  deleteDriveEntry, markAsSkill, addSkill, receiveDriveUpload, packDriveFolder, driveFailure,
+  DriveListingSchema, MarkedSkillSchema, DriveUploadTargetSchema,
+  type DriveEntry, type DriveListing, type MarkedSkill, type DriveFailure, type DriveUploadTarget, type DriveUploadOutcome,
+} from './skills/drive';
+
 export {
   withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, RESERVED_REFERENCE_ROOTS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
@@ -1914,7 +1930,7 @@ export {
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, skillIndexLine, unreadSkillLine,
   unionAllowedTools, toolAllowedBySkills, trustedActiveSkills,
-  SkillError, SKILLS_DIR,
+  SkillError, SKILLS_DIR, SKILL_FOLDER_FILE,
 } from './skills/index';
 
 export type {
@@ -2097,7 +2113,7 @@ export {
   readExecutorFileBytes, statExecutorFile, renameExecutorPathOp, deleteExecutorPathOp,
   listEnvironments, normalizeDir, joinDir, parentDir,
   FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
-  ExecutorFileUpload, ExecutorFileDownload,
+  ExecutorFileUpload, ExecutorFileDownload, ChunkedUpload, pumpUploadChunks,
 } from './read-models/files';
 
 export type {
@@ -2298,7 +2314,7 @@ export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 // describe a shape the resolver does not produce.
 export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
 
-export { fmtPct, fmtTokens, fmtUsd, shortAge, timeAgo } from './utils/format';
+export { fmtPct, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
 
 export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
 

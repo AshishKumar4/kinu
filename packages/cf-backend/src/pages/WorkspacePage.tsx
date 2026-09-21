@@ -286,11 +286,10 @@ function SubordinateEventCard({ event, workspace }: { event: SubordinateActivity
 /* ── Fork modal ───────────────────────────────────────────────── */
 
 function ForkModal({
-  sourceName, messagesUpToHere, craftedToolsCount, onCancel, onSubmit,
+  sourceName, messagesUpToHere, onCancel, onSubmit,
 }: {
   sourceName: string;
   messagesUpToHere: number;
-  craftedToolsCount: number;
   onCancel: () => void;
   /** Throws on RPC error so the modal can display it. */
   onSubmit: (name: string) => Promise<void>;
@@ -328,8 +327,8 @@ function ForkModal({
       <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
         <p>Create a new workspace that branches off <span className="font-mono p-text">{sourceName}</span> at this message.</p>
         <ul className="list-disc list-inside space-y-0.5 p-text-3">
-          <li>Copies: SOUL.md, {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"}, memory, {craftedToolsCount} crafted tool{craftedToolsCount === 1 ? "" : "s"}</li>
-          <li>Resets: MCTS tree, evolution events, scaffold, craft scores</li>
+          <li>Copies: SOUL.md, {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"}, memory, learned tools</li>
+          <li>Resets: MCTS tree, evolution events, scaffold</li>
           <li>Source workspace is unaffected</li>
         </ul>
       </div>
@@ -1336,7 +1335,6 @@ export default function WorkspacePage() {
         <ForkModal
           sourceName={shownTitle}
           messagesUpToHere={state.messages.findIndex(m => m.id === forkFor) + 1}
-          craftedToolsCount={as?.craftedToolCount ?? 0}
           onCancel={() => setForkFor(null)}
           onSubmit={async (name) => {
             try {
@@ -1375,7 +1373,7 @@ export default function WorkspacePage() {
           </>}
         >
           <p className="text-xs p-text-2 leading-relaxed">
-            This cannot be undone. Memory, SOUL.md, crafted tools, and evolution stay unchanged.
+            This cannot be undone. Memory, SOUL.md, learned tools, and evolution stay unchanged.
           </p>
         </Modal>
       )}
