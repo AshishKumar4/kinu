@@ -1,0 +1,125 @@
+diff --git a/dist/hosted/runtime.d.ts b/dist/hosted/runtime.d.ts
+index 3459ddfae4efa8ecdfc8f05c7670456dcea7c28d..6feb2db97ba6fad1c0f5bf181fe633e61e319e5b 100644
+--- a/dist/hosted/runtime.d.ts
++++ b/dist/hosted/runtime.d.ts
+@@ -4,6 +4,7 @@ import type { ProcessLogReadOptions } from '@nimbus-sh/core/runtime/process-logs
+ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+ import type { SandboxFs } from '@nimbus-sh/core/substrate/lifo/sandbox/types.js';
+ import { type SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
++import type { ComposedFacetManager, FacetManagerHostHooks } from '../facets/compose.js';
+ import { WebSocketTerminal } from '../facets/ws-terminal.js';
+ import * as operations from '../session/programmatic.js';
+ import * as services from './services.js';
+@@ -25,6 +26,8 @@ export interface HostedRuntimeOptions {
+     env: services.HostedRuntimeEnv;
+     ports: PortRegistry;
+     lifecycle: HostedRuntimeLifecycle;
++    /** The embedder's resolver for journalled worker launches it owns. */
++    hooks?: Pick<FacetManagerHostHooks, 'resolveWorkerLaunch'>;
+     basePath?: string;
+     origin?: string;
+ }
+@@ -36,6 +39,7 @@ export declare function composeHostedRuntime(options: HostedRuntimeOptions): Pro
+     terminal: WebSocketTerminal;
+     files: RuntimeFiles;
+     runtimes: import("@nimbus-sh/core/runtime/runtime-manager.js").RuntimeManager;
++    facets: () => ComposedFacetManager;
+     ready: (options?: operations.ProgrammaticReadyOptions | undefined) => Promise<{
+         ok: true;
+         preinstalled: string[];
+@@ -100,7 +104,7 @@ export declare function composeHostedRuntime(options: HostedRuntimeOptions): Pro
+         installed: import("@nimbus-sh/core/runtime/installed-runtimes.js").RuntimeSummary[];
+         available: import("@nimbus-sh/core/runtime/runtime-package.js").RuntimeAvailability[];
+     }>;
+-    spawnWorker: (workerCode: string, command: string, cwd: string, opts?: import("../facets/manager.js").LongRunningWorkerSpawnOptions | undefined) => Promise<import("../facets/manager.js").SpawnedWorker>;
++    spawnWorker: (workerCode: string, command: string, cwd: string, opts?: import("../workspace-host.js").LongRunningWorkerSpawnOptions | undefined) => Promise<import("../facets/manager.js").SpawnedWorker>;
+     routeCapabilityPort: (port: number, capability: string, request: Request<unknown, CfProperties<unknown>>, pathname: string) => Promise<Response>;
+     supervisorOp: (envelope: SupervisorOpEnvelope) => Promise<unknown>;
+     onScheduled: (task: HostedRuntimeTask) => Promise<void>;
+diff --git a/dist/hosted/runtime.d.ts.map b/dist/hosted/runtime.d.ts.map
+index 92be6ef149d1eea24780ab3e8e4760fe3001e03e..03ffb51e985d81a5e127761db6cf1edac5fd7a5b 100644
+--- a/dist/hosted/runtime.d.ts.map
++++ b/dist/hosted/runtime.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"runtime.d.ts","sourceRoot":"","sources":["../../src/hosted/runtime.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,2BAA2B,CAAC;AAEjE,OAAO,KAAK,EAAE,YAAY,EAAE,MAAM,0CAA0C,CAAC;AAC7E,OAAO,KAAK,EAAE,qBAAqB,EAAE,MAAM,yCAAyC,CAAC;AACrF,OAAO,KAAK,EAAE,OAAO,EAAE,MAAM,yCAAyC,CAAC;AAGvE,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,iDAAiD,CAAC;AACjF,OAAO,EAAwB,KAAK,oBAAoB,EAAE,MAAM,4CAA4C,CAAC;AAW7G,OAAO,EAAE,iBAAiB,EAAE,MAAM,0BAA0B,CAAC;AAO7D,OAAO,KAAK,UAAU,MAAM,4BAA4B,CAAC;AACzD,OAAO,KAAK,QAAQ,MAAM,eAAe,CAAC;AAE1C,OAAO,EAAE,CAAC,EAAE,MAAM,QAAQ,CAAC;AAI3B,QAAA,MAAM,UAAU;;;;EAA0D,CAAC;AAC3E,MAAM,MAAM,iBAAiB,GAAG,CAAC,CAAC,KAAK,CAAC,OAAO,UAAU,CAAC,CAAC;AAE3D,MAAM,WAAW,sBAAsB;IACrC,SAAS,CAAC,IAAI,EAAE,OAAO,CAAC,IAAI,CAAC,GAAG,IAAI,CAAC;IACrC,QAAQ,CAAC,MAAM,EAAE,iBAAiB,EAAE,EAAE,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC,CAAC;IAC/D,MAAM,CAAC,MAAM,EAAE,iBAAiB,GAAG,OAAO,CAAC,IAAI,CAAC,CAAC;CAClD;AAED,MAAM,WAAW,oBAAoB;IACnC,SAAS,EAAE,eAAe,CAAC;IAC3B,GAAG,EAAE,kBAAkB,CAAC;IACxB,GAAG,EAAE,QAAQ,CAAC,gBAAgB,CAAC;IAC/B,KAAK,EAAE,YAAY,CAAC;IACpB,SAAS,EAAE,sBAAsB,CAAC;IAClC,QAAQ,CAAC,EAAE,MAAM,CAAC;IAClB,MAAM,CAAC,EAAE,MAAM,CAAC;CACjB;AAED,MAAM,WAAW,YAAa,SAAQ,SAAS;IAC7C,EAAE,CAAC,IAAI,EAAE,OAAO,GAAG,YAAY,CAAC;CACjC;AAsOD,wBAAsB,oBAAoB,CAAC,OAAO,EAAE,oBAAoB;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;uBAkBjD,MAAM,YAAY,qBAAqB;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;6BAWjC,oBAAoB;wBACzB,iBAAiB;yBAChB,SAAS;wBACV,SAAS,WAAW,MAAM,GAAG,WAAW;wBACxC,SAAS;;GAGhC;AAED,MAAM,MAAM,aAAa,GAAG,OAAO,CAAC,UAAU,CAAC,OAAO,oBAAoB,CAAC,CAAC,CAAC"}
+\ No newline at end of file
++{"version":3,"file":"runtime.d.ts","sourceRoot":"","sources":["../../src/hosted/runtime.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,2BAA2B,CAAC;AAEjE,OAAO,KAAK,EAAE,YAAY,EAAE,MAAM,0CAA0C,CAAC;AAC7E,OAAO,KAAK,EAAE,qBAAqB,EAAE,MAAM,yCAAyC,CAAC;AACrF,OAAO,KAAK,EAAE,OAAO,EAAE,MAAM,yCAAyC,CAAC;AAGvE,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,iDAAiD,CAAC;AACjF,OAAO,EAAwB,KAAK,oBAAoB,EAAE,MAAM,4CAA4C,CAAC;AAE7G,OAAO,KAAK,EAAE,oBAAoB,EAAE,qBAAqB,EAAE,MAAM,sBAAsB,CAAC;AASxF,OAAO,EAAE,iBAAiB,EAAE,MAAM,0BAA0B,CAAC;AAO7D,OAAO,KAAK,UAAU,MAAM,4BAA4B,CAAC;AACzD,OAAO,KAAK,QAAQ,MAAM,eAAe,CAAC;AAE1C,OAAO,EAAE,CAAC,EAAE,MAAM,QAAQ,CAAC;AAI3B,QAAA,MAAM,UAAU;;;;EAA0D,CAAC;AAC3E,MAAM,MAAM,iBAAiB,GAAG,CAAC,CAAC,KAAK,CAAC,OAAO,UAAU,CAAC,CAAC;AAE3D,MAAM,WAAW,sBAAsB;IACrC,SAAS,CAAC,IAAI,EAAE,OAAO,CAAC,IAAI,CAAC,GAAG,IAAI,CAAC;IACrC,QAAQ,CAAC,MAAM,EAAE,iBAAiB,EAAE,EAAE,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC,CAAC;IAC/D,MAAM,CAAC,MAAM,EAAE,iBAAiB,GAAG,OAAO,CAAC,IAAI,CAAC,CAAC;CAClD;AAED,MAAM,WAAW,oBAAoB;IACnC,SAAS,EAAE,eAAe,CAAC;IAC3B,GAAG,EAAE,kBAAkB,CAAC;IACxB,GAAG,EAAE,QAAQ,CAAC,gBAAgB,CAAC;IAC/B,KAAK,EAAE,YAAY,CAAC;IACpB,SAAS,EAAE,sBAAsB,CAAC;IAClC,sEAAsE;IACtE,KAAK,CAAC,EAAE,IAAI,CAAC,qBAAqB,EAAE,qBAAqB,CAAC,CAAC;IAC3D,QAAQ,CAAC,EAAE,MAAM,CAAC;IAClB,MAAM,CAAC,EAAE,MAAM,CAAC;CACjB;AAED,MAAM,WAAW,YAAa,SAAQ,SAAS;IAC7C,EAAE,CAAC,IAAI,EAAE,OAAO,GAAG,YAAY,CAAC;CACjC;AAuOD,wBAAsB,oBAAoB,CAAC,OAAO,EAAE,oBAAoB;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;uBAmBjD,MAAM,YAAY,qBAAqB;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;6BAWjC,oBAAoB;wBACzB,iBAAiB;yBAChB,SAAS;wBACV,SAAS,WAAW,MAAM,GAAG,WAAW;wBACxC,SAAS;;GAGhC;AAED,MAAM,MAAM,aAAa,GAAG,OAAO,CAAC,UAAU,CAAC,OAAO,oBAAoB,CAAC,CAAC,CAAC"}
+\ No newline at end of file
+diff --git a/dist/hosted/runtime.js b/dist/hosted/runtime.js
+index 7c48f74e5cb76e895250e2cb82d447ef53c21122..12df329568d7a90c1a3066c1774ff39b313a8b04 100644
+--- a/dist/hosted/runtime.js
++++ b/dist/hosted/runtime.js
+@@ -68,6 +68,7 @@ class RuntimeOwner {
+             env: options.env,
+             notify: (line) => this._notifySession(line),
+             requestLaunchTurn: (at) => this._scheduleLaunchTurn(at),
++            ...(options.hooks?.resolveWorkerLaunch !== undefined ? { resolveWorkerLaunch: options.hooks.resolveWorkerLaunch } : {}),
+         });
+         options.workspace.shell.bindTerminal(this.terminal);
+         installLogPersistence(this, options.ctx, () => this.scheduleLogs());
+@@ -257,6 +258,7 @@ export async function composeHostedRuntime(options) {
+         terminal: owner.terminal,
+         files: runtimeFiles(options.workspace, owner.processes.cred(owner.shellProcessPid)),
+         runtimes: owner.runtimeManager,
++        facets: () => owner.ensureFacetManager(),
+         ready: operations.ensureProgrammaticReady.bind(null, owner),
+         exec: operations.rpcExec.bind(null, owner),
+         runCode: operations.rpcRunCode.bind(null, owner),
+diff --git a/dist/hosted/services.d.ts b/dist/hosted/services.d.ts
+index 73eba6d58b7fa96753ab6f70e44019e4540c6607..40e7f86437c1fe68f6aecde055cc5b35cc99e905 100644
+--- a/dist/hosted/services.d.ts
++++ b/dist/hosted/services.d.ts
+@@ -1,4 +1,4 @@
+-import { type ComposedFacetManager } from "../facets/compose.js";
++import { type ComposedFacetManager, type FacetManagerHostHooks } from "../facets/compose.js";
+ import { EsbuildBundlePool } from "../facets/esbuild-bundle-pool.js";
+ import type { NpmInstaller } from "../npm/installer.js";
+ import { WebSocketRelay } from "../session/ws-relay.js";
+@@ -16,6 +16,7 @@ export interface RuntimeServiceContext {
+     readonly env: HostedRuntimeEnv;
+     notify(line: string): void;
+     requestLaunchTurn(notBefore?: number): Promise<boolean>;
++    resolveWorkerLaunch?: FacetManagerHostHooks['resolveWorkerLaunch'];
+ }
+ export declare function ensureBundlePool(self: RuntimeServiceHost, runtimeContext: RuntimeServiceContext): EsbuildBundlePool;
+ export declare function ensureFacetManager(self: RuntimeServiceHost, runtimeContext: RuntimeServiceContext): ComposedFacetManager;
+diff --git a/dist/hosted/services.d.ts.map b/dist/hosted/services.d.ts.map
+index 88ce142722e0660cc18ddf71090a3fe88ccf2c62..72efbcd9f6a4084b21d3e7600ba869cc31834984 100644
+--- a/dist/hosted/services.d.ts.map
++++ b/dist/hosted/services.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"services.d.ts","sourceRoot":"","sources":["../../src/hosted/services.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
++{"version":3,"file":"services.d.ts","sourceRoot":"","sources":["../../src/hosted/services.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
+diff --git a/dist/hosted/services.js b/dist/hosted/services.js
+index 0afc516a5e23f8ec5b5ce5d36122876402e65836..1555d62075da844065b47e176a165dacb211e424 100644
+--- a/dist/hosted/services.js
++++ b/dist/hosted/services.js
+@@ -75,6 +75,7 @@ export function ensureFacetManager(self, runtimeContext) {
+                 onExternalExit: (pid, code, reason) => self._reportExternalExit(pid, code, reason),
+                 requestLaunchTurn: (notBefore) => { void runtimeContext.requestLaunchTurn(notBefore); },
+                 notify: (line) => runtimeContext.notify(line),
++                ...(runtimeContext.resolveWorkerLaunch !== undefined ? { resolveWorkerLaunch: runtimeContext.resolveWorkerLaunch } : {}),
+                 onSpawn: (pid, command, longRunning) => {
+                     const attachedTty = self.processes.get(pid)?.attachedTty === true;
+                     if (longRunning) {
+diff --git a/dist/workspace-host.d.ts b/dist/workspace-host.d.ts
+index 9752faf71a96009a0aad3d1351a23d702392bfef..73b2a06f0ac1278ee9c5a78e493d2734fcbed5be 100644
+--- a/dist/workspace-host.d.ts
++++ b/dist/workspace-host.d.ts
+@@ -1,4 +1,4 @@
+-export { composeFacetManager, type FacetManagerDeps, type ComposedFacetManager } from './facets/compose.js';
++export { composeFacetManager, type FacetManagerDeps, type FacetManagerHostHooks, type ComposedFacetManager, type LongRunningWorkerSpawnOptions, type WorkerRecipe } from './facets/compose.js';
+ export { composeHostedRuntime, type HostedRuntime, type HostedRuntimeOptions, type HostedRuntimeLifecycle, type HostedRuntimeTask, type RuntimeFiles } from './hosted/runtime.js';
+ export { runtimeCatalogSource } from './runtime/runtime-catalog.js';
+ export { SupervisorRPC } from './session/supervisor-rpc.js';
+diff --git a/dist/workspace-host.d.ts.map b/dist/workspace-host.d.ts.map
+index a2ee21723baa0186329e11985f970e4070db2fc5..4deb5e4146b11a049cb4544b734d876c9f7e1503 100644
+--- a/dist/workspace-host.d.ts.map
++++ b/dist/workspace-host.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"workspace-host.d.ts","sourceRoot":"","sources":["../src/workspace-host.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,mBAAmB,EAAE,KAAK,gBAAgB,EAAE,KAAK,oBAAoB,EAAE,MAAM,qBAAqB,CAAC;AAC5G,OAAO,EAAE,oBAAoB,EAAE,KAAK,aAAa,EAAE,KAAK,oBAAoB,EAAE,KAAK,sBAAsB,EAAE,KAAK,iBAAiB,EAAE,KAAK,YAAY,EAAE,MAAM,qBAAqB,CAAC;AAClL,OAAO,EAAE,oBAAoB,EAAE,MAAM,8BAA8B,CAAC;AACpE,OAAO,EAAE,aAAa,EAAE,MAAM,6BAA6B,CAAC;AAC5D,OAAO,EAAE,eAAe,EAAE,eAAe,EAAE,kBAAkB,EAAE,sBAAsB,EAAE,4BAA4B,EAAE,YAAY,EAAE,MAAM,+BAA+B,CAAC"}
+\ No newline at end of file
++{"version":3,"file":"workspace-host.d.ts","sourceRoot":"","sources":["../src/workspace-host.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,mBAAmB,EAAE,KAAK,gBAAgB,EAAE,KAAK,qBAAqB,EAAE,KAAK,oBAAoB,EAAE,KAAK,6BAA6B,EAAE,KAAK,YAAY,EAAE,MAAM,qBAAqB,CAAC;AAC/L,OAAO,EAAE,oBAAoB,EAAE,KAAK,aAAa,EAAE,KAAK,oBAAoB,EAAE,KAAK,sBAAsB,EAAE,KAAK,iBAAiB,EAAE,KAAK,YAAY,EAAE,MAAM,qBAAqB,CAAC;AAClL,OAAO,EAAE,oBAAoB,EAAE,MAAM,8BAA8B,CAAC;AACpE,OAAO,EAAE,aAAa,EAAE,MAAM,6BAA6B,CAAC;AAC5D,OAAO,EAAE,eAAe,EAAE,eAAe,EAAE,kBAAkB,EAAE,sBAAsB,EAAE,4BAA4B,EAAE,YAAY,EAAE,MAAM,+BAA+B,CAAC"}
+\ No newline at end of file
