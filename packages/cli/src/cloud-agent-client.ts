@@ -128,7 +128,6 @@ const BranchTurnResultSchema = v.nullable(v.object({
   reason: v.optional(v.string()),
 }));
 
-const ForkAgentResultSchema = v.nullable(v.object({ name: v.optional(v.string()) }));
 
 /** Both additional-agent calls answer with the slug to address the agent by
  *  and its shown title, which is empty until something names it. */
@@ -515,35 +514,17 @@ export class CloudAgentClient implements AgentClient {
     });
   }
 
-  /** Walk-back fork: the cloud's fork primitive is agent-level — forkAgent
-   *  copies SOUL/memory/messages up to a message id into a NEW agent DO. We
-   *  fork at the message preceding the picked user message and hand back a
-   *  sibling client pointed at the fork. */
+  /** Walk-back: the workspace continues from before the picked user message,
+   *  on the context it held there. Same client, same agent. */
   async fork(point: ForkPoint): Promise<AgentForkResult> {
     if (this.activeTurns.size > 0) throw new Error('Cannot fork while a turn is running.');
     const rows = await this.transcript();
-    const pivot = findForkPivot(rows, point);
+    const pivotRow = rows[findForkPivot(rows, point)];
 
-    if (pivot < 0) throw new Error("Could not locate that message in the agent's chat history.");
+    if (pivotRow === undefined) throw new Error("Could not locate that message in the agent's chat history.");
+    await this.callRpc('revertConversation', [pivotRow.id]);
 
-    if (pivot === 0) throw new Error('Cannot walk back before the first message of a cloud workspace.');
-    const untilId = rows[pivot - 1]!.id;
-    const forkName = v.parse(ForkAgentResultSchema, await this.callRpc('forkAgent', [untilId]))?.name;
-
-    if (!forkName) throw new Error('Cloud fork returned no agent name.');
-
-    const sibling = new CloudAgentClient({
-      origin: this.origin,
-      token: this.token,
-      agentName: forkName,
-      cloudName: forkName,
-      transcript: {
-        transcriptDir: this.transcriptOptions.transcriptDir,
-        noTranscript: this.transcriptOptions.noTranscript,
-      },
-    });
-
-    return { client: sibling, label: `agent ${forkName}` };
+    return { client: this, label: `before ${pivotRow.id}` };
   }
 
   /** Invoke a named agent method over the generic HTTP RPC transport —
