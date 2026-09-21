@@ -25,12 +25,6 @@ export interface ContextFileHeader {
   readonly effectiveAt: 'step' | 'turn'; readonly turn: string | null; readonly blocked?: string;
 }
 
-export interface ObservedWorkingFile { readonly header: ContextFileHeader; readonly entries: readonly WorkingEntry[] }
-
-type WorkingEntry =
-  | { readonly entryId: string; readonly messageId: string; readonly cutoff: number; readonly message: JsonObject }
-  | { readonly new: true; readonly message: JsonObject };
-
 const HeaderSchema = v.object({ actor: v.string(), contextId: v.nullable(v.string()), revision: v.pipe(v.number(), v.integer(), v.minValue(0)),
   proposalId: v.nullable(v.string()), version: v.string() });
 
