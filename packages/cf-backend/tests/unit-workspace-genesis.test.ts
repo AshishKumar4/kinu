@@ -189,10 +189,11 @@ describe('the workspace takes its own first turn', () => {
 
     // Late, while the offer's turn holds the slot: a steer the model never
     // sees, which the settle reruns as the operator's own next turn — on the
-    // same scripted model, answered as the offer was.
+    // same scripted model, answered as the offer was. The send says so once
+    // that turn has run: it landed as a turn, not in the genesis turn's step.
     const late = harness.agent.harnessChatLoop.send('Late but admitted.');
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
-    expect(await late).toBe('mid-turn');
+    expect(await late).toBe('turn');
 
     expect(activityEvents(harness.db)).not.toContain('genesis.yielded_to_message');
     const ran = (await turnsRun(harness.agent));
