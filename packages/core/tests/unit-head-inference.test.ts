@@ -212,6 +212,43 @@ describe('durable delegated turn opening', () => {
     });
   }
 
+  test('the walk-back is one session method: head, selection, woven blocks and working history move together', async () => {
+    const { rt, testSql } = createTestRuntime();
+    const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back', 'subordinate');
+    const { session, stores } = seat.actor;
+    const chat = stores.history.transcript(CHAT_SESSION_ID);
+    const assertOwner = () => rt.actor.assertCurrent();
+
+    try {
+      for (const [ask, answer, text] of [['ask-1', 'answer-1', 'one'], ['ask-2', 'answer-2', 'two']] as const) {
+        const input = await stores.history.append({ id: ask, message: { role: 'user', content: text }, origin: 'input', turnId: ask, assertOwner });
+        chat.record({ ...await chat.prepareUser({ id: ask, turnId: ask, message: input }), parentId: undefined });
+        const output = await stores.history.append({ id: answer, message: { role: 'assistant', content: `${text} answered` }, origin: 'output', turnId: ask, assertOwner });
+        chat.appendAssistant(await chat.prepareAssistant({ id: answer, parentId: ask, turnId: ask, runId: ask, parts: [{ messageId: answer, partNo: 0, throughSequence: output.sequence }], finalText: null }));
+      }
+
+      await session.restoreWorkingHistory();
+      expect(session.history.map((message) => message.content)).toEqual(['one', 'one answered', 'two', 'two answered']);
+      // A block woven against the four-message stream: positioned there, and meaningless anywhere else.
+      session.dynamic.weave(session.history, { mode: { workMode: 'build', planSubmission: false } });
+      expect(session.dynamic.size).toBe(1);
+
+      // The host's own idle condition is raised inside the same transaction: nothing moves.
+      await expect(session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => { throw new Error('a queued turn holds the loop'); }))
+        .rejects.toThrow('a queued turn holds the loop');
+      expect(chat.ancestry().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2']);
+      expect(session.dynamic.size).toBe(1);
+
+      await session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => {});
+      expect(chat.ancestry().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1']);
+      expect(session.history.map((message) => message.content)).toEqual(['one', 'one answered']);
+      expect((await stores.history.materialize()).messages.map((message) => message.content)).toEqual(['one', 'one answered']);
+      expect(session.dynamic.size).toBe(0);
+    } finally {
+      testSql.close();
+    }
+  });
+
   test('an explicitly empty working revision is authoritative, not a new birth', async () => {
     const { rt, testSql } = createTestRuntime();
     const first = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'subordinate');

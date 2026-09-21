@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
-import { applyWorkspaceTitle, persistAutoTitle, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, invalidateConversationSearchIndex, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
+import { applyWorkspaceTitle, persistAutoTitle, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import {
   DriverLeaseHold,
@@ -486,9 +486,8 @@ export class LocalAgentClient implements AgentClient {
     const pivotRow = rows[findForkPivot(rows, point)];
 
     if (pivotRow === undefined) throw new Error('Could not locate that message in the durable conversation.');
+    await this.session.revertConversation(pivotRow.id);
     await this.session.end();
-    this.deps.rt.stores.history.revertTo(this.canonicalConversation, pivotRow.id, () => {});
-    invalidateConversationSearchIndex(this.deps.rt.storage.sql);
     this.activeCliSession = createCliSession(this.agentName, {
       ...this.deps.transcript,
       conversationId: this.canonicalConversation,

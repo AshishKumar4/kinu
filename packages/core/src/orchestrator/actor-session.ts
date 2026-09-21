@@ -71,6 +71,15 @@ export interface ActorSessionOptions {
    */
   readonly events?: ContextEventRecorder | null;
   readonly advisor?: ActorAdvisorContext;
+  /**
+   * The ledger of woven dynamic-context blocks, when the host holds the one
+   * instance its compaction plane prunes; omitted, the session keeps its own.
+   * In-memory only: a cold start attaches exactly one fresh block, and every
+   * rewrite of the model-visible stream (a new compaction plan, a walk-back, a
+   * cleared conversation) resets it, because frozen block positions mean
+   * nothing against a stream they were not positioned in.
+   */
+  readonly dynamic?: DynamicContextLedger;
 }
 
 /** Live-instance execution token, not a replacement for a durable turn/run claim. */
@@ -141,7 +150,7 @@ export class ActorSession {
   readonly runtime: AgentRuntime;
   readonly orchestrator: AgentOrchestrator;
   readonly canonical: SessionHistory;
-  readonly dynamic = new DynamicContextLedger();
+  readonly dynamic: DynamicContextLedger;
   private readonly messages: ModelMessage[] = [];
   private readonly landed: LandedSteerRow[] = [];
   private active: ActiveTurn | null = null;
@@ -152,6 +161,7 @@ export class ActorSession {
     this.actorId = options.runtime.actor.actorId;
     this.runtime = options.runtime;
     this.canonical = options.history;
+    this.dynamic = options.dynamic ?? new DynamicContextLedger();
 
     this.orchestrator = new AgentOrchestrator(options.orchestration, {
       onDrain: (steers, atStep) => this.landSteers(steers, atStep),
@@ -286,6 +296,24 @@ export class ActorSession {
 
       return receipt.proposalId;
     });
+  }
+
+  /**
+   * Continue the chat from before `entryId`, on the context the actor held
+   * there. One path for every backend: the durable head and the context
+   * selection move together inside the store's transaction, the woven dynamic
+   * blocks are forgotten with the stream they were positioned in, and the
+   * working history is re-read from the store. Refused while a turn is in
+   * flight here; `assertIdle` is the host's own further condition (a queued
+   * turn its loop holds, say), raised inside the same transaction.
+   */
+  async revertConversation(sessionId: string, entryId: string, assertIdle: () => void): Promise<void> {
+    this.canonical.revertTo(sessionId, entryId, () => {
+      if (this.inFlight) throw new KinuError('denied', 'Stop the active turn before reverting its conversation');
+      assertIdle();
+    });
+    this.dynamic.reset();
+    await this.restoreWorkingHistory();
   }
 
   restoreWorkingHistory(): Promise<boolean> {

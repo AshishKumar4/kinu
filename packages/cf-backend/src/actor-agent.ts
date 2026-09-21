@@ -2492,6 +2492,9 @@ export abstract class ActorAgent extends Agent<Env> {
         installedBuild: this.installedBuildIdentity(),
         events: this.stores.eventRecorder,
         orchestration: this.orchestrationDeps(),
+        // The one ledger: the compaction plane registered at schema time prunes
+        // the same blocks the session weaves and the resets forget.
+        dynamic: this.dynamicLedger,
       });
     }
 

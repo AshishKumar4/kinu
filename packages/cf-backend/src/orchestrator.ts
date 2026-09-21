@@ -6568,11 +6568,9 @@ export class OrchestratorAgent extends ActorAgent {
   /** Continue the chat from before `entryId`, on the context the actor held there. */
   @callable()
   async revertConversation(entryId: string): Promise<void> {
-    this.stores.history.revertTo(CHAT_SESSION_ID, entryId, () => {
-      if (this.chatLoop.turnInFlight() || this.actorSession.inFlight) throw new KinuError('denied', 'Stop the active turn before reverting its conversation');
+    await this.actorSession.revertConversation(CHAT_SESSION_ID, entryId, () => {
+      if (this.chatLoop.turnInFlight()) throw new KinuError('denied', 'Stop the active turn before reverting its conversation');
     });
-    this.dynamicLedger.reset();
-    await this.actorSession.restoreWorkingHistory();
   }
 
   @callable()
