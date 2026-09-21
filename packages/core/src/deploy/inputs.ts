@@ -112,10 +112,11 @@ export const DeploymentRecordSchema: v.GenericSchema<DeploymentRecord> = v.objec
 });
 
 /** Every secret the deployment needs that nobody has to type: the two root
- *  secrets are minted here and never leave the run. A person who wants to keep
- *  a copy reads them once from the page (the same rule the provisioner has:
- *  a key nobody has seen is a key nobody can restore). */
-export const MINTED_SECRETS: readonly string[] = ['CREDENTIAL_ENCRYPTION_KEY', 'WEBHOOK_ROUTE_SECRET'];
+ *  secrets and the Drive's cursor-signing secret are minted here and never
+ *  leave the run. A person who wants to keep a copy reads them once from the
+ *  page (the same rule the provisioner has: a key nobody has seen is a key
+ *  nobody can restore). */
+export const MINTED_SECRETS: readonly string[] = ['CREDENTIAL_ENCRYPTION_KEY', 'WEBHOOK_ROUTE_SECRET', 'JWT_SECRET'];
 
 /** The secrets this release asks a person for, in the order the page shows
  *  them. Optional ones are offered, required ones block the run. */

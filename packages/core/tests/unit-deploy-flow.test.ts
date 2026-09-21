@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY,
-  HeldBytes, LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS,
+  HeldBytes, LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS, promptedSecrets,
   REFRESH_TOKEN_KEY, deployDoor, deployPlan, factsFrom, localLayout, parseReleaseManifest, releaseDir,
   renderLocalConfig, renderWorkerdConfig, runDeployPlan, unhostedBindings, workerdDirectories,
 } from '../src/deploy/index';
@@ -58,6 +58,7 @@ const MANIFEST: ReleaseManifest = {
   secrets: [
     { name: 'CREDENTIAL_ENCRYPTION_KEY', handling: 'prompted', required: true, prompt: '32 random bytes' },
     { name: 'WEBHOOK_ROUTE_SECRET', handling: 'prompted', required: true, prompt: '32 random bytes' },
+    { name: 'JWT_SECRET', handling: 'prompted', required: true, prompt: '32 random bytes' },
     { name: 'ANALYTICS_SQL_API_TOKEN', handling: 'optional', required: false, prompt: 'an account analytics token' },
   ],
   vars: [
@@ -471,6 +472,13 @@ describe('a guided run', () => {
       clientId: 'deploy-client-id',
     });
     expect(progress.at(-1)).toEqual({ kind: 'run-done', address: 'kinu.acme.workers.dev' });
+  });
+
+  test('a random secret is minted, never asked of a person', () => {
+    // The Drive's cursor-signing secret joined the census as a required prompt;
+    // the door mints it like the two root secrets, so a self-hoster is blocked
+    // on nothing they could not have typed.
+    expect(promptedSecrets(MANIFEST)).toEqual([]);
   });
 
   test('holds no secret when it is over', async () => {
