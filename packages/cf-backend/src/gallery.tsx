@@ -6868,6 +6868,35 @@ async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[
   };
 }
 
+/**
+ * The Environment tab and the composite drive share one stateful frame, so
+ * an Environment card's Files action genuinely lands the drive. Routed: the
+ * Files surface reads `agentId` off the route to address the raw-bytes HTTP
+ * route. `&offline=device` photographs the stated-absence row for a
+ * disconnected device; `&wide=1` the ≥64rem side-panel preview.
+ */
+/** What a gallery frame mounts, and the routed location the MemoryRouter opens on. */
+interface MountedFrame { node: React.ReactNode; entries: string[] }
+
+function driveFrame(frame: "environment" | "files"): MountedFrame {
+  const params = new URLSearchParams(location.search);
+
+  return {
+    entries: ["/workspace/checkout-fixes"],
+    node: (
+      <Routes>
+        <Route path="/workspace/:agentId"
+          element={<DriveFrame
+            initialSurface={frame === "files" ? "Files" : "Environment"}
+            offlineDevice={params.get("offline") === "device"}
+            width={params.get("wide") === null ? (frame === "files" ? "w-[860px]" : "w-[720px]") : "w-[1240px]"}
+            deferPreview={params.get("deferpreview") === "1"}
+          />} />
+      </Routes>
+    ),
+  };
+}
+
 async function mount() {
   // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
@@ -7087,26 +7116,7 @@ async function mount() {
   else if (frame === "planreview") node = <PlanReviewFrame />;
   else if (frame === "workempty") node = <WorkEmptyFrame />;
   else if (frame === "approvals") node = <ApprovalsFrame />;
-  // The Environment tab and the composite drive share one stateful frame, so
-  // an Environment card's Files action genuinely lands the drive. Routed: the
-  // Files surface reads `agentId` off the route to address the raw-bytes HTTP
-  // route. `&offline=device` photographs the stated-absence row for a
-  // disconnected device; `&wide=1` the ≥64rem side-panel preview.
-  else if (frame === "environment" || frame === "files") {
-    const params = new URLSearchParams(location.search);
-    entries = ["/workspace/checkout-fixes"];
-    node = (
-      <Routes>
-        <Route path="/workspace/:agentId"
-          element={<DriveFrame
-            initialSurface={frame === "files" ? "Files" : "Environment"}
-            offlineDevice={params.get("offline") === "device"}
-            width={params.get("wide") === null ? (frame === "files" ? "w-[860px]" : "w-[720px]") : "w-[1240px]"}
-            deferPreview={params.get("deferpreview") === "1"}
-          />} />
-      </Routes>
-    );
-  }
+  else if (frame === "environment" || frame === "files") ({ node, entries } = driveFrame(frame));
   else if (fixture !== undefined) { node = fixture.node; entries = fixture.entries; }
   // The log pane alone, at fixture scale — the close-up the composed activity
   // frames render too small to read.

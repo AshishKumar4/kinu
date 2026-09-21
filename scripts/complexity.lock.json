@@ -31,7 +31,7 @@
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#mount",
-      "complexity": 69
+      "complexity": 67
     },
     {
       "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
