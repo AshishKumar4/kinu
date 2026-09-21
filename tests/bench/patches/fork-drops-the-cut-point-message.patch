@@ -1,8 +1,8 @@
-diff --git a/packages/core/src/identity/fork.ts b/packages/core/src/identity/fork.ts
-index b5ade6402..d94c0a208 100644
---- a/packages/core/src/identity/fork.ts
-+++ b/packages/core/src/identity/fork.ts
-@@ -563,7 +563,7 @@ export function planForkConversation(input: {
+diff --git a/packages/core/src/identity/fork-plan.ts b/packages/core/src/identity/fork-plan.ts
+index 12567deca..24807f764 100644
+--- a/packages/core/src/identity/fork-plan.ts
++++ b/packages/core/src/identity/fork-plan.ts
+@@ -303,7 +303,7 @@ export function planForkConversation(input: {
  
    return {
      cut: { entryId: cutEntry.id, recordedAt: cutEntry.recorded_at },
