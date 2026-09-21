@@ -2335,6 +2335,11 @@ export {
 } from './execution/terminal-lane';
 
 export {
+  WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG, WorkspaceTerminalInputSchema, WorkspaceTerminalOutputSchema,
+  isWorkspaceTerminal,
+} from './execution/workspace-terminal';
+
+export {
   type WorkspacePreviewHost, type WorkspacePreviewUrl, buildWorkspacePreviewHost, parseWorkspacePreviewLabel,
 } from './preview/nimbus-preview-host';
 

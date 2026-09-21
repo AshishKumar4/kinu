@@ -278,6 +278,9 @@ interface HostComposition {
   readonly ports: PortRegistry;
 }
 
+/** The runtime's terminal surface, as this host exposes it to the actor. */
+export type WorkspaceTerminal = Pick<HostedRuntime, 'attachTerminal' | 'terminalFrame' | 'terminalClose'>;
+
 export interface HostedWorkspace {
   /** The filesystem and the shell, as `Storage.vfs` and every file surface
    *  consume them. */
@@ -316,7 +319,7 @@ export interface HostedWorkspace {
    * accept, `frame` per message, `close` when the socket goes. One terminal
    * per workspace, as Nimbus keeps it; a second attach replaces the first.
    */
-  terminal(): Promise<Pick<HostedRuntime, 'attachTerminal' | 'terminalFrame' | 'terminalClose'>>;
+  terminal(): Promise<WorkspaceTerminal>;
   readonly apps: DurableApps;
   /**
    * Route a preview request whose signed hostname the edge has already

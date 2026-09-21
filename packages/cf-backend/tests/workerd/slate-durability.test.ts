@@ -117,3 +117,20 @@ it('npm install streams a package off the registry into the hosted workspace', a
   expect(await subject().readWorkspaceFile(workspace, `/home/user/proj/node_modules/${REGISTRY_PKG}/package.json`)).toBe(REGISTRY_MANIFEST);
   expect(await subject().readWorkspaceFile(workspace, `/home/user/proj/node_modules/${REGISTRY_PKG}/lib/index.js`)).toBe(REGISTRY_ENTRY);
 });
+
+it('the workspace terminal is the runtime shell: a typed line runs and its output comes back as frames', async () => {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('terminal'));
+  const workspace = 'durability-terminal';
+  await subject().serveSlate({ workspace, owner: 'durability-owner', id: 'beside-terminal', body: 'served' });
+
+  const drive = await subject().driveTerminal(workspace, 'echo shell-$((20+3))', 'shell-23');
+
+  expect(drive.ok, drive.ok ? '' : drive.error).toBe(true);
+
+  if (!drive.ok) return;
+  // The runtime replays the screen and then says the socket is attached;
+  // nothing of the actor protocol reached the pane's socket.
+  expect(drive.frames).toContain('ready');
+  expect(drive.frames).not.toContain('other');
+  expect(drive.output).toContain('shell-23');
+});

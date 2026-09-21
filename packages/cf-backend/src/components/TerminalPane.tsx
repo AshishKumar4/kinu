@@ -1,7 +1,7 @@
 /**
  * The environment terminal.
  *
- * One xterm instance, two families of driver:
+ * One xterm instance, three families of driver:
  *
  *   PTY   — a real pseudo-terminal: `htop`, `vim` and anything else that
  *           paints a screen works, arrow keys and Ctrl-C reach the foreground
@@ -21,12 +21,18 @@
  *             WebSocket and speaks the same shape by hand: binary frames each
  *             way, `{type:'resize'}` out, `ready`/`exit`/`error` in.
  *
- *   LINE  — every environment with no pseudo-terminal. A command in, its
+ *   SHELL — the workspace. Nimbus's own shell, inside the workspace object:
+ *           its line editor, its scrollback replayed on reattach, its bash
+ *           and python REPLs. Not a pseudo-terminal — nothing full-screen
+ *           paints — so it is its own family rather than a third PTY driver.
+ *           The wire is the runtime's JSON frames (workspace-terminal.ts).
+ *
+ *   LINE  — every environment with no shell of its own. A command in, its
  *           output back, and the pane SAYS it is line mode. Saying so is the
  *           honest half: an emulated prompt over one-shot exec looks like a
  *           shell and cannot run one.
  *
- * The lane decides PTY or line, and the route agrees with it because both read
+ * The lane decides the family, and the route agrees with it because both read
  * the same table. Which PTY driver runs inside that family is this file's own
  * call, by executor. lib/terminal-lane.ts holds the lane table, the line-mode
  * label, and the line editor and painter this file mounts — everything that is
@@ -47,6 +53,7 @@ import {
   type TerminalPaneOutput,
 } from "@kinu.run/core";
 import type { ExecutorCommandResult } from "@kinu.run/core";
+import { WorkspaceTerminalOutputSchema } from "@kinu.run/core";
 
 // The row type is declared with the driver that paints it and named here
 // because this pane's props are what a reader looks at to find it.
@@ -80,7 +87,9 @@ const SCROLLBACK_LINES = 5_000;
 export function TerminalPane({ workspace, executor, outputs, onExecute }: TerminalPaneProps) {
   const lane = terminalLane(executor);
 
-  if (lane.mode !== "pty") return <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} />;
+  if (lane.mode === "line") return <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} />;
+
+  if (lane.mode === "shell") return <WorkspaceTerminal workspace={workspace} executor={executor} />;
 
   return executor === "device"
     ? <DeviceTerminal workspace={workspace} executor={executor} />
@@ -325,6 +334,26 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
   );
 }
 
+/** The window, as both socket drivers declare it: the same control frame. */
+function resizeFrames(term: Terminal, socket: WebSocket): IDisposable {
+  return term.onResize(({ cols, rows }) => {
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", cols, rows }));
+  });
+}
+
+/** What both socket drivers undo on unmount: the socket's handlers and
+ *  subscriptions, the socket, then the chrome. */
+function releaseSocketTerminal(socket: WebSocket, subscriptions: readonly (IDisposable | null)[], disposeChrome: () => void): void {
+  socket.onopen = null;
+  socket.onmessage = null;
+  socket.onclose = null;
+  socket.onerror = null;
+
+  for (const subscription of subscriptions) subscription?.dispose();
+  socket.close();
+  disposeChrome();
+}
+
 /**
  * The wire this driver speaks, verbatim: binary frames of terminal bytes each
  * way, `{type:'resize'}` out, and these three control frames in. Not the
@@ -383,9 +412,7 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
       dataSubscription = term.onData((data) => {
         if (socket.readyState === WebSocket.OPEN) socket.send(encoder.encode(data));
       });
-      resizeSubscription = term.onResize(({ cols, rows }) => {
-        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", cols, rows }));
-      });
+      resizeSubscription = resizeFrames(term, socket);
     };
 
     socket.onmessage = (event) => {
@@ -427,14 +454,7 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
 
     return () => {
       copyOperation.current = null;
-      socket.onopen = null;
-      socket.onmessage = null;
-      socket.onclose = null;
-      socket.onerror = null;
-      dataSubscription?.dispose();
-      resizeSubscription?.dispose();
-      socket.close();
-      disposeChrome();
+      releaseSocketTerminal(socket, [dataSubscription, resizeSubscription], disposeChrome);
       termRef.current = null;
     };
   }, [workspace, executor]);
@@ -459,6 +479,110 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
             program is a real shell, so Ctrl-C keeps its ordinary meaning
             instead of merely reaching a full-screen program's raw input. */}
         <span className="ml-auto shrink-0" title="⌃C interrupts the foreground program.">
+          ⇧⌃C copies
+        </span>
+      </div>
+      <div ref={hostRef} className="p-bg flex-1 min-h-0 rounded-lg border p-border overflow-hidden" />
+    </div>
+  );
+}
+
+/* ── the workspace shell ──────────────────────────────────────────────── */
+
+/**
+ * The runtime's terminal over its own frames: keystrokes and the window go
+ * out as JSON, the shell's bytes come back as JSON, and `ready` says the
+ * runtime attached this socket — after which it has already replayed the
+ * scrollback, so a reload lands on the same screen.
+ */
+function WorkspaceTerminal({ workspace, executor }: { workspace: string; executor: string }) {
+  const theme = useTheme();
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const copyOperation = useRef<TerminalOperation | null>(null);
+  const [state, setState] = useState<PtyState>("connecting");
+  const [failure, setFailure] = useState<string | null>(null);
+
+  useEffect(() => {
+    const host = hostRef.current;
+
+    if (!host) return;
+    setState("connecting");
+    setFailure(null);
+
+    const { term, dispose: disposeChrome } = mountPtyTerminal(host, theme.mode, copyOperation, setFailure);
+    termRef.current = term;
+    const origin = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
+
+    const socket = new WebSocket(
+      `${origin}/api/workspaces/${encodeURIComponent(workspace)}/terminal`
+      + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}`,
+    );
+
+    let dataSubscription: IDisposable | null = null;
+    let resizeSubscription: IDisposable | null = null;
+
+    socket.onopen = () => {
+      // The runtime sizes its editor from the frames it is sent, never from
+      // the query, so the window is declared as soon as the socket is up.
+      socket.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      dataSubscription = term.onData((data) => {
+        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }));
+      });
+      resizeSubscription = resizeFrames(term, socket);
+    };
+
+    socket.onmessage = (event) => {
+      // The runtime writes process notices on this socket beside the shell's
+      // output; the pane paints the two frames it knows and drops the rest.
+      const parsed = v.safeParse(WorkspaceTerminalOutputSchema, tolerate(() => JSON.parse(String(event.data)), "malformed-input"));
+
+      if (!parsed.success) return;
+      const message = parsed.output;
+
+      switch (message.type) {
+        case "output":
+          term.write(message.data);
+          break;
+        case "ready":
+          setState("connected");
+          term.focus();
+          break;
+      }
+    };
+
+    socket.onclose = (event) => {
+      setState("disconnected");
+
+      if (event.reason !== "") setFailure(event.reason);
+    };
+
+    socket.onerror = () => {
+      setState("disconnected");
+      setFailure("the connection dropped");
+    };
+
+    return () => {
+      copyOperation.current = null;
+      releaseSocketTerminal(socket, [dataSubscription, resizeSubscription], disposeChrome);
+      termRef.current = null;
+    };
+  }, [workspace, executor]);
+
+  useEffect(() => {
+    const term = termRef.current;
+
+    if (term) term.options.theme = terminalTheme(theme.mode);
+  }, [theme]);
+
+  return (
+    <div className="w-full h-full flex flex-col">
+      <div className="flex items-center gap-2 px-3 py-1 shrink-0 p-meta p-text-3">
+        <span className="font-mono">{executor}</span>
+        <span>·</span>
+        <span>{state === "connected" ? "workspace shell" : state}</span>
+        {failure !== null && <span className="p-danger truncate" title={failure}>{failure}</span>}
+        <span className="ml-auto shrink-0" title="⌃C interrupts the running command.">
           ⇧⌃C copies
         </span>
       </div>

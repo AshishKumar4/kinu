@@ -12,7 +12,7 @@
  * @kinu.run/core so the CLI surface shares them verbatim.
  */
 
-import { callable, type AgentContext } from "agents";
+import { callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
@@ -33,7 +33,8 @@ import {
   type LoopOrigin, type MergeResult, type NimbusSandboxHandle, type NodeHomeHost,
   type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
 } from "@kinu.run/core";
-import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
+import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
+import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
 import { ActorMessagesTranscript, CHAT_SESSION_ID, recordedAnswer } from '@kinu.run/core';
 import type { UIMessage } from 'ai';
@@ -1190,6 +1191,24 @@ export class OrchestratorAgent extends ActorAgent {
     }
 
     return await super.fetch(request);
+  }
+
+  /** A socket the terminal route forwarded is tagged as the workspace's shell,
+   *  ahead of the identity tags the base reads off the same request. */
+  override async getConnectionTags(connection: Connection, ctx: ConnectionContext): Promise<string[]> {
+    const tags = await super.getConnectionTags(connection, ctx);
+
+    return new URL(ctx.request.url).pathname === WORKSPACE_TERMINAL_PATH ? [WORKSPACE_TERMINAL_TAG, ...tags] : tags;
+  }
+
+  /** The SDK's identity, state and MCP frames are for a pane that speaks the
+   *  actor protocol; a terminal socket carries the shell's frames only. */
+  override shouldSendProtocolMessages(_connection: Connection, ctx: ConnectionContext): boolean {
+    return new URL(ctx.request.url).pathname !== WORKSPACE_TERMINAL_PATH;
+  }
+
+  protected override async terminalFor(connection: Connection): Promise<WorkspaceTerminal | null> {
+    return isWorkspaceTerminal(connection.tags) ? await this.hostedWorkspace().terminal() : null;
   }
 
   protected override turnWorkMode(): WorkMode {
@@ -6300,6 +6319,24 @@ export class OrchestratorAgent extends ActorAgent {
       if (device.registered) return { error: 'That machine is offline. Run `kinu connect` on it.' };
 
       return { error: 'No machine is linked to this account yet. Run `kinu connect` on the one you want.' };
+    }
+
+    // The runtime's own shell. Composing the runtime is what an attach waits
+    // on; the socket itself is forwarded to this object afterwards.
+    if (executorId === 'workspace') {
+      try {
+        await this.hostedWorkspace().terminal();
+
+        return { ok: true };
+      } catch (cause) {
+        return {
+          error: renderCauseChain(toKinuError({
+            doing: 'composing the workspace runtime for a terminal',
+            cause,
+            otherwise: 'unavailable',
+          })),
+        };
+      }
     }
 
     if (executorId !== 'sandbox') return { error: `${executorId} has no terminal` };
