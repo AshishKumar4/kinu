@@ -6,7 +6,10 @@ import { runParityScenario } from './chat-session-parity';
 describe('ChatSession steering and recovery', () => {
   test('steering preserves conversation ancestry and consumes pending sends across restart', async () => {
     const now = await runParityScenario();
-    expect(now.landings).toEqual({ landingTwo: 'mid-turn', landingThree: 'mid-turn', returned: ['three-steer'], landingFour: 'mid-turn', landingFive: 'turn' });
+    // Each landing as the turn decided it: two read at its step, three handed
+    // back by the interrupt, four acknowledged by a process that then died,
+    // five a turn of its own.
+    expect(now.landings).toEqual({ landingTwo: 'mid-turn', landingThree: 'cancelled', returned: ['three-steer'], landingFour: 'acknowledged', landingFive: 'turn' });
     const rows = v.parse(v.array(v.object({ id: v.string(), parentId: v.nullable(v.string()), role: v.string(), content: v.string() })), now.afterTwo.actorMessages);
     expect(rows.map(row => row.content)).toEqual(['one', 'answer one', 'two', 'two-steer', 'answer two']);
     expect(rows.map(row => row.parentId)).toEqual([null, ...rows.slice(0, -1).map(row => row.id)]);

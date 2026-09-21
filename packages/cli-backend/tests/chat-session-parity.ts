@@ -25,6 +25,7 @@ import { Database } from 'bun:sqlite';
 import { parityNormalizer, scratchPath, type ParityNormalizer } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { decodeJsonValue, initWorkspaceSchema, JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
 import type { LanguageModelV2CallOptions, LanguageModelV2Usage } from '@ai-sdk/provider';
 import type { LLMProviderConfig, SessionTranscriptReader } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
@@ -173,6 +174,23 @@ function sequencedModel(scripts: readonly TestLanguageModelV2[]): TestLanguageMo
       return script.doStream(options);
     },
   });
+}
+
+/** How a send that did not land was answered: the refusal's code, or the
+ *  landing it got instead. */
+async function refusalCode(landing: Promise<string>): Promise<string> {
+  try {
+    return await landing;
+  } catch (cause) {
+    if (cause instanceof KinuError) return cause.code;
+    throw new Error('a send was refused with something other than a KinuError', { cause });
+  }
+}
+
+/** The texts the session holds a reservation for — the acknowledgement a
+ *  send has before anything is decided about where it lands. */
+function pendingSteerTexts(db: Database): string[] {
+  return db.query<{ text: string }, []>('SELECT text FROM pending_steers ORDER BY seq').all().map((row) => row.text);
 }
 
 async function waitFor(pred: () => boolean, timeoutMs = 5000): Promise<void> {
@@ -368,31 +386,38 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
   // 1. An idle send runs as a turn of its own.
   await a.send('one');
 
-  // 2. A send mid-turn, carrying a file: it lands at the next step boundary.
+  // 2. A send mid-turn, carrying a file: it lands at the next step boundary,
+  //    and is answered there — the landing is the drain's, not the admission's.
   const turnTwo = a.send('two');
   await waitFor(() => turnEvents(eventsA, 2).some((event) => event.type === 'tool-call'));
-  const landingTwo = await a.send({ text: 'two-steer', files: [NOTE_FILE] });
+  const steerTwo = a.send({ text: 'two-steer', files: [NOTE_FILE] });
   two.stepGate.resolve();
+  const landingTwo = await steerTwo;
   await waitFor(() => two.prompts.length === 2);
   two.endGate.resolve();
   await turnTwo;
   const afterTwo = await durableRows(db, norm, transcript);
 
-  // 3. An interrupt hands the pending steer back and cuts the turn.
+  // 3. An interrupt hands the pending steer back and cuts the turn: the send
+  //    is answered with the refusal, never a landing.
   const turnThree = a.send('three');
   await waitFor(() => turnEvents(eventsA, 3).some((event) => event.type === 'text-delta'));
-  const landingThree = await a.send('three-steer');
+  const steerThree = a.send('three-steer');
+  await waitFor(() => pendingSteerTexts(db).includes('three-steer'));
   const returned = a.interrupt();
+  const landingThree = await refusalCode(steerThree);
   await turnThree;
   three.release();
 
   // 4. A send with a file acknowledged mid-turn, then the process dies before
-  //    the drain.
-  // Its landing is never read: this is the turn the process dies inside, and
-  // the model producers it parks on stay parked (see the end of the script).
+  //    the drain. Its landing is never decided in this process: this is the
+  //    turn the process dies inside, and the model producers it parks on stay
+  //    parked (see the end of the script). The reservation is the acknowledgement.
   const turnFour = a.send('four');
   await waitFor(() => turnEvents(eventsA, 4).some((event) => event.type === 'tool-call'));
-  const landingFour = await a.send({ text: 'four-steer', files: [NOTE_FILE] });
+  const steerFour = a.send({ text: 'four-steer', files: [NOTE_FILE] });
+  await waitFor(() => pendingSteerTexts(db).includes('four-steer'));
+  const landingFour = 'acknowledged';
   const beforeRestart = await durableRows(db, norm, transcript);
 
   if (interruptRecovery) {
@@ -429,7 +454,7 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
   // model producers stay parked, so the promise that awaits them never
   // settles; racing it against the live session's close is what lets the
   // script end without ever resuming the dead one.
-  await Promise.race([turnFour, b.end()]);
+  await Promise.race([turnFour, steerFour, b.end()]);
   db.close();
 
   return record;
