@@ -743,7 +743,7 @@ describe('turn-pipeline correctness wiring', () => {
     );
 
     const transcript = clear.indexOf('this.stores.history.clearConversation(CHAT_SESSION_ID,');
-    const reset = clear.indexOf('this.dynamicLedger.reset()');
+    const reset = clear.indexOf('this.actorSession.dynamic.reset()');
     const clearPlan = clear.indexOf('this.compactionState.plans.save(this.name, null)');
     expect(transcript).toBeGreaterThan(-1);
     expect(reset).toBeGreaterThan(transcript);

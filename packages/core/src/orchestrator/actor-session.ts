@@ -71,15 +71,6 @@ export interface ActorSessionOptions {
    */
   readonly events?: ContextEventRecorder | null;
   readonly advisor?: ActorAdvisorContext;
-  /**
-   * The ledger of woven dynamic-context blocks, when the host holds the one
-   * instance its compaction plane prunes; omitted, the session keeps its own.
-   * In-memory only: a cold start attaches exactly one fresh block, and every
-   * rewrite of the model-visible stream (a new compaction plan, a walk-back, a
-   * cleared conversation) resets it, because frozen block positions mean
-   * nothing against a stream they were not positioned in.
-   */
-  readonly dynamic?: DynamicContextLedger;
 }
 
 /** Live-instance execution token, not a replacement for a durable turn/run claim. */
@@ -150,7 +141,15 @@ export class ActorSession {
   readonly runtime: AgentRuntime;
   readonly orchestrator: AgentOrchestrator;
   readonly canonical: SessionHistory;
-  readonly dynamic: DynamicContextLedger;
+  /**
+   * The one ledger of woven dynamic-context blocks: the turn weaves through
+   * it, the host's compaction plane prunes it, and every rewrite of the
+   * model-visible stream (a new compaction plan, a walk-back, a cleared
+   * conversation) resets it, because frozen block positions mean nothing
+   * against a stream they were not positioned in. In-memory only, so a cold
+   * start attaches exactly one fresh block.
+   */
+  readonly dynamic = new DynamicContextLedger();
   private readonly messages: ModelMessage[] = [];
   private readonly landed: LandedSteerRow[] = [];
   private active: ActiveTurn | null = null;
@@ -161,7 +160,6 @@ export class ActorSession {
     this.actorId = options.runtime.actor.actorId;
     this.runtime = options.runtime;
     this.canonical = options.history;
-    this.dynamic = options.dynamic ?? new DynamicContextLedger();
 
     this.orchestrator = new AgentOrchestrator(options.orchestration, {
       onDrain: (steers, atStep) => this.landSteers(steers, atStep),

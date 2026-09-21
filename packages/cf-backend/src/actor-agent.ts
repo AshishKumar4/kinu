@@ -83,7 +83,7 @@ import {
   currentDateForPrompt,
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
-  DynamicContextLedger, turnLocalContextMessage, unverifiedInstructionsMessage,
+  turnLocalContextMessage, unverifiedInstructionsMessage,
   observeSystemPromptHash, steerSkillsBlock,
   type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
@@ -2235,8 +2235,9 @@ export abstract class ActorAgent extends Agent<Env> {
         source: 'compaction', report: (report) => this.reportModelCall(report),
         operations: this.modelOperations,
       }),
-      // The ladder's first rung prunes this plane before any tool output.
-      ephemeral: this.dynamicLedger,
+      // The ladder's first rung prunes this plane before any tool output: the
+      // session's own ledger, the one the turn weaves through.
+      ephemeral: this.actorSession.dynamic,
       onOutcome: ({ outcome }) => {
         // The model-visible stream changed shape — a NEW plan rewrote it
         // ('planned') or a cached plan was discarded after a history rewrite
@@ -2244,7 +2245,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // are meaningless. This fires inside runTransformContext, BEFORE the
         // turn's first step weave, so the next weave starts over with one
         // fresh block at the tail. A byte-stable replay keeps positions valid.
-        if (outcome !== 'replayed') this.dynamicLedger.reset();
+        if (outcome !== 'replayed') this.actorSession.dynamic.reset();
       },
     });
     this.extensions.register(this._compactionExtension);
@@ -2492,9 +2493,6 @@ export abstract class ActorAgent extends Agent<Env> {
         installedBuild: this.installedBuildIdentity(),
         events: this.stores.eventRecorder,
         orchestration: this.orchestrationDeps(),
-        // The one ledger: the compaction plane registered at schema time prunes
-        // the same blocks the session weaves and the resets forget.
-        dynamic: this.dynamicLedger,
       });
     }
 
@@ -4260,14 +4258,6 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The shared extension host for this activation's core chat driver. */
   protected readonly extensions = new ExtensionHost();
 
-  /** Dynamic-context blocks for this DO activation (core volatile-context.ts),
-   *  re-read and re-woven at every model step by the shared step pipeline.
-   *  In-memory only — hibernation/reset empties it, so a cold start attaches
-   *  exactly one fresh block; the compaction extension's onOutcome resets it
-   *  whenever the model-visible stream changed shape ('planned'/'invalidated')
-   *  because the frozen block positions are meaningless against a rewritten
-   *  stream. */
-  protected readonly dynamicLedger = new DynamicContextLedger();
   protected _cliCwd: string | null = null;
   /** Whether the message that opened the CURRENT turn was a conversational
    *  reply or an independent one-shot task (`kinu exec` against this
@@ -6022,7 +6012,7 @@ export abstract class ActorAgent extends Agent<Env> {
         throw new KinuError('denied', 'Stop the active turn before clearing its conversation');
       }
     });
-    this.dynamicLedger.reset();
+    this.actorSession.dynamic.reset();
 
     try {
       await this.compactionState.plans.save(this.name, null);

@@ -504,7 +504,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     const result = await composePrepareStep(
       {
         extensions,
-        dynamic: { ledger: this.dynamicLedger, snapshot: () => dynamic(profile, this._preparedTools) },
+        dynamic: { ledger: this.actorSession.dynamic, snapshot: () => dynamic(profile, this._preparedTools) },
         // The provider this request is bound for — the destination boundary a
         // replay from another provider is re-keyed at, read as the loop reads it.
         destinationProviderId: this.promptModelContext().provider,
