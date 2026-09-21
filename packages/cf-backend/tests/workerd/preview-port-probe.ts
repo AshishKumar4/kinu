@@ -24,26 +24,6 @@ export class PreviewPortProbeDO extends DurableObject<Cloudflare.Env> {
     return this._workspace;
   }
 
-  async nodeEval(): Promise<ShellProbeReport> {
-    const workspace = await this.workspace();
-
-    // A program that exits at once: the shim compiles before it runs, so a
-    // codegen block fails here without hanging the shell on a listener.
-    const result = await workspace.shell.execute(`node -e 'console.log("hi")'`, {
-      cwd: '/home/user',
-    });
-
-    return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
-  }
-
-  async nodeFile(): Promise<ShellProbeReport> {
-    const workspace = await this.workspace();
-    await workspace.fs.writeFile('/home/user/probe-8789.js', 'console.log("Kinu live preview");\n');
-    const result = await workspace.shell.execute('node probe-8789.js', { cwd: '/home/user' });
-
-    return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
-  }
-
   /** A virtual server the host registers with no compilation: the port the
    *  loopback check must answer with these bytes. */
   async serveLoopback(port: number, body: string): Promise<{ registered: boolean }> {

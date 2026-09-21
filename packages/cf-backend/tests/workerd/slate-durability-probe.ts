@@ -89,6 +89,11 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
 export { ObservedOrchestrator as OrchestratorAgent };
 
+// The composed supervisor entrypoint, exported exactly as `src/server.ts`
+// exports it: the hosted runtime refuses to compose over a worker whose
+// `ctx.exports` carries none, and every facet reaches its host through it.
+export { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
+
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'slateAs' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator, 'portReservations'>;
 

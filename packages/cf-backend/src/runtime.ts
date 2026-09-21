@@ -618,16 +618,12 @@ export function createCFRuntime(
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
-    // FALSE, with the bucket bound. `runtimeCatalog` declares that this
-    // deployment can INSTALL AND RUN an interpreter runtime; a workspace held
-    // as a library in the actor's own Durable Object can fetch one out of
-    // NIMBUS_RUNTIME_CACHE and cannot run it — a wasm guest needs a facet
-    // substrate that compiles and enters a module, which on workerd is the
-    // dynamic-worker pool a Nimbus SESSION object composes for itself. So
-    // `python`/`native_binary` are not declared, `runtimes.*` still reaches the
-    // bucket, and `python3` is "command not found" rather than a command that
-    // installs 35.7 MB of rows and then fails.
-    runtimeCatalog: false,
+    // `runtimeCatalog` declares that this deployment can INSTALL AND RUN an
+    // interpreter runtime: the hosted runtime installs one out of
+    // NIMBUS_RUNTIME_CACHE on first use and runs it in a dynamic-worker
+    // facet of its own. Without the bucket there is nothing to install, so
+    // `python`/`native_binary` are declared exactly when it is bound.
+    runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
       vfs: agentFileVfs, memory, craftStore, shell,

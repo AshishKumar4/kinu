@@ -226,10 +226,15 @@ workspace registration.
 
 The workspace has files, POSIX shell, coreutils, package installation and git.
 Local Node programs and on-demand local `bash`, `python3` and `pip` can run.
-Hosted Node programs cannot: `workspaceNodeCommand` in
-`core/src/vfs/workspace-runtimes.ts` probes the shim at the first invocation,
-where workerd forbids its string compiler. Version and help commands do not
-compile a program. A runtime catalog entry is not proof that this host can run it.
+Hosted Node programs and the catalogued interpreters (`bash`, `python3`,
+`ruby`) run too, since 2026-09-21: Nimbus's hosted runtime
+(`composeHostedRuntime`, composed in `cf-backend/src/workspace-host.ts`) runs
+each in a dynamic-worker facet and installs an interpreter out of
+`NIMBUS_RUNTIME_CACHE` on its first invocation (`WorkspaceOptions.runtimeSource`
+in `core/src/vfs/nimbus-workspace.ts`). `python` is declared exactly when that
+bucket is bound. Measured 2026-09-21 only under `bun test` over the composed
+runtime (git clone through a facet, credentialed exec); a hosted `python3` run
+on workerd is unmeasured.
 The CLI has no container: work needing a real machine goes to consented `device`.
 
 The inventories were probed. `scripts/nimbus-runtime-probe.ts` covers the
@@ -242,8 +247,8 @@ pull was byte-identical. The inventory comment lives at
 
 Escalate only for structural needs:
 
-- A hosted npm dev server or another program requiring Node process semantics.
-  The workspace Node shim cannot supply them on workerd.
+- A hosted npm dev server or another program requiring Node process semantics
+  beyond what the facet-hosted `node` supplies.
 - Native Linux binaries: Nimbus runs wasm32-wasi and JavaScript, so ELF,
   `.node`, and native Python wheels cannot run there. The
   container runs binaries but cannot build them: no `gcc`, `clang`, or `make`.
