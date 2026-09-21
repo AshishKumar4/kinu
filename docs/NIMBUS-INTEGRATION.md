@@ -6,42 +6,56 @@ describes lives in `packages/cf-backend/src/runtime.ts` and
 
 ## Where the packages come from
 
-The tree carries no Nimbus source. Four Nimbus patches live under `patches/`,
-listed below. Earlier fixes went upstream to `AshishKumar4/Nimbus` and published.
-Packages come from the registry at exact pinned versions, checked against the
-package manifests and `bun.lock` on 2026-09-14:
+The tree carries no Nimbus source. Packages come from the registry at exact
+pinned versions, checked against the package manifests and `bun.lock` on
+2026-09-21:
 
 | Package | Version | Declared in |
 |---|---|---|
-| `@nimbus-sh/core` | 0.9.0 | `packages/core`, `packages/cf-backend`, `packages/cli-backend` |
-| `@nimbus-sh/sdk` | 0.6.0 | `packages/cf-backend` |
-| `@nimbus-sh/worker` | 0.7.0 | `packages/cf-backend` |
+| `@nimbus-sh/core` | 0.10.0 | `packages/core`, `packages/cf-backend`, `packages/cli-backend` |
+| `@nimbus-sh/fabric` | 0.6.0 | `packages/core`, `packages/cf-backend` |
+| `@nimbus-sh/sdk` | 0.7.0 | `packages/cf-backend` |
+| `@nimbus-sh/worker` | 0.8.0 | `packages/cf-backend` |
 | `@nimbus-sh/runtime-bash` | 5.2.37 | `packages/cli-backend` |
 | `@nimbus-sh/runtime-cpython` | 3.13.14 | `packages/cli-backend` |
-`packages/core` and `packages/cf-backend` are the two workspace packages that declare
-`@nimbus-sh/fabric`, at 0.5.0 (`packages/core/package.json:31`). Core imports
-it directly: `packages/core/src/events/outbox.ts` builds its outbox on
-`@nimbus-sh/fabric/outbox.js`. `@nimbus-sh/worker` also depends on fabric, so
-the resolved tree holds it either way.
 
-No Nimbus package is patched: `@nimbus-sh/core` 0.9.0, `fabric` 0.5.0,
-`worker` 0.7.0 and `sdk` 0.6.0 (checked 2026-09-14) carry
-everything the four earlier patches did. The six `patchedDependencies` entries
-that remain are `@plannotator%2Fui@0.30.0.patch`,
+Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
+outbox on `@nimbus-sh/fabric/outbox.js`. `@nimbus-sh/worker` also depends on
+fabric, so the resolved tree holds it either way.
+
+Two Nimbus packages are patched, both from upstream branch
+`feat/hosted-runtime-hooks` (`3f83361e`), each hunk with its reason on record:
+
+- `patches/@nimbus-sh%2Fworker@0.8.0.patch`: the `resolveWorkerLaunch`
+  embedder hook, the `facets()` accessor and their re-exports (the manager
+  refuses a durable spawn carrying `globalOutbound` without the hook;
+  `docs/DEVBOX-DECISIONS.md` D20), and `NPM_REGISTRY` plumbed through the
+  hosted installer, the R2 cache key namespace, the facet resolver and the
+  supervisor RPC (commit `3ea2a6c67`; pinned by
+  `packages/cf-backend/tests/workerd/slate-durability.test.ts`, "npm install
+  streams a package off the registry").
+- `patches/@nimbus-sh%2Fcore@0.10.0.patch`: the same `NPM_REGISTRY` origin on
+  the core `npm` command's install port, and the schema-migration marker
+  written only when it is absent, in `src/vfs/sqlite-vfs.ts` and its `dist`
+  build alike (D21). The `src` hunk matters because bun resolves the package
+  through its `bun` export condition to `src/*.ts`; a `dist`-only patch never
+  reaches the CLI backend or any `bun test`.
+
+The other five `patchedDependencies` entries are `@plannotator%2Fui@0.30.0.patch`,
 `@cloudflare%2Fsandbox@0.12.8.patch`, `@cloudflare%2Fcontainers@0.3.7.patch`,
-`agents@0.22.0.patch`, `@cloudflare%2Fcodemode@0.5.1.patch` and
-`@cloudflare%2Fthink@0.17.0.patch`, all declared in the root `package.json`. The sandbox patch makes the SDK's handler-map assignments MERGE, so configuring a bucket
-mount cannot unbind an outbound handler the host installed
-(`KinuSandbox.outboundHandlers`, `cf-backend/src/kinu-sandbox.ts`). The codemode
-patch adds the `./normalize` subpath export and the `dist/normalize.js` behind
-it, which `cli-backend/src/executor.ts` and
-`cli-backend/src/codemode-tool-factory.ts` import as `normalizeCode`.
-`bun run gate:patch-parity`
+`agents@0.22.0.patch` and `@cloudflare%2Fcodemode@0.5.1.patch`, all declared
+in the root `package.json`. The sandbox patch makes the SDK's handler-map
+assignments MERGE, so configuring a bucket mount cannot unbind an outbound
+handler the host installed (`KinuSandbox.outboundHandlers`,
+`cf-backend/src/kinu-sandbox.ts`). The codemode patch adds the `./normalize`
+subpath export and the `dist/normalize.js` behind it, which
+`cli-backend/src/executor.ts` and `cli-backend/src/codemode-tool-factory.ts`
+import as `normalizeCode`. `bun run gate:patch-parity`
 (`scripts/patch-parity.ts`) reads `patchedDependencies` out of the root
-`package.json`, so it governs those six. Its header still narrates the `@nimbus-sh/core` patch incident,
-because that incident is why the gate exists.
+`package.json`, so it governs all seven. Its header still narrates the
+`@nimbus-sh/core` patch incident, because that incident is why the gate exists.
 
-The seventh file, `upstream-codemode-normalize.patch`, is not a
+The eighth file, `upstream-codemode-normalize.patch`, is not a
 `patchedDependencies` entry, so bun never applies it and `gate:patch-parity`
 does not govern it. It patches the codemode repository's own
 `packages/codemode/` sources, which is the upstream proposal behind the export

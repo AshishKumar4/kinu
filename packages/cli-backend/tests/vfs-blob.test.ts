@@ -4,7 +4,9 @@
 // local file write/read silently failed. Guards the coercion on both sides.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createCLIRuntime } from '../src/runtime';
+import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { createCLIRuntime, localTransactions, nimbusSql } from '../src/runtime';
 import { scratchPath } from '@kinu.run/test-utils';
 
 function freshVfs() {
@@ -46,5 +48,30 @@ describe('workspace filesystem byte round-trip (bun:sqlite)', () => {
     await vfs.writeFile('skills/one.md', 'a');
     await vfs.writeFile('skills/two.md', 'b');
     expect((await vfs.readdir('skills')).sort()).toEqual(['one.md', 'two.md']);
+  });
+});
+
+describe('workspace filesystem over a read-only handle', () => {
+  // The vendored core patch (patches/@nimbus-sh%2Fcore@0.10.0.patch, the
+  // sqlite-vfs.js hunk) writes the schema-migration marker only when it is
+  // absent; upstream 0.10.0 wrote it on every construction, so a filesystem
+  // whose schema was already current still failed to open over a handle that
+  // cannot write. Measured 2026-09-21 against the patched package.
+  test('a current filesystem opens read-only and reads what a writer left', async () => {
+    const path = scratchPath('vfs-readonly', 'agent.db');
+    const writer = new Database(path, { create: true });
+
+    await new SqliteVFS(nimbusSql(writer), localTransactions(writer)).as(CRED_KERNEL).writeFile('/note.txt', 'kept');
+    writer.close();
+
+    const reader = new Database(path, { readonly: true });
+
+    try {
+      const vfs = new SqliteVFS(nimbusSql(reader), localTransactions(reader)).as(CRED_KERNEL);
+
+      expect(new TextDecoder().decode(await vfs.readFile('/note.txt'))).toBe('kept');
+    } finally {
+      reader.close();
+    }
   });
 });

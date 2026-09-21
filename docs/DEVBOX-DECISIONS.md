@@ -714,6 +714,22 @@ upstream's installer resolves through a `LOADER.get` facet the suite's fake
 loader refuses); the commit tier (lint plus every typecheck project) green. The
 workerd tiers and the bundle size are unmeasured for this change.
 
+D21. A current workspace filesystem opens over a read-only handle
+(2026-09-21). Upstream `@nimbus-sh/core` 0.10.0 writes the schema-migration
+marker (`INSERT OR IGNORE INTO vfs_schema_migrations`) on every `SqliteVFS`
+construction; every other schema step is already conditional, so a reader
+holding a `readonly` database failed with `SQLITE_READONLY` although nothing
+needed writing. The fix gates the marker on the marker's absence, upstream on
+`feat/hosted-runtime-hooks` (`3f83361e`, `tests/unit/sqlite-vfs-readonly-open.mjs`:
+red at its line 27 without the change, `sqlite-vfs-readonly-open: ok` with it)
+and here in `patches/@nimbus-sh%2Fcore@0.10.0.patch`. Measured 2026-09-21 in
+this tree with `bun test packages/cli-backend/tests/vfs-blob.test.ts` ("a
+current filesystem opens read-only and reads what a writer left"): red with
+the guard removed from `src/vfs/sqlite-vfs.ts`, green with it. The same run
+showed the earlier `dist`-only hunk never reached bun at all, since the
+package's `bun` export condition resolves to `src/*.ts`; the patch now carries
+both.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

@@ -56,3 +56,26 @@ index fb200e40b35c0ce1dfc22e77de86c8449cd48943..6a0b526644a531281b41626cd80aa49f
          });
          this.migrateFromLegacy();
      }
+diff --git a/src/vfs/sqlite-vfs.ts b/src/vfs/sqlite-vfs.ts
+index bae314e5e42a87d471f15cbbf061aca4d5247e5b..e6a2dc547b111b1f747b25b41d8a17305cfedc0e 100644
+--- a/src/vfs/sqlite-vfs.ts
++++ b/src/vfs/sqlite-vfs.ts
+@@ -924,11 +924,13 @@ export class SqliteVFS {
+         this.sql.exec('DROP INDEX IF EXISTS idx_inodes_resolved_file_content');
+         this.sql.exec('DROP INDEX IF EXISTS idx_inodes_resolved_kind_content');
+       }
+-      this.sql.exec(
+-        "INSERT OR IGNORE INTO vfs_schema_migrations (id, applied_at) VALUES (?, ?)",
+-        CONTENT_SCHEMA_MIGRATION,
+-        Date.now(),
+-      );
++      if (!contentMigrationApplied) {
++        this.sql.exec(
++          "INSERT OR IGNORE INTO vfs_schema_migrations (id, applied_at) VALUES (?, ?)",
++          CONTENT_SCHEMA_MIGRATION,
++          Date.now(),
++        );
++      }
+     });
+ 
+     this.migrateFromLegacy();
