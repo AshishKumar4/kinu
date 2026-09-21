@@ -131,6 +131,14 @@ import {
   type PutEgressSecretInput,
 } from '@kinu.run/core';
 import { initAccessTokenTable } from '@kinu.run/core';
+import {
+  addSkill, ChunkedUpload, deleteDriveEntry, driveFailure, DriveUploadTargetSchema, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
+  listDrive, makeDriveFolder, markAsSkill, normalizeDrivePath, packDriveFolder, receiveDriveUpload, renameDriveEntry,
+  SHARED_DRIVE_UNBOUND, SKILL_FOLDER_FILE,
+  type DriveFailure, type DriveListing, type DriveUploadOutcome, type DriveUploadTarget, type MarkedSkill, type MossaicVfs,
+} from '@kinu.run/core';
+import { tenantDrive } from '../drive/tenant';
+import { deriveUserId } from '../auth/store';
 import { isModelInferenceCredentialKey } from '@kinu.run/core';
 import { randomToken, sha256Hex } from '@kinu.run/core';
 import { resolveWorkspaceTitle } from '@kinu.run/core';
@@ -177,6 +185,13 @@ import {
   type CloudflareAccount,
   type CloudflareAIGatewaySummary,
 } from '@kinu.run/core';
+
+/** How every Drive method answers: the value, or the folded failure. */
+export type DriveAnswer<Value> = { readonly ok: true; readonly value: Value } | ({ readonly ok: false } & DriveFailure);
+
+/** A pasted SKILL.md rides one RPC argument, so it stays far under the
+ *  structured-clone ceiling the chunked rail exists for. */
+const DRIVE_PASTED_SKILL_MAX_BYTES = 256 * 1024;
 
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 
@@ -5037,6 +5052,168 @@ export class UserDO extends Agent<Env> {
   async sharesReceived_forget(caller: UserCaller, ownerUserId: string): Promise<void> {
     await this.requireTier(caller, 'shares');
     this.sqlx(`DELETE FROM user_shares_received WHERE owner_user_id = ?`, ownerUserId);
+  }
+
+  // ── Drive ─────────────────────────────────────────────────────────
+  // The owner's Mossaic tenant, as the web UI manages it. The tenant id IS
+  // the owner's user id, and this object derives it from the profile row the
+  // sign-in wrote — the same email → id derivation the edge runs — so no
+  // caller ever names a tenant: whoever reaches this object reaches its own.
+  // Every workspace of the owner mounts this same tenant at `/shared`.
+
+  /** The tenant's plane. A seam: the hosted deployment constructs the SDK
+   *  client from its bindings, the bun:sqlite harness stands in a fake. */
+  protected driveFor(tenant: string): MossaicVfs | null {
+    return tenantDrive(this.env, tenant);
+  }
+
+  private async drive(): Promise<MossaicVfs> {
+    const row = this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0];
+
+    if (!row) throw new KinuError('missing', 'the Drive opens once the account has signed in');
+    const files = this.driveFor(await deriveUserId(row.email));
+
+    if (files === null) throw new KinuError('unavailable', SHARED_DRIVE_UNBOUND);
+
+    return files;
+  }
+
+  /** One gated Drive call, its failure folded into the value the wire carries. */
+  private async driveOp<Value>(caller: UserCaller, op: (drive: MossaicVfs) => Promise<Value>): Promise<DriveAnswer<Value>> {
+    await this.requireTier(caller, 'drive');
+
+    try {
+      return { ok: true, value: await op(await this.drive()) };
+    } catch (cause) {
+      return { ok: false, ...driveFailure({ cause }) };
+    }
+  }
+
+  async drive_list(caller: UserCaller, path: string): Promise<DriveAnswer<DriveListing>> {
+    return this.driveOp(caller, (drive) => listDrive(drive, path));
+  }
+
+  async drive_mkdir(caller: UserCaller, path: string): Promise<DriveAnswer<void>> {
+    return this.driveOp(caller, (drive) => makeDriveFolder(drive, path));
+  }
+
+  async drive_rename(caller: UserCaller, from: string, to: string): Promise<DriveAnswer<void>> {
+    return this.driveOp(caller, (drive) => renameDriveEntry(drive, from, to));
+  }
+
+  async drive_delete(caller: UserCaller, path: string): Promise<DriveAnswer<void>> {
+    return this.driveOp(caller, (drive) => deleteDriveEntry(drive, path));
+  }
+
+  async drive_markAsSkill(caller: UserCaller, path: string): Promise<DriveAnswer<MarkedSkill>> {
+    return this.driveOp(caller, (drive) => markAsSkill(drive, path));
+  }
+
+  /** A skill from the text of one pasted `SKILL.md`. */
+  async drive_addSkill(caller: UserCaller, skillFile: string): Promise<DriveAnswer<MarkedSkill>> {
+    return this.driveOp(caller, (drive) => {
+      const bytes = new TextEncoder().encode(skillFile);
+
+      if (bytes.byteLength > DRIVE_PASTED_SKILL_MAX_BYTES) {
+        throw new KinuError('budget', `a pasted SKILL.md is at most ${String(DRIVE_PASTED_SKILL_MAX_BYTES)} bytes`);
+      }
+
+      return addSkill(drive, [{ path: SKILL_FOLDER_FILE, bytes }], null);
+    });
+  }
+
+  // Bytes cross the Worker↔object boundary as bounded chunks, exactly as the
+  // workspace file route's do (files-routes.ts): one transfer id per HTTP
+  // request, an `offset === 0` chunk (re)starts it, and the target — a file, a
+  // zip to unpack, a skill — is fixed by the first chunk and checked on every
+  // later one. The object is single-threaded, so the map needs no lock.
+  private readonly driveUploads = new Map<string, { readonly target: DriveUploadTarget; readonly upload: ChunkedUpload }>();
+  private readonly driveDownloads = new Map<string, { readonly path: string; readonly bytes: Uint8Array }>();
+
+  async drive_writeChunk(
+    caller: UserCaller, rawTarget: DriveUploadTarget, transferId: string, offset: number, chunk: Uint8Array, final: boolean,
+  ): Promise<DriveAnswer<DriveUploadOutcome>> {
+    return this.driveOp(caller, async (drive) => {
+      const target = v.parse(DriveUploadTargetSchema, rawTarget);
+
+      if (!transferId) throw new KinuError('bad_input', 'upload transfer id required');
+      let row = this.driveUploads.get(transferId);
+
+      if (offset === 0) {
+        row = { target, upload: new ChunkedUpload() };
+        this.driveUploads.set(transferId, row);
+      } else if (!row || JSON.stringify(row.target) !== JSON.stringify(target)) {
+        throw new KinuError('bad_input', 'file transfer out of sync: no matching open upload');
+      }
+
+      const step = row.upload.chunk(offset, chunk, final);
+
+      if (row.upload.done) this.driveUploads.delete(transferId);
+
+      if ('error' in step) throw new KinuError('bad_input', step.error);
+
+      if (!('assembled' in step)) return { ok: true };
+
+      return receiveDriveUpload(drive, target, step.assembled);
+    });
+  }
+
+  async drive_abortUpload(caller: UserCaller, transferId: string): Promise<void> {
+    await this.requireTier(caller, 'drive');
+    this.driveUploads.get(transferId)?.upload.abort();
+    this.driveUploads.delete(transferId);
+  }
+
+  /** Open one download: a file's bytes, or a folder packed as one zip. The
+   *  snapshot is taken here, so later ranges cannot observe a newer write. */
+  async drive_startDownload(caller: UserCaller, path: string, transferId: string): Promise<DriveAnswer<{ size: number; name: string }>> {
+    return this.driveOp(caller, async (drive) => {
+      if (!transferId) throw new KinuError('bad_input', 'download transfer id required');
+      const clean = normalizeDrivePath(path);
+      const stat = await drive.stat(clean);
+
+      if (stat === null) throw new KinuError('missing', `no such entry: ${clean}`);
+      const leaf = clean === '/' ? 'drive' : clean.slice(clean.lastIndexOf('/') + 1);
+
+      if (stat.isDir) {
+        const bytes = await packDriveFolder(drive, clean, FILE_TRANSFER_MAX_BYTES);
+        this.driveDownloads.set(transferId, { path: clean, bytes });
+
+        return { size: bytes.byteLength, name: `${leaf}.zip` };
+      }
+
+      if (stat.size > FILE_TRANSFER_MAX_BYTES) {
+        throw new KinuError('budget', `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`);
+      }
+
+      const raw = await drive.readFile(clean);
+      const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw);
+      this.driveDownloads.set(transferId, { path: clean, bytes });
+
+      return { size: bytes.byteLength, name: leaf };
+    });
+  }
+
+  async drive_readChunk(caller: UserCaller, transferId: string, offset: number, length: number): Promise<DriveAnswer<{ bytes: Uint8Array }>> {
+    return this.driveOp(caller, async () => {
+      const open = this.driveDownloads.get(transferId);
+
+      if (!open) throw new KinuError('bad_input', 'file transfer out of sync: no matching open download');
+
+      if (offset < 0 || length <= 0 || length > FILE_CHUNK_BYTES) throw new KinuError('bad_input', 'chunk range out of bounds');
+
+      if (offset >= open.bytes.byteLength) throw new KinuError('bad_input', 'chunk offset past end of file');
+      const bytes = open.bytes.subarray(offset, offset + length);
+
+      if (offset + bytes.byteLength >= open.bytes.byteLength) this.driveDownloads.delete(transferId);
+
+      return { bytes };
+    });
+  }
+
+  async drive_abortDownload(caller: UserCaller, transferId: string): Promise<void> {
+    await this.requireTier(caller, 'drive');
+    this.driveDownloads.delete(transferId);
   }
 
   // ── Account deletion ───────────────────────────────────────────────

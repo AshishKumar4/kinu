@@ -16,7 +16,7 @@ import { withMountTable } from '../src/vfs/mounts';
 import { mossaicVfs, type MossaicClient } from '../src/vfs/mossaic-vfs';
 import { sharedDriveMount, SHARED_DRIVE_UNCLAIMED } from '../src/vfs/shared-drive';
 import { isVfsError, type VfsErrorCode } from '../src/vfs/errno';
-import { FakeMossaicError, fakeMossaic, type FakeMossaic } from './helpers-fake-mossaic';
+import { FakeMossaicError, fakeMossaic, type FakeMossaic } from '@kinu.run/test-utils';
 
 const SHARED_ROOT = '/shared';
 

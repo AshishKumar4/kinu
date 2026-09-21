@@ -24,6 +24,7 @@ import { inlineFileType } from './file-types';
 import type { VFS, VfsRevision } from '../types/primitives';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
+import { readBoundedStream } from '../http/http';
 
 /** Just enough of the router to find one executor's files, and to ask that
  *  environment where its own relative paths resolve. */
@@ -137,9 +138,7 @@ export const FILE_TRANSFER_MAX_BYTES = PLATFORM_CATALOG['do.isolate.transient_al
  * and write in one plane call.
  */
 export class ExecutorFileUpload {
-  private parts: Uint8Array[] = [];
-  private received = 0;
-  private settled = false;
+  private readonly chunks = new ChunkedUpload();
 
   constructor(
     private readonly router: ExecutorFileLookup,
@@ -150,10 +149,39 @@ export class ExecutorFileUpload {
 
   /** True once finalized or aborted — the holder must stop feeding it. */
   get done(): boolean {
-    return this.settled;
+    return this.chunks.done;
   }
 
   async chunk(offset: number, chunk: Uint8Array, final: boolean): Promise<ExecutorWriteResult> {
+    const step = this.chunks.chunk(offset, chunk, final);
+
+    if (!('assembled' in step)) return step;
+
+    return writeExecutorFileOp(this.router, this.executorId, this.path, step.assembled, this.expectedRevision);
+  }
+
+  abort(): void {
+    this.chunks.abort();
+  }
+}
+
+/**
+ * The in-order chunk assembly every bounded upload shares, apart from what is
+ * done with the bytes: the workspace plane writes them where the route said,
+ * the Drive may unpack them first. `assembled` is answered exactly once, on
+ * the final chunk, after which the instance is settled.
+ */
+export class ChunkedUpload {
+  private parts: Uint8Array[] = [];
+  private received = 0;
+  private settled = false;
+
+  /** True once finalized or aborted — the holder must stop feeding it. */
+  get done(): boolean {
+    return this.settled;
+  }
+
+  chunk(offset: number, chunk: Uint8Array, final: boolean): { ok: true } | { error: string } | { assembled: Uint8Array } {
     if (this.settled) return { error: 'file transfer already settled' };
 
     if (offset < 0) return { error: 'chunk offset must not be negative' };
@@ -186,7 +214,7 @@ export class ExecutorFileUpload {
 
     this.settled = true;
 
-    return writeExecutorFileOp(this.router, this.executorId, this.path, assembled, this.expectedRevision);
+    return { assembled };
   }
 
   abort(): void {
@@ -194,6 +222,56 @@ export class ExecutorFileUpload {
     this.received = 0;
     this.settled = true;
   }
+}
+
+/**
+ * The request body as the actor takes it: whole chunks of FILE_CHUNK_BYTES in
+ * order, then one final chunk carrying the tail (possibly empty). The bound is
+ * `readBoundedStream`'s; nothing materialises the whole body at the edge. A
+ * `send` that throws stops the pump and the throw is the caller's to handle,
+ * since only it knows how to abort the transfer it opened. The final send's
+ * answer is the pump's.
+ */
+export async function pumpUploadChunks<Result>(
+  request: Request,
+  send: (offset: number, chunk: Uint8Array, final: boolean) => Promise<Result>,
+): Promise<'too_large' | KinuError | { result: Result }> {
+  const pending: Uint8Array[] = [];
+  let pendingBytes = 0;
+  let offset = 0;
+
+  const take = (want: number): Uint8Array => {
+    const out = new Uint8Array(want);
+    let at = 0;
+
+    while (at < want) {
+      const part = pending[0]!;
+      const count = Math.min(part.byteLength, want - at);
+      out.set(part.subarray(0, count), at);
+
+      if (count === part.byteLength) pending.shift();
+      else pending[0] = part.subarray(count);
+      at += count;
+    }
+
+    pendingBytes -= want;
+
+    return out;
+  };
+
+  const outcome = await readBoundedStream(request, FILE_TRANSFER_MAX_BYTES, async (value) => {
+    pending.push(value);
+    pendingBytes += value.byteLength;
+
+    while (pendingBytes >= FILE_CHUNK_BYTES) {
+      await send(offset, take(FILE_CHUNK_BYTES), false);
+      offset += FILE_CHUNK_BYTES;
+    }
+  });
+
+  if (outcome !== 'ok') return outcome;
+
+  return { result: await send(offset, pendingBytes > 0 ? take(pendingBytes) : new Uint8Array(0), true) };
 }
 
 /** Actor-side snapshot behind one chunked download. `open` reads once, enforces

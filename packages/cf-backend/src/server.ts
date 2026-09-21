@@ -66,6 +66,7 @@ import { handleUpdatesRequest } from "./updates/routes";
 import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
 import { handleSharedPublicRequest, handleSharedRequest } from "./shared/routes";
+import { handleDriveRequest } from "./drive/routes";
 import { handleHubRequest, handleWebhookDeliveryRequest } from "./events/routes";
 import { handleFilesRequest } from "./files-routes";
 import { handleTerminalRequest } from "./terminal-route";
@@ -708,8 +709,9 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     if (controlResp) return controlResp;
   }
 
-  // 9. The signed-in account APIs — /api/user/* profile and roster, and
-  //    /api/shared/* publish, list, fork — plus /api/updates/*, this
+  // 9. The signed-in account APIs — /api/user/* profile and roster,
+  //    /api/shared/* publish, list, fork, /api/drive/* the owner's Drive —
+  //    plus /api/updates/*, this
   //    deployment reading its own release channel and installing from it.
   //    The updates owner check is the deployment's own record, inside that
   //    module: everyone else is answered 404, including the fact that the
@@ -721,6 +723,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     (req) => handleAccountRequest(req, env, identity),
     (req) => handleUserRequest(req, env, identity, ctx),
     (req) => handleSharedRequest(req, env, identity),
+    (req) => handleDriveRequest(req, env, identity),
     (req) => handleUpdatesRequest(req, env, identity),
   ]);
 

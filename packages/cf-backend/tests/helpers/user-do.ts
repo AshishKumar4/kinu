@@ -20,6 +20,7 @@ import {
   type DeviceConsentRequest,
   type JsonValue,
   type SqlExec,
+  type MossaicVfs,
   type SqlExecRow,
   type SqlValue,
 } from '@kinu.run/core';
@@ -31,6 +32,18 @@ mockAgentsSdk();
 const { UserDO } = await import('../../src/user/user-do');
 
 type UserDOInstance = InstanceType<typeof UserDO>;
+
+/** The UserDO with its Drive seam pointed at a fake tenant: the class is the
+ *  real one, and only the SDK-constructed plane is stood in. */
+class DriveHarnessUserDO extends UserDO {
+  constructor(ctx: AgentContext, env: Env, private readonly drives: (tenant: string) => MossaicVfs | null) {
+    super(ctx, env);
+  }
+
+  protected override driveFor(tenant: string): MossaicVfs | null {
+    return this.drives(tenant);
+  }
+}
 
 /** A `SqlExec` over bun:sqlite — the same seam the Durable Object provides. */
 export function sqlExec(db: Database): SqlExec {
@@ -200,6 +213,9 @@ export interface TestUserDOOptions {
   credentialEncryptionKeyPrevious?: string;
   /** Stand in for a different user's Durable Object. */
   durableObjectId?: string;
+  /** The Drive's plane per tenant — an in-memory Mossaic, keyed by the id the
+   *  object derives from the profile's email. Absent, the Drive is unbound. */
+  drive?: (tenant: string) => MossaicVfs | null;
   /** Make workspace teardown fail at the real UserDO -> Orchestrator seam. */
   destroyWorkspaceError?: string;
   /** Hold the workspace teardown open at the real UserDO → Orchestrator seam.
@@ -676,7 +692,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   // SAFETY: the UserDO dependency contract reads only the locally constructed
   // credential key and OrchestratorAgent binding in this harness.
   const userEnv = partialEnv as Env;
-  const userDO = new UserDO(agentContext, userEnv);
+  const userDO = options.drive === undefined ? new UserDO(agentContext, userEnv) : new DriveHarnessUserDO(agentContext, userEnv, options.drive);
   rememberMcpManager(inheritedMcpManager(userDO));
   hub.current = userDO;
 

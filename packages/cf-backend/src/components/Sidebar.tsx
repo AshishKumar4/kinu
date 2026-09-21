@@ -4,11 +4,12 @@
  *   ┌─────────────────┐
  *   │ ❯ Kinu          │   Newsreader brand lockup
  *   │ + New workspace │
- *   │ ⌂ Home          │   primary nav: the five places an account goes
+ *   │ ⌂ Home          │   primary nav: the six places an account goes
  *   │ ▦ Workspaces    │
- *   │ ⇄ Shared        │
- *   │ ⚙ Plugins       │
+ *   │ ▤ Drive         │
  *   │ ▣ Devices       │
+ *   │ ⚙ Plugins       │
+ *   │ ⚙ Settings      │
  *   │ WORKSPACES      │
  *   │ ● Jarvis    4h  │
  *   │   ├ Scout       │   nested subordinates of the OPEN workspace
@@ -301,7 +302,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
           </Button>
         </div>
       )}
-      {/* Primary nav — the four places an account goes, in the workspace
+      {/* Primary nav — the places an account goes, in the workspace
           rows' own rhythm and on their active token, above the roster. */}
       <nav aria-label="Primary" className="px-2 pt-1">
         {PRIMARY_NAV.map((item) => <PrimaryNavRow key={item.to} {...item} />)}

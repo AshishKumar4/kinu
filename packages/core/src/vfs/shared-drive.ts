@@ -21,9 +21,18 @@ import type { MossaicVfs } from './mossaic-vfs';
 /** The mount name: the Drive is `/shared` on every workspace plane. */
 const SHARED_MOUNT = 'shared';
 
+/** Where user-level skills live ON THE TENANT, the path the Drive UI addresses. */
+export const DRIVE_SKILLS_DIR = '/skills';
+
+/** Where blueprints live on the tenant; the Drive shows the library there. */
+export const DRIVE_BLUEPRINTS_DIR = '/blueprints';
+
+/** The tenant folders the Drive UI never renames or deletes. */
+export const DRIVE_RESERVED_DIRS: readonly string[] = [DRIVE_SKILLS_DIR, DRIVE_BLUEPRINTS_DIR];
+
 /** Where user-level skills live, as every workspace sees them: `/skills` on
  *  the tenant. Blueprints follow the same rule at `/shared/blueprints`. */
-export const SHARED_SKILLS_DIR = `/${SHARED_MOUNT}/skills`;
+export const SHARED_SKILLS_DIR = `/${SHARED_MOUNT}${DRIVE_SKILLS_DIR}`;
 
 /** Why the mount is absent when the workspace has no owner yet. */
 export const SHARED_DRIVE_UNCLAIMED = 'the shared Drive mounts once the workspace has an owner';

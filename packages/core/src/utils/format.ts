@@ -79,3 +79,14 @@ export function shortAge(at: number): string | null {
 
 	return `${Math.floor(s / 31_536_000)}y`;
 }
+
+/** Sizes at a glance, in the unit that keeps a column scannable. */
+export function formatBytes(n: number): string {
+	if (n < 1024) return `${n} B`;
+
+	if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+
+	if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+
+	return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}

@@ -7,14 +7,14 @@
  * granted, opened in a new tab — or a blueprint — a committed version with
  * every binding unmapped, forked into a workspace of mine.
  *
- * There is no user-level file list here, because there is no user-level file
- * or blob store to list: `user-schema.ts` declares none, and every file lives
- * in the workspace that owns it.
+ * It is the body of the Drive's `/blueprints` folder (pages/DrivePage.tsx):
+ * blueprints are the one user-level asset with no bytes of their own on the
+ * tenant, so the folder shows the library rather than a file list.
  */
 import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
-import { ArrowSquareOutIcon, GitBranchIcon, GlobeIcon, LinkIcon, LockIcon, ShareNetworkIcon } from "@phosphor-icons/react";
+import { ArrowSquareOutIcon, GitBranchIcon, GlobeIcon, LinkIcon, LockIcon } from "@phosphor-icons/react";
 import { blueprintPagePath, seededRandom, type SharedLibrary, type SharedRow } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { getSharedLibrary, openLiveShare } from "@/lib/shared-api";
@@ -228,11 +228,13 @@ function ShareCard({ row, onFork }: { row: SharedRow; onFork: (row: SharedRow) =
   );
 }
 
-export default function SharedPage({ fixture, workspaces }: {
+export interface SharedLibraryProps {
   /** Signed-out sample content for the gallery. */
   fixture?: SharedLibrary;
   workspaces?: readonly WorkspaceEntry[];
-} = {}) {
+}
+
+export function SharedLibraryView({ fixture, workspaces }: SharedLibraryProps = {}) {
   const [library, setLibrary] = useState<SharedLibrary | null>(fixture ?? null);
   const [err, setErr] = useState<string | null>(null);
   const [forking, setForking] = useState<SharedRow | null>(null);
@@ -275,49 +277,43 @@ export default function SharedPage({ fixture, workspaces }: {
   const empty = SEGMENTS.find(({ id }) => id === segment)!;
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-6xl space-y-6 px-6 py-8">
-        <header className="flex items-center gap-3">
-          <ShareNetworkIcon size={22} className="shrink-0 p-text-3" />
-          <h1 className="p-display text-2xl">Shared</h1>
-        </header>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-          <Segmented label="Shared lists" value={segment} onChange={setSegment}
-            segments={SEGMENTS.map((option) => ({ ...option, count: counts[option.id] }))} />
-          <div className="flex w-full items-center gap-3 sm:w-auto sm:flex-1">
-            <input value={query} onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search" aria-label="Search shared"
-              className={`${inputCls} sm:max-w-xs`} />
-            <div className="ml-auto flex items-center gap-2" role="group" aria-label="Sort">
-              {SORTS.map((option) => (
-                <button key={option.id} type="button" aria-pressed={sort === option.id} onClick={() => setSort(option.id)}
-                  className={`whitespace-nowrap p-t-control ${sort === option.id ? "p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
-                  {option.label}
-                </button>
-              ))}
-            </div>
+    <div data-shared-library className="space-y-6">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+        <Segmented label="Shared lists" value={segment} onChange={setSegment}
+          segments={SEGMENTS.map((option) => ({ ...option, count: counts[option.id] }))} />
+        <div className="flex w-full items-center gap-3 sm:w-auto sm:flex-1">
+          <input value={query} onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search" aria-label="Search shared"
+            className={`${inputCls} sm:max-w-xs`} />
+          <div className="ml-auto flex items-center gap-2" role="group" aria-label="Sort">
+            {SORTS.map((option) => (
+              <button key={option.id} type="button" aria-pressed={sort === option.id} onClick={() => setSort(option.id)}
+                className={`whitespace-nowrap p-t-control ${sort === option.id ? "p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
+                {option.label}
+              </button>
+            ))}
           </div>
         </div>
-        {err && (
-          <div className="p-notice-danger flex items-center justify-between gap-3 rounded-md px-3 py-2 text-xs">
-            <span className="min-w-0 truncate">{err}</span>
-            <button type="button" onClick={refresh} className="shrink-0 underline">retry</button>
-          </div>
-        )}
-        {library === null && err === null ? (
-          <div className="flex items-center justify-center py-12"><Loader size="base" /></div>
-        ) : library !== null && (
-          shown.length === 0 ? (
-            <p className="py-12 text-center p-text-3">
-              {needle === "" ? empty.empty : `Nothing matches “${query.trim()}”`}
-            </p>
-          ) : (
-            <ul data-share-grid className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {shown.map((row) => <ShareCard key={`${row.kind}:${row.id}`} row={row} onFork={setForking} />)}
-            </ul>
-          )
-        )}
       </div>
+      {err && (
+        <div className="p-notice-danger flex items-center justify-between gap-3 rounded-md px-3 py-2 text-xs">
+          <span className="min-w-0 truncate">{err}</span>
+          <button type="button" onClick={refresh} className="shrink-0 underline">retry</button>
+        </div>
+      )}
+      {library === null && err === null ? (
+        <div className="flex items-center justify-center py-12"><Loader size="base" /></div>
+      ) : library !== null && (
+        shown.length === 0 ? (
+          <p className="py-12 text-center p-text-3">
+            {needle === "" ? empty.empty : `Nothing matches “${query.trim()}”`}
+          </p>
+        ) : (
+          <ul data-share-grid className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {shown.map((row) => <ShareCard key={`${row.kind}:${row.id}`} row={row} onFork={setForking} />)}
+          </ul>
+        )
+      )}
       {forking !== null && (
         forking.kind === "live"
           ? <ForkDialog live={{ share: forking.share, workspace: forking.workspace ?? '' }} title={forking.title} onClose={() => setForking(null)} workspaces={workspaces} />

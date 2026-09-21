@@ -216,7 +216,7 @@ export async function discoverSkills(
 }
 
 /** The file a skill FOLDER carries its front matter and body in (Anthropic's layout). */
-const SKILL_FOLDER_FILE = 'SKILL.md';
+export const SKILL_FOLDER_FILE = 'SKILL.md';
 
 /** The skill file that names `name` inside a skills directory, in folder form. */
 function skillFolderPath(name: string, skillsDir = SKILLS_DIR): string {

@@ -28,6 +28,7 @@
  *   /gallery.html?frame=home     → HomePage
  *   /gallery.html?frame=workspaces → the Workspaces page (`&view=list` for the list)
  *   /gallery.html?frame=plugins  → the Plugins page
+ *   /gallery.html?frame=drive    → the Drive page over a seeded tenant (gallery-drive.tsx)
  *   /gallery.html?frame=devices  → the Devices page: the linked machines, their
  *     link states and the per-workspace grants
  *   /gallery.html?frame=setupmodal → HomePage with an account panel open in
@@ -172,7 +173,7 @@ import type { EvolutionEntry } from "@/components/surfaces/supervise-evolution";
 import { AddServerCard } from "@/components/account/McpServersPanel";
 import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
 import { AccountProvider } from "@/hooks/use-account";
-import SharedPage from "@/pages/SharedPage";
+import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
@@ -995,6 +996,10 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
 }, { preconnect: realFetch.preconnect });
 
 window.fetch = galleryFetch;
+
+// The Drive frames answer `/api/drive/*` from an in-memory tenant, wrapped
+// around the fixture fetch above rather than branched inside it.
+if (frame === "drive" || frame === "drive-empty" || frame === "app") installDriveFixture(frame !== "drive-empty");
 
 
 /* ── A search worth photographing ───────────────────────────────── */
@@ -6745,7 +6750,8 @@ async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string
           <Route index element={<HomePage />} />
           <Route path="/user/settings" element={<UserSettingsPage />} />
           <Route path="/workspace/:agentId" element={<div className="h-full" data-gallery-blank />} />
-          <Route path="/shared" element={<SharedPage fixture={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />} />
+          <Route path="/shared" element={<DriveRoute />} />
+          <Route path="/shared/*" element={<DriveRoute />} />
         </Route>
       </Routes>
     ),
@@ -6889,26 +6895,17 @@ async function mount() {
     ["blueprint", { node: <BlueprintFrame />, entries: [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`] }],
     // A slate card inside a chat message, at its inline height.
     ["chat-slate", { node: <ChatSlateFrame />, entries: ["/"] }],
-    ["shared", {
-      node: (
-        <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
-          <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
-          <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><SharedPage fixture={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} /></main>
-        </div>
-      ),
-      // On its own route, so the rail's primary nav lights Shared and not Home.
-      entries: [APP_ROUTES.shared],
-    }],
-    // The same page before anything is shared: every list shows its empty line.
+    // The Drive's blueprints folder: the shared library, behind the chrome.
+    // On its own route, so the rail's primary nav lights Drive and not Home.
+    ["shared", { node: <DrivePageFrame library={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />, entries: ["/shared/blueprints"] }],
+    // The same folder before anything is shared: every list shows its empty line.
     ["shared-empty", {
-      node: (
-        <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
-          <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
-          <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><SharedPage fixture={{ mine: [], received: [], public: [], known: [] }} workspaces={STOCK_ROSTER.entries} /></main>
-        </div>
-      ),
-      entries: [APP_ROUTES.shared],
+      node: <DrivePageFrame library={{ mine: [], received: [], public: [], known: [] }} workspaces={STOCK_ROSTER.entries} />,
+      entries: ["/shared/blueprints"],
     }],
+    // The Drive over a seeded tenant (`&path=/projects/ops` opens a folder), and over an empty one.
+    ["drive", { node: <DrivePageFrame />, entries: [`/shared${new URLSearchParams(location.search).get("path") ?? ""}`] }],
+    ["drive-empty", { node: <DrivePageFrame />, entries: [APP_ROUTES.shared] }],
     // The task indicator mid-wait: the model call is sleeping out the
     // provider's declared window and the bar names it instead of "working".
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],

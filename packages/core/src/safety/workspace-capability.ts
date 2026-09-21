@@ -150,6 +150,12 @@ const WORKSPACE_CAPABILITY_TIERS = {
    *  workspace forking a blueprint is the owner's browser asking, never the
    *  workspace itself. */
   'shares': 'owner_only',
+  /** The owner's Drive as the web UI manages it: listing, uploads, renames,
+   *  deletes, and what is a skill. Owner-only: every workspace already reaches
+   *  the same tenant through its own `/shared` mount as the agent's file plane,
+   *  so a workspace token here would only be a second door onto the same
+   *  bytes, and the agent's door is the one whose reach the prompt declares. */
+  'drive': 'owner_only',
 } as const satisfies Record<string, CapabilityFloor>;
 
 export type WorkspaceCapability = keyof typeof WORKSPACE_CAPABILITY_TIERS;
