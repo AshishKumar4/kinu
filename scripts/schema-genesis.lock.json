@@ -12,33 +12,36 @@
     "key",
     "value"
   ],
-  "actor_context_revisions@packages/core/src/orchestrator/actor-claims.ts": [
+  "actor_context_selection@packages/core/src/session/schema.ts": [
     "actor_id",
-    "turn_id",
-    "revision",
-    "epoch",
-    "working_revision",
-    "digest",
-    "message_count",
-    "messages",
-    "step_index",
-    "recorded_at"
+    "context_id"
   ],
-  "actor_messages@packages/core/src/identity/schema.ts": [
+  "actor_contexts@packages/core/src/session/schema.ts": [
     "actor_id",
-    "id",
-    "session_id",
-    "parent_id",
-    "role",
-    "content",
-    "metadata",
-    "created_at"
+    "context_id",
+    "fork_context_id",
+    "fork_revision"
   ],
   "actor_program_state@packages/core/src/identity/program-state.ts": [
     "actor_id",
     "key",
     "value",
     "updated_at"
+  ],
+  "actor_requests@packages/core/src/session/schema.ts": [
+    "actor_id",
+    "request_id",
+    "turn_id",
+    "run_id",
+    "epoch",
+    "step_index",
+    "revision",
+    "context_id",
+    "context_revision",
+    "metadata_json",
+    "metadata_path",
+    "metadata_digest",
+    "recorded_at"
   ],
   "actor_subordinates@packages/core/src/subordinates/roster.ts": [
     "actor_id",
@@ -70,33 +73,6 @@
     "claimed_at",
     "settled_at"
   ],
-  "actor_turn_inputs@packages/core/src/orchestrator/actor-claims.ts": [
-    "actor_id",
-    "request_id",
-    "message_ids",
-    "settled"
-  ],
-  "actor_working_revisions@packages/core/src/orchestrator/working-context.ts": [
-    "actor_id",
-    "revision",
-    "base_revision",
-    "base_message_count",
-    "source",
-    "status",
-    "via",
-    "author",
-    "digest",
-    "message_count",
-    "messages",
-    "turn_id",
-    "activated_turn",
-    "activated_step",
-    "activated_at",
-    "deferred_reason",
-    "deferred_at",
-    "closed_reason",
-    "recorded_at"
-  ],
   "agent_facts@packages/core/src/memory/facts.ts": [
     "actor_id",
     "key",
@@ -123,6 +99,11 @@
     "schema_version",
     "dedupe_key",
     "consumed_at"
+  ],
+  "agent_task_notes@packages/core/src/tasks/store.ts": [
+    "actor_id",
+    "task_id",
+    "note"
   ],
   "agent_tasks@packages/core/src/tasks/store.ts": [
     "actor_id",
@@ -227,12 +208,101 @@
     "review",
     "created_at"
   ],
+  "context_memberships@packages/core/src/session/schema.ts": [
+    "actor_id",
+    "context_id",
+    "entry_id",
+    "from_revision",
+    "to_revision",
+    "position",
+    "message_id",
+    "through_sequence"
+  ],
+  "context_proposal_entries@packages/core/src/session/schema.ts": [
+    "actor_id",
+    "proposal_id",
+    "entry_id",
+    "expected_message_id",
+    "expected_sequence",
+    "message_id",
+    "through_sequence",
+    "position"
+  ],
+  "context_proposal_sources@packages/core/src/session/schema.ts": [
+    "actor_id",
+    "proposal_id",
+    "output_message_id",
+    "output_part_no",
+    "source_entry_id",
+    "source_message_id",
+    "source_part_no",
+    "source_sequence"
+  ],
+  "context_proposals@packages/core/src/session/schema.ts": [
+    "actor_id",
+    "proposal_id",
+    "context_id",
+    "base_revision",
+    "author",
+    "via",
+    "cause",
+    "turn_id",
+    "build_identity",
+    "status",
+    "deferred_reason",
+    "deferred_at",
+    "closed_reason",
+    "recorded_at"
+  ],
+  "context_revisions@packages/core/src/session/schema.ts": [
+    "actor_id",
+    "context_id",
+    "revision",
+    "author",
+    "cause",
+    "turn_id",
+    "proposal_id",
+    "recorded_at"
+  ],
+  "conversation_entries@packages/core/src/session/transcript-schema.ts": [
+    "actor_id",
+    "session_id",
+    "id",
+    "parent_id",
+    "role",
+    "turn_id",
+    "run_id",
+    "metadata_json",
+    "metadata_path",
+    "metadata_digest",
+    "recorded_at",
+    "context_id",
+    "context_revision"
+  ],
+  "conversation_entry_parts@packages/core/src/session/transcript-schema.ts": [
+    "actor_id",
+    "session_id",
+    "entry_id",
+    "position",
+    "message_id",
+    "part_no",
+    "through_sequence",
+    "text_start",
+    "text_length"
+  ],
   "conversation_fts_state@packages/core/src/memory/conversation-search.ts": [
     "id",
     "actor_id",
-    "regime",
     "rev",
-    "synced_rev"
+    "purges",
+    "synced_rev",
+    "synced_purges",
+    "synced_rowid"
+  ],
+  "conversation_heads@packages/core/src/session/transcript-schema.ts": [
+    "actor_id",
+    "session_id",
+    "entry_id"
   ],
   "cp_audit@packages/core/src/control-plane/store.ts": [
     "id",
@@ -355,11 +425,6 @@
     "agent_name",
     "announced_at"
   ],
-  "device_provision_pending@packages/core/src/state/user-schema.ts": [
-    "agent_name",
-    "consent_id",
-    "raised_at"
-  ],
   "driver_lease@packages/core/src/execution/driver-lease.ts": [
     "id",
     "pid",
@@ -459,8 +524,12 @@
     "staged_agent_config",
     "staged_crafted_tools",
     "staged_memory_chunks",
-    "staged_pane_messages",
-    "staged_messages",
+    "staged_session_messages",
+    "staged_message_parts",
+    "staged_message_updates",
+    "staged_conversation_entries",
+    "staged_conversation_entry_parts",
+    "staged_context_members",
     "staged_files",
     "transfer_id",
     "expected_seq",
@@ -471,8 +540,12 @@
     "want_agent_config",
     "want_crafted_tools",
     "want_memory_chunks",
-    "want_pane_messages",
-    "want_messages",
+    "want_session_messages",
+    "want_message_parts",
+    "want_message_updates",
+    "want_conversation_entries",
+    "want_conversation_entry_parts",
+    "want_context_members",
     "want_files",
     "published"
   ],
@@ -627,6 +700,25 @@
     "hash",
     "text",
     "updated_at"
+  ],
+  "message_parts@packages/core/src/session/schema.ts": [
+    "actor_id",
+    "message_id",
+    "part_no",
+    "kind",
+    "reply_to_message_id",
+    "reply_to_part_no",
+    "stream_order"
+  ],
+  "message_updates@packages/core/src/session/schema.ts": [
+    "actor_id",
+    "message_id",
+    "sequence",
+    "part_no",
+    "operation",
+    "payload_json",
+    "payload_path",
+    "payload_digest"
   ],
   "mission_budget@packages/core/src/mission-budget.ts": [
     "actor_id",
@@ -842,6 +934,13 @@
     "created_at",
     "updated_at"
   ],
+  "request_messages@packages/core/src/session/schema.ts": [
+    "actor_id",
+    "request_id",
+    "position",
+    "message_id",
+    "through_sequence"
+  ],
   "run_events@packages/core/src/events/recorder.ts": [
     "actor_id",
     "run_id",
@@ -915,6 +1014,18 @@
     "branch_agent_key",
     "evaluation_json",
     "created_at"
+  ],
+  "session_messages@packages/core/src/session/schema.ts": [
+    "actor_id",
+    "message_id",
+    "role",
+    "native_content_kind",
+    "origin",
+    "request_id",
+    "output_slot",
+    "ingress_id",
+    "sealed_sequence",
+    "recorded_at"
   ],
   "slate_deployment_reservations@packages/core/src/state/workspace-schema.ts": [
     "id",
@@ -1342,10 +1453,5 @@
     "owner_user_id",
     "mission",
     "created_at"
-  ],
-  "agent_task_notes@packages/core/src/tasks/store.ts": [
-    "actor_id",
-    "task_id",
-    "note"
   ]
 }
