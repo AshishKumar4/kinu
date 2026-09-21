@@ -378,15 +378,20 @@ describe('the living background', () => {
       await page.evaluateOnNewDocument(() => localStorage.setItem('theme', 'light'));
 
       try {
+        // A hoverless visitor is `(hover: none)`, which the browser derives from
+        // the emulated touch profile `hasTouch` installs. Puppeteer's media
+        // feature allowlist does not carry `hover`, and the profile reaches the
+        // page's media state after navigation, not before it: read at once on a
+        // loaded machine it answered `false` (measured 2026-09-21 in the
+        // deploy's parallel gate batch, green alone). So the read waits for the
+        // state the emulation is contracted to produce.
         await page.setViewport({ width: 1440, height: 900, hasTouch: true, isMobile: false });
         await page.goto(`${gallery.origin}/gallery.html?frame=app&path=/`, { waitUntil: 'networkidle0' });
+        await page.waitForFunction(() => matchMedia('(hover: none)').matches);
         await liveBackground(page);
 
         for (const name of DISPLAYED) await setOverview(page, name, idleBody());
         await waitForMode(page, 'idle');
-
-        const hoverNone = await page.evaluate(() => matchMedia('(hover: none)').matches);
-        expect(hoverNone).toBe(true);
 
         await page.touchscreen.touchStart(0.8 * 1440, 0.3 * 900);
         await page.touchscreen.touchMove(0.85 * 1440, 0.35 * 900);
