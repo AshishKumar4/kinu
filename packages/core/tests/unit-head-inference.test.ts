@@ -505,8 +505,18 @@ async function seededTranscript(count: number, extra?: (history: SessionHistory)
   return { db, history, transcript: history.transcript(CHAT_SESSION_ID) };
 }
 
-/** The parent-conversation cap core hands each spawned head. */
-const INHERITED_CONTEXT_CAP = 50;
+/** The parent-conversation cap core hands each spawned head, measured rather
+ *  than restated: a transcript far longer than any cap inherits the cap plus
+ *  the one omission note, so the read itself says what the cap is. */
+async function measuredInheritedCap(): Promise<number> {
+  const seeded = await seededTranscript(400);
+  const inherited = await inheritedContextFromTranscript(seeded.transcript);
+
+  seeded.db.close();
+  expect(inherited[0]).toMatchObject({ id: 'ctx-omitted', role: 'system' });
+
+  return inherited.length - 1;
+}
 
 describe('inherited context is windowed at READ time, exactly once (C4)', () => {
   test('plain text and SDK text parts inherit the same conversation bytes', () => {
@@ -586,18 +596,20 @@ describe('inheritedContextFromTranscript — the canonical store, read once for 
    *  seeded chat transcript to read a hire's inheritance out of. */
 
   test('the newest rows up to the cap, in order, with the omission note core owes a hire', async () => {
+    const cap = await measuredInheritedCap();
+
     // A row of another session: not a turn the hire inherits, and it does not
     // count against what it was not told.
-    const seeded = await seededTranscript(INHERITED_CONTEXT_CAP + 5, async (history) => {
+    const seeded = await seededTranscript(cap + 5, async (history) => {
       await history.record('side', { id: 'other', parentId: null, origin: 'input', message: { role: 'user', content: 'elsewhere' } });
     });
 
     const ctx = await inheritedContextFromTranscript(seeded.transcript);
     expect(ctx[0]).toMatchObject({ id: 'ctx-omitted', role: 'system' });
     expect(ctx[0]!.content).toContain('5 earlier messages omitted');
-    expect(ctx).toHaveLength(INHERITED_CONTEXT_CAP + 1);
+    expect(ctx).toHaveLength(cap + 1);
     expect(ctx[1]).toMatchObject({ id: 'm5', role: 'assistant', content: 'body 5' });
-    expect(ctx.at(-1)).toMatchObject({ id: `m${INHERITED_CONTEXT_CAP + 4}` });
+    expect(ctx.at(-1)).toMatchObject({ id: `m${cap + 4}` });
     expect(ctx.some((entry) => entry.content === 'elsewhere')).toBe(false);
     seeded.db.close();
   });

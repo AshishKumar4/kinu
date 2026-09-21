@@ -771,7 +771,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(source).not.toContain('reenqueue');
   });
 
-  test('an INTERRUPTED turn is complete through every reader, with no mirror write', async () => {
+  test('an INTERRUPTED turn is complete through every reader, with no projection write', async () => {
     // The bug the operator hit: he forked from a message the chat pane was
     // showing and got `fork point not found`, because every reader but the
     // fork cut read a projection beside the canonical store, and the
@@ -785,7 +785,7 @@ describe('turn-pipeline correctness wiring', () => {
     chatSessionTurns(harness.agent).open('u-live');
     await chatSessionTurns(harness.agent).settle({ messageId: 'a-live', text: 'partial answer', requestId: 'req-interrupted', status: 'aborted' });
 
-    // No projection to write into: the mirror tables are gone from the
+    // No projection to write into: the pane-era tables are gone from the
     // workspace, not merely left unwritten.
     const projections = harness.db.prepare<{ name: string }, []>(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('actor_messages', 'assistant_messages')`,

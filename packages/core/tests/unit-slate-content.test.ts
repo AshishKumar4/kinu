@@ -5,7 +5,17 @@ import { WorkspaceSlateContentStore } from '../src/slates/content';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createTestWorkspace, createWorkspaceBundle } from './helpers';
 
-const SLATE_CONTENT_ROOT = '/etc/kinu-slate-content';
+/** Where the store keeps a retained object: found under the kernel's /etc by
+ *  its digest, rather than restated from the store's own constant. */
+function retainedPath(kernel: { readdir(path: string): readonly { name: string }[]; exists(path: string): boolean }, digest: string) {
+  for (const { name } of kernel.readdir('/etc')) {
+    const root = `/etc/${name}`;
+
+    if (kernel.exists(`${root}/${digest}`)) return { root, path: `${root}/${digest}` };
+  }
+
+  throw new Error(`no retained object ${digest} under /etc`);
+}
 
 test('Slate content retains exact bytes and ranges in the workspace VFS', async () => {
   const ws = createTestWorkspace();
@@ -23,11 +33,11 @@ test('Slate content retains exact bytes and ranges in the workspace VFS', async 
     expect((await reopened.put(expected)).ref.value).toBe(stored.ref.value);
     expect((await reopened.stat(stored.ref))?.size).toBe(expected.length);
     await expect(reopened.get(stored.ref, ByteRange.slice(expected.length, 1))).rejects.toThrow();
-    const path = SLATE_CONTENT_ROOT + '/' + stored.digest.value;
+    const { root, path } = retainedPath(session.vfs.as(CRED_KERNEL), stored.digest.value);
     const user = session.vfs.as(CRED_SESSION_USER);
     expect(() => user.writeFile(path, 'tamper')).toThrow();
     expect(() => user.unlink(path)).toThrow();
-    expect(() => user.rename(SLATE_CONTENT_ROOT, SLATE_CONTENT_ROOT + '-moved')).toThrow();
+    expect(() => user.rename(root, `${root}-moved`)).toThrow();
     session.vfs.as(CRED_KERNEL).unlink(path);
     await expect(reopened.get(stored.ref)).rejects.toThrow('Slate content not found');
   } finally {
@@ -64,13 +74,12 @@ test('retention refuses a pre-existing path with mutable ownership or a symlink'
   try {
     const session = await createWorkspaceBundle(ws.db).session();
     const kernel = session.vfs.as(CRED_KERNEL);
-    kernel.mkdir(SLATE_CONTENT_ROOT, { mode: 0o700 });
-    kernel.chown(SLATE_CONTENT_ROOT, CRED_SESSION_USER.uid, CRED_SESSION_USER.gid);
-    expect(() => new WorkspaceSlateContentStore(kernel)).toThrow('not kernel-owned and protected');
-    kernel.chown(SLATE_CONTENT_ROOT, 0, 0);
     const content = new WorkspaceSlateContentStore(kernel);
     const retained = content.retain(new Uint8Array([42]));
-    const path = SLATE_CONTENT_ROOT + '/' + retained.digest.value;
+    const { root, path } = retainedPath(kernel, retained.digest.value);
+    kernel.chown(root, CRED_SESSION_USER.uid, CRED_SESSION_USER.gid);
+    expect(() => new WorkspaceSlateContentStore(kernel)).toThrow('not kernel-owned and protected');
+    kernel.chown(root, 0, 0);
     kernel.unlink(path);
     kernel.symlink('/etc/passwd', path);
     expect(() => content.retain(new Uint8Array([42]))).toThrow('not kernel-owned and protected');
