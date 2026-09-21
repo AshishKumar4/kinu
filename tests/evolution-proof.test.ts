@@ -433,7 +433,7 @@ describe('Evolution Proof', () => {
     // `reviewTurn` in this proof routes a reflection lane, so without it the
     // whole cross-session comparison dies on the second turn.
     model = liveChatModel(LLM_CONFIG);
-    engine = new EvolutionEngine(rt, { enabled: true });
+    engine = new EvolutionEngine(rt, rt.stores.history, { enabled: true });
     surface = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG });
     engine.onEvent(e => console.log(`    [evolution] ${e.type}: ${e.message.slice(0, 80)}`));
   });

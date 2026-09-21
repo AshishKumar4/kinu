@@ -139,7 +139,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     rt = target.runtime;
 
     events = [];
-    engine = new EvolutionEngine(rt, { enabled: true });
+    engine = new EvolutionEngine(rt, rt.stores.history, { enabled: true });
     engine.onEvent(e => events.push(e));
 
     // The model is resolved BEFORE the surface, because the production actor

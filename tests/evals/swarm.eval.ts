@@ -67,7 +67,7 @@ import type { LanguageModel, ToolSet } from 'ai';
 
 import {
   buildActorTools, execRatioImplementation, WORKSPACE_RUN_ID,
-  type AgentRuntime, type Floor, type JsonValue, type LLMProviderConfig,
+  type Floor, type JsonValue, type LLMProviderConfig,
   type ObjectiveIdentity,
 } from '../../packages/core/src/index';
 import { KinuError, refusalOf, type Refusal } from '@kinu.run/core/obs';
@@ -75,6 +75,7 @@ import {
   bestInCell, floorDigestOf, recordsFor, verifierDigestOf,
 } from '../../packages/core/src/strategy/records';
 import { provisionLocalTarget, type LocalAgentEvalTarget } from './target-local';
+import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { resolveEvalTarget } from './target';
 import {
   EVAL_MODELS, HARD_TASKS, ledgerTotalsFromEvents, liveChatModel,
@@ -458,7 +459,7 @@ type SwarmOutcome =
 
 describe('Swarm evals — a live measured search through the settled tool surface', () => {
   let target: LocalAgentEvalTarget;
-  let rt: AgentRuntime;
+  let rt: CLIRuntime;
   let model: LanguageModel;
   let tools: ToolSet;
   let callSwarm: (args: SwarmCall, signal: AbortSignal) => Promise<SwarmOutcome>;
@@ -517,6 +518,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     model = liveChatModel(LLM_CONFIG);
     tools = buildActorTools({
       rt,
+      history: rt.stores.history,
       agents: {
         mode: 'build',
         // The exploration substrate, which is what puts `swarm` in the action enum.

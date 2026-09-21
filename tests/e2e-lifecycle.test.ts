@@ -206,7 +206,7 @@ describe('E2E Lifecycle', () => {
     rt = target.runtime;
     db = target.db;
     events = [];
-    engine = new EvolutionEngine(rt, { enabled: true });
+    engine = new EvolutionEngine(rt, rt.stores.history, { enabled: true });
     engine.onEvent(e => events.push(e));
     turns = [];
 

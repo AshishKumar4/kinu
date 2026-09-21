@@ -49,8 +49,8 @@ import type { LanguageModel } from 'ai';
 import type { HostedNodeSeat, NodeIdentity } from '../../packages/core/src/index';
 
 import {
-  createAgentStores, initWorkspaceSchema, listBackgroundJobs, listForkRuns,
-  listRecordObjectives, readExplorationCanvas, SubordinateRosterStore, workspaceSpend,
+  agentArtifactDirectory, agentHome, createAgentStores, initWorkspaceSchema, listBackgroundJobs, listForkRuns,
+  listRecordObjectives, MAIN_AGENT, readExplorationCanvas, SubordinateRosterStore, workspaceSpend,
   type AgentStores, type LLMProviderConfig, type RunEvent, type WorkspaceSpend,
 } from '../../packages/core/src/index';
 import { createWorkspace } from '../../packages/core/src/identity/index';
@@ -159,7 +159,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
     readonly runtime: CLIRuntime,
     private readonly opts: LocalTargetOptions,
   ) {
-    this.stores = createAgentStores(() => this.runtime.storage.sql, () => this.runtime.actor, this.runtime.storage.transactionSync);
+    this.stores = createAgentStores(() => this.runtime.storage.sql, () => this.runtime.actor, this.runtime.storage.transactionSync, async () => ({ vfs: this.runtime.storage.vfs, artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) }));
   }
 
   get describe(): string {
