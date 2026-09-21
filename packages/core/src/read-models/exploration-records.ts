@@ -51,7 +51,7 @@ import {
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { boundedInt } from '../utils/bounds';
-import { mapPage, seekPage, StaleCursorError, type Page, type SeekCursor } from './page';
+import { mapPage, seekPage, StaleCursorError, type Page, type SeekCursor } from '../session/page';
 
 /**
  * One comparable set: an objective, under one floor, with what it measures spelled

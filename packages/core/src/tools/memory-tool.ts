@@ -14,7 +14,7 @@ import { appendMemoryNote } from '../memory/note';
 import { normalizeFactKey, searchFacts, type FactSearchHit, type FactsStore } from '../memory/facts';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search';
 import { ConversationSearchStore } from '../memory/conversation-search';
-import type { SessionTranscriptReader } from '../orchestrator/session-transcript';
+import type { SessionTranscriptReader } from '../session/transcript';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 import {
   memoryActionsFor, unknownActionError,

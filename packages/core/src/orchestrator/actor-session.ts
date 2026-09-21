@@ -18,7 +18,7 @@ import {
   programIdentityOf, type ActorClaimStore, type ActorTurnClaim, type ClaimOutcome,
 } from './actor-claims';
 import type { ContextEventRecorder } from '../types/context-plane';
-import type { ContextSelection } from './session-context';
+import type { ContextSelection } from '../session/context';
 import type { ScaffoldBridgeOpts } from './scaffold-host';
 import type { ModelCallSpend } from '../events/model-call';
 import type { AgentSignal, SendOutcome } from '../types/signals';
@@ -30,10 +30,10 @@ import { reviewRecordedTurn, type AdvisorRecoverySnapshot, type AdvisorDispositi
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { resolveModelRoute } from '../profiles/model-route';
 import { contextWindowForModel } from '../context-window';
-import { SessionHistory } from './session-history';
+import { SessionHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
-import type { MessageReference, MessagePartReference } from './session-messages';
+import type { MessageReference, MessagePartReference } from '../session/messages';
 
 /** A hosted actor shares workspace priorities, but delivers feedback to itself. */
 export interface ActorAdvisorContext {

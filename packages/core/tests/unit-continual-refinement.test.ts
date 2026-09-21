@@ -34,8 +34,8 @@ import {
 import { initAllTables } from '../src/identity/schema';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
-import type { SessionHistory } from '../src/orchestrator/session-history';
-import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
+import type { SessionHistory } from '../src/session/history';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { initTurnOutcomeTables } from '../src/evolution/outcomes';
 import { buildChangelog } from '../src/evolution/changelog';
 import { initGepaTables } from '../src/evolution/gepa/persistence';

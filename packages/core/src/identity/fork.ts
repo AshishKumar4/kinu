@@ -63,7 +63,7 @@ import { walkRecursive } from '@kinu.run/agent-utils/vfs';
 import type { SqlExecutor, VFS } from '../types/primitives';
 import { SOUL_PATH, summarizeSoul } from './soul';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../config/store';
-import { CHAT_SESSION_ID } from './conversation-store';
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { ForkStagingState } from './fork-staging';
 import { invalidateConversationSearchIndex } from '../memory/conversation-search';
 import { openWorkspaceMainActor, WorkspaceActorDirectory } from './workspace-actors';

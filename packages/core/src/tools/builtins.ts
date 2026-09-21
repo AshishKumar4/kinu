@@ -67,7 +67,7 @@ import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { SessionHistory } from '../orchestrator/session-history';
+import type { SessionHistory } from '../session/history';
 import type { ExecutorProviderSurface } from '../execution/types';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,

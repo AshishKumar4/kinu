@@ -16,8 +16,8 @@ import {
   recordLesson, listLessons, corroborateLessonsForTurn,
 } from '../src/evolution/outcomes';
 import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
-import { SessionHistory } from '../src/orchestrator/session-history';
-import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
+import { SessionHistory } from '../src/session/history';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import type { ScaffoldArchiveEntry } from '../src/scaffold/archive';
 import { RunEventRecorder } from '../src/events/recorder';
 import type { ToolCallRecord } from '../src/evolution/types';

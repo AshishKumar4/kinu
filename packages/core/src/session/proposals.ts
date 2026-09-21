@@ -3,8 +3,8 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
 import { STAGED_CONTEXT_DEFERRALS, type ContextProposalClosure, type StagedContextDeferral } from '../types/context-plane';
-import { SessionContext, type ContextEntry, type ContextSelection } from './session-context';
-import type { MessageReference } from './session-messages';
+import { SessionContext, type ContextEntry, type ContextSelection } from './context';
+import type { MessageReference } from './messages';
 
 export interface ContextChange {
   readonly entryId: string;

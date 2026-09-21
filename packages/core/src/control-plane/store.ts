@@ -15,7 +15,7 @@
  * primary record, and it has no update and no delete path anywhere in this file —
  * an audit log an admin can edit is a diary.
  */
-import { seekPage, type Page, type PageRequest } from '../read-models/page';
+import { seekPage, type Page, type PageRequest } from '../session/page';
 import * as v from 'valibot';
 import type { ControlPlaneSql, ControlPlaneSqlValue } from './sql';
 import { initPublicShareIndex } from './public-shares';

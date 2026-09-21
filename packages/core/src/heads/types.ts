@@ -33,7 +33,7 @@ import type { Usage } from '../usage';
 import type { ToolSet } from 'ai';
 import type { BuiltinToolName } from '../tools/registry';
 import type { LoopOrigin } from '../scaffold/loop-origin';
-import type { MessageReference, MessagePartReference } from '../orchestrator/session-messages';
+import type { MessageReference, MessagePartReference } from '../session/messages';
 
 /** What a head did to the shared filesystem — see heads/file-changes.ts. */
 export type { HeadFileChange, HeadFileChangeSet, HeadId, SerializedMessage };

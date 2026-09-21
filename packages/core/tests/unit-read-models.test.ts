@@ -23,10 +23,10 @@ import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { getRunTimeline } from '../src/read-models/timeline';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs';
 import { getAgentStatus, getChatHistoryPage, getToolList } from '../src/read-models/status';
-import { SessionHistory } from '../src/orchestrator/session-history';
-import type { SessionTranscriptReader } from '../src/orchestrator/session-transcript';
-import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
-import { StaleCursorError, type SeekCursor } from '../src/read-models/page';
+import { SessionHistory } from '../src/session/history';
+import type { SessionTranscriptReader } from '../src/session/transcript';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
+import { StaleCursorError, type SeekCursor } from '../src/session/page';
 import {
   getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
 } from '../src/read-models/workspace-diff';

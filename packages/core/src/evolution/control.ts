@@ -40,9 +40,9 @@ import {
 import { modifyScaffold } from '../scaffold/modify';
 import type { ScaffoldVersionView } from '../types/scaffold';
 import type { ActorHandle } from '../identity/actor-handle';
-import { CHAT_SESSION_ID } from '../identity/conversation-store';
-import type { SessionHistory } from '../orchestrator/session-history';
-import type { SessionTranscriptReader } from '../orchestrator/session-transcript';
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
+import type { SessionHistory } from '../session/history';
+import type { SessionTranscriptReader } from '../session/transcript';
 import { listScaffoldArchive } from '../scaffold/archive';
 import {
   DEFAULT_SHADOW_CONFIG, MAX_QUEUED_SHADOW_TRIALS, applyPromotionDecision, countQueuedShadowTrials,

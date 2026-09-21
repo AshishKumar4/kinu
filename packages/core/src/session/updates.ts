@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { KinuError } from '../obs/error';
-import type { SessionPayload, SessionPayloads } from './session-payload';
+import type { SessionPayload, SessionPayloads } from './payload';
 
 export type MessageUpdateInput =
   | { readonly operation: 'envelope-metadata'; readonly part: null; readonly value: JsonObject }

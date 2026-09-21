@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createCLIRuntime } from '../src/runtime';
 import { localActorDirectory } from '../src/actor-identity';
-import { SessionPayloads } from '../../core/src/orchestrator/session-payload';
+import { SessionPayloads } from '../../core/src/session/payload';
 
 test('large canonical payloads use the issued child home and deny sibling reads', async () => {
   const db = new Database(':memory:');

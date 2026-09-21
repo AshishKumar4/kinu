@@ -56,7 +56,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import { ActorSession } from '../orchestrator/actor-session';
 import type { AgentOrchestratorDeps } from '../orchestrator/agent-orchestrator';
 import type { StoredActorClaim } from '../orchestrator/actor-claims';
-import type { SessionFilePlane } from '../orchestrator/session-payload';
+import type { SessionFilePlane } from '../session/payload';
 import { actorReferenceOf, sameActorReference, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import { createAgentStores, type AgentStores } from './agent-stores';
 import type { WorkspaceActor, WorkspaceActorDirectory } from '../identity/workspace-actors';

@@ -2,15 +2,15 @@ import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
-import { SessionMessages, type PreparedMessage, type MessageReference, type MessagePartReference, type MessageOrigin } from './session-messages';
-import { SessionPayloads, type SessionFilePlane } from './session-payload';
-import { SessionContext, type ContextSelection, type ContextEntry } from './session-context';
-import { SessionProposals, type ContextProposal } from './session-proposals';
-import { SessionRequests } from './session-requests';
+import { SessionMessages, type PreparedMessage, type MessageReference, type MessagePartReference, type MessageOrigin } from './messages';
+import { SessionPayloads, type SessionFilePlane } from './payload';
+import { SessionContext, type ContextSelection, type ContextEntry } from './context';
+import { SessionProposals, type ContextProposal } from './proposals';
+import { SessionRequests } from './requests';
 import { KinuError } from '../obs/error';
 import type { JsonObject } from '../utils/json';
-import { SessionTranscript } from './session-transcript';
-import { toolPairingGaps } from '../prompting/tool-pairing';
+import { SessionTranscript } from './transcript';
+import { toolPairingGaps } from './tool-pairing';
 import type { ContextEventRecorder } from '../types/context-plane';
 
 export interface SessionHistoryDependencies {

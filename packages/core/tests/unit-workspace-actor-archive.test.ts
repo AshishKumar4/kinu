@@ -18,9 +18,9 @@ import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { restoreWorkspaceArchive, writeWorkspaceArchive } from '../src/identity/archive';
-import { SessionHistory } from '../src/orchestrator/session-history';
-import { readSessionTranscript, type SessionTranscriptReader } from '../src/orchestrator/session-transcript';
-import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
+import { SessionHistory } from '../src/session/history';
+import { readSessionTranscript, type SessionTranscriptReader } from '../src/session/transcript';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor, SqlValue } from '../src/types/primitives';
 

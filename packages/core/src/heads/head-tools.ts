@@ -36,7 +36,7 @@ import { buildToolSurface } from '../tools/builtins';
 import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference';
 import { budgetExhausted, HEAD_BUILTIN_TOOLS } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { SessionHistory } from '../orchestrator/session-history';
+import type { SessionHistory } from '../session/history';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
 import { KinuError, renderThrownChain } from '../obs/index';

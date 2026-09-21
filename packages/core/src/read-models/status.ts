@@ -11,7 +11,7 @@
 
 import type { ActorHandle } from '../identity/actor-handle';
 import { conversationCount } from '../identity/conversation-store';
-import type { SessionTranscriptReader } from '../orchestrator/session-transcript';
+import type { SessionTranscriptReader } from '../session/transcript';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
 import { readSoul, summarizeSoul } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
@@ -22,7 +22,7 @@ import type { CraftedTool } from '../types/craft';
 import type { ReasoningEffort } from '../strategy/effort';
 import { transcriptRole } from '../utils/ui-message';
 import type { ChatHistoryEntry } from '../types/chat';
-import { mapPage, type Page, type PageRequest } from './page';
+import { mapPage, type Page, type PageRequest } from '../session/page';
 
 export type { ChatHistoryEntry } from '../types/chat';
 

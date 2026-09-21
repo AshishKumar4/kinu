@@ -14,7 +14,7 @@
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { SerializedMessage } from '../heads/types';
-import type { SessionTranscriptReader } from './session-transcript';
+import type { SessionTranscriptReader } from '../session/transcript';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 
 /** The parent-conversation cap handed to each spawned head — bounds head LLM

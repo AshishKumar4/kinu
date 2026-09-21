@@ -5,11 +5,11 @@ import type { PromptFile } from '../types/backend-host';
 import type { SqlExecutor, VFS } from '../types/primitives';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
-import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference } from './session-messages';
-import { type SessionPayloads, SessionPayloadReader, type SessionPayload } from './session-payload';
+import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference } from './messages';
+import { type SessionPayloads, SessionPayloadReader, type SessionPayload } from './payload';
 import { turnAuthor } from '../utils/ui-message';
-import { seekPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
-import type { ContextSelection } from './session-context';
+import { seekPage, StaleCursorError, type Page, type PageRequest } from './page';
+import type { ContextSelection } from './context';
 
 export interface ConversationPartReference extends MessagePartReference { textRange?: { readonly start: number; readonly length: number } }
 

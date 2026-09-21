@@ -102,9 +102,11 @@ export {
 } from './identity/fork-sink';
 
 export {
-  forkPointExists, answersForDrainTurns, conversationCount, conversationTurnPair, CHAT_SESSION_ID,
+  forkPointExists, answersForDrainTurns, conversationCount, conversationTurnPair,
   type ConversationTurnPair,
 } from './identity/conversation-store';
+
+export { CHAT_SESSION_ID, MCTS_SESSION_ID } from './session/transcript-schema';
 
 export {
   forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,
@@ -460,28 +462,28 @@ export {
   type StepPrepareResult, type StepPrepareContext,
 } from './prompting/prepare-step';
 
-export { toolPairingGaps } from './prompting/tool-pairing';
+export { toolPairingGaps } from './session/tool-pairing';
 
 export { STAGED_CONTEXT_DEFERRALS, type StagedContextDeferral, type ContextProposalClosure, type ContextEditEffect, type ContextEventRecorder, type ContextEditEvent } from './types/context-plane';
 
-export { SessionHistory, type SessionHistoryDependencies } from './orchestrator/session-history';
+export { SessionHistory, type SessionHistoryDependencies } from './session/history';
 
-export type { ContextSelection, ContextEntry } from './orchestrator/session-context';
+export type { ContextSelection, ContextEntry } from './session/context';
 
-export type { ContextProposal, ContextChange } from './orchestrator/session-proposals';
+export type { ContextProposal, ContextChange } from './session/proposals';
 
 export {
   contextMount,
   type ActorContextStores, type ChildContextResolver, type ContextMountDeps, type ContextFileHeader,
 } from './vfs/context-plane';
 
-export type { SessionFilePlane } from './orchestrator/session-payload';
+export type { SessionFilePlane } from './session/payload';
 
-export type { MessageReference, MessagePartReference, ActorReadAuthority } from './orchestrator/session-messages';
+export type { MessageReference, MessagePartReference, ActorReadAuthority } from './session/messages';
 
-export { SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './orchestrator/session-transcript';
+export { SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './session/transcript';
 
-export { encodeModelMessages, decodeModelMessages } from './prompting/message-codec';
+export { encodeModelMessages, decodeModelMessages } from './session/message-codec';
 
 export {
   pruneStepToolOutputs,
@@ -2171,9 +2173,9 @@ export type {
 
 export { getAgentStatus, getChatHistoryPage, getToolList } from './read-models/status';
 
-export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './read-models/page';
+export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 
-export type { Page, PageRequest, SeekCursor } from './read-models/page';
+export type { Page, PageRequest, SeekCursor } from './session/page';
 
 export {
   mergeTranscript, restoredRows, transcriptRole,

@@ -26,7 +26,7 @@ import { bindTaskPlan, type TaskPlan } from '../src/tasks/plan-scope';
 import { HeadJournal } from '../src/heads/journal';
 import { BackgroundJobStore } from '../src/jobs/store';
 import { MctsSearchStore } from '../src/mcts/search-store';
-import { StaleCursorError } from '../src/read-models/page';
+import { StaleCursorError } from '../src/session/page';
 import type { HeadInput } from '../src/heads/types';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 

@@ -9,10 +9,8 @@
  */
 
 import type { SessionWriter, SessionMessage } from '../mcts/record-node';
-import type { SessionHistory } from './session-history';
-
-/** The transcript session a lifetime search writes its trajectories into. */
-export const MCTS_SESSION_ID = 'mcts';
+import type { SessionHistory } from '../session/history';
+import { MCTS_SESSION_ID } from '../session/transcript-schema';
 
 export function createDurableMctsSession(history: SessionHistory, sessionId: string = MCTS_SESSION_ID): SessionWriter {
   const transcript = history.transcript(sessionId);

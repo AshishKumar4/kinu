@@ -26,7 +26,7 @@ import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrat
 import type { AgentRuntime, Identity, VFS, SqlExecutor } from '../src/index';
 import { actorReferenceOf, type ActorReference } from '../src/identity/actor-handle';
 import type { ActorProgramIdentity, ActorTurnClaim } from '../src/orchestrator/actor-claims';
-import type { ContextSelection } from '../src/orchestrator/session-context';
+import type { ContextSelection } from '../src/session/context';
 import { agentArtifactDirectory } from '../src/vfs/agent-home';
 import { sha256Hex } from '../src/safety/argument-digest';
 

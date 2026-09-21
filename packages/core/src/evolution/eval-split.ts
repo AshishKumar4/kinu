@@ -16,7 +16,7 @@ import {
 } from '../advisor/review';
 import { delegationFeatures, renderDelegationFeatures } from './delegation-features';
 import { conversationTurnPair } from '../identity/conversation-store';
-import type { SessionTranscriptReader } from '../orchestrator/session-transcript';
+import type { SessionTranscriptReader } from '../session/transcript';
 import { RunEventRecorder } from '../events/recorder';
 import { parseJsonValue, projectJsonValue, JsonObjectSchema, type JsonValue } from '../utils/json';
 import {

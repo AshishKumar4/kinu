@@ -91,10 +91,10 @@ import {
   owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, persistMeasuredPromptTokens, snapshotCompletedTurn,
   type CompactionTriggerState, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
-import type { SessionTranscript, PreparedConversationEntry } from './session-transcript';
+import type { SessionTranscript, PreparedConversationEntry } from '../session/transcript';
 import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
-import type { MessageReference } from './session-messages';
-import type { ContextSelection } from './session-context';
+import type { MessageReference } from '../session/messages';
+import type { ContextSelection } from '../session/context';
 import { subordinateTurnContext } from '../subordinates/support';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
 import type { TaskListStore } from '../tasks/store';

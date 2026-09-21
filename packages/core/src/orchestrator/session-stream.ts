@@ -1,11 +1,11 @@
 import type { ModelMessage, ProviderMetadata, TextStreamPart, ToolSet } from 'ai';
 import * as v from 'valibot';
 import type { ChatEvent } from '../chat';
-import { SessionHistory } from './session-history';
-import type { MessageReference } from './session-messages';
-import { PreparedMessageUpdate } from './session-updates';
+import { SessionHistory } from '../session/history';
+import type { MessageReference } from '../session/messages';
+import { PreparedMessageUpdate } from '../session/updates';
 import { JsonObjectSchema, projectJsonValue, type JsonObject } from '../utils/json';
-import { encodeModelMessages } from '../prompting/message-codec';
+import { encodeModelMessages } from '../session/message-codec';
 import { renderThrownChain, KinuError } from '../obs/index';
 
 interface StreamPart {

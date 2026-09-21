@@ -21,8 +21,8 @@ import { proposeNextTasks, type ProposedTask } from '../curriculum/proposer';
 import {
   buildTakeContinuationPrompt, recordTakePick, type TakePickOutcome,
 } from '../mcts/takes';
-import { CHAT_SESSION_ID } from '../identity/conversation-store';
-import type { SessionHistory } from '../orchestrator/session-history';
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
+import type { SessionHistory } from '../session/history';
 import { getCurrentScaffoldVersion } from '../scaffold/shadow';
 import type { AgentInbox } from '../types/signals';
 import type { AgentRuntime } from '../types/agent-runtime';

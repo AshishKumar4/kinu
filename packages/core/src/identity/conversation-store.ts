@@ -6,10 +6,9 @@
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from './actor-handle';
-import type { SessionTranscriptReader } from '../orchestrator/session-transcript';
+import type { SessionTranscriptReader } from '../session/transcript';
 
-/** The chat session every conversational read and write uses. */
-export const CHAT_SESSION_ID = 'default';
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
 
 /** Cheap fork-cut preflight. It reads only the authority table primary key, so
  * the driver can refuse an unknown requested cut before it probes or reserves a

@@ -20,16 +20,16 @@
 
 import { fillToCapacity, relaxFtsQuery, sanitizeFtsQuery } from '@kinu.run/agent-utils/memory';
 import * as v from 'valibot';
-import { CHAT_SESSION_ID } from '../identity/conversation-store';
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { boundedInt } from '../utils/bounds';
 import { KinuError } from '../obs/error';
 // The MCTS session holds tree nodes, not conversation: excluded from indexing
 // and from browse below. A scroll may still anchor one — a search tree is a
 // different tree, not a hidden one.
-import { MCTS_SESSION_ID } from '../orchestrator/mcts-session';
+import { MCTS_SESSION_ID } from '../session/transcript-schema';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { SessionTranscriptReader } from '../orchestrator/session-transcript';
+import type { SessionTranscriptReader } from '../session/transcript';
 
 /** Default per-message budget in scroll/browse results. A DEFAULT, not a
  *  ceiling: scroll honours the caller's max_chars, because scroll IS the

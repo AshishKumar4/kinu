@@ -14,13 +14,13 @@
 
 import type { ModelMessage } from 'ai';
 import type { TestWorkspace } from '../helpers';
-import { CHAT_SESSION_ID } from '../../src/identity/conversation-store';
+import { CHAT_SESSION_ID } from '../../src/session/transcript-schema';
 import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../../src/identity/workspace-actors';
 import type { ActorHandle } from '../../src/identity/actor-handle';
-import { SessionMessages, type MessageOrigin, type MessageReference } from '../../src/orchestrator/session-messages';
-import { SessionContext, type ContextSelection } from '../../src/orchestrator/session-context';
-import { SessionPayloads } from '../../src/orchestrator/session-payload';
-import { SessionTranscript, readSessionTranscript } from '../../src/orchestrator/session-transcript';
+import { SessionMessages, type MessageOrigin, type MessageReference } from '../../src/session/messages';
+import { SessionContext, type ContextSelection } from '../../src/session/context';
+import { SessionPayloads } from '../../src/session/payload';
+import { SessionTranscript, readSessionTranscript } from '../../src/session/transcript';
 import { writeSoul } from '../../src/identity/soul';
 import type { JsonObject } from '../../src/utils/json';
 import { PLATFORM_CATALOG } from '../../src/platform-catalog';

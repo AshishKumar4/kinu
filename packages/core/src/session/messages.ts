@@ -3,10 +3,10 @@ import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
-import { encodeModelMessages, decodeModelMessages } from '../prompting/message-codec';
+import { encodeModelMessages, decodeModelMessages } from './message-codec';
 import { JsonObjectSchema, JsonValueSchema, type JsonObject } from '../utils/json';
-import type { SessionPayloads, SessionPayloadReader, SessionPayload } from './session-payload';
-import { PreparedMessageUpdate } from './session-updates';
+import type { SessionPayloads, SessionPayloadReader, SessionPayload } from './payload';
+import { PreparedMessageUpdate } from './updates';
 
 export interface MessageReference { readonly messageId: string; readonly sequence: number }
 

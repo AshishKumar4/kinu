@@ -54,7 +54,7 @@ import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../
 import type { BuiltinToolName } from '../tools/registry';
 import { agentAffinityKey } from '../providers/workers-ai';
 import type { ActorTurnClaim } from '../orchestrator/actor-claims';
-import type { MessageReference, MessagePartReference } from '../orchestrator/session-messages';
+import type { MessageReference, MessagePartReference } from '../session/messages';
 import { snapshotCompletedTurn } from '../orchestrator/turn-lifecycle';
 
 /**

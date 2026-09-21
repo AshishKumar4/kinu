@@ -428,7 +428,7 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/core/src/prompting/message-codec.ts",
+      "file": "packages/core/src/session/message-codec.ts",
       "kind": "hand-parser",
       "owner": "decodeValue",
       "sourceSha256": "13324d5e6a078c0df508d29c24050e32b02bb05de375c41fc4622b7b8c1fb35e",

@@ -1,6 +1,12 @@
 import type { RawSqlExec } from '../types/primitives';
 
 /** Public conversation structure references canonical parts, independently of working-context selection. */
+/** The chat session every conversational read and write uses. */
+export const CHAT_SESSION_ID = 'default';
+
+/** The transcript session a lifetime search writes its trajectories into; never indexed or browsed as chat. */
+export const MCTS_SESSION_ID = 'mcts';
+
 export function initSessionTranscriptTables(exec: RawSqlExec): void {
   exec(`CREATE TABLE IF NOT EXISTS conversation_entries (
     actor_id TEXT NOT NULL,

@@ -57,7 +57,8 @@ import { createCraftLedger, type CraftLedger } from '../craft/in-episode';
 import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import { readSoul, summarizeSoul } from '../identity/soul';
-import { CHAT_SESSION_ID, conversationTurnPair } from '../identity/conversation-store';
+import { conversationTurnPair } from '../identity/conversation-store';
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import {
   ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, normalizeNote,
   type AdvisorNote, type AdvisorRowData,
@@ -111,7 +112,7 @@ const GeneralizedToolSchema = v.object({
 
 import { runMCTS } from '../mcts/engine';
 import { createDurableMctsSession } from '../orchestrator/mcts-session';
-import type { SessionHistory } from '../orchestrator/session-history';
+import type { SessionHistory } from '../session/history';
 import type { AgentConfigStore } from '../config/store';
 import type { WorkspaceActor } from '../identity/workspace-actors';
 import { diagnostics, toKinuError, KinuError } from '../obs/index';

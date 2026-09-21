@@ -3,9 +3,9 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import type { JsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
-import type { ContextSelection } from './session-context';
-import { SessionMessages, type MessageReference, type PreparedMessage } from './session-messages';
-import { SessionPayloads, type SessionPayload } from './session-payload';
+import type { ContextSelection } from './context';
+import { SessionMessages, type MessageReference, type PreparedMessage } from './messages';
+import { SessionPayloads, type SessionPayload } from './payload';
 
 export interface PreparedRequest {
   readonly id: string;

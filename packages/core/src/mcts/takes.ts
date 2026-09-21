@@ -19,7 +19,7 @@ import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../identity/effect-tombstones';
 import { conversationTurnPair } from '../identity/conversation-store';
-import type { SessionTranscriptReader } from '../orchestrator/session-transcript';
+import type { SessionTranscriptReader } from '../session/transcript';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';

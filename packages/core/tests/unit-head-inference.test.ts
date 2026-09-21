@@ -17,8 +17,8 @@ import {
   inheritedContextFromHistory, inheritedContextOmissionNote,
   inheritedContextFromTranscript,
 } from '../src/orchestrator/heads-support';
-import { SessionHistory } from '../src/orchestrator/session-history';
-import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
+import { SessionHistory } from '../src/session/history';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/prompts/evidence-window';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 

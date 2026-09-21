@@ -9,11 +9,10 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import {
-  answersForDrainTurns, conversationCount, conversationTurnPair, forkPointExists, CHAT_SESSION_ID,
-} from '../src/identity/conversation-store';
-import { SessionHistory } from '../src/orchestrator/session-history';
-import type { SessionTranscript } from '../src/orchestrator/session-transcript';
+import { answersForDrainTurns, conversationCount, conversationTurnPair, forkPointExists } from '../src/identity/conversation-store';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
+import { SessionHistory } from '../src/session/history';
+import type { SessionTranscript } from '../src/session/transcript';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { createTestActor, createTestWorkspace, type TestWorkspace } from './helpers';
 

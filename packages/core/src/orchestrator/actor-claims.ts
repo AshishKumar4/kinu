@@ -5,12 +5,12 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { KinuError } from '../obs/error';
 import { nowMs } from '../utils/date';
 import { RUN_END_REASONS } from './turn-lifecycle';
-import { initSessionContextTables } from './session-schema';
-import { initSessionTranscriptTables } from './session-transcript-schema';
+import { initSessionContextTables } from '../session/schema';
+import { initSessionTranscriptTables } from '../session/transcript-schema';
 import { sqlCheckList } from '../identity/schema';
 import type { ActorTurnProgram } from './actor-program';
-import type { SessionHistory } from './session-history';
-import type { ContextSelection } from './session-context';
+import type { SessionHistory } from '../session/history';
+import type { ContextSelection } from '../session/context';
 
 const CLAIM_OUTCOMES = [...RUN_END_REASONS, 'indeterminate'] as const;
 

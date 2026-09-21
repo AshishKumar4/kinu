@@ -32,7 +32,7 @@ import { initTurnOutcomeTables } from '../src/evolution/outcomes';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createTestRuntime, storesFor } from './helpers';
-import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { RunEventRecorder } from '../src/events/recorder';
 
 const EVAL_SIZE = 8;

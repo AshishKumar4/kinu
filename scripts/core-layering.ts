@@ -38,7 +38,7 @@ const CORE = 'packages/core/src/';
 export const LAYERS: ReadonlyMap<string, 0 | 1 | 2> = new Map<string, 0 | 1 | 2>([
   ['obs', 0], ['utils', 0], ['types', 0], ['checkpoints', 0], ['credentials', 0], ['providers', 0],
   ['config', 0], ['identity', 0], ['vfs', 0], ['execution', 0], ['events', 0], ['memory', 0],
-  ['safety', 0], ['slates', 0],
+  ['safety', 0], ['slates', 0], ['session', 0],
   ['tools', 1], ['craft', 1], ['web', 1],
   // Root files, by name: the six primitives and their accounting are platform,
   // the loop's assembly is harness. A root file absent here is harness.

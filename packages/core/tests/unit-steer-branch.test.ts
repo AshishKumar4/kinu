@@ -6,8 +6,8 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { createTestActor, createTestWorkspace } from './helpers';
-import { SessionHistory } from '../src/orchestrator/session-history';
-import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
+import { SessionHistory } from '../src/session/history';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import {
   recordBranchTakeSet, claimAlternateTakesForTurn,
   latestAlternateTakeSet, listAlternateTakeSets, recordTakePick, buildTakeContinuationPrompt,

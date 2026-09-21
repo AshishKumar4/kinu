@@ -2,16 +2,16 @@ import * as v from 'valibot';
 import type { VFS, VfsEntryStat, VfsRevision } from '../types/primitives';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { ActorClaimStore } from '../orchestrator/actor-claims';
-import type { ContextEntry, ContextSelection } from '../orchestrator/session-context';
-import type { PreparedMessage } from '../orchestrator/session-messages';
-import type { ContextChange } from '../orchestrator/session-proposals';
+import type { ContextEntry, ContextSelection } from '../session/context';
+import type { PreparedMessage } from '../session/messages';
+import type { ContextChange } from '../session/proposals';
 import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
 import { FileRefusalError } from '../tools/file-edit';
 import { isVfsError, makeVfsError } from './errno';
 import type { VfsMount, VfsNativeReads } from './mounts';
-import { toolPairingGaps } from '../prompting/tool-pairing';
+import { toolPairingGaps } from '../session/tool-pairing';
 
 export interface ActorContextStores { readonly claims: ActorClaimStore; readonly events: ContextEventRecorder | null }
 

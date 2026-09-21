@@ -23,7 +23,7 @@ import type { RunEventQuery, RunEventRecorder, RunListEntry } from '../events/re
 import type { RunEvent } from '../events/types';
 import { boundedInt } from '../utils/bounds';
 import { addUsage, usageReported, type Usage } from '../usage';
-import { mapPage, seekPage, StaleCursorError, type Page, type SeekCursor } from './page';
+import { mapPage, seekPage, StaleCursorError, type Page, type SeekCursor } from '../session/page';
 
 export type { RunListEntry };
 

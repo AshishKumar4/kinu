@@ -33,8 +33,8 @@ import { ActorClaimStore } from '../orchestrator/actor-claims';
 import { PlanReviewStore } from '../plans/review';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
 import { createAppDataStore, type AppDataStore } from '../tools/db-codemode';
-import { SessionHistory } from '../orchestrator/session-history';
-import type { SessionFilePlane } from '../orchestrator/session-payload';
+import { SessionHistory } from '../session/history';
+import type { SessionFilePlane } from '../session/payload';
 
 /** Field names match what both backends already called these, so a backend
  *  reads its stores through one object without renaming any call site. */

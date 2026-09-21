@@ -36,7 +36,7 @@ import * as v from 'valibot';
 import type { LLM } from '../types/primitives';
 import type { FactsStore } from './facts';
 import { normalizeFactKey } from './facts';
-import type { ConversationProjection } from '../orchestrator/session-transcript';
+import type { ConversationProjection } from '../session/transcript';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';

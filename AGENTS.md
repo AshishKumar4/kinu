@@ -13,7 +13,7 @@ Self-evolving agent framework: MCTS exploration, mutable scaffolding, durable sk
 - A verification claim names the tree, the command, and the revision. A subagent's summary is a claim to check.
 - A gate that pins platform behaviour (what the runtime, an SDK, or a service does) cites a dated measurement on that platform in its header. A comment in our own source is not a measurement. A gate built on an unmeasured premise enforces the regression it was meant to prevent; `scripts/do-init-gate.ts` did exactly that from 2026-09-10 to 2026-09-13.
 - Locks keyed by path (`schema-genesis`, `wired`, `complexity`, `pattern-inventory`, `test-clocks`) are re-keyed on the path half only when a file moves; values stay byte-identical.
-- `gate:core-layering`: `packages/core` is platform (`obs utils types identity vfs execution events memory safety slates providers config credentials checkpoints`, plus root files by name), tools (`tools craft web`), harness (everything else). Imports point down or sideways, never up; the lock shrinks only.
+- `gate:core-layering`: `packages/core` is platform (`obs utils types identity vfs execution events memory safety slates session providers config credentials checkpoints`, plus root files by name), tools (`tools craft web`), harness (everything else). Imports point down or sideways, never up; the lock shrinks only.
 - `gate:client-graph`: no path from a client entry reaches `@agent-core/core` or `bun:sqlite`.
 
 ## Testing judgment

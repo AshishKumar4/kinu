@@ -5,8 +5,8 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { makeSql, createTestActor, createTestWorkspace } from './helpers';
-import { SessionHistory } from '../src/orchestrator/session-history';
-import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
+import { SessionHistory } from '../src/session/history';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,

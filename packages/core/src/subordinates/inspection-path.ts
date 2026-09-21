@@ -31,7 +31,7 @@ import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { WorkspaceActorDirectory } from '../identity/workspace-actors';
-import type { SessionTranscriptReader } from '../orchestrator/session-transcript';
+import type { SessionTranscriptReader } from '../session/transcript';
 
 export interface SubordinateInspectionAuthority {
   /** The owner the transport authenticated. */

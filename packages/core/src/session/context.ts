@@ -1,7 +1,7 @@
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
-import type { MessageReference } from './session-messages';
+import type { MessageReference } from './messages';
 
 export interface ContextSelection { readonly contextId: string; readonly revision: number }
 

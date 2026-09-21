@@ -43,10 +43,10 @@ import {
   initGepaTables, startGepaRun, persistGepaCandidate, listGepaRuns, loadGepaCandidates,
 } from '../src/evolution/gepa/persistence';
 import { initActorTables } from '../src/identity/schema';
-import { initSessionContextTables } from '../src/orchestrator/session-schema';
-import { initSessionTranscriptTables } from '../src/orchestrator/session-transcript-schema';
-import { SessionHistory } from '../src/orchestrator/session-history';
-import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
+import { initSessionContextTables } from '../src/session/schema';
+import { initSessionTranscriptTables } from '../src/session/transcript-schema';
+import { SessionHistory } from '../src/session/history';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../src/identity/effect-tombstones';
