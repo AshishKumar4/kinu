@@ -25,7 +25,8 @@ import {
   assertToolsSupportedByModel,
   type PromptModelContext,
 } from './prompting/model-profile';
-import { applyCacheBreakpoints, hasCacheMarkers } from './prompting/cache-breakpoints';
+import { applyCacheBreakpoints, hasCacheMarkers, type CacheBreakpointPlan } from './prompting/cache-breakpoints';
+import type { ModelWindow } from './prompting/step-prune';
 import type { CacheRetention } from './providers/types';
 import type { TurnContextMeter } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
@@ -728,6 +729,55 @@ function suppressDeferredRejections(
   for (const deferred of [result.steps, result.finishReason, result.rawFinishReason, result.totalUsage]) deferred.then(undefined, ignore);
 }
 
+/** The window a turn is assembled, admitted and pruned against, and the answer allowance inside it. */
+function turnWindow(modelContext: ChatOptions['modelContext']): ModelWindow {
+  const contextWindow = modelContext?.contextWindow ?? contextWindowForModel(modelContext?.id ?? '');
+
+  // An unreported answer allowance says nothing about how much of the window
+  // the answer may take, so the honest reading is the whole window and
+  // `outputReserveTokens` splits from there. A picked number here would put a
+  // fact in the catalog's mouth.
+  return { contextWindow, modelOutputLimit: modelContext?.modelOutputLimit ?? contextWindow };
+}
+
+/**
+ * Provider prompt-cache plan: cache-eligible system + request-level cache
+ * routing at turn assembly; marker strategies additionally re-roll the tail
+ * breakpoints in prepareStep so every request of the agentic loop reads the
+ * previous step's prefix. Without opts.cache the plan is a pass-through.
+ */
+function turnCachePlan(opts: ChatOptions, turnMessages: readonly ModelMessage[]): CacheBreakpointPlan {
+  return applyCacheBreakpoints({
+    providerId: opts.cache?.providerId,
+    modelId: opts.cache?.modelId ?? opts.modelContext?.id,
+    system: opts.system,
+    messages: turnMessages,
+    sessionKey: opts.cache?.sessionKey ?? '',
+    retention: opts.cache?.retention,
+  });
+}
+
+/** The text a finished turn reports: its answer when the steps settled one, else what streamed, else the steps' own text, else a line synthesized from the tool results. */
+function turnText(streamed: string, steps: readonly StepResult<ToolSet>[], answer: string | null): string {
+  let allText = answer ?? streamed;
+
+  // If the model produced no text (ended on a tool call), gather from steps
+  if (!allText.trim()) {
+    for (const step of steps) {
+      if (step.text?.trim()) allText += step.text;
+    }
+  }
+
+  // If still no text, synthesize from tool results
+  if (!allText.trim()) {
+    const fallback = synthesizeToolFallback(steps);
+
+    if (fallback) allText = fallback;
+  }
+
+  return allText;
+}
+
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const extensions = opts.extensions;
 
@@ -741,20 +791,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const modelSpec = opts.modelContext?.id;
 
   let stepCount = 0;
+  const { contextWindow, modelOutputLimit } = turnWindow(opts.modelContext);
 
   // The shared turn-context assembly (orchestrator/turn-context.ts): attachment
   // sanitize → extension onTurnStart → awaited transformContext (compaction) →
   // turn-local tail. The cf backend's beforeTurn runs the SAME function, so the
   // ordering cannot drift per backend.
-  const contextWindow = opts.modelContext?.contextWindow
-    ?? contextWindowForModel(opts.modelContext?.id ?? '');
-
-  // An unreported answer allowance says nothing about how much of the window
-  // the answer may take, so the honest reading is the whole window and
-  // `outputReserveTokens` splits from there. A picked number here would put a
-  // fact in the catalog's mouth.
-  const modelOutputLimit = opts.modelContext?.modelOutputLimit ?? contextWindow;
-
   const assembly: Parameters<typeof assembleTurnMessages>[0] = {
     system: opts.system,
     history: opts.history,
@@ -803,19 +845,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     consume: step => stepContext.consume(step),
   };
 
-  // Provider prompt-cache plan: cache-eligible system + request-level cache
-  // routing at turn assembly; marker strategies additionally re-roll the tail
-  // breakpoints in prepareStep so every request of the agentic loop reads the
-  // previous step's prefix. Without opts.cache the plan is a pass-through.
-  const cache = applyCacheBreakpoints({
-    providerId: opts.cache?.providerId,
-    modelId: opts.cache?.modelId ?? opts.modelContext?.id,
-    system: opts.system,
-    messages: turnMessages,
-    sessionKey: opts.cache?.sessionKey ?? '',
-    retention: opts.cache?.retention,
-  });
-
+  const cache = turnCachePlan(opts, turnMessages);
   const rollTail = hasCacheMarkers(cache.strategy);
   const providerOptions = mergeProviderOptions(cache.providerOptions, opts.providerOptions);
 
@@ -1076,25 +1106,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   }
 
   const answer = answerFromSteps(steps, interrupted);
+  const text = turnText(allText, steps, answer);
 
-  if (answer !== null) allText = answer;
-
-  // If the model produced no text (ended on a tool call), gather from steps
-  if (!allText.trim()) {
-    for (const step of steps) {
-      if (step.text?.trim()) allText += step.text;
-    }
-  }
-
-  // If still no text, synthesize from tool results
-  if (!allText.trim()) {
-    const fallback = synthesizeToolFallback(steps);
-
-    if (fallback) allText = fallback;
-  }
-
-  await extensions?.emitTurnEnd({ text: allText, responseMessages });
-  yield { type: 'done', text: allText, responseMessages, ...(answer !== null && { answer }) };
+  await extensions?.emitTurnEnd({ text, responseMessages });
+  yield { type: 'done', text, responseMessages, ...(answer !== null && { answer }) };
 
   // The turn did not finish, and the caller's turn record must say so — but
   // only AFTER `done`, so the history above is durably kept. Being cut is not a
