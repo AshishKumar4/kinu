@@ -31,7 +31,7 @@
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#mount",
-      "complexity": 69
+      "complexity": 67
     },
     {
       "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
@@ -108,10 +108,6 @@
     {
       "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
       "complexity": 44
-    },
-    {
-      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
-      "complexity": 43
     },
     {
       "key": "scripts/bench-payload-transports.ts#main",

@@ -54,6 +54,7 @@ import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../
 import type { BuiltinToolName } from '../tools/registry';
 import { agentAffinityKey } from '../providers/workers-ai';
 import type { ActorTurnClaim } from '../orchestrator/actor-claims';
+import type { ActorExecutionResult, ActorSession, ActorTurnLease } from '../orchestrator/actor-session';
 import type { MessageReference, MessagePartReference } from '../session/messages';
 import { snapshotCompletedTurn } from '../orchestrator/turn-lifecycle';
 
@@ -743,6 +744,114 @@ function classifyHeadOutcome(
  * NEVER THROWS: a failure becomes an `errored` report, because the controller
  * treats a thrown run() as budget_exceeded and that is a different claim.
  */
+/**
+ * The resolved model as the prompt layer names it, read off the model the
+ * caller already resolved rather than asked for as a second dep nobody would
+ * set. It buys two things: the real context window, which is what
+ * step-boundary tool-output pruning is measured against, and the
+ * tool-capability check the actor already refuses a turn on — without it a
+ * fork handed a model that cannot call tools burns its whole envelope
+ * producing none instead of saying so in its report.
+ *
+ * PARSED, not type-narrowed: `LanguageModel` is the SDK's "constructed model OR
+ * bare id", two representations of one domain value, and the third arm is a
+ * reading rather than a failure — a model that reports no identity still runs,
+ * on the default window, because this field is read by the prompt layer alone.
+ */
+function promptModelContext(model: HeadInferenceDeps['model']): PromptModelContext {
+  const constructed = v.safeParse(ConstructedModelSchema, model);
+  const named = v.safeParse(v.string(), model);
+
+  return constructed.success
+    ? { id: constructed.output.modelId, provider: constructed.output.provider.split('.', 1)[0] }
+    : named.success ? { id: named.output } : {};
+}
+
+/**
+ * The advisor's review of a turn that completed, as the user messages the next
+ * turn opens with; none when the improvement lanes are closed for this mode.
+ * A review that fails is recorded and advises nothing: it watches the work and
+ * must not end it.
+ */
+async function adviseCompletedTurn(
+  session: ActorSession, input: HeadInput, deps: HeadInferenceDeps, lease: ActorTurnLease, outcome: ActorExecutionResult,
+): Promise<ModelMessage[]> {
+  const advice: ModelMessage[] = [];
+
+  if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return advice;
+
+  const turn = snapshotCompletedTurn(session.orchestrator.acc, {
+    userMessage: input.task, assistantResponse: outcome.text,
+    turnId: `${deps.runId}:${lease.turnId}`, sessionId: input.id, origin: 'programmatic',
+  });
+
+  try {
+    await session.reviewTurn(session.advisorSnapshot(turn, Object.keys(deps.tools)), false, async (signal) => {
+      advice.push({ role: 'user', content: signal.text });
+
+      return 'queued';
+    });
+  } catch (cause) {
+    diagnostics.failure('advisor.lane_failed', toKinuError({
+      doing: 'reviewing the reporting actor turn', cause, otherwise: 'unavailable',
+    }), { actor: deps.actor.handle.name });
+  }
+
+  return advice;
+}
+
+/** What the next turn opens with, appended to the actor's canonical history under that turn's id and echoed into the run's conversation. */
+async function appendNextTurnInput(
+  session: ActorSession, deps: HeadInferenceDeps, conversation: ModelMessage[], turnId: string, kind: 'advice' | 'resume', messages: readonly ModelMessage[],
+): Promise<void> {
+  for (const [part, message] of messages.entries()) {
+    const reference = await session.canonical.append({ id: `${turnId}:${kind}:${part}`, message, origin: 'input', turnId, assertOwner: () => deps.actor.handle.assertCurrent() });
+    conversation.push(await session.canonical.messages.materialize(reference));
+  }
+}
+
+/** Hands the settled conversation to the spawner. A report that fails becomes the run's failure, joined to the one the run already had. */
+function reportConversation(deps: HeadInferenceDeps, input: HeadInput, conversation: readonly ModelMessage[], failure: KinuError | undefined): KinuError | undefined {
+  try {
+    deps.reportMessages?.(conversation);
+  } catch (cause) {
+    return toKinuError({
+      doing: `report agent ${input.id} conversation`,
+      cause: failure === undefined ? cause : new AggregateError([failure, cause], 'execution and conversation reporting failed'),
+      otherwise: 'unavailable',
+    });
+  }
+
+  return failure;
+}
+
+/** How the run reads in its report: a completed run's final answer, or what the head captured when it left none; an errored run's reason; an incomplete run's account of itself. */
+function headSummary(
+  input: HeadInput, capture: HeadInferenceDeps['capture'], status: HeadReport['status'], stopReason: string | null, final: { text: string; reasoningText: string },
+): string {
+  return status === 'completed'
+    ? (extractFinalText(final)
+      || synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })
+      || `Head ${input.id} completed without producing a textual summary.`)
+    : status === 'errored'
+      ? `Head ${input.id} errored: ${stopReason ?? 'no reason reported'}`
+      : incompleteHeadSummary(input, status, capture, stopReason);
+}
+
+/**
+ * The spawner's cancellation, bridged onto the session's own abort rather than
+ * handed to the SDK as `deps.signal`: the session owns the signal its steps run
+ * under, so an external cancel becomes the same interrupt an actor's own cancel
+ * is — one cancellation path for every kind. Returns the release of the bridge.
+ */
+function bridgeCancel(signal: AbortSignal | undefined, session: ActorSession): () => void {
+  const cancelled = (): void => { session.interrupt(); };
+
+  signal?.addEventListener('abort', cancelled, { once: true });
+
+  return () => { signal?.removeEventListener('abort', cancelled); };
+}
+
 /** The pane relay as a `chat` option, absent when nothing watches. */
 function streamRelay(deps: HeadInferenceDeps): { observeStream?: HeadInferenceDeps['observeStream'] } {
   return deps.observeStream === undefined ? {} : { observeStream: deps.observeStream };
@@ -804,14 +913,9 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   const session = deps.actor.session;
   const seed = deps.framing ? [...deps.framing.messages] : buildHeadMessages(input);
 
-  // The spawner's cancellation, bridged onto the session's own abort rather than
-  // handed to the SDK as `deps.signal`: the session owns the signal its steps run
-  // under, so an external cancel becomes the same interrupt an actor's own cancel
-  // is — one cancellation path for every kind. Bridged before the first await,
-  // so a cancel that lands while the seed is being restored still interrupts.
-  const cancelled = (): void => { session.interrupt(); };
-
-  deps.signal?.addEventListener('abort', cancelled, { once: true });
+  // Bridged before the first await, so a cancel that lands while the seed is
+  // being restored still interrupts.
+  const unbridgeCancel = bridgeCancel(deps.signal, session);
 
   // An exploration is re-executed from its seed; a delegated turn continues the actor's own working history.
   if (deps.delegation) await session.restoreWorkingHistory();
@@ -821,24 +925,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   const system = deps.framing?.system
     ?? buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout);
 
-  // The resolved model as the prompt layer names it, read off the model the
-  // caller already resolved rather than asked for as a second dep nobody would
-  // set. It buys two things: the real context window, which is what
-  // step-boundary tool-output pruning is measured against, and the
-  // tool-capability check the actor already refuses a turn on — without it a
-  // fork handed a model that cannot call tools burns its whole envelope
-  // producing none instead of saying so in its report.
-  //
-  // PARSED, not type-narrowed: `LanguageModel` is the SDK's "constructed model OR
-  // bare id", two representations of one domain value, and the third arm is a
-  // reading rather than a failure — a model that reports no identity still runs,
-  // on the default window, because this field is read by the prompt layer alone.
-  const constructed = v.safeParse(ConstructedModelSchema, deps.model);
-  const named = v.safeParse(v.string(), deps.model);
-
-  const modelContext: PromptModelContext = constructed.success
-    ? { id: constructed.output.modelId, provider: constructed.output.provider.split('.', 1)[0] }
-    : named.success ? { id: named.output } : {};
+  const modelContext = promptModelContext(deps.model);
 
   /** Whether any turn settled a conversation at all. A provider stream that
    *  died before its first step never yields `done`, and half a conversation is
@@ -906,7 +993,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       );
 
       let turnFailed = false;
-      const advice: ModelMessage[] = [];
+      let advice: ModelMessage[] = [];
 
       try {
         if (index === 0 && deps.delegation) {
@@ -991,24 +1078,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         // what the head recorded.
         if (outcome.answer !== null) lastText = outcome.answer;
 
-        if (!turnFailed && !outcome.interrupted && session.orchestrator.improvementLanesOpen('completed', input.mode)) {
-          const turn = snapshotCompletedTurn(session.orchestrator.acc, {
-            userMessage: input.task, assistantResponse: outcome.text,
-            turnId: `${deps.runId}:${lease.turnId}`, sessionId: input.id, origin: 'programmatic',
-          });
-
-          try {
-            await session.reviewTurn(session.advisorSnapshot(turn, Object.keys(deps.tools)), false, async (signal) => {
-              advice.push({ role: 'user', content: signal.text });
-
-              return 'queued';
-            });
-          } catch (cause) {
-            diagnostics.failure('advisor.lane_failed', toKinuError({
-              doing: 'reviewing the reporting actor turn', cause, otherwise: 'unavailable',
-            }), { actor: deps.actor.handle.name });
-          }
-        }
+        if (!turnFailed && !outcome.interrupted) advice = await adviseCompletedTurn(session, input, deps, lease, outcome);
 
         // The claim closes under the outcome THIS turn reached, in the same
         // vocabulary the run ledger uses — never the host's silence read as
@@ -1024,10 +1094,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       if (failure !== undefined || deps.isAborted() || budgetExhausted(input.budget).exhausted) break;
 
       if (advice.length > 0) {
-        for (const [part, message] of advice.entries()) {
-          const reference = await session.canonical.append({ id: `${turnId}#${index + 1}:advice:${part}`, message, origin: 'input', turnId: `${turnId}#${index + 1}`, assertOwner: () => deps.actor.handle.assertCurrent() });
-          conversation.push(await session.canonical.messages.materialize(reference));
-        }
+        await appendNextTurnInput(session, deps, conversation, `${turnId}#${index + 1}`, 'advice', advice);
 
         continue;
       }
@@ -1035,43 +1102,22 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       const resumed = await deps.resume?.();
 
       if (!resumed) break;
-
-      for (const [part, message] of resumed.entries()) {
-        const reference = await session.canonical.append({ id: `${turnId}#${index + 1}:resume:${part}`, message, origin: 'input', turnId: `${turnId}#${index + 1}`, assertOwner: () => deps.actor.handle.assertCurrent() });
-        conversation.push(await session.canonical.messages.materialize(reference));
-      }
+      await appendNextTurnInput(session, deps, conversation, `${turnId}#${index + 1}`, 'resume', resumed);
     }
   } catch (err) {
     failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: err, otherwise: 'unavailable' });
   } finally {
-    deps.signal?.removeEventListener('abort', cancelled);
+    unbridgeCancel();
   }
 
-  if (settled) {
-    try {
-      deps.reportMessages?.(conversation);
-    } catch (cause) {
-      failure = toKinuError({
-        doing: `report agent ${input.id} conversation`,
-        cause: failure === undefined ? cause : new AggregateError([failure, cause], 'execution and conversation reporting failed'),
-        otherwise: 'unavailable',
-      });
-    }
-  }
+  if (settled) failure = reportConversation(deps, input, conversation, failure);
 
   if (refusal) {
     return exhaustedMissionReport(input, capture, refusal, clock.now() - startedAt, recorded);
   }
 
   const { status, stopReason } = classifyHeadOutcome(input.budget, deps, failure);
-
-  const summary = status === 'completed'
-    ? (extractFinalText({ text: lastText, reasoningText: lastReasoning })
-      || synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })
-      || `Head ${input.id} completed without producing a textual summary.`)
-    : status === 'errored'
-      ? `Head ${input.id} errored: ${stopReason ?? 'no reason reported'}`
-      : incompleteHeadSummary(input, status, capture, stopReason);
+  const summary = headSummary(input, capture, status, stopReason, { text: lastText, reasoningText: lastReasoning });
 
   const canonicalCompletion = canonicalClaim === null ? undefined : {
     turnId: canonicalClaim.turnId, runId: canonicalClaim.runId, outputReferences: canonicalOutput, outputPartReferences: canonicalParts,
