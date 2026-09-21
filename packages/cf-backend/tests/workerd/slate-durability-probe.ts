@@ -281,6 +281,16 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeEnv> {
 
     if ('error' in answer) return { exitCode: 1, stdout: answer.error };
 
-    return { exitCode: answer.exitCode, stdout: answer.stdout };
+    return { exitCode: answer.exitCode, stdout: `${answer.stdout}${answer.stderr}` };
+  }
+
+  /** A file of the workspace as its user reads it, or null when absent. */
+  async readWorkspaceFile(workspace: string, path: string): Promise<string | null> {
+    const target = await this.workspaceTarget(workspace);
+    const answer = await target.executeInExecutor('workspace', `cat ${path}`);
+
+    if ('error' in answer || answer.exitCode !== 0) return null;
+
+    return answer.stdout;
   }
 }

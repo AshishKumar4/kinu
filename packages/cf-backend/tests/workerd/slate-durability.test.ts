@@ -13,6 +13,7 @@
 import { env } from 'cloudflare:workers';
 import { abortAllDurableObjects } from 'cloudflare:test';
 import { expect, it } from 'vitest';
+import { REGISTRY_ENTRY, REGISTRY_HOST, REGISTRY_MANIFEST, REGISTRY_PKG } from './npm-registry-fake';
 
 it('a slate survives eviction on its own URL', async () => {
   // A stub held across the reset is itself broken by it ("Application called
@@ -100,4 +101,19 @@ it('a slate keeps answering its URL while a workspace process runs beside it', a
 
   expect(finished.exitCode).toBe(0);
   expect(await subject().drivePreview(boot.url)).toEqual({ status: 200, body: 'keeper-body' });
+});
+
+it('npm install streams a package off the registry into the hosted workspace', async () => {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('npm'));
+  const workspace = 'durability-npm';
+  await subject().serveSlate({ workspace, owner: 'durability-owner', id: 'beside-npm', body: 'served' });
+  const made = await subject().runInWorkspace(workspace, 'mkdir -p /home/user/proj');
+  expect(made.exitCode).toBe(0);
+
+  const install = await subject().runInWorkspace(workspace,
+    `cd /home/user/proj && NPM_REGISTRY=http://${REGISTRY_HOST} npm install ${REGISTRY_PKG}`);
+
+  expect(install.exitCode, install.stdout).toBe(0);
+  expect(await subject().readWorkspaceFile(workspace, `/home/user/proj/node_modules/${REGISTRY_PKG}/package.json`)).toBe(REGISTRY_MANIFEST);
+  expect(await subject().readWorkspaceFile(workspace, `/home/user/proj/node_modules/${REGISTRY_PKG}/lib/index.js`)).toBe(REGISTRY_ENTRY);
 });
