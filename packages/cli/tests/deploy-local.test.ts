@@ -50,7 +50,7 @@ const VERSION = '0.4.0+local01';
 const WORKER = `export default { async fetch(request, env) {
   const path = new URL(request.url).pathname;
   if (path === '/api/health') {
-    return Response.json({ version: '${VERSION}', sha: 'local01', builtAt: '2026-09-18T00:00:00.000Z' });
+    return Response.json({ ok: true, build: { version: '${VERSION}', sha: 'local01', builtAt: '2026-09-18T00:00:00.000Z' } });
   }
   if (path === '/kv') {
     await env.AUTH_KV.put('session:probe', 'kv round trip');

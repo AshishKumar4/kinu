@@ -88,10 +88,24 @@ const files: ReleaseFile[] = [];
 
 const modules: string[] = [];
 
-// Modules. `wrangler.json` is the plugin's generated deploy config for OUR
-// account; the release carries the manifest instead, so it is not copied.
+/** A worker member is what the runtime LOADS: an ES module or a compiled
+ *  WebAssembly module. Everything else the Vite plugin writes beside them is
+ *  scaffolding for OUR account and OUR checkout: `wrangler.json` (the deploy
+ *  config), `*.map` (uploaded separately), `.vite/manifest.json` (the build's
+ *  own index), and `.dev.vars` (this checkout's local-dev secrets, which the
+ *  plugin copies in for preview). Measured 2026-09-21: release
+ *  0.2.0+bd1872f73 shipped `.dev.vars` and `.vite/manifest.json` to the public
+ *  bucket, and `kinu deploy local` exited on the first non-module member. The
+ *  release carries the manifest instead of any of them. */
+function isWorkerModule(path: string): boolean {
+  if (path.split('/').some((segment) => segment.startsWith('.'))) return false;
+
+  return path.endsWith('.js') || path.endsWith('.wasm');
+}
+
+// Modules, and only modules.
 for (const path of walk(workerDir)) {
-  if (path.endsWith('.map') || path === 'wrangler.json') continue;
+  if (!isWorkerModule(path)) continue;
   const bytes = readFileSync(join(workerDir, path));
 
   mkdirSync(join(staging, 'worker', path, '..'), { recursive: true });
@@ -127,10 +141,33 @@ for (const path of walk(clientDir)) {
   });
 }
 
+// THE BUILD STAMP, so an instance installed from this release knows what it
+// is. `/api/health` reads `/downloads/kinu-version.json` off the assets
+// (`core/src/http/health-route.ts`) and answers `build: null` without it, which
+// both doors read as an unstamped build and refuse. `client/downloads/` is
+// otherwise left out (the CLI tarballs are not this release's), and the full
+// stamp `build-cli-dist.sh` publishes at kinu.run is written after this one
+// because it holds this artifact's own checksum; the three fields the health
+// route needs are known now.
+const builtAt = new Date().toISOString();
+
+const stamp = Buffer.from(`${JSON.stringify({ version, sha, builtAt })}\n`);
+
+mkdirSync(join(staging, 'client', 'downloads'), { recursive: true });
+
+writeFileSync(join(staging, 'client', 'downloads', 'kinu-version.json'), stamp);
+
+files.push({
+  path: 'client/downloads/kinu-version.json',
+  sha256: createHash('sha256').update(stamp).digest('hex'),
+  size: stamp.length,
+  assetHash: assetDigest(stamp, 'downloads/kinu-version.json'),
+});
+
 const manifest = v.parse(ReleaseManifestSchema, buildReleaseManifest({
   version,
   sha,
-  builtAt: new Date().toISOString(),
+  builtAt,
   files,
   modules,
   // Published once per Nimbus release and referenced by digest. Nothing

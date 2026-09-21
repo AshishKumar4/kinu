@@ -33,7 +33,7 @@ import { get } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import {
-  LOCAL_PORT, LocalConfigSchema, fetchReleaseArtifact, fetchReleaseManifest, localLayout, releaseDir,
+  HealthAnswerSchema, LOCAL_PORT, LocalConfigSchema, fetchReleaseArtifact, fetchReleaseManifest, localLayout, releaseDir,
   renderLocalConfig, renderWorkerdConfig, unhostedBindings, workerdDirectories,
   type LocalConfig, type LocalLayout,
 } from '@kinu.run/core/deploy';
@@ -59,10 +59,6 @@ const READY_MS = 10_000;
  *  the case this is here to survive. */
 const HEALTH_MS = 2_000;
 
-/** What `/api/health` answers on every Kinu build (`{version, sha, builtAt}`,
- *  AGENTS.md § Deploy). Only the version is read: the question is whether a
- *  Kinu is on the port, not which one. */
-const HealthSchema = v.object({ version: v.pipe(v.string(), v.minLength(1)) });
 
 /** What `workerd.pid` names. `none` after a pidfile that named nothing alive
  *  has been cleared, `foreign` for a live process that is not this instance's
@@ -451,7 +447,9 @@ async function servesKinu(port: number): Promise<boolean> {
   if (answered === null) return false;
   const body: unknown = tolerate(() => JSON.parse(answered), 'malformed-input');
 
-  return v.safeParse(HealthSchema, body).success;
+  // The question is whether a Kinu is on the port, not which one: a stamped
+  // build or a stated absence of one are both Kinu's own answer.
+  return v.safeParse(HealthAnswerSchema, body).success;
 }
 
 /** `/api/health`'s body, or null when the port did not answer it with a 200.

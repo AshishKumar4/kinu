@@ -231,10 +231,30 @@ Cloudflare door. No user repository and no Workers Builds.
    because a process that already holds the port kills workerd on EADDRINUSE
    while a connect to it still succeeds.
 
+   **Measured against a real release 2026-09-21**, for the first time: the
+   published `0.2.0+bd1872f73` installed and workerd exited on its first
+   member. Three defects, each fixed with its red pin: the renderer embedded
+   the one `esbuild-*.wasm` member as an ES module (`wasm = embed` now,
+   `unit-deploy-flow`); the release builder packed everything under
+   `dist/kinu`, which is where the Vite plugin also writes `.vite/manifest.json`
+   and this checkout's `.dev.vars` — so every tarball published since
+   2026-09-18 carried the local-dev root key (a member is now what the runtime
+   loads, `.js` or `.wasm` under no dot-path, `scripts/deploy.test.ts`); and
+   both doors read `/api/health`'s `version` at the top level while the product
+   answers it under `build`, and the release carried no
+   `downloads/kinu-version.json` for health to answer from, so no door
+   deployment could have passed its own smoke step (one `HealthAnswerSchema`
+   in `core/src/deploy/update.ts`, the stamp written into the release). With
+   the three in place `kinu deploy local --origin <channel>` installs, starts,
+   and answers `/api/health` with its build, `/`, `/login` and
+   `/api/deploy/options` with 200 (`kinu-logs/self-host-0921/`).
+
    Still to come: the one-line installer (`curl kinu.run/install-local.sh |
    bash`) that puts a pinned workerd in `~/.kinu/local/bin/` — until then a
    local instance uses the `workerd` on PATH — the runtime cache seed, and the
-   local owner account the installer creates.
+   local owner account the installer creates. Until that account exists a
+   local instance has no `CREDENTIAL_ENCRYPTION_KEY` and no sign-in: every
+   signed-in surface answers 503 and the public ones answer.
 
 6. **Not done: the Cloudflare door has never deployed anything.** One real run
    was driven through the plan on 2026-09-18 with an account API token as the

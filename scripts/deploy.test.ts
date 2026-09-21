@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { childEnv, scratchDir } from "@kinu.run/test-utils";
+import { parseReleaseManifest } from "@kinu.run/core/deploy";
 import {
   DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, PATH_IGNORE_FLAG, SHARED_RESOURCES, claims, deployPlan,
   printPlan,
@@ -1658,6 +1659,14 @@ describe("worker release artifact", () => {
     writeFileSync(join(dist, "kinu", "index.js.map"), "{}\n");
     writeFileSync(join(dist, "kinu", "wrangler.json"), "{}\n");
     writeFileSync(join(dist, "kinu", "assets", "chunk.js"), "export const a = 1;\n");
+    // What the real build writes beside the modules and a release must never
+    // carry: the plugin's copy of this checkout's local-dev secrets, and the
+    // build's own index. And one member the runtime does load: a compiled
+    // WebAssembly module.
+    writeFileSync(join(dist, "kinu", ".dev.vars"), "CREDENTIAL_ENCRYPTION_KEY='not-for-the-public'\n");
+    mkdirSync(join(dist, "kinu", ".vite"), { recursive: true });
+    writeFileSync(join(dist, "kinu", ".vite", "manifest.json"), "{}\n");
+    writeFileSync(join(dist, "kinu", "assets", "esbuild-abc.wasm"), new Uint8Array([0, 0x61, 0x73, 0x6d]));
     writeFileSync(join(dist, "client", "index.html"), "<!doctype html><title>k</title>\n");
     writeFileSync(join(dist, "client", "assets", "app.js"), "console.log('app');\n");
     writeFileSync(join(dist, "client", "downloads", "kinu-cli-linux-x64.tar.gz"), "not really a tarball\n");
@@ -1696,10 +1705,32 @@ describe("worker release artifact", () => {
     const entries = new TextDecoder().decode(listed.stdout).split("\n").filter((line) => line.trim() !== "");
 
     expect(entries).toContain("worker/index.js");
+    expect(entries).toContain("worker/assets/esbuild-abc.wasm");
     expect(entries).toContain("client/index.html");
     expect(entries.some((entry) => entry.endsWith(".map"))).toBe(false);
-    expect(entries.some((entry) => entry.startsWith("client/downloads/"))).toBe(false);
+    // The build stamp rides along (it is what `/api/health` answers `build`
+    // from); the CLI tarballs beside it at kinu.run do not.
+    expect(entries.filter((entry) => entry.startsWith("client/downloads/") && !entry.endsWith("/")))
+      .toEqual(["client/downloads/kinu-version.json"]);
     expect(entries).toContain("release.json");
+  });
+
+  // Measured 2026-09-21: release 0.2.0+bd1872f73 carried both, and the
+  // `.dev.vars` was this checkout's local-dev root key, published to anyone
+  // who installs. A member is what the runtime loads; scaffolding is not.
+  test("the artifact carries no local-dev secrets and no build index, and the manifest names only modules", () => {
+    const listed = Bun.spawnSync(["tar", "-tzf", join(dist, "worker-release", ARTIFACT)], { stdout: "pipe" });
+    const entries = new TextDecoder().decode(listed.stdout).split("\n").filter((line) => line.trim() !== "");
+
+    expect(entries.some((entry) => entry.endsWith(".dev.vars"))).toBe(false);
+    expect(entries.some((entry) => entry.includes("/.vite/"))).toBe(false);
+    expect(entries.some((entry) => entry.endsWith("wrangler.json"))).toBe(false);
+
+    const manifest = parseReleaseManifest(readFileSync(join(dist, "client", "downloads", "release.json"), "utf8"));
+
+    expect([...manifest.worker.modules].sort()).toEqual(["assets/chunk.js", "assets/esbuild-abc.wasm", "index.js"]);
+    expect(manifest.files.map((file) => file.path).filter((path) => path.startsWith("worker/")).sort())
+      .toEqual(["worker/assets/chunk.js", "worker/assets/esbuild-abc.wasm", "worker/index.js"]);
   });
 
   /**

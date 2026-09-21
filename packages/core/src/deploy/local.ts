@@ -192,8 +192,12 @@ export function renderWorkerdConfig(input: {
       `    (name = ${quoted(serviceName(binding))}, disk = (path = ${quoted(storePath(binding))}, writable = true)),`),
   ];
 
+  // The same rule the Cloudflare door uploads by (`steps.ts`): a compiled
+  // `.wasm` member is a WebAssembly module, everything else an ES module.
+  // Measured 2026-09-21 on the published release: workerd read the one
+  // `esbuild-*.wasm` member as JavaScript and exited on its first byte.
   const modules = manifest.worker.modules.map((name) =>
-    `    (name = ${quoted(name)}, esModule = embed ${quoted(`${release}/${manifest.worker.modulesPath}/${name}`)}),`);
+    `    (name = ${quoted(name)}, ${name.endsWith('.wasm') ? 'wasm' : 'esModule'} = embed ${quoted(`${release}/${manifest.worker.modulesPath}/${name}`)}),`);
 
   const bindings = [
     ...(assets === undefined ? [] : [`    (name = ${quoted(assets.binding)}, service = "assets"),`]),

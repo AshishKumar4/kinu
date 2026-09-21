@@ -411,7 +411,8 @@ let served: UpdateBuild;
 const healthFetch: HttpGet = async (url) => {
   if (!url.endsWith('/api/health')) throw new Error(`unexpected fetch ${url}`);
 
-  return new Response(JSON.stringify(served), {
+  // The product's own body: the stamp under `build` (core/src/http/health-route.ts).
+  return new Response(JSON.stringify({ ok: true, build: served }), {
     status: health,
     headers: { 'content-type': 'application/json' },
   });
@@ -822,6 +823,18 @@ describe('a release manifest a channel publishes', () => {
  * workerd cannot host is named rather than rendered as something else.
  */
 describe('the workerd configuration for a local instance', () => {
+  test('a compiled member is a WebAssembly module, not JavaScript', () => {
+    // Measured 2026-09-21 on the published release: rendered as `esModule`,
+    // workerd read the one `esbuild-*.wasm` member as JavaScript and exited on
+    // its first byte, so `kinu deploy local` never served.
+    const manifest = { ...MANIFEST, worker: { ...MANIFEST.worker, modules: [...MANIFEST.worker.modules, 'assets/esbuild-abc.wasm'] } };
+    const config = renderWorkerdConfig({ manifest, version: manifest.version, port: 8787 });
+
+    expect(config).toContain('(name = "assets/esbuild-abc.wasm", wasm = embed "releases/0.4.0+abc1234/worker/assets/esbuild-abc.wasm"),');
+    expect(config).not.toContain('esModule = embed "releases/0.4.0+abc1234/worker/assets/esbuild-abc.wasm"');
+    expect(config).toContain('(name = "index.js", esModule = embed "releases/0.4.0+abc1234/worker/index.js"),');
+  });
+
   test('renders the release, its stores and its objects, and names what a local instance loses', () => {
     const config = renderWorkerdConfig({ manifest: MANIFEST, version: MANIFEST.version, port: 8787 });
 

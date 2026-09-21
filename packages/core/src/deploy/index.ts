@@ -77,6 +77,6 @@ export {
 } from './frames';
 
 export {
-  SELF_UPDATE_RUN_ID, UpdateOfferSchema, buildOf, updateOffer,
+  HealthAnswerSchema, SELF_UPDATE_RUN_ID, UpdateOfferSchema, buildOf, updateOffer,
   type UpdateBuild, type UpdateOffer,
 } from './update';

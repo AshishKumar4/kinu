@@ -80,6 +80,7 @@ import {
   REFRESH_TOKEN_KEY,
   type DeployInputs, type DeploymentRecord,
 } from './inputs';
+import { HealthAnswerSchema } from './update';
 import type { ArtifactMember, HeldBytes } from './artifact';
 import type { JsonObject, JsonValue } from '../utils/json';
 import type { ReleaseBinding, ReleaseManifest } from './manifest';
@@ -624,25 +625,22 @@ function smokeStep(): DeployStep {
         throw new Error(`https://${address}/api/health answered HTTP ${response.status}`);
       }
 
-      const health = v.parse(
-        v.object({ version: v.optional(v.string()), sha: v.optional(v.string()) }),
-        await response.json(),
-      );
+      const { build } = v.parse(HealthAnswerSchema, await response.json());
 
       // THE CHECK IS WHICH BUILD ANSWERED, not that something did. On an update
       // the old version answers 200 from the same address, so a smoke step that
       // only read `response.ok` would pass while the deployment still served
       // the previous build — and the next apply, over a finished ledger, would
       // have nothing left to repair.
-      if (health.version !== context.manifest.version || health.sha !== context.manifest.sha) {
+      if (build === null || build.version !== context.manifest.version || build.sha !== context.manifest.sha) {
         throw new Error(
-          `https://${address}/api/health answers ${health.version ?? 'an unstamped build'}`
-          + ` (${health.sha ?? 'no sha'}), and this release is ${context.manifest.version}`
+          `https://${address}/api/health answers ${build?.version ?? 'an unstamped build'}`
+          + ` (${build?.sha ?? 'no sha'}), and this release is ${context.manifest.version}`
           + ` (${context.manifest.sha})`,
         );
       }
 
-      return `Health answers ${health.version}.`;
+      return `Health answers ${build.version}.`;
     },
   };
 }

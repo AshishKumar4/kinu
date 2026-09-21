@@ -44,6 +44,16 @@ const UpdateBuildSchema: v.GenericSchema<UpdateBuild> = v.object({
 });
 
 /**
+ * What `GET /api/health` answers about the build it is: the stamp under
+ * `build`, or `null` on an instance whose assets carry no stamp
+ * (`core/src/http/health-route.ts`). Both doors read a fresh instance through
+ * this and nothing else; measured 2026-09-21, each read `version` at the top
+ * level instead and called every real instance foreign or unstamped, which is
+ * why no door deployment had ever passed its own smoke step.
+ */
+export const HealthAnswerSchema = v.object({ build: v.nullable(UpdateBuildSchema) });
+
+/**
  * What the Updates page is told.
  *
  * `installable` is false for two different reasons and the page says which:
