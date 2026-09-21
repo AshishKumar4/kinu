@@ -24,7 +24,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createHostedWorkspace, type HostedWorkspace } from '../src/workspace-host';
-import { deriveResidentOwner } from '@nimbus-sh/worker/resident-identity';
+import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { sqlOver } from '@kinu.run/test-utils';
 import type { JsonValue } from '@kinu.run/core';
@@ -95,6 +95,9 @@ function actorObject(): ActorObject {
     id: { toString: () => 'locality-actor', name: 'locality-actor' },
     waitUntil: (promise: Promise<unknown>) => { held.push(promise); },
     getWebSockets: () => [],
+    // The bag workerd hangs on `ctx`, reduced to the composed supervisor
+    // entrypoint the hosted runtime requires before it composes.
+    exports: { SupervisorRPC },
   };
 
   const partial: Partial<DurableObjectState> = {};
@@ -183,10 +186,19 @@ function workspaceBindings(): Partial<Env> & Record<NimbusKnob, undefined> {
     get() { throw new Error('the hosted workspace loaded a dynamic worker'); },
   });
 
+  // The fabric's host namespace, read by the runtime at composition; no
+  // facet in this suite dispatches through it.
+  const OrchestratorAgent: Env['OrchestratorAgent'] = Object.create({
+    get() { throw new Error('a facet dispatched through the host namespace'); },
+    idFromName() { throw new Error('a facet dispatched through the host namespace'); },
+    idFromString() { throw new Error('a facet dispatched through the host namespace'); },
+  });
+
   return {
     NIMBUS_RUNTIME_CACHE: undefined,
     LOADER,
     ASSETS: undefined,
+    OrchestratorAgent,
     NIMBUS_DEBUG: undefined,
     NIMBUS_LAUNCH_CHUNK_BYTES: undefined,
     NIMBUS_PROCESS_HOST: undefined,
@@ -229,6 +241,23 @@ async function listen(workspace: HostedWorkspace, port: number, argv: string[], 
   await (await workspace.facetManager()).manager.registerPort(pid, port);
 
   return pid;
+}
+
+/**
+ * The owner the manager derives for `argv` under SLATE_CWD, read off the
+ * manager itself: a probe process is spawned exactly as `listen` spawns a
+ * listener, its identity is asked for, and it is ended. The reservation a
+ * test seeds must name this identity for the capability to survive.
+ */
+async function derivedOwner(workspace: HostedWorkspace, argv: string[]): Promise<string> {
+  const session = await workspace.bundle.session();
+  const probe = session.processes.spawn('slate', argv, SLATE_CWD, { longRunning: true });
+  const identity = await (await workspace.facetManager()).manager.residentIdentity(probe.pid);
+  session.processes.kill(probe.pid);
+
+  if (identity?.owner === undefined) throw new Error('the manager derived no owner for the probe process');
+
+  return identity.owner;
 }
 
 describe('the hosted workspace lives in the actor Durable Object', () => {
@@ -496,7 +525,6 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const capability = 'abcdef0123456789abcdef01';
     const kv = new Map<string, JsonValue>();
     Object.assign(actor.ctx.storage, kvBackedStorage(kv));
-    kv.set('nimbus_preview_capability:3000', { capability, owner: await deriveResidentOwner(SLATE_CWD, ['a']) });
     let source = 'old';
 
     const workspace = createHostedWorkspace({
@@ -508,6 +536,8 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
         return null;
       },
     });
+
+    kv.set('nimbus_preview_capability:3000', { capability, owner: await derivedOwner(workspace, ['a']) });
 
     const pid = await listen(workspace, 3000, ['a'], {
       handleHttpRequest: async (request) => Response.json({ source, invocation: request.headers.get('x-slate-call') }),
@@ -528,7 +558,6 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const capability = 'abcdef0123456789abcdef01';
     const kv = new Map<string, JsonValue>();
     Object.assign(actor.ctx.storage, kvBackedStorage(kv));
-    kv.set('nimbus_preview_capability:3000', { capability, owner: await deriveResidentOwner(SLATE_CWD, ['a']) });
     const released: string[] = [];
 
     const workspace = createHostedWorkspace({
@@ -537,6 +566,8 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       ensureSlate: async () => null,
       slateInvocation: (port) => ({ value: `minted-${String(port)}`, release: () => { released.push(`minted-${String(port)}`); } }),
     });
+
+    kv.set('nimbus_preview_capability:3000', { capability, owner: await derivedOwner(workspace, ['a']) });
 
     const pid = await listen(workspace, 3000, ['a'], {
       handleHttpRequest: async (request) => Response.json({ invocation: request.headers.get('x-slate-call') }),
@@ -567,8 +598,8 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     // The reservation is the slate host's act: an owner declares its port and
     // is handed the capability its URL carries, before any process binds it.
     // The owner is the identity the manager derives for the listener below.
-    const ownerA = await deriveResidentOwner(SLATE_CWD, ['A']);
     const first = activate();
+    const ownerA = await derivedOwner(first, ['A']);
     const app = await first.apps.ensure({ owner: ownerA, preferredPort: 20000 });
     expect(app.port).toBe(20000);
     const handle = app.capability.slice(0, 10);

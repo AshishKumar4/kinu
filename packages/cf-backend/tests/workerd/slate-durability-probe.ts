@@ -33,7 +33,7 @@ import { newWebSocketRpcSession } from 'capnweb';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { handleNimbusPreviewHostRequest } from '../../src/nimbus-route';
-import { listPortReservations } from '../../src/nimbus-programmatic';
+import { listPortReservations } from '@nimbus-sh/worker/port-capability';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';

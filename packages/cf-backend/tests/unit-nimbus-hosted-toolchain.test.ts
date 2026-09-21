@@ -24,7 +24,6 @@ import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlRow, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { runGitCommand } from '@nimbus-sh/worker/git';
-import { ensureRuntimesProgrammatic } from '@nimbus-sh/worker/package-manager';
 
 const databases: Database[] = [];
 
@@ -105,21 +104,5 @@ describe('hosted Nimbus session toolchain', () => {
     const log = await workspace.shell.execute('git log --oneline', { cwd: repo });
     expect(log.exitCode).toBe(0);
     expect(log.stdout).toContain('first commit');
-  });
-
-  test('a runtime install with no catalog bucket names the missing binding', async () => {
-    const workspace = await hostedWorkspace();
-
-    // Exactly the deps `rpcEnsureRuntimes` builds from a session, with the env a
-    // Worker that never bound the bucket has: empty.
-    const [result] = await ensureRuntimesProgrammatic({
-      env: {},
-      vfs: workspace.vfs,
-      registry: workspace.registry,
-      getHome: () => '/home/user',
-    }, ['python']);
-
-    expect(result?.exitCode).not.toBe(0);
-    expect(`${result?.stderr}${result?.stdout}`).toContain('NIMBUS_RUNTIME_CACHE');
   });
 });

@@ -1,6 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import { wireWorkspaceLoopback } from '../../../core/src/vfs/workspace-runtimes';
 
 export interface ShellProbeReport {
   readonly exitCode: number;
@@ -18,12 +17,6 @@ export class PreviewPortProbeDO extends DurableObject<Cloudflare.Env> {
         sql: this.ctx.storage.sql,
         transactions: { storage: this.ctx.storage },
       });
-
-      // The same call the hosted boot makes after its runtime provisioning —
-      // the loopback wiring under test. The full provisioning is skipped for
-      // the reason the files-eio probe documents: its toolkit imports a CJS
-      // graph this pool cannot load, and the commands under test never reach it.
-      wireWorkspaceLoopback(workspace);
 
       return workspace;
     })();

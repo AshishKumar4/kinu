@@ -23,6 +23,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
+import type { HostedRuntime } from '@nimbus-sh/worker/workspace-host';
 import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   facetHomeProvisioner, headAgentName,
@@ -38,11 +39,12 @@ import type { NimbusSandboxHandle } from '@kinu.run/core';
 import { nimbusSessionFiles, readExecutorFile, writeExecutorFileOp, type ExecutorFileLookup, type VFS } from '@kinu.run/core';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import {
+  credentialedSessionBox,
+  programmaticHostOver,
   ensureProgrammaticReady,
   rpcExec,
   type ProgrammaticHost,
-} from '@nimbus-sh/worker/programmatic';
-import { credentialedSessionBox, programmaticHostOver } from './helpers/programmatic-host';
+} from './helpers/programmatic-host';
 import { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 const databases: Database[] = [];
@@ -79,6 +81,7 @@ function sqlBinding(value: SqlValue): SQLQueryBindings {
 interface Fixture {
   readonly workspace: NimbusWorkspace;
   readonly host: ProgrammaticHost;
+  readonly runtime: () => Promise<HostedRuntime>;
   /** The seam under test, wired from this workspace's own three members. */
   readonly provision: NodeWorkspaceProvisioner;
   /** A second provisioner over the same workspace — proves uid allocation is a
@@ -108,7 +111,8 @@ async function openFixture(): Promise<Fixture> {
     generation: 1,
   });
 
-  const host = programmaticHostOver(workspace).host;
+  const composed = programmaticHostOver(workspace);
+  const host = composed.host;
 
   await ensureProgrammaticReady(host);
   const wiring = { root: workspace.vfs.as(ROOT), confiner: workspace.vfs, sql };
@@ -116,6 +120,7 @@ async function openFixture(): Promise<Fixture> {
   return {
     workspace,
     host,
+    runtime: composed.runtime,
     // Keyed on the node ACTOR's storage key, not the raw node id. Every
     // actor-scoped address is keyed that way — `shellId`, the state subtree,
     // the home — because a rename must not move an actor's directory and two
@@ -480,7 +485,7 @@ describe('hosted node execution', () => {
  * file tools and its commands are one identity over one tree.
  */
 function sessionBox(f: Fixture, cred: VfsCred): NimbusSandboxHandle {
-  return credentialedSessionBox(f.workspace, f.host, cred);
+  return credentialedSessionBox(f.runtime, cred);
 }
 
 describe('the hosted file plane acts as the node, or the home is unwritable', () => {

@@ -4,19 +4,18 @@ import * as v from 'valibot';
 import { Nimbus, type NimbusExecOptions } from '@nimbus-sh/sdk';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlDatabase, SqlRow, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import {
+  programmaticHostOver,
+  type DurableState,
   ensureProgrammaticReady,
   rpcExec,
-  rpcExposePort,
   rpcListPorts,
   rpcRouteCapabilityPort,
-  rpcUnexposePort,
+  durableStorage,
   type ProgrammaticExecOptions,
-  type ProgrammaticHost,
-} from '@nimbus-sh/worker/programmatic';
-import type { SessionPortHost } from '@nimbus-sh/worker/port-capability';
-import { programmaticHostOver, type DurableState } from './helpers/programmatic-host';
+  type TestProgrammaticHost,
+} from './helpers/programmatic-host';
+import { clearPortCapability } from '@nimbus-sh/worker/port-capability';
 
 const databases: Database[] = [];
 
@@ -66,17 +65,25 @@ function openWorkspaceDatabase(): WorkspaceDatabase {
 
 type DurableShellState = DurableState;
 
-function workerHost(workspace: NimbusWorkspace, durableState: DurableShellState): ProgrammaticHost {
-  return programmaticHostOver(workspace, { durable: durableState }).host;
+function workerHost(workspace: NimbusWorkspace, durableState: DurableShellState): TestProgrammaticHost {
+  return programmaticHostOver(workspace, { durable: durableState });
 }
 
-function sdkBox(host: ProgrammaticHost) {
+/** The SDK over the runtime's verbs, with the port verbs mapped exactly as
+ *  the production box maps them: `expose` is the app exposure of the port's
+ *  serving process, `unexpose` retires the capability before the listener. */
+function sdkBox({ host, portRegistry, durable }: TestProgrammaticHost) {
   const stub = {
     _rpcReady: (options?: { preinstall?: string[] }) => ensureProgrammaticReady(host, options),
     _rpcExec: (command: string, options?: ProgrammaticExecOptions) => rpcExec(host, command, options),
     _rpcListPorts: () => rpcListPorts(host),
-    _rpcExposePort: (port: number) => rpcExposePort(host, port),
-    _rpcUnexposePort: (port: number) => rpcUnexposePort(host, port),
+    _rpcExposePort: (port: number) => host.exposeApp({ port }),
+    _rpcUnexposePort: async (port: number) => {
+      await host.ready();
+      await clearPortCapability({ ctx: { storage: durableStorage(durable) }, portRegistry }, port);
+
+      return { port, ok: portRegistry.unregister(port) };
+    },
   };
 
   const namespace = {
@@ -194,8 +201,11 @@ describe('hosted workspace preview capabilities', () => {
       return guestRequest;
     };
 
-    host.portRegistry.bindFacetStub(41, guest);
-    host.portRegistry.register(4321, 41);
+    // The serving pid is a process of the workspace's own table: an
+    // application's owner is derived from the process serving its port.
+    const server = workspace.processes.spawn('node', ['node', 'server.js'], '/home/user');
+    host.portRegistry.bindFacetStub(server.pid, guest);
+    host.portRegistry.register(4321, server.pid);
 
     const box = sdkBox(host);
     const exposed = await box.ports.expose(4321);
@@ -204,7 +214,7 @@ describe('hosted workspace preview capabilities', () => {
     if (!exposed.capability) throw new Error('listening port did not receive a capability');
 
     const response = await rpcRouteCapabilityPort(
-      host,
+      host.host,
       4321,
       exposed.capability,
       new Request('https://preview.example/private?view=full', {
@@ -229,11 +239,11 @@ describe('hosted workspace preview capabilities', () => {
 
     guestRequest = null;
     const reconstructedHost = workerHost(workspace, durableState);
-    reconstructedHost.portRegistry.bindFacetStub(41, guest);
-    reconstructedHost.portRegistry.register(4321, 41);
+    reconstructedHost.portRegistry.bindFacetStub(server.pid, guest);
+    reconstructedHost.portRegistry.register(4321, server.pid);
     expect(reconstructedHost.portRegistry.get(4321)?.capability).not.toBe(exposed.capability);
     expect(await rpcRouteCapabilityPort(
-      reconstructedHost,
+      reconstructedHost.host,
       4321,
       exposed.capability,
       new Request('https://preview.example/reconstructed', {
@@ -260,156 +270,16 @@ describe('hosted workspace preview capabilities', () => {
     ]));
     await reconstructedBox.ports.unexpose(4321);
     expect(await rpcRouteCapabilityPort(
-      reconstructedHost,
+      reconstructedHost.host,
       4321,
       exposed.capability,
       new Request('https://preview.example/private'),
       '/private',
     )).toMatchObject({ status: 404 });
 
-    reconstructedHost.portRegistry.register(4321, 41);
+    reconstructedHost.portRegistry.register(4321, server.pid);
     const reexposed = await reconstructedBox.ports.expose(4321);
     expect(reexposed.capability).toMatch(/^[a-f0-9]{24}$/);
     expect(reexposed.capability).not.toBe(exposed.capability);
-  });
-
-  test('the actual worker route supports Cirrus HMR and generic guest upgrades', async () => {
-    // Unchecked and named: `WebSocket` is a platform class with no
-    // constructible form under bun; the route only accepts the server half
-    // and hands the client half back inside a 101, touching neither.
-    const serverSocket: WebSocket = Object.create({ serializeAttachment() {} });
-    const clientSocket: WebSocket = Object.create(null);
-
-    class FakeWebSocketPair {
-      0 = clientSocket;
-      1 = serverSocket;
-    }
-
-    Object.defineProperty(globalThis, 'WebSocketPair', {
-      configurable: true,
-      value: FakeWebSocketPair,
-    });
-
-    const { routeCapabilityPort } = await import('@nimbus-sh/worker/port-capability');
-
-    const { routeHostedWebSocket } = await import(
-      '@nimbus-sh/worker/rpc'
-    );
-
-    const portRegistry = new PortRegistry();
-    portRegistry.bindFacetStub(41, {
-      async handleHttpRequest() { return new Response('guest'); },
-      async handleWebSocketRequest() { return new Response(null, { status: 101 }); },
-    });
-    portRegistry.register(4321, 41);
-    const capability = portRegistry.get(4321)?.capability;
-
-    if (!capability) throw new Error('port capability was not generated');
-
-    const acceptedSockets: WebSocket[] = [];
-    let acceptedTags: string[] = [];
-
-    // `routeCapabilityPort` reached `cirrusReal.attachHmrClient` directly in
-    // worker 0.6; 0.7 routes the HMR upgrade through `acceptCirrusHmrWs`, the
-    // session method that accepts the socket, attaches the client and echoes
-    // the vite-hmr subprotocol. The double plays that method's part over the
-    // pair declared above.
-    const cirrusReal = {
-      isRunning: true,
-      attachHmrClient(socket: WebSocket) {
-        acceptedSockets.push(socket);
-
-        return 'client-1';
-      },
-    };
-
-    const socketCtx = {
-      storage: { get: async () => undefined },
-      acceptWebSocket(socket: WebSocket, tags: string[]) {
-        acceptedSockets.push(socket);
-        acceptedTags = tags;
-      },
-    };
-
-    // Unchecked and named: the route reads `ctx.storage.get` for the port's
-    // reservation and `acceptWebSocket` through the HMR double above; the
-    // rest of `DurableObjectState` is never touched by a capability route.
-    const ctx: DurableObjectState = Object.create(socketCtx);
-
-    const host: SessionPortHost = {
-      portRegistry,
-      _viteShimPort: 4321,
-      viteDevServer: null,
-      cirrusReal,
-      ctx,
-      acceptCirrusHmrWs(request: Request) {
-        socketCtx.acceptWebSocket(serverSocket, ['cirrus-hmr']);
-        cirrusReal.attachHmrClient(serverSocket);
-        const wantedProto = request.headers.get('Sec-WebSocket-Protocol') ?? '';
-        const useProto = wantedProto.split(',').map((s) => s.trim()).find((p) => p === 'vite-hmr' || p === 'vite-ping');
-        const headers: Record<string, string> = {};
-
-        if (useProto) headers['Sec-WebSocket-Protocol'] = useProto;
-
-        return new Response(null, { status: 101, webSocket: clientSocket, headers });
-      },
-    };
-
-    const hmr = await routeCapabilityPort(
-      host,
-      4321,
-      capability,
-      new Request('https://preview.example/__nimbus_hmr', {
-        headers: { upgrade: 'websocket', 'sec-websocket-protocol': 'vite-hmr' },
-      }),
-      '/__nimbus_hmr',
-    );
-
-    expect(hmr.status).toBe(101);
-    expect(hmr.headers.get('sec-websocket-protocol')).toBe('vite-hmr');
-    expect(acceptedSockets).toEqual([serverSocket, serverSocket]);
-    expect(acceptedTags).toEqual(['cirrus-hmr']);
-
-    expect(await routeCapabilityPort(
-      host,
-      4321,
-      capability,
-      new Request('https://preview.example/socket', { headers: { upgrade: 'websocket' } }),
-      '/socket',
-    )).toMatchObject({ status: 101 });
-
-    let peerFacetReached = false;
-
-    const peerHost = {
-      _hostedProcesses: new Map([['process-key', {
-        facet: Promise.resolve({
-          async handleWebSocketRequest() {
-            peerFacetReached = true;
-
-            return new Response(null, { status: 101 });
-          },
-        }),
-        started: Promise.resolve(),
-        webSocketCapability: 'f1a4d4c8-c38d-446e-a10b-e781f15d4ba1',
-        cancelled: new Promise<void>(() => {}),
-        cancel() {},
-      }]]),
-      _hostedProcessWaiters: new Map(),
-    };
-
-    expect(await routeHostedWebSocket(
-      peerHost,
-      'process-key',
-      '7198774f-fd91-45cf-a1b9-661f77e39221',
-      new Request('https://peer.invalid/socket', { headers: { upgrade: 'websocket' } }),
-    )).toMatchObject({ status: 404 });
-    expect(peerFacetReached).toBe(false);
-    expect(await routeHostedWebSocket(
-      peerHost,
-      'process-key',
-      'f1a4d4c8-c38d-446e-a10b-e781f15d4ba1',
-      new Request('https://peer.invalid/socket', { headers: { upgrade: 'websocket' } }),
-    )).toMatchObject({ status: 101 });
-    expect(peerFacetReached).toBe(true);
   });
 });

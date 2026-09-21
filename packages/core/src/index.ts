@@ -1291,7 +1291,6 @@ export {
   writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, archiveFileTree,
 } from './vfs/workspace-planes';
 
-export { wireWorkspaceLoopback } from './vfs/workspace-runtimes';
 
 export {
   makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,

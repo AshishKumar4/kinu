@@ -144,7 +144,7 @@ export { DeployRunDO } from "./deploy/deploy-do";
 // outbound-interception fetchers from `ctx.exports.ContainerProxy`
 // (@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js:11509). The fabric mints each
 // facet's `env.SUPERVISOR` binding from the composed supervisor entrypoint
-// (`supervisorEntrypoint` in nimbus-programmatic.ts).
+// (`supervisorEntrypoint`, adopted by the hosted runtime in workspace-host.ts).
 //
 // REQUIRED, and the binding or lookup that requires each one.
 //   OrchestratorAgent carries the `OrchestratorAgent` durable_objects binding
@@ -168,7 +168,7 @@ export { DeployRunDO } from "./deploy/deploy-do";
 //     `@nimbus-sh/worker`'s root, whose module scope calls `composeFabric` for
 //     the hosted product (no `hostNamespace`, so `NIMBUS_SESSION`). The holder
 //     is first-write-wins per isolate, so the root's write beat this Worker's
-//     `HOST_FABRIC_COMPOSITION` (workspace-host.ts) and every facet dispatch
+//     the host fabric composition (workspace-host.ts) and every facet dispatch
 //     asked for a namespace this Worker does not bind.
 //
 // NOT EXPORTED, because no live path reads them. Kinu holds Nimbus as a
@@ -184,7 +184,7 @@ export { DeployRunDO } from "./deploy/deploy-do";
 // facet manager Kinu leaves null. The HMR binding resolves in cirrus-real.js.
 // A missing export is an absent property, so removing one breaks only a path
 // that reads it.
-export { SupervisorRPC } from "@nimbus-sh/worker/supervisor-rpc";
+export { SupervisorRPC } from "@nimbus-sh/worker/workspace-host";
 
 /** The SPA and every other static asset, under the app's document policy. */
 async function serveApp(request: Request, env: Env): Promise<Response> {

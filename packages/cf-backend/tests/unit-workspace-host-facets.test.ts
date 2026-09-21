@@ -36,7 +36,7 @@ import { durableStorage } from './helpers/programmatic-host';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { CRED_SESSION_USER, type SqlRow, type SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpEnvelope, SupervisorOpName } from '@nimbus-sh/core/workspace/supervisor-op.js';
-import { SupervisorRPC } from '@nimbus-sh/worker/supervisor-rpc';
+import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 // The entry's module graph reaches `agents`, which the harness stands in for;
@@ -59,6 +59,7 @@ interface ActorExports {
 /** The namespace the supervisor entrypoint resolves its host in. Its objects
  *  mount the one method production mounts. */
 interface WorkspaceHostNamespace {
+  idFromName(name: string): string;
   idFromString(id: string): string;
   get(id: string): { supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult> };
 }
@@ -203,6 +204,7 @@ function hostActor(): Actor {
   const actorEnv: ActorBindings = {
     LOADER,
     OrchestratorAgent: {
+      idFromName: (name) => name,
       idFromString: (id) => id,
       get: (id) => {
         if (id !== ACTOR_ID) throw new Error('supervisor resolved the wrong host');
@@ -407,6 +409,7 @@ function refusingBindings(): ActorBindings {
   return {
     LOADER,
     OrchestratorAgent: {
+      idFromName: (name) => name,
       idFromString: (id) => id,
       get() { throw new Error('no facet may reach a host'); },
     },
@@ -414,17 +417,18 @@ function refusingBindings(): ActorBindings {
 }
 
 describe('hosted workspace facets', () => {
-  test('a ctx without exports still answers the verbatim refusal', async () => {
+  test('a ctx without exports composes no runtime: the first command names the missing entrypoint', async () => {
     const hosted = createHostedWorkspace({
       ctx: actorCtx(),
       env: strictEnv(refusingBindings()),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
-    const clone = await hosted.box('red').exec('git clone https://example.invalid/hello.git /home/user/hello');
-    const output = `${clone.stdout}${clone.stderr}`;
-    expect(clone.exitCode).toBe(1);
-    expect(output).toContain(REFUSAL);
+    // The runtime refuses to compose over an object that exports no supervisor
+    // entrypoint, so nothing runs — not a clone that refuses at spawn time, but
+    // a host whose every command fails naming what is missing.
+    await expect(hosted.box('red').exec('git clone https://example.invalid/hello.git /home/user/hello'))
+      .rejects.toThrow('supervisor entrypoint');
   });
 
   test('git clone spawns one facet and lands bytes through supervisorOp', async () => {
@@ -492,7 +496,7 @@ describe('hosted workspace facets', () => {
 
       const output = `${install.stdout}${install.stderr}`;
       expect(output).not.toContain(REFUSAL);
-      expect(install.exitCode).toBe(0);
+      expect(install.exitCode, output).toBe(0);
       const session = await actor.hosted.bundle.session();
       const vfs = session.vfs.as(CRED_SESSION_USER);
       const manifestPath = `home/user/proj/node_modules/${REGISTRY_PKG}/package.json`;

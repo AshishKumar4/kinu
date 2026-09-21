@@ -18,11 +18,11 @@ import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import {
+  programmaticHostOver,
   ensureProgrammaticReady,
   rpcExec,
   type ProgrammaticHost,
-} from '@nimbus-sh/worker/programmatic';
-import { programmaticHostOver } from './helpers/programmatic-host';
+} from './helpers/programmatic-host';
 
 const databases: Database[] = [];
 
@@ -89,7 +89,7 @@ async function openFixture(): Promise<Fixture> {
     processes,
   });
 
-  const host = programmaticHostOver(workspace, { processes }).host;
+  const host = programmaticHostOver(workspace).host;
 
   await ensureProgrammaticReady(host);
 

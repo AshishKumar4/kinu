@@ -1,10 +1,7 @@
 {
   "measuredAt": "2026-09-18",
-  "total": 238,
+  "total": 236,
   "files": {
-    "packages/cf-backend/tests/fixtures/nimbus-capability-websocket-workerd.mjs": {
-      "sleep": 2
-    },
     "packages/cf-backend/tests/helpers/kv.ts": {
       "clock-compare": 1
     },

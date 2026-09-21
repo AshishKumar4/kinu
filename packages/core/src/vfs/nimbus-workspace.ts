@@ -42,7 +42,7 @@ import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
 import type { SqlDatabase, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { adoptGeneration, GENERATION_KEY, generation, type GenerationContext } from '@nimbus-sh/fabric/generation.js';
 import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
-import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
+import type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import { agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, type HomeRootVfs, type TmpConfiner } from './agent-home';
@@ -55,7 +55,7 @@ import { isVfsError } from './errno';
 
 export { workspaceToolchainCapabilities } from './workspace-runtimes';
 
-export type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
+export type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runtime-package.js';
 
 export { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 
@@ -272,13 +272,17 @@ export type SupervisorOpResult = Awaited<ReturnType<NimbusWorkspace['supervisorO
  * This workspace's own Nimbus primitives, as a host's process/port surface
  * binds to them.
  *
- * Five members and no more: the shell commands actually run on, the raw
- * credentialed filesystem, the registry a host adds `git` to, the process
- * owner whose pids this filesystem's append capabilities are keyed by, and
- * the one dispatch a facet reaches its host through. Anything a host can
- * compose from those is the host's, not this module's.
+ * The opened workspace itself, for a host that composes Nimbus's hosted
+ * runtime over it — the runtime reads its shell, kernel, registry, process
+ * owner and runtime manager and starts it, and a second `NimbusWorkspace`
+ * over the same database would be a second content cache. Beside it, the
+ * members a host reads directly: the shell commands actually run on, the raw
+ * credentialed filesystem, the registry, the process owner whose pids this
+ * filesystem's append capabilities are keyed by, and the one dispatch a facet
+ * reaches its host through.
  */
 export interface WorkspaceSession {
+  readonly workspace: NimbusWorkspace;
   readonly shell: NimbusWorkspace['shell'];
   readonly vfs: SqliteVFS;
   readonly registry: NimbusWorkspace['registry'];
@@ -388,6 +392,14 @@ export interface WorkspaceOptions {
    * substrate to reach.
    */
   fabric?: FabricComposition;
+  /**
+   * A remote runtime catalog beyond the supplied packages — the R2 catalog a
+   * hosted workspace installs `python3` or `bash` from. A name the registry
+   * cannot answer is offered to it and, when it can satisfy the name, becomes
+   * a stub that installs on first invocation; the host's runners then bind
+   * the installed bins. The CLI passes none: its runtimes arrive as packages.
+   */
+  runtimeSource?: RuntimeSource;
 }
 
 /**
@@ -435,12 +447,16 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
           processes.setPidBase(generationNow * PID_GEN_STRIDE);
 
-          const workspace = await NimbusWorkspace.create({
+          let creation: Parameters<typeof NimbusWorkspace.create>[0] = {
             sql: opts.sql,
             transactions: opts.transactions,
             generation: generationNow,
             cwd: WORKSPACE_ROOT,
             env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
+            // The one process owner of this filesystem: the shell, every
+            // agent plane and a host's background processes allocate from
+            // it, so no two of them are ever handed the same pid.
+            processes,
             // The embedder's fabric, stated once per isolate. A workspace
             // whose host can run dynamic workers reaches them through this:
             // the fabric mints every facet's `env.SUPERVISOR` binding from
@@ -451,7 +467,15 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
             // a dynamic worker refuses before it spawns. First-write-wins
             // per isolate, so passing it on every create is idempotent.
             fabric: opts.fabric,
-          });
+          };
+
+          // A remote catalog makes every name it can satisfy an install-on-
+          // first-use stub; the supplied packages stay this module's own.
+          if (opts.runtimeSource !== undefined) {
+            creation = { ...creation, runtimeSource: opts.runtimeSource, runtimeInstall: 'on-demand' };
+          }
+
+          const workspace = await NimbusWorkspace.create(creation);
 
           // Before the first command, and after the substrate's own
           // registrations so a coreutil is never shadowed by a runtime bin of
@@ -525,6 +549,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
       const workspace = await open();
 
       return {
+        workspace,
         shell: workspace.shell,
         vfs: workspace.vfs,
         registry: workspace.registry,
