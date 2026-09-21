@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/tools/clamp.ts b/packages/core/src/tools/clamp.ts
-index e27b1c491..3aabcbb15 100644
+index e36a9f0e1..1acc8f609 100644
 --- a/packages/core/src/tools/clamp.ts
 +++ b/packages/core/src/tools/clamp.ts
-@@ -77,7 +77,7 @@ async function offload(vfs: VFS, text: string): Promise<string | null> {
+@@ -80,7 +80,7 @@ async function offload(vfs: VFS, text: string): Promise<Offload> {
    // The path as written, not rooted: relative paths resolve at the workspace
    // root for every surface that reads them, and a leading slash would name the
    // filesystem's real root instead.
--  return path;
-+  return `/${path}`;
+-  return { path };
++  return { path: `/${path}` };
  }
  
  /** What a clamped result says about itself. Short on purpose — it is charged
