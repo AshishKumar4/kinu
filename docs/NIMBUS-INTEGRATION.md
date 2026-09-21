@@ -12,34 +12,52 @@ pinned versions, checked against the package manifests and `bun.lock` on
 
 | Package | Version | Declared in |
 |---|---|---|
-| `@nimbus-sh/core` | 0.10.0 | `packages/core`, `packages/cf-backend`, `packages/cli-backend` |
-| `@nimbus-sh/fabric` | 0.6.0 | `packages/core`, `packages/cf-backend` |
-| `@nimbus-sh/sdk` | 0.7.0 | `packages/cf-backend` |
-| `@nimbus-sh/worker` | 0.8.0 | `packages/cf-backend` |
-| `@nimbus-sh/runtime-bash` | 5.2.37 | `packages/cli-backend` |
-| `@nimbus-sh/runtime-cpython` | 3.13.14 | `packages/cli-backend` |
+| `@nimbus-sh/core` | 0.11.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend` |
+| `@nimbus-sh/fabric` | 0.7.0 | `packages/core`, `packages/cf-backend` |
+| `@nimbus-sh/sdk` | 0.8.0 | `packages/cf-backend` |
+| `@nimbus-sh/worker` | 0.9.0 | `packages/cf-backend` |
+| `@nimbus-sh/runtime-bash` | 5.2.37 | root, `packages/cli-backend` |
+| `@nimbus-sh/runtime-cpython` | 3.13.14 | root, `packages/cli-backend` |
+
+The pin is exact, never a caret, because `patchedDependencies` is keyed by
+`name@version`: a range that aged to 0.11.1 would match no key, and the patch
+would leave the tree without one line of the manifest changing.
+
+Every declaration moves together, the ROOT `devDependencies` included. It
+declares `@nimbus-sh/core` for the repository's own scripts and fixtures, and
+it counts: a root version left behind hoists ITS copy to the top of
+`node_modules` and nests the workspaces' copy below, so the copy that runs is
+the stale one. `@nimbus-sh/platform` is nobody's declared dependency. It
+arrives under core, fabric and worker, which is why nothing here pins it.
 
 Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
 outbox on `@nimbus-sh/fabric/outbox.js`. `@nimbus-sh/worker` also depends on
 fabric, so the resolved tree holds it either way.
 
-Two Nimbus packages are patched, both from upstream branch
-`feat/hosted-runtime-hooks` (`3f83361e`), each hunk with its reason on record:
+Two Nimbus packages are patched, each hunk with its reason on record:
 
-- `patches/@nimbus-sh%2Fworker@0.8.0.patch`: the `resolveWorkerLaunch`
-  embedder hook, the `facets()` accessor and their re-exports (the manager
-  refuses a durable spawn carrying `globalOutbound` without the hook;
-  `docs/DEVBOX-DECISIONS.md` D20), and `NPM_REGISTRY` plumbed through the
-  hosted installer, the R2 cache key namespace, the facet resolver and the
-  supervisor RPC (commit `3ea2a6c67`; pinned by
+- `patches/@nimbus-sh%2Fworker@0.9.0.patch`: the `facets()` accessor on the
+  composed runtime, which is how the hosted host reaches the ONE facet manager
+  instead of composing a second (`workspace-host.ts`), the
+  `LongRunningWorkerSpawnOptions` re-export that `src/slates/resident.ts`
+  imports, and `NPM_REGISTRY` plumbed through the hosted installer, the R2
+  cache key namespace, the facet resolver and the supervisor RPC (pinned by
   `packages/cf-backend/tests/workerd/slate-durability.test.ts`, "npm install
-  streams a package off the registry").
-- `patches/@nimbus-sh%2Fcore@0.10.0.patch`: the same `NPM_REGISTRY` origin on
-  the core `npm` command's install port, and the schema-migration marker
-  written only when it is absent, in `src/vfs/sqlite-vfs.ts` and its `dist`
-  build alike (D21). The `src` hunk matters because bun resolves the package
-  through its `bun` export condition to `src/*.ts`; a `dist`-only patch never
-  reaches the CLI backend or any `bun test`.
+  streams a package off the registry"). Worker 0.9.0 now carries the
+  `resolveWorkerLaunch` embedder hook itself — `dist/hosted/runtime.d.ts:29`
+  reads it off `HostedRuntimeOptions` directly rather than a `hooks` member —
+  and re-exports `FacetManagerHostHooks` and `WorkerRecipe`, so those hunks
+  are retired (D20, D22).
+- `patches/@nimbus-sh%2Fcore@0.11.0.patch`: the `NPM_REGISTRY` origin on the
+  core `npm` command's install port, and five schema writes gated on their
+  row's absence so a reader holding a `readonly` database can still open a
+  current filesystem: the schema-migration marker (D21), the filesystem
+  identity and device rows, the `vfs_ino_allocator` seed, and
+  `backfillInoColumn`'s two `UPDATE`s (D22). Each is written in
+  `src/vfs/sqlite-vfs.ts` and its `dist` build alike. The `src` half matters
+  because bun resolves the package through its `bun` export condition to
+  `src/*.ts`; a `dist`-only patch never reaches the CLI backend or any
+  `bun test`.
 
 The other five `patchedDependencies` entries are `@plannotator%2Fui@0.30.0.patch`,
 `@cloudflare%2Fsandbox@0.12.8.patch`, `@cloudflare%2Fcontainers@0.3.7.patch`,
@@ -61,8 +79,9 @@ does not govern it. It patches the codemode repository's own
 `packages/codemode/` sources, which is the upstream proposal behind the export
 the installed patch supplies locally.
 
-The core patch also ports Nimbus `c9af250e`: `EsbuildService` keeps
-the supplied credentialed view and never acquires kernel authority itself.
+`EsbuildService` keeps the supplied credentialed view and never acquires
+kernel authority itself (upstream Nimbus `c9af250e`, in core since 0.10.0 and
+no longer anything this tree patches).
 Published core/worker runtime callers select kernel authority explicitly.
 Kinu's resident slate compiler instead uses `CRED_SESSION_USER` for both server
 and browser imports, matching the authoring agent's filesystem view. Its

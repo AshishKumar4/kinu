@@ -52,11 +52,13 @@ describe('workspace filesystem byte round-trip (bun:sqlite)', () => {
 });
 
 describe('workspace filesystem over a read-only handle', () => {
-  // The vendored core patch (patches/@nimbus-sh%2Fcore@0.10.0.patch, the
-  // sqlite-vfs.js hunk) writes the schema-migration marker only when it is
-  // absent; upstream 0.10.0 wrote it on every construction, so a filesystem
-  // whose schema was already current still failed to open over a handle that
-  // cannot write. Measured 2026-09-21 against the patched package.
+  // The vendored core patch (patches/@nimbus-sh%2Fcore@0.11.0.patch, the
+  // sqlite-vfs hunks) writes each schema row only when it is absent: the
+  // migration marker, the filesystem identity and device rows, the inode
+  // allocator seed and the inode backfill. Upstream writes all five on every
+  // construction, so a filesystem whose schema was already current still
+  // failed to open over a handle that cannot write. Each guard is measured
+  // load-bearing on its own; see docs/DEVBOX-DECISIONS.md D21 and D22.
   test('a current filesystem opens read-only and reads what a writer left', async () => {
     const path = scratchPath('vfs-readonly', 'agent.db');
     const writer = new Database(path, { create: true });

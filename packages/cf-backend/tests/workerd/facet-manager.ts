@@ -6,6 +6,7 @@
  * the pump rides `waitUntil` directly.
  */
 import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { SqliteFilesystemAuthority } from '@nimbus-sh/core/runtime/filesystem-authority.js';
 import type { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { composeFacetManager, type ComposedFacetManager } from '@nimbus-sh/worker/workspace-host';
@@ -22,6 +23,11 @@ export interface ProbeFacetManagerDeps {
 export function probeFacetManager(deps: ProbeFacetManagerDeps): ComposedFacetManager {
   const composed: ComposedFacetManager = composeFacetManager({
     ...deps,
+    // A probe opens the disk itself instead of through `NimbusWorkspace`, so it
+    // also owns the credentialed authority every runtime binds through. One per
+    // object, because a second authority is a second set of descriptor scopes
+    // over the same rows.
+    filesystem: new SqliteFilesystemAuthority(deps.vfs),
     hooks: {
       onExternalExit: () => undefined,
       onSpawn: () => undefined,
