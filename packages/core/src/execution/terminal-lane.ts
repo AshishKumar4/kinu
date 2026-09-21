@@ -514,7 +514,7 @@ export function writeOutputRow(term: TerminalWriter, out: TerminalPaneOutput) {
  *   replays to a reattaching client.
  *
  * `workspace` — Nimbus's own shell, `shell` mode. The hosted runtime
- *   (@nimbus-sh/worker 0.8.0 `composeHostedRuntime`: `attachTerminal`,
+ *   (@nimbus-sh/worker 0.9.0 `composeHostedRuntime`: `attachTerminal`,
  *   `terminalFrame`, `terminalClose`) keeps one `WebSocketTerminal` per
  *   workspace with its own line editor, scrollback replay on reattach, and
  *   the bash and python REPLs. It is not a pseudo-terminal: Nimbus is a
