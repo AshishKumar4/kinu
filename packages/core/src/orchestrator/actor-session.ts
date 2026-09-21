@@ -33,7 +33,7 @@ import { contextWindowForModel } from '../context-window';
 import { SessionHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
-import type { MessageReference, MessagePartReference } from '../session/messages';
+import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
 
 /** A hosted actor shares workspace priorities, but delivers feedback to itself. */
 export interface ActorAdvisorContext {
@@ -190,8 +190,18 @@ export class ActorSession {
     if (claim === undefined || claim === null) throw new KinuError('denied', 'steer landing requires an admitted claim');
     const id = `steers:${steers.map(steer => steer.id ?? `${claim.turnId}:${atStep}`).join(':')}`;
     const existing = this.canonical.admittedInput(id);
-    const prepared = existing === null ? await this.canonical.messages.prepare(steerUserMessage(steers), id) : null;
-    const reference = existing ?? { messageId: id, sequence: prepared!.updates.length - 1 };
+    let prepared: PreparedMessage | null = null;
+    let reference: MessageReference;
+
+    if (existing === null) {
+      // The reference names the cutoff the preparation will publish; `landInput`
+      // checks the landed row against it.
+      prepared = await this.canonical.messages.prepare(steerUserMessage(steers), id);
+      reference = { messageId: id, sequence: prepared.updates.length - 1 };
+    } else {
+      reference = existing;
+    }
+
     const publish = await prepareDrain?.(rows, atStep, reference);
     this.canonical.landInput(prepared, reference, claim.turnId, () => this.canonical.assertEpoch(claim.turnId, claim.epoch), publish);
     const message = await this.canonical.messages.materialize(reference);

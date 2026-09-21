@@ -780,9 +780,28 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     limits: { contextWindow, modelOutputLimit },
   };
 
-  const initialContext = opts.stepContext === undefined ? null : await opts.stepContext.base();
+  const stepContext = opts.stepContext;
+  const initialContext = stepContext === undefined ? null : await stepContext.base();
   const turnMessages = await assembleTurnMessages({ ...assembly, history: initialContext?.messages ?? assembly.history });
   let initialContextAvailable = initialContext !== null;
+
+  // The first step reads the turn's assembled messages; every later step reads
+  // the plane's current base, assembled the same way minus the admission.
+  const stepContextPlane: StepContextPlane | undefined = stepContext === undefined ? undefined : {
+    base: async () => {
+      if (initialContextAvailable) {
+        initialContextAvailable = false;
+
+        return { messages: turnMessages, changed: initialContext?.changed ?? false };
+      }
+
+      const base = await stepContext.base();
+      const messages = await assembleTurnMessages({ ...assembly, history: base.messages, admission: undefined });
+
+      return { messages, changed: base.changed };
+    },
+    consume: step => stepContext.consume(step),
+  };
 
   // Provider prompt-cache plan: cache-eligible system + request-level cache
   // routing at turn assembly; marker strategies additionally re-roll the tail
@@ -924,21 +943,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           dynamic: opts.dynamicContext,
           destinationProviderId: opts.cache?.providerId,
           meter: opts.meter,
-          context: opts.stepContext === undefined ? undefined : {
-            base: async () => {
-              if (initialContextAvailable) {
-                initialContextAvailable = false;
-
-                return { messages: turnMessages, changed: initialContext?.changed ?? false };
-              }
-
-              const base = await opts.stepContext!.base();
-              const messages = await assembleTurnMessages({ ...assembly, history: base.messages, admission: undefined });
-
-              return { messages, changed: base.changed };
-            },
-            consume: step => opts.stepContext!.consume(step),
-          },
+          context: stepContextPlane,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
       },
       experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
