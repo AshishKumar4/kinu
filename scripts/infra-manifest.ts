@@ -583,6 +583,17 @@ export const SUPPLY = new Map<string, Supply>([
     absent: 'nothing — this is the read-only side of a key rotation and is set only during one.',
     source: 'the outgoing CREDENTIAL_ENCRYPTION_KEY, during a rotation. See docs/DEPLOYMENT.md.',
   }],
+  ['JWT_SECRET', {
+    handling: 'prompt',
+    required: true,
+    absent: 'no Drive: the Mossaic tenant objects sign every listing cursor with this inside '
+      + 'the Durable Object, so `GET /api/drive` and every `/shared` listing answer 500 while '
+      + 'the rest of the product keeps answering 200. Measured on the deployed build '
+      + '2026-09-21 (`tests/first-run/drive`), which is why `driveBound` now states the '
+      + 'absence up front and the routes answer 503 instead.',
+    source: 'pasted at the prompt: `openssl rand -base64 32`. Rotating it invalidates '
+      + 'in-flight listing cursors only (15-minute tokens); nothing durable is sealed with it.',
+  }],
   ['WEBHOOK_ROUTE_SECRET', {
     handling: 'prompt',
     required: true,

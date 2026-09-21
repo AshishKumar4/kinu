@@ -17,6 +17,8 @@ import { fakeMossaic, type FakeMossaic } from '@kinu.run/test-utils';
 import { deriveUserId } from '../src/auth/store';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
+import { driveBound, tenantDrive } from '../src/drive/tenant';
+import type { MossaicShardDO, MossaicUserDO } from '../src/server';
 
 const SKILL = (name: string): string => `---\nname: ${name}\ndescription: ${name} does things\n---\nSteps.`;
 
@@ -42,6 +44,25 @@ async function upload(harness: TestUserDO, owner: UserCaller, path: string, part
 
   return last;
 }
+
+describe('the Drive\'s bindings', () => {
+  // Measured on the deployed build 2026-09-21: both objects bound, no secret,
+  // every listing answered 500 from inside the tenant object. A Drive that
+  // cannot list is stated as absent at the seam, not met on a route.
+  test('two objects without the signing secret are no Drive', () => {
+    // SAFETY: checked at the seam under test — `driveBound` compares both
+    // namespaces against undefined and `tenantDrive` returns before
+    // `createVFS` when the secret is absent, so no namespace method runs.
+    const namespace = {} as DurableObjectNamespace<MossaicUserDO> & DurableObjectNamespace<MossaicShardDO>;
+    const objects = { MOSSAIC_USER: namespace, MOSSAIC_SHARD: namespace };
+
+    expect(driveBound(objects)).toBe(false);
+    expect(driveBound({ ...objects, JWT_SECRET: '' })).toBe(false);
+    expect(tenantDrive({ ...objects, JWT_SECRET: '' }, 'tenant')).toBeNull();
+    expect(driveBound({ ...objects, JWT_SECRET: 'signs-the-cursors' })).toBe(true);
+    expect(driveBound({ JWT_SECRET: 'signs-the-cursors' })).toBe(false);
+  });
+});
 
 describe('the Drive on the UserDO', () => {
   test('the tenant is the profile\'s own; the other user\'s object reaches none of it', async () => {

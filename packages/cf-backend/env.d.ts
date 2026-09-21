@@ -69,6 +69,13 @@ declare global {
      *  states its absence instead of failing the first file call. */
     MOSSAIC_USER?: DurableObjectNamespace<MossaicUserDO>;
     MOSSAIC_SHARD?: DurableObjectNamespace<MossaicShardDO>;
+    /** The Drive's tenant objects sign every listing cursor with this, read off
+     *  their own env inside the Durable Object (Mossaic
+     *  `worker/core/objects/user/list-files.ts`), so it is a Wrangler secret on
+     *  THIS Worker, never a var. Without it every Drive listing answers 500
+     *  (measured 2026-09-21 on the deployed build, `tests/first-run/drive`).
+     *  Generate with `openssl rand -base64 32`. */
+    JWT_SECRET?: string;
     /** Browser sessions, one-time OAuth state, and CLI browser-approval state.
      *  Everything in it expires on its own; nothing in it is a source of truth. */
     AUTH_KV: KVNamespace;

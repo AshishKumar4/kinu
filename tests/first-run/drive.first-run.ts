@@ -4,6 +4,14 @@
  * workspaces of the one owner, a pasted skill lands under `/skills` and is a
  * skill in the listing and on the mount, and the probe leaves nothing behind.
  * No model task; the routes and the mount are the whole claim.
+ *
+ * The mount is read through each workspace's FILE surface (the files route,
+ * which is the executor's mounted VFS: what the agent's `file` tool and the
+ * web file manager read), not its shell. The hosted shell runs over Nimbus's
+ * own filesystem and crosses no mount, by the same rule that keeps `/pc` and
+ * `/sandbox` out of it: name a runtime for commands, cross a mount for files
+ * (docs/EXECUTION-LAYER-SPEC.md). Measured 2026-09-21: `cat /shared/...` in
+ * the shell answers ENOENT on a Drive the files route reads whole.
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
@@ -23,8 +31,6 @@ const liveTest = test.skipIf(PLAN === null);
 const observations: EvalObservation[] = [];
 
 afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
-
-const Exec = v.object({ stdout: v.optional(v.string()), exitCode: v.optional(v.number()), error: v.optional(v.string()) });
 
 const NOTE = 'drive first-run: one Drive, every workspace\n';
 
@@ -95,15 +101,15 @@ describe(SUITE, () => {
             detail: JSON.stringify({ status: fetched.status, text: fetched.text.slice(0, 80) }),
           });
 
-          const first = v.parse(Exec, await session.execute('workspace', `cat /shared${folder}/note.txt`));
+          const first = await session.readFile(`/shared${folder}/note.txt`, { allowMissing: true });
 
           second = await plan.open({ subject: 'drive2', purpose: 'The same owner, a second workspace, the same Drive; no model task.', genesis: false });
-          const other = v.parse(Exec, await second.execute('workspace', `cat /shared${folder}/note.txt`));
+          const other = await second.readFile(`/shared${folder}/note.txt`, { allowMissing: true });
 
           goals.push({
             what: 'the-shared-mount-reads-the-drive-from-two-workspaces',
-            reached: first.stdout === NOTE && other.stdout === NOTE,
-            detail: JSON.stringify({ first, other }),
+            reached: first === NOTE && other === NOTE,
+            detail: JSON.stringify({ first: first.slice(0, 80), other: other.slice(0, 80) }),
           });
 
           const added = await drive('/skills', {
@@ -116,13 +122,13 @@ describe(SUITE, () => {
           const marked = v.parse(MarkedSkillSchema, JSON.parse(added.text));
           const skills = await listing('/skills');
           const skill = skills.entries.find((entry) => entry.name === skillName);
-          const mounted = v.parse(Exec, await session.execute('workspace', `cat /shared/skills/${skillName}/SKILL.md`));
+          const mounted = await session.readFile(`/shared/skills/${skillName}/SKILL.md`, { allowMissing: true });
 
           goals.push({
             what: 'a-pasted-skill-lands-under-skills-and-is-a-skill-on-the-mount',
             reached: marked.linked === `/skills/${skillName}` && skill?.skill === true
-              && (mounted.stdout ?? '').includes(`name: ${skillName}`),
-            detail: JSON.stringify({ marked, skill, mounted: (mounted.stdout ?? mounted.error ?? '').slice(0, 120) }),
+              && mounted.includes(`name: ${skillName}`),
+            detail: JSON.stringify({ marked, skill, mounted: mounted.slice(0, 120) }),
           });
         } finally {
           const gone = await drive(`?path=${encodeURIComponent(folder)}`, { method: 'DELETE' });

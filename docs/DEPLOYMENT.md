@@ -108,6 +108,7 @@ This derives from `Env` in `packages/cf-backend/env.d.ts`, pinned. A field that 
 | --- | --- | --- | --- |
 | `CREDENTIAL_ENCRYPTION_KEY` | **prompt**: paste one, or press enter and provisioning generates 32 random bytes and displays them **once** | yes, everywhere | Every signed-in surface answers 503 while public routes answer 200, so the site looks healthy. |
 | `WEBHOOK_ROUTE_SECRET` | **prompt**: paste 32 random bytes (`openssl rand -base64 32`) | yes, everywhere | No workspace can take an inbound webhook. Creating one answers 503, and every delivery URL answers 404 without waking a workspace. Timers and email keep working. |
+| `JWT_SECRET` | **prompt**: paste 32 random bytes (`openssl rand -base64 32`) | yes, everywhere | No Drive. The Mossaic tenant objects sign every listing cursor with it inside the Durable Object, so the Drive page and every `/shared` listing answer 503 (stated up front) instead of the 500 the deployed build answered on 2026-09-21 before the secret existed. |
 | `CLOUDFLARE_OAUTH_CLIENT_SECRET` | **prompt** | where `CLOUDFLARE_OAUTH_CLIENT_ID` is a var | Chat falls back to the platform gateway and bills the **platform** account instead of each user's. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | **prompt** | where `GOOGLE_OAUTH_CLIENT_ID` is a var | Google is not on `/login`. Unset on both environments. |
 | `GITHUB_OAUTH_CLIENT_SECRET` | **prompt** | where `GITHUB_OAUTH_CLIENT_ID` is a var | GitHub is not on `/login`. Unset on both environments. |
@@ -175,6 +176,11 @@ openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
 # 404 without waking a workspace. Separate from the root secret because the two
 # rotate on different clocks, this one's URLs live in other people's systems.
 openssl rand -base64 32 | bunx wrangler secret put WEBHOOK_ROUTE_SECRET
+
+# The Drive's signing secret. Mossaic's tenant objects read it off their own
+# env to sign listing cursors; without it every Drive listing fails inside the
+# object. Rotating it invalidates only in-flight cursors (15-minute tokens).
+openssl rand -base64 32 | bunx wrangler secret put JWT_SECRET
 
 # No AI Gateway token. The platform gateway rides the Workers AI binding.
 
