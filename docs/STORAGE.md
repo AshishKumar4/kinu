@@ -157,14 +157,34 @@ erDiagram
         TEXT snapshot "JSON checkpoint"
         INTEGER created_at "Epoch ms"
     }
-    actor_messages {
+    session_messages {
+        TEXT actor_id PK "Actor whose message this is"
+        TEXT message_id PK "Message ID"
+        TEXT role "user/assistant/system/tool"
+        TEXT origin "input/output/edit/context_transform/render"
+        INTEGER sealed_sequence "Last update once sealed"
+        INTEGER recorded_at "Epoch ms"
+    }
+    message_updates {
+        TEXT actor_id PK "Actor"
+        TEXT message_id PK "Message ID"
+        INTEGER sequence PK "Update order within the message"
+        TEXT operation "open/append/metadata/content-end/replace-content"
+        TEXT payload_path "Large payloads live in the file plane"
+    }
+    conversation_entries {
         TEXT actor_id PK "Actor whose conversation this is"
-        TEXT id PK "Message ID"
-        TEXT session_id "Session ('default' chat, 'mcts' search)"
-        TEXT parent_id "Parent message. These edges ARE the session tree"
-        TEXT role "user/assistant/system"
-        TEXT content "Plain text (flattened for FTS and the outcome joins)"
-        INTEGER created_at "Epoch ms"
+        TEXT session_id PK "Session ('default' chat, 'mcts' search)"
+        TEXT id PK "Entry ID"
+        TEXT parent_id "Parent entry. These edges ARE the session tree"
+        TEXT role "user/assistant/system/tool"
+        TEXT context_id "Working context the entry recorded"
+        INTEGER recorded_at "Epoch ms"
+    }
+    conversation_heads {
+        TEXT actor_id PK "Actor"
+        TEXT session_id PK "Session"
+        TEXT entry_id "The entry the next turn chains from"
     }
     conversation_fts {
         TEXT content "Derived FTS5 transcript index"
@@ -215,7 +235,10 @@ erDiagram
 
     memory_chunks ||--|| memory_chunks_fts : "FTS5 external content"
     crafted_tools ||--|| crafted_tools_fts : "FTS5 sync triggers"
-    actor_messages ||--o{ conversation_fts : "local transcript index"
+    session_messages ||--o{ message_updates : "the streamed record"
+    session_messages ||--o{ conversation_entries : "entry parts reference message parts"
+    conversation_entries ||--o| conversation_heads : "one head per session"
+    conversation_entries ||--o{ conversation_fts : "local transcript index"
     crafted_tools ||--o| craft_scores : "tool_name"
     search_nodes ||--o{ search_nodes : "parent_id"
     scaffold_versions ||--o{ task_history : "scaffold_version"
@@ -290,131 +313,49 @@ chunk carries a SHA-256 hash so the next pass skips unchanged chunks. Search
 is FTS5 MATCH with BM25 ranking. `sanitizeFtsQuery` removes operators and stop
 words. It falls back to OR-joined tokens when the AND query returns nothing.
 
-## Think message persistence
-`AgentSessionProvider.ensureTable` (`agents/dist/experimental/memory/session/index.js:747-790`,
-agents 0.22.0) creates on the first session read, which is Think's own boot
-(`@cloudflare/think/dist/think.js:1012-1073`, 0.17.0), before the actor's
-`onStart`:
+## The canonical conversation store
 
-- `assistant_messages`: the durable message tree (`id`, `session_id`,
-  `parent_id`, `role`, `content`, `created_at`)
-- `assistant_compactions`: the SDK's own compaction records
-- `assistant_config`: session-scoped settings
-- `assistant_fts`: the provider's FTS5 index over message content
+Every actor's chat, root and hosted alike, on both backends, lives in one
+relational store under `packages/core/src/session` (`SessionHistory`, built by
+`createAgentStores`). It has two layers:
 
-Kinu does not write these through the SDK. On a hosted workspace
-`assistant_messages` is the pane store, the ONE authority for the default
-chat. Every conversational reader answers from it in raw SQL when it
-exists, and from plain `actor_messages` when it does not
-(`packages/core/src/identity/conversation-store.ts` `hasPaneStore`). The pane
-is the vendor's shape with no owner column. It is the ROOT actor's transcript
-by construction: Think's session belongs to the workspace object and no
-child actor runs Think. `usesPaneStore` is the one place that says whose it
-is. A child's default chat is the plain store. Plain `actor_messages` is the
-local backend's only store, never a projection of the pane (the header of
-that module records why the projection was retired). The
-census in `packages/core/src/conformance/manifest.ts` declares the four
-tables on both cf roots. `ActorAgent.assertSessionStore`
-(`packages/cf-backend/src/actor-agent.ts`) refuses an activation whose Think
-booted without leaving `assistant_messages` behind.
+- The streamed record: `session_messages` is one row per message the model
+  read or produced (`role`, `origin`, `native_content_kind`, the sequence it
+  was sealed at); `message_parts` its parts and their reply edges;
+  `message_updates` the ordered operations that built it (`open`, `append`,
+  `metadata`, `content-end`, `replace-content`), with payloads over a size
+  threshold written to the actor's file plane and referenced by
+  `payload_path` plus digest. A message is durable while it streams, one
+  update at a time, and sealed when its sequence closes.
+- The conversation: `conversation_entries` is the public chain (`id`,
+  `parent_id`, `role`, `turn_id`, `run_id`, `recorded_at`, and the working
+  context the entry recorded), keyed by actor and session (`default` is the
+  chat; `mcts` holds lifetime-search trajectories and is never browsed as
+  chat). `conversation_entry_parts` references the message parts each entry
+  displays, up to a cutoff sequence. `conversation_heads` names the entry the
+  next turn chains from; a walk-back moves it without deleting anything
+  (`SessionHistory.revertTo`), and a fork carries the chain to the cut
+  (`identity/fork.ts`, the `ForkTargetWriter` staging then publishing in one
+  transaction).
 
-### Session replatform migration plan (2026-09-10)
+The working context sits beside the chain: `actor_contexts`,
+`context_revisions`, `context_memberships` and `actor_context_selection`
+record which messages the model reads at each revision, and
+`context_proposals` the edits staged against it; the `/context` mount
+(`vfs/context-plane.ts`) is how an owner or the actor reads and edits them.
 
-originals; the migration cannot be rolled back. Installed today:
-`@cloudflare/think` 0.17.0, `agents` 0.22.0 (`packages/cf-backend/package.json`).
-Nothing below converts to the 0.17.0 `Session` read model with identical
-results, which is why every reader is still raw SQL. That read model
-(`agents/dist/experimental/memory/session/index.d.ts:197-225`) is
-`Promise`-returning where every Kinu reader is synchronous over a
-`SqlExecutor`; it is `session_id`-scoped and knows no actor, where every Kinu
-reader is `actor_id`-scoped; `getHistory(leafId)` returns the root-to-leaf path
-only, parsed to `SessionMessage` (`id`, `role`, `parts`, optional `createdAt`
-from the JSON — no `parent_id`, no row `created_at`, no `rowid`), with
-compaction overlays applied (`index.js:798-806`) and unparsable rows dropped.
-
-What each reader must become, and what is unknown until the release names the
-new tables and their columns (the changeset names neither):
-
-| Reader | Today | Will read | Unknown until release |
-|---|---|---|---|
-| `identity/conversation-store.ts` — `hasPaneStore`, `usesPaneStore`, `forkPointExists`, `ancestryIds` (pane arm), `paneRowById`, `conversationCount`, `conversationPageRows`, `answersForDrainTurns`, `conversationTurnPair`, `normalizeImportedConversation` | `assistant_messages` by `id`, `parent_id`, `rowid`, whole-second `created_at` — no `actor_id`, the vendor declares none and the pane is the root actor's by construction | the `cf_agents_session_*` message table; the ancestry walk and the rowid page cursor must survive the "message larger than one SQLite row is split across continuation rows" model, so a logical message is reassembled from its continuation rows before `content` is flattened | table and column names; whether continuation rows share the parent's id; whether `created_at` stays a whole-second `DATETIME`; whether a `rowid` order still equa… |
-| `memory/conversation-search.ts` — `scroll`, `listConversations`, `refreshIndex`, and the `conversation_rev_pane_*` revision triggers (`AFTER INSERT/UPDATE/DELETE ON assistant_messages`) | same table, grouped by `session_id`; Kinu's own `conversation_fts` is rebuilt from it | the same message table; the three triggers are Kinu DDL ON the vendor table and go away with the `DROP`, so the revision counter must be re-pointed or the index rebuilt on a regime change | whether media leaving the row into the "content-addressed attachment store" changes what `content` holds for a text part |
-| `identity/fork.ts` — the pane WRITE (`requirePaneStore`, the three `INSERT OR IGNORE INTO assistant_messages`) and `carriedText` | writes vendor-shaped rows into the vendor's table — which must already exist, since Kinu never creates it and the write refuses a target without it | rows the SDK's new provider reads back as a conversation — a write that must produce continuation rows and attachment references the provider understands, which raw DDL cannot do before the release documents it | the entire write shape; whether the SDK exposes a bulk import that keeps message ids and parent edges (the fork cut depends on both) |
-| `identity/archive.ts` — `normalizeImportedPaneRows` (export normalization) | reads `assistant_messages` by `rowid` and attributes every row to the workspace's root actor, the directory the restore landed | the message table, with continuation rows reassembled | same as the store row |
-| `evolution/eval-split.ts` — `advisorNegatives` join | joins `assistant_messages` twice on `id` / `parent_id` | the message table, on the same two columns | column names |
-| `cf-backend/src/actor-agent.ts` — `readInheritedContext` | last `INHERITED_CONTEXT_CAP` rows by `created_at DESC`, and a `COUNT(*)` over the whole table — the pane holds the root's transcript only, so no actor column is named | the message table; on the agent itself `this.session.getHistory()` is reachable, but it answers the path, not the actor's rows, and asynchronously — the port contracts that call this reader (`inheritedContext: () => …`, `orchestrator.ts`) are synchronous | whether the release keeps a synchronous in-memory view (`this.messages`) that can stand in for the window |
-| `subordinates/inspection.ts` — the `history` view's existence check | `tableExists(sql, 'assistant_messages')` | the new table name | the name |
-| `utils/ui-message.ts`, `orchestrator/heads-support.ts` | comments naming the table | the same, renamed | nothing |
-
-One fact the migration once threatened, settled since: Kinu's pane queries no
-longer predicate on `actor_id` — the vendor DDL never declared it
-(`agents/dist/experimental/memory/session/index.js:750-757`), the reads
-naming it are what broke every hosted snapshot on 2026-09-11, and the pane is
-now defined as the root actor's transcript with no owner column. The SDK's
-lift copies the columns the SDK wrote, so the `cf_agents_session_*` message
-table will not carry an actor either — which matches, rather than breaks, the
-model the readers now keep: root pane, child plain store.
-
-Two ways the pane branch can move. Land neither until the release publishes
-the `cf_agents_session_*` DDL and the `this.session.history()` signature.
-
-**A. The pane branch reads the new tables in raw SQL.** Every pane arm in the
-table above is re-pointed at the released message table; the fork's pane
-write is re-shaped to whatever rows the new provider reads back. Cost: the
-58 references (`git grep -n -E 'assistant_(messages|compactions|config)' --
-packages/*/src`), all synchronous, no signature moves; plus the continuation
-row reassembly in every reader that returns `content`, plus a fork write that
-fabricates continuation rows and attachment references the SDK documents for
-nobody — the changeset's own words are "Think no longer reads Sessions tables
-with raw SQL. If you queried `assistant_messages` yourself, use
-`this.session.history()` or `getHistory()`". Whose transcript the new table
-holds is already answered on the Kinu side — the pane is the root actor's by
-construction — so the lift changes names and row shapes, not ownership.
-This is the coupling that put the census on watch in the first place, re-made
-against a shape declared private.
-
-**B. `AgentRuntime` gains a session read port.** One interface in
-`packages/core/src/types/agent-runtime.ts` that answers what the readers
-actually ask: the ancestry of a leaf as ids, a message by id, the count, a
-newest-first page with a cursor, the user→assistant pairs, a full dump in
-insertion order — and one write, `append(message, parentId)`, for the fork.
-The cf backend implements it over Think (`getHistory(leafId)`, `getMessage`,
-`appendMessage(message, parentId)` all keep their positional arguments per the
-changeset; one `Session.forSession(actorId)` per hosted actor answers the
-scoping the vendor column never did); the CLI implements it over plain
-`actor_messages`, which is the fall-through arm of every reader today, moved behind
-the port unchanged. Cost: the port is asynchronous, so it propagates through
-the call chains that reach a reader — `read-models/status.ts:159`
-(`conversationPageRows`), `evolution/engine.ts:850`, `eval-split.ts:95` and
-`mcts/takes.ts:424` (`conversationTurnPair`), `identity/fork-transfer.ts:380`
-(`ancestryIds`, the bounded frame stream), `orchestrator.ts:1158`
-(`answersForDrainTurns`), `memory/conversation-search.ts` (`scroll`,
-`listConversations`, `refreshIndex`), `identity/archive.ts`
-(`normalizeImportedPaneRows`), `subordinates/inspection.ts:101` and
-`actor-agent.ts` `readInheritedContext` with its synchronous
-`inheritedContext: () => …` port contracts — about a dozen signatures, each
-mechanical. What the port cannot answer identically is the rowid page cursor
-and the whole-second tie-break (`conversation-store.ts:383-389`): the SDK
-exposes neither, so the page is cut on the path the SDK returns, which is
-also the order the pane renders. The three `conversation_rev_pane_*`
-triggers go with the raw table; the index rebuilds on the port's revision
-instead.
-
-**Recommendation: B.** A's cost is smaller today and it is the same debt
-again, on a table the vendor has now said it will not keep stable; B's cost is
-a bounded set of signature moves that lands the fork write on the SDK's own
-append (no fabricated continuation rows) and turns `actor_id` into
-`forSession(actorId)`, which the SDK supports. B is also the only option whose
-CLI half is provably unchanged: it is today's plain arm behind an interface.
-
-Sequence when the release lands: read the released `agents/sessions` DDL and
-`this.session.history()` signature; decide the actor scoping under B; move
-`hasPaneStore` and the readers in the order of the table, with the existing
-suites (`unit-conversation-store`, `unit-conversation-search`, `unit-fork`,
-`integration-fork-pipeline`, `unit-session-store-guard`) as the equivalence
-proof over seeded rows; replace the four `assistant_*` census rows with the
-released table names; then bump `@cloudflare/think` and `agents` together,
-behind a canary, because a rolled-back object has an empty conversation.
+Readers answer from the entries: the chat pane's page walk
+(`read-models/status.ts` `getChatHistoryPage` over `session/page.ts`),
+`memory/conversation-search.ts`
+(`scroll`, `listConversations`, the FTS index keyed on entry rowid), the
+inherited context a spawned head receives
+(`orchestrator/heads-support.ts`), the evolution joins and the export. The
+Agents SDK's `assistant_messages` is the SDK's own table and is neither
+written nor read by Kinu; the `/get-messages` seed a reconnecting tab receives
+is projected from the canonical entries (`actor-agent.ts`).
+`gate:vendor-schema` (`scripts/vendor-schema.ts`) prepares every Kinu
+statement over any vendor-created table against the installed vendor's DDL,
+so a read of a vendor table is caught at the gate rather than met at runtime.
 
 ## The rest of the schema
 

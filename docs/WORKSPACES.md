@@ -192,8 +192,8 @@ actors that work inside it.
     there, and each hides the other's root writes.
 
   - Subordinates (`agents`, `action: 'hire'`) are durable: a
-    logical actor with its own `actor_id`-scoped history in `actor_messages` and a
-    full turn loop,
+    logical actor with its own `actor_id`-scoped history in the canonical
+    conversation store (`conversation_entries`) and a full turn loop,
     using the canonical workspace files and the parent's sandbox/device
     planes. Locally it opens over its root's stored directory, keeping the
     parent's plane while memory, craft store, and conversation stay its own.

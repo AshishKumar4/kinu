@@ -29,7 +29,7 @@
  *              is healthy, and assert the "new version" reload affordance shows
  *              EXACTLY ONCE.
  *
- * Conventions follow scripts/history-walk-proof.ts: timestamped stages,
+ * Conventions follow scripts/liveness-capture.ts: timestamped stages,
  * env-overridable config, artifacts under scripts/artifacts/ws-reconnect/.
  *
  * Zero product diff: this drives the shipped behaviour with no knobs. Run:
