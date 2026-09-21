@@ -65,7 +65,7 @@ describe('the CF public transcript over canonical references', () => {
       { type: 'tool-call', toolCallId: 'call', toolName: 'file', input: {} },
       { type: 'tool-result', toolCallId: 'call', toolName: 'file', output: { type: 'text', value: 'inspected' } },
       { type: 'step-start' },
-      { type: 'text', text: 'The slate is ready.' },
+      { type: 'text', text: 'The slate is ready.', state: 'done' },
     ]);
 
     const finalText = parts.at(-1);
@@ -98,7 +98,7 @@ describe('the CF public transcript over canonical references', () => {
 
     if (finalText === undefined) throw new Error('fixture has no display text reference');
     t.store.appendAssistant(await t.store.prepareAssistant({ id: 'answer', parentId: 'opening', turnId: 'opening', runId: 'run', parts, finalText }));
-    expect((await t.store.history()).at(-1)?.parts.at(-1)).toEqual({ type: 'text', text: 'The check passed.' });
+    expect((await t.store.history()).at(-1)?.parts.at(-1)).toEqual({ type: 'text', text: 'The check passed.', state: 'done' });
     const selected = t.history.context.selected();
 
     if (selected !== null) expect(t.history.context.entries(selected).some((entry) => entry.messageId === 'display-answer')).toBe(false);

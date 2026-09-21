@@ -234,14 +234,14 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return texts;
   }
 
-  /** The chat's entries, root first, each with its projected text as the content column. */
+  /** The chat's entries, root first, each as the UI message a client reads. */
   private async conversationRows(): Promise<ParityRows['assistantMessages']> {
     const rows: ParityRows['assistantMessages'] = [];
 
     for (const entry of this.chatTranscript.ancestry()) {
-      const projected = await this.chatTranscript.project(entry.id);
+      const message = await this.chatTranscript.message(entry.id);
 
-      if (projected !== null) rows.push({ id: entry.id, parentId: entry.parentId, role: entry.role, content: JSON.stringify({ text: projected.content, toolCalls: projected.toolCalls }) });
+      if (message !== null) rows.push({ id: entry.id, parentId: entry.parentId, role: entry.role, content: JSON.stringify(message) });
     }
 
     return rows;

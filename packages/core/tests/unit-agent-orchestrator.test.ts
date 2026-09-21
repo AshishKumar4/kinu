@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { createTestActors, createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
-import { RUN_END_REASONS } from '../src/orchestrator/turn-lifecycle';
+import { RUN_END_REASONS, creditedTurnId } from '../src/orchestrator/turn-lifecycle';
 import { declareTerminalRoster } from '../src/orchestrator/terminal-roster';
 import { MissionGovernor } from '../src/mission-budget';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
@@ -420,6 +420,20 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
     expect(at('turn_record')).toBeGreaterThan(at('turn_end_extensions'));
     expect(at('event_drain')).toBeGreaterThan(at('turn_record'));
     expect(at('improvement_lanes')).toBeGreaterThan(at('event_drain'));
+  });
+
+  test('a turn cut before its first token owes no effect keyed on an answer row', () => {
+    // The row is never written, so its id is empty (the roster's contract);
+    // an announcement, a credit or a reply over it would read back nothing.
+    const owed = declareTerminalRoster({
+      messageId: '', status: 'aborted', workMode: 'build',
+      continuity: 'conversation', completed: false, userText: 'q', assistantText: '',
+      scopedTurn: {}, recordedAt: 1, evolutionEnabled: true,
+    }, { turnEndExtensions: true, eventReplies: { answered: new Set(['d1']), requestId: 'req-1' } });
+
+    expect(owed.map((effect) => effect.name)).not.toContain('turn_end_extensions');
+    expect(owed.map((effect) => effect.name)).not.toContain('event_reply');
+    expect(creditedTurnId({ messageId: '', completed: true, workMode: 'build' })).toBeNull();
   });
 
   test('the drain the settled turn owes injects one turn for the pending backlog', async () => {

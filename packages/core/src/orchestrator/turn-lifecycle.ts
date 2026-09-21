@@ -483,7 +483,7 @@ export interface SettledTurn {
  * captures to have competed against.
  */
 export function creditedTurnId(turn: SettledTurn): string | null {
-  if (!turn.completed || turn.workMode === 'plan') return null;
+  if (!turn.completed || turn.workMode === 'plan' || turn.messageId === '') return null;
 
   return turn.messageId;
 }

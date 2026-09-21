@@ -1625,6 +1625,11 @@ export class ChatSession {
           asyncWakePending: this.ports.hasPendingAsyncWake(),
         });
 
+      // The roster keys every effect on the answer row; a turn cut before its
+      // first token writes none, and the roster's contract for that is an
+      // empty id, not an identity no effect could ever read back.
+      const answerId = input.preparedAssistant === null ? '' : messageId;
+
       const owed = this.ports.owedTerminalEffects({
         turn,
         status,
@@ -1633,9 +1638,9 @@ export class ChatSession {
         // core (orchestrator/turn-lifecycle.ts `creditedTurnId`) rather than once
         // here and again in the cf backend's onChatResponse.
         credited: creditedTurnId({
-          messageId, completed: runError === null, workMode: this.actorSession.workMode,
+          messageId: answerId, completed: runError === null, workMode: this.actorSession.workMode,
         }),
-        messageId,
+        messageId: answerId,
         userText: item.text,
         assistantText: input.assistantText,
         completed: runError === null,

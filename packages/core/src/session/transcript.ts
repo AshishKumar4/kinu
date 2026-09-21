@@ -338,6 +338,10 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
           const { providerOptions, ...value } = part;
 
           if (providerOptions !== undefined) value.providerMetadata = providerOptions;
+
+          // A recorded answer is finished: its streamed text and reasoning read back as done, not mid-stream.
+          if (entry.role === 'assistant' && (value.type === 'text' || value.type === 'reasoning')) value.state = 'done';
+
           projected.push(value);
         }
       }

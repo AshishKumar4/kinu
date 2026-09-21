@@ -233,8 +233,9 @@ export function declareTerminalRoster(
   }
 
   // The settle spine, as FOUR separately claimed boundaries. Each records the
-  // whole input it needs, because each is genuinely replayed.
-  if (parts.turnEndExtensions) {
+  // whole input it needs, because each is genuinely replayed. The extension
+  // announcement's subject is the answer row, so a turn with none owes none.
+  if (parts.turnEndExtensions && messageId !== '') {
     owed.push({
       name: 'turn_end_extensions', scope: messageId, lane: 'inline',
       input: { messageId },

@@ -26,6 +26,13 @@
  * so the `model_call` its compute used to record inside the NEXT run's event
  * space is gone and `<run#7>`'s `step_finish` and `run_end` sit one index
  * earlier. No row, frame or landing changed.
+ * Re-recorded 2026-09-21 for three changes that mean to change it: the turn
+ * resumed after eviction (FOUR-TOOL) keeps its pre-eviction tool step in its
+ * row, since the row is now projected from the one canonical transcript
+ * instead of the resumed run's memory; recorded assistant text carries
+ * `state: 'done'`, as a finished answer does; and the `start` frame precedes
+ * the landed `steer_status`, since delivery is sequential and the steer lands
+ * at step 1 of an already-open turn. No other line differs.
  */
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
