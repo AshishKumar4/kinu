@@ -65,7 +65,7 @@ describe('the CF public transcript over canonical references', () => {
       { type: 'tool-call', toolCallId: 'call', toolName: 'file', input: {} },
       { type: 'tool-result', toolCallId: 'call', toolName: 'file', output: { type: 'text', value: 'inspected' } },
       { type: 'step-start' },
-      { type: 'text', text: 'The slate is ready.', state: 'done' },
+      { type: 'text', text: 'The slate is ready.' },
     ]);
 
     const finalText = parts.at(-1);
@@ -79,7 +79,7 @@ describe('the CF public transcript over canonical references', () => {
       { type: 'step-start' },
       { type: 'tool-file', toolCallId: 'call', state: 'output-available', input: {}, output: 'inspected' },
       { type: 'step-start' },
-      { type: 'text', text: 'The slate is ready.' },
+      { type: 'text', text: 'The slate is ready.', state: 'done' },
     ]);
     expect(t.store.read('answer')?.parts.at(-1)).toEqual(finalText);
   });
