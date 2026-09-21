@@ -1,7 +1,11 @@
 import * as v from 'valibot';
 import type { VFS, VfsEntryStat, VfsRevision } from '../types/primitives';
 import type { ContextEventRecorder } from '../types/context-plane';
-import type { ActorClaimStore } from '../orchestrator/actor-claims';
+import type { ActorClaimStore, StoredActorClaim } from '../orchestrator/actor-claims';
+import type { SessionHistory } from '../session/history';
+import type { SessionMessages } from '../session/messages';
+import type { PendingContextProposal } from '../session/proposals';
+import type { StagedContextDeferral } from '../types/context-plane';
 import type { ContextEntry, ContextSelection } from '../session/context';
 import type { PreparedMessage } from '../session/messages';
 import type { ContextChange } from '../session/proposals';
@@ -62,6 +66,150 @@ interface WorkingView {
 
 interface Document { readonly owner: ActorClaimStore; readonly writable: boolean; readonly version: string; readonly modified: number; readonly chunks: () => AsyncGenerator<string> }
 
+type PairingView = v.InferOutput<typeof PairingView>;
+
+interface StagedView { readonly entries: readonly ContextEntry[]; readonly blocked: StagedContextDeferral | undefined; readonly staged: boolean }
+
+interface DesiredEntry { readonly entryId: string; readonly messageId: string; sequence: number | null; readonly message: JsonObject; readonly prepare: boolean }
+
+/** What the working file shows over the selected revision: the pending proposal's preview when one is staged, the revision
+ *  itself otherwise. A preview the history has rewritten from under its proposal is shown as the revision, blocked and not staged. */
+function stagedEntries(history: SessionHistory, selection: ContextSelection | null, pending: PendingContextProposal | undefined): StagedView {
+  let entries = selection === null ? [] : history.context.entries(selection);
+  let blocked = pending?.deferred_reason ?? undefined;
+  let staged = pending !== undefined;
+
+  if (pending !== undefined) {
+    try { entries = [...history.proposals.preview(pending.proposal_id)]; }
+    catch (cause) {
+      if (!(cause instanceof KinuError) || cause.code !== 'denied') throw cause;
+      blocked = 'history_rewritten';
+      staged = false;
+    }
+  }
+
+  return { entries, blocked, staged };
+}
+
+/** The working file's revision token: everything a later write must find unchanged, in the order contextRevision reads it back. */
+const workingVersion = (actorId: string, selection: ContextSelection | null, pending: PendingContextProposal | undefined, blocked: StagedContextDeferral | undefined, claim: StoredActorClaim | null): string =>
+  token([actorId, selection?.contextId ?? null, selection?.revision ?? 0, pending?.proposal_id ?? null,
+    blocked ?? null, claim?.turnId ?? null, claim?.epoch ?? null, claim?.status ?? null]);
+
+/** The tool-pairing view of a message, or undefined when it carries no tool parts: only structured assistant and tool content can pair. */
+const pairingView = (message: JsonObject): PairingView | undefined =>
+  (message.role === 'assistant' || message.role === 'tool') && !v.is(v.string(), message.content) ? v.parse(PairingView, message) : undefined;
+
+/** The body lines of a working.jsonl write, admitted only when its $context header is the observed one: the same actor, version, selection and pending edit. */
+function workingLines(data: string | Uint8Array, observed: WorkingView, actorId: string): readonly string[] {
+  const text = v.is(v.string(), data) ? data : new TextDecoder('utf-8', { fatal: true }).decode(data);
+  const lines = text.split('\n').filter(line => line.trim() !== '');
+  const firstLine = lines[0];
+
+  if (firstLine === undefined) throw new KinuError('bad_input', 'working.jsonl requires its observed $context header');
+  const header = v.parse(v.object({ $context: HeaderSchema }), JSON.parse(firstLine)).$context;
+
+  if (header.actor !== actorId) throw new KinuError('denied', 'the context header names another actor');
+
+  if (header.version !== observed.header.version || header.contextId !== observed.header.contextId || header.revision !== observed.header.revision || header.proposalId !== observed.header.proposalId) throw new FileRefusalError('stale', 'context changed; read working.jsonl again before editing');
+
+  return lines.slice(1);
+}
+
+/** The entries a write asks for, matched line by line against the observed ones. A new line gets a fresh identity; an existing line keeps
+ *  its entry and cutoff and keeps its message unless the content differs, in which case the message is re-prepared under a new id.
+ *  `originals` holds the projection read for every existing line, so the pairing check does not read it twice. */
+async function desiredEntries(lines: readonly string[], observed: readonly ContextEntry[], messages: SessionMessages): Promise<{ desired: DesiredEntry[]; originals: Map<string, JsonObject> }> {
+  const entries = lines.map(line => v.parse(EntrySchema, JSON.parse(line)));
+  const visible = new Map(observed.map(entry => [entry.entryId, entry]));
+  const desired: DesiredEntry[] = [];
+  const originals = new Map<string, JsonObject>();
+
+  for (const entry of entries) {
+    if ('new' in entry) {
+      const id = crypto.randomUUID();
+      desired.push({ entryId: id, messageId: id, sequence: null, message: entry.message, prepare: true });
+      continue;
+    }
+
+    if (originals.has(entry.entryId)) throw new KinuError('bad_input', 'a working entry appears more than once');
+    const previous = visible.get(entry.entryId);
+
+    if (previous === undefined || previous.messageId !== entry.messageId || previous.sequence !== entry.cutoff) throw new FileRefusalError('stale', 'entry identity or cutoff differs from the observed context');
+    const original = await messages.projection(previous);
+    originals.set(entry.entryId, original);
+    const changed = JSON.stringify(original) !== JSON.stringify(entry.message);
+    desired.push({ entryId: entry.entryId, messageId: changed ? crypto.randomUUID() : entry.messageId, sequence: entry.cutoff, message: entry.message, prepare: changed });
+  }
+
+  return { desired, originals };
+}
+
+/** Prepares every changed or new message in order, resolving each tool result against the tool call that precedes it in the
+ *  desired sequence; a kept message contributes its calls from storage. A prepared entry's cutoff is its last update. */
+async function prepareDesired(desired: readonly DesiredEntry[], messages: SessionMessages): Promise<PreparedMessage[]> {
+  const calls = new Map<string, { messageId: string; part: number }>();
+  const prepared: PreparedMessage[] = [];
+
+  for (const entry of desired) {
+    if (entry.message.role === 'assistant' && !v.is(v.string(), entry.message.content)) {
+      let parts: readonly { partNo: number; value: JsonObject }[];
+
+      if (entry.prepare) parts = v.parse(v.array(JsonObjectSchema), entry.message.content).map((value, partNo) => ({ partNo, value }));
+      else {
+        if (entry.sequence === null) throw new KinuError('io', 'existing context message has no cutoff');
+        parts = await messages.materializeParts({ messageId: entry.messageId, sequence: entry.sequence });
+      }
+
+      for (const part of parts) if (part.value.type === 'tool-call') calls.set(v.parse(v.string(), part.value.toolCallId), { messageId: entry.messageId, part: part.partNo });
+    }
+
+    if (entry.prepare) {
+      const message = await messages.prepareProjection(entry.message, entry.messageId, calls);
+      prepared.push(message);
+      entry.sequence = message.updates.length - 1;
+    }
+  }
+
+  return prepared;
+}
+
+/** Refuses an edit that leaves a tool call or result unpaired which was paired in the observed context. */
+async function assertPairsIntact(observed: readonly ContextEntry[], originals: ReadonlyMap<string, JsonObject>, desired: readonly DesiredEntry[], messages: SessionMessages): Promise<void> {
+  const beforeViews: PairingView[] = [];
+
+  for (const entry of observed) {
+    const view = pairingView(originals.get(entry.entryId) ?? await messages.projection(entry));
+
+    if (view !== undefined) beforeViews.push(view);
+  }
+
+  const afterViews = desired.map(entry => pairingView(entry.message)).filter(view => view !== undefined);
+  const beforePairs = toolPairingGaps(beforeViews);
+  const afterPairs = toolPairingGaps(afterViews);
+
+  if ([...afterPairs.calls].some(id => !beforePairs.calls.has(id)) || [...afterPairs.results].some(id => !beforePairs.results.has(id))) throw new KinuError('bad_input', 'context edit severs a tool call/result pair');
+}
+
+/** The change list from the base revision to the desired entries: every base entry the write dropped, then every desired entry whose
+ *  identity, cutoff or position differs from the base. Every desired entry has been prepared by now, or the write is broken. */
+function changesAgainst(base: readonly ContextEntry[], desired: readonly DesiredEntry[]): ContextChange[] {
+  const baseById = new Map(base.map(entry => [entry.entryId, entry]));
+  const wantedIds = new Set(desired.map(entry => entry.entryId));
+  const changes: ContextChange[] = base.filter(entry => !wantedIds.has(entry.entryId)).map(entry => ({ entryId: entry.entryId, expected: entry, replacement: null }));
+
+  for (const [position, entry] of desired.entries()) {
+    const previous = baseById.get(entry.entryId);
+
+    if (entry.sequence === null) throw new KinuError('io', 'context message was not prepared');
+
+    if (previous !== undefined && previous.messageId === entry.messageId && previous.sequence === entry.sequence && previous.position === position) continue;
+    changes.push({ entryId: entry.entryId, expected: previous ?? null, replacement: { messageId: entry.messageId, sequence: entry.sequence, position } });
+  }
+
+  return changes;
+}
+
 function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readRange'> {
   /** The actor and segments a path addresses, or null when it addresses nothing. */
   const target = (path: string): Target | null => {
@@ -94,25 +242,10 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     const history = resolved.stores.claims.history;
     const selection = history.context.selected();
     const pending = selection === null ? undefined : history.proposals.pending(selection.contextId).at(-1);
-    let entries = selection === null ? [] : history.context.entries(selection);
-    let blocked = pending?.deferred_reason ?? undefined;
-    let staged = pending !== undefined;
-
-    if (pending !== undefined) {
-      try { entries = [...history.proposals.preview(pending.proposal_id)]; }
-      catch (cause) {
-        if (!(cause instanceof KinuError) || cause.code !== 'denied') throw cause;
-        blocked = 'history_rewritten';
-        staged = false;
-      }
-    }
-
+    const { entries, blocked, staged } = stagedEntries(history, selection, pending);
     const claim = resolved.stores.claims.latestTurn();
     const revision = selection?.revision ?? 0;
-
-    const version = token([resolved.stores.claims.actorId, selection?.contextId ?? null, revision, pending?.proposal_id ?? null,
-      blocked ?? null, claim?.turnId ?? null, claim?.epoch ?? null, claim?.status ?? null]);
-
+    const version = workingVersion(resolved.stores.claims.actorId, selection, pending, blocked, claim);
     const head = selection === null ? undefined : history.context.revisions(selection.contextId).find(row => row.revision === revision);
 
     const header: ContextFileHeader = {
@@ -317,81 +450,11 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     };
 
     assertBase();
-    const text = v.is(v.string(), data) ? data : new TextDecoder('utf-8', { fatal: true }).decode(data);
-    const lines = text.split('\n').filter(line => line.trim() !== '');
-    const firstLine = lines[0];
-
-    if (firstLine === undefined) throw new KinuError('bad_input', 'working.jsonl requires its observed $context header');
-    const header = v.parse(v.object({ $context: HeaderSchema }), JSON.parse(firstLine)).$context;
-
-    if (header.actor !== resolved.stores.claims.actorId) throw new KinuError('denied', 'the context header names another actor');
-
-    if (header.version !== observed.header.version || header.contextId !== observed.header.contextId || header.revision !== observed.header.revision || header.proposalId !== observed.header.proposalId) throw new FileRefusalError('stale', 'context changed; read working.jsonl again before editing');
-    const entries = lines.slice(1).map(line => v.parse(EntrySchema, JSON.parse(line)));
-    const visible = new Map(observed.entries.map(entry => [entry.entryId, entry]));
-    const desired: Array<{ entryId: string; messageId: string; sequence: number | null; message: JsonObject; prepare: boolean }> = [];
-    const seen = new Set<string>();
-    const beforeViews = new Map<string, v.InferOutput<typeof PairingView>>();
-
-    for (const entry of entries) {
-      if ('new' in entry) {
-        const id = crypto.randomUUID();
-        desired.push({ entryId: id, messageId: id, sequence: null, message: entry.message, prepare: true });
-        continue;
-      }
-
-      if (seen.has(entry.entryId)) throw new KinuError('bad_input', 'a working entry appears more than once');
-      seen.add(entry.entryId);
-      const previous = visible.get(entry.entryId);
-
-      if (previous === undefined || previous.messageId !== entry.messageId || previous.sequence !== entry.cutoff) throw new FileRefusalError('stale', 'entry identity or cutoff differs from the observed context');
-      const original = await resolved.stores.claims.history.messages.projection(previous);
-
-      if ((original.role === 'assistant' || original.role === 'tool') && !v.is(v.string(), original.content)) beforeViews.set(entry.entryId, v.parse(PairingView, original));
-      const changed = JSON.stringify(original) !== JSON.stringify(entry.message);
-      desired.push({ entryId: entry.entryId, messageId: changed ? crypto.randomUUID() : entry.messageId, sequence: entry.cutoff, message: entry.message, prepare: changed });
-    }
-
-    const calls = new Map<string, { messageId: string; part: number }>();
-    const prepared: PreparedMessage[] = [];
-
-    for (const entry of desired) {
-      if (entry.message.role === 'assistant' && !v.is(v.string(), entry.message.content)) {
-        let parts: readonly { partNo: number; value: JsonObject }[];
-
-        if (entry.prepare) parts = v.parse(v.array(JsonObjectSchema), entry.message.content).map((value, partNo) => ({ partNo, value }));
-        else {
-          if (entry.sequence === null) throw new KinuError('io', 'existing context message has no cutoff');
-          parts = await resolved.stores.claims.history.messages.materializeParts({ messageId: entry.messageId, sequence: entry.sequence });
-        }
-
-        for (const part of parts) if (part.value.type === 'tool-call') calls.set(v.parse(v.string(), part.value.toolCallId), { messageId: entry.messageId, part: part.partNo });
-      }
-
-      if (entry.prepare) {
-        const message = await resolved.stores.claims.history.messages.prepareProjection(entry.message, entry.messageId, calls);
-        prepared.push(message);
-        entry.sequence = message.updates.length - 1;
-      }
-    }
-
-    for (const entry of observed.entries) if (!seen.has(entry.entryId)) {
-      const original = await resolved.stores.claims.history.messages.projection(entry);
-
-      if ((original.role === 'assistant' || original.role === 'tool') && !v.is(v.string(), original.content)) beforeViews.set(entry.entryId, v.parse(PairingView, original));
-    }
-
-    const afterViews = desired.filter(entry => (entry.message.role === 'assistant' || entry.message.role === 'tool') && !v.is(v.string(), entry.message.content)).map(entry => v.parse(PairingView, entry.message));
-
-    const beforePairs = toolPairingGaps(observed.entries.flatMap(entry => {
-      const view = beforeViews.get(entry.entryId);
-
-      return view === undefined ? [] : [view];
-    }));
-
-    const afterPairs = toolPairingGaps(afterViews);
-
-    if ([...afterPairs.calls].some(id => !beforePairs.calls.has(id)) || [...afterPairs.results].some(id => !beforePairs.results.has(id))) throw new KinuError('bad_input', 'context edit severs a tool call/result pair');
+    const messages = resolved.stores.claims.history.messages;
+    const lines = workingLines(data, observed, resolved.stores.claims.actorId);
+    const { desired, originals } = await desiredEntries(lines, observed.entries, messages);
+    const prepared = await prepareDesired(desired, messages);
+    await assertPairsIntact(observed.entries, originals, desired, messages);
     const history = resolved.stores.claims.history;
 
     const assertOwner = () => {
@@ -404,19 +467,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     assertOwner();
     const selection = observed.selection;
     const base = selection === null ? [] : history.context.entries(selection);
-    const baseById = new Map(base.map(entry => [entry.entryId, entry]));
-    const wantedIds = new Set(desired.map(entry => entry.entryId));
-    const changes: ContextChange[] = base.filter(entry => !wantedIds.has(entry.entryId)).map(entry => ({ entryId: entry.entryId, expected: entry, replacement: null }));
-
-    for (const [position, entry] of desired.entries()) {
-      const previous = baseById.get(entry.entryId);
-
-      if (entry.sequence === null) throw new KinuError('io', 'context message was not prepared');
-
-      if (previous !== undefined && previous.messageId === entry.messageId && previous.sequence === entry.sequence && previous.position === position) continue;
-      changes.push({ entryId: entry.entryId, expected: previous ?? null, replacement: { messageId: entry.messageId, sequence: entry.sequence, position } });
-    }
-
+    const changes = changesAgainst(base, desired);
     const proposalId = crypto.randomUUID();
     history.stagePrepared({ id: proposalId, base: selection, expectedPending: observed.header.proposalId, author: resolved.author,
       via: resolved.child ? 'owner' : 'file', cause: 'edit', turnId: observed.header.turn, changes }, prepared, assertOwner, resolved.stores.events);
