@@ -26,7 +26,7 @@ import { admissionBytes } from '../llm';
 import { headEnd, tailStart } from '../utils/text';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
 import { assertJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
-import { diagnostics, renderThrownChain } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
 import { successfulToolOutcome } from './outcome';
 
 /** Workspace VFS directory full outputs are offloaded to. */
@@ -58,35 +58,38 @@ export interface ClampToolResultOptions {
   producer?: BulkProducer;
 }
 
-/** Save the full text where the marker can promise it. Returns the path the
- *  bytes actually landed at, or null — a promise is only made after the write
- *  resolves, and a failed offload stays visible rather than silently becoming
- *  a path that reads back empty. */
-async function offload(vfs: VFS, text: string): Promise<string | null> {
+/** Where the full text landed, or why it did not. A failed offload is a
+ *  classified value the marker reads, never a path that reads back empty. */
+type Offload = { readonly path: string } | { readonly failure: KinuError };
+
+/** Save the full text where the marker can promise it — a promise is only
+ *  made after the write resolves. */
+async function offload(vfs: VFS, text: string): Promise<Offload> {
   const path = `${TOOL_OUTPUT_DIR}/${nanoid(10)}.log`;
 
   try {
     await vfs.mkdir(TOOL_OUTPUT_DIR, { recursive: true });
     await vfs.writeFile(path, text);
-  } catch (error) {
-    diagnostics.event('clamp.offload_failed', { error: renderThrownChain({ cause: error }) });
+  } catch (cause) {
+    const failure = toKinuError({ doing: 'saving the full tool result to the workspace', cause, otherwise: 'io' });
+    diagnostics.failure('clamp.offload_failed', failure);
 
-    return null;
+    return { failure };
   }
 
   // The path as written, not rooted: relative paths resolve at the workspace
   // root for every surface that reads them, and a leading slash would name the
   // filesystem's real root instead.
-  return path;
+  return { path };
 }
 
 /** What a clamped result says about itself. Short on purpose — it is charged
  *  against the same cap as the output it replaces, and the only thing it has
  *  to carry is where the rest is. */
-function truncationMarker(savedPath: string | null): string {
-  return savedPath === null
+function truncationMarker(saved: Offload | null): string {
+  return saved === null || 'failure' in saved
     ? '[truncated; the full result was not saved — rerun with a filter (grep/head/tail)]'
-    : `[truncated; use ranged reads to read the full result at ${savedPath}]`;
+    : `[truncated; use ranged reads to read the full result at ${saved.path}]`;
 }
 
 /** Clamp one oversize tool result, offloading the full text to the VFS. */
@@ -103,8 +106,8 @@ export async function clampToolResult(
   // The marker promises a path only once the bytes are at it, and its own
   // length is known before the head and tail are cut, because they are what
   // it leaves behind.
-  const savedPath = opts.vfs ? await offload(opts.vfs, text) : null;
-  const marker = truncationMarker(savedPath);
+  const saved = opts.vfs ? await offload(opts.vfs, text) : null;
+  const marker = truncationMarker(saved);
   const room = DEFAULT_TOOL_RESULT_MAX_CHARS - marker.length - MARKER_FENCE_CHARS;
   const headLen = Math.floor(room * HEAD_FRACTION);
   const head = text.slice(0, headEnd(text, headLen));
@@ -119,7 +122,7 @@ export async function clampToolResult(
     opts.budget.recordSpill({
       producer: opts.producer ?? 'eval',
       omitted,
-      referenced: savedPath !== null,
+      referenced: saved !== null && 'path' in saved,
     });
   }
 
