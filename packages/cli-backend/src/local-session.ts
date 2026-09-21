@@ -73,7 +73,7 @@ import { TierIdSchema,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   skillsVfsOver, resolveTurnSkills, steerSkillsBlock, filterToolSetBySkills, renderFactsForTurn,
-  inheritedContextFromHistory,
+  inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   // The terminal transition — core owns the vocabulary, the roster, the state
@@ -1554,9 +1554,9 @@ export class LocalAgentSession implements BackendHost {
     this.ensureModelState();
     const id = newBranchId();
 
-    const handle = startBranchHead(this._headRuntime, this.headJournal, {
-      id, task, inheritedContext: this.readInheritedContext(),
-    });
+    const handle = this.readInheritedContext().then((inheritedContext) => startBranchHead(this._headRuntime, this.headJournal, {
+      id, task, inheritedContext,
+    }));
 
     this.pendingBranches.push({ id, task, handle });
     this.broadcast({ type: 'branch_status', status: 'running', branchId: id, task } satisfies BranchStatusEvent);
@@ -3872,8 +3872,8 @@ export class LocalAgentSession implements BackendHost {
 
   /** The recent conversation handed to each spawned head as inherited context
    *  (core heads-support; capped to bound the head's LLM context). */
-  private readInheritedContext(): SerializedMessage[] {
-    return inheritedContextFromHistory(this.actorSession.history);
+  private readInheritedContext(): Promise<SerializedMessage[]> {
+    return inheritedContextFromTranscript(this.stores.history.transcript(CHAT_SESSION_ID));
   }
 
   /** The shared background wrap (core background-tools) — the SAME wrapper

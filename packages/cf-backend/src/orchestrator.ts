@@ -3577,8 +3577,8 @@ export class OrchestratorAgent extends ActorAgent {
     // turn completes), so it can't be read at turn time.
     //
     // KEYED (actor_id, message_id), never message_id alone. A message id is
-    // minted PER ACTOR — `actor_messages` is `PRIMARY KEY (actor_id, id)` for exactly
-    // this reason — so ids are not unique across the actors sharing this one
+    // minted PER ACTOR — the transcript is keyed `(actor_id, session_id, id)`
+    // for exactly this reason — so ids are not unique across the actors sharing this one
     // database. Under a bare `message_id` primary key two actors' turns that
     // collide do not error, they silently OVERWRITE each other's thumbs, and
     // the graded-outcome read behind them grades one actor's turn with a

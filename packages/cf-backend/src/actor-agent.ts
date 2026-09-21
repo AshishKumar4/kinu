@@ -5161,10 +5161,9 @@ export abstract class ActorAgent extends Agent<Env> {
    * refuses an actor this workspace never registered or has retired, and the
    * two further checks are the ones `resolveHostedActorRoute` makes of the
    * socket serving the same chat — a child of THIS actor, of the one kind
-   * whose pane has a conversation. The page itself then comes off the rows
-   * that actor's own chat wire serves (`actor_messages` under
-   * `CHAT_SESSION_ID`, through the canonical read model), not a reader of this
-   * RPC's own.
+   * whose pane has a conversation. The page itself then comes off the
+   * transcript that actor's own chat wire serves (`CHAT_SESSION_ID`, through
+   * the canonical read model), not a reader of this RPC's own.
    */
   private hostedChatActor(actorId: string): ActorHandle {
     const directory = this.actorDirectoryStore();

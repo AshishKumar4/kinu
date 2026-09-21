@@ -53,9 +53,9 @@
  * exiting with no "hung" exceptions is the same fact from the runtime side.
  *
  * WHY THIS FILE EXISTS. Two shipped defects are observable only over a real
- * OrchestratorAgent running two turns end to end with the real Think session
- * store: the pane-COUNT read of `assistant_messages` naming a column the SDK
- * never creates (2026-09-08), and the second turn's model request dropping
+ * OrchestratorAgent running two turns end to end over the real canonical
+ * store: a transcript count that named a column the store never created
+ * (2026-09-08), and the second turn's model request dropping
  * the message that started it (2026-09-08). Every bun suite seeds history
  * itself; the earlier workerd claim that a full turn cannot be hosted here is
  * stale — CompiledWasm modules and `workerLoaders` are wired for the sibling
@@ -216,10 +216,35 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
           return runs;
         }, []),
-      assistantTexts: sql.exec("SELECT content FROM assistant_messages WHERE role = 'assistant' ORDER BY rowid").toArray()
-        .map((row) => v.parse(v.object({ parts: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })) }), JSON.parse(String(row.content))).parts
-          .flatMap((part) => part.type === 'text' ? [part.text ?? ''] : []).join('')),
+      assistantTexts: await this.assistantTexts(),
     });
+  }
+
+  /** The chat's assistant answers as a reader projects them, root first. */
+  private async assistantTexts(): Promise<string[]> {
+    const texts: string[] = [];
+
+    for (const entry of this.chatTranscript.ancestry()) {
+      if (entry.role !== 'assistant') continue;
+      const projected = await this.chatTranscript.project(entry.id);
+
+      if (projected !== null) texts.push(projected.content);
+    }
+
+    return texts;
+  }
+
+  /** The chat's entries, root first, each with its projected text as the content column. */
+  private async conversationRows(): Promise<ParityRows['assistantMessages']> {
+    const rows: ParityRows['assistantMessages'] = [];
+
+    for (const entry of this.chatTranscript.ancestry()) {
+      const projected = await this.chatTranscript.project(entry.id);
+
+      if (projected !== null) rows.push({ id: entry.id, parentId: entry.parentId, role: entry.role, content: JSON.stringify({ text: projected.content, toolCalls: projected.toolCalls }) });
+    }
+
+    return rows;
   }
 
   /** The durable reservations a mid-turn send leaves: each accepted message's
@@ -296,8 +321,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const sql = this.actorState.storage.sql;
 
     return v.parse(ParityRowsSchema, {
-      assistantMessages: sql.exec('SELECT id, parent_id, role, content FROM assistant_messages ORDER BY rowid').toArray()
-        .map((row) => ({ id: String(row.id), parentId: row.parent_id === null ? null : String(row.parent_id), role: String(row.role), content: String(row.content) })),
+      assistantMessages: await this.conversationRows(),
       pendingSteers: await this.pendingSteers(),
       pendingSteerFiles: await this.pendingSteerFileRows(),
       agentLog: sql.exec('SELECT id, kind, turn_id, variant, consumed_at, payload FROM agent_log ORDER BY rowid').toArray()

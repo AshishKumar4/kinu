@@ -75,8 +75,8 @@ export function inheritedContextFromRows(rows: readonly InheritedContextRow[], t
   ];
 }
 
-/** The recent live conversation as inherited context (the CLI's source; the
- *  cf backend digests its durable assistant_messages rows instead). */
+/** A live conversation as inherited context: the frozen origin a hire is
+ *  born with. The root's own inheritance reads the transcript instead. */
 export function inheritedContextFromHistory(
   history: readonly ModelMessage[],
   cap: number = INHERITED_CONTEXT_CAP,
