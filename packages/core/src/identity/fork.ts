@@ -1202,6 +1202,20 @@ export class ForkTargetWriter {
     const forkPointMs = head.cut.createdAtMs;
     const actorId = this.actorId;
 
+    // Every plan's carried chain ends in the cut entry, so a target that does
+    // not hold it received an incomplete transfer; publishing anyway would
+    // root the marker on nothing and leave the lineage naming an entry the
+    // fork cannot read. Asked before the first write, so a refusal leaves the
+    // target exactly as staged.
+    const cut = this.target<{ id: string }>`
+      SELECT id FROM conversation_entries
+      WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${head.cut.messageId}
+    `[0]?.id;
+
+    if (cut === undefined) {
+      throw new KinuError('missing', `fork publication has no cut entry ${JSON.stringify(head.cut.messageId)} in the transferred chain`);
+    }
+
     // 1. Identity: new id, new name, fresh created_at. The owner carries through
     //    so the row and the file namespace cannot diverge.
     void this.target`DELETE FROM workspace_identity`;
@@ -1243,20 +1257,12 @@ export class ForkTargetWriter {
     //    recorded no context starts from an empty one rather than from none.
     const contextId = this.forkContext(actorId);
 
-    const cut = this.target<{ id: string }>`
-      SELECT id FROM conversation_entries
+    // The cut entry names the fork's context, so a fork taken AT this
+    // boundary later restores the same membership rather than walking past it.
+    void this.target`
+      UPDATE conversation_entries SET context_id = ${contextId}, context_revision = ${FORK_CONTEXT_REVISION}
       WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${head.cut.messageId}
-    `[0]?.id ?? null;
-
-    if (cut !== null) {
-      // The cut entry names the fork's context, so a fork taken AT this
-      // boundary later restores the same membership rather than walking past it.
-      void this.target`
-        UPDATE conversation_entries SET context_id = ${contextId}, context_revision = ${FORK_CONTEXT_REVISION}
-        WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${head.cut.messageId}
-      `;
-
-    }
+    `;
 
     // 6. The fork marker: one system-role entry parented on the cut point, so
     //    the chat shows a visible boundary between inherited history and the
@@ -1293,7 +1299,7 @@ export class ForkTargetWriter {
    * here needs the filesystem.
    */
   private writeForkMarker(
-    actorId: string, markerId: string, parentId: string | null, text: string, recordedAt: number,
+    actorId: string, markerId: string, parentId: string, text: string, recordedAt: number,
   ): void {
     void this.target`
       INSERT INTO session_messages

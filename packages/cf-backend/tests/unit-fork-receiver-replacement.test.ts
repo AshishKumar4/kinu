@@ -35,9 +35,17 @@ function begin(transferId: string): ForkFrame {
     counts: {
       agentConfig: 0, craftedTools: 0, memoryChunks: 0,
       sessionMessages: 0, messageParts: 0, messageUpdates: 0,
-      conversationEntries: 0, conversationEntryParts: 0, contextMembers: 0,
+      conversationEntries: 1, conversationEntryParts: 0, contextMembers: 0,
       files: 1,
     },
+  });
+}
+
+/** The cut entry the head names: a transfer carries it, and publication refuses one that does not. */
+function cut(transferId: string, seq: number): ForkFrame {
+  return sealForkFrame({
+    version: FORK_TRANSFER_VERSION, transferId, seq, kind: 'conversationEntries',
+    rows: [{ id: 'm1', parent_id: null, role: 'user', turn_id: null, run_id: null, metadata_json: null, metadata_path: null, metadata_digest: null, recorded_at: 1 }],
   });
 }
 
@@ -62,13 +70,16 @@ describe('a replacement transfer stages under its OWN suffix', () => {
 
     // T1 begins and stages half a file, then its source gives up.
     expect((await first.agent.rawCopyFromFork(FORK, begin('tx-one'), OWNER)).ok).toBe(true);
-    expect((await first.agent.rawCopyFromFork(FORK, range('tx-one', 1, 0, 10, false), OWNER)).ok).toBe(true);
+    expect((await first.agent.rawCopyFromFork(FORK, cut('tx-one', 1), OWNER)).ok).toBe(true);
+    expect((await first.agent.rawCopyFromFork(FORK, range('tx-one', 2, 0, 10, false), OWNER)).ok).toBe(true);
 
     // The retry: a FRESH transfer id through the SAME activation. The begin
     // resets the durable staging row to tx-two; the receiver must follow it.
     const beginTwo = begin('tx-two');
-    const rangeTwo = range('tx-two', 1, 0, 10, false);
+    const cutTwo = cut('tx-two', 1);
+    const rangeTwo = range('tx-two', 2, 0, 10, false);
     expect((await first.agent.rawCopyFromFork(FORK, beginTwo, OWNER)).ok).toBe(true);
+    expect((await first.agent.rawCopyFromFork(FORK, cutTwo, OWNER)).ok).toBe(true);
     expect((await first.agent.rawCopyFromFork(FORK, rangeTwo, OWNER)).ok).toBe(true);
 
     // The eviction: same durable rows, fresh activation, no cached receiver.
@@ -76,14 +87,14 @@ describe('a replacement transfer stages under its OWN suffix', () => {
       world: { workspace: FORK },
     });
 
-    const rangeEnd = range('tx-two', 2, 10, CONTENT.byteLength, true);
+    const rangeEnd = range('tx-two', 3, 10, CONTENT.byteLength, true);
     expect((await second.agent.rawCopyFromFork(FORK, rangeEnd, OWNER)).ok).toBe(true);
 
-    const stream = [beginTwo, rangeTwo, rangeEnd]
+    const stream = [beginTwo, cutTwo, rangeTwo, rangeEnd]
       .reduce((held, frame) => foldForkStream(held, frame.digest), FORK_STREAM_SEED);
 
     const commit = sealForkFrame({
-      version: FORK_TRANSFER_VERSION, transferId: 'tx-two', seq: 3, kind: 'commit', stream,
+      version: FORK_TRANSFER_VERSION, transferId: 'tx-two', seq: 4, kind: 'commit', stream,
     });
 
     const outcome = await second.agent.rawCopyFromFork(FORK, commit, OWNER);

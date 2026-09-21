@@ -372,6 +372,30 @@ describe('fork transfer receiver', () => {
       .every((row) => row.payload_path.startsWith(`${TARGET_ARTIFACTS}/`))).toBe(true);
   });
 
+  test('a chain that never carried the cut entry the head names is refused at publication', async () => {
+    const tgt = fresh();
+    const transferId = 'tx-no-cut';
+
+    const begin = sealForkFrame({
+      version: FORK_TRANSFER_VERSION, transferId, seq: 0, kind: 'begin',
+      head: { source: { workspaceId: 'S', workspaceName: 's' }, cut: { messageId: 'm1', createdAtMs: 1 } },
+      // Every count honest and every section empty: the only thing missing is the cut.
+      counts: { ...EMPTY_COUNTS, files: 0 },
+    });
+
+    const commit = sealForkFrame({
+      version: FORK_TRANSFER_VERSION, transferId, seq: 1, kind: 'commit',
+      stream: foldForkStream(FORK_STREAM_SEED, begin.digest),
+    });
+
+    const receiver = receiverFor(tgt);
+
+    await receiver.accept(begin);
+    await expect(receiver.accept(commit)).rejects.toThrow(/no cut entry "m1"/);
+    expect(isFork(tgt)).toBe(false);
+    expect(readForkLineage(tgt.sql)).toBeNull();
+  });
+
   test('a gap is refused and leaves no fork', async () => {
     const src = await source();
     const tgt = fresh();
@@ -963,15 +987,23 @@ describe('fork transfer receiver', () => {
       fileDigest: last ? digest : undefined,
     });
 
+    // The chain the head names: a transfer carries its cut entry, and the
+    // publication refuses one that does not.
+    const cut = sealForkFrame({
+      version: FORK_TRANSFER_VERSION, transferId, seq: 1, kind: 'conversationEntries',
+      rows: [{ id: 'm1', parent_id: null, role: 'user', turn_id: null, run_id: null, metadata_json: null, metadata_path: null, metadata_digest: null, recorded_at: 1 }],
+    });
+
     const begin = sealForkFrame({
       version: FORK_TRANSFER_VERSION, transferId, seq: 0, kind: 'begin',
       head: { source: { workspaceId: 'S', workspaceName: 's' }, cut: { messageId: 'm1', createdAtMs: 1 } },
-      counts: EMPTY_COUNTS,
+      counts: { ...EMPTY_COUNTS, conversationEntries: 1 },
     });
 
     const first = activation();
     await first.accept(begin);
-    await first.accept(range(1, 0, false));
+    await first.accept(cut);
+    await first.accept(range(2, 0, false));
     expect(temps.size).toBe(1);
     expect(files.has('memory/resume.md')).toBe(false);
 
@@ -979,14 +1011,14 @@ describe('fork transfer receiver', () => {
     // range lands at the offset the TARGET counted, and the file's digest is
     // read back out of a staging no single activation wrote whole.
     const second = activation();
-    await second.accept(range(2, 10, true));
+    await second.accept(range(3, 10, true));
     expect(new TextDecoder().decode(files.get('memory/resume.md'))).toBe('0123456789abcdefghij');
     expect(temps.size).toBe(0);
 
     // And the transfer still completes: the file counted once, published once.
     const outcome = await second.accept(sealForkFrame({
-      version: FORK_TRANSFER_VERSION, transferId, seq: 3, kind: 'commit',
-      stream: [begin, range(1, 0, false), range(2, 10, true)]
+      version: FORK_TRANSFER_VERSION, transferId, seq: 4, kind: 'commit',
+      stream: [begin, cut, range(2, 0, false), range(3, 10, true)]
         .reduce((stream, frame) => foldForkStream(stream, frame.digest), FORK_STREAM_SEED),
     }));
 
