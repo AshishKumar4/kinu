@@ -732,12 +732,14 @@ both.
 
 D22. The Nimbus upgrade retires the hook patch and grows the read-only one
 (2026-09-21, commits `81e5964ff`, `7eaef3034` and this one on
-`lane/nimbus-0921b`). Core moves to `^0.11.0`, worker to `^0.9.0`, sdk to
-`^0.8.0` and fabric to `^0.7.0`; `@nimbus-sh/platform` follows to 0.5.0 under
-them and stays undeclared. A caret on 0.x is minor-strict, so every
-declaration moved, the ROOT `devDependencies` included: left at `0.10.0` it
-hoisted core 0.10.0 to the top of `node_modules` and nested 0.11.0 under each
-workspace, so the copy that ran was the stale unpatched one.
+`lane/nimbus-0921b`). Core moves to 0.11.0, worker to 0.9.0, sdk to 0.8.0 and
+fabric to 0.7.0; `@nimbus-sh/platform` follows to 0.5.0 under them and stays
+undeclared. Every version stays an EXACT pin rather than a caret, because
+`patchedDependencies` is keyed by `name@version`: a range that aged to 0.11.1
+would match no key and would drop the patch with no manifest line changing.
+So every declaration moves by hand, the ROOT `devDependencies` included: left
+at 0.10.0 it hoisted core 0.10.0 to the top of `node_modules` and nested
+0.11.0 under each workspace, so the copy that ran was the stale unpatched one.
 
 RETIRED because upstream carries them. D20's `resolveWorkerLaunch` embedder
 hook is in worker 0.9.0 at `dist/hosted/runtime.d.ts:29`

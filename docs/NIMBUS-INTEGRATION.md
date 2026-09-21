@@ -6,25 +6,29 @@ describes lives in `packages/cf-backend/src/runtime.ts` and
 
 ## Where the packages come from
 
-The tree carries no Nimbus source. Packages come from the registry, checked
-against the package manifests and `bun.lock` on 2026-09-21:
+The tree carries no Nimbus source. Packages come from the registry at exact
+pinned versions, checked against the package manifests and `bun.lock` on
+2026-09-21:
 
-| Package | Range | Resolved | Declared in |
-|---|---|---|---|
-| `@nimbus-sh/core` | `^0.11.0` | 0.11.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend` |
-| `@nimbus-sh/fabric` | `^0.7.0` | 0.7.0 | `packages/core`, `packages/cf-backend` |
-| `@nimbus-sh/sdk` | `^0.8.0` | 0.8.0 | `packages/cf-backend` |
-| `@nimbus-sh/worker` | `^0.9.0` | 0.9.0 | `packages/cf-backend` |
-| `@nimbus-sh/runtime-bash` | 5.2.37 | 5.2.37 | root, `packages/cli-backend` |
-| `@nimbus-sh/runtime-cpython` | 3.13.14 | 3.13.14 | root, `packages/cli-backend` |
+| Package | Version | Declared in |
+|---|---|---|
+| `@nimbus-sh/core` | 0.11.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend` |
+| `@nimbus-sh/fabric` | 0.7.0 | `packages/core`, `packages/cf-backend` |
+| `@nimbus-sh/sdk` | 0.8.0 | `packages/cf-backend` |
+| `@nimbus-sh/worker` | 0.9.0 | `packages/cf-backend` |
+| `@nimbus-sh/runtime-bash` | 5.2.37 | root, `packages/cli-backend` |
+| `@nimbus-sh/runtime-cpython` | 3.13.14 | root, `packages/cli-backend` |
 
-A caret on a 0.x version is minor-strict, so each range names one minor and
-every upgrade edits every declaration. The ROOT `devDependencies` declares
-`@nimbus-sh/core` for the repository's own scripts and fixtures, and it counts:
-a root range left behind hoists ITS version to the top of `node_modules` and
-nests the workspaces' copy below, so the copy that runs is the stale one.
-`@nimbus-sh/platform` is nobody's declared dependency. It arrives under core,
-fabric and worker, which is why nothing here pins it.
+The pin is exact, never a caret, because `patchedDependencies` is keyed by
+`name@version`: a range that aged to 0.11.1 would match no key, and the patch
+would leave the tree without one line of the manifest changing.
+
+Every declaration moves together, the ROOT `devDependencies` included. It
+declares `@nimbus-sh/core` for the repository's own scripts and fixtures, and
+it counts: a root version left behind hoists ITS copy to the top of
+`node_modules` and nests the workspaces' copy below, so the copy that runs is
+the stale one. `@nimbus-sh/platform` is nobody's declared dependency. It
+arrives under core, fabric and worker, which is why nothing here pins it.
 
 Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
 outbox on `@nimbus-sh/fabric/outbox.js`. `@nimbus-sh/worker` also depends on
@@ -227,10 +231,10 @@ to a second one. That is deliberate.
 The Worker needs no workspace Durable Object binding, because there is none. It
 needs the `LOADER` Worker Loader binding. `NIMBUS_RUNTIME_CACHE` is optional in `Env`.
 Without it, a hosted `python3`, `ruby` or `clang` exits 127 while the shell
-reports the missing binding. `packages/cf-backend/package.json` names the Nimbus
-Core, SDK, and Worker ranges, and `bun.lock` holds the one version each
-resolves to. `bun install --frozen-lockfile` in `scripts/deploy.sh` stops a
-local `node_modules` tree from deciding which versions ship.
+reports the missing binding. `packages/cf-backend/package.json` pins the Nimbus
+Core, SDK, and Worker versions exactly. `bun install --frozen-lockfile` in
+`scripts/deploy.sh` stops a local `node_modules` tree from deciding
+which versions ship.
 
 The generic Core Nimbus factory stays reusable by another backend, which is why
 `ExecutorKind` (`core/src/execution/types.ts`) can still represent `nimbus`.
