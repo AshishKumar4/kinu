@@ -175,7 +175,11 @@ export function programmaticHostOver(workspace: NimbusWorkspace, seams: Programm
   };
 
   let composing: Promise<HostedRuntime> | null = null;
-  const timers = new Map<HostedRuntimeTask, ReturnType<typeof setTimeout>>();
+  // The scheduler runs without a clock: the launch turn is the one task the
+  // runtime asks for NOW and it runs on the next turn; the log flush and
+  // janitor are asked for later and stay pending, so a finished suite is never
+  // held open by a timer the production host would have armed.
+  const pending = new Set<HostedRuntimeTask>();
 
   const runtime = (): Promise<HostedRuntime> => {
     composing ??= composeHostedRuntime({
@@ -185,27 +189,16 @@ export function programmaticHostOver(workspace: NimbusWorkspace, seams: Programm
       ports: portRegistry,
       lifecycle: {
         waitUntil: (task) => { ctx.waitUntil(task); },
-        // The production host's timer per reason, unreferenced so a janitor
-        // the runtime re-arms every minute never holds a finished suite open.
-        schedule: async (reason, at) => {
-          const held = timers.get(reason);
+        schedule: async (reason) => {
+          pending.add(reason);
 
-          if (held !== undefined) clearTimeout(held);
-
-          const timer = setTimeout(() => {
-            timers.delete(reason);
+          if (reason !== 'resident-launch') return;
+          queueMicrotask(() => {
+            if (!pending.delete(reason)) return;
             ctx.waitUntil(runtime().then((composed) => composed.onScheduled(reason)));
-          }, Math.max(0, at - Date.now()));
-
-          timer.unref();
-          timers.set(reason, timer);
+          });
         },
-        cancel: async (reason) => {
-          const held = timers.get(reason);
-
-          if (held !== undefined) clearTimeout(held);
-          timers.delete(reason);
-        },
+        cancel: async (reason) => { pending.delete(reason); },
       },
     });
 

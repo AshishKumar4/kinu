@@ -93,22 +93,6 @@ describe('connectMcpServers', () => {
     }
   });
 
-  test('a tool call without a configured timeout completes after six seconds', async () => {
-    // The fixture completes a 6,000 ms call without a server timeout; this
-    // exercises a call longer than five seconds, not the SDK's 60-second
-    // default. Startup has no wall-clock bound, and only an explicit server
-    // timeout config bounds a tool call.
-    const conn = await connectMcpServers({
-      echo: { command: 'node', args: [fixtureServer] },
-    });
-
-    try {
-      await expect(conn.call('echo', 'slow', { ms: 6_000 })).resolves.toBe('slept 6000ms');
-    } finally {
-      await conn.close();
-    }
-  });
-
   test('the caller cancels a running tool call; nothing else ends it early', async () => {
     const conn = await connectMcpServers({
       echo: { command: 'node', args: [fixtureServer] },

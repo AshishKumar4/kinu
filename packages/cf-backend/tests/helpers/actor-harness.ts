@@ -169,7 +169,22 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   harnessLastTurnStart(): { turnId: string; messageId: string } | null { return this._lastTurnStart; }
   /** Every text delta the transport delivered, in order: what a client has seen so far. */
   private readonly _deliveredText: string[] = [];
+  private readonly _deliveryWatchers = new Set<() => void>();
   harnessDeliveredText(): string { return this._deliveredText.join(''); }
+  /** Settles once the delivered text ends with `text`: the client has seen it. */
+  harnessDelivered(text: string): Promise<void> {
+    if (this.harnessDeliveredText().endsWith(text)) return Promise.resolve();
+
+    return new Promise<void>((resolve) => {
+      const watcher = (): void => {
+        if (!this.harnessDeliveredText().endsWith(text)) return;
+        this._deliveryWatchers.delete(watcher);
+        resolve();
+      };
+
+      this._deliveryWatchers.add(watcher);
+    });
+  }
   protected override get chatTransport(): ChatWireTransport {
     const transport = super.chatTransport;
 
@@ -180,7 +195,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       transport.deliver = (event) => {
         if (event.type === 'turn-start') this._lastTurnStart = { turnId: event.turnId, messageId: event.messageId };
 
-        if (event.type === 'text-delta') this._deliveredText.push(event.delta);
+        if (event.type === 'text-delta') {
+          this._deliveredText.push(event.delta);
+
+          for (const watcher of this._deliveryWatchers) watcher();
+        }
 
         return deliver(event);
       };
@@ -1407,9 +1426,6 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       // The stream, so a CUT answer is what a cut answer is on the loop: the
       // text it streamed before the interrupt, then the abort.
       doStream: async (options) => {
-        const delivered = async (text: string): Promise<void> => {
-          while (!agent.harnessDeliveredText().endsWith(text)) await new Promise<void>((resolve) => { setTimeout(resolve, 1); });
-        };
 
         const scripted = await script(options);
         const text = textOf(scripted);
@@ -1437,7 +1453,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
               // Everything the answer had streamed is out and seen by the
               // client; the turn is cut here — the cut a Stop makes, which
               // keeps queued steers queued.
-              return delivered(text).then(() => {
+              return agent.harnessDelivered(text).then(() => {
                 agent.harnessChatLoop.stop();
                 controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
               });
