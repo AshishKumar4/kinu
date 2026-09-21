@@ -31,7 +31,7 @@ import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
 import { looksLikeSecretField, parseMemoryNotes, type InlineSteer } from "@kinu.run/core";
-import { diagnostics, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
@@ -90,11 +90,55 @@ export interface BranchRun {
 
 /** Where `sendChat` put the message: a turn this pane started, or the actor's
  *  running turn — whose `settled` answer says whether it was spliced there or,
- *  the turn having just ended, run as the next turn. Null: nothing was sent. */
+ *  the turn having just ended, run as the next turn. That answer is the
+ *  server's steer_status for the message, decided where it happens, so it can
+ *  arrive long after the call; it rejects when the message did not land — the
+ *  actor refused it, or a stop handed the words back. Null: nothing was sent. */
 export type SendAdmission =
   | { readonly landed: "turn" }
   | { readonly landed: "mid-turn"; readonly settled: Promise<SendLanding> }
   | null;
+
+/** A composer's wait for one message's landing. */
+type SendLandingResolvers = ReturnType<typeof Promise.withResolvers<SendLanding>>;
+
+/** The landing an admitted message is owed, once its admission held: a call
+ *  the actor refused takes the waiter with it, and the refusal is the answer. */
+async function landingAfter(
+  admission: Promise<void>,
+  landings: Map<string, SendLandingResolvers>,
+  id: string,
+  landing: Promise<SendLanding>,
+): Promise<SendLanding> {
+  try {
+    await admission;
+  } catch (cause) {
+    landings.delete(id);
+    throw toKinuError({ doing: "sending to the running turn", cause, otherwise: "unavailable" });
+  }
+
+  return landing;
+}
+
+/** Answer the composer awaiting this message, if one is: read by the model
+ *  (`mid-turn`), run as a turn of its own (`turn`), or handed back. `queued`
+ *  decides nothing. */
+function settleSendLanding(
+  landings: Map<string, SendLandingResolvers>,
+  status: { readonly steerId: string; readonly status: "queued" | "landed" | "returned" | "turn" },
+): void {
+  if (status.status === "queued") return;
+  const landing = landings.get(status.steerId);
+
+  if (landing === undefined) return;
+  landings.delete(status.steerId);
+
+  if (status.status === "returned") {
+    landing.reject(new KinuError("cancelled", "The turn was stopped before the agent read this message; it is back in the composer."));
+  } else {
+    landing.resolve(status.status === "landed" ? "mid-turn" : "turn");
+  }
+}
 
 /** One mid-turn steer as the chat renders it — driven entirely by the server's
  *  steer_status broadcasts, so every open tab agrees about whether the model
@@ -373,7 +417,7 @@ const SocketMessageSchema = v.variant("type", [
   }),
   v.object({
     type: v.literal("steer_status"), steerId: v.string(), text: v.string(),
-    status: v.picklist(["queued", "landed", "returned"]),
+    status: v.picklist(["queued", "landed", "returned", "turn"]),
     /** Present on `landed`: the step of the running turn the model read it in,
      *  which is where the thread draws it. */
     atStep: v.optional(v.number()),
@@ -988,6 +1032,9 @@ export function useKinu(target?: string | KinuActorAddress) {
   // slates_changed broadcast re-lists at once and bumps the remount
   // counter of every open tab among its ids.
   const [slates, setSlates] = useState<SlateSummary[]>([]);
+  /** Messages sent to the running turn whose landing a composer awaits, by
+   *  the id each went under; settled by the server's steer_status for it. */
+  const sendLandings = useRef(new Map<string, SendLandingResolvers>());
   const knownSlates = useRef<Set<string> | null>(null);
   const knownPorts = useRef<Set<string> | null>(null);
   const [previewFocus, setPreviewFocus] = useState<string | null>(null);
@@ -1549,9 +1596,11 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   /**
    * Stop this turn. Aborts the live LLM request through the SDK and the server
-   * turn through the RPC in parallel; queued steers stay queued and run as the
-   * next turn. Releases the send latch on settle, success or failure, so the
-   * next Send is admitted at once.
+   * turn through the RPC in parallel. The SDK's cancel frame interrupts the
+   * loop, which hands back every message the model had not read: each comes
+   * off the thread on its `returned` broadcast and its awaiting composer puts
+   * the words back in the draft. Releases the send latch on settle, success
+   * or failure, so the next Send is admitted at once.
    */
   const abortChat = useCallback(async (): Promise<void> => {
     // Snapshot BEFORE the awaits: a new Send admitted while the two RPCs below
@@ -1703,10 +1752,12 @@ export function useKinu(target?: string | KinuActorAddress) {
         } else if (msg.type === "head_stream") {
           setHeadDeltaMap((previous) => appendHeadDelta(previous, msg.headId, msg.kind, msg.delta));
         } else if (msg.type === "steer_status") {
+          settleSendLanding(sendLandings.current, msg);
           // `returned` is a removal: the abort dropped it and the composer has
           // it back, so leaving a bubble in the thread would claim the agent
-          // was given something it never saw.
-          setSteerRuns((prev) => msg.status === "returned"
+          // was given something it never saw. `turn` is one too: the message
+          // is a user turn of its own now, drawn from the transcript.
+          setSteerRuns((prev) => msg.status === "returned" || msg.status === "turn"
             ? prev.filter((s) => s.id !== msg.steerId)
             : [
               ...prev.filter((s) => s.id !== msg.steerId),
@@ -2172,10 +2223,15 @@ export function useKinu(target?: string | KinuActorAddress) {
     // PLAN turn, not silently become a build one.
     const attachments = files.map((file) => ({ filename: file.filename ?? "attachment", mediaType: file.mediaType, url: file.url }));
 
-    return {
-      landed: "mid-turn",
-      settled: rpc<{ landed: SendLanding }>("send", [content, attachments, mode]).then((result) => result.landed),
-    };
+    // The message goes under an id minted here, so its landing — the server's
+    // steer_status for that id — is awaited before the call that admits it
+    // returns, and no broadcast can precede the listener. The call answers
+    // the admission alone: it has a deadline, the landing has none.
+    const id = crypto.randomUUID();
+    const landing = Promise.withResolvers<SendLanding>();
+    sendLandings.current.set(id, landing);
+
+    return { landed: "mid-turn", settled: landingAfter(rpc<void>("send", [content, id, attachments, mode]), sendLandings.current, id, landing.promise) };
   }, [startTurn, sendMessage, isStreaming, rpc]);
 
   /**

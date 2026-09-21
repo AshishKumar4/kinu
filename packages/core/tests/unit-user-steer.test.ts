@@ -55,7 +55,7 @@ const BroadcastSchema = v.union([
   SignalCardEventSchema,
   v.object({
     type: v.literal('steer_status'),
-    status: v.picklist(['queued', 'landed', 'returned']),
+    status: v.picklist(['queued', 'landed', 'returned', 'turn']),
     steerId: v.string(),
     text: v.string(),
     atStep: v.optional(v.number()),
@@ -147,9 +147,13 @@ describe('Inbox — the user kind, accepted', () => {
       metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
     }]);
     // The idle path matches a steer the caller sends itself: NO idempotency
-    // key, and nothing is claimed mid-turn, so no steer_status is owed.
+    // key, and nothing was ever queued mid-turn. What IS owed is where the
+    // words went — a turn of their own — because the surface that sent them
+    // to a running turn learns their landing from this broadcast alone.
     expect(queued[0]!.idempotencyKey).toBeUndefined();
-    expect(broadcasts).toEqual([]);
+    expect(broadcasts).toEqual([
+      { type: 'steer_status', status: 'turn', steerId: 's1', text: 'nothing is running' },
+    ]);
   });
 
   test('a steer is accepted mid-turn and reported as mid-turn, with a queued steer_status', async () => {
@@ -406,7 +410,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
   });
 
   test('leftover users rerun as ONE user-origin turn, stamped operator under their mode', async () => {
-    const { inbox, queued } = setup({ turnInFlight: true, turnId: 'turn-9' });
+    const { inbox, queued, broadcasts } = setup({ turnInFlight: true, turnId: 'turn-9' });
     inbox.beginTurn(false);
     await inbox.prepareStep(step(0, HISTORY));
     // Typed while the model was writing its final answer — there is no further
@@ -424,6 +428,13 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
       idempotencyKey: 'steer-rerun:turn-9:build:s1',
       metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
     }]);
+    // Each steer's landing is announced under its own id: it is a turn now,
+    // not a bubble the running turn owes a step to. A surface that only
+    // admitted the words — the composer's call answers admission, not the
+    // landing — has no other way to learn which happened.
+    expect(steerStatuses(broadcasts).map((status) => [status.status, status.steerId])).toEqual([
+      ['queued', 's1'], ['queued', 's2'], ['turn', 's1'], ['turn', 's2'],
+    ]);
   });
 
   test('the spliced conversation replays into the turn response at the position the model saw it', async () => {

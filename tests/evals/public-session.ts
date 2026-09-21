@@ -37,9 +37,11 @@
  *               from the SDK constant, so a rename there is a compile error here
  *               rather than a silent hang.
  *   steer       the socket RPC `send` (actor-agent.ts), which is
- *               exactly what the composer calls mid-turn (hooks/use-kinu.ts:2000)
- *               and answers `'mid-turn'` or `'turn'` — the DO's own statement
- *               about which of the two happened.
+ *               exactly what the composer calls mid-turn (hooks/use-kinu.ts
+ *               `sendChat`): the call admits the words under an id minted
+ *               here, and the DO's `steer_status` broadcast for that id says
+ *               where they landed — `landed` (the running turn read them) or
+ *               `turn` (they ran as a turn of their own) — once that is decided.
  *   history     `GET /agents/<slug>/<name>/get-messages`, the SDK's transport
  *               endpoint the pane is seeded from (agent-routing.ts:24-40).
  *   events      `GET /api/workspaces/<name>/runs` then
@@ -422,7 +424,14 @@ export type PublicFrame =
    *  mid-turn is the one case where the turn is still running up there. */
   | { readonly kind: 'resuming'; readonly id: string }
   | { readonly kind: 'resume-none' }
+  /** The DO's account of where a steered message is: taken, read by the
+   *  running turn at a step, run as a turn of its own, or handed back. */
+  | { readonly kind: 'steer'; readonly steerId: string; readonly status: SteerStatus }
   | { readonly kind: 'other'; readonly type: string };
+
+const STEER_STATUSES = ['queued', 'landed', 'turn', 'returned'] as const;
+
+type SteerStatus = (typeof STEER_STATUSES)[number];
 
 const FrameSchema = v.object({
   type: v.string(),
@@ -430,6 +439,8 @@ const FrameSchema = v.object({
   body: v.optional(v.string()),
   done: v.optional(v.boolean()),
   landed: v.optional(v.picklist(['mid-turn', 'turn'])),
+  steerId: v.optional(v.string()),
+  status: v.optional(v.string()),
   /** The DO sets `error: true` on a terminal failure frame and carries the text
    *  in `body`; an RPC reply's `error` is the failure itself, which may be a
    *  string or a structured value. One field, two producers, so both shapes are
@@ -499,6 +510,12 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
   }
 
   if (type === CHAT_MESSAGE_TYPES.STREAM_RESUME_NONE) return { kind: 'resume-none' };
+
+  if (type === 'steer_status' && frame.output.steerId !== undefined) {
+    const status = v.safeParse(v.picklist(STEER_STATUSES), frame.output.status);
+
+    if (status.success) return { kind: 'steer', steerId: frame.output.steerId, status: status.output };
+  }
 
   return { kind: 'other', type };
 }
@@ -674,7 +691,6 @@ const RunEventsSchema = v.array(RunEventSchema);
 
 const SetModelSchema = v.object({ spec: v.string() });
 
-const SteerSchema = v.object({ landed: v.picklist(['mid-turn', 'turn']) });
 
 /** The executor's display fields and its producer-owned command refusal.
  * Success omits refusal; historical responses may lack classification. */
@@ -1052,6 +1068,11 @@ export class KinuPublicSession {
    *  landing instant the absorbing run is named at, in the run events' own
    *  clock domain. Outlives the `turns` entry, which is deleted at settle. */
   private readonly midTurnLandings = new Map<string, string>();
+  /** Steers awaiting their landing, by the id each was admitted under. */
+  private readonly steerLandings = new Map<string, {
+    resolve: (landing: 'mid-turn' | 'turn') => void;
+    reject: (error: Error) => void;
+  }>();
   private readonly rpcs = new Map<string, {
     readonly resolve: (result: JsonValue) => void;
     readonly reject: (error: Error) => void;
@@ -1206,18 +1227,29 @@ export class KinuPublicSession {
   /**
    * Steer the running turn, the way the composer does.
    *
-   * The answer is the DO's own statement about what happened to the words:
-   * `'mid-turn'` means they were spliced into the running turn's next step,
-   * `'turn'` means that turn had already ended and they became the next
-   * ordinary turn (actor-agent.ts:5461). Both are landings, and a caller
+   * The call admits the words under an id minted here; the answer is the DO's
+   * own statement about what then happened to them, its `steer_status` for
+   * that id: `'mid-turn'` means the running turn read them at a step, `'turn'`
+   * means that turn ended first and they ran as the next ordinary turn. Both
+   * are landings, decided by the turn and heard when decided, and a caller
    * that treated `'turn'` as a failure would be failing on a race the product
-   * resolves correctly.
+   * resolves correctly. The waiter is registered before the call, so a
+   * broadcast cannot precede it.
    */
   async steer(text: string): Promise<'mid-turn' | 'turn'> {
-    const landed = await infraBoundary(`send on ${this.input.origin}/${this.workspace}`, () =>
-      this.rpc('send', [text, [], 'build']));
+    const steerId = this.mintId('steer');
+    const landing = new Promise<'mid-turn' | 'turn'>((resolve, reject) => { this.steerLandings.set(steerId, { resolve, reject }); });
 
-    return v.parse(SteerSchema, landed).landed;
+    return infraBoundary(`send on ${this.input.origin}/${this.workspace}`, async () => {
+      try {
+        await this.rpc('send', [text, steerId, [], 'build']);
+      } catch (cause) {
+        this.steerLandings.delete(steerId);
+        throw cause;
+      }
+
+      return landing;
+    });
   }
 
   /**
@@ -1885,6 +1917,18 @@ export class KinuPublicSession {
 
       if (frame.error === null) pending.resolve(frame.result);
       else pending.reject(new Error(frame.error));
+
+      return;
+    }
+
+    if (frame.kind === 'steer') {
+      const pending = this.steerLandings.get(frame.steerId);
+
+      if (!pending || frame.status === 'queued') return;
+      this.steerLandings.delete(frame.steerId);
+
+      if (frame.status === 'returned') pending.reject(new Error('the turn was stopped before it read the steer'));
+      else pending.resolve(frame.status === 'landed' ? 'mid-turn' : 'turn');
 
       return;
     }

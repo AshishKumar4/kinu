@@ -88,7 +88,7 @@ import {
   type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
-  type SendLanding, type PromptFile, PromptFileSchema,
+  type PromptFile, PromptFileSchema,
   // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
   // Shared turn lifecycle (run bracket, prompt-token trigger, overflow apply)
   // plus the run_end vocabulary and the classifier that derives it from raw
@@ -2570,9 +2570,7 @@ export abstract class ActorAgent extends Agent<Env> {
         broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
         getConnection: (id) => this.getConnection(id),
         history: () => this.chatTranscript.history(),
-        // Held by the loop: as a row once it landed, as a reservation from
-        // the moment the send was accepted until then.
-        admitted: (id) => this.chatTranscript.has(id) || this.pendingSends.has(id),
+        admitted: (id) => this.admittedSend(id),
         send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
         interrupt: () => { this.chatLoop.interrupt(); },
         clear: () => this.clearConversation(),
@@ -5212,25 +5210,36 @@ export abstract class ActorAgent extends Agent<Env> {
     }, spec);
   }
 
+  /** Held by the loop: as a row once it landed, as a reservation from the
+   *  moment the send was accepted until then. */
+  private admittedSend(id: string): boolean {
+    return this.chatTranscript.has(id) || this.pendingSends.has(id);
+  }
+
   /**
-   * Send the user a message to this actor — the composer's one submit, whatever
-   * the actor is doing. A running turn takes it at its next step
-   * (`'mid-turn'`); an idle actor runs it as the next ordinary turn (`'turn'`),
-   * atomically with the decision, in its own turn queue. "It went into the
-   * running turn" and "it started a new one" are different events for the
-   * person who typed it, so the answer still says which, and no caller
-   * re-sends. Attachments ride the same path, as file parts on the message.
+   * Send the user a message to this actor while a turn runs — the composer's
+   * submit when the chat request path is held by the turn on screen. The
+   * words are admitted under the id the client renders them by, and the call
+   * answers the admission: they are reserved and owed a landing. Where they
+   * land — the running turn's next step, a turn of their own once it ended,
+   * or back in the composer after a stop — reaches every open tab as
+   * steer_status under that same id, decided where it happens; a client call
+   * has a deadline and the landing has none, so the two are not one answer.
+   * No caller re-sends. Attachments ride the same path, as file parts.
    *
-   * `files` and `mode` arrive over the wire, so they are parsed rather than
-   * trusted; an unrecognized mode runs as ordinary build work, exactly as
-   * `workModeForTurnMetadata` reads an unrecognized stored `kinuMode`.
+   * `files`, `mode` and `id` arrive over the wire, so they are parsed rather
+   * than trusted; an unrecognized mode runs as ordinary build work, exactly as
+   * `workModeForTurnMetadata` reads an unrecognized stored `kinuMode`, and an
+   * id the loop already holds is refused rather than reserved twice.
    */
   @callable()
-  async send(text: string, files: readonly PromptFile[] = [], mode?: WorkMode): Promise<{ landed: SendLanding }> {
+  async send(text: string, id: string, files: readonly PromptFile[] = [], mode?: WorkMode): Promise<void> {
     this.ensureSchema();
     const attachments = v.parse(v.array(PromptFileSchema), files);
+    const messageId = v.parse(v.pipe(v.string(), v.nonEmpty(), v.maxLength(128)), id);
 
-    return { landed: await this.chatLoop.send({ text, files: attachments }, { mode: isWorkMode(mode) ? mode : 'build' }) };
+    if (this.admittedSend(messageId)) throw new KinuError('bad_input', `message ${messageId} was already sent`);
+    await this.chatLoop.admit({ text, files: attachments }, { id: messageId, mode: isWorkMode(mode) ? mode : 'build' });
   }
 
   /** Stop the turn on screen — the composer's Stop button. Aborts the in-flight

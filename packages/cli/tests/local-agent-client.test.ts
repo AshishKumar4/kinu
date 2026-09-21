@@ -335,9 +335,12 @@ describe('LocalAgentClient', () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
-    expect(await client.send('actually, use yaml')).toEqual({ landed: 'mid-turn' });
+    // Answered where it is decided: the step boundary the gate opens is what
+    // makes 'mid-turn' a fact, so the send resolves once that step took it.
+    const steer = client.send('actually, use yaml');
     release();
     await turn;
+    expect(await steer).toEqual({ landed: 'mid-turn' });
 
     // The send spliced into the running turn's second step as one user
     // message — the model read it, and no second turn ran for it.
@@ -354,6 +357,83 @@ describe('LocalAgentClient', () => {
     const history = await client.history();
     const steered = history.find((message) => message.content === 'actually, use yaml');
     expect(steered).toMatchObject({ role: 'user', steered: true });
+    await client.close();
+  });
+
+  test('a message the running turn ended before reading answers with the turn that ran it', async () => {
+    // The armed call is the turn's LAST step, held open on its final words:
+    // a message sent while it is held has no step boundary left to land on,
+    // so the session reruns it as the operator's next turn. Every other call
+    // answers at once, which is what the rerun's own model call does.
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let armed = false;
+    let calls = 0;
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async () => {
+        const gated = armed;
+        armed = false;
+        calls += 1;
+        const answer = gated ? 'standing brief, noted' : `answer ${calls}`;
+
+        return {
+          stream: new ReadableStream({
+            async start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'text-start', id: '0' });
+              controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
+
+              if (gated) await gate;
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    });
+
+    const { client } = setup(model);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+    await client.connect();
+
+    armed = true;
+    const first = client.send('here is your standing brief');
+    // The held turn has streamed its words: the next message arrives with the
+    // turn on screen and nothing left for it to ride.
+    await new Promise<void>((resolve) => {
+      const unsubscribe = client.subscribe((event) => {
+        if (event.type === 'text-delta') { unsubscribe(); resolve(); }
+      });
+    });
+    const second = client.send('list every tool you have');
+    release();
+
+    expect((await first).landed).toBe('turn');
+    const result = await second;
+
+    // Answered by the rerun, with the rerun's own reply — not by the turn
+    // that was writing when the words arrived, and not `mid-turn` at
+    // admission, which is what made a harness read the brief's reply as the
+    // answer to the question.
+    if (result.landed !== 'turn') throw new Error('a message the turn never read runs as the next turn');
+    expect(result.text).toBe('answer 2');
+    expect(events.filter((event) => event.type === 'turn-start')).toHaveLength(2);
+
+    // The CLI transcript shows it as the operator's own next message, in
+    // order, ahead of the answer it got — never as a steer inside the brief's turn.
+    const history = await client.history();
+    expect(history.map((message) => [message.role, message.content])).toEqual([
+      ['user', 'here is your standing brief'], ['assistant', 'standing brief, noted'],
+      ['user', 'list every tool you have'], ['assistant', 'answer 2'],
+    ]);
+    expect(history[2]).not.toHaveProperty('steered');
     await client.close();
   });
 
