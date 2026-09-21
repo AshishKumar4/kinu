@@ -36,6 +36,49 @@ function modelMenuEntry<Input>(input: Input): ModelMenuEntry | null {
  *  stylesheet can remove it; must match the selector in index.css. */
 const CLEAR_LABEL_UNUSED = "Clear selection (unused)";
 
+/** Empty clears the workspace override; the tier's effort applies. */
+const DEFAULT_EFFORT = "";
+
+const effortLabel = (effort: ReasoningEffort | typeof DEFAULT_EFFORT): string =>
+  effort === DEFAULT_EFFORT ? "Default" : effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1);
+
+/** The thinking level beside the model: the levels this model declares, or
+ *  nothing when it declares none — a model that takes no level shows no
+ *  control. The same popup family as the model picker beside it.
+ *
+ *  The trigger is text at rest, like the model name it follows: Kumo's button
+ *  look (a surface fill and a hairline ring) made the pair read as a label
+ *  over a pill, and the composer wants one quiet row. The raise arrives on
+ *  hover and on focus, where the control is being used. */
+function EffortPicker({ options, value, onChange, disabled }: {
+  options: readonly ReasoningEffort[];
+  value: ReasoningEffort | null;
+  onChange: (effort: ReasoningEffort | null) => void;
+  disabled?: boolean;
+}) {
+  if (options.length === 0) return null;
+
+  return (
+    <Select
+      aria-label="Thinking level"
+      size="xs"
+      className="shrink-0 !bg-transparent !shadow-none !ring-0 transition-colors hover:!bg-[var(--c-elevated)] focus-visible:!bg-[var(--c-elevated)]"
+      value={value ?? DEFAULT_EFFORT}
+      disabled={disabled}
+      onValueChange={(next) => { onChange(isReasoningEffort(next) ? next : null); }}
+      renderValue={(picked) => (
+        <span className="inline-flex items-center gap-1 p-text-2">
+          <BrainIcon size={12} aria-hidden="true" />
+          {effortLabel(isReasoningEffort(picked) ? picked : DEFAULT_EFFORT)}
+        </span>
+      )}
+    >
+      <Select.Option value={DEFAULT_EFFORT}>{effortLabel(DEFAULT_EFFORT)}</Select.Option>
+      {options.map((effort) => <Select.Option key={effort} value={effort}>{effortLabel(effort)}</Select.Option>)}
+    </Select>
+  );
+}
+
 export interface ModelPickerProps {
   models: ModelMenuEntry[];
   /** Providers the server could not reach. Listed under the options so a
@@ -58,11 +101,15 @@ export interface ModelPickerProps {
    *  agent pane's picker, where the model is the actor's resolved one and the
    *  only write lives on the workspace's own tab. */
   disabled?: boolean;
+  /** The thinking level, offered from the selected model's declared levels.
+   *  Passed where the surface owns that choice too; the two triggers then
+   *  render as siblings, which the composer lays out as one row. */
+  effort?: { value: ReasoningEffort | null; onChange: (effort: ReasoningEffort | null) => void };
   className?: string;
 }
 
 export function ModelPicker({
-  models, failures, value, onChange,
+  models, failures, value, onChange, effort,
   size = "base", placeholder = "Select a model…", label = "Model", clearable = false, className, disabled = false,
 }: ModelPickerProps) {
   const items = useMemo(
@@ -72,7 +119,7 @@ export function ModelPicker({
 
   const selected = useMemo(() => models.find((m) => m.spec === value) ?? null, [models, value]);
 
-  return (
+  const combobox = (
     <Combobox
       items={items}
       value={selected}
@@ -121,6 +168,20 @@ export function ModelPicker({
       </Combobox.Content>
     </Combobox>
   );
+
+  if (!effort) return combobox;
+
+  return (
+    <>
+      {combobox}
+      <EffortPicker
+        options={offeredReasoningEfforts(selected?.reasoningEfforts, effort.value)}
+        value={effort.value}
+        onChange={effort.onChange}
+        disabled={disabled}
+      />
+    </>
+  );
 }
 
 /**
@@ -131,52 +192,12 @@ export function ModelPicker({
  * earns the empty-state CTA — flashing it during load or on a flaky request
  * sent connected users through a full OAuth prompt=login.
  */
-/** Empty clears the workspace override; the tier's effort applies. */
-const DEFAULT_EFFORT = "";
-
-const effortLabel = (effort: ReasoningEffort | typeof DEFAULT_EFFORT): string =>
-  effort === DEFAULT_EFFORT ? "Default" : effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1);
-
-/** The thinking level beside the model: the levels this model declares, or
- *  nothing when it declares none — a model that takes no level shows no
- *  control. The same popup family as the model picker beside it. */
-function EffortPicker({ options, value, onChange, disabled }: {
-  options: readonly ReasoningEffort[];
-  value: ReasoningEffort | null;
-  onChange: (effort: ReasoningEffort | null) => void;
-  disabled?: boolean;
-}) {
-  if (options.length === 0) return null;
-
-  return (
-    <Select
-      aria-label="Thinking level"
-      size="xs"
-      className="shrink-0"
-      value={value ?? DEFAULT_EFFORT}
-      disabled={disabled}
-      onValueChange={(next) => { onChange(isReasoningEffort(next) ? next : null); }}
-      renderValue={(picked) => (
-        <span className="inline-flex items-center gap-1">
-          <BrainIcon size={12} aria-hidden="true" />
-          {effortLabel(isReasoningEffort(picked) ? picked : DEFAULT_EFFORT)}
-        </span>
-      )}
-    >
-      <Select.Option value={DEFAULT_EFFORT}>{effortLabel(DEFAULT_EFFORT)}</Select.Option>
-      {options.map((effort) => <Select.Option key={effort} value={effort}>{effortLabel(effort)}</Select.Option>)}
-    </Select>
-  );
-}
-
 export function ConnectedModelPicker({
   value, onChange, size, className, clearable, placeholder, renderEmpty, disabled, effort,
 }: Omit<ModelPickerProps, "models"> & {
   /** Rendered when no provider is connected. Defaults to the Workers AI
    *  reconnect CTA. */
   renderEmpty?: () => React.ReactNode;
-  /** The thinking level, offered from the selected model's declared levels. */
-  effort?: { value: ReasoningEffort | null; onChange: (effort: ReasoningEffort | null) => void };
 }) {
   const [menu, setMenu] = useState<ModelMenu | null | "error">(null);
 
@@ -247,7 +268,7 @@ export function ConnectedModelPicker({
     );
   }
 
-  const picker = (
+  return (
     <ModelPicker
       models={menu.models}
       failures={menu.failures}
@@ -258,21 +279,8 @@ export function ConnectedModelPicker({
       clearable={clearable}
       placeholder={placeholder}
       disabled={disabled}
+      effort={effort}
     />
-  );
-
-  if (effort === undefined) return picker;
-
-  return (
-    <>
-      {picker}
-      <EffortPicker
-        options={offeredReasoningEfforts(menu.models.find((model) => model.spec === value)?.reasoningEfforts, effort.value)}
-        value={effort.value}
-        onChange={effort.onChange}
-        disabled={disabled}
-      />
-    </>
   );
 }
 
