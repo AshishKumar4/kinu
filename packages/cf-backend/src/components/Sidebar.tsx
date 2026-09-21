@@ -4,12 +4,11 @@
  *   ┌─────────────────┐
  *   │ ❯ Kinu          │   Newsreader brand lockup
  *   │ + New workspace │
- *   │ ⌂ Home          │   primary nav: the six places an account goes
+ *   │ ⌂ Home          │   primary nav: the five places an account goes
  *   │ ▦ Workspaces    │
  *   │ ▤ Drive         │
  *   │ ▣ Devices       │
  *   │ ⚙ Plugins       │
- *   │ ⚙ Settings      │
  *   │ WORKSPACES      │
  *   │ ● Jarvis    4h  │
  *   │   ├ Scout       │   nested subordinates of the OPEN workspace
@@ -303,8 +302,10 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
         </div>
       )}
       {/* Primary nav — the places an account goes, in the workspace
-          rows' own rhythm and on their active token, above the roster. */}
-      <nav aria-label="Primary" className="px-2 pt-1">
+          rows' own rhythm and on their active token, above the roster. The
+          gap holds the rounded backgrounds of two touching rows apart, so a
+          hover or a selection reads as one pill and not as a blob. */}
+      <nav aria-label="Primary" className="px-2 pt-1 space-y-0.5">
         {PRIMARY_NAV.map((item) => <PrimaryNavRow key={item.to} {...item} />)}
       </nav>
       {/* Workspace list */}
@@ -321,7 +322,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
             className="w-full text-left px-5 py-2 text-xs p-warning rounded-md p-card-hover transition-colors"
           >Couldn't load workspaces. Tap to retry.</button>
         )}
-        <ul>
+        <ul className="space-y-0.5">
           {workspaces.map((a) => {
             const age = shortAge(a.lastVisited);
             const live = activity[a.name];
