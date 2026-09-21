@@ -64,7 +64,7 @@ import {
   // Durable admission — the claim a turn is issued under, and the per-step
   // context plane its revisions are recorded on.
   initActorClaimTables, ActorClaimStore, initPendingSendTables, PendingSendStore,
-  createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory,
+  createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory, type ScaffoldCandidateBinding,
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
   // Continual refinement — the lane's deps come from four seams this class
   // already owns; nothing about it is Cloudflare-shaped.
@@ -3140,14 +3140,7 @@ export abstract class ActorAgent extends Agent<Env> {
       history: this.stores.history,
       config: this.config,
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
-        rt: this.rt,
-        profile: async () => {
-          const mode = await this.preparedWorkMode();
-
-          return this.routingProfile([...Object.keys(this.getRawToolsForWorkMode(mode)), ...codemodeCapabilitiesFor(this.turnCodemodeProviders('build'))], mode);
-        },
-        bindModel: spec => this.ownedModelServices.resolveModel(spec),
-        modelContext: spec => this.modelCatalog.contextFor(spec),
+        ...this.scaffoldCandidateModel(),
         tools: () => this.getRawToolsForWorkMode(this.turnWorkMode(), callScope),
         callScope,
         history: this.makeScaffoldHistory(),
@@ -3205,13 +3198,10 @@ export abstract class ActorAgent extends Agent<Env> {
     await advanceRefinementLane(deps);
   }
 
-  /** The scaffold's host.llmStream bridge (core scaffold-host): tool names
-   *  resolve against the RAW surface per call, multi-step, scaffold-stage
-   *  reasoning effort. No step cap here — the scaffold's loop runs exactly as
-   *  long as the live turn it may replace would (owner ruling, 2026-08-21), so
-   *  comparisons between them measure the scaffold, not a handicap. */
-  protected makeScaffoldLLMStream(signal?: AbortSignal): ScaffoldRunOptions['llmStream'] {
-    return createScaffoldCandidateSurface({
+  /** The model half of a scaffold candidate surface: the routing profile of
+   *  the prepared work mode, and this actor's model binding and catalog. */
+  private scaffoldCandidateModel(): Pick<ScaffoldCandidateBinding, 'rt' | 'profile' | 'bindModel' | 'modelContext'> {
+    return {
       rt: this.rt,
       profile: async () => {
         const mode = await this.preparedWorkMode();
@@ -3220,6 +3210,17 @@ export abstract class ActorAgent extends Agent<Env> {
       },
       bindModel: spec => this.ownedModelServices.resolveModel(spec),
       modelContext: spec => this.modelCatalog.contextFor(spec),
+    };
+  }
+
+  /** The scaffold's host.llmStream bridge (core scaffold-host): tool names
+   *  resolve against the RAW surface per call, multi-step, scaffold-stage
+   *  reasoning effort. No step cap here — the scaffold's loop runs exactly as
+   *  long as the live turn it may replace would (owner ruling, 2026-08-21), so
+   *  comparisons between them measure the scaffold, not a handicap. */
+  protected makeScaffoldLLMStream(signal?: AbortSignal): ScaffoldRunOptions['llmStream'] {
+    return createScaffoldCandidateSurface({
+      ...this.scaffoldCandidateModel(),
       tools: () => this.getRawTools(),
       history: undefined,
       signal,
