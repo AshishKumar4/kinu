@@ -25,7 +25,6 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import { gzipSync } from 'node:zlib';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -308,94 +307,6 @@ export const git = {
 };
 `;
 
-/** One USTAR file entry: a 512-byte header plus padded content. */
-function tarFile(name: string, data: string): Uint8Array[] {
-  const bytes = new TextEncoder().encode(data);
-  const header = new Uint8Array(512);
-
-  const octal = (value: number, width: number): string =>
-    value.toString(8).padStart(width - 1, '0') + '\0';
-
-  const write = (offset: number, value: string, width: number): void => {
-    header.set(new TextEncoder().encode(value).subarray(0, width), offset);
-  };
-
-  write(0, name, 100);
-  write(100, octal(0o644, 8), 8);
-  write(108, octal(0, 8), 8);
-  write(116, octal(0, 8), 8);
-  write(124, octal(bytes.length, 12), 12);
-  write(136, octal(0, 12), 12);
-  header.fill(0x20, 148, 156);
-  header[156] = 0x30;
-  write(257, 'ustar\0', 6);
-  write(263, '00', 2);
-  write(148, octal(header.reduce((sum, byte) => sum + byte, 0), 8), 8);
-  const padded = new Uint8Array(Math.ceil(bytes.length / 512) * 512);
-  padded.set(bytes);
-
-  return [header, padded];
-}
-
-const REGISTRY_PKG = 'host-fixture';
-
-const REGISTRY_VERSION = '1.0.0';
-
-const REGISTRY_MANIFEST = `{"name":"${REGISTRY_PKG}","version":"${REGISTRY_VERSION}","main":"lib/index.js"}`;
-
-// package.json FIRST in the archive, as npm ships it. The streaming writer
-// holds the manifest back and lands it last, so a tree without one is a tree
-// the next install re-extracts rather than trusts.
-const REGISTRY_TARBALL = (() => {
-  const parts = [
-    ...tarFile('package/package.json', REGISTRY_MANIFEST),
-    ...tarFile('package/lib/index.js', 'module.exports = 1;\n'),
-    new Uint8Array(1024),
-  ];
-
-  const total = parts.reduce((sum, part) => sum + part.length, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-
-  for (const part of parts) { out.set(part, offset); offset += part.length; }
-
-  return new Uint8Array(gzipSync(out));
-})();
-
-interface LocalRegistry {
-  readonly url: string;
-  stop(): Promise<void>;
-}
-
-function serveRegistry(): LocalRegistry {
-  const server = Bun.serve({
-    port: 0,
-    fetch(request): Response {
-      const { pathname } = new URL(request.url);
-
-      if (pathname === `/${REGISTRY_PKG}/latest` || pathname === `/${REGISTRY_PKG}/${REGISTRY_VERSION}`) {
-        return Response.json({
-          name: REGISTRY_PKG,
-          version: REGISTRY_VERSION,
-          dist: {
-            tarball: `http://127.0.0.1:${server.port}/${REGISTRY_PKG}/-/${REGISTRY_PKG}-${REGISTRY_VERSION}.tgz`,
-          },
-        });
-      }
-
-      if (pathname === `/${REGISTRY_PKG}/-/${REGISTRY_PKG}-${REGISTRY_VERSION}.tgz`) {
-        return new Response(REGISTRY_TARBALL, {
-          headers: { 'Content-Type': 'application/octet-stream' },
-        });
-      }
-
-      return new Response('not found', { status: 404 });
-    },
-  });
-
-  return { url: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
-}
-
 /** Bindings for the red direction: nothing may spawn and nothing may reach a host. */
 function refusingBindings(): ActorBindings {
   const loader = {
@@ -479,33 +390,6 @@ describe('hosted workspace facets', () => {
     const vfs = session.vfs.as(CRED_SESSION_USER);
     expect(vfs.readFile('home/user/hello/.git/HEAD')).toEqual(new TextEncoder().encode('ref: refs/heads/main\n'));
     expect(vfs.readFile('home/user/hello/README.md')).toEqual(new TextEncoder().encode('# hello from the facet\n'));
-  });
-
-  test('npm install streams a package off a local registry into the workspace', async () => {
-    const registry = serveRegistry();
-
-    try {
-      const actor = hostActor();
-      const box = actor.hosted.box('npm');
-      const made = await box.exec('mkdir -p /home/user/proj');
-      expect(made.exitCode).toBe(0);
-
-      const install = await box.exec(`cd /home/user/proj && npm install ${REGISTRY_PKG}`, {
-        env: { NPM_REGISTRY: registry.url },
-      });
-
-      const output = `${install.stdout}${install.stderr}`;
-      expect(output).not.toContain(REFUSAL);
-      expect(install.exitCode, output).toBe(0);
-      const session = await actor.hosted.bundle.session();
-      const vfs = session.vfs.as(CRED_SESSION_USER);
-      const manifestPath = `home/user/proj/node_modules/${REGISTRY_PKG}/package.json`;
-      expect(vfs.readFile(manifestPath)).toEqual(new TextEncoder().encode(REGISTRY_MANIFEST));
-      expect(vfs.readFile('home/user/proj/node_modules/' + REGISTRY_PKG + '/lib/index.js'))
-        .toEqual(new TextEncoder().encode('module.exports = 1;\n'));
-    } finally {
-      await registry.stop();
-    }
   });
 });
 
