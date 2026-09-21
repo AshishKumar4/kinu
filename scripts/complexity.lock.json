@@ -110,10 +110,6 @@
       "complexity": 44
     },
     {
-      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
-      "complexity": 43
-    },
-    {
       "key": "scripts/bench-payload-transports.ts#main",
       "complexity": 42
     },
