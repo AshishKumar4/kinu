@@ -127,6 +127,7 @@ import {
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { mcpPresetById } from "@kinu.run/core";
+import type { ReasoningEffort } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from "@kinu.run/core";
@@ -3637,10 +3638,16 @@ function ComposerFrame() {
   const [value, setValue] = useState("Ship the coupon fix behind a preview first.");
   const [mode, setMode] = useState<ChatMode>("build");
   const [model, setModel] = useState("anthropic/claude-opus-4");
+  /* The thinking level travels with the model on every agent conversation, so
+     the sheet carries it too: the pair's row is what this frame photographs,
+     and a frame with the model alone photographed a composer the product does
+     not have. The composer sizes the row, so the picker takes no width class
+     here either — the app passes none. */
+  const [effort, setEffort] = useState<ReasoningEffort | null>(null);
 
   const picker = () => (
     <ModelPicker models={MODEL_STUBS()} value={model} onChange={setModel} size="xs"
-      className="min-w-0 flex-1 basis-32 max-w-44" />
+      effort={{ value: effort, onChange: setEffort }} />
   );
 
   const shared = {

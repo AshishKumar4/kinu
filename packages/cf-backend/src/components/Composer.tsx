@@ -417,8 +417,13 @@ export function Composer({
               disabled={disabled || streaming} />
           )}
 
+          {/* The model and the thinking level read as ONE quiet row. A fill or
+              a rule on either trigger turned the pair into a label over a
+              pill, so both stay plain text and take their raise on hover and
+              on focus; a chat column too narrow for the two side by side is
+              the only place they stack. */}
           {modelPicker && (
-            <div className="min-w-0 flex-1 basis-32 max-w-44 focus-within:rounded-sm focus-within:ring-1 focus-within:ring-[var(--c-accent)] [&_input]:!bg-transparent [&_input]:!ring-transparent">
+            <div className="flex min-w-0 flex-1 basis-32 max-w-44 flex-col items-start gap-y-0.5 @[30rem]:max-w-[17.5rem] @[30rem]:flex-row @[30rem]:items-center @[30rem]:gap-x-3 [&>*]:min-w-0 [&_input]:!p-text-2 [&_input]:!bg-transparent [&_input]:!shadow-none [&_input]:!ring-0 [&_input]:transition-colors [&_input]:hover:!bg-[var(--c-elevated)] [&_input]:focus:!bg-[var(--c-elevated)]">
               {modelPicker}
             </div>
           )}
