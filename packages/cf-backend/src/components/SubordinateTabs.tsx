@@ -76,10 +76,8 @@ export function SubordinateTabs({
           rule cannot live on the strip itself: the strip clips vertically —
           a tab's overhang is enough to raise a scrollbar beside a single row
           of tabs — and a bar drawn past the strip's own edge is clipped away.
-          That clip is what hid the open tab: every tab stood taller than the
-          45px strip, so its accent bar fell outside the box the strip shows.
-          `h-full` with `items-stretch` makes each tab the strip's own height
-          and puts the bar back in view.
+          `h-full` with `items-stretch` makes each tab the strip's own height,
+          so the bar stays inside the box the strip shows.
 
           The trailing controls are a SIBLING of the strip, not content inside
           it: the strip scrolls horizontally once the roster outgrows the
@@ -105,12 +103,10 @@ export function SubordinateTabs({
                 {active ? (
                   // The open tab is not a link anywhere; it is where the agent is renamed.
                   <div aria-current="page" className={`${tabCls} p-tab-active h-full max-w-64 pl-3 pr-8 font-medium`}>
-                    {/* The mounting row names the colour its own title reads
-                        in — the rename control's contract — so the open tab
-                        hands over the accent. An agent still under its
-                        codename keeps the italic and drops the muted colour
-                        with it; muted was how a lit tab still printed its name
-                        like a closed one. */}
+                    {/* The mounting row names the colour its title reads in,
+                        so the open tab hands the rename control its accent. An
+                        agent still under its codename keeps the italic; a lit
+                        tab never prints its name muted. */}
                     <InlineRenameTitle
                       title={title}
                       editValue={subordinate.displayName}

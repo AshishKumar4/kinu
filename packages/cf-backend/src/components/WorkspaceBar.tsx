@@ -177,10 +177,9 @@ export function WorkspaceBar({
  * agent conversation's header — one rename affordance, whatever it names.
  * `subject` labels the accessible controls; `textClass` carries the mounting
  * row's type scale AND its text colour, so the still text and the editor agree
- * and the row decides how its own name reads. The colour used to be written
- * here as well, which a mounting row cannot overrule — a role in Tailwind's
- * utility layer outranks the grammar of whatever the name sits in — and that
- * is how the open agent tab kept printing its name in the closed colour.
+ * and the row decides how its own name reads. No colour is added here: a role
+ * in Tailwind's utility layer outranks the grammar the name sits in, so one
+ * written here could not be overruled by the row.
  */
 export function InlineRenameTitle({ title, editValue, onRename, subject, textClass = "text-[15px] font-semibold p-text" }: {
   title: string;
