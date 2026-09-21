@@ -14,7 +14,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
-import { createTestSql } from '@kinu.run/test-utils';
+import { AwaitedList, createTestSql } from '@kinu.run/test-utils';
 import { INTERRUPTED_TURN, type SendLanding, type SessionEvent } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { Connection } from 'agents';
@@ -29,17 +29,21 @@ const FrameSchema = v.looseObject({ type: v.string(), id: v.optional(v.string())
  *  send that FAULTS rejects with whatever broke underneath it. */
 interface HarnessRefusal { readonly refuse: string; readonly fault?: true; }
 
-function isRefusal(landing: SendLanding | HarnessRefusal): landing is HarnessRefusal {
+function isRefusal(landing: HarnessLanding): landing is HarnessRefusal {
   return v.is(v.object({ refuse: v.string() }), landing);
 }
 
-function harness(landing: SendLanding | HarnessRefusal = 'turn', loadHistory?: () => Promise<UIMessage[]>) {
+/** The loop's answer to a send: a landing at once, a refusal, or — as the
+ *  loop itself answers — a landing decided later. */
+type HarnessLanding = SendLanding | HarnessRefusal | Promise<SendLanding>;
+
+function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<UIMessage[]>) {
   const { sql, db } = createTestSql();
   const broadcasts: Array<{ frame: v.InferOutput<typeof FrameSchema>; exclude: string[] | undefined }> = [];
   const history: UIMessage[] = [];
   /** The ids the loop holds a reservation for: every send accepted mid-turn. */
   const reserved = new Set<string>();
-  const sent: Array<{ text: string; files: readonly { url: string }[]; id: string; mode: string }> = [];
+  const sent = new AwaitedList<{ text: string; files: readonly { url: string }[]; id: string; mode: string }>();
   let interrupts = 0;
   let clears = 0;
   const connections = new Map<string, Connection>();
@@ -69,10 +73,9 @@ function harness(landing: SendLanding | HarnessRefusal = 'turn', loadHistory?: (
     send: (input) => {
       if (isRefusal(landing)) return Promise.reject(landing.fault === true ? new Error(landing.refuse) : new KinuError('bad_input', landing.refuse));
       sent.push(input);
+      reserved.add(input.id);
 
-      if (landing === 'mid-turn') reserved.add(input.id);
-
-      return Promise.resolve(landing);
+      return landing instanceof Promise ? landing : Promise.resolve(landing);
     },
     interrupt: () => { interrupts += 1; },
     clear: () => {
@@ -88,7 +91,7 @@ function harness(landing: SendLanding | HarnessRefusal = 'turn', loadHistory?: (
   const chunkRows = () => db.query<{ body: string }, []>('SELECT body FROM cf_ai_chat_stream_chunks ORDER BY chunk_index').all().map((row) => row.body);
 
   return {
-    transport, broadcasts, history, reserved, sent, connection, chunkRows, db,
+    transport, broadcasts, history, reserved, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, chunkRows, db,
     interrupts: () => interrupts, clears: () => clears,
     responses: () => broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response').map((b) => b.frame),
     connectionFrames: (id: string): string[] => frames.get(id) ?? [],
@@ -163,6 +166,39 @@ describe('ChatWireTransport', () => {
     await h.transport.onMessage(conn, chatRequest('req-1', 'hello', file));
     expect(h.sent).toHaveLength(1);
     expect(h.responses()).toHaveLength(2);
+  });
+
+  test('a message the running turn ended before reading is answered by its rerun, under the request that sent it', async () => {
+    // The loop answers the landing where it is decided: here, after the turn
+    // that was running ended without a step for the words, reran them as the
+    // operator's next turn under the message's own id, and finished.
+    const landing = Promise.withResolvers<SendLanding>();
+    const h = harness(landing.promise);
+    const conn = h.connection('c1');
+    const admitted = h.transport.onMessage(conn, chatRequest('req-1', 'one more thing'));
+    await h.taken(1);
+
+    // The rerun opens under the message's id: the request that sent it is
+    // the request its stream and its done frame answer under.
+    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'one more thing' }] });
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    expect(h.responses()).toEqual([]);
+    await h.transport.observe(chunks([
+      { type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't' },
+      { type: 'text-delta', id: 't', delta: 'the tools are' },
+      { type: 'text-end', id: 't' }, { type: 'finish-step' }, { type: 'finish' },
+    ]));
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'one more thing', assistantResponse: 'the tools are', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    landing.resolve('turn');
+    expect(await admitted).toBe(true);
+
+    // One done frame, the rerun's, under `req-1` — never a `mid-turn` verdict
+    // at admission that would have told the client the words were read by a
+    // turn that never saw them.
+    expect(h.responses().filter((frame) => frame.done === true)).toEqual([
+      { type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true },
+    ]);
+    expect(h.responses().filter((frame) => frame.landed !== undefined)).toEqual([]);
   });
 
   test('a send the loop refuses closes the request with the refusal, and nothing is written', async () => {

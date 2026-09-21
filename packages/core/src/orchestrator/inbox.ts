@@ -50,7 +50,8 @@
  * event is routed, 'shown' where the agent takes it in (the step that splices
  * it, or the turn it started, which names its card through the `signalId`
  * stamped on it). A user message has no card — its record is the durable row,
- * announced by the steer_status broadcasts as it lands, returns, or reruns.
+ * announced by the steer_status broadcasts as it is queued, lands, runs as a
+ * turn of its own, or returns.
  */
 
 import type { ModelMessage } from 'ai';
@@ -128,12 +129,16 @@ export type SteerStatusDetail =
   | { status: 'landed'; steerId: string; text: string; atStep: number }
   /** An interrupt dropped it before the model saw it — the composer takes it
    *  back. */
-  | { status: 'returned'; steerId: string; text: string };
+  | { status: 'returned'; steerId: string; text: string }
+  /** It ran as a turn of its own: the running turn ended before reading it,
+   *  or none was running when it arrived. The turn's opening row, under this
+   *  same id, is its record from here on — not a bubble inside another turn. */
+  | { status: 'turn'; steerId: string; text: string };
 
 /** The progress event both backends broadcast for a user steer, so every open
  *  surface shows the same thing: the text was accepted, then the model saw it,
- *  or an interrupt handed it back. Compatible with BroadcastEvent's
- *  `{ type: string; … }` shape. */
+ *  or it ran as its own turn, or an interrupt handed it back. Compatible with
+ *  BroadcastEvent's `{ type: string; … }` shape. */
 export type SteerStatusEvent = SteerStatusDetail & { type: 'steer_status' };
 
 /** One landed steer as a durable user row, before a backend writes it. */
@@ -854,7 +859,14 @@ export class Inbox implements AgentInbox {
     try {
       const result = await this.startTurn(() => this.host.enqueueTurn(turn));
 
-      if (result.status === 'queued') return 'queued';
+      if (result.status === 'queued') {
+        for (const signal of group) {
+          this.host.broadcast({ type: 'steer_status', status: 'turn', steerId: signal.user.id, text: signal.text });
+        }
+
+        return 'queued';
+      }
+
       diagnostics.failure(
         'signal.preempted',
         new KinuError('unavailable', 'the host pre-empted the signal turn'),

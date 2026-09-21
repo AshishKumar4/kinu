@@ -150,16 +150,23 @@ export const PendingSteerFileSchema = v.object({
 export type PendingSteerFile = v.InferOutput<typeof PendingSteerFileSchema>;
 
 /** What one RAW chat frame, put on a socket while a turn's provider call is
- *  held, leaves behind: how the request itself was answered while the turn
- *  still ran, the reservation the admission wrote, whether the words reached
- *  the transcript instead, the `steer_status` landings the socket was told
- *  about, the provider calls, and how many assistant rows the drive ended
- *  with — one turn's worth, or a second turn's. */
+ *  held, leaves behind: what the admission announced while the turn still
+ *  ran, the reservation it wrote, whether the words reached the transcript
+ *  instead, how the request was answered once the words landed, the
+ *  `steer_status` landings the socket was told about, the provider calls,
+ *  and how many assistant rows the drive ended with — one turn's worth, or a
+ *  second turn's. */
 export interface RawChatProbeResult {
-  /** The done frame's `landed` while the provider was held: `'mid-turn'` for
-   *  a splice, `'closed'` for a done frame carrying no landing. A request the
-   *  running turn does not answer never produces this record: the probe waits
-   *  on the frame, and the row fails on the runner's clock. */
+  /** The `steer_status` the socket heard while the provider was held: the
+   *  running turn's inbox took the words under the client's id (`queued`),
+   *  the one thing admission says. A request the object does not announce
+   *  never produces this record: the probe waits on the frame, and the row
+   *  fails on the runner's clock. */
+  readonly admission: string;
+  /** The done frame's `landed`, once the words landed: `'mid-turn'` for a
+   *  splice into the held turn's next step, `'closed'` for a done frame
+   *  carrying no landing (a turn of their own). Never before the release —
+   *  the request is answered where the landing is decided. */
   readonly landing: string;
   readonly pendingIds: readonly string[];
   readonly persistedWhileHeld: boolean;
@@ -270,6 +277,9 @@ export const ParityFrameSchema = v.object({
   replay: v.optional(v.boolean()),
   continuation: v.optional(v.boolean()),
   body: v.optional(v.string()),
+  /** On a `steer_status` frame: which steer, and where it is. */
+  steerId: v.optional(v.string()),
+  status: v.optional(v.string()),
 });
 
 export type ParityFrame = v.InferOutput<typeof ParityFrameSchema>;

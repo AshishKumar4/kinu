@@ -72,6 +72,15 @@ function connection(agent: { broadcast: (message: string, exclude?: string[]) =>
   return { wire, sent, frame: (holds) => frames.until(holds) };
 }
 
+/** The wire's own word that the loop took a message into the running turn:
+ *  its `queued` steer_status. The request itself is answered only when the
+ *  words land, so a test that drives the step must wait for this, not that. */
+function queuedOnWire(steerId: string): (frames: readonly string[]) => boolean {
+  const queued = v.object({ type: v.literal('steer_status'), status: v.literal('queued'), steerId: v.literal(steerId) });
+
+  return (frames) => frames.some((raw) => v.is(queued, JSON.parse(raw)));
+}
+
 function chatRequest(id: string, text: string): string {
   return JSON.stringify({
     type: 'cf_agent_use_chat_request', id,
@@ -139,7 +148,7 @@ describe('a chat request through the production gate', () => {
 
   test('a mid-turn send that lands leaves exactly one row, stamped where it landed', async () => {
     const { agent } = orchestratorHarness();
-    const { wire, sent } = connection(agent);
+    const { wire, sent, frame } = connection(agent);
     await agent.activateActor();
     const gate = agent.harnessChatGate();
     // Production opens a turn through prepare; driving the same entry point
@@ -151,9 +160,12 @@ describe('a chat request through the production gate', () => {
     const [liveRow] = (await userRows(agent));
 
     // Admit the splice first, then drive the step it lands in: the drain
-    // at the step boundary commits the row the assertions read back.
-    await gate(wire, chatRequest('req-steer', 'check staging'));
+    // at the step boundary commits the row the assertions read back, and
+    // that landing is what answers the request — not the admission.
+    const request = gate(wire, chatRequest('req-steer', 'check staging'));
+    await frame(queuedOnWire('input-req-steer'));
     const stepped = await agent.harnessStepInto(0, [{ role: 'user', content: 'the long job' }]);
+    await request;
     const carried = stepped.flatMap((m) => m.role === 'user' && v.is(v.string(), m.content) ? [m.content] : []);
     expect(carried.some((content) => content.includes('check staging'))).toBe(true);
     expect((await userRows(agent))).toEqual([liveRow, 'input-req-steer']);
@@ -165,37 +177,44 @@ describe('a chat request through the production gate', () => {
 
   test('a replay of the same request while the steer is pending asks for no second turn', async () => {
     const { agent } = orchestratorHarness();
-    const { wire, sent } = connection(agent);
+    const { wire, sent, frame } = connection(agent);
     await agent.activateActor();
     const gate = agent.harnessChatGate();
 
     // A turn the session opened but the loop never ran — the inbox reads
-    // busy off it, so both sends take the mid-turn arm. The loop's own terms
+    // busy off it, so the send takes the mid-turn arm. The loop's own terms
     // for a message typed while the agent works, without spending a turn.
+    // The first request stays open until the words land; the replay finds
+    // them held and is spent at once, asking for nothing.
     await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
-    await gate(wire, chatRequest('req-steer', 'check staging'));
+    const request = gate(wire, chatRequest('req-steer', 'check staging'));
+    await frame(queuedOnWire('input-req-steer'));
     await gate(wire, chatRequest('req-steer', 'check staging'));
 
-    expect(doneFrames(sent)).toEqual([
-      { id: 'req-steer', landed: 'mid-turn' },
-      { id: 'req-steer' },
-    ]);
+    expect(doneFrames(sent)).toEqual([{ id: 'req-steer' }]);
     const bodies = agent.harnessEnqueued.map((turn) => turn.text);
     expect(bodies.filter((text) => text.includes('check staging'))).toHaveLength(0);
+
+    // The step that takes the words is what answers the first request.
+    await agent.harnessStepInto(0, [{ role: 'user', content: 'the long job' }]);
+    await request;
+    expect(doneFrames(sent)).toEqual([{ id: 'req-steer' }, { id: 'req-steer', landed: 'mid-turn' }]);
   });
 
   test('a second connection mid-turn is told what is resuming and reads the fresh transcript', async () => {
     const { agent } = orchestratorHarness();
-    const { wire } = connection(agent);
+    const { wire, frame } = connection(agent);
     await agent.activateActor();
     const gate = agent.harnessChatGate();
 
     // Production opens a turn through prepare; driving the same entry point
     // gives the step the prepared snapshot it refuses without, and the inbox
     // reads busy off this open turn. The LIVE text is the step's input; the
-    // gold is what the SECOND socket sees while the turn is still running.
+    // gold is what the SECOND socket sees while the turn is still running —
+    // and the request is still open, as one to a running turn is.
     await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
-    await gate(wire, chatRequest('req-live', 'the long job'));
+    const request = gate(wire, chatRequest('req-live', 'the long job'));
+    await frame(queuedOnWire('input-req-live'));
     const [liveRow] = (await agent.harnessTranscript.history()).filter((m) => m.role === 'user').map((m) => m.id);
 
     const second = connection(agent);
@@ -211,6 +230,9 @@ describe('a chat request through the production gate', () => {
     // And the close half of the same wiring: a resuming socket that goes
     // away releases the resume the handshake held for it.
     await agent.onClose(second.wire, 1000, 'gone', true);
+    // The request is answered by the step that takes its words.
+    await agent.harnessStepInto(0, [{ role: 'user', content: 'the long job' }]);
+    await request;
   });
 
   test('a live turn records its fleet row at its own seal', async () => {

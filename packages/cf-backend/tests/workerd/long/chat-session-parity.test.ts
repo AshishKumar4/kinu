@@ -33,6 +33,16 @@
  * `state: 'done'`, as a finished answer does; and the `start` frame precedes
  * the landed `steer_status`, since delivery is sequential and the steer lands
  * at step 1 of an already-open turn. No other line differs.
+ * Re-recorded 2026-09-21 (later) for one change that means to change it (67
+ * lines): a request to a running turn is answered where its landing is
+ * decided, never at admission. TWO-STEER, whose parked turn has no second
+ * step, is announced `queued` then `turn` and is answered by its rerun's own
+ * stream and done frame under the client's request id, so `landings` records
+ * no landing claim for it (its rerun is a turn like any other) and the rerun's
+ * frames carry `PARITY-TWO-STEER` in place of a minted id. FOUR-STEER is
+ * announced `queued` and then evicted with the isolate that held its request;
+ * the resumed turn announces it `landed` on socket B. `steer_status` frames
+ * now carry `steerId` and `status`, so the record says which steer and where.
  */
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';

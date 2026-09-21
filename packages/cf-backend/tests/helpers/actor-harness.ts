@@ -1483,17 +1483,30 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
 
     // A stamped driving message (a signal's `kinuEvent`) is a programmatic
     // turn, admitted through the queue with its metadata; a client's message
-    // is sent under its own id and mode, as the transport sends one.
-    const landed: Promise<SendLanding> = driving?.stamped === true
-      ? agent.harnessEnqueueTurn({ text: driving.text, metadata: driving.metadata ?? {} }).then(() => agent.harnessChatLoop.pumpPromise).then(() => 'turn' as const)
-      : agent.harnessChatLoop.send(text, { ...(chosenMode !== undefined && { mode: chosenMode }), ...(turnId !== undefined && { id: turnId }) });
-    // A refused send is an outcome the suite reads, not a rejection nobody
-    // handles: it lands here as its own arm.
+    // is admitted under its own id and mode, as the transport admits one,
+    // and its landing is a second answer: the loop decides it at the step
+    // that takes the words, or at the settle of the turn that reran them.
+    const waiter = Promise.withResolvers<SendLanding>();
+    // A message to a turn already in flight is the composer's steer — the
+    // loop reads the same fact on this same tick — so its admission is the
+    // whole of what a preparation can see: no model call is its own.
+    const steer = driving?.stamped !== true && agent.harnessChatLoop.turnInFlight();
 
+    const admitted: Promise<void> = driving?.stamped === true
+      ? agent.harnessEnqueueTurn({ text: driving.text, metadata: driving.metadata ?? {} }).then(() => agent.harnessChatLoop.pumpPromise).then(() => { waiter.resolve('turn'); })
+      : agent.harnessChatLoop.admit(text, { ...(chosenMode !== undefined && { mode: chosenMode }), ...(turnId !== undefined && { id: turnId }) }, waiter);
+
+    const landed: Promise<SendLanding> = admitted.then(() => waiter.promise);
+    // A refused admission is an outcome the suite reads, not a rejection
+    // nobody handles: it lands here as its own arm.
     const refused = (error: Error) => ({ refused: toKinuError({ doing: 'admitting the turn the suite asked for', cause: error, otherwise: 'unavailable' }) });
     const landing = landed.then((value) => ({ landing: value }), refused);
 
-    const outcome = await Promise.race([arrived.promise.then((request) => ({ request })), landing]);
+    const outcome = await Promise.race([
+      arrived.promise.then((request) => ({ request })),
+      ...(steer ? [admitted.then(() => ({ admitted: true as const }), refused)] : []),
+      landing,
+    ]);
 
     if ('refused' in outcome) throw outcome.refused;
 

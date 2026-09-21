@@ -880,21 +880,28 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       if (response.status !== 101 || socket === null) throw new Error('queue probe did not receive a real WebSocket');
       socket.accept();
 
-      // A busy-routed send answers with its own done frame carrying
-      // `landed:'mid-turn'` — the acceptance a splice gives — while an idle
-      // send only persists its row. send() resolves on WHICHEVER arrives
-      // first, so it never outlives either path.
-      const landedIds = new Set<string>();
+      // A busy-routed send is announced `queued` under its client id the
+      // moment the running turn's inbox takes it — its request is answered
+      // only when the words land, which the held provider call forbids —
+      // while an idle send only persists its row. send() resolves on
+      // WHICHEVER arrives first, so it never outlives either path.
+      const admittedIds = new Set<string>();
       socket.addEventListener('message', (event) => {
         const raw = v.is(v.string(), event.data) ? event.data : '';
 
         const frame = v.safeParse(
-          v.object({ type: v.string(), id: v.optional(v.string()), done: v.optional(v.boolean()) }),
+          v.object({ type: v.string(), id: v.optional(v.string()), done: v.optional(v.boolean()), status: v.optional(v.string()), steerId: v.optional(v.string()) }),
           raw.startsWith('{') ? JSON.parse(raw) : {},
         );
 
-        if (frame.success && frame.output.type === 'cf_agent_use_chat_response' && frame.output.done === true) {
-          landedIds.add(String(frame.output.id));
+        if (!frame.success) return;
+
+        if (frame.output.type === 'cf_agent_use_chat_response' && frame.output.done === true) {
+          admittedIds.add(String(frame.output.id));
+        }
+
+        if (frame.output.type === 'steer_status' && frame.output.status === 'queued' && frame.output.steerId !== undefined) {
+          admittedIds.add(frame.output.steerId.replace(/^input-/, ''));
         }
       });
 
@@ -916,9 +923,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
           const page = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
           const history = v.parse(SocketHistorySchema, await page.json());
 
-          if (history.some((row) => row.role === 'user' && row.id === `input-${text}`) || landedIds.has(text)) break;
+          if (history.some((row) => row.role === 'user' && row.id === `input-${text}`) || admittedIds.has(text)) break;
 
-          if (Date.now() - began > 20000) throw new Error(`socket input ${text} neither persisted nor answered landed`);
+          if (Date.now() - began > 20000) throw new Error(`socket input ${text} neither persisted nor announced queued`);
           await new Promise<void>((resolve) => setTimeout(resolve, 20));
         }
       };
@@ -1309,11 +1316,11 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       const parsed = v.safeParse(v.looseObject({
         type: v.string(), id: v.optional(v.string()), done: v.optional(v.boolean()), error: v.optional(v.boolean()),
         landed: v.optional(v.string()), replay: v.optional(v.boolean()), continuation: v.optional(v.boolean()),
-        body: v.optional(v.string()),
+        body: v.optional(v.string()), steerId: v.optional(v.string()), status: v.optional(v.string()),
       }), JSON.parse(raw));
 
       if (!parsed.success) return;
-      const { type, id, done, error, landed, replay, continuation, body } = parsed.output;
+      const { type, id, done, error, landed, replay, continuation, body, steerId, status } = parsed.output;
 
       const frame = v.parse(ParityFrameSchema, {
         socket: name, type,
@@ -1321,6 +1328,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         ...(landed !== undefined && { landed }), ...(replay !== undefined && { replay }),
         ...(continuation !== undefined && { continuation }),
         ...(body !== undefined && body !== '' && { body }),
+        ...(steerId !== undefined && { steerId }), ...(status !== undefined && { status }),
       });
 
       frames.push(frame);
@@ -1355,6 +1363,11 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         }
       },
     };
+  }
+
+  /** The socket's word that the running turn's inbox took this message. */
+  private queuedSteer(steerId: string): (frame: ParityFrame) => boolean {
+    return (frame) => frame.type === 'steer_status' && frame.status === 'queued' && frame.steerId === steerId;
   }
 
   private parityFrame(text: string, file?: { filename: string; mediaType: string; url: string }): string {
@@ -1412,14 +1425,17 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
 
         // 2. A send mid-turn, carrying a file, while the turn's model call is
         //    parked. The echo lane has no second step, so the steer reruns as
-        //    the operator's next turn once the parked turn settles.
+        //    the operator's next turn once the parked turn settles — and its
+        //    request is answered by that rerun, under the steer's own id,
+        //    not at admission. What admission announces is `queued`.
         await fetch('http://probe-control.invalid/parity/hold', { method: 'POST', body: JSON.stringify({ parkAt: 'first' }) });
         socket.send(this.parityFrame('PARITY-TWO'));
         await fetch('http://probe-control.invalid/parity/arrived');
         socket.send(this.parityFrame('PARITY-TWO-STEER', file));
-        landings['PARITY-TWO-STEER'] = (await done('PARITY-TWO-STEER')).landed ?? null;
+        await seen(this.queuedSteer('input-PARITY-TWO-STEER'), 'the steer admitted into the parked turn');
         await fetch('http://probe-control.invalid/parity/release', { method: 'POST' });
         landings['PARITY-TWO'] = (await done('PARITY-TWO')).landed ?? null;
+        landings['PARITY-TWO-STEER'] = (await done('PARITY-TWO-STEER')).landed ?? null;
         await awaitSleepTimeSettled(recording, 3);
         await awaitQuiet(recording);
         afterTwo = await target.parityRows();
@@ -1444,7 +1460,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         await fetch('http://probe-control.invalid/parity/arrived');
         await seen((frame) => frame.id === 'PARITY-FOUR-TOOL' && frame.body !== undefined && frame.body.includes('"text-delta"'), "the parked answer's first delta");
         socket.send(this.parityFrame('PARITY-FOUR-STEER', file));
-        landings['PARITY-FOUR-STEER'] = (await done('PARITY-FOUR-STEER')).landed ?? null;
+        // Acknowledged, not landed: the eviction below cuts the turn before
+        // any step could take the words, and the request that sent them dies
+        // with the isolate. The reservation is what survives.
+        await seen(this.queuedSteer('input-PARITY-FOUR-STEER'), 'the steer admitted into the parked turn');
       } finally {
         socket.close(1000, 'parity prepared');
       }
@@ -1892,11 +1911,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
    * and the provider is parked on that turn's first call while the frame
    * goes out under the CLIENT's own message id.
    *
-   * Everything returned is what the surface itself could see: how the
-   * request was answered while the turn still ran, the reservation the
-   * admission wrote, whether the words reached the transcript instead, the
-   * `steer_status` landings broadcast to the socket, the provider calls, and
-   * the assistant rows the drive ended with.
+   * Everything returned is what the surface itself could see: what the
+   * admission announced while the turn still ran, the reservation it wrote,
+   * whether the words reached the transcript instead, how the request was
+   * answered once the words landed, the `steer_status` landings broadcast
+   * to the socket, the provider calls, and the assistant rows the drive
+   * ended with.
    */
   async rawChat(): Promise<RawChatProbeResult> {
     const workspace = 'raw-steer-workspace';
@@ -1919,6 +1939,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     const recording = createRecordingLogger();
     const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
     const frames: v.InferOutput<typeof RawChatFrameSchema>[] = [];
+    const admitted = Promise.withResolvers<string>();
     const answered = Promise.withResolvers<string>();
     let socket: WebSocket | null = null;
 
@@ -1936,6 +1957,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
 
         if (!parsed.success) return;
         frames.push(parsed.output);
+
+        if (parsed.output.type === 'steer_status' && parsed.output.steerId === 'raw-client-id' && parsed.output.status === 'queued') {
+          admitted.resolve(parsed.output.status);
+        }
 
         if (parsed.output.type === 'cf_agent_use_chat_response' && parsed.output.id === 'raw-request'
           && parsed.output.done === true) {
@@ -1957,24 +1982,28 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         }) },
       }));
 
-      // The request's own done frame is the signal: a splice answers it while
-      // the provider call is still parked, and only then are the durable
-      // traces read — the reservation under the client's id, and whether the
-      // words reached the transcript as a turn of their own instead. The hold
-      // stays armed until this frame arrives, so a request that could only be
-      // answered after the turn hangs here and the row fails on its clock.
-      const landing = await answered.promise;
+      // The admission's own broadcast is the signal: the running turn's inbox
+      // announces the words `queued` under the client's id while the provider
+      // call is still parked, and only then are the durable traces read — the
+      // reservation under that id, and whether the words reached the
+      // transcript as a turn of their own instead. The hold stays armed until
+      // this frame arrives, so words the object does not take hang here and
+      // the row fails on its clock. The request itself is answered later, at
+      // the step that takes the words: the landing is decided there, never at
+      // admission.
+      const admission = await admitted.promise;
       const persistedWhileHeld = (await this.socketHistory(target, workspace)).some((row) => row.id === 'raw-client-id');
       const pendingIds = (await target.pendingSteers()).map((row) => row.id);
 
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+      const landing = await answered.promise;
       // ONE turn when the words landed inside it; a second turn when they
       // could only run after it — each turn settles its own sleep-time lane.
       await awaitSleepTimeSettled(recording, persistedWhileHeld ? 2 : 1);
       await awaitQuiet(recording);
 
       return {
-        landing, pendingIds, persistedWhileHeld,
+        admission, landing, pendingIds, persistedWhileHeld,
         landed: frames.flatMap((frame) => frame.type === 'steer_status' && frame.status === 'landed'
           && frame.steerId !== undefined && frame.text !== undefined && frame.atStep !== undefined
           ? [{ id: frame.steerId, text: frame.text, atStep: frame.atStep }]

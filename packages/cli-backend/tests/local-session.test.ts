@@ -3100,10 +3100,13 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
-    expect(await session.send('also check X')).toBe('mid-turn');
-    expect(await session.send('and Y')).toBe('mid-turn');
+    const steerX = session.send('also check X');
+    const steerY = session.send('and Y');
     release();
     await turn;
+    // Answered at the step boundary that took them, never at admission.
+    expect(await steerX).toBe('mid-turn');
+    expect(await steerY).toBe('mid-turn');
 
     // The second model call (post-tool step) sees exactly one injected user
     // message, merged from both steers, AFTER the tool-result message.
@@ -3140,11 +3143,12 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
     expect(session.turnInFlight()).toBe(true);
-    expect(await session.send('also check X')).toBe('mid-turn');
+    const steer = session.send('also check X');
     await fireTimer(session, 'mail from bob');
     await session.flushPendingDrains();
     release();
     await turn;
+    expect(await steer).toBe('mid-turn');
 
     const second = prompts[1]!;
     const injected = userTexts(second).filter((text) => text.includes('also check X') || text.includes('mail from bob'));
@@ -3188,10 +3192,13 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const turn = session.send('first question');
     await waitFor(() => events.some((e) => e.type === 'text-delta'));
-    expect(await session.send('follow up please')).toBe('mid-turn');
+    const steer = session.send('follow up please');
     release();
     await turn;
     await waitFor(() => events.filter((e) => e.type === 'turn-end').length >= 2);
+    // The words ran as a turn of their own, and the send says so once that
+    // turn has finished — not `mid-turn` at admission, which no step made true.
+    expect(await steer).toBe('turn');
 
     const starts = turnStarts(events);
     expect(starts).toHaveLength(2);
@@ -3214,10 +3221,13 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const turn = session.send('long task');
     await waitFor(() => events.some((e) => e.type === 'text-delta'));
-    expect(await session.send('change of plans')).toBe('mid-turn');
+    const steer = session.send('change of plans');
+    await waitFor(() => steerStatuses(events).some((s) => s.status === 'queued'));
     // Surfaces already rendered the steer as sent — the dropped text comes
-    // back so they can restore it to the composer instead of losing it.
+    // back so they can restore it to the composer instead of losing it, and
+    // the send itself is answered with that: the words did not land.
     expect(session.interrupt()).toEqual(['change of plans']);
+    await expect(steer).rejects.toThrow(/stopped before the agent read this message/);
     await turn;
     await new Promise((resolve) => setTimeout(resolve, 30));
 
@@ -3283,7 +3293,8 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
 
-    expect(await session.send('also check X')).toBe('mid-turn');
+    const steer = session.send('also check X');
+    await waitFor(() => steerStatuses(events).length > 0);
     // Accepted but not yet seen. The id is assigned at ACCEPTANCE, so the queued
     // event and the durable row it later becomes carry the same one.
     expect(steerStatuses(events).map((s) => [s.status, s.text]))
@@ -3298,6 +3309,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     if (!landed) throw new Error('the landed steer was never announced');
     expect(landed.steerId).toBe(steerId);
     expect(landed.text).toBe('also check X');
+    expect(await steer).toBe('mid-turn');
     // The step index is what lets a surface draw the steer INSIDE the assistant
     // message the turn is still writing rather than under it.
     expect(landed.atStep).toBeDefined();
@@ -3305,8 +3317,10 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     // A second steer with no boundary left goes back to the composer.
     await waitFor(() => events.some((e) => e.type === 'text-delta'));
-    expect(await session.send('and Y')).toBe('mid-turn');
+    const second = session.send('and Y');
+    await waitFor(() => steerStatuses(events).filter((s) => s.status === 'queued').length === 2);
     expect(session.interrupt()).toEqual(['and Y']);
+    await expect(second).rejects.toThrow(/stopped before the agent read this message/);
     await turn;
 
     expect(steerStatuses(events).map((s) => s.status))
@@ -3485,9 +3499,10 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const { session, events } = setup('unused', model);
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
-    expect(await session.send('do it differently')).toBe('mid-turn');
+    const steer = session.send('do it differently');
     release();
     await turn;
+    expect(await steer).toBe('mid-turn');
     expect(events.some((e) => e.type === 'error')).toBe(true);
 
     // The NEXT turn's model context must still carry the steer the model
@@ -3677,8 +3692,10 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     expect(bound?.mode).toBe('build');
     expect(bound?.turn_id).not.toBeNull();
 
-    expect(await steer).toBe('mid-turn');
+    // The send is answered at the drain the step gate opens — the moment the
+    // words are the model's — and by the same durable write that lands them.
     stepGate.resolve();
+    expect(await steer).toBe('mid-turn');
     await waitFor(() => steerStatuses(events).some((s) => s.status === 'landed'));
     endGate.resolve();
     await turn;
@@ -3699,8 +3716,9 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
 
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
-    expect(await session.send('also check X')).toBe('mid-turn');
+    const steer = session.send('also check X');
     stepGate.resolve();
+    expect(await steer).toBe('mid-turn');
 
     // The drain ran — the turn is still open, parked on endGate. A process
     // dying HERE used to lose the landed row.
@@ -3723,7 +3741,10 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
 
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
-    expect(await session.send('lost mid-turn')).toBe('mid-turn');
+    // Acknowledged, never landed: the send's answer dies with this process,
+    // so the promise is held and never awaited.
+    const lost = session.send('lost mid-turn');
+    await waitFor(() => pendingSends(db).length === 2);
     // What the process acknowledged: the steer's bound row, and the opening
     // send's own reservation — its turn never committed. After this the first
     // session is dead: nothing below may release its model gate.
@@ -3766,8 +3787,10 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     expect(await rt.stores.history.transcript(CHAT_SESSION_ID).metadata(steered[0]!.id))
       .toMatchObject({ [STEER_METADATA_KEY]: true });
 
-    // The dead session's turn is still parked; interrupt releases it cleanly.
+    // The dead session's turn is still parked; interrupt releases it cleanly,
+    // and hands its copy of the acknowledged words back to their sender.
     session.interrupt();
+    await expect(lost).rejects.toThrow(/stopped before the agent read this message/);
     await turn;
     await session.end();
     await next.end();
@@ -3797,11 +3820,12 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
       onEvent: (e) => nextEvents.push(e),
     });
 
-    expect(await next.send('the follow-up')).toBe('mid-turn');
+    const followUp = next.send('the follow-up');
     // One recovered turn: the dead session's acknowledged send re-entered the
     // pump as its own turn, and the new send — mid-turn while it ran —
     // landed inside it.
     await waitFor(() => nextEvents.some((e) => e.type === 'turn-end'));
+    expect(await followUp).toBe('mid-turn');
     expect(turnStarts(nextEvents).map((s) => [s.kind, s.text])).toEqual([
       ['user', 'queued behind nothing'],
     ]);
@@ -3824,12 +3848,14 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
 
     const turn = session.send('long task');
     await waitFor(() => events.some((e) => e.type === 'text-delta'));
-    expect(await session.send('change of plans')).toBe('mid-turn');
+    const steer = session.send('change of plans');
+    await waitFor(() => pendingSends(db).length === 2);
     expect(pendingSends(db).map((row) => row.text)).toEqual(['long task', 'change of plans']);
 
     // The composer took the words back: the surface owns them again, so the
-    // durable reservation is spent rather than owed.
+    // durable reservation is spent rather than owed, and the send hears it.
     expect(session.interrupt()).toEqual(['change of plans']);
+    await expect(steer).rejects.toThrow(/stopped before the agent read this message/);
     await turn;
     // Both reservations spent: the returned steer's by the interrupt, the
     // turn's own by the commit its abort still reaches.

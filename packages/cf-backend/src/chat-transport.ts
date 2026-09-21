@@ -306,8 +306,10 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
    * (`reconcileMessages`, the SDK's own rule for what is new), then ONE send
    * per message the loop does not already hold, each under the id the client
    * renders it by. The loop decides the landing and writes the row; this
-   * answers the request accordingly. A regenerate carries nothing new and is
-   * answered as done.
+   * answers the request accordingly, and only once the landing is decided —
+   * the request is the client's one question about the message, and the
+   * turn that answers it is not known at admission. A regenerate carries
+   * nothing new and is answered as done.
    */
   private async admitChatRequest(requestId: string, body: string | undefined): Promise<void> {
     const parsed = body === undefined ? null : v.safeParse(v.pipe(v.string(), v.parseJson(), ChatRequestBodySchema), body);
@@ -352,11 +354,12 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       }
     }
 
-    // A splice answers at once, with where it landed, and the request is
-    // spent: a message the splice could not place reruns as a turn of its
-    // own, and that turn answers under an id of its own like any harness turn.
-    // A message that opened a turn answers when that turn's own `turn-end`
-    // closes the request it was admitted under.
+    // A message the running turn read is answered by that turn: the request
+    // is spent with the landing, and the absorbing turn's own stream is where
+    // the reply goes. A message that opened a turn — at once, or as the rerun
+    // of words the running turn ended before reading — kept its id as that
+    // turn's id, so the turn streamed under this request and its `turn-end`
+    // closed it; nothing is left to say.
     if (landed === 'mid-turn') {
       for (const message of fresh) this.requests.delete(message.id);
       this.done(requestId, { landed });

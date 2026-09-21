@@ -1838,7 +1838,7 @@ export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type Actor
 
 export {
   ChatSession, turnInputMessage, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
-  type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
+  type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 
 
