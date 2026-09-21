@@ -13,7 +13,6 @@ import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepR
 import {
   EvolutionEngine,
   readSoul,
-  type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
   type EvolutionEvent,
@@ -62,7 +61,7 @@ const PROBLEMS: Problem[] = [
 /** Run one problem using native AI SDK tool calling */
 async function solveProblem(
   model: LanguageModel,
-  rt: AgentRuntime,
+  rt: CLIRuntime,
   tools: ToolSet,
   problem: Problem,
 ): Promise<{ response: string; turn: CompletedTurn; toolNames: string[] }> {
@@ -90,10 +89,10 @@ async function solveProblem(
 
   // Store in DB
   const id = crypto.randomUUID();
-  void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content)
-    VALUES (${rt.actor.actorId}, ${id}, ${'deep'}, ${'user'}, ${problem.question})`;
-  void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
-    VALUES (${rt.actor.actorId}, ${crypto.randomUUID()}, ${'deep'}, ${id}, ${'assistant'}, ${response})`;
+  await rt.stores.history.record('deep', { id, parentId: null, message: { role: 'user', content: problem.question }, origin: 'input' });
+  await rt.stores.history.record('deep', {
+    id: crypto.randomUUID(), parentId: id, message: { role: 'assistant', content: response }, origin: 'output',
+  });
 
   const turn: CompletedTurn = {
     userMessage: problem.question,

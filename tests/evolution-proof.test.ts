@@ -149,10 +149,10 @@ async function chatTurn(
   const responseText = collectStepText(result);
 
   const id = crypto.randomUUID();
-  void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content)
-    VALUES (${rt.actor.actorId}, ${id}, ${sessionId}, ${'user'}, ${userMessage})`;
-  void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
-    VALUES (${rt.actor.actorId}, ${crypto.randomUUID()}, ${sessionId}, ${id}, ${'assistant'}, ${responseText})`;
+  await rt.stores.history.record(sessionId, { id, parentId: null, message: { role: 'user', content: userMessage }, origin: 'input' });
+  await rt.stores.history.record(sessionId, {
+    id: crypto.randomUUID(), parentId: id, message: { role: 'assistant', content: responseText }, origin: 'output',
+  });
 
   return {
     text: responseText,
@@ -653,7 +653,7 @@ describe('Evolution Proof', () => {
     console.log(`    Memory chunks: ${chunks.length}`);
 
     // Both halves of every turn are on the session tree the next session reads.
-    const msgCount = rt.storage.sql<{ c: number }>`SELECT COUNT(*) as c FROM actor_messages`[0]?.c ?? 0;
+    const msgCount = rt.storage.sql<{ c: number }>`SELECT COUNT(*) as c FROM conversation_entries`[0]?.c ?? 0;
     console.log(`    Messages: ${msgCount}`);
     expect(msgCount).toBe(session1Results.length * 2);
   });
@@ -838,7 +838,7 @@ return report;`,
     }
 
     // DB state
-    const msgCount = rt.storage.sql<{ c: number }>`SELECT COUNT(*) as c FROM actor_messages`[0]?.c ?? 0;
+    const msgCount = rt.storage.sql<{ c: number }>`SELECT COUNT(*) as c FROM conversation_entries`[0]?.c ?? 0;
     const craftCount = rt.storage.sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`[0]?.c ?? 0;
     console.log(`\n    DB: ${msgCount} messages, ${craftCount} crafted tools`);
 

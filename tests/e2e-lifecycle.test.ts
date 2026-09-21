@@ -29,7 +29,6 @@ import {
 import {
   collectStepText,
   EvolutionEngine,
-  type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
   type EvolutionEvent,
@@ -111,7 +110,7 @@ interface ConversationTurn {
  * subject of that suite's title, so it is threaded here, once, for every caller.
  *
  * `sent` IS RETURNED BECAUSE CONTENT CANNOT PROVE THREADING. The agent holds a
- * `memory` tool whose conversation-search action queries the same `actor_messages`
+ * `memory` tool whose conversation-search action queries the same `conversation_entries`
  * table this function writes to (core/src/tools/memory-tool.ts over
  * core/src/memory/conversation-search.ts), so a later turn can RETRIEVE the
  * conversation whether or not it was threaded. Measured 2026-08-20: with
@@ -125,7 +124,7 @@ interface ConversationTurn {
  */
 async function chatTurn(
   model: LanguageModel,
-  rt: AgentRuntime,
+  rt: CLIRuntime,
   tools: ToolSet,
   history: ModelMessage[],
   userMessage: string,
@@ -155,10 +154,10 @@ async function chatTurn(
   history.push(...result.response.messages);
   const responseText = collectStepText(result);
   const id = crypto.randomUUID();
-  void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content)
-    VALUES (${rt.actor.actorId}, ${id}, ${'e2e'}, ${'user'}, ${userMessage})`;
-  void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
-    VALUES (${rt.actor.actorId}, ${crypto.randomUUID()}, ${'e2e'}, ${id}, ${'assistant'}, ${responseText})`;
+  await rt.stores.history.record('e2e', { id, parentId: null, message: { role: 'user', content: userMessage }, origin: 'input' });
+  await rt.stores.history.record('e2e', {
+    id: crypto.randomUUID(), parentId: id, message: { role: 'assistant', content: responseText }, origin: 'output',
+  });
 
   return {
     sent,
@@ -237,7 +236,7 @@ describe('E2E Lifecycle', () => {
     ).all().map(t => t.name);
 
     expect(tables).toContain('inodes');
-    expect(tables).toContain('actor_messages');
+    expect(tables).toContain('conversation_entries');
     expect(tables).toContain('search_nodes');
     const soul = await readSoul(rt.storage.vfs) ?? '';
     expect(soul).toContain('TypeScript');
@@ -252,7 +251,7 @@ describe('E2E Lifecycle', () => {
     // MECHANISM assertions read the prompt each turn handed the model: they are
     // the deterministic red for threading. The BEHAVIOUR assertions read the
     // replies: they prove the model USED its context, but they are not proof of
-    // threading, because the `memory` tool searches the same `actor_messages` table
+    // threading, because the `memory` tool searches the same `conversation_entries` table
     // this suite writes and can fetch the conversation back (measured — see
     // chatTurn's header). Both are kept: a suite that only checked the
     // mechanism would pass on a model that ignored what it was handed.
@@ -286,7 +285,7 @@ describe('E2E Lifecycle', () => {
     // This is the assertion that makes the suite's title true, and the only one
     // that is a deterministic red when the history is not threaded. It reads
     // the prompt each turn SENT, never the store and never the reply, because
-    // the agent's `memory` tool searches the same `actor_messages` table this suite
+    // the agent's `memory` tool searches the same `conversation_entries` table this suite
     // writes — so a later turn can retrieve the conversation without ever
     // having been given it (see chatTurn's header for the measurement).
     for (const [i, sent] of sentPerTurn.entries()) {
@@ -349,7 +348,7 @@ describe('E2E Lifecycle', () => {
       'turn 5\'s summary never mentions validation or input types — the discussed work did not reach it')
       .toMatch(/validat|input type/i);
 
-    const count = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM actor_messages').get()?.c ?? 0;
+    const count = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM conversation_entries').get()?.c ?? 0;
     console.log(`  Messages in DB: ${count}`);
     expect(count).toBeGreaterThanOrEqual(10);
     // 30 minutes, RAISED FROM 600_000 ON A MEASUREMENT. Threading the history
@@ -406,10 +405,10 @@ describe('E2E Lifecycle', () => {
   }, 900_000);
 
   liveTest('persistence', async () => {
-    const msgsBefore = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM actor_messages').get()?.c ?? 0;
+    const msgsBefore = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM conversation_entries').get()?.c ?? 0;
     db.close();
     const db2 = new Database(DB_PATH);
-    const msgsAfter = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM actor_messages').get()?.c ?? 0;
+    const msgsAfter = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM conversation_entries').get()?.c ?? 0;
     const reopened = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG });
     const soul = reopened.info.soul;
     db2.close();
