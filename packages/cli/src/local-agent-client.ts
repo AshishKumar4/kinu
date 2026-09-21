@@ -270,8 +270,9 @@ export class LocalAgentClient implements AgentClient {
    *  or the rerun of words a running turn ended before reading. A send the
    *  running turn read leaves here at that landing. */
   private readonly awaiting = new Map<string, PendingLocalTurn>();
-  /** The awaited send whose turn is open now, filled at its `turn-end`. */
-  private live: PendingLocalTurn | null = null;
+  /** The awaited sends whose turn is open now — one, or every leftover a
+   *  rerun carried — each filled at its `turn-end`. */
+  private live: readonly PendingLocalTurn[] = [];
   private closed = false;
   /** The one title operation may outlive opening or a turn, but never the
    * workspace database. Its owning client joins it during close. */
@@ -457,8 +458,7 @@ export class LocalAgentClient implements AgentClient {
       return { landed, ...(pending.result ?? unfinishedTurn()) };
     } finally {
       this.awaiting.delete(id);
-
-      if (this.live === pending) this.live = null;
+      this.live = this.live.filter((open) => open !== pending);
     }
   }
 
@@ -715,15 +715,16 @@ export class LocalAgentClient implements AgentClient {
     if (!mapped) return;
 
     if (event.type === 'turn-start') {
-      // The turn under an awaited send's id is that send's turn: its row goes
-      // into the CLI transcript ahead of the turn's events, and its end is
-      // the send's result. Any other turn — a wake, a delegation — is nobody's.
-      this.live = this.awaiting.get(event.turnId) ?? null;
+      // The turn under an awaited send's id is that send's turn, and so is
+      // one it carried: each row goes into the CLI transcript ahead of the
+      // turn's events, and its end is each send's result. Any other turn — a
+      // wake, a delegation — is nobody's.
+      this.live = [event.turnId, ...event.carried].flatMap((id) => this.awaiting.get(id) ?? []);
 
-      if (this.live !== null) this.activeCliSession.append('user', this.live.entry);
+      for (const pending of this.live) this.activeCliSession.append('user', pending.entry);
     }
 
-    if (mapped.type === 'turn-end' && this.live !== null) this.live.result = mapped.turn;
+    if (mapped.type === 'turn-end') for (const pending of this.live) pending.result = mapped.turn;
     this.emit(mapped);
   }
 

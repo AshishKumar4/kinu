@@ -413,10 +413,17 @@ describe('LocalAgentClient', () => {
       });
     });
     const second = client.send('list every tool you have');
+    const third = client.send('and your version');
     release();
 
     expect((await first).landed).toBe('turn');
     const result = await second;
+    // Both leftovers reran as ONE turn under the first one's id; the turn
+    // carried the second, so it is answered with the same result.
+    const carried = await third;
+
+    if (carried.landed !== 'turn') throw new Error('a message the turn never read runs as the next turn');
+    expect(carried.text).toBe('answer 2');
 
     // Answered by the rerun, with the rerun's own reply — not by the turn
     // that was writing when the words arrived, and not `mid-turn` at
@@ -431,9 +438,10 @@ describe('LocalAgentClient', () => {
     const history = await client.history();
     expect(history.map((message) => [message.role, message.content])).toEqual([
       ['user', 'here is your standing brief'], ['assistant', 'standing brief, noted'],
-      ['user', 'list every tool you have'], ['assistant', 'answer 2'],
+      ['user', 'list every tool you have'], ['user', 'and your version'], ['assistant', 'answer 2'],
     ]);
     expect(history[2]).not.toHaveProperty('steered');
+    expect(history[3]).not.toHaveProperty('steered');
     await client.close();
   });
 

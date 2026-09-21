@@ -197,7 +197,11 @@ export type SessionEvent =
   | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string; workMode: WorkMode;
       /** The opening row's id and the answer's id, both minted at admission,
        *  so a transport can key a turn's frames and its persisted row. */
-      turnId: string; messageId: string }
+      turnId: string; messageId: string;
+      /** The other messages this turn carries: a rerun runs every leftover
+       *  as ONE turn under the first one's id, so the rest are answered by
+       *  this turn too and a transport closes their requests with it. */
+      carried: readonly string[] }
   | { type: 'text-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: ToolCallArguments }
   | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string } & ToolOutcome)
@@ -1212,7 +1216,10 @@ export class ChatSession {
 
     if (item.kind === 'user') this.transcript.appendUser(opening);
 
-    this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode, turnId: this.turnId, messageId: this.messageId });
+    this.emit({
+      type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode, turnId: this.turnId, messageId: this.messageId,
+      carried: (item.steerIds ?? []).filter((id) => id !== this.turnId),
+    });
 
     const startedAt = Date.now();
     // Open this turn's run in the durable event log (core turn-lifecycle).

@@ -1217,6 +1217,11 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       ? { filename: 'chart.png', mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' }
       : undefined;
 
+    // Both frames go out while the held call is in flight — after the fake
+    // reports it arrived — so each is a steer with no step left to land at
+    // before the reset. Sent earlier, B can reach the turn's first drain and
+    // land inside the held call, and the reset then has no reservation to keep.
+    await fetch('http://probe-control.invalid/queue/arrived');
     const bWire = (await this.sendChatFrame(target, workspace, 'QUEUE-B', attach)).wire;
     const cWire = (await this.sendChatFrame(target, workspace, 'QUEUE-C')).wire;
 
@@ -1268,6 +1273,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
 
     try {
+      // The fake logged the held call when it arrived, before the reset killed
+      // the object that made it; only the calls the restarted object makes are
+      // this half's measurement.
+      await this.httpReset();
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
       // ONE turn: the re-opened genesis turn, with B and C landed at its first
       // step — the step boundary both were waiting for when the reset came.

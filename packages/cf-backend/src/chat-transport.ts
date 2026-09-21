@@ -116,6 +116,9 @@ const ChatInputSchema = v.object({
 
 interface LiveStream {
   readonly requestId: string;
+  /** The requests of the other messages this turn carried — a rerun runs
+   *  every leftover as one turn — answered when it closes. */
+  readonly carried: readonly string[];
   readonly streamId: string;
   readonly accumulator: StreamAccumulator;
   readonly cadence: PartialFlushCadence;
@@ -359,7 +362,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     // the reply goes. A message that opened a turn — at once, or as the rerun
     // of words the running turn ended before reading — kept its id as that
     // turn's id, so the turn streamed under this request and its `turn-end`
-    // closed it; nothing is left to say.
+    // closed it; a rerun that carried other leftovers named them at its open,
+    // and their requests closed with it too.
     if (landed === 'mid-turn') {
       for (const message of fresh) this.requests.delete(message.id);
       this.done(requestId, { landed });
@@ -376,16 +380,27 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
    * One turn opens: its stream answers under the request that admitted the
    * message (`turnId` is the opening row's id), else under a minted id — a
    * wake, a rerun, a delegated turn. The entry is deleted either way: a
-   * steer's own id is the turn id of its rerun. A user turn's opening row is
-   * durable before this, so every tab reads the transcript with it.
+   * steer's own id is the turn id of its rerun, and a rerun that carries
+   * other leftovers takes their requests with it, to answer at its close. A
+   * user turn's opening row is durable before this, so every tab reads the
+   * transcript with it.
    */
-  async openTurn(turn: { readonly turnId: string; readonly messageId: string; readonly userTurn: boolean }): Promise<void> {
+  async openTurn(turn: { readonly turnId: string; readonly messageId: string; readonly userTurn: boolean; readonly carried: readonly string[] }): Promise<void> {
     const requestId = this.requests.get(turn.turnId) ?? crypto.randomUUID();
     this.requests.delete(turn.turnId);
+    const carried: string[] = [];
+
+    for (const id of turn.carried) {
+      const request = this.requests.get(id);
+
+      if (request === undefined) continue;
+      this.requests.delete(id);
+      carried.push(request);
+    }
 
     const streamId = this.resume?.resumable.start(requestId, { messageId: turn.messageId }) ?? requestId;
 
-    this.live = { requestId, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), cadence: partialFlushCadence(), taken: false, broken: false };
+    this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), cadence: partialFlushCadence(), taken: false, broken: false };
 
     if (turn.userTurn) this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: await this.wire.history() }));
   }
@@ -404,13 +419,15 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.resume?.resumable.complete(live.streamId);
     this.pendingResume.clear();
     this.done(live.requestId);
+
+    for (const request of live.carried) this.done(request);
     this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history }));
   }
 
   async deliver(event: SessionEvent): Promise<void> {
     switch (event.type) {
       case 'turn-start':
-        await this.openTurn({ turnId: event.turnId, messageId: event.messageId, userTurn: event.kind === 'user' });
+        await this.openTurn({ turnId: event.turnId, messageId: event.messageId, userTurn: event.kind === 'user', carried: event.carried });
 
         return;
 

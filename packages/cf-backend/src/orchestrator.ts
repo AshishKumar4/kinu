@@ -1403,7 +1403,7 @@ export class OrchestratorAgent extends ActorAgent {
             const room = this.chatRooms.hostedRoom(record.name);
             const answerId = crypto.randomUUID();
 
-            await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined });
+            await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined, carried: [] });
 
             try {
               const result = await runHostedTask(seams, reference, task, room === null ? undefined : (chunks) => room.observe(chunks));

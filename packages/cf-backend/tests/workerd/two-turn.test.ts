@@ -178,7 +178,8 @@ describe('two real turns over the HTTP model seam', () => {
     // The re-opened genesis turn continued after the reset and landed B and
     // C at its first step — the boundary both were waiting for — as one
     // spliced message after the genesis text, in order, on ONE model call
-    // (the held call died with the object; the fake's log is per process).
+    // (the held call died with the object; the probe reads only the calls
+    // the restarted object makes).
     expect(calls).toHaveLength(1);
     expect(realUsers(calls[0]!)).toHaveLength(2);
     expect(realUsers(calls[0]!)[1]).toBe('QUEUE-B\n\nQUEUE-C');
