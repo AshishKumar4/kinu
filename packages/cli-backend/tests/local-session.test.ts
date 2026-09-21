@@ -574,12 +574,13 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows[1]!.content).toBe('hello there');
   });
 
-  test('a streamed answer mints a revision per step, not per delta, and the next step reads all of it', async () => {
+  test('a streamed answer mints a revision per step and a row per window, and the next step reads all of it', async () => {
     // Every delta used to commit the working context, one revision and one
-    // membership row per token: a long answer cost deltas times entries in
-    // row traffic, and on a Durable Object that spent the 30 s CPU budget
-    // (2026-09-21). A delta extends one message; the context's cutoff for
-    // that message moves once, at the step's end, to its final sequence.
+    // membership row per token, and write one update row per token: a long
+    // answer cost deltas times entries in row traffic, and on a Durable
+    // Object that spent the 30 s CPU budget (2026-09-21, D23). A delta
+    // extends one message; deltas reach the rows in windows of 64; the
+    // context's cutoff for the message moves once, at the step's end.
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     const prompts: PromptMessage[][] = [];
     const words = Array.from({ length: 300 }, (_, i) => `w${i}`);
@@ -613,6 +614,14 @@ describe('LocalAgentSession.send — a user turn', () => {
     // The user row's join, the answer's join, and the answer's final cutoff.
     expect(db.query<{ cause: string }, [string]>('SELECT cause FROM context_revisions WHERE turn_id = ? ORDER BY revision').all(turnId ?? '').map((row) => row.cause))
       .toEqual(['input', 'output', 'output']);
+
+    // 300 deltas in windows of 64: at most six appends on the text part,
+    // plus its open and its end — never a row per token.
+    const answerRows = db.query<{ n: number }, []>(
+      "SELECT count(*) AS n FROM message_updates WHERE part_no = 0 AND message_id IN (SELECT message_id FROM session_messages WHERE role = 'assistant' AND origin = 'output')",
+    ).get()!.n;
+
+    expect(answerRows).toBeLessThanOrEqual(8);
 
     // The next turn's model call carries the WHOLE streamed answer: the
     // cutoff the context pinned at the step's end is its final sequence.

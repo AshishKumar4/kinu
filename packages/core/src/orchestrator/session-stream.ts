@@ -12,11 +12,26 @@ interface StreamPart {
   readonly number: number;
   readonly kind: string;
   opened: boolean;
+  /** The text durable so far: what the rows hold. */
   text: string;
+  /** Deltas taken in but not yet written, and how many: one row per window
+   *  (`COALESCE_DELTAS` or `COALESCE_BYTES`), not per token. Written ahead
+   *  of the part's next non-delta update, or by the step's final text. */
+  buffered: string;
+  bufferedDeltas: number;
   readonly streamOrder: number;
   ended: boolean;
   startMetadata: JsonObject | null;
 }
+
+/** A streamed part's deltas reach the rows in windows. Each row is a
+ *  statement on the Durable Object's storage; a reasoning model streams
+ *  tokens by the ten-thousand, and one statement per token was the CPU the
+ *  eval objects spent inside one turn (D23). A window is small enough that a
+ *  cut turn keeps all but its last second of words. */
+const COALESCE_DELTAS = 64;
+
+const COALESCE_BYTES = 4096;
 
 interface StreamContainer {
   readonly id: string;
@@ -193,7 +208,7 @@ export class SessionStream {
     const existing = container.parts.get(key);
 
     if (existing !== undefined) return existing;
-    const part: StreamPart = { number: container.parts.size, kind, streamOrder: this.sourceOrder++, opened: false, text: '', ended: false, startMetadata: null };
+    const part: StreamPart = { number: container.parts.size, kind, streamOrder: this.sourceOrder++, opened: false, text: '', buffered: '', bufferedDeltas: 0, ended: false, startMetadata: null };
     container.parts.set(key, part);
 
     return part;
@@ -203,6 +218,24 @@ export class SessionStream {
     providerMetadata?: ProviderMetadata, end = false, working = true): Promise<void> {
     const kind = v.parse(v.string(), descriptor.type);
     const part = this.reserve(container, key, kind);
+
+    // A plain delta on an open text part joins the window; the window is
+    // written when full. Anything else the part records — its end, its
+    // metadata — writes what the window holds first, in the same statement.
+    if (delta !== null && part.opened && !end && providerMetadata === undefined && (kind === 'text' || kind === 'reasoning')) {
+      part.buffered += delta;
+      part.bufferedDeltas += 1;
+
+      if (part.bufferedDeltas < COALESCE_DELTAS && part.buffered.length < COALESCE_BYTES) return;
+      delta = null;
+    }
+
+    if (part.buffered.length > 0) {
+      delta = part.buffered + (delta ?? '');
+      part.buffered = '';
+      part.bufferedDeltas = 0;
+    }
+
     const updates: PreparedMessageUpdate[] = [];
     const callId = v.safeParse(v.string(), descriptor.toolCallId);
     const reply = kind === 'tool-result' && callId.success ? this.calls.get(callId.output) ?? null : null;

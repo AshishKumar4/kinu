@@ -830,6 +830,15 @@ as one row thereafter; the update rows stay the truth and a missing
 projection is rebuilt from them. The same turn after twenty long answers
 measured 375 ms (1.03x the empty transcript; the priors 22.4 s). The gate
 above holds the ratio under 3x and is red on the old reader at 6.3x.
+(4) After (1)-(3) shipped as 5682c7907 the eval object `del-gw1zqv` still
+reset ten times in ten minutes, each frame 30 s of CPU across activation,
+the re-run of the interrupted delegated turn, and its two model calls, with
+output tokens in the low thousands per call. What remained was one storage
+statement per streamed token: a reasoning model streams tens of thousands.
+Deltas now reach the rows in windows of 64 deltas or 4 KB, written ahead of
+the part's next non-delta update or by the step's final text (bun:sqlite,
+30,000 deltas: 7.2 s and 40,051 rows to 0.85 s and 682 rows; the workerd
+gate 256 ms and 297 ms). A cut turn keeps all but its last window.
 Pins: `packages/cli-backend/tests/local-session.test.ts` "a streamed answer
 mints a revision per step" and `packages/core/tests/unit-session-context-store.test.ts`
 "a sealed message is projected once", both red on the old code.
