@@ -14,15 +14,16 @@
  * refused for belonging to no open transfer, and the source's only answer to a
  * refusal is to destroy the half-built target.
  *
- * Its own module rather than a section of `identity/fork.ts` because both halves
- * of the fork use it — the write half there and the wire in
+ * Its own module rather than a section of `identity/fork-writer.ts` because both
+ * halves of the fork use it — the write half there and the wire in
  * `identity/fork-transfer.ts` — and neither owns it. The DDL lives with every
  * other workspace table, in `identity/schema.ts`.
  */
 
 import type { SqlExecutor } from '../types/primitives';
 // Type-only, so this module has no runtime edge back to the two that use it.
-import type { ForkSnapshotHead, ForkStagedCounts } from './fork';
+import type { ForkSnapshotHead } from './fork-rows';
+import type { ForkStagedCounts } from './fork-writer';
 
 /** One unpublished transfer's staging state, as the target stores it. */
 export interface ForkStaging {
