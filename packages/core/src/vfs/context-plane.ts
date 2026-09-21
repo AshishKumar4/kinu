@@ -348,9 +348,11 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
 
     const afterViews = desired.filter(entry => (entry.message.role === 'assistant' || entry.message.role === 'tool') && !v.is(v.string(), entry.message.content)).map(entry => v.parse(PairingView, entry.message));
 
-    const beforePairs = toolPairingGaps(observed.entries.flatMap(entry => { const view = beforeViews.get(entry.entryId);
+    const beforePairs = toolPairingGaps(observed.entries.flatMap(entry => {
+      const view = beforeViews.get(entry.entryId);
 
- return view === undefined ? [] : [view]; }));
+      return view === undefined ? [] : [view];
+    }));
 
     const afterPairs = toolPairingGaps(afterViews);
 
@@ -390,9 +392,11 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
   const readDocumentRange = async (source: Document, offset: number, length: number): Promise<Uint8Array> => {
     if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 || offset > Number.MAX_SAFE_INTEGER - length) throw new KinuError('bad_input', 'range must use nonnegative safe byte offsets');
 
-    if (length === 0) { source.owner.history.context.selected();
+    if (length === 0) {
+      source.owner.history.context.selected();
 
- return new Uint8Array(0); }
+      return new Uint8Array(0);
+    }
 
     const chunks: Uint8Array[] = [];
     let skipped = 0;
@@ -427,11 +431,15 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
   const readRange = (path: string, offset: number, length: number): Promise<Uint8Array> => readDocumentRange(document(path), offset, length);
 
   const files: VFS & Pick<VfsNativeReads, 'readRange'> = {
-    async readFile(path) { const source = document(path); let text = '';
+    async readFile(path) {
+      const source = document(path);
+      let text = '';
 
- for await (const chunk of source.chunks()) text += chunk; source.owner.history.context.selected();
+      for await (const chunk of source.chunks()) text += chunk;
+      source.owner.history.context.selected();
 
- return text; },
+      return text;
+    },
     async readFileAtRevision(path, revision, range) {
       const resolved = target(path);
 
@@ -450,12 +458,15 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     readRange,
     async readdir(path) { return list(path); },
     async stat(path): Promise<VfsEntryStat | null> {
-      try { list(path);
+      try {
+        list(path);
 
- return { isDir: true, size: 0, mtimeMs: 0 }; }
-      catch (cause) { if ((isVfsError(cause) && cause.code === 'ENOENT')) return null;
+        return { isDir: true, size: 0, mtimeMs: 0 };
+      } catch (cause) {
+        if (isVfsError(cause) && cause.code === 'ENOENT') return null;
 
- if ((!isVfsError(cause) || cause.code !== 'ENOTDIR')) throw cause; }
+        if (!isVfsError(cause) || cause.code !== 'ENOTDIR') throw cause;
+      }
 
       try {
         const source = document(path);
@@ -466,17 +477,31 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
         const stat: VfsEntryStat = { isDir: false, size, mtimeMs: source.modified };
 
         return source.writable ? { ...stat, revision: source.version } : stat;
-      } catch (cause) { if ((isVfsError(cause) && cause.code === 'ENOENT')) return null; throw cause; }
+      } catch (cause) {
+        if (isVfsError(cause) && cause.code === 'ENOENT') return null;
+        throw cause;
+      }
     },
-    async exists(path) { try { list(path);
+    async exists(path) {
+      try {
+        list(path);
 
- return true; } catch (cause) { if ((isVfsError(cause) && cause.code === 'ENOENT')) return false;
+        return true;
+      } catch (cause) {
+        if (isVfsError(cause) && cause.code === 'ENOENT') return false;
 
- if ((!isVfsError(cause) || cause.code !== 'ENOTDIR')) throw cause; }
+        if (!isVfsError(cause) || cause.code !== 'ENOTDIR') throw cause;
+      }
 
- try { document(path);
+      try {
+        document(path);
 
- return true; } catch (cause) { if ((isVfsError(cause) && cause.code === 'ENOENT')) return false; throw cause; } },
+        return true;
+      } catch (cause) {
+        if (isVfsError(cause) && cause.code === 'ENOENT') return false;
+        throw cause;
+      }
+    },
     async writeFile(path, data) { await write(path, data); },
     async writeFileIfRevision(path, data, expectedRevision) { return write(path, data, expectedRevision); },
     async unlink(path) { throw readOnly(path); },
