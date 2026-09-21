@@ -24,6 +24,10 @@ export interface McpPreset {
   readonly id: McpPresetId;
   /** The server's name once added — the row claims it like any other name. */
   readonly title: string;
+  /** What the server gives an agent, in one line a person reads. The catalog
+   *  owns this sentence: a surface that lists presets shows it instead of the
+   *  endpoint, which tells a person nothing. */
+  readonly description: string;
   readonly serverUrl: string;
   readonly transport: 'sse' | 'streamable-http';
   /**
@@ -58,6 +62,7 @@ export const MCP_PRESETS: readonly McpPreset[] = [
   {
     id: 'github',
     title: 'GitHub',
+    description: 'Issues, pull requests and code',
     // github/github-mcp-server README + docs/remote-server.md — the remote
     // server authorizes through a pre-registered OAuth app: register the app
     // with callback `<deployment-origin>/api/user/mcp/callback`, then set the
@@ -72,6 +77,7 @@ export const MCP_PRESETS: readonly McpPreset[] = [
   {
     id: 'cloudflare',
     title: 'Cloudflare',
+    description: 'Workers, DNS, logs and docs',
     // developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare — the general-purpose API server
     serverUrl: 'https://mcp.cloudflare.com/mcp',
     transport: 'streamable-http',
@@ -81,6 +87,7 @@ export const MCP_PRESETS: readonly McpPreset[] = [
   {
     id: 'google',
     title: 'Gmail',
+    description: 'Read and search your mail',
     // developers.google.com/workspace/gmail/api/guides/configure-mcp-server —
     // Google Workspace MCP (Developer Preview) requires a user-created OAuth
     // client: register `<deployment-origin>/api/user/mcp/callback` under

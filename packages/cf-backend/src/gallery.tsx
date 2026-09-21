@@ -333,13 +333,10 @@ const GalleryMcpAddSchema = v.object({
   presetId: v.optional(v.string()),
 });
 
-/** The MCP server roster, mutable for the page's lifetime so the preset add
- *  flow is observable: a POST lands here and the next GET — the panel's own
- *  refresh — shows the row. `mcp-preset=connected` on the frame URL swaps the
- *  generic github row for the two preset-tagged states a screenshot needs —
- *  Connected and Needs sign-in; `mcp-preset=open` drops it so every preset is
- *  unclaimed (its name would refuse the GitHub preset's). */
-let galleryMcpRows: McpServerSummary[] = [
+/** The servers this account added itself: one of each state a row draws — a
+ *  healthy one, one still authorizing, and one whose failure is the line the
+ *  row shows where the endpoint used to be. */
+const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
   {
     id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
     transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
@@ -351,7 +348,25 @@ let galleryMcpRows: McpServerSummary[] = [
     allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
     error: null, presetId: null, createdAt: NOW - 864e5, updatedAt: NOW,
   },
+  {
+    id: "srv-notion", name: "notion", serverUrl: "https://mcp.notion.example/sse",
+    transport: "sse", status: "failed", toolsCount: 0, allowedTools: null,
+    authUrl: null, error: "The server refused the connection.", presetId: null,
+    createdAt: NOW - 2 * 864e5, updatedAt: NOW,
+  },
 ];
+
+/** The rows the two preset variants keep: a name the account already claims
+ *  refuses the preset's own add, and 'github' is the GitHub preset's name. */
+const GALLERY_UNCLAIMED_MCP = GALLERY_CUSTOM_MCP.filter((row) => row.name !== "github");
+
+/** The MCP server roster, mutable for the page's lifetime so the preset add
+ *  flow is observable: a POST lands here and the next GET — the panel's own
+ *  refresh — shows the row. `mcp-preset=connected` on the frame URL swaps the
+ *  generic github row for the two preset-tagged states a screenshot needs —
+ *  Connected and Needs sign-in; `mcp-preset=open` drops it so every preset is
+ *  unclaimed. */
+let galleryMcpRows: McpServerSummary[] = [...GALLERY_CUSTOM_MCP];
 
 const mcpPresetVariant = new URLSearchParams(location.search).get("mcp-preset");
 
@@ -368,12 +383,10 @@ if (mcpPresetVariant === "connected") {
       authUrl: "https://mcp.cloudflare.com/authorize?srv-preset-cloudflare", error: null,
       presetId: "cloudflare", createdAt: NOW - 3600e3, updatedAt: NOW,
     },
-    galleryMcpRows[1]!,
+    ...GALLERY_UNCLAIMED_MCP,
   ];
 } else if (mcpPresetVariant === "open") {
-  // Every preset unclaimed: the custom github row would refuse the GitHub
-  // preset's name, so this variant keeps only linear.
-  galleryMcpRows = [galleryMcpRows[1]!];
+  galleryMcpRows = [...GALLERY_UNCLAIMED_MCP];
 }
 
 /** Which `oauth-app` presets the frame pretends the deployment carries the
