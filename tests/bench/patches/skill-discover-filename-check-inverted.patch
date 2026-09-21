@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/skills/discover.ts b/packages/core/src/skills/discover.ts
-index 0afe3e0b5..1b19301a8 100644
+index 6a94d6435..e4147a30b 100644
 --- a/packages/core/src/skills/discover.ts
 +++ b/packages/core/src/skills/discover.ts
-@@ -186,7 +186,7 @@ export async function discoverSkills(
+@@ -189,7 +189,7 @@ export async function discoverSkills(
  
-       if (!parsed.ok) { onErr(path, parsed.error); slots -= 1; continue; }
+         if (!parsed.ok) { onErr(path, parsed.error); slots -= 1; continue; }
  
--      if (parsed.skill.name !== stem) {
-+      if (parsed.skill.name === stem) {
-         onErr(path, `filename "${stem}.md" does not match front-matter name "${parsed.skill.name}"`);
-         slots -= 1;
-         continue;
+-        if (parsed.skill.name !== stem) {
++        if (parsed.skill.name === stem) {
+           onErr(path, `"${path}" does not match front-matter name "${parsed.skill.name}"`);
+           slots -= 1;
+           continue;
