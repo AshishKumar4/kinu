@@ -127,6 +127,8 @@ interface Observed {
    *  two-line command. Rows, not a string: the defect was which row a
    *  character lands on. */
   readonly terminalRows: string[];
+  /** Every `input` frame the pane sent the workspace shell, in order. */
+  readonly terminalInput: string[];
   /** Exploration's run-node rows on the mixed-status run, by node id. */
   readonly runNodes: Record<string, RunNode>;
   readonly toolActivity: {
@@ -570,10 +572,14 @@ async function run(): Promise<Observed> {
     const envCapabilityChips = await env.$$eval('[data-capability-chip]', (els) => els.length);
     const envCapabilityAbsences = await env.$$eval('[data-capability-absences]', (els) => els.length);
 
-    // The line terminal, as the browser lays it out. Two commands: one typed,
-    // one pasted with a newline in it. What is read back is the rendered rows,
-    // because the whole defect class is which row a character lands on.
+    // The workspace shell, as the browser lays it out: the pane sends what is
+    // typed as `input` frames over the terminal socket and paints what comes
+    // back. Two commands: one typed, one pasted with a newline in it. What is
+    // read back is the rendered rows, because the whole defect class is which
+    // row a character lands on, and the frames the pane sent, because a paste
+    // that reaches the shell as one frame cannot lose its second line.
     await env.waitForSelector('.xterm-rows');
+    await terminalSettled(env, '$ ');
     await env.click('.xterm-screen');
     await env.keyboard.type('one');
     await env.keyboard.press('Enter');
@@ -585,6 +591,8 @@ async function run(): Promise<Observed> {
       '.xterm-rows > div',
       (rows) => rows.map((line) => (line.textContent ?? '').replace(/\u00a0/gu, ' ').trimEnd()).filter((line) => line !== ''),
     );
+
+    const terminalInput = await env.evaluate(() => window.__kinuTerminalInput ?? []);
 
     // The jump is a synchronous surface switch (`openFiles` navigates focus
     // and the Files surface is a static import), committed before the click
@@ -608,7 +616,7 @@ async function run(): Promise<Observed> {
       filesMarkdownRendered, filesPreviewText, filesEditorSeedsFromTheFile,
       filesAfterRename, filesAfterDelete, filesFiltered, filesOfflineRow,
       envCards, envCapabilityChips, envCapabilityAbsences, envFilesJumpLandsOnDrive,
-      terminalRows,
+      terminalRows, terminalInput,
       runNodes,
     };
   });
@@ -927,12 +935,13 @@ describe('the Environment tab, as a user reads it', () => {
 
   // The same session: a pasted `echo first-line\necho second-line\n` ran the
   // first line and dropped the second with no echo and no error.
-  test('a pasted two-line command runs whole, in one call', () => {
+  test('a pasted two-line command reaches the shell as one frame and runs whole', () => {
     const echoed = observed.terminalRows.filter((line) => line.startsWith('ran: '));
     expect(echoed).toEqual(['ran: one', 'ran: two', 'ran: three']);
-    // One call, so both pasted lines are echoed under one prompt and the
-    // second wears the continuation prompt rather than a new `$`.
-    expect(observed.terminalRows).toContain('> three');
+    // One frame carries the whole paste, its newlines as the CR the shell
+    // runs at; the pane never re-submits the second line as its own keys.
+    expect(observed.terminalInput).toContain('two\rthree\r');
+    expect(observed.terminalRows).toContain('$ three');
   });
 });
 
@@ -4036,7 +4045,11 @@ interface CreateProbe {
 }
 
 declare global {
-  interface Window { __createProbe: CreateProbe }
+  interface Window {
+    __createProbe: CreateProbe;
+    /** Every `input` frame the pane sent the gallery's workspace shell (`gallery-terminal.ts`). */
+    __kinuTerminalInput?: string[];
+  }
 }
 
 describe('the home creation form, as a browser submits it', () => {

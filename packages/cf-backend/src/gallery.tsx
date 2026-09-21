@@ -125,7 +125,7 @@ import {
   TrashIcon, BrainIcon,
 } from "@phosphor-icons/react";
 import "./index.css";
-import { KINU_MARK, MARK_IDS, mark, codenameFor } from "@kinu.run/core";
+import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { mcpPresetById } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
@@ -1000,6 +1000,113 @@ window.fetch = galleryFetch;
 // The Drive frames answer `/api/drive/*` from an in-memory tenant, wrapped
 // around the fixture fetch above rather than branched inside it.
 if (frame === "drive" || frame === "drive-empty" || frame === "app") installDriveFixture(frame !== "drive-empty");
+
+
+// The workspace shell, as the gallery's environment frame answers it. The pane
+// opens a socket to `/api/workspaces/<name>/terminal` and speaks the runtime's
+// own frames (core execution/workspace-terminal.ts): `input` and `resize` up,
+// `output` and `ready` down. No server stands behind the gallery, so this
+// stands in for the runtime's terminal facet with the two things a browser
+// gate measures against it: the shell echoes what it is typed and runs a line
+// at CR, and its output ends every line with CR LF exactly as the runtime's
+// `writeln` does. Every `input` frame the pane sends is kept, so the gate can
+// read whether a pasted multi-line command arrived as one frame.
+
+const PROMPT = "$ ";
+
+declare global {
+  interface Window {
+    /** Every `input` frame the pane sent the gallery's shell, in order. */
+    __kinuTerminalInput?: string[];
+  }
+}
+
+const TERMINAL_PATH = /^\/api\/workspaces\/[^/]+\/terminal$/u;
+
+/** The gallery's shell: one line editor over the frames the pane sends. */
+class GalleryShellSocket extends EventTarget {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  readonly CONNECTING = 0;
+  readonly OPEN = 1;
+  readonly CLOSING = 2;
+  readonly CLOSED = 3;
+  readonly url: string;
+  readyState = 0;
+  onopen: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent<string>) => void) | null = null;
+  onclose: ((event: CloseEvent) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+  private line = "";
+
+  constructor(url: string | URL) {
+    super();
+    this.url = String(url);
+    window.__kinuTerminalInput = [];
+    // The runtime attaches, replays its screen, then says ready; here the
+    // screen is empty, so the prompt is the whole replay.
+    queueMicrotask(() => {
+      this.readyState = 1;
+      this.onopen?.(new Event("open"));
+      this.emit({ type: "output", data: PROMPT });
+      this.emit({ type: "ready" });
+    });
+  }
+
+  send(raw: string): void {
+    const parsed = v.safeParse(WorkspaceTerminalInputSchema, JSON.parse(raw));
+
+    if (!parsed.success || parsed.output.type !== "input") return;
+    window.__kinuTerminalInput?.push(parsed.output.data);
+
+    for (const char of parsed.output.data) {
+      // xterm hands a paste over with its newlines already CR, so CR is the
+      // one line end the shell runs at, as the runtime's editor does.
+      if (char === "\r") this.run();
+      else {
+        this.line += char;
+        this.emit({ type: "output", data: char });
+      }
+    }
+  }
+
+  close(code?: number, reason?: string): void {
+    this.readyState = 3;
+    this.onclose?.(new CloseEvent("close", { code: code ?? 1000, reason: reason ?? "", wasClean: true }));
+  }
+
+  private run(): void {
+    const command = this.line;
+
+    this.line = "";
+    this.emit({ type: "output", data: `\r\nran: ${command}\r\n${PROMPT}` });
+  }
+
+  private emit(frame: { type: "output"; data: string } | { type: "ready" }): void {
+    this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(frame) }));
+  }
+}
+
+/** Answer the environment frame's workspace terminal from the shell above. */
+function installWorkspaceTerminalFixture(): void {
+  const RealWebSocket = window.WebSocket;
+
+  window.WebSocket = new Proxy(RealWebSocket, {
+    construct(target, args: [string | URL, (string | string[])?]) {
+      const [url, protocols] = args;
+
+      if (TERMINAL_PATH.test(new URL(String(url), location.href).pathname)) return new GalleryShellSocket(url);
+
+      return protocols === undefined ? new target(url) : new target(url, protocols);
+    },
+  });
+}
+
+// The environment frame's workspace terminal is the runtime's shell over a
+// socket; the gallery answers that socket with a shell of its own.
+if (frame === "environment") installWorkspaceTerminalFixture();
 
 
 /* ── A search worth photographing ───────────────────────────────── */
