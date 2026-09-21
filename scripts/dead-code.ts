@@ -306,12 +306,52 @@ const ManifestSchema = v.object({
  * serves its own directory only, so "unused here" stays a statement about that
  * package instead of about the tree.
  */
-export const servedBy = (manifest: string): ((file: string) => boolean) => {
+export const servedBy = (manifest: string, reach: readonly string[] = []): ((file: string) => boolean) => {
   if (manifest === 'package.json') return () => true;
   const directory = manifest.slice(0, -'package.json'.length);
 
-  return (file) => file.startsWith(directory);
+  return (file) => file.startsWith(directory) || reach.some((root) => file.startsWith(root));
 };
+
+const TsconfigPaths = v.looseObject({
+  compilerOptions: v.optional(v.looseObject({
+    paths: v.optional(v.record(v.string(), v.array(v.string())), {}),
+  }), {}),
+});
+
+/**
+ * The directories a package compiles from beyond its own: every target of a
+ * `paths` alias in its `tsconfig.json` that resolves outside the package. The
+ * vendored Mossaic SDK reaches `../shared/*` through `@shared/*`, and a scan
+ * that stopped at the package directory would call a declaration unused while
+ * the built bundle imports it.
+ */
+export function compileReach(manifest: string, files: readonly string[], read: (file: string) => string): string[] {
+  const directory = manifest.slice(0, -'package.json'.length);
+  const tsconfig = `${directory}tsconfig.json`;
+
+  if (!files.includes(tsconfig)) return [];
+  const parsed = parseJsonc(read(tsconfig), TsconfigPaths, tsconfig);
+  const roots = new Set<string>();
+
+  for (const targets of Object.values(parsed.compilerOptions.paths)) {
+    for (const target of targets) {
+      const segments = [...directory.split('/').filter((part) => part !== ''), ...target.split('/')];
+      const resolved: string[] = [];
+
+      for (const segment of segments) {
+        if (segment === '..') resolved.pop();
+        else if (segment !== '.' && segment !== '*' && segment !== '') resolved.push(segment);
+      }
+
+      const root = `${resolved.join('/')}/`;
+
+      if (!root.startsWith(directory)) roots.add(root);
+    }
+  }
+
+  return [...roots].sort();
+}
 
 /** `@types/node` and `@ai-sdk/openai` carry characters a regex reads. */
 const escaped = (name: string): string => name.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
@@ -435,7 +475,17 @@ const LockMeta = v.looseObject({
   peerDependencies: v.optional(v.record(v.string(), v.string()), {}),
 });
 
+/** One `bun.lock` workspace row, keyed by its path: a linked package declares
+ *  its peers here, not in a `packages` row, and a consumer that declares such a
+ *  peer is answering the workspace's contract exactly as it answers an
+ *  installed package's. */
+const LockWorkspace = v.looseObject({
+  name: v.string(),
+  peerDependencies: v.optional(v.record(v.string(), v.string()), {}),
+});
+
 const LockSchema = v.looseObject({
+  workspaces: v.optional(v.record(v.string(), v.unknown()), {}),
   packages: v.optional(v.record(v.string(), v.array(v.unknown())), {}),
 });
 
@@ -456,6 +506,16 @@ export function readInstalled(lockText: string): Installed {
 
     for (const peer of Object.keys(parsed.output.peerDependencies)) {
       peerRequirers.set(peer, [...(peerRequirers.get(peer) ?? []), name]);
+    }
+  }
+
+  for (const row of Object.values(lock.workspaces)) {
+    const parsed = v.safeParse(LockWorkspace, row);
+
+    if (!parsed.success) continue;
+
+    for (const peer of Object.keys(parsed.output.peerDependencies)) {
+      peerRequirers.set(peer, [...(peerRequirers.get(peer) ?? []), parsed.output.name]);
     }
   }
 
@@ -514,7 +574,7 @@ export function unusedDependencies(
       ...Object.keys(declared.dependencies), ...Object.keys(declared.devDependencies),
     ]);
 
-    const serves = servedBy(manifest);
+    const serves = servedBy(manifest, compileReach(manifest, files, read));
 
     // A manifest is read WITHOUT its declaration blocks, and as a `.json`
     // whatever its path: the file name carries the format, and every manifest
@@ -577,12 +637,6 @@ export const DEPENDENCY_REASONS = {
     'the same redundant duplicate: packages/core/src/providers/openai.ts:8 and '
     + 'packages/cli-backend/src/opencode-provider.ts:17 import it through the root pin, '
     + 'and no cf-backend file imports it.',
-  'packages/cf-backend/package.json#y-protocols (unused-dependency)':
-    'declared HERE and imported from the BUILT Mossaic SDK — third_party/mossaic/sdk/'
-    + 'dist/*.js imports `y-protocols/awareness` (2 sites) and upstream\'s manifest '
-    + 'names it as a peer the consumer supplies, so this declaration is what hoisting '
-    + 'resolves those imports against. No cf-backend source file imports it; the '
-    + 'SDK\'s own dist is not in the corpus, which is why the census cannot see the importer.',
   'packages/devbox/package.json#@cloudflare/containers (unused-dependency)':
     'declared HERE and imported from cf-backend — packages/cf-backend/src/egress/'
     + 'outbound.ts:53 type-imports it while cf-backend declares nothing, so this '
