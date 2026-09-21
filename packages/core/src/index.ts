@@ -1294,6 +1294,10 @@ export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observ
 
 export { ensureDir } from './utils/vfs-helpers';
 
+export { mossaicVfs, type MossaicClient, type MossaicVfs, type MossaicStat, type MossaicChild } from './vfs/mossaic-vfs';
+
+export { sharedDriveMount, SHARED_SKILLS_DIR, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND } from './vfs/shared-drive';
+
 export {
   withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, RESERVED_REFERENCE_ROOTS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,

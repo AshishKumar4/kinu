@@ -38,6 +38,8 @@ import {
   SKILLS_DIR,
   type SkillsVfs, type ActiveSkill, type DiscoveredSkill,
 } from './index';
+import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
+import { makeVfsError } from '../vfs/errno';
 import type { InstructionTrustResolver } from '../safety/instruction-trust';
 import { createRecordingLogger, setDiagnosticsSink } from '../obs/index';
 
@@ -85,10 +87,10 @@ function memoryVfs(
 
       for (const k of files.keys()) {
         if (!k.startsWith(prefix)) continue;
-        const rest = k.slice(prefix.length);
+        // A nested path lists as its first segment — the folder — once.
+        const head = k.slice(prefix.length).split('/')[0]!;
 
-        if (rest.includes('/')) continue;
-        out.push(rest);
+        if (!out.includes(head)) out.push(head);
       }
 
       return opts.entryOrder ? opts.entryOrder(out) : out;
@@ -802,6 +804,48 @@ describe('unionAllowedTools', () => {
 // ── discover ─────────────────────────────────────────────────────
 
 describe('discoverSkills', () => {
+  test('a shared Drive skill is discovered in folder form and the workspace wins a name clash', async () => {
+    const errors: string[] = [];
+
+    const v = memoryVfs({
+      [`${SKILLS_DIR}/deploy.md`]: skillFile('deploy', 'workspace body'),
+      [`${SHARED_SKILLS_DIR}/deploy/SKILL.md`]: skillFile('deploy', 'shared body'),
+      [`${SHARED_SKILLS_DIR}/review/SKILL.md`]: skillFile('review', 'shared review'),
+      [`${SHARED_SKILLS_DIR}/review/scripts/run.sh`]: 'echo hi',
+      [`${SHARED_SKILLS_DIR}/notes.md`]: skillFile('notes', 'flat shared'),
+    });
+
+    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS, onParseError: (_f, e) => errors.push(e) });
+    const byName = new Map(found.skills.map(s => [s.name, s]));
+
+    expect(byName.get('deploy')?.source).toBe('vfs');
+    expect(byName.get('deploy')?.bodyRef).toMatchObject({ kind: 'file', path: `${SKILLS_DIR}/deploy.md` });
+    expect(byName.get('review')?.source).toBe('shared');
+    expect(byName.get('review')?.bodyRef).toMatchObject({ kind: 'file', path: `${SHARED_SKILLS_DIR}/review/SKILL.md` });
+    expect(byName.get('notes')?.source).toBe('shared');
+    expect(errors).toEqual(['"deploy" is shadowed by the workspace skill of the same name']);
+
+    // The shadowed shared body was never opened.
+    expect(v.calls.readFile).not.toContain(`${SHARED_SKILLS_DIR}/deploy/SKILL.md`);
+    expect(renderSkillsIndexSection(admitSkillsIndex(found, ROOMY_TOKENS))).toContain('**review** (shared drive skill;');
+  });
+
+  test('an absent /shared mount is no shared skills, not a failed discovery', async () => {
+    const v = memoryVfs({ [`${SKILLS_DIR}/own.md`]: skillFile('own', 'O') });
+    const readdir = v.readdir!;
+
+    v.readdir = async (p) => {
+      if (p.startsWith('/shared')) throw makeVfsError('ENXIO', '/shared — the shared Drive mounts once the workspace has an owner', p);
+
+      return readdir(p);
+    };
+
+    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
+
+    expect(found.skills.map(s => s.name)).toContain('own');
+    expect(found.skills.filter(s => s.source === 'shared')).toEqual([]);
+  });
+
   test('returns built-ins when VFS is empty', async () => {
     const v = memoryVfs();
     const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
@@ -884,7 +928,8 @@ describe('discoverSkills', () => {
     const views = [
       memoryVfs(files, { entryOrder: (n) => [...n].sort() }),
       memoryVfs(files, { entryOrder: (n) => [...n].sort().reverse() }),
-      memoryVfs(files, { entryOrder: (n) => [n[1]!, n[2]!, n[0]!] }),
+      // The shared directory lists empty; only the workspace's three rotate.
+      memoryVfs(files, { entryOrder: (n) => (n.length === 3 ? [n[1]!, n[2]!, n[0]!] : n) }),
     ];
 
     const orders = await Promise.all(views.map(async (v) => {

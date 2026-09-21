@@ -2587,10 +2587,6 @@ interface ToolDescResult {
     name: string; summary: string; description: string;
     exposure: ToolInfo["exposure"]; wired: boolean;
   }>;
-  crafted: Array<{
-    name: string; description: string; exposure: ToolInfo["exposure"]; wired: boolean;
-    qualityScore?: number; usageCount?: number;
-  }>;
 }
 
 /** Map a getToolDescriptions result into the UI's ToolInfo[] — single source
@@ -2601,11 +2597,9 @@ interface ToolDescResult {
  *  capability. Neither is recomputed here — a single guessed word cannot tell
  *  absence from codemode-only reach. */
 function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
-  return [
-    ...r.builtIn.map((t) => ({ ...t, learned: false, qualityScore: 1, usageCount: 0 })),
-    // A crafted tool's description IS its one line — it has no second register.
-    ...r.crafted.map((t) => ({ ...t, summary: t.description, learned: true, qualityScore: t.qualityScore ?? 0.5, usageCount: t.usageCount ?? 0 })),
-  ];
+  // Crafted tools are the agent's own concern — scored and selected by its
+  // evolution loop — and are not listed to the user; only the built-ins are.
+  return r.builtIn.map((t) => ({ ...t, learned: false, qualityScore: 1, usageCount: 0 }));
 }
 
 /** MEMORY.md as pane rows. The heading the notes are read out of belongs to
