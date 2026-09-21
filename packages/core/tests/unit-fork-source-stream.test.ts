@@ -13,7 +13,8 @@ import { createTestWorkspace, type TestWorkspace } from './helpers';
 import {
   seedForkSource, SOURCE_ARTIFACTS, SPILLED_BYTES, INLINE_PAYLOAD_BYTES, type ForkConversation,
 } from './helpers/fork-conversation';
-import { snapshotWorkspaceForFork, type ForkFile, type ForkSnapshot } from '../src/identity/fork';
+import { snapshotWorkspaceForFork } from '../src/identity/fork';
+import type { ForkFile, ForkSnapshot } from '../src/identity/fork-rows';
 import {
   FORK_ROW_SECTIONS, forkTransferFrames, type ForkFileFrame, type ForkFrame, type ForkRowFrame,
 } from '../src/identity/fork-transfer';

@@ -76,13 +76,20 @@ export type { ProfileProvenance, SwarmProfileSnapshot } from './profiles';
 export { DEFAULT_WORKERS_AI_MODEL_SPEC } from './providers/workers-ai';
 
 export {
-  forkWorkspaceStorage, snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage,
-  ForkSnapshotSchema, ForkTargetWriter,
-  type ForkOpts, type ForkResult, type ForkLineageRow, type ForkSnapshot,
-  type ForkSnapshotHead, type ForkSnapshotSource,
-  type ForkMemoryChunkRow, type ForkCraftedToolRow, type ForkConfigRow, type ForkFile,
-  type ForkWriteTarget, type ForkStagedCounts,
+  forkWorkspaceStorage, snapshotWorkspaceForFork, readForkLineage,
+  type ForkOpts, type ForkLineageRow, type ForkSnapshotSource,
 } from './identity/fork';
+
+export {
+  ForkSnapshotSchema,
+  type ForkSnapshot, type ForkSnapshotHead,
+  type ForkMemoryChunkRow, type ForkCraftedToolRow, type ForkConfigRow, type ForkFile,
+} from './identity/fork-rows';
+
+export {
+  writeForkSnapshot, ForkTargetWriter,
+  type ForkResult, type ForkWriteTarget, type ForkStagedCounts,
+} from './identity/fork-writer';
 
 export { ForkStagingState, type ForkStaging } from './identity/fork-staging';
 

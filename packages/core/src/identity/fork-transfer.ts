@@ -26,8 +26,10 @@
  * `ForkStagingState` row rather than an instance field, and an interrupted
  * transfer resumes at the frame it stopped at.
  *
- * This module owns the WIRE. The rows it carries and the write it drives belong
- * to `identity/fork.ts`, which is the single authority for what a fork copies.
+ * This module owns the WIRE. The rows it carries belong to
+ * `identity/fork-rows.ts`, the reads it streams them through to
+ * `identity/fork-plan.ts` and the write it drives to `identity/fork-writer.ts`,
+ * which together are the single authority for what a fork copies.
  */
 
 import * as v from 'valibot';
@@ -41,16 +43,19 @@ import type { VfsNativeReads } from '../vfs/mounts';
 import type { ForkFileSink } from './fork-sink';
 import { renderIssues } from '../utils/json';
 import { openWorkspaceMainActor } from './workspace-actors';
+import { forkFilePaths, type ForkFilePath } from './fork';
 import {
   forkArtifactPath,
   forkConversationCounts,
   forkConversationEntryPartRows,
   forkConversationEntryRow,
-  forkFilePaths,
   forkMessagePartRows,
   forkMessageUpdateRows,
   forkSessionMessageRow,
   planForkConversation,
+  type ForkConversationPlan,
+} from './fork-plan';
+import {
   ForkSnapshotHeadSchema,
   ForkSessionMessageRowSchema,
   ForkMessagePartRowSchema,
@@ -65,16 +70,13 @@ import {
   type ForkContextMemberRow,
   type ForkConversationEntryPartRow,
   type ForkConversationEntryRow,
-  type ForkConversationPlan,
   type ForkCraftedToolRow,
-  type ForkFilePath,
   type ForkMemoryChunkRow,
   type ForkMessagePartRow,
   type ForkMessageUpdateRow,
-  type ForkResult,
   type ForkSessionMessageRow,
-  ForkTargetWriter,
-} from './fork';
+} from './fork-rows';
+import { ForkTargetWriter, type ForkResult } from './fork-writer';
 import type { ForkStaging, ForkStagingState } from './fork-staging';
 
 /**
