@@ -19,7 +19,7 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 
 /** The parent-conversation cap handed to each spawned head — bounds head LLM
  *  context over long sessions. */
-export const INHERITED_CONTEXT_CAP = 50;
+const INHERITED_CONTEXT_CAP = 50;
 
 /** Detach a delegation's birth-time conversation from its parent's live turn. */
 export function freezeInheritedContext<T>(messages: readonly T[]): readonly T[] {
@@ -56,25 +56,6 @@ export function serializeContentForHeads(content: ModelMessage['content']): stri
 
 /** Stored conversation rows as inherited context (the cf backend's source: it
  *  digests durable message rows, having already decoded each row's text). */
-export interface InheritedContextRow {
-  readonly id: string;
-  readonly role: string;
-  readonly content: string;
-  readonly createdAt: number;
-}
-
-export function inheritedContextFromRows(rows: readonly InheritedContextRow[], total: number): SerializedMessage[] {
-  return [
-    ...inheritedContextOmissionNote(total, rows.length),
-    ...rows.map((r) => ({
-      id: r.id,
-      role: narrowInheritedRole(r.role),
-      content: evidenceWindow(r.content, EVIDENCE_BUDGETS.inheritedMessage),
-      createdAt: r.createdAt,
-    })),
-  ];
-}
-
 /** A live conversation as inherited context: the frozen origin a hire is
  *  born with. The root's own inheritance reads the transcript instead. */
 export function inheritedContextFromHistory(
@@ -98,15 +79,15 @@ export function inheritedContextFromHistory(
  * led by the disclosure note when the transcript holds more.
  */
 export async function inheritedContextFromTranscript(transcript: SessionTranscriptReader): Promise<SerializedMessage[]> {
-  const rows: InheritedContextRow[] = [];
+  const kept: SerializedMessage[] = [];
 
   for (const entry of transcript.ancestry(transcript.newestId(), INHERITED_CONTEXT_CAP)) {
     const projected = await transcript.project(entry.id);
 
-    if (projected !== null) rows.push({ id: entry.id, role: entry.role, content: projected.content, createdAt: entry.recordedAt });
+    if (projected !== null) kept.push({ id: entry.id, role: narrowInheritedRole(entry.role), content: evidenceWindow(projected.content, EVIDENCE_BUDGETS.inheritedMessage), createdAt: entry.recordedAt });
   }
 
-  return inheritedContextFromRows(rows, transcript.count());
+  return [...inheritedContextOmissionNote(transcript.count(), kept.length), ...kept];
 }
 
 /** The disclosure entry a capped inheritance leads with — a head must be able

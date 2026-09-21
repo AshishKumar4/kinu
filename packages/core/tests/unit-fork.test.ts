@@ -17,7 +17,7 @@ import {
   ForkConversation, readChain, readWorkingContext, seedForkSource, seedForkTarget,
   SOURCE_ARTIFACTS, SPILLED_BYTES, TARGET_ARTIFACTS,
 } from './helpers/fork-conversation';
-import { forkArtifactRelativePath, forkFilePaths, type ForkFilePath } from '../src/identity/fork';
+import { forkFilePaths, type ForkFilePath } from '../src/identity/fork';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../src/config/store';
 import type { VFS } from '../src/types/primitives';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
@@ -505,10 +505,4 @@ describe('the files a fork carries', () => {
     ]);
   });
 
-  test('a payload path outside its artifact directory cannot be made relative', () => {
-    expect(forkArtifactRelativePath(`${SOURCE_ARTIFACTS}/x/y.json`, SOURCE_ARTIFACTS)).toBe('x/y.json');
-    expect(() => forkArtifactRelativePath('/other/plane/y.json', SOURCE_ARTIFACTS)).toThrow(/outside the artifact directory/);
-    expect(() => forkArtifactRelativePath(`${SOURCE_ARTIFACTS}/../escape.json`, SOURCE_ARTIFACTS))
-      .toThrow(/does not name a file inside/);
-  });
 });

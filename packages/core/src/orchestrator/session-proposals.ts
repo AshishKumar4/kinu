@@ -1,6 +1,8 @@
+import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
+import { STAGED_CONTEXT_DEFERRALS, type ContextProposalClosure, type StagedContextDeferral } from '../types/context-plane';
 import { SessionContext, type ContextEntry, type ContextSelection } from './session-context';
 import type { MessageReference } from './session-messages';
 
@@ -24,7 +26,9 @@ interface ChangeRow { entry_id: string; expected_message_id: string | null; expe
 
 export interface ContextProposalMetadata extends PendingContextProposal { readonly context_id: string; readonly status: string; readonly closed_reason: string | null; readonly build_identity: string | null }
 
-export interface PendingContextProposal { readonly proposal_id: string; readonly base_revision: number; readonly author: string; readonly via: string; readonly cause: string; readonly turn_id: string | null; readonly deferred_reason: string | null; readonly recorded_at: number }
+export interface PendingContextProposal { readonly proposal_id: string; readonly base_revision: number; readonly author: string; readonly via: string; readonly cause: string; readonly turn_id: string | null; readonly deferred_reason: StagedContextDeferral | null; readonly recorded_at: number }
+
+const DeferralSchema = v.picklist(STAGED_CONTEXT_DEFERRALS);
 
 /** Sparse authored intent; committed intervals are the only selection history. */
 export class SessionProposals {
@@ -34,7 +38,8 @@ export class SessionProposals {
   pending(contextId: string): readonly PendingContextProposal[] {
     this.actor.assertCurrent();
 
-    return this.sql`SELECT proposal_id,base_revision,author,via,cause,turn_id,deferred_reason,recorded_at FROM context_proposals WHERE actor_id=${this.actor.actorId} AND context_id=${contextId} AND status='pending' ORDER BY rowid`;
+    return this.sql<Omit<PendingContextProposal, 'deferred_reason'> & { readonly deferred_reason: string | null }>`SELECT proposal_id,base_revision,author,via,cause,turn_id,deferred_reason,recorded_at FROM context_proposals WHERE actor_id=${this.actor.actorId} AND context_id=${contextId} AND status='pending' ORDER BY rowid`
+      .map(row => ({ ...row, deferred_reason: row.deferred_reason === null ? null : v.parse(DeferralSchema, row.deferred_reason) }));;
   }
 
   list(contextId: string): readonly ContextProposalMetadata[] {
@@ -110,7 +115,7 @@ export class SessionProposals {
     return this.compose(id, this.context.entries(selection));
   }
 
-  apply(id: string, assertEpoch: () => void, validate: (entries: readonly ContextEntry[]) => string | null, turnId: string | null = null): ContextSelection | null {
+  apply(id: string, assertEpoch: () => void, validate: (entries: readonly ContextEntry[]) => StagedContextDeferral | null, turnId: string | null = null): ContextSelection | null {
     return this.atomic(() => {
       this.actor.assertCurrent();
       assertEpoch();
@@ -135,7 +140,7 @@ export class SessionProposals {
     });
   }
 
-  close(id: string, reason: string): void {
+  close(id: string, reason: ContextProposalClosure): void {
     this.actor.assertCurrent();
     void this.sql`UPDATE context_proposals SET status='closed',closed_reason=${reason}
       WHERE actor_id=${this.actor.actorId} AND proposal_id=${id} AND status='pending'`;

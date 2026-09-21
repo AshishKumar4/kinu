@@ -1,7 +1,12 @@
 /** Cross-layer context-edit metadata. Canonical content and selection are relational, not array snapshots. */
+
+/** Why a staged edit could not be applied at the step it was due. */
 export const STAGED_CONTEXT_DEFERRALS = ['unpaired_tool_call', 'history_rewritten'] as const;
 
 export type StagedContextDeferral = (typeof STAGED_CONTEXT_DEFERRALS)[number];
+
+/** Why a pending edit was closed without being applied. */
+export type ContextProposalClosure = 'superseded_by_edit' | 'history_rewritten';
 
 export type ContextEditEffect = 'step' | 'turn';
 

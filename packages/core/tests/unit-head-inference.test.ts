@@ -14,8 +14,8 @@ import {
 } from '../src/heads/head-inference';
 import type { Decision, Evidence, HeadInput, SerializedMessage } from '../src/heads/types';
 import {
-  inheritedContextFromHistory, inheritedContextFromRows, inheritedContextOmissionNote,
-  inheritedContextFromTranscript, INHERITED_CONTEXT_CAP,
+  inheritedContextFromHistory, inheritedContextOmissionNote,
+  inheritedContextFromTranscript,
 } from '../src/orchestrator/heads-support';
 import { SessionHistory } from '../src/orchestrator/session-history';
 import { CHAT_SESSION_ID } from '../src/identity/conversation-store';
@@ -444,6 +444,33 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
   });
 });
 
+async function seededTranscript(count: number, extra?: (history: SessionHistory) => Promise<void>) {
+  const { db, sql, execRaw, vfs } = createTestWorkspace();
+  const actor = createTestActors(sql, execRaw).main;
+
+  const history = new SessionHistory({
+    sql, actor, transactionSync: (write) => db.transaction(write)(),
+    files: async () => ({ vfs, artifactDirectory: '/actor/.kinu/context' }),
+  });
+
+  let parentId: string | null = null;
+
+  for (let i = 0; i < count; i++) {
+    await history.record(CHAT_SESSION_ID, {
+      id: `m${i}`, parentId, origin: i % 2 === 0 ? 'input' : 'output',
+      message: { role: i % 2 === 0 ? 'user' : 'assistant', content: `body ${i}` },
+    });
+    parentId = `m${i}`;
+  }
+
+  await extra?.(history);
+
+  return { db, history, transcript: history.transcript(CHAT_SESSION_ID) };
+}
+
+/** The parent-conversation cap core hands each spawned head. */
+const INHERITED_CONTEXT_CAP = 50;
+
 describe('inherited context is windowed at READ time, exactly once (C4)', () => {
   test('plain text and SDK text parts inherit the same conversation bytes', () => {
     // The literal is the contract: an all-text part array serializes to the
@@ -463,8 +490,12 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
   // budget plus that single disclosure line — never the stored body.
   const bound = cap + 80;
 
-  test('inheritedContextFromRows caps each stored body as it builds the digest', () => {
-    const ctx = inheritedContextFromRows([{ id: 'r1', role: 'assistant', content: stored, createdAt: 1 }], 1);
+  test('the transcript read caps each stored body as it builds the digest', async () => {
+    const seeded = await seededTranscript(0, async (history) => {
+      await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'output', message: { role: 'assistant', content: stored } });
+    });
+
+    const ctx = await inheritedContextFromTranscript(seeded.transcript);
 
     expect(ctx).toHaveLength(1);
     expect(ctx[0]!.content.length).toBeLessThanOrEqual(bound);
@@ -472,11 +503,16 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
     // Head AND tail survive — the window is a window, not a head truncation.
     expect(ctx[0]!.content.startsWith('HEAD-MARK')).toBe(true);
     expect(ctx[0]!.content.endsWith('TAIL-MARK')).toBe(true);
+    seeded.db.close();
   });
 
-  test('a body within budget passes through byte-identical', () => {
-    const ctx = inheritedContextFromRows([{ id: 'r1', role: 'user', content: 'short body', createdAt: 1 }], 1);
-    expect(ctx[0]!.content).toBe('short body');
+  test('a body within budget passes through byte-identical', async () => {
+    const seeded = await seededTranscript(0, async (history) => {
+      await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'input', message: { role: 'user', content: 'short body' } });
+    });
+
+    expect((await inheritedContextFromTranscript(seeded.transcript))[0]!.content).toBe('short body');
+    seeded.db.close();
   });
 
   test('inheritedContextFromHistory caps each live-history body the same way', () => {
@@ -488,9 +524,14 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
     expect(ctx[0]!.content.endsWith('TAIL-MARK')).toBe(true);
   });
 
-  test('buildHeadMessages neither expands nor re-windows what the read already capped', () => {
-    const inheritedContext = inheritedContextFromRows(
-      [{ id: 'r1', role: 'assistant', content: stored, createdAt: 1 }], 1);
+  test('buildHeadMessages neither expands nor re-windows what the read already capped', async () => {
+    const seeded = await seededTranscript(0, async (history) => {
+      await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'output', message: { role: 'assistant', content: stored } });
+    });
+
+    const inheritedContext = await inheritedContextFromTranscript(seeded.transcript);
+
+    seeded.db.close();
 
     const windowed = inheritedContext[0]!.content;
 
@@ -506,29 +547,6 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
 describe('inheritedContextFromTranscript — the canonical store, read once for both hosts', () => {
   /** One actor's canonical session store over a real workspace database, and a
    *  seeded chat transcript to read a hire's inheritance out of. */
-  async function seededTranscript(count: number, extra?: (history: SessionHistory) => Promise<void>) {
-    const { db, sql, execRaw, vfs } = createTestWorkspace();
-    const actor = createTestActors(sql, execRaw).main;
-
-    const history = new SessionHistory({
-      sql, actor, transactionSync: (write) => db.transaction(write)(),
-      files: async () => ({ vfs, artifactDirectory: '/actor/.kinu/context' }),
-    });
-
-    let parentId: string | null = null;
-
-    for (let i = 0; i < count; i++) {
-      await history.record(CHAT_SESSION_ID, {
-        id: `m${i}`, parentId, origin: i % 2 === 0 ? 'input' : 'output',
-        message: { role: i % 2 === 0 ? 'user' : 'assistant', content: `body ${i}` },
-      });
-      parentId = `m${i}`;
-    }
-
-    await extra?.(history);
-
-    return { db, history, transcript: history.transcript(CHAT_SESSION_ID) };
-  }
 
   test('the newest rows up to the cap, in order, with the omission note core owes a hire', async () => {
     // A row of another session: not a turn the hire inherits, and it does not

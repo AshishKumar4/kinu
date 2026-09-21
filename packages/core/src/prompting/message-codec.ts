@@ -27,7 +27,6 @@
 
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { sha256Hex } from '../safety/argument-digest';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
 
@@ -200,9 +199,3 @@ export function decodeModelMessages(payload: string): ModelMessage[] {
   return parsed.output.map((message, index) => validated(decodeValue(message), index));
 }
 
-/** The identity of one encoded revision. Over the ENCODED bytes rather than the
- *  live array: two revisions with the same digest decode to the same messages,
- *  and a digest over a live object would depend on key order nobody controls. */
-export function modelMessagesDigest(encoded: string): string {
-  return sha256Hex(encoded);
-}

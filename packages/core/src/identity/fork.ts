@@ -368,7 +368,7 @@ function assertArtifactSegments(relative: string, path: string, root: string): v
  * would either be re-rooted into a file the fork does not have or copied
  * verbatim into a directory it does not own.
  */
-export function forkArtifactRelativePath(path: string, artifactDirectory: string): string {
+function forkArtifactRelativePath(path: string, artifactDirectory: string): string {
   // One trailing-separator rule for both directions, so `/a/b` and `/a/b/`
   // relativize and re-root identically.
   const root = artifactDirectory.endsWith('/') ? artifactDirectory.slice(0, -1) : artifactDirectory;

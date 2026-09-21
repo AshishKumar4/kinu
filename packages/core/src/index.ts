@@ -462,7 +462,7 @@ export {
 
 export { toolPairingGaps } from './prompting/tool-pairing';
 
-export { STAGED_CONTEXT_DEFERRALS, type StagedContextDeferral, type ContextEditEffect, type ContextEventRecorder, type ContextEditEvent } from './types/context-plane';
+export { STAGED_CONTEXT_DEFERRALS, type StagedContextDeferral, type ContextProposalClosure, type ContextEditEffect, type ContextEventRecorder, type ContextEditEvent } from './types/context-plane';
 
 export { SessionHistory, type SessionHistoryDependencies } from './orchestrator/session-history';
 
@@ -481,7 +481,7 @@ export type { MessageReference, MessagePartReference, ActorReadAuthority } from 
 
 export { SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './orchestrator/session-transcript';
 
-export { encodeModelMessages, decodeModelMessages, modelMessagesDigest } from './prompting/message-codec';
+export { encodeModelMessages, decodeModelMessages } from './prompting/message-codec';
 
 export {
   pruneStepToolOutputs,
@@ -1895,8 +1895,8 @@ export { ModelCatalogSession, resolveEffectiveModelSpec } from './orchestrator/m
 
 export {
   serializeContentForHeads, narrowInheritedRole,
-  inheritedContextFromHistory, inheritedContextFromRows, inheritedContextFromTranscript, type InheritedContextRow,
-  INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
+  inheritedContextFromHistory, inheritedContextFromTranscript,
+  inheritedContextOmissionNote,
 } from './orchestrator/heads-support';
 
 // ── skills (Claude-Code / Hermes-compatible SKILL.md workflow store) ──

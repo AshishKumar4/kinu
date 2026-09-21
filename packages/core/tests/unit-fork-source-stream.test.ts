@@ -241,6 +241,17 @@ describe('forkTransferFrames source streamer', () => {
     expect(empty[0]?.offset).toBe(0);
   });
 
+  test('a payload outside the artifact directory refuses the fork rather than carrying it', async () => {
+    const ws = createTestWorkspace();
+    const chat = await seedChain(ws);
+    await chat.say({ id: 'm4', role: 'user', text: 'p'.repeat(SPILLED_BYTES) });
+    // A reference into another plane: re-rooting it would name a file this
+    // fork does not have, copying it verbatim a directory it does not own.
+    void ws.sql`UPDATE message_updates SET payload_path = '/other/plane/escape.json' WHERE payload_path IS NOT NULL`;
+
+    await expect(framesFor(ws, 64 * 1024, 'm4')).rejects.toThrow(/outside the artifact directory/);
+  });
+
   test('an unknown cut point is refused before a frame is produced', async () => {
     const ws = createTestWorkspace();
     await seedChain(ws);

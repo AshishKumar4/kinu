@@ -34,7 +34,8 @@ const SCAN_CHUNK_BYTES = 64 * 1024;
  *  read ledger keys on. */
 export interface ScannedFile {
   readonly window: SliceWindow;
-  readonly revision?: VfsRevision;
+  /** The plane's revision of the scanned bytes, when it names one. */
+  readonly revision: VfsRevision | undefined;
   /** `fnv1a64` of the file's ENTIRE text, byte-order mark included, identical
    *  to hashing the string a whole-file read would have produced — which is
    *  what lets a scanned read and a later edit agree on what was seen. */
@@ -94,7 +95,7 @@ export async function scanFileWindow(
       return v.is(v.string(), result) ? new TextEncoder().encode(result) : result;
     }, path);
 
-    if (pinned) return { ...scan.done(), revision };
+    if (pinned) return scan.done(revision);
   }
 
   // The plane's own ranged read, where it declares one. A widening assignment,
@@ -115,9 +116,7 @@ export async function scanFileWindow(
       + `part of another. Read it again (action=read path=${path}).`);
   }
 
-  const result = scan.done();
-
-  return before?.revision === undefined ? result : { ...result, revision: before.revision };
+  return scan.done(before?.revision);
 }
 
 /**
@@ -320,7 +319,7 @@ function beginScan(opts: { offset?: number | undefined; limit?: number | undefin
       }
     },
 
-    done(): ScannedFile {
+    done(revision: VfsRevision | undefined): ScannedFile {
       // A trailing newline ENDS the last line rather than starting a phantom
       // one, so only a non-empty remainder is a further line.
       if (pendingChars > 0) {
@@ -331,6 +330,7 @@ function beginScan(opts: { offset?: number | undefined; limit?: number | undefin
 
       return {
         fingerprint: hash.digest(),
+        revision,
         window: {
           first,
           total,
