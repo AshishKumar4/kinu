@@ -999,10 +999,11 @@ export async function deployOutbound(request: Request): Promise<Response> {
     const pointed = held.deployments.at(-1) ?? '';
     const serving = held.versions.get(pointed);
 
-    if (serving === undefined) return Response.json(DEPLOY_FAKE_OLDER_BUILD);
+    // The product's own body: the stamp under `build` (core/src/http/health-route.ts).
+    if (serving === undefined) return Response.json({ ok: true, build: DEPLOY_FAKE_OLDER_BUILD });
     const build = serving === held.published.version ? held.published : DEPLOY_FAKE_OLDER_BUILD;
 
-    return Response.json(build);
+    return Response.json({ ok: true, build });
   }
 
   throw new Error(`the deploy probe reached an unnamed network: ${request.method} ${request.url}`);
