@@ -219,28 +219,38 @@ export class SessionStream {
     if (providerMetadata !== undefined) updates.push(await PreparedMessageUpdate.prepare({ part: part.number, operation: 'metadata', value: { providerOptions: projectJsonValue({ value: providerMetadata }) } }, this.history.messages.payloads));
 
     if (end) updates.push(await PreparedMessageUpdate.prepare({ part: part.number, operation: 'content-end' }, this.history.messages.payloads));
-    const empty = container.reference === null ? await this.history.messages.prepareParts(container.role, [], {}, container.id) : null;
-    const selected = this.history.context.selected();
 
-    if (selected === null) throw new KinuError('missing', 'stream has no selected context');
-    this.history.context.commit(selected, 'output', this.turnId, entries => {
-      let reference = container.reference;
+    const current = container.reference;
 
-      if (reference === null && empty !== null) reference = this.history.messages.insert(empty, working ? 'output' : 'render', { requestId: this.requestId, slot: this.nativeProducer ? container.slot : this.step * 3 + container.slot });
+    const write = (reference: MessageReference): MessageReference => part.opened
+      ? this.history.messages.append(reference.messageId, reference.sequence, updates)
+      : this.history.messages.addPart(reference, { number: part.number, kind, reply, streamOrder: part.streamOrder }, updates);
 
-      if (reference === null) throw new KinuError('io', 'stream container was not prepared');
-      reference = part.opened
-        ? this.history.messages.append(reference.messageId, reference.sequence, updates)
-        : this.history.messages.addPart(reference, { number: part.number, kind, reply, streamOrder: part.streamOrder }, updates);
-      container.reference = reference;
+    if (current !== null) {
+      // The message is already in the context: a delta extends it under the
+      // same fence and moves no membership. Minting a revision per delta made
+      // a streamed answer cost deltas times context entries in row traffic
+      // (measured 2026-09-21: 2,002 revisions for one 2,000-delta answer) and
+      // was what the eval objects spent `do.cpu_ms_per_invocation` on (D23).
+      container.reference = this.history.extendOutput(this.turnId, this.epoch, () => write(current));
+    } else {
+      const empty = await this.history.messages.prepareParts(container.role, [], {}, container.id);
+      const selected = this.history.context.selected();
 
-      if (!working) return entries;
-      const existing = entries.find(entry => entry.messageId === container.id);
+      if (selected === null) throw new KinuError('missing', 'stream has no selected context');
+      this.history.context.commit(selected, 'output', this.turnId, entries => {
+        const reference = write(this.history.messages.insert(empty, working ? 'output' : 'render', { requestId: this.requestId, slot: this.nativeProducer ? container.slot : this.step * 3 + container.slot }));
+        container.reference = reference;
 
-      return existing === undefined
-        ? [...entries, { ...reference, entryId: container.id, position: entries.length }]
-        : entries.map(entry => entry.messageId === container.id ? { ...entry, ...reference } : entry);
-    }, () => this.history.assertEpoch(this.turnId, this.epoch));
+        if (!working) return entries;
+        const existing = entries.find(entry => entry.messageId === container.id);
+
+        return existing === undefined
+          ? [...entries, { ...reference, entryId: container.id, position: entries.length }]
+          : entries.map(entry => entry.messageId === container.id ? { ...entry, ...reference } : entry);
+      }, () => this.history.assertEpoch(this.turnId, this.epoch));
+    }
+
     part.opened = true;
 
     if (end) part.ended = true;
@@ -297,16 +307,10 @@ export class SessionStream {
         }
 
         if (updates.length === 0) continue;
-        const selected = this.history.context.selected();
 
-        if (selected === null || container.reference === null) throw new KinuError('missing', 'final response lost its working selection');
+        if (container.reference === null) throw new KinuError('missing', 'final response lost its working selection');
         const current = container.reference;
-        this.history.context.commit(selected, 'output', this.turnId, entries => {
-          const reference = this.history.messages.append(container.id, current.sequence, updates);
-          container.reference = reference;
-
-          return entries.map(entry => entry.messageId === container.id ? { ...entry, ...reference } : entry);
-        }, () => this.history.assertEpoch(this.turnId, this.epoch));
+        container.reference = this.history.extendOutput(this.turnId, this.epoch, () => this.history.messages.append(container.id, current.sequence, updates));
       }
 
       if (container.reference !== null) {
@@ -314,10 +318,12 @@ export class SessionStream {
 
         if (selected === null) throw new KinuError('missing', 'final response has no selected context');
         const sealed = container.reference;
+        // ONE revision per finished step: the cutoff the context holds for
+        // this message moves from the sequence it joined at to its final one.
         this.history.context.commit(selected, 'output', this.turnId, entries => {
           this.history.messages.seal(sealed);
 
-          return entries;
+          return entries.map(entry => entry.messageId === container.id ? { ...entry, ...sealed } : entry);
         }, () => this.history.assertEpoch(this.turnId, this.epoch));
         await this.history.messages.bindSource(message, container.reference);
       }

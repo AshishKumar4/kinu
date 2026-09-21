@@ -802,6 +802,30 @@ red on a tree whose manifests and lock were already correct. A
 cycle, not of the new ranges: the primary checkout's tree holds one copy.
 Re-cut a patch, then install clean before believing any suite.
 
+D23. A streamed delta extends a message and mints no context revision
+(2026-09-21, this commit). Measured cause of the Durable Object CPU resets
+on the eval workspaces: the observability API (`$workers.durableObjectId`
+filter on object `c0f37b02c8…`, workspace `eval-kinu-task-evals-del-hsi814`,
+13:20 to 13:46 UTC) shows 17 alarm events at `exceededCpu` with
+`cpuTimeMs` 30,000 and wall 36 to 55 s, and the "ok" alarms around them at
+32,500 ms; 649 s of CPU in 26 minutes, all inside alarms. Each frame logs
+the same sequence: activation, `subordinate.assignment_repended`, a model
+call whose first byte arrives in 3 to 7 s, then the budget. Wall minus CPU
+is 6 s, so the burn is computation, not waiting.
+The path: `SessionStream.publish` committed the working context on EVERY
+streamed delta, which reads the whole membership set, writes a
+`context_revisions` row and a `context_memberships` row, and asserts the
+epoch. Measured over bun:sqlite before the change: a 2,000-delta answer
+minted 2,002 revisions and cost 2.1 s with no history, 5.2 s after 60
+turns; the per-delta cost grows with the context. A delta changes no
+membership, so the context's cutoff for the message now moves once, at
+`finishStep`, to the sealed sequence, and each delta is one fenced append
+(`SessionHistory.extendOutput`). After: 3 revisions per turn, 0.95 s and
+2.1 s for the same two cases. Pin: `packages/cli-backend/tests/local-session.test.ts`
+"a streamed answer mints a revision per step", red on the old code by 299
+revisions. The remaining growth with history is `context.base()` per step,
+linear, and is not this defect.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

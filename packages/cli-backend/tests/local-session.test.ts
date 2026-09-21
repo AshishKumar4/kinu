@@ -574,6 +574,56 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows[1]!.content).toBe('hello there');
   });
 
+  test('a streamed answer mints a revision per step, not per delta, and the next step reads all of it', async () => {
+    // Every delta used to commit the working context, one revision and one
+    // membership row per token: a long answer cost deltas times entries in
+    // row traffic, and on a Durable Object that spent the 30 s CPU budget
+    // (2026-09-21). A delta extends one message; the context's cutoff for
+    // that message moves once, at the step's end, to its final sequence.
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    const prompts: PromptMessage[][] = [];
+    const words = Array.from({ length: 300 }, (_, i) => `w${i}`);
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async (options) => {
+        prompts.push(options.prompt);
+
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'text-start', id: '0' });
+
+              for (const word of words) controller.enqueue({ type: 'text-delta', id: '0', delta: `${word} ` });
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    });
+
+    const { db, session, events } = setup('unused', model);
+    await session.send('say a lot');
+    const turnId = turnStarts(events)[0]?.turnId;
+    // The user row's join, the answer's join, and the answer's final cutoff.
+    expect(db.query<{ cause: string }, [string]>('SELECT cause FROM context_revisions WHERE turn_id = ? ORDER BY revision').all(turnId ?? '').map((row) => row.cause))
+      .toEqual(['input', 'output', 'output']);
+
+    // The next turn's model call carries the WHOLE streamed answer: the
+    // cutoff the context pinned at the step's end is its final sequence.
+    await session.send('and again');
+    const prior = prompts[1]!.filter((message) => message.role === 'assistant');
+    const seen = prior.flatMap((message) => message.content).filter((part) => part.type === 'text').map((part) => part.text).join('');
+
+    expect(seen).toBe(words.map((word) => `${word} `).join(''));
+    await session.end();
+  });
+
   test('a post-stream persistence failure ends the turn and does not stall the queue', async () => {
     const { db, rt, session, events } = setup('streamed answer');
     // The answer to the conversation's root message — turn one's, and only

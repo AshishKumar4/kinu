@@ -41,6 +41,18 @@ export class SessionHistory {
     this.requests = new SessionRequests(sql, actor, this.messages, payloads);
   }
 
+  /** One fenced write to a message the working context already holds: a
+   *  streamed delta extends the message and changes no membership, so it
+   *  mints no context revision. The cutoff the context pins for that message
+   *  moves once, when its step finishes. */
+  extendOutput(turnId: string, epoch: number, write: () => MessageReference): MessageReference {
+    return this.dependencies.transactionSync(() => {
+      this.assertEpoch(turnId, epoch);
+
+      return write();
+    });
+  }
+
   transcript(sessionId: string): SessionTranscript {
     return new SessionTranscript(this.dependencies.sql, this.dependencies.actor, sessionId, this.messages, this.messages.payloads, this.dependencies.transactionSync, () => this.context.selected());
   }
