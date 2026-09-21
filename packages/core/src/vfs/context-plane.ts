@@ -9,7 +9,7 @@ import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } fr
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
 import { FileRefusalError } from '../tools/file-edit';
-import { isVfsError, makeVfsError } from './errno';
+import { makeVfsError } from './errno';
 import type { VfsMount, VfsNativeReads } from './mounts';
 import { toolPairingGaps } from '../session/tool-pairing';
 
@@ -63,10 +63,11 @@ interface WorkingView {
 interface Document { readonly owner: ActorClaimStore; readonly writable: boolean; readonly version: string; readonly modified: number; readonly chunks: () => AsyncGenerator<string> }
 
 function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readRange'> {
-  const target = (path: string): Target => {
+  /** The actor and segments a path addresses, or null when it addresses nothing. */
+  const target = (path: string): Target | null => {
     const parts = path.split('/').filter(part => part !== '' && part !== '.');
 
-    if (parts.includes('..')) throw absent(path);
+    if (parts.includes('..')) return null;
     const own = deps.stores();
 
     if (parts[0] !== 'agents') return { stores: own, author: own.claims.actorId, segments: parts, child: false };
@@ -75,9 +76,18 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     const key = parts[1];
     const child = key === undefined ? null : deps.children?.resolve(key);
 
-    if (!child || parts[2] === 'agents') throw absent(path);
+    if (!child || parts[2] === 'agents') return null;
 
     return { stores: child, author: own.claims.actorId, segments: parts.slice(2), child: true };
+  };
+
+  /** The same address, for an operation that needs one. */
+  const located = (path: string): Target => {
+    const resolved = target(path);
+
+    if (resolved === null) throw absent(path);
+
+    return resolved;
   };
 
   const working = (resolved: Target): WorkingView => {
@@ -161,8 +171,8 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     },
   });
 
-  const document = (path: string): Document => {
-    const resolved = target(path);
+  /** The file a resolved address names, or null when none does; a directory address is refused as one. */
+  const document = (resolved: Target, path: string): Document | null => {
     const [head, second, third] = resolved.segments;
     const history = resolved.stores.claims.history;
     const view = working(resolved);
@@ -181,11 +191,11 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     if (head === 'revisions' && second !== undefined && resolved.segments.length === 2) {
       const match = /^(\d+)\.json$/u.exec(second);
 
-      if (!match || view.selection === null) throw absent(path);
+      if (!match || view.selection === null) return null;
       const revision = Number(match[1]);
       const metadata = history.context.revisions(view.selection.contextId).find(row => row.revision === revision);
 
-      if (metadata === undefined) throw absent(path);
+      if (metadata === undefined) return null;
       const entries = history.context.entries({ contextId: view.selection.contextId, revision });
 
       return { owner: resolved.stores.claims, writable: false, version: token([resolved.stores.claims.actorId, view.selection.contextId, revision]), modified: metadata.recorded_at,
@@ -195,7 +205,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     if (head === 'proposals' && second?.endsWith('.json') && resolved.segments.length === 2) {
       const inspected = history.proposals.inspect(decodeURIComponent(second.slice(0, -5)));
 
-      if (inspected === null) throw absent(path);
+      if (inspected === null) return null;
 
       return { owner: resolved.stores.claims, writable: false, version: token(v.parse(JsonValueSchema, inspected.metadata)), modified: inspected.metadata.recorded_at,
         chunks: async function* () { yield `{"proposal":${JSON.stringify(inspected.metadata)},"entries":[`; yield* entryChunks(view, inspected.entries, false); yield ']}\n'; } };
@@ -204,11 +214,11 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     if (head === 'requests' && second !== undefined && third !== undefined && resolved.segments.length === 3) {
       const match = /^(\d+)-(\d+)\.json$/u.exec(third);
 
-      if (!match) throw absent(path);
+      if (!match) return null;
       const turnId = decodeURIComponent(second);
       const request = history.requests.forTurn(turnId).find(row => row.epoch === Number(match[1]) && row.revision === Number(match[2]));
 
-      if (request === undefined) throw absent(path);
+      if (request === undefined) return null;
 
       return { owner: resolved.stores.claims, writable: false, version: token([resolved.stores.claims.actorId, request.id]), modified: view.modified,
         chunks: async function* () {
@@ -222,11 +232,12 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     }
 
     if (head === undefined || head === 'agents' || (head === 'requests' && third === undefined) || (head === 'revisions' && second === undefined) || (head === 'proposals' && second === undefined)) throw makeVfsError('EISDIR', 'context path is a directory', path);
-    throw absent(path);
+
+    return null;
   };
 
-  const list = (path: string): string[] => {
-    const resolved = target(path);
+  /** A directory's entries, 'file' when the address names a file, null when it names no directory. */
+  const list = (resolved: Target): string[] | 'file' | null => {
     const [head, second] = resolved.segments;
     const history = resolved.stores.claims.history;
     const selected = history.context.selected();
@@ -244,16 +255,40 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     if (head === 'requests' && second !== undefined && resolved.segments.length === 2) {
       const rows = history.requests.forTurn(decodeURIComponent(second));
 
-      if (rows.length === 0) throw absent(path);
+      if (rows.length === 0) return null;
 
       return rows.map(row => `${row.epoch}-${row.revision}.json`);
     }
 
-    throw makeVfsError('ENOTDIR', 'context path is a file', path);
+    return 'file';
+  };
+
+  /** One question, answered once: what a path names. */
+  const resolve = (path: string): { kind: 'dir'; entries: string[] } | { kind: 'file'; document: Document } | null => {
+    const resolved = target(path);
+
+    if (resolved === null) return null;
+    const entries = list(resolved);
+
+    if (entries === null) return null;
+
+    if (entries !== 'file') return { kind: 'dir', entries };
+    const source = document(resolved, path);
+
+    return source === null ? null : { kind: 'file', document: source };
+  };
+
+  /** The file a path names, for a read that needs one. */
+  const file = (path: string): Document => {
+    const source = document(located(path), path);
+
+    if (source === null) throw absent(path);
+
+    return source;
   };
 
   const write = async (path: string, data: string | Uint8Array, expected?: VfsRevision): Promise<{ ok: true; revision: VfsRevision } | { ok: false; revision: VfsRevision }> => {
-    const resolved = target(path);
+    const resolved = located(path);
 
     if (resolved.segments.length !== 1 || resolved.segments[0] !== 'working.jsonl') throw readOnly(path);
     const current = working(resolved);
@@ -261,7 +296,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     const observedRevision = contextRevision(observed.header.version);
 
     const assertBase = () => {
-      const latest = working(target(path));
+      const latest = working(located(path));
       const latestRevision = contextRevision(latest.header.version);
 
       if (latest.header.contextId !== observed.header.contextId || latest.header.proposalId !== observed.header.proposalId || latest.header.turn !== observed.header.turn) {
@@ -360,7 +395,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     const history = resolved.stores.claims.history;
 
     const assertOwner = () => {
-      const current = working(target(path));
+      const current = working(located(path));
 
       if (current.target.author !== resolved.author) throw new KinuError('denied', 'context edit authority changed');
       assertBase();
@@ -386,7 +421,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     history.stagePrepared({ id: proposalId, base: selection, expectedPending: observed.header.proposalId, author: resolved.author,
       via: resolved.child ? 'owner' : 'file', cause: 'edit', turnId: observed.header.turn, changes }, prepared, assertOwner, resolved.stores.events);
 
-    return { ok: true, revision: working(target(path)).header.version };
+    return { ok: true, revision: working(located(path)).header.version };
   };
 
   const readDocumentRange = async (source: Document, offset: number, length: number): Promise<Uint8Array> => {
@@ -428,11 +463,11 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     return result;
   };
 
-  const readRange = (path: string, offset: number, length: number): Promise<Uint8Array> => readDocumentRange(document(path), offset, length);
+  const readRange = (path: string, offset: number, length: number): Promise<Uint8Array> => readDocumentRange(file(path), offset, length);
 
   const files: VFS & Pick<VfsNativeReads, 'readRange'> = {
     async readFile(path) {
-      const source = document(path);
+      const source = file(path);
       let text = '';
 
       for await (const chunk of source.chunks()) text += chunk;
@@ -441,7 +476,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
       return text;
     },
     async readFileAtRevision(path, revision, range) {
-      const resolved = target(path);
+      const resolved = located(path);
 
       if (resolved.segments.length !== 1 || resolved.segments[0] !== 'working.jsonl') throw readOnly(path);
       const view = atRevision(resolved, revision);
@@ -456,52 +491,31 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
       return text;
     },
     readRange,
-    async readdir(path) { return list(path); },
+    async readdir(path) {
+      const found = resolve(path);
+
+      if (found === null) throw absent(path);
+
+      if (found.kind === 'file') throw makeVfsError('ENOTDIR', 'context path is a file', path);
+
+      return found.entries;
+    },
     async stat(path): Promise<VfsEntryStat | null> {
-      try {
-        list(path);
+      const found = resolve(path);
 
-        return { isDir: true, size: 0, mtimeMs: 0 };
-      } catch (cause) {
-        if (isVfsError(cause) && cause.code === 'ENOENT') return null;
+      if (found === null) return null;
 
-        if (!isVfsError(cause) || cause.code !== 'ENOTDIR') throw cause;
-      }
+      if (found.kind === 'dir') return { isDir: true, size: 0, mtimeMs: 0 };
+      const source = found.document;
+      let size = 0;
 
-      try {
-        const source = document(path);
-        let size = 0;
+      for await (const chunk of source.chunks()) size += encoder.encode(chunk).byteLength;
+      source.owner.history.context.selected();
+      const stat: VfsEntryStat = { isDir: false, size, mtimeMs: source.modified };
 
-        for await (const chunk of source.chunks()) size += encoder.encode(chunk).byteLength;
-        source.owner.history.context.selected();
-        const stat: VfsEntryStat = { isDir: false, size, mtimeMs: source.modified };
-
-        return source.writable ? { ...stat, revision: source.version } : stat;
-      } catch (cause) {
-        if (isVfsError(cause) && cause.code === 'ENOENT') return null;
-        throw cause;
-      }
+      return source.writable ? { ...stat, revision: source.version } : stat;
     },
-    async exists(path) {
-      try {
-        list(path);
-
-        return true;
-      } catch (cause) {
-        if (isVfsError(cause) && cause.code === 'ENOENT') return false;
-
-        if (!isVfsError(cause) || cause.code !== 'ENOTDIR') throw cause;
-      }
-
-      try {
-        document(path);
-
-        return true;
-      } catch (cause) {
-        if (isVfsError(cause) && cause.code === 'ENOENT') return false;
-        throw cause;
-      }
-    },
+    async exists(path) { return resolve(path) !== null; },
     async writeFile(path, data) { await write(path, data); },
     async writeFileIfRevision(path, data, expectedRevision) { return write(path, data, expectedRevision); },
     async unlink(path) { throw readOnly(path); },

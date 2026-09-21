@@ -108,6 +108,14 @@ failed command-tool result, omitted on success. Its exit code is the display
 status (zero or one), not a reconstruction of the remote process's numeric
 exit code. Callers needing the class read `refusal`, never parse the display.
 
+One condition is a throw, not a refusal value: a hosted workspace whose Durable
+Object exports no supervisor entrypoint cannot compose Nimbus's hosted runtime
+at all, so its first command rejects naming the missing entrypoint
+(`packages/cf-backend/tests/unit-workspace-host-facets.test.ts`, "a ctx without
+exports composes no runtime"). That is a misconfigured deployment, not a
+command outcome authored code can branch on; `src/server.ts` always exports
+`SupervisorRPC`.
+
 `AgentRuntime.executor` is Core's baseline execution primitive.
 `AgentRuntime.executionRouter` serves tools and UI. `storage.vfs` is the
 canonical VFS plus mounts. Memory indexing, fork snapshots and identity
