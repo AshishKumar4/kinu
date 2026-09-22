@@ -39,7 +39,7 @@
  * `safety/egress-destination.ts` states for the other two. What bounds it is a
  * platform property nothing in this repository measures: that Workers `fetch`
  * egress does not reach RFC1918 or link-local addresses. Settling that needs a
- * deployed run, not a reading: on a STAGING deployment, one `eval`
+ * deployed run, not a reading: on the deployment, one `eval`
  * program that fetches a name whose A record points at 169.254.169.254 and one
  * that fetches a public control, with both outcomes recorded. Source cannot
  * answer it: no line here decides what the runtime's resolver and egress path

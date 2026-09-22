@@ -341,7 +341,7 @@ export const UNCAPTURED: readonly Uncaptured[] = [
   },
   {
     what: "The Vectorize indexes' GEOMETRY. `wrangler.jsonc` names `kinu-memory` and "
-      + '`kinu-memory-staging` and stops there; creating an index needs `--dimensions` and '
+      + 'stops there; creating an index needs `--dimensions` and '
       + '`--metric`, and one created at the wrong dimension count accepts the binding and '
       + 'rejects every insert.',
     evidence: 'the dimension is a literal in the embedder construction in '
@@ -352,14 +352,13 @@ export const UNCAPTURED: readonly Uncaptured[] = [
   },
   {
     what: 'The proxied DNS records the `pattern + zone_name` routes need. Production takes a '
-      + 'wildcard `*` record for every preview hostname; staging takes a single `staging` '
-      + 'record for its own origin. A route matches a request that arrives — it does not make '
-      + 'the hostname resolve, so without the records every preview URL and the whole staging '
-      + 'deployment are NXDOMAIN while both routes read as present.',
+      + 'wildcard `*` record for every preview hostname. A route matches a request that '
+      + 'arrives — it does not make the hostname resolve, so without the record every preview '
+      + 'URL is NXDOMAIN while the route reads as present.',
     evidence: 'wrangler has no DNS command at all, and the zone DNS API answers 403 code 10000 '
       + 'under the wrangler OAuth token — so this is invisible to every credential a deploy has. '
       + 'Verification here resolves a hostname against each record instead.',
-    check: 'dig +short probe.kinu.run staging.kinu.run',
+    check: 'dig +short probe.kinu.run',
   },
   {
     what: 'The ZONE. `zone_name: "kinu.run"` assumes a zone already on the account, already '
@@ -370,7 +369,7 @@ export const UNCAPTURED: readonly Uncaptured[] = [
       + '(f44999d1ddda7012e9a87729eba250f1), which a custom domain requires rather than merely '
       + 'prefers, and holding ZERO DNS records, so every record this deployment needs is '
       + 'created rather than contended. Universal SSL covers `kinu.run` and `*.kinu.run` — the '
-      + 'app host, every preview host and staging — so no Advanced Certificate Manager is '
+      + 'app host and every preview host — so no Advanced Certificate Manager is '
       + 'needed. A preview suffix one label deeper would need one.',
     check: 'npx wrangler email routing list',
   },
@@ -401,28 +400,25 @@ export const UNCAPTURED: readonly Uncaptured[] = [
       + 'SANDBOX_VERSION the configured digest was resolved for. The SDK asks the container for '
       + 'its own SANDBOX_VERSION on every start.',
     evidence: 'a container application is named after its Worker and class — '
-      + '`kinu-kinusandbox` and `kinu-staging-kinusandbox-staging` — and neither exists '
-      + 'until that environment is deployed. The image is reconciled only by a deploy OF THAT '
-      + 'ENVIRONMENT, so a version bump lands in one environment and not the other until both '
-      + 'are deployed, and Sandbox.checkVersionCompatibility logs the mismatch at container '
+      + '`kinu-kinusandbox` — and it does not exist until the Worker is deployed. The image is '
+      + 'reconciled only by a deploy, and Sandbox.checkVersionCompatibility logs the mismatch at container '
       + 'start rather than failing the deploy. What IS captured, by '
-      + '`scripts/release-config.test.ts`: both environments name one immutable digest rather '
+      + '`scripts/release-config.test.ts`: the config names one immutable digest rather '
       + 'than a re-pointable tag, and the version that digest was resolved for equals the '
       + '`@cloudflare/sandbox` dependency that ships.',
     check: 'npx wrangler containers list --json',
   },
   {
-    what: 'A 90-day R2 lifecycle rule on the `feedback/` prefix of both feedback buckets. '
+    what: 'A 90-day R2 lifecycle rule on the `feedback/` prefix of the feedback bucket. '
       + 'The screenshot object is exact user feedback and the DO retains only its pointer.',
-    evidence: 'lifecycle rules are not expressible in wrangler.jsonc. Production and staging '
-      + 'were set and read back on 2026-08-24.',
-    check: 'npx wrangler r2 bucket lifecycle list kinu-feedback && '
-      + 'npx wrangler r2 bucket lifecycle list kinu-feedback-staging',
+    evidence: 'lifecycle rules are not expressible in wrangler.jsonc. Set and read '
+      + 'back on 2026-08-24.',
+    check: 'npx wrangler r2 bucket lifecycle list kinu-feedback',
   },
   {
     what: 'The KV namespace TITLES. `wrangler.jsonc` binds AUTH_KV by namespace id, and the '
-      + '`kv_namespaces` block has no title field at all — so `kinu-auth` and '
-      + '`kinu-auth-staging`, the names an operator reads and types, exist only in the account '
+      + '`kv_namespaces` block has no title field at all — so `kinu-auth`, the '
+      + 'name an operator reads and types, exists only in the account '
       + 'and in the command that created them.',
     evidence: 'a `kv_namespaces` entry carries `binding`, `id`, `preview_id` and `remote` and '
       + 'nothing else (wrangler/config-schema.json), while `wrangler kv namespace list` returns '
@@ -474,9 +470,6 @@ export const UNOBSERVABLE = new Map<string, string>([
   ['cron.kinu */15 * * * *',
     'Wrangler writes cron triggers from config but exposes no command that reads them back. '
     + 'Check Workers & Pages > kinu > Triggers in the Cloudflare dashboard.'],
-  ['cron.kinu-staging */15 * * * *',
-    'Wrangler writes cron triggers from config but exposes no command that reads them back. '
-    + 'Check Workers & Pages > kinu-staging > Triggers in the Cloudflare dashboard.'],
 ]);
 
 /* ── Supplying what the manifest does not ─────────────────────────────── */

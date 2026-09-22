@@ -2,8 +2,7 @@
  * References: `root://path`, the way a file is named in anything a person
  * reads. A path is what a command takes; a reference says which plane the
  * path is on, so a reader with two machines and a container knows which
- * `/home/dev/a.txt` is meant (docs/CODEMODE-SURFACE.md, "References in
- * content").
+ * `/home/dev/a.txt` is meant.
  *
  * One grammar over the mount table: the root names a plane, the path is that
  * plane's own absolute path. `vfs` is the workspace filesystem (mounted at

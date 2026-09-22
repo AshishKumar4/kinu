@@ -2,7 +2,7 @@ import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, parseJsonValue, type JsonValu
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
-const origin = (process.env.KINU_SMOKE_ORIGIN ?? 'https://staging.kinu.run').replace(/\/+$/, '');
+const origin = (process.env.KINU_SMOKE_ORIGIN ?? 'https://kinu.run').replace(/\/+$/, '');
 
 const agentName = process.env.KINU_SMOKE_AGENT ?? `smoke-workspace-${Date.now().toString(36)}`;
 

@@ -32,7 +32,7 @@
  *
  * CASE 1 SUBGOAL 6 — WHICH DURABILITY THE PRODUCT PROMISES. It promises
  * durable slate STORAGE and a stable address, NOT durable process memory:
- * `docs/EXECUTION-LAYER-SPEC.md:310-324` says a worker-home slate is "a
+ * `docs/EXECUTION-LAYER-SPEC.md` § Slate preview home says a worker-home slate is "a
  * durable Nimbus application", that port and capability "are the same on every
  * launch", and that `this.sql` "persists across restarts and eviction" —
  * while the same paragraph says "a request for the URL after eviction or

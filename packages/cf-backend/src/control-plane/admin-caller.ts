@@ -143,9 +143,9 @@ type OperatorLookup =
  * hypothetical:
  *
  *   - `provider: 'dev'`. `DEV_USER_EMAIL` synthesizes an identity with
- *     `authTime: Date.now()` for EVERY request, and `env.staging` sets it. An
- *     allowlist match there would hand full operator authority, permanently
- *     fresh, to any unauthenticated caller who can reach the staging origin.
+ *     `authTime: Date.now()` for EVERY request, and the deployment sets it for
+ *     the eval service account. An allowlist match there would hand full
+ *     operator authority, permanently fresh, to whoever holds that identity.
  *   - a scoped CLI access token (`cliScopes` present). That is a
  *     non-interactive long-lived credential; step-up over it means nothing, and
  *     the admin plane is not in any CLI scope.
