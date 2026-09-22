@@ -14,8 +14,6 @@ import {
   type WorkspaceTitleState,
 } from '../src/index';
 
-// A permanent workspace address appears in URLs, Durable Object names, logs,
-// and shared links. It is neutral; mission text stays in the editable title.
 describe('the permanent slug', () => {
   test('is a memorable neutral pair with a stable id suffix', () => {
     expect(workspaceSlug('abcdef123456')).toBe('evergreen-birch-ef123456');
@@ -84,9 +82,6 @@ describe('the mission-derived title', () => {
   });
 });
 
-// A workspace whose display name is still its raw slug is titled from its
-// mission the next time it runs. planWorkspaceTitle is the single decision
-// behind both the first-turn title and that lazy heal.
 describe('automatic workspace titling — the decision', () => {
   const MISSION = 'Audit the OAuth callback flow\n\nstart with the token exchange';
 
@@ -119,9 +114,6 @@ describe('automatic workspace titling — the decision', () => {
   });
 
   test('an actor born with its codename is titled from its first message; a codename the owner kept is not', () => {
-    // A codename is two words fixed by the slug: the same on every surface,
-    // and never "Untitled". It is still a placeholder — the first message
-    // replaces it — unless the owner claimed it by renaming to it.
     const codename = codenameFor('task-12qzhx');
 
     expect(codename).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
@@ -135,8 +127,6 @@ describe('automatic workspace titling — the decision', () => {
   });
 
   test('a title whose origin nobody recorded is the owner\'s, and is never touched', () => {
-    // The cloud registry has always read an absent origin as the owner's; the
-    // CLI read it as "never titled" and renamed the workspace. One rule now.
     expect(planWorkspaceTitle({ ...slugNamed, displayName: 'OAuth Callback Audit', nameOrigin: null })).toBe(null);
     expect(planWorkspaceTitle({ ...slugNamed, nameOrigin: null })).toBe(null);
     expect(autoTitleMayReplace(null)).toBe(false);
@@ -145,19 +135,13 @@ describe('automatic workspace titling — the decision', () => {
   });
 
   test('a stored origin is the owner\'s only when it says so', () => {
-    // Storage an earlier build wrote can hold an origin no writer produces now
-    // ('provisional', 2026-09-22). That title was the system's stand-in, so it
-    // reads as 'auto' rather than freezing as the owner's.
+    // 'provisional' was written by an earlier build for the system's stand-in.
     expect(nameOriginOf('user')).toBe('user');
     expect(nameOriginOf('auto')).toBe('auto');
     expect(nameOriginOf('provisional')).toBe('auto');
   });
 
   test('a stand-in is replaced only by the pass its caller names as its naming', () => {
-    // #18: the stand-in is the first line of the person's prompt, stored 'auto'
-    // exactly as a model's name is. The genesis turn (or a hosted actor's run
-    // of the message it came from) says it is a stand-in; every other pass
-    // reads it as named, which is what keeps a model's name from churning.
     const standIn: WorkspaceTitleState = { ...slugNamed, displayName: 'Audit the OAuth callback flow' };
 
     expect(planWorkspaceTitle({ ...standIn, standIn: true })).toEqual({ provisional: null, mission: MISSION });
@@ -186,8 +170,7 @@ describe('automatic workspace titling — the decision', () => {
   test('no mission to title from is a no-op', () => {
     expect(planWorkspaceTitle({ ...slugNamed, mission: '' })).toBe(null);
     expect(planWorkspaceTitle({ ...slugNamed, mission: '   \n ' })).toBe(null);
-    // The generic missions seeded for workspaces created without one describe
-    // Kinu, not the workspace — titling from them would be noise.
+    // Seeded generic missions describe Kinu, not the workspace.
     expect(planWorkspaceTitle({ ...slugNamed, mission: summarizeSoul(renderSoulMarkdown({ name: 'Kinu' })) })).toBe(null);
     expect(planWorkspaceTitle({ ...slugNamed, mission: summarizeSoul(DEFAULT_SOUL_MD) })).toBe(null);
   });
@@ -199,7 +182,6 @@ describe('automatic workspace titling — the decision', () => {
 });
 
 describe('automatic workspace titling — applying it', () => {
-  /** A backend's persistence: display name plus the 'auto' origin mark. */
   function workspace(state: Partial<WorkspaceTitleState> = {}) {
     const stored: WorkspaceTitleState = {
       slug: 'workspace-1a4e20',
@@ -242,9 +224,7 @@ describe('automatic workspace titling — applying it', () => {
       return 'OAuth Callback Audit';
     };
 
-    // The failure reaches the caller: on cf it keeps the genesis row owed, and
-    // the CLI logs it. Absorbed here, a dead review model and a refused
-    // `persist` would both report "titled".
+    // Swallowing this would report "titled" for a dead model or a refused `persist`.
     await expect(applyWorkspaceTitle(stored, {
       persist,
       suggest: async () => { throw new Error('no model configured'); },
@@ -252,12 +232,9 @@ describe('automatic workspace titling — applying it', () => {
     expect(persisted).toEqual(['Audit the OAuth callback flow']);
     expect(stored).toMatchObject({ displayName: 'Audit the OAuth callback flow', nameOrigin: 'auto' });
 
-    // A later pass reads the stand-in as named and asks no model.
     expect(await applyWorkspaceTitle(stored, { persist, suggest })).toBe(null);
     expect(suggested).toBe(0);
 
-    // The pass the naming is owed by (the genesis row's retry) replaces it,
-    // and writes only the model's name.
     expect(await applyWorkspaceTitle({ ...stored, standIn: true }, { persist, suggest })).toBe('OAuth Callback Audit');
     expect(persisted).toEqual(['Audit the OAuth callback flow', 'OAuth Callback Audit']);
     expect(suggested).toBe(1);
@@ -317,7 +294,6 @@ describe('automatic workspace titling — applying it', () => {
     await applyWorkspaceTitle(fresh.stored, { persist: fresh.persist, suggest: async () => '  ' });
     expect(fresh.persisted).toEqual(['Audit the OAuth callback flow']);
 
-    // The owed naming over a stand-in the model repeats changes nothing.
     const named = workspace({ displayName: 'Audit the OAuth callback flow', standIn: true });
     expect(await applyWorkspaceTitle(named.stored, { persist: named.persist, suggest: async () => 'Audit the OAuth callback flow' }))
       .toBe(null);
@@ -332,38 +308,22 @@ describe('automatic workspace titling — applying it', () => {
   });
 });
 
-/**
- * The ONE minting rule both backends call, and the slug bound that belongs to
- * it alone.
- *
- * A backend that inlines the slug-and-suffix shape instead disagrees on the
- * suffix — `nanoid(6)` over 36 characters on Cloudflare against six hex digits
- * of a UUID locally — and identical roles then mint names of two different
- * collision strengths depending on where the agent ran. A caller-side cut at 48
- * is just as useless, because the slugifier has already cut at 24. So the slug
- * is module-private, and these assertions read it where a caller does.
- */
 describe('a minted subordinate name', () => {
-  /** The slug half, with the random suffix removed. */
   const slugOf = (name: string): string => name.slice(0, name.lastIndexOf('-'));
 
   test('lowercases, hyphenates, trims and caps the role at 24 characters', () => {
     expect(slugOf(mintSubordinateName('Research Rust Frameworks'))).toBe('research-rust-frameworks');
     expect(slugOf(mintSubordinateName('  Build a Benchmark!!  '))).toBe('build-a-benchmark');
-    // 24, not 48: the slugifier's own cut is the only one that runs.
     expect(slugOf(mintSubordinateName('A'.repeat(40)))).toBe('a'.repeat(24));
   });
 
   test('a role that slugifies to nothing is named for what it is', () => {
-    // Never a bare suffix: the name is what a roster shows and what an operator
-    // addresses, and `-a1b2c3` says nothing about who it is.
     expect(mintSubordinateName('!!!')).toMatch(/^subordinate-[a-z0-9]{6}$/);
     expect(mintSubordinateName('')).toMatch(/^subordinate-[a-z0-9]{6}$/);
   });
 
   test('satisfies the name contract spawnSubordinate enforces', () => {
-    // Lowercase, URL-safe, at most 64 — the same predicate core/subordinates
-    // applies, restated here because this is the only producer of these names.
+    // Same predicate core/subordinates applies; this is the only producer of these names.
     for (const role of ['Research Rust Frameworks', 'ask-auditor', 'A'.repeat(40), '!!!']) {
       expect(mintSubordinateName(role)).toMatch(/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/);
     }
@@ -373,8 +333,6 @@ describe('a minted subordinate name', () => {
     const minted = new Set(Array.from({ length: 64 }, () => mintSubordinateName('auditor')));
     expect(minted.size).toBe(64);
 
-    // One entropy source, and it is the 36-character alphabet rather than the
-    // 16 of a hex suffix.
     for (const name of minted) expect(name).toMatch(/^auditor-[a-z0-9]{6}$/);
   });
 });
