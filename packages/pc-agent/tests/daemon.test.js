@@ -213,19 +213,7 @@ describe('daemon startup hardening', () => {
     const loop = startConnectLoop({
       getTicket: async () => issued.shift(),
       dial(ticket) {
-        const listeners = new Map();
-
-        const socket = {
-          addEventListener(type, listener) {
-            const callbacks = listeners.get(type) ?? [];
-            callbacks.push(listener);
-            listeners.set(type, callbacks);
-          },
-          emit(type, event = {}) {
-            for (const listener of listeners.get(type) ?? []) listener(event);
-          },
-        };
-
+        const socket = fakeSocket();
         dialed.push(ticket);
         sockets.push(socket);
 
@@ -358,7 +346,7 @@ describe('daemon startup hardening', () => {
 
         return scheduled.length;
       },
-      cancel(handle) { cancelled.push(handle); },
+      cancel(scheduleId) { cancelled.push(scheduleId); },
     });
 
     await Promise.resolve();
@@ -885,6 +873,36 @@ describe('daemon process under Bun against a local hub', () => {
     return null;
   }
 
+  /** Reads one reply frame by request id, or fails naming the daemon's log. */
+  function replyReader(hub, daemonLog) {
+    return async (id, timeoutMs = 15_000) => {
+      const frame = await untilHub(() => hub.frames.find((f) => f.id === id), timeoutMs);
+
+      if (!frame) throw new Error(`no reply for ${id}: log says ${daemonLog()}`);
+
+      return frame;
+    };
+  }
+
+  /** Any supervisor the body left un-acked: each in-flight record names its
+   *  process group, and ESRCH is that group already being gone, which is the
+   *  teardown's goal. Killing by the daemon child's group is not possible —
+   *  `Bun.spawn` above is not detached. */
+  function killInflightSupervisors(root) {
+    const inflight = path.join(root, 'inflight');
+
+    if (!fs.existsSync(inflight)) return;
+
+    for (const entry of fs.readdirSync(inflight)) {
+      const state = path.join(inflight, entry, 'state');
+
+      if (!fs.existsSync(state)) continue;
+      const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(state, 'utf-8'))?.[1]);
+
+      if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
+    }
+  }
+
   test('HELLO on connect, rotation, exec, cancel, file op, and reconnect — all under Bun', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     const root = scratchDir('daemon-e2e');
@@ -922,13 +940,7 @@ describe('daemon process under Bun against a local hub', () => {
         // the absent direction has to be spelled as "not null" to be able to fail.
         expect(await untilHub(() => hub.frames.find((f) => f.type === 'ROTATE_ACK'))).not.toBeNull();
 
-        const reply = async (id, timeoutMs = 15_000) => {
-          const frame = await untilHub(() => hub.frames.find((f) => f.id === id), timeoutMs);
-
-          if (!frame) throw new Error(`no reply for ${id}: log says ${daemonLog()}`);
-
-          return frame;
-        };
+        const reply = replyReader(hub, daemonLog);
 
         // exec round-trip through the real supervisor under Bun. The result
         // frame is then ACKED — the supervisor publishes its ack FIFO before
@@ -965,28 +977,12 @@ describe('daemon process under Bun against a local hub', () => {
         const hello2 = await untilHub(() => hub.frames.filter((f) => f.type === 'HELLO')[1]);
         expect(hello2).toBeDefined();
       } finally {
-        // Teardown owns three things the runner's exit depends on: the
-        // daemon child (SIGTERM, then reaped through .exited), the in-flight
-        // root (any supervisor the test failed to ack dies with its process
-        // group — killing by -pid on the child's group is not possible here
-        // because Bun.spawn above is not detached, so each supervisor's own
-        // directory is checked and removed), and the hub.
+        // Teardown owns three things the runner's exit depends on: the daemon
+        // child (SIGTERM, then reaped through .exited), the in-flight root,
+        // and the hub.
         child.kill('SIGTERM');
         await child.exited;
-        const inflight = path.join(root, 'inflight');
-
-        if (fs.existsSync(inflight)) {
-          for (const entry of fs.readdirSync(inflight)) {
-            const state = path.join(inflight, entry, 'state');
-
-            if (!fs.existsSync(state)) continue;
-            const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(state, 'utf-8'))?.[1]);
-
-            // ESRCH is the supervisor already being gone; that is the
-            // teardown's goal, so nothing rethrows past it.
-            if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
-          }
-        }
+        killInflightSupervisors(root);
       }
     } finally {
       await hub.close();
@@ -1013,30 +1009,13 @@ describe('daemon process under Bun against a local hub', () => {
 
         if (!hello) throw new Error(`daemon never connected: log says ${daemonLog()}`);
 
-        const reply = async (id, timeoutMs = 15_000) => {
-          const frame = await untilHub(() => hub.frames.find((f) => f.id === id), timeoutMs);
-
-          if (!frame) throw new Error(`no reply for ${id}: log says ${daemonLog()}`);
-
-          return frame;
-        };
+        const reply = replyReader(hub, daemonLog);
 
         await body({ hub, root, child, reply, daemonLog });
       } finally {
         child.kill('SIGTERM');
         await child.exited;
-        const inflight = path.join(root, 'inflight');
-
-        if (fs.existsSync(inflight)) {
-          for (const entry of fs.readdirSync(inflight)) {
-            const state = path.join(inflight, entry, 'state');
-
-            if (!fs.existsSync(state)) continue;
-            const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(state, 'utf-8'))?.[1]);
-
-            if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
-          }
-        }
+        killInflightSupervisors(root);
       }
     } finally {
       await hub.close();

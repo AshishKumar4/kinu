@@ -142,12 +142,27 @@ function parseUpdateFrame(msg) {
   return { version, tarball, checksum, sha256: sha256.toLowerCase(), checksums, signature };
 }
 
+/** The key this machine verifies a release against: the environment's when it
+ *  names one, else the key pinned in this source. */
+function pinnedPublicKey() {
+  const fromEnv = process.env[RELEASE_SIGNING_PUBLIC_KEY_ENV] ?? '';
+
+  return fromEnv === '' ? RELEASE_SIGNING_PUBLIC_KEY : fromEnv;
+}
+
+/** Byte order over artifact paths; a different order is a different message. */
+function byArtifactPath([a], [b]) {
+  if (a < b) return -1;
+
+  return a > b ? 1 : 0;
+}
+
 /** The canonical bytes a release signature covers — the same text
  *  `core/src/http/release-signing.ts` builds: prefix, version, then every
  *  artifact with its checksum, sorted by path, one per line. */
 function releaseMessage(version, checksums) {
   const lines = Object.entries(checksums)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .sort(byArtifactPath)
     .map(([artifact, digest]) => `${artifact} ${digest.toLowerCase()}`);
 
   return new TextEncoder().encode([RELEASE_MESSAGE_PREFIX, version, ...lines, ''].join('\n'));
@@ -158,7 +173,7 @@ function releaseMessage(version, checksums) {
  *  refused before WebCrypto is asked; WebCrypto's own refusal of the
  *  material it is handed is a failure of THIS machine's pin and propagates
  *  to the caller's `device.update_failed` line with its cause. */
-async function releaseSignatureHolds(frame, publicKeyHex = process.env[RELEASE_SIGNING_PUBLIC_KEY_ENV] || RELEASE_SIGNING_PUBLIC_KEY) {
+async function releaseSignatureHolds(frame, publicKeyHex = pinnedPublicKey()) {
   if (!/^[0-9a-f]{64}$/i.test(publicKeyHex)) return false;
   const publicKey = Uint8Array.from(publicKeyHex.match(/../g), (pair) => Number.parseInt(pair, 16));
   const signature = Uint8Array.from(Buffer.from(frame.signature, 'base64'));

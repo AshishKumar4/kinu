@@ -23,7 +23,9 @@ const update = require('./update.js');
  *  — for the updater to land a newer set of. */
 const DAEMON_SIBLINGS = ['sandbox.js', 'pty.js', 'update.js'];
 
-const DEVICE_HOME = path.resolve(process.env.KINU_HOME?.trim() || path.join(os.homedir(), '.kinu'));
+const HOME_SETTING = process.env.KINU_HOME?.trim() ?? '';
+
+const DEVICE_HOME = path.resolve(HOME_SETTING === '' ? path.join(os.homedir(), '.kinu') : HOME_SETTING);
 
 /** The build this process IS: the stamp beside the daemon when it started,
  *  read once. The file may change under a running daemon (an update lands
@@ -186,6 +188,14 @@ const PTY_BACKLOG_MAX_BYTES = 256 * 1024;
 
 function log(...a) { console.log(new Date().toISOString(), ...a); }
 
+/** What a caught value says: its message, or the value itself when it carries
+ *  none — a `throw 'text'` and an `Error('')` both reach these logs. */
+function errorDetail(err) {
+  const message = err?.message;
+
+  return message === undefined || message === '' ? err : message;
+}
+
 /** What `sandbox.probe()` answered at start. Read by HELLO and by the exec
  *  frame's own refusal, so it is proved once rather than per command. */
 let SANDBOX_CAPABILITY = { status: sandbox.SANDBOX_STATUS.PROBE_FAILED, detail: 'the sandbox probe has not run yet' };
@@ -235,6 +245,10 @@ const WORKDIR_MARKER = 'KINU_WORKDIR';
 
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
 
+/** `git diff-tree --name-status` letters this daemon reports by name; every
+ *  other letter (M, R, T, …) restores as a modification. */
+const DIFF_KIND = { A: 'create', D: 'delete' };
+
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
 
 const CHECKPOINT_EXCLUDES = [
@@ -270,11 +284,11 @@ const ADD_FAILED = /^fatal: adding files failed$/;
 const REASON_UNREADABLE_LIMIT = 3;
 
 function diagnoseStaging(stderr) {
-  const lines = String(stderr || '').split('\n').map((line) => line.trim()).filter(Boolean);
+  const lines = String(stderr ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
   const unreadable = new Set();
 
   for (const line of lines) {
-    const denied = UNREADABLE_DIR.exec(line) || UNREADABLE_FILE.exec(line);
+    const denied = UNREADABLE_DIR.exec(line) ?? UNREADABLE_FILE.exec(line);
 
     if (denied) unreadable.add(denied[1]);
   }
@@ -289,7 +303,7 @@ function diagnoseStaging(stderr) {
   };
 
   return {
-    unreadable: [...unreadable].sort(),
+    unreadable: [...unreadable].sort((a, b) => (a < b ? -1 : 1)),
     unexplained: lines.filter((line) => !explained(line)),
   };
 }
@@ -304,9 +318,9 @@ function reasonWithSkips(reason, unreadable) {
 }
 
 function createCheckpoints(opts = {}) {
-  const base = opts.base || path.join(os.homedir(), '.kinu', 'checkpoints');
-  const keep = Math.max(1, opts.keep || 50);
-  const gitBin = opts.gitBin || 'git';
+  const base = opts.base ?? path.join(os.homedir(), '.kinu', 'checkpoints');
+  const keep = Math.max(1, opts.keep ?? 50);
+  const gitBin = opts.gitBin ?? 'git';
   let gitAvailable = null;
   let refSeq = 0;
   /** `${agent}|${dir}` → last turn key; one snapshot per turn per dir. */
@@ -377,7 +391,12 @@ function createCheckpoints(opts = {}) {
     return gitAvailable;
   };
 
-  const sanitizeAgent = (agent) => String(agent || 'agent').replace(/[^A-Za-z0-9_-]/g, '_');
+  const sanitizeAgent = (agent) => {
+    const name = String(agent ?? '');
+
+    return (name === '' ? 'agent' : name).replace(/[^A-Za-z0-9_-]/g, '_');
+  };
+
   const dirHash = (dir) => crypto.createHash('sha256').update(path.resolve(dir)).digest('hex').slice(0, 16);
   const storeDirFor = (agent, dir) => path.join(base, sanitizeAgent(agent), dirHash(dir));
   const workdirOrBase = (workdir) => (fs.existsSync(workdir) ? workdir : base);
@@ -391,7 +410,7 @@ function createCheckpoints(opts = {}) {
     fs.writeFileSync(path.join(gitDir, WORKDIR_MARKER), path.resolve(workdir) + '\n');
   };
 
-  const cleanField = (s) => String(s == null ? '-' : s).replace(/[\n|]/g, ' ').trim() || '-';
+  const cleanField = (s) => String(s ?? '-').replace(/[\n|]/g, ' ').trim() || '-';
 
   const subjectFor = (turn, reason) =>
     `turn=${cleanField(turn && turn.turnId)} session=${cleanField(turn && turn.sessionId)} ${cleanField(reason)}`;
@@ -470,7 +489,7 @@ function createCheckpoints(opts = {}) {
     gitAvailable = true;
 
     if (run.error) throw new Error(`checkpoint staging failed: ${run.error.message}`, { cause: run.error });
-    const stderr = String(run.stderr || '');
+    const stderr = String(run.stderr ?? '');
     const diagnosis = diagnoseStaging(stderr);
 
     // Non-zero explained entirely by paths it may not read is not a failure;
@@ -501,9 +520,7 @@ function createCheckpoints(opts = {}) {
     const refs = storeRefs(gitDir, abs);
     const latest = refs[0];
 
-    if (latest) {
-      if (git(['rev-parse', `${latest.id}^{tree}`], abs, env).trim() === tree) return latest.id;
-    }
+    if (latest && git(['rev-parse', `${latest.id}^{tree}`], abs, env).trim() === tree) return latest.id;
 
     const subject = subjectFor(turn, reasonWithSkips(reason, staged.unreadable));
     const sha = git(['commit-tree', tree, '-m', subject], abs, env).trim();
@@ -554,7 +571,7 @@ function createCheckpoints(opts = {}) {
       const status = line.slice(0, tab);
       files.push({
         path: line.slice(tab + 1),
-        kind: status === 'A' ? 'create' : status === 'D' ? 'delete' : 'modify',
+        kind: DIFF_KIND[status] ?? 'modify',
       });
     }
 
@@ -571,12 +588,14 @@ function createCheckpoints(opts = {}) {
     ensure(hint, fallbackDir) {
       try {
         if (!hint || !probe()) return null;
-        const dir = hint.dir || fallbackDir;
+        const hinted = hint.dir ?? '';
+        const dir = hinted === '' ? fallbackDir : hinted;
 
         if (!dir) return null;
         const abs = path.resolve(dir);
         const dedupeKey = `${sanitizeAgent(hint.agent)}|${abs}`;
-        const turnKey = hint.turnId || 'no-turn';
+        const turnId = hint.turnId ?? '';
+        const turnKey = turnId === '' ? 'no-turn' : turnId;
 
         if (turnDone.get(dedupeKey) === turnKey) return null;
         turnDone.set(dedupeKey, turnKey);
@@ -626,7 +645,7 @@ function createCheckpoints(opts = {}) {
 
       entries.sort((a, b) => b.at - a.at);
 
-      return entries.slice(0, Math.max(1, limit || 50));
+      return entries.slice(0, Math.max(1, limit ?? 50));
     },
 
     plan(agent, dir, id) {
@@ -694,11 +713,13 @@ function listListeningPorts() {
     const n = Number(port);
 
     if (!Number.isInteger(n) || n <= 0 || n > 65535) return;
-    const key = `${host || ''}:${n}:${pid || ''}:${command || ''}`;
+    const bind = host ?? '';
+    const program = command ?? '';
+    const key = `${bind}:${n}:${pid ?? ''}:${program}`;
 
     if (seen.has(key)) return;
     seen.add(key);
-    rows.push({ port: n, host: host || '0.0.0.0', protocol: 'tcp', command: command || null, pid: pid ? Number(pid) : null });
+    rows.push({ port: n, host: bind === '' ? '0.0.0.0' : bind, protocol: 'tcp', command: program === '' ? null : program, pid: pid ? Number(pid) : null });
   };
 
   const lsof = runCommand('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN']);
@@ -720,7 +741,7 @@ function listListeningPorts() {
   if (ss) {
     for (const line of ss.split('\n').slice(1)) {
       const parts = line.trim().split(/\s+/);
-      const local = parts[3] || '';
+      const local = parts[3] ?? '';
       const m = local.match(/^(.*):(\d+)$/);
       const proc = line.match(/users:\(\("([^"]+)",pid=(\d+)/);
 
@@ -736,8 +757,8 @@ function listListeningPorts() {
     for (const line of netstat.split('\n')) {
       if (!/\bLISTEN\b/i.test(line) || !/^tcp/i.test(line.trim())) continue;
       const parts = line.trim().split(/\s+/);
-      const local = parts[3] || parts[1] || '';
-      const m = local.match(/^(.*)\.(\d+)$/) || local.match(/^(.*):(\d+)$/);
+      const local = parts[3] ?? parts[1] ?? '';
+      const m = local.match(/^(.*)\.(\d+)$/) ?? local.match(/^(.*):(\d+)$/);
 
       if (m) add(m[2], m[1].replace(/^\[|\]$/g, ''), null, null);
     }
@@ -821,7 +842,7 @@ function probeNames(raw) {
 }
 
 function whichAll(names) {
-  const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  const dirs = String(process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
 
   return probeNames(names).filter((name) => onPath(dirs, name));
 }
@@ -834,7 +855,9 @@ function whichAll(names) {
 // or file it can discover. State validation prevents malformed or stale records
 // from being selected accidentally; it cannot defend against a malicious
 // same-user command that already has equivalent local authority.
-const INFLIGHT_ROOT = path.resolve(KINU_INFLIGHT_ROOT || path.join(os.homedir(), '.kinu', 'inflight'));
+const INFLIGHT_ROOT = path.resolve(
+  KINU_INFLIGHT_ROOT === undefined || KINU_INFLIGHT_ROOT === '' ? path.join(os.homedir(), '.kinu', 'inflight') : KINU_INFLIGHT_ROOT,
+);
 
 const REQUEST_ID = /^rpc-[A-Za-z0-9_-]{10}-[1-9]\d*$/;
 
@@ -919,15 +942,20 @@ function processStartIdentity(pid) {
   throw new Error('pc-agent command supervision requires POSIX Linux or macOS');
 }
 
-function readSupervisorState(dir) {
-  const state = fs.readFileSync(path.join(dir, 'state'), 'utf8');
+/** A supervisor record: one `key=value` per line, split at the FIRST `=` so a
+ *  value may hold one. */
+function readFieldFile(file) {
+  const text = fs.readFileSync(file, 'utf8');
 
-  const fields = new Map(state.trimEnd().split('\n').map((line) => {
+  return new Map(text.trimEnd().split('\n').map((line) => {
     const separator = line.indexOf('=');
 
     return [line.slice(0, separator), line.slice(separator + 1)];
   }));
+}
 
+function readSupervisorState(dir) {
+  const fields = readFieldFile(path.join(dir, 'state'));
   const pid = Number(fields.get('pid'));
   const start = fields.get('start');
   const group = Number(fields.get('group'));
@@ -983,14 +1011,7 @@ function processGroupHasLiveProcess(group) {
 }
 
 function readTerminalResult(dir) {
-  const result = fs.readFileSync(path.join(dir, 'result'), 'utf8');
-
-  const fields = new Map(result.trimEnd().split('\n').map((line) => {
-    const separator = line.indexOf('=');
-
-    return [line.slice(0, separator), line.slice(separator + 1)];
-  }));
-
+  const fields = readFieldFile(path.join(dir, 'result'));
   const kind = fields.get('kind');
   const exitCode = Number(fields.get('exitCode'));
 
@@ -1320,7 +1341,7 @@ function writeAcknowledgement(dir) {
     writer.once('error', reject);
     writer.once('exit', (code, signal) => {
       if (code === 0) resolve();
-      else reject(new Error(`supervisor acknowledgement writer exited with ${signal || code}`));
+      else reject(new Error(`supervisor acknowledgement writer exited with ${signal ?? code}`));
     });
   });
 }
@@ -1379,7 +1400,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
         entries.set(directory.name, { dir, ...state });
         recovered.push({ requestId: directory.name, terminal });
       } catch (err) {
-        log('Removing unusable in-flight command record', dir, err.message || err);
+        log('Removing unusable in-flight command record', dir, errorDetail(err));
         removeRequestDirectory(dir);
       }
     }
@@ -1397,7 +1418,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
     try {
       entry = await loadEntry(requestId);
     } catch (err) {
-      throw new Error(`cannot validate supervisor for ${requestId}: ${err.message || err}`, { cause: err });
+      throw new Error(`cannot validate supervisor for ${requestId}: ${errorDetail(err)}`, { cause: err });
     }
 
     if (!entry || fs.existsSync(path.join(entry.dir, 'result'))) {
@@ -1569,7 +1590,7 @@ function waitForSupervisorState(dir, child) {
     const onError = (err) => finish(err);
 
     const onExit = (code, signal) => {
-      finish(new Error(`supervisor exited before publishing state (${signal || code || 0})`));
+      finish(new Error(`supervisor exited before publishing state (${signal ?? code ?? 0})`));
     };
 
     child.once('error', onError);
@@ -1758,7 +1779,7 @@ function sendPtyFrame(ws, frame) {
   } catch (err) {
     // The socket closed between this terminal's read and this write. Its own
     // close handler ends every session; this frame has nowhere left to go.
-    log('device.terminal_frame_unsent', frame.type, frame.session, err.message || err);
+    log('device.terminal_frame_unsent', frame.type, frame.session, errorDetail(err));
 
     return false;
   }
@@ -1784,7 +1805,7 @@ function handlePtyFrame(msg, ctx) {
     else if (msg.type === PTY_RESIZE_FRAME) sessions.resize(msg.session, msg.cols, msg.rows);
     else sessions.close(msg.session);
   } catch (err) {
-    log('device.terminal_frame_dropped', msg.type, msg.session, err.message || err);
+    log('device.terminal_frame_dropped', msg.type, msg.session, errorDetail(err));
   }
 }
 
@@ -1793,7 +1814,9 @@ function handlePtyFrame(msg, ctx) {
  *  roots they consented to, and a refusal when the machine cannot honour a
  *  sandboxed frame. A terminal is device access, so it is confined exactly as
  *  a command is. */
-function openTerminalSession(msg, ws, id, params, ctx) {
+function openTerminalSession(msg, ws, ctx) {
+  const { id, params } = msg;
+
   assertSupervisionSupported();
   assertCommandShellPresent();
 
@@ -1815,7 +1838,8 @@ function openTerminalSession(msg, ws, id, params, ctx) {
 /** Run one command, joining a re-delivered request to its existing supervisor.
  *  The plan is computed once, HERE: a re-delivered exec must not re-plan, or
  *  the same request could run under two policies. */
-function execCommand(msg, ws, id, params, ctx) {
+function execCommand(msg, ws, ctx) {
+  const { id, params } = msg;
   const cmd = parseString(params[0], 'exec expects a command string');
   const checkpoints = ctx && ctx.checkpoints;
   assertSupervisionSupported();
@@ -1859,9 +1883,9 @@ function handle(msg, ws, ctx) {
 
   try {
     if (method === PTY_OPEN_METHOD) {
-      openTerminalSession(msg, ws, id, params, ctx);
+      openTerminalSession(msg, ws, ctx);
     } else if (method === 'exec') {
-      execCommand(msg, ws, id, params, ctx);
+      execCommand(msg, ws, ctx);
     } else if (method === CANCEL_METHOD || method === EXEC_ACK_METHOD) {
       const requested = params[0];
       const target = String(requested);
@@ -1884,7 +1908,7 @@ function handle(msg, ws, ctx) {
         replyWithOperationFailure,
       );
     } else if (method === 'readFile') {
-      const options = params[1] || {};
+      const options = params[1] ?? {};
       const confined = confinedDeviceViewPath(msg, params[0], 'read');
 
       if (options.encoding === 'base64') rpc(ws, id, { content: fs.readFileSync(confined).toString('base64'), encoding: 'base64' });
@@ -1904,12 +1928,13 @@ function handle(msg, ws, ctx) {
         rpc(ws, id, { encoding: 'base64', content: bytes.subarray(0, read).toString('base64') });
       } finally { fs.closeSync(file); }
     } else if (method === 'writeFile') {
-      const options = params[2] || {};
+      const options = params[2] ?? {};
       const confined = confinedDeviceViewPath(msg, params[0], 'write');
 
       if (checkpoints && msg.checkpoint) {
         const hint = msg.checkpoint;
-        checkpoints.ensure(hint, hint.dir || checkpoints.workdirForPath(confined));
+        const hinted = hint.dir ?? '';
+        checkpoints.ensure(hint, hinted === '' ? checkpoints.workdirForPath(confined) : hinted);
       }
 
       fs.mkdirSync(path.dirname(confined), { recursive: true });
@@ -1941,7 +1966,7 @@ function handle(msg, ws, ctx) {
       ));
       rpc(ws, id, { success: true });
     } else if (method === 'mkdirPath') {
-      const options = params[1] || {};
+      const options = params[1] ?? {};
       fs.mkdirSync(confinedDeviceViewPath(msg, params[0], 'write'), {
         recursive: options.recursive === true,
       });
@@ -2451,7 +2476,7 @@ function releaseMachine(pidPath = PID_PATH) {
   } catch (err) {
     // Shutdown path: an unreadable pidfile is left for the next daemon's stale
     // check, which is what recovers it, rather than thrown out of an exit hook.
-    log('Could not read the device pidfile while exiting:', err.message || err);
+    log('Could not read the device pidfile while exiting:', errorDetail(err));
 
     return;
   }
@@ -2461,7 +2486,7 @@ function releaseMachine(pidPath = PID_PATH) {
   try {
     fs.rmSync(pidPath, { force: true });
   } catch (err) {
-    log('Could not remove the device pidfile while exiting:', err.message || err);
+    log('Could not remove the device pidfile while exiting:', errorDetail(err));
   }
 }
 
@@ -2499,7 +2524,8 @@ function main() {
 
   const cfg = readDeviceConfig(CONFIG_PATH);
   const USER = cfg.user;
-  const HTTP_ORIGIN = (cfg.origin || 'https://kinu.run').replace(/\/+$/, '');
+  const origin = cfg.origin ?? '';
+  const HTTP_ORIGIN = (origin === '' ? 'https://kinu.run' : origin).replace(/\/+$/, '');
   const WS_ORIGIN = HTTP_ORIGIN.replace(/^http/, 'ws');
 
   const ctx = {
