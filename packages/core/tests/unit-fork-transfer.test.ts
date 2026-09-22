@@ -280,6 +280,38 @@ async function drain(receiver: ForkTransferReceiver, frames: readonly ForkFrame[
   return outcomes;
 }
 
+/** A native file port over two maps: `temps` is what a sink stages, `files` is
+ *  what a rename publishes. */
+function stagingNativePort(
+  files: Map<string, Uint8Array>,
+  temps: Map<string, Uint8Array>,
+): ForkNativeFilePort {
+  return {
+    async truncate(path, size) {
+      const current = temps.get(path);
+      temps.set(path, current === undefined ? new Uint8Array(size) : current.slice(0, size));
+    },
+    async writeRange(path, offset, bytes) {
+      const current = temps.get(path) ?? new Uint8Array(0);
+      const next = new Uint8Array(Math.max(current.byteLength, offset + bytes.byteLength));
+      next.set(current);
+      next.set(bytes, offset);
+      temps.set(path, next);
+    },
+    async readRange(path, offset, length) {
+      return (temps.get(path) ?? new Uint8Array(0)).subarray(offset, offset + length);
+    },
+    async rename(from, to) {
+      const next = temps.get(from);
+
+      if (!next) throw new Error('missing temp');
+      files.set(to, next);
+      temps.delete(from);
+    },
+    async unlink(path) { temps.delete(path); },
+  };
+}
+
 describe('fork transfer receiver', () => {
   test('a streamed transfer lands exactly what the in-process write lands', async () => {
     const src = await source();
@@ -843,31 +875,7 @@ describe('fork transfer receiver', () => {
   test('a native sink abort keeps an existing destination and commit replaces it atomically', async () => {
     const files = new Map<string, Uint8Array>([['memory/existing.md', new TextEncoder().encode('old')]]);
     const temps = new Map<string, Uint8Array>();
-
-    const native: ForkNativeFilePort = {
-      async truncate(path, size) {
-        const current = temps.get(path);
-        temps.set(path, current === undefined ? new Uint8Array(size) : current.slice(0, size));
-      },
-      async writeRange(path, offset, bytes) {
-        const current = temps.get(path) ?? new Uint8Array(0);
-        const next = new Uint8Array(Math.max(current.byteLength, offset + bytes.byteLength));
-        next.set(current);
-        next.set(bytes, offset);
-        temps.set(path, next);
-      },
-      async readRange(path, offset, length) {
-        return (temps.get(path) ?? new Uint8Array(0)).subarray(offset, offset + length);
-      },
-      async rename(from, to) {
-        const next = temps.get(from);
-
-        if (!next) throw new Error('missing temp');
-        files.set(to, next);
-        temps.delete(from);
-      },
-      async unlink(path) { temps.delete(path); },
-    };
+    const native = stagingNativePort(files, temps);
 
     const sink = new NativeSinkPlan(native, 'atomic');
     await sink.beginFile('memory/existing.md', 0);
@@ -886,31 +894,7 @@ describe('fork transfer receiver', () => {
   test('a refusal mid-file removes the staged temp and leaves the destination alone', async () => {
     const files = new Map<string, Uint8Array>([['memory/keep.md', new TextEncoder().encode('old')]]);
     const temps = new Map<string, Uint8Array>();
-
-    const native: ForkNativeFilePort = {
-      async truncate(path, size) {
-        const current = temps.get(path);
-        temps.set(path, current === undefined ? new Uint8Array(size) : current.slice(0, size));
-      },
-      async writeRange(path, offset, bytes) {
-        const current = temps.get(path) ?? new Uint8Array(0);
-        const next = new Uint8Array(Math.max(current.byteLength, offset + bytes.byteLength));
-        next.set(current);
-        next.set(bytes, offset);
-        temps.set(path, next);
-      },
-      async readRange(path, offset, length) {
-        return (temps.get(path) ?? new Uint8Array(0)).subarray(offset, offset + length);
-      },
-      async rename(from, to) {
-        const next = temps.get(from);
-
-        if (!next) throw new Error('missing temp');
-        files.set(to, next);
-        temps.delete(from);
-      },
-      async unlink(path) { temps.delete(path); },
-    };
+    const native = stagingNativePort(files, temps);
 
     const tgt = fresh();
     const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, OWNER);
@@ -943,31 +927,7 @@ describe('fork transfer receiver', () => {
   test('a new receiver adopts the staging the last one left mid-file, and verifies the whole file', async () => {
     const files = new Map<string, Uint8Array>();
     const temps = new Map<string, Uint8Array>();
-
-    const native: ForkNativeFilePort = {
-      async truncate(path, size) {
-        const current = temps.get(path);
-        temps.set(path, current === undefined ? new Uint8Array(size) : current.slice(0, size));
-      },
-      async writeRange(path, offset, bytes) {
-        const current = temps.get(path) ?? new Uint8Array(0);
-        const next = new Uint8Array(Math.max(current.byteLength, offset + bytes.byteLength));
-        next.set(current);
-        next.set(bytes, offset);
-        temps.set(path, next);
-      },
-      async readRange(path, offset, length) {
-        return (temps.get(path) ?? new Uint8Array(0)).subarray(offset, offset + length);
-      },
-      async rename(from, to) {
-        const next = temps.get(from);
-
-        if (!next) throw new Error('missing temp');
-        files.set(to, next);
-        temps.delete(from);
-      },
-      async unlink(path) { temps.delete(path); },
-    };
+    const native = stagingNativePort(files, temps);
 
     const tgt = fresh();
     const content = new TextEncoder().encode('0123456789abcdefghij');
@@ -1142,9 +1102,9 @@ describe('fork transfer receiver', () => {
     const begin = frames[0];
 
     if (begin === undefined) throw new Error('expected a begin frame');
-    // SAFETY: this is deliberately malformed wire input. The schema rejects
-    // it before any staged target state can mutate, which is the behavior under test.
-    await expect(receiver.accept({ ...begin, version: FORK_TRANSFER_VERSION + 1 } as ForkFrame))
+    // The schema rejects it before any staged target state can mutate, which is
+    // the behavior under test.
+    await expect(receiver.accept({ ...begin, version: FORK_TRANSFER_VERSION + 1 }))
       .rejects.toThrow(new RegExp(`not valid for protocol version ${String(FORK_TRANSFER_VERSION)}`));
     expect(isFork(tgt)).toBe(false);
   });
