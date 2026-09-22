@@ -123,7 +123,9 @@ function rowPayloadBytes(frame: ForkFrame): number {
       return frame.rows.reduce((total, row) => total + bytes(row.entry_id) + bytes(row.message_id), 0);
     case 'contextMembers':
       return frame.rows.reduce((total, row) => total + bytes(row.entry_id) + bytes(row.message_id), 0);
-    default:
+    case 'begin':
+    case 'file':
+    case 'commit':
       return 0;
   }
 }

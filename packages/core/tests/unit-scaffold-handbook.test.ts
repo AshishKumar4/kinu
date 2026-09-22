@@ -34,7 +34,7 @@ describe('the handbook renders the layer gate’s taxonomy, not a second one', (
         expect(handbook).toContain(`L1 ${layer.id} [${layer.probes.length} probe`);
       } else {
         expect(handbook).toContain(`L1 ${layer.id} [NOT SCORED]`);
-        expect(handbook).toContain(layer.unmeasuredBecause!.slice(0, 40));
+        expect(handbook).toContain(present(layer.unmeasuredBecause, `the reason ${layer.id} is unmeasured`).slice(0, 40));
       }
     }
   });

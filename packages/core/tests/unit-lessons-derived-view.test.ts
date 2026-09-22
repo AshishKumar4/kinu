@@ -136,7 +136,7 @@ describe('S8 — an explicit verdict overrules the classifier without erasing it
 
     expect(written).toBe(1);
     const gold = goldLabels(rt.storage.sql, rt.actor);
-    expect(gold.get(classifierRow.id)!.label).toBe('corrected');
+    expect(present(gold.get(classifierRow.id), 'the gold label for the classifier row').label).toBe('corrected');
 
     // …and the calibration universe is drawn from classifier rows only, so a
     // later explicit verdict neither dilutes nor deletes the measured error.

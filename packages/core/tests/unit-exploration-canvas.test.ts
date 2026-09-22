@@ -31,7 +31,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, present } from '@kinu.run/test-utils';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { initHeadsTables } from '../src/heads/schema';
@@ -255,13 +255,13 @@ describe('readExplorationCanvas', () => {
     // A journal-only run keeps its branches in the journal, so it carries no tree
     // rows — and carries the journalled run instead. Empty on BOTH halves is what
     // "this run recorded nothing" means, so the two must not be confusable.
-    const journalled = page.items.find((entry) => entry.run.id === 'm1')!;
+    const journalled = present(page.items.find((entry) => entry.run.id === 'm1'), 'the m1 run on the canvas');
     expect(journalled.tree).toEqual([]);
     expect(journalled.head?.heads.map((head) => head.task)).toEqual(['angle 0', 'angle 1']);
     // A search-only run's branches ARE its tree; there is no journalled run to fetch.
     expect(page.items.filter((entry) => entry.run.hasSearchTree).map((entry) => entry.head))
       .toEqual([null, null]);
-    expect(page.items.find((entry) => entry.run.id === 's1')!.tree).toHaveLength(4);
+    expect(present(page.items.find((entry) => entry.run.id === 's1'), 'the s1 run on the canvas').tree).toHaveLength(4);
   });
 
   // THE DEFECT THIS READ MODEL WAS REWRITTEN FOR. One swarm root, both stores

@@ -25,12 +25,17 @@ function fetchStub(
   return Object.assign(handler, { preconnect: fetch.preconnect });
 }
 
+/** The URL a fetch names, whichever of the three shapes the caller passed. */
+function requestedUrl(input: RequestInfo | URL): string {
+  return input instanceof Request ? input.url : String(input);
+}
+
 describe('provider model catalogs', () => {
   test('OpenAI model menu comes from models.dev when available', async () => {
     const provider = createOpenAIProvider();
 
     const fetchFn = fetchStub(async (input) => {
-      expect(String(input)).toBe('https://models.dev/api.json');
+      expect(requestedUrl(input)).toBe('https://models.dev/api.json');
 
       return Response.json({
         openai: {
@@ -143,7 +148,7 @@ describe('provider model catalogs', () => {
     const provider = createCodexProvider({ baseURL: 'https://chatgpt.test/backend-api/codex' });
 
     const fetchFn = fetchStub(async (input, init) => {
-      expect(String(input)).toBe('https://chatgpt.test/backend-api/codex/models?client_version=1.0.0');
+      expect(requestedUrl(input)).toBe('https://chatgpt.test/backend-api/codex/models?client_version=1.0.0');
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer codex-token');
 
       return Response.json({

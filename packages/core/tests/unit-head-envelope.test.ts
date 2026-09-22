@@ -14,7 +14,7 @@
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import type { LanguageModel } from 'ai';
-import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
+import { createTestRuntime, present, scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import {
   budgetExhausted, deriveChildBudget, type HeadBudget, type HeadInput,
@@ -85,21 +85,21 @@ describe('deriveChildBudget', () => {
     const parent: HeadBudget = { maxDepth: 3, maxWallClockMs: 60_000, spawnedAt: now - 40_000 };
     const child = deriveChildBudget(parent, now);
     expect(child.maxWallClockMs).toBe(20_000);
-    expect(child.spawnedAt + child.maxWallClockMs!)
-      .toBeLessThanOrEqual(parent.spawnedAt + parent.maxWallClockMs!);
+    expect(child.spawnedAt + present(child.maxWallClockMs, "the child's wall-clock ceiling"))
+      .toBeLessThanOrEqual(parent.spawnedAt + present(parent.maxWallClockMs, "the parent's wall-clock ceiling"));
   });
 
   test('a 3-deep recursive split keeps every descendant under the requested deadline', () => {
     const start = 5_000_000;
     const root: HeadBudget = { maxDepth: 4, maxWallClockMs: 30_000, spawnedAt: start };
-    const rootDeadline = root.spawnedAt + root.maxWallClockMs!;
+    const rootDeadline = root.spawnedAt + present(root.maxWallClockMs, "the root's wall-clock ceiling");
     let parent = root;
     let now = start;
 
     for (let depth = 0; depth < 3; depth++) {
       now += 8_000;
       const child = deriveChildBudget(parent, now);
-      expect(child.spawnedAt + child.maxWallClockMs!).toBeLessThanOrEqual(rootDeadline);
+      expect(child.spawnedAt + present(child.maxWallClockMs, "the child's wall-clock ceiling")).toBeLessThanOrEqual(rootDeadline);
       parent = child;
     }
   });

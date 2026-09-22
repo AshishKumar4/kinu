@@ -82,7 +82,7 @@ describe("ExecutorFileUpload", () => {
     }
 
     expect(upload.done).toBe(true);
-    expect([...plane.files.get("/home/user/big.bin")!]).toEqual([...whole]);
+    expect([...present(plane.files.get("/home/user/big.bin"), "the transferred big.bin")]).toEqual([...whole]);
   });
 
   test("an out-of-order chunk is refused with the expected offset, and the stream recovers", async () => {

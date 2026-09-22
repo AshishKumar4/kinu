@@ -22,7 +22,7 @@ import {
   type Executor, type LLM,
   initHeadsTables,
 } from '../src/index';
-import { createJSONLLM } from '@kinu.run/test-utils';
+import { createJSONLLM, present } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, captureConsole, createTestActor } from './helpers';
 
 // ── fakes ────────────────────────────────────────────────────────────
@@ -128,8 +128,8 @@ describe('grounded head outcome scores', () => {
 
     expect(result.grounded).toBe(true);
     expect(result.headScores).toHaveLength(2);
-    const good = result.headScores.find((s) => s.text === 'works')!;
-    const bad = result.headScores.find((s) => s.text === 'broken')!;
+    const good = present(result.headScores.find((s) => s.text === 'works'), "the 'works' head score");
+    const bad = present(result.headScores.find((s) => s.text === 'broken'), "the 'broken' head score");
     expect(good.grounding).toBe('execution');
     expect(bad.grounding).toBe('execution');
     expect(good.score).toBeGreaterThan(bad.score);
@@ -161,8 +161,8 @@ describe('grounded head outcome scores', () => {
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
-    const gone = result.headScores.find((s) => s.status === 'aborted')!;
-    const done = result.headScores.find((s) => s.status === 'completed')!;
+    const gone = present(result.headScores.find((s) => s.status === 'aborted'), 'the aborted head score');
+    const done = present(result.headScores.find((s) => s.status === 'completed'), 'the completed head score');
     expect(gone.score).toBe(0);
     expect(done.score).toBeGreaterThan(gone.score);
   });
@@ -259,6 +259,16 @@ describe('grounded head outcome scores', () => {
 
 // ── 2. k-sample median merge ──────────────────────────────────────────
 
+/** The ensemble's three synthesized candidates, scored by keyword so the median
+ *  is the one the selection has to land on. */
+function synthesisScore(prompt: string): number {
+  if (prompt.includes('CAND-low')) return 0.1;
+
+  if (prompt.includes('CAND-high')) return 0.9;
+
+  return 0.5;
+}
+
 describe('k-sample median merge', () => {
   test('grounded merge runs k samples and keeps the median-scored one', async () => {
     const { journal } = newJournal();
@@ -270,7 +280,7 @@ describe('k-sample median merge', () => {
       async *stream() { yield ''; },
       async complete(prompt: string) {
         if (prompt.includes('Synthesized answer:')) {
-          const s = prompt.includes('CAND-low') ? 0.1 : prompt.includes('CAND-high') ? 0.9 : 0.5;
+          const s = synthesisScore(prompt);
 
           return JSON.stringify({ score: s });
         }

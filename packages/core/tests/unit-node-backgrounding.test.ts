@@ -95,6 +95,65 @@ function slowExecuteTool() {
  * handle is already in hand and there is nothing to do but stop; a user message naming a
  * background job means the result has landed.
  */
+/** What the detaching node answers at each stage: launch the eval, end the turn
+ *  holding live work, report once woken, then close. */
+function detachStageContent(stage: { reported: boolean; woken: boolean; launched: boolean }): LanguageModelV3Content[] {
+  if (stage.reported) return [{ type: 'text', text: 'Done.' }];
+
+  if (stage.woken) {
+    return [{
+      type: 'tool-call',
+      toolCallId: 'report-1',
+      toolName: 'report',
+      input: JSON.stringify({ status: 'completed', content: 'The sandbox run finished.' }),
+    }];
+  }
+
+  // THE TURN ENDS HERE, holding live work. On the base of this change there was
+  // nowhere for it to go from here: no wake could arrive, so this was a node
+  // that had finished without reporting.
+  if (stage.launched) return [{ type: 'text', text: 'Launched it; waiting on the result.' }];
+
+  return [{
+    type: 'tool-call',
+    toolCallId: 'exec-1',
+    toolName: 'eval',
+    input: JSON.stringify({ code: 'await sandbox.run()' }),
+  }];
+}
+
+/** The factory-form variant: launch, report what the factory ran, then close. */
+function factoryStageContent(stage: { reported: boolean; launched: boolean; sawFactory: boolean }): LanguageModelV3Content[] {
+  if (stage.reported) return [{ type: 'text', text: 'Done.' }];
+
+  if (stage.launched) {
+    return [{
+      type: 'tool-call',
+      toolCallId: 'report-1',
+      toolName: 'report',
+      input: JSON.stringify({
+        status: 'completed',
+        content: stage.sawFactory ? 'saw factory-ran' : 'saw none',
+      }),
+    }];
+  }
+
+  return [{
+    type: 'tool-call',
+    toolCallId: 'exec-1',
+    toolName: 'eval',
+    input: JSON.stringify({ code: 'const x = 1' }),
+  }];
+}
+
+function detachStageFinish(stage: { reported: boolean; woken: boolean; launched: boolean }): 'stop' | 'tool-calls' {
+  if (stage.reported) return 'stop';
+
+  if (stage.woken) return 'tool-calls';
+
+  return stage.launched ? 'stop' : 'tool-calls';
+}
+
 function detachThenReport(seen: string[][], onRequest?: (count: number) => void): ReturnType<typeof scriptedTurnModel> {
   return scriptedTurnModel({
     modelId: 'fake-detacher',
@@ -106,33 +165,12 @@ function detachThenReport(seen: string[][], onRequest?: (count: number) => void)
       const reported = text.includes('"received":true');
       const launched = prompt.some((message) => message.role === 'tool');
 
-      const content: LanguageModelV3Content[] = reported
-        ? [{ type: 'text', text: 'Done.' }]
-        : woken
-        ? [{
-          type: 'tool-call',
-          toolCallId: 'report-1',
-          toolName: 'report',
-          input: JSON.stringify({ status: 'completed', content: 'The sandbox run finished.' }),
-        }]
-        : launched
-          // THE TURN ENDS HERE, holding live work. On the base of this change there was
-          // nowhere for it to go from here: no wake could arrive, so this was a node
-          // that had finished without reporting.
-          ? [{ type: 'text', text: 'Launched it; waiting on the result.' }]
-          : [{
-            type: 'tool-call',
-            toolCallId: 'exec-1',
-            toolName: 'eval',
-            input: JSON.stringify({ code: 'await sandbox.run()' }),
-          }];
+      const stage = { reported, woken, launched };
 
       return {
-        content,
+        content: detachStageContent(stage),
         finishReason: {
-          unified: reported ? 'stop' as const
-            : woken ? 'tool-calls' as const
-              : launched ? 'stop' as const : 'tool-calls' as const,
+          unified: detachStageFinish(stage),
           raw: undefined,
         },
         usage: {
@@ -453,24 +491,7 @@ describe('a node resolves a function-form codemodeTool through the finished surf
         const launched = prompt.some((message) => message.role === 'tool');
         const reported = text.includes('"received":true');
 
-        const content: LanguageModelV3Content[] = reported
-          ? [{ type: 'text', text: 'Done.' }]
-          : launched
-            ? [{
-              type: 'tool-call',
-              toolCallId: 'report-1',
-              toolName: 'report',
-              input: JSON.stringify({
-                status: 'completed',
-                content: text.includes('factory-ran') ? 'saw factory-ran' : 'saw none',
-              }),
-            }]
-            : [{
-              type: 'tool-call',
-              toolCallId: 'exec-1',
-              toolName: 'eval',
-              input: JSON.stringify({ code: 'const x = 1' }),
-            }];
+        const content = factoryStageContent({ reported, launched, sawFactory: text.includes('factory-ran') });
 
         return {
           content,

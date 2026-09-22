@@ -49,7 +49,7 @@ describe('provider proxy fetch', () => {
     const seen: Array<{ url: string; init?: RequestInit }> = [];
 
     const impl = asFetchFunction(async (input, init) => {
-      seen.push({ url: String(input), init });
+      seen.push({ url: input instanceof Request ? input.url : String(input), init });
 
       return new Response('ok');
     });

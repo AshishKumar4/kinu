@@ -13,7 +13,7 @@ import {
   WORKSPACE_RUN_ID,
   type RunEvent,
 } from '../src/index';
-import { testActorHandle } from '@kinu.run/test-utils';
+import { present, testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 
 function setup() {
@@ -87,7 +87,7 @@ describe('beginModelOperation — the start row exists while the call runs', () 
     const end = rows[1];
     expect(end.outcome).toBe('failed');
     expect(end.error).toContain('provider boom');
-    expect(end.error!.length).toBeLessThanOrEqual(300);
+    expect(present(end.error, 'the failed operation error text').length).toBeLessThanOrEqual(300);
     expect(end.usage).toBeUndefined();
     expect(recorder.unterminatedModelOperations()).toEqual([]);
   });

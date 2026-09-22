@@ -153,7 +153,16 @@ function splitRequest(branches: number, rationale = TASK): SplitRequest {
 /** One drive of the head, exactly as `resumeBackgroundJob` drives it: a fresh
  *  controller call carrying the stored input — the authored depth room included,
  *  since a re-drive replays it unchanged — and no run identity. */
-function drive(journal: HeadJournal, spawned: HeadInput[], settles: boolean, branches = 5, pendingHeads?: PendingHead[]) {
+interface DriveOptions {
+  journal: HeadJournal;
+  /** Collects every head the drive spawns, across drives. */
+  spawned: HeadInput[];
+  settles: boolean;
+  branches?: number;
+  pendingHeads?: PendingHead[];
+}
+
+function drive({ journal, spawned, settles, branches = 5, pendingHeads }: DriveOptions) {
   return new HeadController(runtime({ settles, spawned, pendingHeads }), journal).run({
     mode: 'build',
     parentHeadId: null,
@@ -172,10 +181,10 @@ describe('a re-driven fork job stays one run', () => {
 
     const interruptedRuns = Array.from(
       { length: 3 },
-      () => drive(journal, spawned, false, 5, pendingHeads),
+      () => drive({ journal, spawned, settles: false, pendingHeads }),
     );
 
-    await drive(journal, spawned, true);
+    await drive({ journal, spawned, settles: true });
 
     const runs = listForkRuns(sql, actor, null, 30).items;
     expect(runs).toHaveLength(1);
@@ -202,10 +211,10 @@ describe('a re-driven fork job stays one run', () => {
     // Three resets that never report, then one that lands.
     const interruptedRuns = Array.from(
       { length: 3 },
-      () => drive(journal, spawned, false, 5, pendingHeads),
+      () => drive({ journal, spawned, settles: false, pendingHeads }),
     );
 
-    await drive(journal, spawned, true);
+    await drive({ journal, spawned, settles: true });
 
     const rows = sql<{ id: string; status: string; error_message: string | null }>`
       SELECT id, status, error_message FROM head_journal
@@ -318,8 +327,8 @@ describe('a re-driven fork job stays one run', () => {
     const { sql, actor, journal } = freshJournal();
     const spawned: HeadInput[] = [];
 
-    await drive(journal, spawned, true);
-    await drive(journal, spawned, true);
+    await drive({ journal, spawned, settles: true });
+    await drive({ journal, spawned, settles: true });
 
     const runs = listForkRuns(sql, actor, null, 30).items;
     expect(runs).toHaveLength(2);
@@ -332,7 +341,7 @@ describe('a re-driven fork job stays one run', () => {
     const spawned: HeadInput[] = [];
 
     const pendingHeads: PendingHead[] = [];
-    const interruptedRuns = [drive(journal, spawned, false, 2, pendingHeads)];
+    const interruptedRuns = [drive({ journal, spawned, settles: false, branches: 2, pendingHeads })];
     await new HeadController(runtime({ settles: true, spawned }), journal).run({
       mode: 'build',
       parentHeadId: null,
@@ -359,7 +368,7 @@ describe('a re-driven fork job stays one run', () => {
     const spawned: HeadInput[] = [];
     const pendingHeads: PendingHead[] = [];
 
-    const interruptedRuns = [drive(journal, spawned, false, 5, pendingHeads)];
+    const interruptedRuns = [drive({ journal, spawned, settles: false, pendingHeads })];
 
     for (let turn = 0; turn < 100 && pendingHeads.length < 5; turn += 1) {
       await Promise.resolve();
@@ -383,7 +392,7 @@ describe('a re-driven fork job stays one run', () => {
     const spawned: HeadInput[] = [];
 
     const pendingHeads: PendingHead[] = [];
-    const interruptedRuns = [drive(journal, spawned, false, 2, pendingHeads)];
+    const interruptedRuns = [drive({ journal, spawned, settles: false, branches: 2, pendingHeads })];
     await new HeadController(runtime({ settles: true, spawned }), journal).run({
       mode: 'build',
       parentHeadId: 'parent-head-1',

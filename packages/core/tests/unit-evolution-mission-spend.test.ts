@@ -95,7 +95,7 @@ describe('evolution spend under a mission budget', () => {
     const spent = ws.governor.snapshot('checkout-fixes')[0];
     // Both graded turns produced the same verdict, so the difference in the
     // ledger is attributable to the label and to nothing else.
-    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor).map((r) => r.turnId).sort())
+    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor).map((r) => r.turnId).sort((a, b) => a.localeCompare(b)))
       .toEqual(['scoped', 'unscoped']);
     expect(spent.calls).toBeGreaterThan(0);
     expect(spent.spent.tokens).toBeGreaterThan(0);

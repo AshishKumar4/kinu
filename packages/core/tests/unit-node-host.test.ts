@@ -124,8 +124,9 @@ function doubleProposer(): MockLanguageModelV3 {
     doGenerate: async () => {
       call += 1;
 
-      const content: LanguageModelV3Content[] = call === 1
-        ? [
+      const turn = (): LanguageModelV3Content[] => {
+        if (call === 1) {
+          return [
             {
               type: 'tool-call', toolCallId: 'propose-1', toolName: PROPOSE_BRANCH_TOOL,
               input: JSON.stringify(proposal('one')),
@@ -134,16 +135,21 @@ function doubleProposer(): MockLanguageModelV3 {
               type: 'tool-call', toolCallId: 'propose-2', toolName: PROPOSE_BRANCH_TOOL,
               input: JSON.stringify(proposal('two')),
             },
-          ]
-        : call === 2
-          ? [{
-              type: 'tool-call', toolCallId: 'report-1', toolName: 'report',
-              input: JSON.stringify({ status: 'completed', content: 'done' }),
-            }]
-          : [{ type: 'text', text: 'Reported.' }];
+          ];
+        }
+
+        if (call === 2) {
+          return [{
+            type: 'tool-call', toolCallId: 'report-1', toolName: 'report',
+            input: JSON.stringify({ status: 'completed', content: 'done' }),
+          }];
+        }
+
+        return [{ type: 'text', text: 'Reported.' }];
+      };
 
       return {
-        content,
+        content: turn(),
         finishReason: { unified: call < 3 ? 'tool-calls' : 'stop', raw: undefined },
         usage: {
           inputTokens: { total: 2, noCache: 2, cacheRead: undefined, cacheWrite: undefined },
@@ -227,14 +233,16 @@ describe('one node, run as an agent', () => {
       doGenerate: async () => {
         step++;
 
-        const content: LanguageModelV3Content[] = step === 1
-          ? [{ type: 'tool-call', toolCallId: 'run-owned', toolName: 'shell', input: JSON.stringify({ command: 'echo owned-seat' }) }]
-          : step === 2
-            ? [{ type: 'tool-call', toolCallId: 'report-owned', toolName: 'report', input: JSON.stringify({ status: 'completed', content: 'The owned runtime answered.' }) }]
-            : [{ type: 'text', text: 'Reported.' }];
+        const turn = (): LanguageModelV3Content[] => {
+          if (step === 1) return [{ type: 'tool-call', toolCallId: 'run-owned', toolName: 'shell', input: JSON.stringify({ command: 'echo owned-seat' }) }];
+
+          if (step === 2) return [{ type: 'tool-call', toolCallId: 'report-owned', toolName: 'report', input: JSON.stringify({ status: 'completed', content: 'The owned runtime answered.' }) }];
+
+          return [{ type: 'text', text: 'Reported.' }];
+        };
 
         return {
-          content, finishReason: { unified: step < 3 ? 'tool-calls' : 'stop', raw: undefined },
+          content: turn(), finishReason: { unified: step < 3 ? 'tool-calls' : 'stop', raw: undefined },
           usage: {
             inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
             outputTokens: { total: 5, text: 5, reasoning: undefined },

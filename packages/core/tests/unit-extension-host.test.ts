@@ -213,7 +213,7 @@ describe('transformContext through runChat', () => {
     const compactor: KinuExtension = {
       name: 'compactor',
       transformContext: async ({ messages }) => {
-        transformSaw = messages.map((m) => String(m.content));
+        transformSaw = messages.map((m) => v.parse(v.string(), m.content));
 
         return [{ role: 'user', content: 'summary-of-history' }];
       },
@@ -491,7 +491,7 @@ describe('ExtensionHost', () => {
       .register({
         name: 'appender',
         transformContext: async ({ messages }) => {
-          seen.push(messages.map((m) => String(m.content)));
+          seen.push(messages.map((m) => v.parse(v.string(), m.content)));
           await Promise.resolve(); // genuinely async
 
           return [...messages, { role: 'user', content: 'from-appender' }];
@@ -504,7 +504,7 @@ describe('ExtensionHost', () => {
       .register({
         name: 'chained',
         transformContext: async ({ messages }) => {
-          seen.push(messages.map((m) => String(m.content)));
+          seen.push(messages.map((m) => v.parse(v.string(), m.content)));
 
           return [...messages, { role: 'user', content: 'from-chained' }];
         },
@@ -623,7 +623,7 @@ describe('ExtensionHost', () => {
       .register({
         name: 'observer',
         prepareStep: ({ messages }) => {
-          seen.push(messages.map((message) => String(message.content)));
+          seen.push(messages.map((message) => v.parse(v.string(), message.content)));
 
           return undefined;
         },

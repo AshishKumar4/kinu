@@ -69,12 +69,12 @@ function seedJournalledRun(
     ).run(actorId, run.rootId, run.rootId, `parent of ${run.task}`, run.parentHead.status, run.at);
   }
 
-  run.heads.forEach((head, i) => {
+  for (const [i, head] of run.heads.entries()) {
     db.prepare(
       `INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
        VALUES (?, ?, ?, ?, 1, ?, '', ?, ?, 'synthesize')`,
     ).run(actorId, `${run.rootId}-h${i}`, run.parentHead ? run.rootId : null, run.rootId, `branch ${i}`, head.status, run.at + i);
-  });
+  }
 
   if (run.merged) {
     db.prepare(
@@ -108,7 +108,7 @@ function seedSearchRun(
     const isWinner = run.winner !== undefined && i === 0;
     node.run(
       actorId, `${run.rootId}-n${i}`, run.rootId, run.rootId, run.task, '',
-      isWinner ? run.winner! : 0.2, 1, isWinner ? 'terminal' : 'pruned', run.at + i + 1,
+      run.winner !== undefined && i === 0 ? run.winner : 0.2, 1, isWinner ? 'terminal' : 'pruned', run.at + i + 1,
     );
   }
 
@@ -440,9 +440,10 @@ describe('a stale running lease', () => {
     );
 
     node.run(actorId, run.rootId, null, run.rootId, 0, 0, run.root, 1000);
-    run.branches.forEach((status, index) => {
+
+    for (const [index, status] of run.branches.entries()) {
       node.run(actorId, `${run.rootId}-n${index}`, run.rootId, run.rootId, 0.4, 1, status, 1001 + index);
-    });
+    }
 
     if (run.ledger) {
       db.prepare(

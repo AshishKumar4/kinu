@@ -308,7 +308,7 @@ describe('OpenAI-compat provider', () => {
       env: {},
       ...createTestAuth(store),
       fetch: asFetchFunction(async (input, init) => {
-        expect(String(input)).toBe('http://127.0.0.1:4111/v1/models');
+        expect(input instanceof Request ? input.url : String(input)).toBe('http://127.0.0.1:4111/v1/models');
         expect(new Headers(init?.headers).get('authorization')).toBe('Bearer local');
 
         return Response.json({

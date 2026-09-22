@@ -92,9 +92,7 @@ function reachableSubjects(entry: string): Map<SubjectName, string> {
   const found = new Map<SubjectName, string>();
   const stack = [entry];
 
-  while (stack.length > 0) {
-    const file = stack.pop()!;
-
+  for (let file = stack.pop(); file !== undefined; file = stack.pop()) {
     if (seen.has(file)) continue;
     seen.add(file);
 
@@ -177,7 +175,9 @@ describe('layer gate — decomposition', () => {
       if (owner === undefined) throw new Error(`unowned layer-gate subject: ${subject}`);
 
       for (const [reached, where] of reachableSubjects(resolve(SRC, relative))) {
-        const reachedOwner = layerOf.get(reached)!;
+        const reachedOwner = layerOf.get(reached);
+
+        if (reachedOwner === undefined) throw new Error(`unowned layer-gate subject: ${reached}`);
 
         if (reachedOwner !== owner) {
           violations.push(`${owner}/${subject} (${relative}) reaches ${reachedOwner}/${reached} via ${where}`);

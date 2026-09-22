@@ -256,7 +256,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
   test('a deep path creates its parents and round-trips', async () => {
     const { vfs, exec } = buildPlane();
     const result = await exec.tools.writeFile.execute('notes/deep/todo.md', 'from codemode');
-    expect(String(result)).toContain('Written');
+    expect(result).toContain('Written');
     expect(await vfs.readFile('notes/deep/todo.md', { encoding: 'utf8' })).toBe('from codemode');
   });
 
@@ -275,7 +275,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     expect(await vfs.readFile('victim.txt', { encoding: 'utf8' })).toBe('keep me');
 
     await exec.tools.readFile.execute('victim.txt');
-    expect(String(await exec.tools.writeFile.execute('victim.txt', 'replacement'))).toContain('Written');
+    expect(await exec.tools.writeFile.execute('victim.txt', 'replacement')).toContain('Written');
     expect(await vfs.readFile('victim.txt', { encoding: 'utf8' })).toBe('replacement');
   });
 
@@ -294,7 +294,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     // "/sandbox/app.ts" makes an ordinary file called sandbox/app.ts in this
     // filesystem, and the container never hears about it — which is the point:
     // there is no path that silently means two places.
-    expect(String(await exec.tools.writeFile.execute('/sandbox/app.ts', 'top'))).toContain('Written');
+    expect(await exec.tools.writeFile.execute('/sandbox/app.ts', 'top')).toContain('Written');
     expect(sandbox.files.size).toBe(0);
   });
 });

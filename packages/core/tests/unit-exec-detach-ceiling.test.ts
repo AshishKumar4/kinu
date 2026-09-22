@@ -23,6 +23,7 @@
 // always was — a detach trigger, never a kill.
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
+import * as v from 'valibot';
 import { toolExecute, createTestActorsOver } from '@kinu.run/test-utils';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
@@ -104,7 +105,7 @@ function runToolOverSandbox(provider: ExecutorProvider): ToolSet[string] {
       properties: { command: { type: 'string' }, runtime: { type: 'string' } },
       required: ['command'],
     }),
-    execute: async (input) => String(await provider.tools.exec.execute(input.command, {})),
+    execute: async (input) => v.parse(v.string(), await provider.tools.exec.execute(input.command, {})),
   });
 }
 
@@ -144,8 +145,8 @@ describe('the sandbox lane carries no deadline of its own', () => {
     // The default cwd is a separate contract and must survive the removal.
     expect(container.calls[0]?.opts?.cwd).toBe('/workspace');
     // And the command's own output comes back, not the container's kill notice.
-    expect(String(out)).toContain('epoch 40/40 done');
-    expect(String(out)).not.toContain('Command timeout');
+    expect(out).toContain('epoch 40/40 done');
+    expect(out).not.toContain('Command timeout');
   });
 });
 
@@ -201,7 +202,7 @@ describe("the incident replayed: a long tee'd training run through run → sandb
     const out = await wrapShellTool(provider, runner)({ command: TRAINING, runtime: 'sandbox' });
 
     expect(crossed).toBe(0);
-    expect(String(out)).toContain('epoch 40/40 done');
+    expect(out).toContain('epoch 40/40 done');
     // Pinned because the relation is the invariant: the larger window is the one
     // a lane ceiling silently defeats first.
     expect(BACKGROUND_POLICY['one-shot'].detachAfterMs)

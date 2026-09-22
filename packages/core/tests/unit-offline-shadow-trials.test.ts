@@ -30,7 +30,7 @@ import type { Executor, ResolvedProvider } from '../src/types/primitives';
 import { decodeJsonValue } from '../src/utils/json';
 import type { ModelMessage } from 'ai';
 import { createTestRuntime, storesFor } from './helpers';
-import { createTestSql, testActorHandle } from '@kinu.run/test-utils';
+import { createTestSql, present, testActorHandle } from '@kinu.run/test-utils';
 import { RunEventRecorder } from '../src/events/recorder';
 
 const TASK = 'what did we decide about the codename?';
@@ -151,7 +151,9 @@ function contentJudge(
     const bMark = prompt.indexOf('\n\nResponse B:\n');
     const a = prompt.slice(prompt.indexOf('\nResponse A:\n'), bMark);
     const pendingIsA = a.includes(pendingText);
-    const pick = winner === 'pending' ? (pendingIsA ? 'a' : 'b') : (pendingIsA ? 'b' : 'a');
+    const pendingSide = pendingIsA ? 'a' : 'b';
+    const currentSide = pendingIsA ? 'b' : 'a';
+    const pick = winner === 'pending' ? pendingSide : currentSide;
 
     return v.parse(schema, {
       winner: pick,
@@ -239,7 +241,7 @@ describe('a queued trial is not evidence', () => {
       queueTurnShadowTrial(control, { task: `t${i}`, currentOutput: LIVE_ANSWER, context: [] }, PLAN);
     }
 
-    const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
+    const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
     // Ten trials exist in some sense; four have been RUN, and only those count.
     expect(pending.trialsSoFar).toBe(4);
     expect(decidePromotion(pending, DEFAULT_SHADOW_CONFIG).decision).toBe('continue');
@@ -268,7 +270,7 @@ describe('the offline drain is what executes trials', () => {
     expect(drain).toEqual({ trials: 1, applied: null });
     expect(counts.surface).toBe(1);
     expect(counts.judge).toBe(2); // the order-swapped pair
-    expect(getPendingScaffold(rt.storage.sql, rt.actor)!.trialsSoFar).toBe(1);
+    expect(present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold').trialsSoFar).toBe(1);
     expect(listQueuedShadowTrials(rt.storage.sql, rt.actor, 1)).toHaveLength(0);
     // The candidate ran against the turn's OWN conversation, not a task-text
     // reconstruction of it — the shadow-parity contract, carried through the

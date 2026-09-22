@@ -205,7 +205,7 @@ describe('remote executor exec abort', () => {
 
         if (method !== DEVICE_CANCEL_METHOD) return hangingPromise();
 
-        return cancelAnswer(String(params[0]));
+        return cancelAnswer(v.parse(v.string(), params[0]));
       },
       status: () => ({ connected: true, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
@@ -382,7 +382,7 @@ describe('remote executor exec abort', () => {
 
         if (method !== DEVICE_CANCEL_METHOD) return held.promise;
 
-        return Promise.resolve({ requestId: String(params[0]), cancelled: 'unknown' });
+        return Promise.resolve({ requestId: v.parse(v.string(), params[0]), cancelled: 'unknown' });
       },
       status: () => ({ connected: true, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),

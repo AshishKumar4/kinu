@@ -136,7 +136,7 @@ describe('a run that settles closes every head it did not hear from', () => {
       WHERE actor_id = ${actor.actorId} AND root_id = ${RUN}`[0].n;
 
     journal.cacheMerge(RUN, MERGE, 'synthesize');
-    const view = journal.readRun(RUN)!;
+    const view = present(journal.readRun(RUN), 'the settled run');
     expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM head_journal
       WHERE actor_id = ${actor.actorId} AND root_id = ${RUN}`[0].n)
       .toBe(before);

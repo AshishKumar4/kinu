@@ -11,7 +11,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 
-import { testActorHandle } from '@kinu.run/test-utils';
+import { present, testActorHandle } from '@kinu.run/test-utils';
 import {
   collectWorkspaceTextFiles, createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
 } from './helpers';
@@ -673,7 +673,7 @@ describe('background-job control plane', () => {
     expect(retry.jobId).not.toBe('j1');
     expect(seen).toEqual([{ q: 'kinu' }]);
     // Detached immediately — the work already proved slow once.
-    expect(detached).toEqual([{ jobId: retry.jobId!, kind: 'search' }]);
+    expect(detached).toEqual([{ jobId: present(retry.jobId, 'the retried job id'), kind: 'search' }]);
     db.close();
   });
 

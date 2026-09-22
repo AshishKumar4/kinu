@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import * as v from "valibot";
+import { present } from "@kinu.run/test-utils";
 import { sandboxHandleLifecycle } from "./helpers/sandbox-handle-lifecycle";
 import {
   DefaultExecutionRouter,
@@ -170,7 +172,7 @@ describe("executor lifecycle state", () => {
     });
     expect(handle.calls).toEqual([]);
 
-    const result = await router.getProvider("sandbox")!.tools.exec.execute("echo ok");
+    const result = await present(router.getProvider("sandbox"), "the registered sandbox provider").tools.exec.execute("echo ok");
     expect(result).toBe("ok");
     expect(router.listExecutors().find((e) => e.name === "sandbox")?.active).toBe(true);
     expect(handle.calls).toEqual(["exec:echo ok"]);
@@ -203,7 +205,9 @@ describe("executor lifecycle state", () => {
     const listResult = await executor.tools.listPorts.execute();
     expect(listResult).toContain("PREVIEW_HOST_SUFFIX");
 
-    const provided = await executor.exposePort!(3000);
+    if (!executor.exposePort) throw new Error("the sandbox provider has no exposePort seam");
+    const provided = await executor.exposePort(3000);
+
     expect(provided.supported).toBe(false);
 
     if (!provided.supported) expect(provided.reason).toContain("PREVIEW_HOST_SUFFIX");
@@ -224,7 +228,10 @@ describe("executor lifecycle state", () => {
     expect(await executor.tools.exec.execute("echo ok"))
       .toMatchObject({ reason: 'unavailable', error: expect.stringContaining('not configured') });
     expect(await executor.tools.exposePort.execute(3000)).toContain("not configured");
-    const provided = await executor.exposePort!(3000);
+
+    if (!executor.exposePort) throw new Error("the sandbox provider has no exposePort seam");
+    const provided = await executor.exposePort(3000);
+
     expect(provided.supported).toBe(false);
 
     if (!provided.supported) expect(provided.reason).toContain("not configured");
@@ -272,9 +279,10 @@ describe("executor lifecycle state", () => {
 
     const executor = createSandboxExecutor(handle);
 
-    const out = await executor.tools.exists.execute("/workspace/a.md");
-    expect(String(out)).toContain("transport down");
-    expect(JSON.parse(String(out))).toMatchObject({ reason: "io" });
+    const out = v.parse(v.string(), await executor.tools.exists.execute("/workspace/a.md"));
+
+    expect(out).toContain("transport down");
+    expect(JSON.parse(out)).toMatchObject({ reason: "io" });
   });
 
   test("sandbox port discovery preserves a real SDK failure", async () => {
@@ -283,7 +291,9 @@ describe("executor lifecycle state", () => {
 
     const executor = createSandboxExecutor(handle, "kinu.example.test");
 
-    await expect(executor.listExposedPorts!()).rejects.toThrow("preview registry unavailable");
+    if (!executor.listExposedPorts) throw new Error("the sandbox provider has no listExposedPorts seam");
+
+    await expect(executor.listExposedPorts()).rejects.toThrow("preview registry unavailable");
   });
 
   test("a transient failure never starts a second supervised process", async () => {
@@ -374,8 +384,10 @@ describe("executor lifecycle state", () => {
     };
 
     const executor = createSandboxExecutor(handle, "kinu.example.test");
-    expect(await executor.files!.stat("/mydir")).toMatchObject({ isDir: true });
-    expect(await executor.files!.stat("/mydir/")).toMatchObject({ isDir: true });
+    const files = present(executor.files, "the sandbox file plane");
+
+    expect(await files.stat("/mydir")).toMatchObject({ isDir: true });
+    expect(await files.stat("/mydir/")).toMatchObject({ isDir: true });
     expect(seen).toContain("/");
   });
 });

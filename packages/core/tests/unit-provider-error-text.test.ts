@@ -14,6 +14,7 @@ import { stepCountIs } from 'ai';
 import { describe, test, expect, spyOn } from 'bun:test';
 import { APICallError, type LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import type { LanguageModel } from 'ai';
+import type { JsonValue } from '../src/utils/json';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
   describeProviderError, providerFailureFacts, toProviderError, runChat,
@@ -28,7 +29,7 @@ interface CircularProviderError {
 }
 
 /** OpenAI-shaped in-band stream failure: 200 OK, then an error object. */
-function inBandErrorModel<ErrorPayload>(error: ErrorPayload): LanguageModel {
+function inBandErrorModel(error: JsonValue | Error): LanguageModel {
   return new MockLanguageModelV3({
     doStream: async () => ({
       stream: new ReadableStream<LanguageModelV3StreamPart>({

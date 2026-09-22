@@ -11,6 +11,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { present } from '@kinu.run/test-utils';
 import { createTestRuntime, createMockSession, makeSql, captureConsole } from './helpers';
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
@@ -48,12 +49,12 @@ describe('MCTS evict-resume (B6)', () => {
     })).rejects.toThrow();
 
     expect(run1Iters).toBe(2);
-    const mid = store.findResumable(TASK);
-    expect(mid).not.toBeNull();
-    expect(mid!.iteration).toBe(2);
-    expect(mid!.budget).toBe(2);          // 2 of 4 consumed, 2 remaining
-    expect(mid!.epoch).toBe(0);
-    const rootId = mid!.rootId;
+    const mid = present(store.findResumable(TASK), 'the interrupted checkpoint');
+
+    expect(mid.iteration).toBe(2);
+    expect(mid.budget).toBe(2);          // 2 of 4 consumed, 2 remaining
+    expect(mid.epoch).toBe(0);
+    const rootId = mid.rootId;
 
     // ── Run 2: fresh call (restarted DO) resumes the SAME search ────────────
     let run2Iters = 0;

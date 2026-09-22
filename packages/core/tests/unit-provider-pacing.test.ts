@@ -102,10 +102,10 @@ describe('request starts are paced against one provider', () => {
     const held = await pacer.admit(HOST);
     let admitted = false;
 
-    const third = pacer.admit(HOST).then((release) => {
+    const third = pacer.admit(HOST).then((releaseThird) => {
       admitted = true;
 
-      return release;
+      return releaseThird;
     });
 
     await Promise.resolve();
