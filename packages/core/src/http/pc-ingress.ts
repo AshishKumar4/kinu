@@ -120,18 +120,18 @@ async function handlePcConnectTicket<Id>(
   const kv = env.AUTH_KV;
   const ns = env.UserDO;
 
-  if (!kv || !ns) return json({ error: "device ingress not configured" }, { status: 503 });
+  if (!kv || !ns) return json({ body: { error: "device ingress not configured" } }, { status: 503 });
 
   if (!(await ingressAdmitted(kv, "ticket", peerIp(request), PC_KNOCKS_PER_WINDOW))) return ingressDenied();
 
   const bounded = await readBounded(request, PC_TICKET_BODY_MAX_BYTES);
 
-  if (bounded === "too_large") return json({ error: "request body too large" }, { status: 413 });
+  if (bounded === "too_large") return json({ body: { error: "request body too large" } }, { status: 413 });
 
   if (bounded instanceof KinuError) {
     diagnostics.failure("pc.ticket.body_unreadable", bounded);
 
-    return json({ error: "could not read request body" }, { status: 400 });
+    return json({ body: { error: "could not read request body" } }, { status: 400 });
   }
 
   let parsed: unknown;
@@ -144,29 +144,29 @@ async function handlePcConnectTicket<Id>(
       bytesRead: bounded.byteLength,
     });
 
-    return json({ error: "malformed JSON body" }, { status: 400 });
+    return json({ body: { error: "malformed JSON body" } }, { status: 400 });
   }
 
   const body = v.safeParse(TICKET_BODY_SCHEMA, parsed);
 
   if (!body.success || !body.output.user || !body.output.token) {
-    return json({ error: "user and token required" }, { status: 400 });
+    return json({ body: { error: "user and token required" } }, { status: 400 });
   }
 
   // Shape gates BEFORE idFromName: a malformed identifier never reaches the
   // namespace, so garbage costs zero DO wake-ups.
-  if (!USER_ID_PATTERN.test(body.output.user)) return json({ error: "invalid user" }, { status: 400 });
+  if (!USER_ID_PATTERN.test(body.output.user)) return json({ body: { error: "invalid user" } }, { status: 400 });
 
-  if (!DEVICE_TOKEN_PATTERN.test(body.output.token)) return json({ error: "unauthorized" }, { status: 401 });
+  if (!DEVICE_TOKEN_PATTERN.test(body.output.token)) return json({ body: { error: "unauthorized" } }, { status: 401 });
 
   const issued = await ns.get(ns.idFromName(body.output.user)).issueDeviceConnectTicket(
     await ownerCaller(env),
     body.output.token,
   );
 
-  if (!issued.ok || !issued.ticket || !issued.expiresAt) return json({ error: "unauthorized" }, { status: 401 });
+  if (!issued.ok || !issued.ticket || !issued.expiresAt) return json({ body: { error: "unauthorized" } }, { status: 401 });
 
-  return json({ ticket: issued.ticket, expiresAt: issued.expiresAt });
+  return json({ body: { ticket: issued.ticket, expiresAt: issued.expiresAt } });
 }
 
 async function handlePcConnect<Id>(

@@ -90,7 +90,7 @@ async function listWorkspaceRoster(ctx: WorkspaceRosterContext): Promise<Respons
   }
 
   try {
-    return json(await ctx.stub.listWorkspaces(ctx.owner, { cursor, limit }));
+    return json({ body: await ctx.stub.listWorkspaces(ctx.owner, { cursor, limit }) });
   } catch (e) {
     const message = renderThrownChain({ cause: e });
 
@@ -178,12 +178,12 @@ export async function handleUserRequest(
     // problem.
     const controlPlane = isControlPlaneOperator(env, identity);
 
-    return json(profile === null ? null : { ...profile, controlPlane });
+    return json({ body: profile === null ? null : { ...profile, controlPlane } });
   }
 
   // ── Profile catalog (account authority over roles + tiers) ──────────
   if (path === '/profile-catalog' && method === 'GET') {
-    return json(await stub.getProfileCatalog(owner));
+    return json({ body: await stub.getProfileCatalog(owner) });
   }
 
   if (path === '/profile-catalog' && method === 'PUT') {
@@ -195,13 +195,15 @@ export async function handleUserRequest(
     if (!body) return err(400, 'Body must be { catalog, expectedVersion }.');
     const result = await stub.putProfileCatalog(owner, body.catalog, body.expectedVersion);
 
-    if (result.ok) return json(result.envelope);
+    if (result.ok) return json({ body: result.envelope });
 
     if (result.kind === 'conflict') {
       return json({
-        error: `Version conflict: the stored catalog is at version ${result.currentVersion}.`,
-        currentVersion: result.currentVersion,
-        currentDigest: result.currentDigest,
+        body: {
+          error: `Version conflict: the stored catalog is at version ${result.currentVersion}.`,
+          currentVersion: result.currentVersion,
+          currentDigest: result.currentDigest,
+        },
       }, { status: 409 });
     }
 
@@ -213,10 +215,12 @@ export async function handleUserRequest(
     const cliOrigin = normalizeCliOrigin(configuredOrigin === '' ? url.origin : configuredOrigin);
 
     return json({
-      publicOrigin: cliOrigin,
-      installCommand: buildCliInstallCommand({ origin: cliOrigin }),
-      setupCommand: buildCliSetupCommand(cliOrigin),
-      authCommand: buildCliAuthCommand(cliOrigin),
+      body: {
+        publicOrigin: cliOrigin,
+        installCommand: buildCliInstallCommand({ origin: cliOrigin }),
+        setupCommand: buildCliSetupCommand(cliOrigin),
+        authCommand: buildCliAuthCommand(cliOrigin),
+      },
     });
   }
 
@@ -235,7 +239,7 @@ export async function handleUserRequest(
     try {
       await stub.touchWorkspace(await ownerCaller(env), decodeURIComponent(agentTouchMatch[1]));
 
-      return json({ ok: true });
+      return json({ body: { ok: true } });
     }
     catch (e) { return err(400, renderThrownChain({ cause: e })); }
   }
@@ -246,14 +250,14 @@ export async function handleUserRequest(
     try {
       await stub.removeWorkspace(await ownerCaller(env), decodeURIComponent(agentMatch[1]), identity.userId);
 
-      return json({ ok: true });
+      return json({ body: { ok: true } });
     }
     catch (e) { return err(400, renderThrownChain({ cause: e })); }
   }
 
   // ── Devices (user-level device/PC tunnel) ──────────────────────────
   if (path === '/devices' && method === 'GET') {
-    return json(await stub.listDevices(await ownerCaller(env)));
+    return json({ body: await stub.listDevices(await ownerCaller(env)) });
   }
 
   if (path === '/devices' && method === 'POST') {
@@ -268,7 +272,7 @@ export async function handleUserRequest(
       label: body?.label,
     });
 
-    return json({ origin: cliOrigin, installCommand }, { status: 201 });
+    return json({ body: { origin: cliOrigin, installCommand } }, { status: 201 });
   }
 
   const deviceAcknowledgeMatch = path.match(/^\/devices\/([^/]+)\/unstopped$/);
@@ -279,7 +283,7 @@ export async function handleUserRequest(
 
       if (!result.ok) return err(404, 'No unconfirmed command incident matched this revoked device');
 
-      return json({ ok: true });
+      return json({ body: { ok: true } });
     } catch (e) {
       return err(400, renderThrownChain({ cause: e }));
     }
@@ -291,7 +295,7 @@ export async function handleUserRequest(
     try {
       const result = await stub.revokeDevice(await ownerCaller(env), decodeURIComponent(deviceMatch[1]));
 
-      return json(result);
+      return json({ body: result });
     } catch (e) {
       return err(400, renderThrownChain({ cause: e }));
     }
@@ -306,13 +310,13 @@ export async function handleUserRequest(
 
     if (!result.ok) return err(404, 'device not found');
 
-    return json({ ok: true });
+    return json({ body: { ok: true } });
   }
 
   // ── Device bindings (per-(workspace, device): may this workspace use this
   //    machine at all) ────────────────────────────────────────────────────
   if (path === '/devices/consents' && method === 'GET') {
-    return json(await stub.listDeviceConsents(await ownerCaller(env)));
+    return json({ body: await stub.listDeviceConsents(await ownerCaller(env)) });
   }
 
   const consentMatch = path.match(/^\/devices\/([^/]+)\/consent$/);
@@ -330,7 +334,7 @@ export async function handleUserRequest(
 
     if (!result.ok) return err(404, 'device not found');
 
-    return json({ ok: true });
+    return json({ body: { ok: true } });
   }
 
   if (consentMatch && method === 'DELETE') {
@@ -344,12 +348,12 @@ export async function handleUserRequest(
 
     if (!result.ok) return err(400, 'grant not revoked');
 
-    return json({ ok: true });
+    return json({ body: { ok: true } });
   }
 
   // ── Credentials ────────────────────────────────────────────────────
   if (path === '/credentials' && method === 'GET') {
-    return json(await stub.listCredentials(await ownerCaller(env)));
+    return json({ body: await stub.listCredentials(await ownerCaller(env)) });
   }
 
   const credMatch = path.match(/^\/credentials\/([^/]+)$/);
@@ -367,7 +371,7 @@ export async function handleUserRequest(
 
       notifyWorkspacesCredentialsChanged(env, stub, ctx);
 
-      return json({ ok: true });
+      return json({ body: { ok: true } });
     }
 
     if (method === 'DELETE') {
@@ -376,24 +380,24 @@ export async function handleUserRequest(
 
       notifyWorkspacesCredentialsChanged(env, stub, ctx);
 
-      return json({ ok: true });
+      return json({ body: { ok: true } });
     }
   }
 
   // ── Codex device flow ──────────────────────────────────────────────
   if (path === '/codex' && method === 'GET') {
-    return json(await stub.getCodexStatus(await ownerCaller(env)));
+    return json({ body: await stub.getCodexStatus(await ownerCaller(env)) });
   }
 
   if (path === '/codex' && method === 'DELETE') {
     await stub.disconnectCodex(await ownerCaller(env));
     notifyWorkspacesCredentialsChanged(env, stub, ctx);
 
-    return json({ ok: true });
+    return json({ body: { ok: true } });
   }
 
   if (path === '/codex/start' && method === 'POST') {
-    try { return json(await stub.startCodexDeviceFlow(await ownerCaller(env))); }
+    try { return json({ body: await stub.startCodexDeviceFlow(await ownerCaller(env)) }); }
     catch (e) { return err(502, renderThrownChain({ cause: e })); }
   }
 
@@ -403,13 +407,13 @@ export async function handleUserRequest(
 
       if (status.connected) notifyWorkspacesCredentialsChanged(env, stub, ctx);
 
-      return json(status);
+      return json({ body: status });
     } catch (e) { return err(502, renderThrownChain({ cause: e })); }
   }
 
   // ── Config (defaults) ──────────────────────────────────────────────
   if (path === '/config' && method === 'GET') {
-    return json(await stub.listConfig(await ownerCaller(env)));
+    return json({ body: await stub.listConfig(await ownerCaller(env)) });
   }
 
   const cfgMatch = path.match(/^\/config\/([^/]+)$/);
@@ -422,7 +426,7 @@ export async function handleUserRequest(
     }
 
     if (method === 'GET') {
-      return json({ key, value: await stub.getConfig(await ownerCaller(env), key) });
+      return json({ body: { key, value: await stub.getConfig(await ownerCaller(env), key) } });
     }
 
     if (method === 'PUT') {
@@ -431,26 +435,26 @@ export async function handleUserRequest(
       if (!body) return err(400, 'value (string) required');
       await stub.setConfig(await ownerCaller(env), key, body.value);
 
-      return json({ ok: true });
+      return json({ body: { ok: true } });
     }
   }
 
   // ── Models + providers ─────────────────────────────────────────────
   if (path === '/providers' && method === 'GET') {
-    return json(await stub.listConnectedProviders(await ownerCaller(env)));
+    return json({ body: await stub.listConnectedProviders(await ownerCaller(env)) });
   }
 
   if (path === '/providers/catalog' && method === 'GET') {
-    return json(await listProviderCatalog(env, identity.userId, await ownerCaller(env)));
+    return json({ body: await listProviderCatalog(env, identity.userId, await ownerCaller(env)) });
   }
 
   if (path === '/models' && method === 'GET') {
-    return json(await listAvailableModels(env, identity.userId, await ownerCaller(env)));
+    return json({ body: await listAvailableModels(env, identity.userId, await ownerCaller(env)) });
   }
 
   // ── Cloudflare account (which account serves Workers AI) ────────────
   if (path === '/cloudflare/accounts' && method === 'GET') {
-    return json(await stub.listCloudflareAccounts(await ownerCaller(env)));
+    return json({ body: await stub.listCloudflareAccounts(await ownerCaller(env)) });
   }
 
   if (path === '/cloudflare/account' && method === 'PUT') {
@@ -463,12 +467,12 @@ export async function handleUserRequest(
 
     notifyWorkspacesCredentialsChanged(env, stub, ctx);
 
-    return json({ ok: true });
+    return json({ body: { ok: true } });
   }
 
   // ── Cloudflare AI Gateway (the user's own gateway) ──────────────────
   if (path === '/cloudflare/gateways' && method === 'GET') {
-    return json(await stub.listAIGateways(await ownerCaller(env)));
+    return json({ body: await stub.listAIGateways(await ownerCaller(env)) });
   }
 
   if (path === '/cloudflare/gateway' && method === 'PUT') {
@@ -483,7 +487,7 @@ export async function handleUserRequest(
 
     notifyWorkspacesCredentialsChanged(env, stub, ctx);
 
-    return json({ ok: true });
+    return json({ body: { ok: true } });
   }
 
   // ── MCP servers ────────────────────────────────────────────────────
@@ -509,12 +513,12 @@ async function handleMcpRoutes(ctx: McpRoutesContext): Promise<Response | null> 
   const { request, stub, owner, path, method } = ctx;
 
   if (path === '/mcp/servers' && method === 'GET') {
-    try { return json(await stub.userMcp_list(owner)); }
+    try { return json({ body: await stub.userMcp_list(owner) }); }
     catch (e) { return err(500, renderThrownChain({ cause: e })); }
   }
 
   if (path === '/mcp/presets' && method === 'GET') {
-    try { return json(await stub.userMcp_presets(owner)); }
+    try { return json({ body: await stub.userMcp_presets(owner) }); }
     catch (e) { return err(500, renderThrownChain({ cause: e })); }
   }
 
@@ -524,7 +528,7 @@ async function handleMcpRoutes(ctx: McpRoutesContext): Promise<Response | null> 
     if (body === null) return err(400, 'Body must be JSON');
     const origin = publicOrigin(request);
 
-    try { return json(await stub.userMcp_add(owner, body, origin), { status: 201 }); }
+    try { return json({ body: await stub.userMcp_add(owner, body, origin) }, { status: 201 }); }
     catch (e) { return err(400, renderThrownChain({ cause: e })); }
   }
 
@@ -537,7 +541,7 @@ async function handleMcpRoutes(ctx: McpRoutesContext): Promise<Response | null> 
       try {
         await stub.userMcp_remove(owner, id);
 
-        return json({ ok: true });
+        return json({ body: { ok: true } });
       }
       catch (e) { return err(400, renderThrownChain({ cause: e })); }
     }
@@ -550,7 +554,7 @@ async function handleMcpRoutes(ctx: McpRoutesContext): Promise<Response | null> 
       try {
         await stub.userMcp_update(owner, id, body);
 
-        return json({ ok: true });
+        return json({ body: { ok: true } });
       }
       catch (e) { return err(400, renderThrownChain({ cause: e })); }
     }

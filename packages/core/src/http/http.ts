@@ -23,17 +23,17 @@ import * as v from 'valibot';
  * routes (the health stamp) stay revalidatable. Naming one is the way to opt
  * OUT, so the default is the safe direction.
  */
-export function json<Body>(body: Body, init: ResponseInit = {}): Response {
+export function json(answer: { body: unknown }, init: ResponseInit = {}): Response {
   const headers = copyHeaders(init.headers);
   headers.set('content-type', 'application/json');
 
   if (!headers.has('cache-control')) headers.set('cache-control', PRIVATE_NO_STORE);
 
-  return new Response(JSON.stringify(projectJsonValue({ value: body })), { ...init, headers });
+  return new Response(JSON.stringify(projectJsonValue({ value: answer.body })), { ...init, headers });
 }
 
 export function err(status: number, message: string): Response {
-  return json({ error: message }, { status });
+  return json({ body: { error: message } }, { status });
 }
 
 /**

@@ -60,16 +60,16 @@ export async function handleAuthRequest(request: Request, env: Env, ctx?: Execut
   const method = request.method;
 
   if (url.pathname === '/api/auth/providers' && method === 'GET') {
-    return json({ providers: listConfiguredOAuthProviders(env) });
+    return json({ body: { providers: listConfiguredOAuthProviders(env) } });
   }
 
   if (url.pathname === '/api/auth/me' && method === 'GET') {
     try {
       const identity = await authenticateRequest(request, env);
 
-      return json({ user: publicIdentity(identity) });
+      return json({ body: { user: publicIdentity(identity) } });
     } catch (e) {
-      if (e instanceof AuthError && e.status === 401) return json({ user: null }, { status: 401 });
+      if (e instanceof AuthError && e.status === 401) return json({ body: { user: null } }, { status: 401 });
       throw e;
     }
   }

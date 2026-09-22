@@ -65,7 +65,7 @@ export async function handleAccountRequest(request: Request, env: Env, identity:
   const stub: DurableObjectStub<UserDO> = env.UserDO.get(env.UserDO.idFromName(identity.userId));
 
   if (path === '/onboarding/complete' && request.method === 'POST') {
-    return json(await stub.completeOnboarding(owner));
+    return json({ body: await stub.completeOnboarding(owner) });
   }
 
   if (path === '/experience' && request.method === 'GET') {
@@ -78,7 +78,7 @@ export async function handleAccountRequest(request: Request, env: Env, identity:
 
     if (!query.success) return err(400, `kind must be one of ${EXPERIENCE_KINDS.join(', ')} and limit an integer from 1 to 100.`);
 
-    return json(decodeJsonWire(await stub.searchExperienceWire(owner, query.output)));
+    return json({ body: decodeJsonWire(await stub.searchExperienceWire(owner, query.output)) });
   }
 
   // DELETE /api/user/account — the one that cannot be undone. The typed
@@ -105,7 +105,7 @@ export async function handleAccountRequest(request: Request, env: Env, identity:
       if (!(cause instanceof Error) || cause.message !== 'destroyed') throw cause;
     }
 
-    return json({ deleted: true });
+    return json({ body: { deleted: true } });
   }
 
   // PATCH /api/user/profile
@@ -117,5 +117,5 @@ export async function handleAccountRequest(request: Request, env: Env, identity:
 
   if (problem !== null) return err(400, problem);
 
-  return json(await stub.setDisplayName(owner, body.displayName));
+  return json({ body: await stub.setDisplayName(owner, body.displayName) });
 }

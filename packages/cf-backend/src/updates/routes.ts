@@ -45,9 +45,9 @@ export async function handleUpdatesRequest(
 
   if (!ownedBy(record, identity)) return err(404, 'Not found');
 
-  if (path === API && request.method === 'GET') return json(await offer(request, env, record));
+  if (path === API && request.method === 'GET') return json({ body: await offer(request, env, record) });
 
-  if (path === RUN_PATH && request.method === 'GET') return json(await runStub(env).snapshot());
+  if (path === RUN_PATH && request.method === 'GET') return json({ body: await runStub(env).snapshot() });
 
   if (path === APPLY_PATH && request.method === 'POST') {
     const held = await offer(request, env, record);
@@ -56,7 +56,7 @@ export async function handleUpdatesRequest(
       return err(409, held.reason === '' ? 'There is nothing to install.' : held.reason);
     }
 
-    return json(await runStub(env).selfUpdate(record, env.KINU_SELF_DEPLOY_REFRESH_TOKEN ?? ''));
+    return json({ body: await runStub(env).selfUpdate(record, env.KINU_SELF_DEPLOY_REFRESH_TOKEN ?? '') });
   }
 
   return null;

@@ -61,7 +61,7 @@ export async function handleCreateWorkspaceRequest(call: CreateWorkspaceRequest)
       env, userId, userDO, caller: await ownerCaller(env), input, options: createOptions,
     });
 
-    return json(entry, { status: 201 });
+    return json({ body: entry }, { status: 201 });
   } catch (e) {
     const message = renderThrownChain({ cause: e });
 

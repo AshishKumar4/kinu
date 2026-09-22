@@ -60,7 +60,7 @@ export async function ingressAdmitted(
 }
 
 export function ingressDenied(): Response {
-  return json({ error: "too many attempts; retry after a minute" }, { status: 429 });
+  return json({ body: { error: "too many attempts; retry after a minute" } }, { status: 429 });
 }
 
 export function peerIp(request: Request): string {
