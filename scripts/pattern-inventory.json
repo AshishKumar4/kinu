@@ -410,7 +410,7 @@
       "file": "packages/core/src/execution/terminal-lane.ts",
       "kind": "hand-parser",
       "owner": "scanCommandLine",
-      "sourceSha256": "f73dc9be912ee73c0c139a6dadc29b85f5db07f243d9a7dbca6505b80ee3cde5",
+      "sourceSha256": "25ea22b95c7aa0d287571b3d6f3a73cd8d9edc79bb926dfb6661050883171655",
       "decision": "cli"
     },
     {
@@ -445,7 +445,7 @@
       "file": "packages/core/src/read-models/background-event.ts",
       "kind": "hand-parser",
       "owner": "parseDrainedEvents",
-      "sourceSha256": "d652e1a8f8b03c0d4f5b6adf9dc82952e1debe51146dba4df70333123263beb7",
+      "sourceSha256": "cd5301a7689b7c3af2cb4cd0982c7fa2b1151e1a5773b86a64efada2fbcf68f4",
       "decision": "framing"
     },
     {
@@ -494,7 +494,7 @@
       "file": "packages/core/src/session/message-codec.ts",
       "kind": "hand-parser",
       "owner": "decodeValue",
-      "sourceSha256": "13324d5e6a078c0df508d29c24050e32b02bb05de375c41fc4622b7b8c1fb35e",
+      "sourceSha256": "4a6a0478c28ab155c75d6c8dfabead45b6377cdff12c8f8a9712303edcf2c907",
       "decision": "traversal"
     },
     {
@@ -508,7 +508,7 @@
       "file": "packages/core/src/skills/parse.ts",
       "kind": "hand-parser",
       "owner": "parseSkillFile",
-      "sourceSha256": "dbbc66ac6e08bb2dff60f653226c1cdee7b520a6815102fe88a9bf508edd6cf4",
+      "sourceSha256": "d491b0105005b496c1fba3c401f78b5c01db05db220f3d65ba96ed3e4a7657ee",
       "decision": "lexical"
     },
     {
@@ -529,7 +529,7 @@
       "file": "packages/core/src/utils/markdown-frontmatter.ts",
       "kind": "hand-parser",
       "owner": "parseFlatYaml",
-      "sourceSha256": "ee9c8fd934b84a9608f76d3c38acc8c49c59eb13068f46e265589738472e76a6",
+      "sourceSha256": "303dfaf4a1a8ec624b803327ece19c33d9c654b6452ae8bea5360fd56f076bfa",
       "decision": "frontmatter"
     },
     {
@@ -543,7 +543,7 @@
       "file": "packages/core/src/vfs/diff.ts",
       "kind": "hand-parser",
       "owner": "parseGitDiff",
-      "sourceSha256": "56354b4561e6764bb2898003a9656db8b0d52e84458eedcf44aaf40428c02da8",
+      "sourceSha256": "3922e6dd75f43df7e6c14d97ed2002444bea23f11701312824d886bf0065f648",
       "decision": "framing"
     },
     {
@@ -1186,15 +1186,15 @@
     {
       "file": "scripts/schema-drift.ts",
       "kind": "hand-parser",
-      "owner": "parseColumns",
-      "sourceSha256": "46c0eb4f3af8f6b7b8ebbf97eacc24d2025b3fc489b4f83cbc75f9745d873709",
+      "owner": "parseParts",
+      "sourceSha256": "96846a953000b622e42de67d1198d956112223e43c4ab90b9149771d5cea1b13",
       "decision": "schema"
     },
     {
       "file": "scripts/schema-drift.ts",
       "kind": "hand-parser",
       "owner": "parseTables",
-      "sourceSha256": "ee7f941e6b7083f65de0cb38ea4b92de6af2b1f9fe22a637f4a66702f655fa96",
+      "sourceSha256": "f44cef3dd50ce15d0987fa7c1ddd6e353db57444efafa7ba32418475dbefba1a",
       "decision": "schema"
     },
     {

@@ -1,6 +1,10 @@
 {
-  "measured": "485bcc065: 1141 test files, 1004 runnable suites, 12996 tests, 40 runners, 90 non-public product members",
+  "measured": "38c001fee: 1143 test files, 1008 runnable suites, 13045 tests, 40 runners, 91 non-public product members",
   "entries": [
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-codemode-sandbox.test.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
       "count": 1
@@ -18,27 +22,15 @@
       "count": 1
     },
     {
-      "key": "mirror :: packages/cf-backend/tests/unit-rpc-gate.test.ts :: (file scope) :: declared mirror",
+      "key": "mirror :: packages/cf-backend/tests/workerd/files-eio-probe.ts :: (file scope) :: declared mirror",
       "count": 1
     },
     {
-      "key": "mirror :: packages/cf-backend/tests/unit-rpc-gate.test.ts :: the HTTP dispatcher consumes THIS table — no second scope policy anywhere :: declared mirror",
-      "count": 2
-    },
-    {
-      "key": "mirror :: packages/cf-backend/tests/workerd/worker.ts :: (file scope) :: declared mirror",
+      "key": "mirror :: packages/cf-backend/tests/workerd/slate-share-probe.ts :: (file scope) :: declared mirror",
       "count": 1
     },
     {
       "key": "mirror :: packages/cli-backend/tests/local-session.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/cli-backend/tests/local-session.test.ts :: an errored turn purges its unclaimed takes instead of claiming them :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/cli/tests/cloud-agent-client.test.ts :: send transmits only the new user message and streams the reply :: declared mirror",
       "count": 1
     },
     {
@@ -54,10 +46,6 @@
       "count": 1
     },
     {
-      "key": "mirror :: packages/core/tests/fixtures/template-flags/violations.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
       "key": "mirror :: packages/core/tests/unit-core-adapter-seams.test.ts :: (file scope) :: declared mirror",
       "count": 3
     },
@@ -66,15 +54,15 @@
       "count": 1
     },
     {
-      "key": "mirror :: packages/core/tests/unit-events-hub-subordinate.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
       "key": "mirror :: packages/core/tests/unit-memory-tail.test.ts :: (file scope) :: mirrored constant",
       "count": 1
     },
     {
       "key": "mirror :: packages/core/tests/unit-mission-budget-seams.test.ts :: a TOOLLESS node charges its one call too, so removing the lump under-charges nothing :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/unit-prompt-template.test.ts :: (file scope) :: declared mirror",
       "count": 1
     },
     {
@@ -90,12 +78,36 @@
       "count": 1
     },
     {
-      "key": "mirror :: packages/core/tests/unit-workspace-spend.test.ts :: the stored payload really carries the fields the aggregate reads :: declared mirror",
+      "key": "mirror :: packages/devbox/tests/decisions.test.ts :: (file scope) :: declared mirror",
       "count": 1
     },
     {
-      "key": "mirror :: packages/devbox/tests/lifecycle-generation.test.ts :: a caller does not JOIN a superseded attempt, it starts the new generation's :: declared mirror",
+      "key": "mirror :: packages/devbox/tests/delta-shell-parity.test.ts :: (file scope) :: declared mirror",
       "count": 1
+    },
+    {
+      "key": "mirror :: packages/devbox/tests/delta-shell-parity.test.ts :: the base stat, the block hashes and the plan agree :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/devbox/tests/restore-after-start.test.ts :: a schedule row naming a callback this class cannot call is dropped at activation :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/devbox/tests/snapshot-chain.test.ts :: (file scope) :: declared mirror",
+      "count": 2
+    },
+    {
+      "key": "mirror :: packages/devbox/tests/support/devbox-harness.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/devbox/tests/support/session-shell.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/devbox/tests/support/strategy-machine.ts :: (file scope) :: declared mirror",
+      "count": 2
     },
     {
       "key": "mirror :: scripts/bench.test.ts :: (file scope) :: declared mirror",
@@ -206,6 +218,10 @@
       "count": 1
     },
     {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a close that rejects releases its sequence to the next sweep :: harness bridge to a non-public member",
+      "count": 3
+    },
+    {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a completed turn retains its terminal disposition so a duplicate callback is done :: harness bridge to a non-public member",
       "count": 2
     },
@@ -258,8 +274,8 @@
       "count": 4
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: an undelivered retry stays owed and replays with the same identity :: harness bridge to a non-public member",
-      "count": 5
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: an overflow retry stays owed until its turn is on disk, across a refused dequeue :: harness bridge to a non-public member",
+      "count": 6
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: cold recovery keeps the claims of a continuation it has not replayed yet :: harness bridge to a non-public member",
@@ -363,7 +379,7 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-output-limit-continuation.test.ts :: (file scope) :: harness bridge to a non-public member",
-      "count": 3
+      "count": 2
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-plan-mode-backend.test.ts :: (file scope) :: harness bridge to a non-public member",
@@ -371,10 +387,6 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-plan-mode-backend.test.ts :: a failed handoff remains retryable and a successful retry cannot enqueue twice :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-plan-mode-backend.test.ts :: recovers when durable acceptance outlives the RPC and the accepted turn later errors :: harness bridge to a non-public member",
       "count": 1
     },
     {
@@ -414,11 +426,23 @@
       "count": 1
     },
     {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: a reply that fails mid-dispatch stays owed with that failure, not as an open channel :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
       "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: an unscoped rollout still claims against the live turn :: harness bridge to a non-public member",
       "count": 1
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the scope is the claim identity, not whatever turn is ambient :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-workspace-genesis.test.ts :: a failed naming call is retried by the ledger, and a later turn asks no model :: harness bridge to a non-public member",
+      "count": 4
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-workspace-genesis.test.ts :: a title the owner chose is never replaced by the genesis naming :: harness bridge to a non-public member",
       "count": 1
     },
     {
@@ -706,6 +730,14 @@
       "count": 1
     },
     {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-copy-label.test.ts :: only a resolved write reads as copied :: expected side computed by the code under test",
+      "count": 3
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-copy-label.test.ts :: the idle label is the caller's, the outcome labels are not :: expected side computed by the code under test",
+      "count": 2
+    },
+    {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-head-delta.test.ts :: step ids are per step, so the trace is stable while it grows :: expected side computed by the code under test",
       "count": 1
     },
@@ -875,6 +907,10 @@
     },
     {
       "key": "tautology_suspect :: scripts/bench.test.ts :: regenerating a task at a different size changes the manifest :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: scripts/infra.test.ts :: the confirmation names the worker :: expected side computed by the code under test",
       "count": 1
     },
     {
