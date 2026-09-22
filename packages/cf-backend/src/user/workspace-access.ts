@@ -1,10 +1,5 @@
-// Worker-side helpers for operating on a user's workspaces: creating one, and
-// telling a user's live workspaces that their credentials changed. Shared by the
-// web routes (user/routes.ts) and the CLI control plane (cli/routes.ts), so
-// status mapping cannot drift between them.
-//
-// Ownership-claiming lives in `./workspace-ownership`, which four surfaces ask
-// and only this one creates — see that module's header.
+// Worker-side helpers for creating a user's workspace and notifying live workspaces of credential
+// changes. Shared by user/routes.ts and cli/routes.ts so status mapping cannot drift.
 import type { ActorAgent } from '../actor-agent';
 import type { UserDO } from './user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
@@ -19,8 +14,6 @@ import { ownerCaller } from '@kinu.run/core';
 import { diagnostics, toKinuError, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
-/** Every binding a create route reads: the create's own, and the fanout's
- *  workspace namespace, which the create already addresses. */
 export interface CreateWorkspaceEnv<Id> extends CreateCloudWorkspaceEnv<Id>, CredentialFanoutEnv<Id> {
   OrchestratorAgent: ObjectNamespace<Id, CloudWorkspaceBirth & CredentialFanoutTarget>;
 }
@@ -49,12 +42,8 @@ export async function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequ
 
   if (!body.name?.trim() && !body.purpose?.trim()) return err(400, 'purpose required');
 
-  // The wire shape and the create input are two types. Passing the parsed body
-  // straight through made them one object by structure, so a field either side
-  // gained crossed silently in whichever direction: the `role` a `kinu create
-  // --role` asks for, the `model` and `reasoningEffort` the CLI sends from its
-  // config defaults, are read by `createCloudWorkspaceForUser`, and each
-  // arrives only because this mapping names it.
+  // Wire shape and create input are distinct types; a field reaches `createCloudWorkspaceForUser`
+  // only if this mapping names it.
   const input: CreateCloudWorkspaceInput = {
     name: body.name,
     displayName: body.displayName,
@@ -73,9 +62,8 @@ export async function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequ
   } catch (e) {
     const message = renderThrownChain({ cause: e });
 
-    // workspace-create.ts throws plain Errors; this is the single home for the
-    // two answers that are conflicts rather than bad requests — a provider the
-    // account cannot serve, and a name an unfinished transfer is still holding.
+    // workspace-create.ts throws plain Errors; these two messages are conflicts (409), not bad
+    // requests: an unserved provider, and a name held by an unfinished transfer.
     const conflict = message.startsWith('Cloudflare Workers AI is not connected')
       || message.startsWith('Workspace name conflict');
 
@@ -83,27 +71,14 @@ export async function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequ
   }
 }
 
-/** The one call the fanout makes on a workspace object. Named so the fanout
- *  states its reach and a stand-in workspace satisfies it. */
 export type CredentialFanoutTarget = Pick<ActorAgent, 'onCredentialsChanged'>;
 
-/** What the fanout reads: the roster's workspaces, and the owner secret the
- *  roster read is authorized with. */
 export interface CredentialFanoutEnv<Id> extends OwnerCapabilityEnv {
   OrchestratorAgent: ObjectNamespace<Id, CredentialFanoutTarget>;
 }
 
-/** Fan a credential-change notification out to the user's active workspaces so
- *  each drops its cached provider/model state (onCredentialsChanged) —
- *  otherwise a disconnected provider stays "available" until the next
- *  claimOwner/setModel. The request's waitUntil owns the fanout.
- *
- *  The fanout is a TIMELINESS mechanism, not a correctness one: every
- *  mutation also bumps the account credential revision, and a workspace
- *  compares that number before using its cached state, so a notification that
- *  never landed is healed at the next use rather than left standing. Each
- *  rejected workspace is named and classified here, so a persistent failure is
- *  a diagnosable line rather than an allSettled outcome nobody reads. */
+/** Tell active workspaces to drop cached provider/model state; the request's waitUntil owns it.
+ *  Timeliness only: workspaces also check the credential revision, so a missed notify heals. */
 export function notifyWorkspacesCredentialsChanged<Id>(
   env: CredentialFanoutEnv<Id>,
   userDO: Pick<UserDO, 'listActiveWorkspaces'>,
@@ -127,9 +102,7 @@ export function notifyWorkspacesCredentialsChanged<Id>(
       workspaces = null;
     }
 
-    // A roster that could not be read is a fan-out that reaches nobody — the
-    // credential write itself already landed, and the next workspace touch
-    // reconciles its own copy.
+    // Unreadable roster: skip; the credential write landed and each workspace reconciles on next use.
     if (workspaces === null) return;
 
     const settled = await Promise.allSettled(workspaces

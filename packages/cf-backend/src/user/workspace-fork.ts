@@ -8,8 +8,7 @@ export interface CloudForkRegistry {
   reserveWorkspace(caller: UserCaller, name: string, displayName?: string): Promise<{
     entry: WorkspaceEntry; reserved: boolean;
   }>;
-  /** Say the transfer is still running, so the reserved name is held for
-   *  another lease. False means it is no longer ours to hold. */
+  /** Extend the reserved name for another lease while the transfer runs; false means it is no longer ours. */
   renewWorkspaceReservation(caller: UserCaller, name: string, createdAt: number): Promise<boolean>;
   releaseWorkspaceReservation(caller: UserCaller, name: string, createdAt: number): Promise<boolean>;
   publishWorkspaceReservation(
@@ -30,17 +29,11 @@ export interface CloudForkTarget {
 export interface CloudForkSource {
   sql: SqlExecutor;
   /**
-   * The actor whose transcript is being cut.
-   *
-   * Not derivable here and deliberately not derived: a workspace database holds
-   * every actor it issued, and the conversation rows the frames read are keyed
-   * per actor, so a snapshot taken without one would carry a sibling's
-   * conversation. The sender supplies its OWN fenced handle — the same one the
-   * driver checked the fork point against.
+   * The actor whose transcript is being cut; must be supplied, since conversation rows are keyed per
+   * actor and a snapshot without one would carry a sibling's. Same fenced handle the fork point used.
    */
   actor: ActorHandle;
-  /** The workspace plane, with the ranged read the wire streams each inherited
-   *  file through. */
+  /** Workspace plane providing the ranged read used to stream each inherited file. */
   vfs: ForkFileSource;
   untilMessageId: string;
   /** Where that actor's payload files live: the carried conversation references
@@ -49,16 +42,8 @@ export interface CloudForkSource {
 }
 
 /**
- * Register a pending roster name, stream source frames straight to the target,
- * then publish that exact reservation only after the target committed.
- *
- * The reservation is RENEWED as each frame is acknowledged. Everything that
- * fails in band runs the rollback below, but this loop lives in the sender's
- * memory: when the source Durable Object dies between frames — the exact window
- * the receiver's staging state exists to survive — nothing here runs again.
- * The renewals are what tell the registry the difference between that and a
- * transfer still going, so a dead sender's reservation lapses and is reclaimed
- * instead of wedging the name for the life of the account.
+ * Reserve the roster name, stream frames to the target, publish only after the target commits.
+ * Renewing per acked frame lets a dead sender's reservation lapse instead of wedging the name.
  */
 export async function deliverCloudFork(input: {
   registry: CloudForkRegistry;
@@ -102,9 +87,7 @@ export async function deliverCloudFork(input: {
 
       if (ack.status === 'published') { landed = ack; break; }
 
-      // Still going: hold the name for another lease. A registry that answers
-      // false has already given the name to someone else — carrying on would
-      // stream into a target this transfer no longer owns.
+      // false: the name was given to someone else; continuing would stream into a target not ours.
       const held = await input.registry.renewWorkspaceReservation(
         input.caller, input.name, registration.entry.createdAt,
       );

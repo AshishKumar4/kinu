@@ -1,21 +1,6 @@
 /**
  * Whether a user owns a workspace, and the stub for it if they do.
- *
- * ONE IMPLEMENTATION, and its own module for a reason that is structural rather
- * than tidy. Four surfaces ask this question — the browser API gate in
- * `server.ts`, the CLI gate in `cli/routes.ts`, the MCP transport, and the admin
- * control plane's action dispatcher — and only one of them has any business
- * reaching workspace CREATION. Leaving the claim inside `workspace-access.ts`
- * would drag `ai`, the provider registry and the model menu into every caller
- * that only wanted to know who owns a name.
- *
- * THE ORDER IN `claimOwnedWorkspace` IS THE SECURITY PROPERTY. `hasWorkspace`
- * must answer before `claimOwner` for anyone unproven, or a crafted workspace
- * name wakes an arbitrary OrchestratorAgent. And `claimOwner` must run even for
- * a proven member, because a registry row is a claim about a name while the
- * workspace's own identity row is the claim about the object — a roster row
- * naming somebody else's workspace passes the first check and is refused by the
- * second.
+ * Kept separate from `workspace-access.ts` so ownership callers don't import creation deps.
  */
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
@@ -24,16 +9,12 @@ import { classifyTransientDO, retryTransientDO } from '@kinu.run/core';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
-/** The two registry calls the gate makes on the asking user's own object. */
 export type WorkspaceRegistry = Pick<UserDO, 'hasWorkspace' | 'ensureWorkspaceCapability'>;
 
-/** The one call the gate makes on the workspace itself. Generic below rather
- *  than fixed, because the resolved stub is handed BACK to the caller, which
- *  reaches the rest of the object through it. */
+/** Generic below because the resolved stub is handed back to the caller. */
 export type WorkspaceOwnerClaim = Pick<OrchestratorAgent, 'claimOwner'>;
 
-/** The bindings an ownership question needs, stated structurally so the control
- *  plane can ask it with its own narrower env rather than the generated `Env`. */
+/** Structural so the control plane can pass its own narrower env, not the generated `Env`. */
 export interface WorkspaceOwnershipEnv<Id, Agent extends WorkspaceOwnerClaim> extends OwnerCapabilityEnv {
   UserDO: ObjectNamespace<Id, WorkspaceRegistry>;
   OrchestratorAgent: ObjectNamespace<Id, Agent>;
@@ -43,53 +24,30 @@ export type OwnedWorkspaceResult<Agent> =
   | { ok: true; agent: Agent }
   | { ok: false; status: number; error: string };
 
-/** Positive registry-membership answers this Worker isolate has proven, keyed
- *  `${userId}\u0000${workspaceName}`. A proof is earned only by a real
- *  `hasWorkspace` answer, and `claimOwner` still verifies the caller IS the
- *  stored owner afterwards — a proof only ever skips the registry READ, never
- *  the identity check, and exists only for a pair that passed both. Removal
- *  happens in the UserDO, which this isolate learns only when
- *  `ensureWorkspaceCapability`'s own registry re-check contradicts the proof;
- *  that eviction is what keeps a deleted workspace deleted.
- */
+/** Per-isolate proofs of registry membership; a proof skips only the registry read, never
+ * claimOwner. Evicted when `ensureWorkspaceCapability`'s re-check contradicts it. */
 const membershipProven = new Set<string>();
 
-/** Bound the proof set: a long-lived isolate otherwise accumulates one small
- *  entry per (user, workspace) it ever saw. Overflow drops every proof, so
- *  each caller simply re-reads its registry once — the uncached path. The
- *  value is a memory bound on this set only; it does not tune
- *  MAX_RATE_LIMIT_PER_MIN (core events ingress), which shares the number by
- *  coincidence. */
+/** Memory bound on the proof set; overflow drops all proofs. Unrelated to
+ * MAX_RATE_LIMIT_PER_MIN despite the same number. */
 const MEMBERSHIP_PROOF_LIMIT = 10_000;
 
-/** Discard a membership proof; the next request re-reads the registry. */
 function forgetWorkspaceMembership(userId: string, workspaceName: string): void {
   membershipProven.delete(`${userId}\u0000${workspaceName}`);
 }
 
-/** Verify `userId` owns `workspaceName` (registry membership + claimOwner on
- *  the orchestrator's own identity). 404 when the workspace isn't in the
- *  caller's registry — creation must go through the explicit create APIs so
- *  probes cannot register workspaces; 403 only for a genuine cross-user collision;
- *  503 when the platform dropped the call, so a client knows to try again; and
- *  anything else is a surfaced 500 so boot/schema issues stay diagnosable. */
+/** 404 when not in the caller's registry (probes must not create workspaces); 403 for a
+ * cross-user collision; 503 for a dropped platform call; anything else is a surfaced 500. */
 export async function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
   env: WorkspaceOwnershipEnv<Id, Agent>,
   userId: string,
   workspaceName: string,
 ): Promise<OwnedWorkspaceResult<Agent>> {
   const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-  // These calls run on every authenticated request for this workspace, and
-  // every one is idempotent — a membership read (skipped when this isolate
-  // still holds a positive proof), a claim that converges on the same owner,
-  // and a reconcile that returns immediately once the two sides agree. A
-  // connection the platform dropped between the Worker and either object is
-  // not a statement about the request.
+  // Every call below is idempotent, so platform-dropped connections are retried.
   const owner = await ownerCaller(env);
-  // The wake-guard half of the gate, and its order IS the security property:
-  // hasWorkspace must answer before claimOwner for anyone unproven, or a
-  // crafted workspace name would wake an arbitrary OrchestratorAgent. A
-  // proven member skips straight to the claim.
+  // Order is the security property: hasWorkspace must answer before claimOwner for anyone
+  // unproven, or a crafted name wakes an arbitrary OrchestratorAgent.
   const membershipKey = `${userId}\u0000${workspaceName}`;
 
   if (!membershipProven.has(membershipKey)) {
@@ -97,8 +55,7 @@ export async function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>
       () => userDO.hasWorkspace(owner, workspaceName));
 
     if (!member) {
-      // A concurrent request may have proven membership moments ago; a fresh
-      // removal answer outranks it.
+      // A fresh removal answer outranks a concurrent request's proof.
       membershipProven.delete(membershipKey);
 
       return {
@@ -133,20 +90,15 @@ export async function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>
     return { ok: false, status: transient === null ? 500 : 503, error: message };
   }
 
-  // Reconcile the workspace's identity with the registry on every touch. The
-  // UserDO owns the whole decision (and serializes concurrent ones) because it
-  // is the only place that can see both sides; it returns immediately when they
-  // already agree, which is every request after the first.
+  // The UserDO serializes this reconcile; it returns immediately once both sides agree.
   try {
     await retryTransientDO('ensureWorkspaceCapability',
       () => userDO.ensureWorkspaceCapability(workspaceName, claim.capabilityHash));
   } catch (e) {
     const message = renderThrownChain({ cause: e });
 
-    // The UserDO re-checks the registry on every reconcile; its contradiction
-    // is the authoritative refutation of a cached proof — the workspace was
-    // removed after this isolate proved membership. Evict and report 404 so
-    // deletion sticks with no cross-isolate invalidation channel.
+    // Registry contradiction refutes a cached proof; evict so deletion sticks without
+    // cross-isolate invalidation.
     if (/not in your registry/i.test(message)) {
       forgetWorkspaceMembership(userId, workspaceName);
 

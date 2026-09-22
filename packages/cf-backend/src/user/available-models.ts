@@ -1,8 +1,6 @@
 /**
- * Union of models available to a user, plus the connectable-provider catalog.
- * The provider registry is the source of truth for models; models.dev is the
- * source of truth for which providers a BYO API key can connect. This module
- * only shapes that data for HTTP clients.
+ * Model menu and connectable-provider catalog for HTTP clients.
+ * The provider registry is the source of truth for models; models.dev for which providers a BYO key can connect.
  */
 import {
   catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL,
@@ -15,31 +13,22 @@ import { retryTransientDO } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 
 export interface ModelMenuEntry {
-  /** Full spec — `<provider>/<modelId>`, used as the actor_config.model value. */
+  /** `<provider>/<modelId>`, used as the actor_config.model value. */
   spec: string;
-  /** Display label for the picker. */
   label: string;
-  /** Provider id (codex, openai, anthropic, workers-ai, …). */
   provider: string;
-  /** Capabilities — used by the UI to badge models. */
   capabilities?: string[];
-  /** Provider-reported context window, when known. */
   contextWindow?: number;
-  /** The effort levels this model accepts (`ModelInfo.reasoningEfforts`);
-   *  the settings control renders exactly these after "model default". */
+  /** The settings control renders exactly these after "model default". */
   reasoningEfforts?: readonly ReasoningEffort[];
 }
 
-/** The model menu as HTTP clients receive it: what can be picked, and which
- *  providers could not be reached (so the picker can say so instead of
- *  silently dropping them). */
+/** `failures` lists unreachable providers so the picker can say so instead of dropping them. */
 export interface ModelMenuResponse {
   models: ModelMenuEntry[];
   failures: ProviderFailure[];
 }
 
-/** What a model listing reads: the provider seam the registry runs on, and
- *  the user object that holds the credentials it lists. */
 export interface AvailableModelsEnv<Id> extends ProviderEnv {
   UserDO: ObjectNamespace<Id, UserCredentialClient>;
 }
@@ -47,7 +36,6 @@ export interface AvailableModelsEnv<Id> extends ProviderEnv {
 export async function listAvailableModels<Id>(
   env: AvailableModelsEnv<Id>, userId: string, caller: UserCaller,
 ): Promise<ModelMenuResponse> {
-  // The UserDO namespace binding declares UserDO as its stub contract.
   const stub = env.UserDO.get(env.UserDO.idFromName(userId));
 
   const { registry, deps } = createAgentProviderRegistry({
@@ -67,10 +55,8 @@ export async function listAvailableModels<Id>(
     reasoningEfforts: model.reasoningEfforts,
   }));
 
-  // openai-compat: user-named — we surface each as a single generic entry.
-  // The actor_config.model can be set to `openai-compat:<name>/<modelId>`.
-  // Retried: a dropped read here renders a user's connected accounts as none at
-  // all, which sends them to re-authorise a provider they never lost.
+  // openai-compat providers are user-named; each surfaces as one entry (`openai-compat:<name>/<modelId>`).
+  // Retried: a dropped read would show no connected accounts and prompt needless re-authorisation.
   const creds = await retryTransientDO('listCredentials', () => stub.listCredentials(caller));
 
   for (const c of creds) {
@@ -88,23 +74,19 @@ export async function listAvailableModels<Id>(
   return { models: out, failures: menu.failures };
 }
 
-/** One connectable provider for the credential UX (BYO API key). */
 export interface ProviderCatalogEntry {
-  /** Provider id — also the model-spec prefix (`<id>/<modelId>`). */
+  /** Also the model-spec prefix (`<id>/<modelId>`). */
   id: string;
-  /** Credential key the API key is stored under. */
   credKey: string;
   name: string;
   doc?: string;
-  /** Conventional env var name for the key (models.dev metadata). */
+  /** From models.dev metadata. */
   envVar?: string;
   connected: boolean;
 }
 
-/** All providers a stored API key can connect: every models.dev provider the
- *  openai-compat path can drive, plus catalog providers a bespoke static
- *  provider serves under the same id/credKey (openai, anthropic, openrouter).
- *  OAuth-connected providers (workers-ai, codex) have their own flows. */
+/** models.dev providers the openai-compat path can drive, plus those a static provider serves under
+ * the same id/credKey. OAuth providers (workers-ai, codex) have their own flows. */
 function buildProviderCatalog(
   providers: readonly ModelsDevProviderInfo[],
   staticIds: ReadonlySet<string>,
@@ -130,7 +112,6 @@ function buildProviderCatalog(
 export async function listProviderCatalog<Id>(
   env: AvailableModelsEnv<Id>, userId: string, caller: UserCaller,
 ): Promise<ProviderCatalogEntry[]> {
-  // The UserDO namespace binding declares UserDO as its stub contract.
   const stub = env.UserDO.get(env.UserDO.idFromName(userId));
   const { registry } = createAgentProviderRegistry({ env, userDO: { stub, caller }, fetch });
 
