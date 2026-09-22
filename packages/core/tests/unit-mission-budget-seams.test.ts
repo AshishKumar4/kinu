@@ -106,6 +106,14 @@ function searchableDeps(opts: {
   const { rt, db } = createTestRuntime();
   const spawns = opts.spawns ?? [];
 
+  /** Both handoff verbs answer identically; the verb that ran is what a seam
+   *  test reads back. */
+  const recordHandoff = (verb: string) => async (input: { name: string }) => {
+    spawns.push(`${verb}:${input.name}`);
+
+    return { ok: true as const, name: input.name, ...handoff() };
+  };
+
   return {
     mode: 'build',
     swarm: {
@@ -135,18 +143,10 @@ function searchableDeps(opts: {
 
         return { name: 'helper', displayName: 'Helper' };
       },
-      assign: async (input) => {
-        spawns.push(`ask:${input.name}`);
-
-        return { ok: true, name: input.name, ...handoff() };
-      },
+      assign: recordHandoff('ask'),
       knows: async () => true,
       status: async () => ({}),
-      message: async (input) => {
-        spawns.push(`send:${input.name}`);
-
-        return { ok: true, name: input.name, ...handoff() };
-      },
+      message: recordHandoff('send'),
       dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true }),
     },
     budget: opts.budget,

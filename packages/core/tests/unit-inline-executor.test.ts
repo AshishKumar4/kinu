@@ -132,34 +132,33 @@ describe('workspace provider (InlineExecutor)', () => {
     expect(stored.name).toBe('multiplyNumbers');
   });
 
-  test('createTool sanitizes invalid identifier chars without lowercasing', async () => {
-    const { rt } = createTestRuntime();
-    const exec = buildExec(rt);
+  const SANITIZED_NAMES = [
+    {
+      // Non-identifier chars become _; case preserved.
+      name: 'createTool sanitizes invalid identifier chars without lowercasing',
+      asked: 'Weird Name-With.Chars!', got: 'Weird_Name_With_Chars_',
+    },
+    {
+      name: 'createTool prepends _ when name starts with a digit',
+      asked: '2ndAttempt', got: '_2ndAttempt',
+    },
+  ];
 
-    const result = v.parse(ToolNamedSchema, await exec.tools.createTool.execute(
-      'Weird Name-With.Chars!',
-      'test',
-      'async () => 1',
-    ));
+  for (const sanitized of SANITIZED_NAMES) {
+    test(sanitized.name, async () => {
+      const { rt } = createTestRuntime();
+      const exec = buildExec(rt);
 
-    // Non-identifier chars become _; case preserved.
-    expect(result.ok).toBe(true);
-    expect(result.name).toBe('Weird_Name_With_Chars_');
-  });
+      const result = v.parse(ToolNamedSchema, await exec.tools.createTool.execute(
+        sanitized.asked,
+        'test',
+        'async () => 1',
+      ));
 
-  test('createTool prepends _ when name starts with a digit', async () => {
-    const { rt } = createTestRuntime();
-    const exec = buildExec(rt);
-
-    const result = v.parse(ToolNamedSchema, await exec.tools.createTool.execute(
-      '2ndAttempt',
-      'test',
-      'async () => 1',
-    ));
-
-    expect(result.ok).toBe(true);
-    expect(result.name).toBe('_2ndAttempt');
-  });
+      expect(result.ok).toBe(true);
+      expect(result.name).toBe(sanitized.got);
+    });
+  }
 
   test('createTool upserts — re-creating the SAME name updates the code, no duplicate row', async () => {
     const { rt } = createTestRuntime();

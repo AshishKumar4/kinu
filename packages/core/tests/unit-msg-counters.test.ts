@@ -100,6 +100,13 @@ function makeTeam(delivery: SubordinateDelivery) {
   const calls: Call[] = [];
   const handoff = { eventId: 'ev-1', delivery, phase: { busy: false, lastActivityAt: null, workingOn: null } };
 
+  /** Both handoff verbs answer identically; only which one ran is recorded. */
+  const recordHandoff = (action: Call['action']) => async (input: { name: string }) => {
+    calls.push({ action });
+
+    return { ok: true as const, name: input.name, ...handoff };
+  };
+
   const deps: TeamToolDeps = {
     delegation: ROOT_DELEGATION_BUDGET,
     list: async () => [rosterEntry],
@@ -111,16 +118,8 @@ function makeTeam(delivery: SubordinateDelivery) {
     spawn: async () => ({ name: rosterEntry.name, displayName: 'Researcher' }),
     status: async () => ({ roster: [rosterEntry] }),
     dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true }),
-    assign: async (input) => {
-      calls.push({ action: 'assign' });
-
-      return { ok: true, name: input.name, ...handoff };
-    },
-    message: async (input) => {
-      calls.push({ action: 'message' });
-
-      return { ok: true, name: input.name, ...handoff };
-    },
+    assign: recordHandoff('assign'),
+    message: recordHandoff('message'),
   };
 
   return { deps, calls };

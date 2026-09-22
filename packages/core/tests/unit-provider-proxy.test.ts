@@ -131,22 +131,29 @@ describe('providerProxyBaseURL', () => {
     expect(await providerProxyBaseURL('groq.bearer', deps)).toBe('https://api.groq.com/openai/v1');
   });
 
-  test('refuses the credentials the proxy is not allowed to spend', async () => {
-    const deps = { fetch: catalogFetch() };
-    // The Cloudflare bearer also authorizes account administration…
-    expect(await providerProxyBaseURL('cloudflare.oauth', deps)).toBeNull();
-    expect(await providerProxyBaseURL('cloudflare.ai-gateway', deps)).toBeNull();
-    // …and Codex refuses Worker egress, so proxying it would break a local
-    // credential that works today.
-    expect(await providerProxyBaseURL('codex.oauth', deps)).toBeNull();
-  });
+  const NO_BASE_URL = [
+    {
+      // The Cloudflare bearer also authorizes account administration, and Codex
+      // refuses Worker egress, so proxying it would break a local credential
+      // that works today.
+      name: 'refuses the credentials the proxy is not allowed to spend',
+      credentials: ['cloudflare.oauth', 'cloudflare.ai-gateway', 'codex.oauth'],
+    },
+    {
+      name: 'returns null when no endpoint is derivable',
+      credentials: ['bespoke.bearer', 'openai-compat.default', 'github'],
+    },
+  ];
 
-  test('returns null when no endpoint is derivable', async () => {
-    const deps = { fetch: catalogFetch() };
-    expect(await providerProxyBaseURL('bespoke.bearer', deps)).toBeNull();
-    expect(await providerProxyBaseURL('openai-compat.default', deps)).toBeNull();
-    expect(await providerProxyBaseURL('github', deps)).toBeNull();
-  });
+  for (const refused of NO_BASE_URL) {
+    test(refused.name, async () => {
+      const deps = { fetch: catalogFetch() };
+
+      for (const credential of refused.credentials) {
+        expect(await providerProxyBaseURL(credential, deps)).toBeNull();
+      }
+    });
+  }
 });
 
 describe('proxyTargetAllowed', () => {
@@ -199,20 +206,37 @@ describe('proxyTargetAllowed', () => {
     expect(proxyTargetAllowed('https://user:pass@api.groq.com/openai/v1/chat/completions', base, 'POST')).toBe(false);
   });
 
-  test('refuses another host — the exfiltration case', () => {
-    expect(proxyTargetAllowed('https://attacker.example/openai/v1/chat/completions', base, 'POST')).toBe(false);
-    expect(proxyTargetAllowed('https://api.groq.com.attacker.example/openai/v1', base, 'POST')).toBe(false);
-  });
+  const REFUSED_TARGETS = [
+    {
+      name: 'refuses another host — the exfiltration case',
+      targets: [
+        ['https://attacker.example/openai/v1/chat/completions', 'POST'],
+        ['https://api.groq.com.attacker.example/openai/v1', 'POST'],
+      ],
+    },
+    {
+      name: 'refuses a sibling path that merely shares a prefix',
+      targets: [
+        ['https://api.groq.com/openai/v1x/chat', 'POST'],
+        ['https://api.groq.com/admin', 'GET'],
+      ],
+    },
+    {
+      name: 'refuses non-https and unparseable targets',
+      targets: [
+        ['http://api.groq.com/openai/v1/chat', 'POST'],
+        ['not a url', 'POST'],
+      ],
+    },
+  ];
 
-  test('refuses a sibling path that merely shares a prefix', () => {
-    expect(proxyTargetAllowed('https://api.groq.com/openai/v1x/chat', base, 'POST')).toBe(false);
-    expect(proxyTargetAllowed('https://api.groq.com/admin', base, 'GET')).toBe(false);
-  });
-
-  test('refuses non-https and unparseable targets', () => {
-    expect(proxyTargetAllowed('http://api.groq.com/openai/v1/chat', base, 'POST')).toBe(false);
-    expect(proxyTargetAllowed('not a url', base, 'POST')).toBe(false);
-  });
+  for (const refused of REFUSED_TARGETS) {
+    test(refused.name, () => {
+      for (const [target, method] of refused.targets) {
+        expect(proxyTargetAllowed(target, base, method)).toBe(false);
+      }
+    });
+  }
 
   test('a base with a trailing slash admits the same descendants', () => {
     expect(proxyTargetAllowed(`${base}/chat/completions`, `${base}/`, 'POST')).toBe(true);

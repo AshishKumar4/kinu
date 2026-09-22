@@ -42,10 +42,25 @@ describe('definePromptSection — rendering', () => {
     expect(definePromptSection('t/static', source).render({})).toBe(source);
   });
 
-  test('a repeated slot is one contract entry and renders at every position', () => {
-    const section = definePromptSection('t/repeat', '{{v}}-{{v}}-{{v}}');
-    expect(section.render({ v: 'q' })).toBe('q-q-q');
-  });
+  const RENDERS = [
+    {
+      name: 'a repeated slot is one contract entry and renders at every position',
+      id: 't/repeat', template: '{{v}}-{{v}}-{{v}}', value: 'q', text: 'q-q-q',
+    },
+    {
+      // The distinction that matters: absent is a bug, empty is a decision.
+      name: 'an empty string is a legal value and renders empty',
+      id: 't/empty', template: 'A{{v}}B', value: '', text: 'AB',
+    },
+  ];
+
+  for (const rendered of RENDERS) {
+    test(rendered.name, () => {
+      const section = definePromptSection(rendered.id, rendered.template);
+
+      expect(section.render({ v: rendered.value })).toBe(rendered.text);
+    });
+  }
 
   test('interpolated content is never rewritten — no whitespace normalisation', () => {
     // OpenSeal's engine ends compile() with .replace(/\n{3,}/g,'\n\n') plus an
@@ -92,12 +107,6 @@ describe('definePromptSection — a missing slot fails loudly', () => {
     expect(() => { rendered = section.render({ present: 'x' }); })
       .toThrow(/prompt template "t\/store2": slot \{\{absent\}\} has no value/);
     expect(rendered).toBeNull();
-  });
-
-  test('an empty string is a legal value and renders empty', () => {
-    // The distinction that matters: absent is a bug, empty is a decision.
-    const section = definePromptSection('t/empty', 'A{{v}}B');
-    expect(section.render({ v: '' })).toBe('AB');
   });
 });
 
@@ -189,22 +198,22 @@ describe('TemplateSlots — the typed boundary', () => {
     expect(exact).toBe(true);
   });
 
-  test('a flag used twice is one required key, and never leaks in as a text slot', () => {
-    const exact = true satisfies Exact<
+  // One test, because the contract is type-level: `TemplateSlots<…>` takes its
+  // template as a literal type, so a table cannot drive these the way it drives
+  // a rendering case.
+  test('a flag is one required key however it is written, and no block token joins it', () => {
+    const usedTwice = true satisfies Exact<
       TemplateSlots<'{{#if on}}a{{/if}}{{#if on}}b{{/if}}'>,
       { readonly on: boolean }
     >;
 
-    expect(exact).toBe(true);
-  });
-
-  test('{{else}} and {{/if}} are block syntax, never contract entries', () => {
-    const exact = true satisfies Exact<
+    const withElse = true satisfies Exact<
       TemplateSlots<'{{#if on}}a{{else}}b{{/if}}'>,
       { readonly on: boolean }
     >;
 
-    expect(exact).toBe(true);
+    expect(usedTwice).toBe(true);
+    expect(withElse).toBe(true);
   });
 });
 

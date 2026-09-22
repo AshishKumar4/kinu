@@ -205,17 +205,22 @@ describe('listForkRuns', () => {
     });
   });
 
-  test('a run with a node still going reads as running', () => {
-    const { db, sql, actor, actorId } = freshDb();
-    seedJournalledRun(db, actorId, { rootId: 'r1', task: 'audit', at: 1000, heads: [{ status: 'completed' }, { status: 'running' }] });
-    expect(listForkRuns(sql, actor).items[0].status).toBe('running');
-  });
+  const SECOND_HEAD_DECIDES = [
+    { name: 'a run with a node still going reads as running', second: 'running', status: 'running' },
+    { name: 'nodes that errored without a synthesis read as partial, not completed', second: 'errored', status: 'partial' },
+  ] as const;
 
-  test('nodes that errored without a synthesis read as partial, not completed', () => {
-    const { db, sql, actor, actorId } = freshDb();
-    seedJournalledRun(db, actorId, { rootId: 'r1', task: 'audit', at: 1000, heads: [{ status: 'completed' }, { status: 'errored' }] });
-    expect(listForkRuns(sql, actor).items[0].status).toBe('partial');
-  });
+  for (const decided of SECOND_HEAD_DECIDES) {
+    test(decided.name, () => {
+      const { db, sql, actor, actorId } = freshDb();
+      seedJournalledRun(db, actorId, {
+        rootId: 'r1', task: 'audit', at: 1000,
+        heads: [{ status: 'completed' }, { status: decided.second }],
+      });
+
+      expect(listForkRuns(sql, actor).items[0].status).toBe(decided.status);
+    });
+  }
 
   test("a recursive sub-split is judged by its parent head, as the detail view judges it", () => {
     // HeadJournal.assembleRun prefers the root head row's own status; the list

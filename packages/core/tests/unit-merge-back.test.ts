@@ -130,6 +130,15 @@ interface Harness {
   ) => Promise<MergeBackReport>;
 }
 
+/** A re-verification that records which member was asked and answers clean. */
+function recordClean(asked: string[]) {
+  return async ({ member, baseDigest }: { member: { nodeId: string; diff: Parameters<typeof memberDigestOf>[0] }; baseDigest: string }) => {
+    asked.push(member.nodeId);
+
+    return { memberDigest: memberDigestOf(member.diff), baseDigest, clean: true };
+  };
+}
+
 function harness(initial: Record<string, string> = {}): Harness {
   const origin = fakeOrigin(initial);
   const log = createRecordingLogger();
@@ -328,11 +337,7 @@ describe('sequential-rebase', () => {
     const asked: string[] = [];
 
     const report = await h.run('sequential-rebase', [first, second], {
-      reverify: async ({ member, baseDigest }) => {
-        asked.push(member.nodeId);
-
-        return { memberDigest: memberDigestOf(member.diff), baseDigest, clean: true };
-      },
+      reverify: recordClean(asked),
     });
 
     // Re-verified, and then applied — the rebase is licensed by the re-check, not by
@@ -349,11 +354,7 @@ describe('sequential-rebase', () => {
 
     const asked: string[] = [];
     await h.run('sequential-rebase', [first, second], {
-      reverify: async ({ member, baseDigest }) => {
-        asked.push(member.nodeId);
-
-        return { memberDigest: memberDigestOf(member.diff), baseDigest, clean: true };
-      },
+      reverify: recordClean(asked),
     });
 
     // A sibling that touched no path this member touches does not invalidate its
