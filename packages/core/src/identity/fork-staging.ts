@@ -1,23 +1,6 @@
 /**
- * Fork transfer staging — the durable state of the ONE unpublished fork transfer
- * a target workspace is receiving.
- *
- * WHY THIS IS A TABLE AND NOT INSTANCE STATE. A hosted fork is a SEQUENCE of
- * RPCs into a Durable Object, and an activation is not the transfer's lifetime:
- * the runtime can reset the isolate between two frames while the source keeps
- * sending. So everything the write and the wire decide with — the head the
- * publication needs, the mission the inherited SOUL.md carried, how many rows of
- * each section landed, which frame is next, the rolling digest of the frames that
- * arrived, whether the fork already published — lives in the same SQLite the
- * staged rows do and is committed by the same write that stages them. Held in
- * fields instead, every one of them is gone after a reset, the next frame is
- * refused for belonging to no open transfer, and the source's only answer to a
- * refusal is to destroy the half-built target.
- *
- * Its own module rather than a section of `identity/fork-writer.ts` because both
- * halves of the fork use it — the write half there and the wire in
- * `identity/fork-transfer.ts` — and neither owns it. The DDL lives with every
- * other workspace table, in `identity/schema.ts`.
+ * Durable state of the one unpublished fork transfer a target is receiving. Kept in SQLite, not instance
+ * fields: the DO isolate can reset between frames, and lost state makes the source destroy the target.
  */
 
 import type { SqlExecutor } from '../types/primitives';
@@ -25,23 +8,19 @@ import type { SqlExecutor } from '../types/primitives';
 import type { ForkSnapshotHead } from './fork-rows';
 import type { ForkStagedCounts } from './fork-writer';
 
-/** One unpublished transfer's staging state, as the target stores it. */
 export interface ForkStaging {
-  /** Declared by the `begin` frame. Null until one arrives, which is what makes
-   *  a publication without a head impossible rather than merely wrong. */
+  /** Declared by the `begin` frame; null until then, so a publication without a head is impossible. */
   head: ForkSnapshotHead | null;
   mission: string;
   staged: ForkStagedCounts;
   transferId: string | null;
   expectedSeq: number;
   sectionCursor: number;
-  /** The rolling digest over every frame that has arrived. */
   stream: string;
-  /** The file whose ranges are still arriving, and how many of its bytes the
-   *  sink has taken. */
+  /** The file whose ranges are still arriving, and how many bytes the sink has taken. */
   filePath: string | null;
   fileBytes: number;
-  /** What the source said was coming, checked against `staged` at the commit. */
+  /** What the source declared, checked against `staged` at the commit. */
   declared: ForkStagedCounts;
   published: boolean;
 }
@@ -79,14 +58,8 @@ interface ForkStagingRow {
 }
 
 /**
- * One transfer's staged state, read and written a column at a time.
- *
- * THE COLUMNS ARE OWNED. `ForkTargetWriter` writes the head, the mission, the
- * `staged_*` tally and the staged file paths; `ForkTransferReceiver` writes
- * the transfer id, the cursor, the rolling digest, the file in flight, the
- * declared `want_*` counts and the publication flag. No
- * update here rewrites the whole row, so the two halves cannot clobber each
- * other across an await.
+ * One transfer's staged state, updated a column at a time. `ForkTargetWriter` and `ForkTransferReceiver`
+ * own disjoint columns and no update rewrites the whole row, so they cannot clobber each other across an await.
  */
 export class ForkStagingState {
   constructor(private readonly sql: SqlExecutor) {}
@@ -146,13 +119,7 @@ export class ForkStagingState {
     };
   }
 
-  /**
-   * This row now belongs to THIS fork, and nothing has been taken.
-   *
-   * Every other column falls back to its declared default, so one statement is
-   * the whole reset — including the publication flag, which is what makes a
-   * replacement transfer start from an unpublished target.
-   */
+  /** Claim the row for this fork; every other column (including the publication flag) resets to its default. */
   begin(head: ForkSnapshotHead): void {
     void this.sql`INSERT OR REPLACE INTO fork_transfer
       (id, head_declared, head_source_id, head_source_name, head_cut_message_id, head_cut_created_at)
@@ -160,8 +127,7 @@ export class ForkStagingState {
               ${head.cut.messageId}, ${head.cut.createdAtMs})`;
   }
 
-  /** The wire's half of the same reset: which transfer this is, what it said was
-   *  coming, and a cursor at the frame after the `begin`. */
+  /** The wire's half of the reset: transfer id, declared counts, cursor after `begin`. */
   declare(input: { transferId: string; declared: ForkStagedCounts; expectedSeq: number; stream: string }): void {
     void this.sql`UPDATE fork_transfer SET
       transfer_id = ${input.transferId}, expected_seq = ${input.expectedSeq}, stream = ${input.stream},
@@ -175,8 +141,6 @@ export class ForkStagingState {
       WHERE id = 1`;
   }
 
-  /** One accepted frame: the next seq, the section it left the cursor at, and
-   *  the rolling digest folded through it. */
   advance(input: { expectedSeq: number; sectionCursor: number; stream: string }): void {
     void this.sql`UPDATE fork_transfer SET
       expected_seq = ${input.expectedSeq}, section_cursor = ${input.sectionCursor}, stream = ${input.stream}
@@ -188,8 +152,7 @@ export class ForkStagingState {
     void this.sql`UPDATE fork_transfer SET file_path = ${path}, file_bytes = ${bytes} WHERE id = 1`;
   }
 
-  /** Rows this write has taken, added to what it had taken before. One statement
-   *  over every section, because a column name cannot be bound. */
+  /** Add taken rows for every section in one statement (a column name cannot be bound). */
   count(delta: Partial<ForkStagedCounts>): void {
     void this.sql`UPDATE fork_transfer SET
       staged_agent_config             = staged_agent_config             + ${delta.agentConfig ?? 0},
@@ -208,8 +171,7 @@ export class ForkStagingState {
     void this.sql`UPDATE fork_transfer SET mission = ${mission} WHERE id = 1`;
   }
 
-  /** The transfer landed. The row OUTLIVES the publication on purpose: it is
-   *  what answers a frame re-delivered after the source lost the reply. */
+  /** The transfer landed. The row outlives publication to answer a frame re-delivered after a lost reply. */
   markPublished(): void {
     void this.sql`UPDATE fork_transfer SET published = 1 WHERE id = 1`;
   }

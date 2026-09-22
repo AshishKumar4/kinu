@@ -1,14 +1,3 @@
-/**
- * Create a new workspace — initializes the database and returns the
- * AgentRuntime of its default orchestrator agent.
- *
- * This is the "birth" of a workspace. It creates:
- * - All tables (idempotent)
- * - SOUL.md
- * - The initial scaffold
- * - The workspace identity (stable UUID) — the ownership root
- */
-
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { LLMProviderConfig } from '../llm';
@@ -31,23 +20,15 @@ import { initWorkspaceActorTable, WorkspaceActorDirectory } from './workspace-ac
 export { wrapDatabase, type AgentDatabase } from './inline-primitives';
 
 export interface WorkspaceBirthConfig {
-  /** The ADDRESS: the slug this workspace is reached by (`workspaceSlug`), and
-   *  what `workspace_identity.name` holds for the life of the workspace. */
+  /** The address slug (`workspaceSlug`), held by `workspace_identity.name` for life. */
   name: string;
-  /** The name a PERSON uses, when the birth already knows one. It heads the two
-   *  documents a model reads, and it is deliberately not `name`: a slug is an
-   *  address, and heading SOUL.md with one told every workspace's model that it
-   *  was called `handwrought-walnut-4166c321`. Absent until a first prompt
-   *  titles the workspace (`planWorkspaceTitle`). */
+  /** The human name heading SOUL.md and MEMORY.md; never the slug. Set later by `planWorkspaceTitle` if absent. */
   title?: string;
   purpose: string;
   llm: LLMProviderConfig;
-  /** Custom initial scaffold (defaults to INITIAL_SCAFFOLD_SOURCE) */
   scaffold?: string;
 }
 
-/** The newborn workspace's storage, its actor and the model it speaks to —
- *  everything {@link buildComponents} needs to assemble one runtime. */
 interface WorkspaceComponents {
   readonly db: AgentDatabase;
   readonly sql: SqlExecutor;
@@ -57,7 +38,6 @@ interface WorkspaceComponents {
   readonly llm: LLMProviderConfig;
 }
 
-/** Create VFS, Memory, CraftStore, Schedule from database + LLM config */
 function buildComponents(components: WorkspaceComponents) {
   const { db, sql, execRaw, workspace, actor } = components;
   const vfs = workspace.vfs;
@@ -71,24 +51,8 @@ function buildComponents(components: WorkspaceComponents) {
     actor,
     sql, execRaw, transactionSync: write => db.transaction(write)(), vfs, llm, executor, schedule, shell: workspace.shell,
     memory, craftStore,
-    /**
-     * This runtime does not implement branch spawning, and says so instead of
-     * pretending to.
-     *
-     * A handle whose `explore` answers the literal `'exploration result'` and
-     * whose `generateReflection` answers `'no reflection available'` is
-     * indistinguishable from a real result to every consumer, so every
-     * MCTS-shaped measurement taken on this runtime would score a fabricated
-     * string — two full behavioural eval runs did exactly that before anyone
-     * noticed, because a plausible fake corrupts silently while an absent
-     * implementation is found in seconds.
-     *
-     * `createWorkspace` exists to BIRTH a workspace (cli/src/agent-create.ts
-     * calls it once and closes the database); every running surface opens through
-     * `openWorkspaceCLI` -> `createCLIRuntime`, which registers the real branch
-     * spawner. Reaching this is a misconfiguration, so it fails loudly here
-     * rather than quietly downstream.
-     */
+    // Birth-only runtime: a fake exploration result would be indistinguishable from a real one,
+    // so fail loudly; running surfaces use createCLIRuntime's real spawner.
     spawnBranch: () => {
       throw new Error(
         'createWorkspace\'s birth runtime does not implement spawnBranch — it is for creating a '
@@ -101,13 +65,7 @@ function buildComponents(components: WorkspaceComponents) {
   });
 }
 
-/**
- * Create a new workspace from scratch. Returns the default agent's runtime.
- *
- * Async because the seeds are FILES in a real filesystem: SOUL.md, the initial
- * scaffold and MEMORY.md are written through the same VFS the agent will use,
- * not injected into storage behind it.
- */
+/** Create a workspace and return its default agent's runtime; seeds are written through the agent's VFS. */
 export async function createWorkspace(
   db: AgentDatabase, config: WorkspaceBirthConfig,
 ): Promise<AgentRuntime> {
@@ -122,19 +80,13 @@ export async function createWorkspace(
   initWorkspaceActorTable(execRaw);
   const actor = new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' }).createMain({ name: config.name });
 
-  // The two documents a model reads open under the name a PERSON uses, and
-  // under the product's name while the workspace has none. `config.name` heads
-  // neither: it is the address.
   const titled = config.title?.trim();
   const heading = titled === undefined || titled === '' ? UNTITLED_WORKSPACE_NAME : titled;
 
-  // SOUL.md — the workspace's canonical identity document, embodied by its
-  // default agent. seedSoul also seeds the mission a listing reads.
   await seedSoul(workspace.vfs, sql, { name: heading, mission: config.purpose });
 
   await workspace.vfs.mkdir('scaffold', { recursive: true });
-  // Canonical source lands before the live view: the archive is authoritative
-  // from birth, and agent.js is only its rebuildable view.
+  // The versioned source is authoritative; agent.js is its rebuildable view.
   const scaffoldSource = config.scaffold ?? INITIAL_SCAFFOLD_SOURCE;
   await workspace.vfs.writeFile('scaffold/agent.js.v0', scaffoldSource);
   void sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)

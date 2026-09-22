@@ -1,16 +1,5 @@
-// The durable snapshot of one resolved turn profile.
-//
-// A durable swarm must run under the profile it was STARTED under, however long
-// it lives: catalog edits are for later turns, never an in-flight tree. So
-// before a swarm detaches into a durable job — and therefore before any
-// re-drive of that job can reach today's catalog — the run records ONE frozen
-// copy of what the resolver produced, beside the provenance saying why each
-// slot carries the value it does.
-//
-// This module is the codec for that record: the valibot gate over the frozen
-// {@link ResolvedTurnProfile} shape plus its three source tags. It lives beside
-// the resolver so the two cannot drift; the ledger stores it inside the run's
-// own config blob, and a re-drive reads it back instead of resolving again.
+// Codec for the frozen profile a durable swarm records before detaching, so a re-drive
+// runs under the profile it started with instead of today's catalog.
 
 import * as v from 'valibot';
 
@@ -23,12 +12,7 @@ import { TierIdSchema,
 } from './catalog';
 import { type TierSource, type ResolvedTurnProfile } from './resolve';
 
-/** Why each resolved slot carries the value it does.
- *
- * `role`: the caller named a role (`explicit`) or the swarm rides the caller's
- * own active role (`caller`). `tier` and `preset` reuse the resolver's
- * vocabulary: explicit wins, then the role's default, then the built-in
- * fallback. */
+/** Why each resolved slot carries the value it does. */
 export interface ProfileProvenance {
   readonly roleSource: 'explicit' | 'caller';
   readonly tierSource: TierSource;
@@ -41,10 +25,7 @@ const ProvenanceSchema = v.strictObject({
   presetSource: v.picklist(['explicit', 'role_default']),
 });
 
-/** Valibot mirror of {@link ResolvedTurnProfile} — declared explicitly rather
- *  than derived, because the whole point is a gate that keeps checking the
- *  frozen shape even if resolution later grows a field without this reader
- *  knowing. */
+/** Declared, not derived from {@link ResolvedTurnProfile}, so it keeps checking the frozen shape. */
 const TierSlotSchema = v.strictObject({
   model: v.string(),
   reasoningEffort: v.picklist(REASONING_EFFORTS),
@@ -63,9 +44,7 @@ const ResolvedTurnProfileSchema = v.strictObject({
     model: v.string(),
     reasoningEffort: v.picklist(REASONING_EFFORTS),
   }),
-  /** Every tier slot as resolved for this turn — the table the fixed-tier
-   *  producers route through (model-route.ts). Written out per slot so a
-   *  snapshot missing one fails here rather than at a producer. */
+  /** Per slot, so a snapshot missing one fails here rather than at a producer (model-route.ts). */
   tiers: v.strictObject({
     fast: TierSlotSchema,
     default: TierSlotSchema,
@@ -92,9 +71,7 @@ const SwarmProfileSnapshotSchema: v.GenericSchema<SwarmProfileSnapshot> = v.stri
   sources: ProvenanceSchema,
 });
 
-/** Gate a stored snapshot, naming the offending paths when it fails. A blob
- *  this code wrote that no longer parses means the shape moved without its
- *  reader — refuse loudly rather than resume under a half-read profile. */
+/** Refuse a stored snapshot that no longer parses rather than resume under a half-read profile. */
 export function validateSwarmProfileSnapshot(input: { value: unknown }): SwarmProfileSnapshot {
   const parsed = v.safeParse(SwarmProfileSnapshotSchema, input.value);
 
@@ -107,5 +84,4 @@ export function validateSwarmProfileSnapshot(input: { value: unknown }): SwarmPr
   return parsed.output;
 }
 
-/** Type-level re-exports kept local so callers need one module. */
 export type { ResolvedTurnProfile, RoleId, TierId, TierSource, WorkMode };

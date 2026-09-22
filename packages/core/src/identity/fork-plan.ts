@@ -1,16 +1,6 @@
 /**
- * Workspace fork — which rows one cut selects, and the readers that materialize
- * them.
- *
- * The in-process snapshot in `identity/fork.ts` and the wire in
- * `identity/fork-transfer.ts` are the two halves. Both halves read the rows
- * through the readers below, so there is one transcription of the copy however
- * it travels.
- *
- * "Ancestry" and not "everything older than the cut" is the whole difference
- * between forking a tree and forking a list. A prefix cut cannot express a
- * second child of the same entry, and the public chain is a tree by
- * construction — `conversation_entries.parent_id`.
+ * Workspace fork: which rows one cut selects (the cut entry's ancestry, since the chain is a tree),
+ * and the readers both the in-process snapshot and the wire use.
  */
 
 import * as v from 'valibot';
@@ -27,35 +17,22 @@ import {
   type ForkSessionMessageRow,
 } from './fork-rows';
 
-/** How deep a carried chain may be before the walk refuses it. A public chain
- *  is a tree whose depth is bounded by turns, not by rows; a walk without a
- *  bound is a loop waiting for corrupt parent edges. */
+/** Max carried chain depth; a walk without a bound loops on corrupt parent edges. */
 const FORK_CHAIN_MAX_DEPTH = 10_000;
 
-/**
- * Which rows one cut selects, decided once.
- *
- * Both halves of the fork run this: the in-process snapshot materializes the
- * rows it names, and the wire streams them. It holds identities — never row
- * CONTENT — so the plan of an unbounded workspace is bounded by its chain, and
- * the content stays where the framing can bound it.
- */
+/** Which rows one cut selects, decided once. Holds identities, never row content,
+ *  so the plan is bounded by the chain. */
 export interface ForkConversationPlan {
   readonly cut: { readonly entryId: string; readonly recordedAt: number };
-  /** The cut entry's ancestry, root first. */
   readonly entryIds: readonly string[];
-  /** Carried message ids in the source's own insertion order. */
   readonly messageIds: readonly string[];
-  /** The membership of the cut entry's context revision, by position. Empty
-   *  where no entry in the chain recorded a context. */
+  /** Membership of the cut entry's context revision, by position; empty if no entry recorded one. */
   readonly members: readonly ForkContextMemberRow[];
-  /** Payload files the carried rows reference, relative to the source artifact
-   *  directory, deduplicated. */
+  /** Referenced payload files, relative to the source artifact directory, deduplicated. */
   readonly artifacts: readonly string[];
 }
 
-/** How many rows each conversation section carries. Declared by the source and
- *  checked against what the target took. */
+/** Rows per conversation section, declared by the source and checked against what the target took. */
 export interface ForkConversationCounts {
   sessionMessages: number;
   conversationEntries: number;
@@ -83,18 +60,10 @@ function assertArtifactSegments(relative: string, path: string, root: string): v
   }
 }
 
-/**
- * One payload path as the wire carries it: relative to the artifact directory
- * that owns it.
- *
- * A path outside that directory is REFUSED rather than carried. Payload
- * references are absolute, and an absolute path from another workspace's plane
- * would either be re-rooted into a file the fork does not have or copied
- * verbatim into a directory it does not own.
- */
+/** One payload path relative to its owning artifact directory. A path outside it is refused:
+ *  carrying another workspace's absolute path would re-root or escape into a directory the fork does not own. */
 function forkArtifactRelativePath(path: string, artifactDirectory: string): string {
-  // One trailing-separator rule for both directions, so `/a/b` and `/a/b/`
-  // relativize and re-root identically.
+  // One trailing-separator rule so `/a/b` and `/a/b/` relativize and re-root identically.
   const root = artifactDirectory.endsWith('/') ? artifactDirectory.slice(0, -1) : artifactDirectory;
   const prefix = `${root}/`;
 
@@ -111,8 +80,7 @@ function forkArtifactRelativePath(path: string, artifactDirectory: string): stri
   return relative;
 }
 
-/** The absolute payload path a carried relative path names under one artifact
- *  directory — the source read and the target write, one rule. */
+/** Absolute payload path for a carried relative path under one artifact directory. */
 export function forkArtifactPath(relative: string, artifactDirectory: string): string {
   const root = artifactDirectory.endsWith('/') ? artifactDirectory.slice(0, -1) : artifactDirectory;
   assertArtifactSegments(relative, relative, root);
@@ -120,14 +88,8 @@ export function forkArtifactPath(relative: string, artifactDirectory: string): s
   return `${root}/${relative}`;
 }
 
-/**
- * Which rows the cut at `untilMessageId` selects.
- *
- * Throws if the id is not an entry of the source's chat session — the one
- * failure worth surfacing before a target workspace is created, and the failure
- * the operator hits. The cut resolves against `conversation_entries` because
- * that is the tree the operator's id comes from.
- */
+/** Which rows the cut at `untilMessageId` selects. Throws if the id is not an entry
+ *  of the source's chat session, before any target is created. */
 export function planForkConversation(input: {
   readonly sql: SqlExecutor;
   readonly actorId: string;
@@ -150,9 +112,7 @@ export function planForkConversation(input: {
 
     walked.add(at);
 
-    // Keyed on the actor at every hop: a workspace database holds every actor
-    // it issued, and entry ids are minted per actor, so an unkeyed hop could
-    // climb out of this conversation into a sibling's.
+    // Keyed on the actor at every hop: entry ids are per actor, so an unkeyed hop could climb into a sibling's.
     const row: ForkChainEntryRow | undefined = sql<ForkChainEntryRow>`
       SELECT id, parent_id, recorded_at, metadata_path, context_id, context_revision
       FROM conversation_entries
@@ -183,8 +143,7 @@ export function planForkConversation(input: {
 
   const context = [...chain].reverse().find((entry) => entry.context_id !== null && entry.context_revision !== null);
 
-  // The membership AT that revision, not the live one: an entry pruned after
-  // the cut is still what the cut's model context held.
+  // Membership at that revision, not live: an entry pruned after the cut was still in its context.
   const members = context === undefined || context.context_id === null || context.context_revision === null
     ? []
     : sql<ForkContextMemberRow>`
@@ -212,8 +171,7 @@ export function planForkConversation(input: {
       throw new Error(`fork carries a reference to message ${JSON.stringify(messageId)}, which the source does not have`);
     }
 
-    // An open message is still being streamed by a turn: a fork requires an
-    // idle source, and its stream rows do not cross.
+    // An open message is still streaming; a fork requires an idle source.
     if (row.sealed_at === null) {
       throw new Error(`fork cannot carry message ${JSON.stringify(messageId)}: it is still open in the source`);
     }
@@ -251,7 +209,7 @@ export function planForkConversation(input: {
   };
 }
 
-/** One carried message, whole, with its content path made relative. */
+/** One carried message with its content path made relative. */
 export function forkSessionMessageRow(
   sql: SqlExecutor, actorId: string, messageId: string, artifactDirectory: string,
 ): ForkSessionMessageRow {
@@ -278,7 +236,6 @@ export function forkSessionMessageRow(
   });
 }
 
-/** One carried entry of the public chain. */
 export function forkConversationEntryRow(
   sql: SqlExecutor, actorId: string, entryId: string, artifactDirectory: string,
 ): ForkConversationEntryRow {
@@ -301,7 +258,6 @@ export function forkConversationEntryRow(
   });
 }
 
-/** One carried entry's part references, by position. */
 export function forkConversationEntryPartRows(
   sql: SqlExecutor, actorId: string, entryId: string,
 ): ForkConversationEntryPartRow[] {
@@ -313,8 +269,7 @@ export function forkConversationEntryPartRows(
   `.map((row) => v.parse(ForkConversationEntryPartRowSchema, row));
 }
 
-/** What a plan will produce, per section, counted over the same predicates the
- *  readers select on — so a declaration and a stream cannot disagree. */
+/** Per-section counts over the readers' own predicates, so declaration and stream cannot disagree. */
 export function forkConversationCounts(
   sql: SqlExecutor, actorId: string, plan: ForkConversationPlan,
 ): ForkConversationCounts {

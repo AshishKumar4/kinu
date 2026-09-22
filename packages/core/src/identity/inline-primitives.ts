@@ -1,11 +1,4 @@
-/**
- * Inline primitive implementations over a raw bun:sqlite-style database,
- * backing createWorkspace. The production backends replace
- * Memory/Executor/Schedule with richer adapters (FTS5 MemoryStore, sandboxed
- * executors); the filesystem is already the production one, so nothing about
- * how bytes are stored differs between this path and a deployed agent: both call
- * `createWorkspace` over their host's own SQLite.
- */
+// Inline primitives over a bun:sqlite-style database for createWorkspace; the filesystem is the production one.
 
 import { createWorkspace as createWorkspaceFilesystem, workspaceGenerationStorage } from '../vfs/nimbus-workspace';
 import type { WorkspaceBundle } from '../vfs/nimbus-workspace';
@@ -22,7 +15,6 @@ import { decodeJsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
 import * as v from 'valibot';
 
-/** Database interface — satisfied by bun:sqlite Database */
 export interface AgentDatabase {
   prepare<T = unknown>(sql: string): { all(...params: unknown[]): T[]; run(...params: unknown[]): void };
   exec(sql: string): void;
@@ -30,15 +22,13 @@ export interface AgentDatabase {
   transaction<T>(fn: () => T): () => T;
 }
 
-/** Wrap a database into our SqlExecutor interface */
 export function wrapDatabase(db: AgentDatabase) {
   const sql: SqlExecutor = function <T = unknown>(
     strings: TemplateStringsArray,
     ...values: unknown[]
   ): T[] {
     const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    // The filesystem binds BLOBs as ArrayBuffer (Cloudflare DO storage.sql's
-    // native type); bun:sqlite only binds TypedArrays — coerce.
+    // DO storage.sql binds BLOBs as ArrayBuffer; bun:sqlite only binds TypedArrays.
     const bound = values.map((binding) => (binding instanceof ArrayBuffer ? new Uint8Array(binding) : binding));
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
     const stmt = db.prepare<T>(query);
@@ -54,11 +44,7 @@ export function wrapDatabase(db: AgentDatabase) {
   return { sql, execRaw };
 }
 
-/**
- * The workspace filesystem over a bun:sqlite-style database — Nimbus, the same
- * component a deployed agent runs, so this path and a Durable Object store
- * bytes identically and run the same shell over them.
- */
+/** Nimbus over a bun:sqlite-style database, storing bytes as a Durable Object does. */
 export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
   const sql = {
     exec(query: string, ...bindings: unknown[]) {
@@ -84,19 +70,7 @@ export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
   });
 }
 
-/**
- * LIKE-based memory over the workspace's `memory_chunks` table. Only the QUERY
- * is simplified — the production MemoryStore (agent-utils) answers the same
- * table through FTS5.
- *
- * The rows are written in the production shape, through the production chunker
- * and the DDL's real owner, so there is exactly ONE declaration of
- * `memory_chunks`. A second one — say `(id, path, content)` — lets whichever
- * ran first win, fails every insert against the other shape on `no column
- * named content`, and a catch around that insert reports an indexed file. A
- * fork copies `memory_chunks`, so the same divergence also hands a fork an
- * empty memory index.
- */
+/** LIKE-based search over `memory_chunks`, written through the production chunker and its one DDL owner. */
 export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeReads, 'readRange'>): Memory {
   const { sql } = wrapDatabase(db);
   initMemoryChunkTables(sql);
@@ -111,15 +85,11 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
       await vfs.writeFile(path, existing + content);
     },
     async index(path) {
-      // Asked rather than caught: an unreadable file must not index as an
-      // absent one, or the chunk table silently diverges from the filesystem.
+      // Asked, not caught: an unreadable file must not index as absent.
       if (!await vfs.exists(path)) return;
       const content = v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }));
       const now = Date.now();
-      // Replace the file's chunk set rather than appending to it, and keep the
-      // FTS shadow in step: a row this path adds must be findable by the FTS5
-      // reader as well, or a workspace opened with the real MemoryStore
-      // searches an index that is missing exactly what the inline path wrote.
+      // Replace the chunk set and keep the FTS5 shadow in step for the real MemoryStore.
       void sql`DELETE FROM memory_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_chunks WHERE path = ${path})`;
       void sql`DELETE FROM memory_chunks WHERE path = ${path}`;
 
@@ -179,7 +149,6 @@ export function createInlineExecutor(): Executor {
     languages: ['javascript'],
     async execute(code) {
       try {
-        // Execute the code, not just parse it. Wrap in async IIFE to support await.
         const fn = new Function(`return (async () => { ${code} })()`);
         const result: unknown = await fn();
 
@@ -197,8 +166,7 @@ export function createInlineExecutor(): Executor {
 }
 
 export function createInlineSchedule(sql: SqlExecutor, actor: ActorHandle): Schedule {
-  // A fiber is a LANE OF ONE ACTOR's work, and its name is minted per lane, so
-  // every actor sharing this database presents the same names.
+  // Fiber names repeat across actors, so rows are keyed by actor.
   const actorId = actor.actorId;
 
   return {

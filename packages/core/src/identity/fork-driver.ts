@@ -1,20 +1,4 @@
-/**
- * Workspace fork — the driver.
- *
- * What has to happen before {@link snapshotWorkspaceForFork} runs, and after
- * it: refuse to cut a workspace mid-turn, resolve and validate the fork's name,
- * refuse to overwrite a name someone already asked for, ship the snapshot, and
- * report where it landed. None of that is Durable-Object-shaped, so none of it
- * lives in a DO: written as a DO method, a fork exists on exactly one backend
- * and the payload's query set needs a second, hand-maintained transcription
- * beside it — a SqlExecutor answering the exact SELECTs the copy issues. Core
- * owns both ends of the query set, so there is exactly one transcription.
- *
- * What a backend supplies is a {@link ForkTransport}: how to reach a workspace
- * that does not exist yet. On Cloudflare that is a Durable Object addressed by
- * name and an RPC that carries the snapshot; elsewhere it is a new database.
- * That is the whole of the per-backend difference.
- */
+/** Workspace fork driver: backend-neutral; a backend supplies only a {@link ForkTransport}. */
 
 import { workspaceAddressRefusal, workspaceSlug } from './naming';
 import { forkPointExists } from './conversation-store';
@@ -22,29 +6,12 @@ import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from './actor-handle';
 import type { ForkFileSource } from './fork-transfer';
 
-/**
- * A fork's name is a workspace address like any other: a requested one is
- * admitted against the one address grammar (`naming.ts`), and a generated one is a
- * fresh {@link workspaceSlug} — neutral, and short enough for a preview hostname,
- * where `<source>-fork-<id>` built on a 29-character slug was not. Lineage lives
- * in the fork record, not in the address.
- */
-
 /** How a fork reaches the workspace it is creating. */
 export interface ForkTransport {
-  /**
-   * Whether a workspace by this name already holds data. Consulted only to turn
-   * an EXPLICITLY requested name into an error instead of a silent overwrite; a
-   * generated name that somehow collides falls through, because failing a fork
-   * over a random-id collision helps nobody.
-   *
-   * A transport that cannot answer cheaply should answer `false` rather than
-   * throw: the delivery below will surface a real problem anyway, and blocking
-   * a fork on a brittle pre-check is worse than a late error.
-   */
+  /** Whether a workspace by this name already holds data. Checked only for an
+   *  explicitly requested name; a transport that cannot answer cheaply returns `false`. */
   occupied(name: string): Promise<boolean>;
-  /** Stream the source state into the named workspace and report where and at
-   *  which cut point it landed. */
+  /** Stream the source state into the named workspace; report where and at which cut point it landed. */
   deliver(name: string, source: {
     sql: SqlExecutor; vfs: ForkFileSource; untilMessageId: string; artifactDirectory: string;
   }): Promise<{
@@ -57,26 +24,19 @@ export interface ForkDriverDeps {
   readonly vfs: ForkFileSource;
   /** The source workspace's own SQL — where the snapshot is read from. */
   sql: SqlExecutor;
-  /** Where the source actor's payload files live. The carried conversation
-   *  references them by absolute path, so a delivery without it cannot tell a
-   *  payload of this actor from a path it must refuse. */
+  /** Source payload directory; the carried conversation references payloads by absolute path. */
   readonly artifactDirectory: string;
-  /** The actor whose transcript is being cut. The fork point is looked up in
-   *  THIS actor's rows: a workspace database holds every actor it issued, and
-   *  message ids are minted per actor, so an unscoped preflight would admit a
-   *  cut at a sibling's message and then snapshot an empty chain. */
+  /** The actor whose transcript is cut. Message ids are per actor, so an unscoped
+   *  preflight could admit a cut at a sibling's message. */
   readonly actor: ActorHandle;
   transport: ForkTransport;
-  /** The source workspace's name, the stem of a generated fork name. */
   sourceName: string;
-  /** True while a turn is in flight. A cut taken mid-turn would snapshot a
-   *  half-written conversation, so the fork is refused rather than skewed. */
+  /** True while a turn is in flight; a mid-turn cut would snapshot a half-written conversation. */
   busy(): boolean;
 }
 
 /** Where the fork landed. The backend adds its own addressing (a URL, a path). */
 export interface ForkOutcome {
-  /** The new workspace's id, as the transport reports it. */
   workspaceId: string;
   name: string;
   /** Timestamp of the message the fork was cut at. */
@@ -84,13 +44,8 @@ export interface ForkOutcome {
 }
 
 /**
- * Fork this workspace at a message, producing a new workspace whose messages,
- * SOUL.md, memory, crafted tools and config are copied and whose evolution
- * state (search tree, scaffold, craft scores) starts clean.
- *
- * Throws — rather than returning an error shape — because every failure here is
- * a caller mistake worth surfacing verbatim: a busy agent, an unknown cut
- * point, a malformed name, a name already taken.
+ * Fork at a message: copies messages, SOUL.md, memory, crafted tools and config; evolution state starts clean.
+ * Throws on caller mistakes (busy agent, unknown cut point, bad or taken name).
  */
 export async function forkWorkspace(
   deps: ForkDriverDeps,

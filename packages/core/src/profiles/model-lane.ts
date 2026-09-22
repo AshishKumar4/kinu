@@ -17,8 +17,7 @@ export function createRoutedModelLane(actor: ActorReference, source: ProfileRout
       return runOperationProfile(context, () => binding.llm(resolveModelRoute(source, context.profile)).complete(prompt));
     },
     stream(options) {
-      // The issuer is whoever CALLS stream(): an async generator body would
-      // not see this scope until the first next(), which is the consumer's.
+      // Capture the caller's scope now; a generator body first runs in the consumer's next().
       const issued = currentOperationProfile(actor);
 
       return operationProfileStream((async function* () {

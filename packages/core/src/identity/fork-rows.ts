@@ -1,45 +1,18 @@
-/**
- * Workspace fork — the row shapes, and nothing else.
- *
- * Declarations only: the reads in `identity/fork-plan.ts`, the wire in
- * `identity/fork-transfer.ts` and the write in `identity/fork-writer.ts` bring
- * the queries.
- */
+/** Workspace fork row shapes; queries live in fork-plan, fork-transfer and fork-writer. */
 
 import * as v from 'valibot';
 
-/**
- * What a fork copies, as valibot schemas.
- *
- * These are the CANONICAL declaration. Every TypeScript type below is inferred
- * from them, and `identity/fork-transfer.ts` builds its frame union out of the
- * same row schemas — so the rows a fork reads, the rows it puts on a wire and
- * the rows it writes are one authority with no second transcription to drift.
- *
- * Everything is JSON-serializable, so a snapshot also survives a transport that
- * only carries structured clones.
- */
+// Canonical declaration: TS types and the fork-transfer frame union derive from these schemas. All JSON-serializable.
 
-/** The source workspace's identity and the entry the fork is cut at — the
- *  fork's lineage parent, and its boundary. */
+/** The source identity and the cut entry: the fork's lineage parent and boundary. */
 export const ForkSnapshotHeadSchema = v.object({
   source: v.object({ workspaceId: v.string(), workspaceName: v.string() }),
   cut: v.object({ messageId: v.string(), createdAtMs: v.number() }),
 });
 
 /**
- * One carried message, whole: its identity, its envelope and its sealed
- * content.
- *
- * `request_id`, `output_slot` and `ingress_id` are deliberately absent: a
- * request is a source-side execution record that does not cross, and an ingress
- * id is the admission identity of a turn the fork never ran. The target row
- * carries null for all three.
- *
- * `content_path` crosses RELATIVE to the source actor's artifact directory and
- * is re-rooted under the target's, because an absolute path names a directory
- * that belongs to the workspace it came from. Only a sealed message crosses: an
- * open one still streams, and a fork requires an idle source.
+ * One carried sealed message. `request_id`, `output_slot` and `ingress_id` do not cross (target stores null);
+ * `content_path` crosses relative to the source artifact directory and is re-rooted under the target's.
  */
 export const ForkSessionMessageRowSchema = v.object({
   message_id: v.string(),
@@ -54,14 +27,8 @@ export const ForkSessionMessageRowSchema = v.object({
   content_digest: v.nullable(v.string()),
 });
 
-/**
- * One entry of the carried public chain, root first.
- *
- * `session_id` is not carried: the chain is by definition the chat session's,
- * and the write stamps it. The context columns are not carried either — they
- * name revisions of the SOURCE's context history, which does not cross; the
- * write points the cut entry at the fork's own fresh context instead.
- */
+/** One entry of the carried chain, root first. Session and context columns do not cross;
+ *  the write stamps the session and points the cut entry at the fork's fresh context. */
 export const ForkConversationEntryRowSchema = v.object({
   id: v.string(),
   parent_id: v.nullable(v.string()),
@@ -84,9 +51,7 @@ export const ForkConversationEntryPartRowSchema = v.object({
   text_length: v.nullable(v.number()),
 });
 
-/** One member of the working context the cut entry recorded, at the revision it
- *  recorded. Positions are preserved: the membership IS the model's message
- *  order. */
+/** One member of the cut entry's working context; positions are the model's message order. */
 export const ForkContextMemberRowSchema = v.object({
   entry_id: v.string(),
   position: v.number(),
@@ -104,7 +69,7 @@ export const ForkMemoryChunkRowSchema = v.object({
   updated_at: v.number(),
 });
 
-/** One crafted tool, snapshotted — the fork evolves it independently. */
+/** One crafted tool, snapshotted; the fork evolves it independently. */
 export const ForkCraftedToolRowSchema = v.object({
   name: v.string(),
   description: v.string(),
@@ -115,25 +80,15 @@ export const ForkCraftedToolRowSchema = v.object({
   updated_at: v.number(),
 });
 
-/** One actor_config row. The shell-approval authority keys never appear here:
- *  they are withheld at the READ, in {@link snapshotWorkspaceForFork}. */
+/** One actor_config row; shell-approval keys are withheld at the read in {@link snapshotWorkspaceForFork}. */
 export const ForkConfigRowSchema = v.object({ key: v.string(), value: v.string() });
 
-/** One inherited file. A fork carries FILES, read through the workspace
- *  filesystem rather than lifted out of one storage engine's row encoding. */
+/** One inherited file, read through the workspace filesystem. */
 export const ForkFileSchema = v.object({ path: v.string(), content: v.string() });
 
 /**
- * The whole of what a fork copies, in one value.
- *
- * This is what the IN-PROCESS fork uses, where both databases are open in the
- * same process and there is no wire to bound. A hosted fork never materializes
- * it on either side — see `identity/fork-transfer.ts`.
- *
- * `artifacts` are the payload files the carried rows reference, by a path
- * relative to the artifact directory that owns them; `files` are workspace
- * paths. Two lists rather than one flagged list, because the two paths are read
- * against different roots and a single list would make that depend on a field.
+ * Everything a fork copies, for the in-process fork; a hosted fork streams instead (fork-transfer.ts).
+ * `artifacts` are relative to the owning artifact directory, `files` are workspace paths.
  */
 export const ForkSnapshotSchema = v.object({
   ...ForkSnapshotHeadSchema.entries,
