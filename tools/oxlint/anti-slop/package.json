@@ -3,7 +3,8 @@
   "type": "module",
   "dependencies": {
     "@oxlint/plugins": "1.78.0",
-    "valibot": "^1.4.1"
+    "valibot": "^1.4.1",
+    "sql-parser-cst": "0.42.1"
   },
   "devDependencies": {
     "oxlint": "1.78.0"

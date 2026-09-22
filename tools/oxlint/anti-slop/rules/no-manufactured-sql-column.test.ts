@@ -28,6 +28,14 @@ tester.run("anti-slop/no-manufactured-sql-column", noManufacturedSqlColumnRule, 
     "const one = sql`SELECT 1 AS v`;",
     // A double-quoted name is an identifier, so it reads a column; only a single-quoted text is a value.
     "const rows = sql`SELECT \"key\" AS name, value FROM capability_rows`;",
+    // A hole in an identifier position is a name the caller supplies; the statement still parses.
+    "const rows = sql`SELECT bytes FROM ${table} WHERE id = ${id}`;",
+    "const rows = sql`SELECT COUNT(*) AS n FROM ${table} WHERE ${column} != ${value}`;",
+    // A CTE whose body is a probe, feeding a select that reads its columns.
+    "const rows = sql`WITH held AS (SELECT 1 AS present FROM t WHERE id = ${id}) SELECT h.present, u.name FROM held h JOIN u`;",
+    // Prose that begins like a statement is not tagged SQL and is passed over.
+    "const hint = 'select the rows you want from the list';",
+    "const label = `select ${count} rows from the table`;",
   ],
   invalid: [
     {
@@ -54,6 +62,21 @@ tester.run("anti-slop/no-manufactured-sql-column", noManufacturedSqlColumnRule, 
       name: "the fake inside a subquery",
       code: "const rows = sql`SELECT * FROM (SELECT id, 'open' AS operation FROM parts) WHERE id = ${id}`;",
       errors: [error],
+    },
+    {
+      name: "a CAST of NULL is still a planted value",
+      code: "const rows = sql`SELECT id, CAST(NULL AS TEXT) AS parent_id FROM nodes`;",
+      errors: [error],
+    },
+    {
+      name: "a bound parameter aliased as a column is a value the caller already knows",
+      code: "const rows = sql`SELECT id, ${kind} AS kind FROM nodes`;",
+      errors: [error],
+    },
+    {
+      name: "tagged SQL that does not parse is its own finding",
+      code: "const rows = sql`SELECT id FROM nodes WHERE ${clause} ORDER BY`;",
+      errors: [{ messageId: "unparsedStatement" }],
     },
   ],
 });
