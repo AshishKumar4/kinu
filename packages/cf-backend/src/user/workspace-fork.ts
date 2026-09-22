@@ -72,13 +72,13 @@ export async function deliverCloudFork(input: {
 
   if (!registration.reserved) throw new Error(`agent name already exists: "${input.name}"`);
 
-  const destroy = async <Cause>(cause: Cause): Promise<never> => {
+  const destroy = async (thrown: { cause: unknown }): Promise<never> => {
     try { await input.registry.removeWorkspace(input.caller, input.name, input.ownerUserId); }
     catch (rollback) {
-      throw new AggregateError([cause, rollback], `fork creation failed and cleanup also failed for "${input.name}"`, { cause: rollback });
+      throw new AggregateError([thrown.cause, rollback], `fork creation failed and cleanup also failed for "${input.name}"`, { cause: rollback });
     }
 
-    throw cause;
+    throw thrown.cause;
   };
 
   let landed: Extract<ForkFrameAck, { status: 'published' }> | null = null;
@@ -111,9 +111,9 @@ export async function deliverCloudFork(input: {
 
       if (!held) throw new Error(`the reservation for "${input.name}" is no longer held by this transfer`);
     }
-  } catch (cause) { return destroy(cause); }
+  } catch (cause) { return destroy({ cause }); }
 
-  if (!landed) return destroy(new Error(`fork transfer to "${input.name}" ended before the target published it`));
+  if (!landed) return destroy({ cause: new Error(`fork transfer to "${input.name}" ended before the target published it`) });
 
   try {
     await input.registry.publishWorkspaceReservation(
@@ -121,5 +121,5 @@ export async function deliverCloudFork(input: {
     );
 
     return { workspaceId: landed.agentId, forkPointMs: landed.forkPointMs };
-  } catch (cause) { return destroy(cause); }
+  } catch (cause) { return destroy({ cause }); }
 }

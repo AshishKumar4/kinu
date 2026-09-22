@@ -1,6 +1,15 @@
 import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
 import type { OAuthClientMetadata, StoredOAuthClientInformation } from '@modelcontextprotocol/client';
 
+export interface RegisteredAppProviderInit {
+  storage: DurableObjectStorage;
+  clientName: string;
+  baseRedirectUrl: string;
+  clientId: string;
+  clientSecret: string;
+  scope: string | undefined;
+}
+
 /** An OAuth client this deployment already registered at the vendor — the
  *  `oauth-app` preset kind. The SDK's auth() skips dynamic registration the
  *  moment `clientInformation()` answers with a registration (auth.js:226+),
@@ -21,16 +30,14 @@ import type { OAuthClientMetadata, StoredOAuthClientInformation } from '@modelco
  *  every DO it reaches would register DCR-shaped providers. `user-do.ts` is
  *  only ever imported after the stub lands, so the subclass lives beside it. */
 export class RegisteredAppOAuthClientProvider extends DurableObjectOAuthClientProvider {
-  constructor(
-    storage: DurableObjectStorage,
-    clientName: string,
-    baseRedirectUrl: string,
-    clientId: string,
-    private readonly clientSecret: string,
-    private readonly scope: string | undefined,
-  ) {
-    super(storage, clientName, baseRedirectUrl);
-    this.clientId = clientId;
+  private readonly clientSecret: string;
+  private readonly scope: string | undefined;
+
+  constructor(init: RegisteredAppProviderInit) {
+    super(init.storage, init.clientName, init.baseRedirectUrl);
+    this.clientId = init.clientId;
+    this.clientSecret = init.clientSecret;
+    this.scope = init.scope;
   }
 
   override get clientMetadata(): OAuthClientMetadata {

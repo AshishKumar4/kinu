@@ -110,18 +110,18 @@ export async function claimOwnedWorkspace(
     claim = await retryTransientDO('claimOwner', () => agent.claimOwner(userId));
   } catch (e) {
     const message = renderThrownChain({ cause: e });
+
+    if (/owned by a different user/i.test(message)) return { ok: false, status: 403, error: message };
+
     const transient = classifyTransientDO({ cause: e });
-    const status = /owned by a different user/i.test(message) ? 403 : transient !== null ? 503 : 500;
 
-    if (status !== 403) {
-      diagnostics.failure('workspace.claim_owner_failed', toKinuError({
-        doing: 'claiming workspace ownership',
-        cause: e,
-        otherwise: 'unavailable',
-      }), { workspace: workspaceName, transient: transient ?? 'none' });
-    }
+    diagnostics.failure('workspace.claim_owner_failed', toKinuError({
+      doing: 'claiming workspace ownership',
+      cause: e,
+      otherwise: 'unavailable',
+    }), { workspace: workspaceName, transient: transient ?? 'none' });
 
-    return { ok: false, status, error: message };
+    return { ok: false, status: transient === null ? 500 : 503, error: message };
   }
 
   // Reconcile the workspace's identity with the registry on every touch. The

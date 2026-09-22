@@ -189,6 +189,43 @@ import {
 /** How every Drive method answers: the value, or the folded failure. */
 export type DriveAnswer<Value> = { readonly ok: true; readonly value: Value } | ({ readonly ok: false } & DriveFailure);
 
+/** One bounded chunk of a Drive upload. `offset === 0` (re)starts the transfer
+ *  and fixes its target; every later chunk is checked against that target. */
+export interface DriveChunkWrite {
+  target: DriveUploadTarget;
+  transferId: string;
+  offset: number;
+  chunk: Uint8Array;
+  final: boolean;
+}
+
+/** An approver's answer on one release approval. */
+export interface ReleaseApprovalDecision {
+  approvalId: string;
+  decision: 'approved' | 'rejected';
+  approvedBy: string;
+  note?: string | null;
+}
+
+interface DeviceConsentCheck {
+  agentName: string;
+  deviceId: string;
+  method: string;
+  params: JsonValue[];
+  /** Present when the caller is the named workspace itself — the card then
+   *  asks for THE WORKSPACE's binding, which is what "always" records. */
+  workspaceName?: string;
+}
+
+/** Codepoint order, so the surface this sorts hashes the same every time. */
+function byToolKey(a: { toolKey: string }, b: { toolKey: string }): number {
+  if (a.toolKey < b.toolKey) return -1;
+
+  if (a.toolKey > b.toolKey) return 1;
+
+  return 0;
+}
+
 /** A pasted SKILL.md rides one RPC argument, so it stays far under the
  *  structured-clone ceiling the chunked rail exists for. */
 const DRIVE_PASTED_SKILL_MAX_BYTES = 256 * 1024;
@@ -475,8 +512,6 @@ function bytesFromBase64(data: string): Uint8Array {
 
   return bytes;
 }
-
-const LooseObjectSchema = v.looseObject({});
 
 const NullableStringArraySchema = v.nullable(v.array(v.string()));
 
@@ -1658,7 +1693,7 @@ export class UserDO extends Agent<Env> {
       name,
     )[0];
 
-    return !!row;
+    return row !== undefined;
   }
 
   // ── Peer-messaging grants (cross-owner, default deny) ──────────────
@@ -1674,7 +1709,7 @@ export class UserDO extends Agent<Env> {
       senderUserId, senderAgentName,
     )[0];
 
-    return !!row;
+    return row !== undefined;
   }
 
   // ── Browser sessions ───────────────────────────────────────────────
@@ -2528,7 +2563,7 @@ export class UserDO extends Agent<Env> {
       // fix it, and the fix is one command. Every other failure — a refused
       // grant, a machine that cannot sandbox, a dropped socket — already
       // carries its own words and is passed through with the chain intact.
-      if (isDeviceUnknownMethodError(cause)) {
+      if (isDeviceUnknownMethodError({ cause })) {
         throw new Error(`${this.deviceLabel(target)} runs an older Kinu. Run \`kinu update\` on that machine.`, { cause });
       }
 
@@ -2681,9 +2716,13 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  override async webSocketError<ErrorValue>(ws: WebSocket, error: ErrorValue): Promise<void> {
+  // The platform's own argument list, forwarded unchanged: what workerd hands a
+  // WebSocket error handler is the runtime's to describe, and nothing here reads it.
+  override async webSocketError(...call: Parameters<NonNullable<Agent<Env>['webSocketError']>>): Promise<void> {
+    const [ws] = call;
+
     // Device sockets clean up in webSocketClose, which the runtime fires next.
-    if (!deviceIdFromSocket(ws)) return this.lifecycle.webSocketError(ws, error);
+    if (!deviceIdFromSocket(ws)) return this.lifecycle.webSocketError(...call);
   }
 
   /** Mint a device + connect token. The authenticated CLI receives the raw
@@ -2696,10 +2735,10 @@ export class UserDO extends Agent<Env> {
     const token = `pdt_${randomToken(32)}`;
     const tokenHash = await sha256Hex(token);
     const now = Date.now();
-    const trimmedLabel = label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH);
+    const trimmedLabel = label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
     this.sqlx(
       `INSERT INTO user_devices (id, token_hash, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-      deviceId, tokenHash, trimmedLabel || 'Your PC', now, now + DEVICE_TOKEN_TTL_MS,
+      deviceId, tokenHash, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_TOKEN_TTL_MS,
     );
 
     return { deviceId, token };
@@ -2944,9 +2983,11 @@ export class UserDO extends Agent<Env> {
     const stopping = method === DEVICE_CANCEL_METHOD;
     const ownerRead = opts?.agentName === undefined && Object.hasOwn(CONSENT_FREE_DEVICE_METHODS, method);
 
-    const consentAgent = stopping ? undefined : (resolved.kind === 'workspace'
-      ? (ownerRead ? undefined : resolved.workspace)
-      : opts?.agentName);
+    let consentAgent: string | undefined;
+
+    if (!stopping && !(resolved.kind === 'workspace' && ownerRead)) {
+      consentAgent = resolved.kind === 'workspace' ? resolved.workspace : opts?.agentName;
+    }
 
     const deviceId = await this.resolveDeviceForCall(opts?.deviceId, consentAgent);
 
@@ -2956,10 +2997,10 @@ export class UserDO extends Agent<Env> {
       // Consent is keyed on the PROVEN workspace, never the claimed name — an
       // agent cannot ride a sibling workspace's remembered grant. The three
       // closed checkpoint reads above are the only consent-free methods.
-      const consent = await this.checkDeviceConsent(
-        consentAgent, deviceId, method, params,
-        resolved.kind === 'workspace' ? resolved.workspace : undefined,
-      );
+      const consent = await this.checkDeviceConsent({
+        agentName: consentAgent, deviceId, method, params,
+        workspaceName: resolved.kind === 'workspace' ? resolved.workspace : undefined,
+      });
 
       if (!consent.allowed) throw new Error(consent.reason);
     }
@@ -3401,12 +3442,9 @@ export class UserDO extends Agent<Env> {
    * workspace to the machine, and the machine's own Sandbox switch decides
    * what a bound workspace may then touch.
    */
-  private async checkDeviceConsent(
-    agentName: string, deviceId: string, method: string, params: JsonValue[],
-    /** Present when the caller is the named workspace itself — the card then
-     *  asks for THE WORKSPACE's binding, which is what "always" records. */
-    workspaceName?: string,
-  ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
+  private async checkDeviceConsent(check: DeviceConsentCheck): Promise<{ allowed: true } | { allowed: false; reason: string }> {
+    const { agentName, deviceId, method, params, workspaceName } = check;
+
     const bound = this.getDeviceBinding(agentName, deviceId);
 
     if (bound === 'allow') return { allowed: true };
@@ -3882,16 +3920,10 @@ export class UserDO extends Agent<Env> {
     return this.releases().requestApproval(changeId, approvalType);
   }
 
-  async decideReleaseApproval(
-    caller: UserCaller,
-    approvalId: string,
-    decision: 'approved' | 'rejected',
-    approvedBy: string,
-    note?: string | null,
-  ): Promise<ReleaseApproval> {
+  async decideReleaseApproval(caller: UserCaller, input: ReleaseApprovalDecision): Promise<ReleaseApproval> {
     await this.requireTier(caller, 'release');
 
-    return this.releases().decideApproval(approvalId, decision, approvedBy, note);
+    return this.releases().decideApproval(input.approvalId, input.decision, input.approvedBy, input.note);
   }
 
   async recordReleaseDeployment(
@@ -3970,6 +4002,25 @@ export class UserDO extends Agent<Env> {
     return this.experienceLibrary().get(id);
   }
 
+  /** Cross-DO wire forms. `ExperiencePayload` carries a `JsonValue`, and a
+   *  stub's RPC mapping over that recursion exceeds TypeScript's instantiation
+   *  depth, so every holder of a `UserDO` stub reaches the library through
+   *  these and reads them with `decodeJsonWire`. */
+  async publishExperienceWire(caller: UserCaller, candidate: PublishableCandidate): Promise<string> {
+    return JSON.stringify(await this.publishExperience(caller, candidate));
+  }
+
+  async searchExperienceWire(
+    caller: UserCaller,
+    options: { query?: string; kind?: ExperienceKind; limit?: number } = {},
+  ): Promise<string> {
+    return JSON.stringify(await this.searchExperience(caller, options));
+  }
+
+  async getExperienceEntryWire(caller: UserCaller, id: string): Promise<string> {
+    return JSON.stringify(await this.getExperienceEntry(caller, id));
+  }
+
   // ── Credentials ────────────────────────────────────────────────────
 
   async listCredentials(caller: UserCaller): Promise<CredentialSummary[]> {
@@ -3994,7 +4045,7 @@ export class UserDO extends Agent<Env> {
     return this.requireTier(caller, isModelInferenceCredentialKey(key) ? 'credentials.model' : 'credentials.other');
   }
 
-  async setCredential<CredentialInput>(caller: UserCaller, key: string, credentialJson: CredentialInput): Promise<void> {
+  async setCredential(caller: UserCaller, key: string, credentialJson: Credential | JsonValue): Promise<void> {
     await this.requireTier(caller, 'credentials.other');
     validateCredentialKey(key);
 
@@ -4433,7 +4484,7 @@ export class UserDO extends Agent<Env> {
       const refreshToken = cred.refreshToken;
 
       if (!refreshToken) return null;
-      const needRefresh = opts?.forceRefresh || codexAccessTokenExpiring(cred.accessToken);
+      const needRefresh = opts?.forceRefresh === true || codexAccessTokenExpiring(cred.accessToken);
 
       if (needRefresh) {
         const refreshed = await this.refreshCodexInternal({ ...cred, refreshToken });
@@ -4448,7 +4499,7 @@ export class UserDO extends Agent<Env> {
     }
 
     if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
-      const needRefresh = opts?.forceRefresh || isCloudflareCredentialExpiring(cred);
+      const needRefresh = opts?.forceRefresh === true || isCloudflareCredentialExpiring(cred);
 
       if (needRefresh) {
         if (!cred.refreshToken) return null;
@@ -5130,11 +5181,11 @@ export class UserDO extends Agent<Env> {
   private readonly driveUploads = new Map<string, { readonly target: DriveUploadTarget; readonly upload: ChunkedUpload }>();
   private readonly driveDownloads = new Map<string, { readonly path: string; readonly bytes: Uint8Array }>();
 
-  async drive_writeChunk(
-    caller: UserCaller, rawTarget: DriveUploadTarget, transferId: string, offset: number, chunk: Uint8Array, final: boolean,
-  ): Promise<DriveAnswer<DriveUploadOutcome>> {
+  async drive_writeChunk(caller: UserCaller, write: DriveChunkWrite): Promise<DriveAnswer<DriveUploadOutcome>> {
+    const { transferId, offset } = write;
+
     return this.driveOp(caller, async (drive) => {
-      const target = v.parse(DriveUploadTargetSchema, rawTarget);
+      const target = v.parse(DriveUploadTargetSchema, write.target);
 
       if (!transferId) throw new KinuError('bad_input', 'upload transfer id required');
       let row = this.driveUploads.get(transferId);
@@ -5146,7 +5197,7 @@ export class UserDO extends Agent<Env> {
         throw new KinuError('bad_input', 'file transfer out of sync: no matching open upload');
       }
 
-      const step = row.upload.chunk(offset, chunk, final);
+      const step = row.upload.chunk(offset, write.chunk, write.final);
 
       if (row.upload.done) this.driveUploads.delete(transferId);
 
@@ -5461,10 +5512,14 @@ export class UserDO extends Agent<Env> {
 
     if (callbackUrl) {
       const authProvider = appCredentials
-        ? new RegisteredAppOAuthClientProvider(
-            this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
-            appCredentials.clientId, appCredentials.clientSecret, preset?.scope,
-          )
+        ? new RegisteredAppOAuthClientProvider({
+            storage: this.ctx.storage,
+            clientName: USER_MCP_CLIENT_NAME,
+            baseRedirectUrl: callbackUrl,
+            clientId: appCredentials.clientId,
+            clientSecret: appCredentials.clientSecret,
+            scope: preset?.scope,
+          })
         : new DurableObjectOAuthClientProvider(
             this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
           );
@@ -5558,11 +5613,8 @@ export class UserDO extends Agent<Env> {
       const status = mapConnectionStatus(conn?.connectionState);
       const allowed = parseAllowedTools(r.allowed_tools);
 
-      const toolsCount = conn?.tools
-        ? (allowed
-            ? conn.tools.filter((t: { name: string }) => allowed.includes(t.name)).length
-            : conn.tools.length)
-        : 0;
+      const tools = conn?.tools ?? [];
+      const toolsCount = allowed ? tools.filter((t: { name: string }) => allowed.includes(t.name)).length : tools.length;
 
       // authUrl is set on the auth provider while AUTHENTICATING. The SDK
       // also persists it on the storage row; expose only if currently
@@ -5601,9 +5653,9 @@ export class UserDO extends Agent<Env> {
    *  server calls back to during OAuth — it determines the callback URL.
    *  The routes layer derives it from the inbound request's `Origin` /
    *  `Host` header — UserDO doesn't see the request. */
-  async userMcp_add<McpInput>(
+  async userMcp_add(
     caller: UserCaller,
-    input: McpInput,
+    input: JsonValue,
     publicOrigin: string,
   ): Promise<{ id: string; authUrl: string | null }> {
     await this.requireTier(caller, 'mcp.manage');
@@ -5666,10 +5718,14 @@ export class UserDO extends Agent<Env> {
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
 
     const authProvider = appCredentials
-      ? new RegisteredAppOAuthClientProvider(
-          this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
-          appCredentials.clientId, appCredentials.clientSecret, preset?.scope,
-        )
+      ? new RegisteredAppOAuthClientProvider({
+          storage: this.ctx.storage,
+          clientName: USER_MCP_CLIENT_NAME,
+          baseRedirectUrl: callbackUrl,
+          clientId: appCredentials.clientId,
+          clientSecret: appCredentials.clientSecret,
+          scope: preset?.scope,
+        })
       : new DurableObjectOAuthClientProvider(
           this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
         );
@@ -5757,11 +5813,11 @@ export class UserDO extends Agent<Env> {
    *  needs a registration, and hydration is the one place that decides it.
    *  `serverUrl` / `transport` changes still require remove + re-add (the SDK
    *  doesn't support live re-targeting). */
-  async userMcp_update<Patch>(caller: UserCaller, id: string, patch: Patch): Promise<void> {
+  async userMcp_update(caller: UserCaller, id: string, patch: JsonValue): Promise<void> {
     await this.requireTier(caller, 'mcp.manage');
 
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
-    const parsedPatch = v.safeParse(LooseObjectSchema, patch);
+    const parsedPatch = v.safeParse(JsonObjectSchema, patch);
 
     if (!parsedPatch.success) throw new Error('patch must be a JSON object.');
     const p = parsedPatch.output;
@@ -5951,7 +6007,7 @@ export class UserDO extends Agent<Env> {
     // cache hashes: `Object.entries(connections)` order is whatever the SDK's
     // map happens to hold, so an unsorted surface re-hashes — and rebuilds every
     // tool closure — for a reason nobody changed.
-    out.sort((a, b) => (a.toolKey < b.toolKey ? -1 : a.toolKey > b.toolKey ? 1 : 0));
+    out.sort(byToolKey);
 
     return JSON.stringify({ descriptors: out, unavailable } satisfies McpToolSurface);
   }

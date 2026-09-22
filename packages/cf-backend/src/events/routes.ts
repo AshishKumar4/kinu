@@ -405,7 +405,8 @@ interface WebhookHeaders {
 
 function extractHeaders(request: Request): WebhookHeaders {
   const out: WebhookHeaders = {};
-  request.headers.forEach((value, key) => { out[key] = value; });
+
+  for (const [key, value] of request.headers) out[key] = value;
 
   return out;
 }

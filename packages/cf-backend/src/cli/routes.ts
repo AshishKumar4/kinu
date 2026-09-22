@@ -80,7 +80,9 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (method === 'GET' || method === 'HEAD') {
     const contentType = publishedDownloadType(url.pathname);
 
-    if (contentType !== null) return cliDownloadAssetResponse(request, env, url.pathname, contentType, method === 'HEAD');
+    if (contentType !== null) {
+      return cliDownloadAssetResponse({ request, env, pathname: url.pathname, contentType, head: method === 'HEAD' });
+    }
   }
 
   if (url.pathname === '/cli/auth' && method === 'GET') {
@@ -120,9 +122,12 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     const body = await safeJson(request, v.object({ deviceName: v.optional(v.string()) }));
 
     try {
-      return json(await startCliAuth(env, url.origin, approvalOrigin(env, url), body?.deviceName, clientKey(request)));
+      return json(await startCliAuth(env, {
+        origin: url.origin, approvalOrigin: approvalOrigin(env, url),
+        deviceName: body?.deviceName, clientKey: clientKey(request),
+      }));
     } catch (e) {
-      return cliAuthError(toError(e));
+      return cliAuthError(toError({ cause: e }));
     }
   }
 
@@ -134,7 +139,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     try {
       return json(await pollCliAuth(env, body.deviceToken, clientKey(request)));
     } catch (e) {
-      return cliAuthError(toError(e));
+      return cliAuthError(toError({ cause: e }));
     }
   }
 
@@ -287,7 +292,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
 
   if (path === '/workspaces' && method === 'POST') {
-    return handleCreateWorkspaceRequest(request, env, cli.userId, cli.userDO, ctx);
+    return handleCreateWorkspaceRequest({ request, env, userId: cli.userId, userDO: cli.userDO, ctx });
   }
 
   const workspaceMatch = path.match(/^\/workspaces\/([^/]+)$/);
@@ -520,7 +525,9 @@ function requiredAccessScope(method: string, path: string): AccessTokenScope | n
 }
 
 function approvalOrigin(env: Env, url: URL): string {
-  return (env.CLI_APPROVAL_ORIGIN || url.origin).replace(/\/+$/, '');
+  const configured = env.CLI_APPROVAL_ORIGIN ?? '';
+
+  return (configured === '' ? url.origin : configured).replace(/\/+$/, '');
 }
 
 function clientKey(request: Request): string {
@@ -546,7 +553,7 @@ async function renderBrowserApproval(request: Request, env: Env): Promise<Respon
   let identity: AuthIdentity;
 
   try { identity = await authenticateRequest(request, env); }
-  catch (e) { return accessError(toError(e), request); }
+  catch (e) { return accessError(toError({ cause: e }), request); }
 
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
@@ -595,7 +602,7 @@ async function approveFromBrowser(request: Request, env: Env): Promise<Response>
   let identity: AuthIdentity;
 
   try { identity = await authenticateRequest(request, env); }
-  catch (e) { return accessError(toError(e), request); }
+  catch (e) { return accessError(toError({ cause: e }), request); }
 
   if (!isSameOriginPost(request)) {
     return html('Kinu CLI Auth', '<p>Invalid approval origin.</p>', 403);
@@ -610,8 +617,8 @@ async function approveFromBrowser(request: Request, env: Env): Promise<Response>
     return html('Kinu CLI Auth', '<p>Invalid approval form.</p>', 400);
   }
 
-  const code = String(form.get('userCode') ?? '');
-  const csrf = String(form.get('csrf') ?? '');
+  const code = textField(form, 'userCode');
+  const csrf = textField(form, 'csrf');
   const cookieCsrf = readCookie(request, CLI_APPROVAL_CSRF_COOKIE_NAME);
 
   if (!csrf || !cookieCsrf || !timingSafeEqual(csrf, cookieCsrf)) {
@@ -630,7 +637,7 @@ async function approveFromBrowser(request: Request, env: Env): Promise<Response>
       },
     });
   } catch (e) {
-    return html('Kinu CLI Auth', `<p>${escapeHtml(toError(e).message)}</p>`, 400);
+    return html('Kinu CLI Auth', `<p>${escapeHtml(toError({ cause: e }).message)}</p>`, 400);
   }
 }
 
@@ -874,13 +881,17 @@ fi
  *  never answer these paths with the SPA shell wearing an `application/gzip`
  *  content-type: the shim would then "verify" a checksum of an HTML page and
  *  every install would fail with an unexplained mismatch. */
-async function cliDownloadAssetResponse(
-  request: Request,
-  env: Env,
-  pathname: string,
-  contentType: string,
-  head = false,
-): Promise<Response> {
+interface CliAssetRequest {
+  request: Request;
+  env: Env;
+  pathname: string;
+  contentType: string;
+  head: boolean;
+}
+
+async function cliDownloadAssetResponse(download: CliAssetRequest): Promise<Response> {
+  const { request, env, pathname, contentType, head } = download;
+
   const asset = await fetchDeployedAsset(env, request.url, pathname);
 
   if (!asset) {
@@ -1160,13 +1171,22 @@ function accessError(e: Error, request?: Request): Response {
 /** The device-approval pages: the consent screen, its result, and its failures. */
 function html(title: string, body: string, status = 200, init: ResponseInit = {}): Response {
   const headers = new Headers(publicHtmlHeaders());
-  new Headers(init.headers).forEach((value, name) => headers.set(name, value));
+
+  for (const [name, value] of new Headers(init.headers)) headers.set(name, value);
 
   return new Response(approvalDocument(title, body), { ...init, status, headers });
 }
 
-function toError<Thrown>(thrown: Thrown): Error {
-  return thrown instanceof Error ? thrown : new Error(String(thrown));
+function toError(thrown: { cause: unknown }): Error {
+  return thrown.cause instanceof Error ? thrown.cause : new Error(renderThrownChain(thrown));
+}
+
+/** A text field of a posted form. A file under a text field's name is not a
+ *  value this endpoint has a use for, so it reads as absent. */
+function textField(form: FormData, name: string): string {
+  const raw = form.get(name);
+
+  return raw === null || raw instanceof Blob ? '' : raw;
 }
 
 function csrfCookie(value: string): string {

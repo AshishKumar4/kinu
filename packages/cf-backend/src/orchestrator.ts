@@ -16,6 +16,7 @@ import { callable, type AgentContext, type Connection, type ConnectionContext } 
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
+  decodeJsonWire, EXPERIENCE_KINDS, parseExperiencePayload,
   type ExperienceEntry, type ExperienceKind, type PublishableCandidate,
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
@@ -518,8 +519,9 @@ export class OrchestratorAgent extends ActorAgent {
    *  than a closure so the stub call checks at method depth. */
   private async publishExperienceEntry(candidate: PublishableCandidate): Promise<ExperienceEntry> {
     const { stub, caller } = await this.userHub();
+    const published = await stub.publishExperienceWire(caller, candidate);
 
-    return stub.publishExperience(caller, candidate);
+    return experienceEntryOf(v.parse(ExperienceEntryWireSchema, decodeJsonWire(published)));
   }
 
   /** One owner-library search through this activation's hub. */
@@ -527,15 +529,18 @@ export class OrchestratorAgent extends ActorAgent {
     options: { query?: string; kind?: ExperienceKind; limit?: number },
   ): Promise<ExperienceEntry[]> {
     const { stub, caller } = await this.userHub();
+    const found = await stub.searchExperienceWire(caller, options);
 
-    return stub.searchExperience(caller, options);
+    return v.parse(v.array(ExperienceEntryWireSchema), decodeJsonWire(found)).map(experienceEntryOf);
   }
 
   /** One owner-library read through this activation's hub. */
   private async getExperienceEntry(id: string): Promise<ExperienceEntry | null> {
     const { stub, caller } = await this.userHub();
+    const read = await stub.getExperienceEntryWire(caller, id);
+    const row = v.parse(v.nullable(ExperienceEntryWireSchema), decodeJsonWire(read));
 
-    return stub.getExperienceEntry(caller, id);
+    return row === null ? null : experienceEntryOf(row);
   }
 
   /**
@@ -2500,7 +2505,7 @@ export class OrchestratorAgent extends ActorAgent {
 
         if (!agentName || !(await userDO.hasWorkspace(caller, agentName))) {
           const workspaceInput = { name: agentName === '' ? undefined : agentName, purpose };
-          const entry = await createCloudWorkspaceForUser(this.env, userId, userDO, caller, workspaceInput);
+          const entry = await createCloudWorkspaceForUser({ env: this.env, userId, userDO, caller, input: workspaceInput });
           agentName = entry.name;
           created = true;
         }
@@ -4215,7 +4220,10 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async decideReleaseApproval(approvalId: string, decision: 'approved' | 'rejected', note?: string | null) {
     const { stub, caller } = await this.userHub();
-    const decided = await stub.decideReleaseApproval(caller, approvalId, decision, this.getOwnerUserId() ?? this.name, note);
+
+    const decided = await stub.decideReleaseApproval(caller, {
+      approvalId, decision, approvedBy: this.getOwnerUserId() ?? this.name, note,
+    });
 
     // Refusing a ROLLBACK leaves the deployed change deployed, which is also
     // why `deployed -> rejected` is not a legal transition. Every other
@@ -7381,6 +7389,31 @@ export class OrchestratorAgent extends ActorAgent {
 }
 
 // ── Module-scope helpers (referenced by OrchestratorAgent) ────────
+
+/** One library entry as the owner's object sends it. The payload crosses as
+ *  plain JSON and is read back through core's own parser, which is the one
+ *  reader of the four-kind union; the entry types themselves never cross a stub
+ *  signature, because their `JsonValue` exceeds TypeScript's RPC mapping depth. */
+const ExperienceEntryWireSchema = v.object({
+  id: v.string(),
+  kind: v.picklist(EXPERIENCE_KINDS),
+  key: v.string(),
+  title: v.string(),
+  payload: JsonValueSchema,
+  evidence: v.string(),
+  sourceWorkspace: v.string(),
+  publishedAt: v.number(),
+});
+
+function experienceEntryOf(row: v.InferOutput<typeof ExperienceEntryWireSchema>): ExperienceEntry {
+  const payload = parseExperiencePayload(JSON.stringify(row.payload));
+
+  if (payload === null) {
+    throw new KinuError('io', `experience entry ${row.id} carries a payload no kind describes`);
+  }
+
+  return { ...row, payload };
+}
 
 /** An export cursor arrives from a client, so it is claimed, not trusted:
  *  anything that is not the shape the previous page returned starts a fresh

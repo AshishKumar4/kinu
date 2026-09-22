@@ -34,6 +34,7 @@
  */
 import { JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, tolerate } from '@kinu.run/core/obs';
+import type { WSMessage } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
 import {
   ACCESS_TOKEN_SCOPES, type AccessTokenScope, normalizeAccessTokenScopes,
@@ -426,7 +427,32 @@ const RpcFrameSchema = v.object({
   args: v.array(JsonValueSchema),
 });
 
-export function rejectOutOfScopeRpc<Message>(tags: Iterable<string>, message: Message): string | null {
+/** Why a frame was refused, in the one place that decides it: the message the
+ *  caller reads and the reason the denial rate counts under. */
+interface RpcDenial {
+  error: string;
+  reason: 'not_invokable' | 'scope_missing' | 'interactive_only';
+}
+
+function rpcDenial(method: string, access: AgentRpcAccess | null, required: AccessTokenScope | null): RpcDenial {
+  if (access === 'never') {
+    return { error: `${method} is not remotely invokable.`, reason: 'not_invokable' };
+  }
+
+  if (required) {
+    return {
+      error: `This access token does not have the ${required} scope required by ${method}.`,
+      reason: 'scope_missing',
+    };
+  }
+
+  return {
+    error: `${method} requires an interactive CLI session token. Sign in with: kinu auth`,
+    reason: 'interactive_only',
+  };
+}
+
+export function rejectOutOfScopeRpc(tags: Iterable<string>, message: WSMessage): string | null {
   if (!v.is(v.string(), message)) return null;
   const scopes = cliScopesFromTags(tags);
 
@@ -442,11 +468,7 @@ export function rejectOutOfScopeRpc<Message>(tags: Iterable<string>, message: Me
 
   if (required && scopes.includes(required)) return null;
 
-  const error = access === 'never'
-    ? `${method} is not remotely invokable.`
-    : required
-      ? `This access token does not have the ${required} scope required by ${method}.`
-      : `${method} requires an interactive CLI session token. Sign in with: kinu auth`;
+  const { error, reason } = rpcDenial(method, access, required);
 
   // The refused METHOD and the scope it wanted, never the token and never the
   // frame. A scoped token asking for something outside its scope is either a
@@ -459,7 +481,7 @@ export function rejectOutOfScopeRpc<Message>(tags: Iterable<string>, message: Me
   // of zero.
   diagnostics.event('rpc_gate.denied', {
     outcome: 'denied',
-    reason: access === 'never' ? 'not_invokable' : required ? 'scope_missing' : 'interactive_only',
+    reason,
     tool: method,
     source: required ?? 'interactive',
   });

@@ -125,9 +125,9 @@ export type CliTokenAuth =
 /** The token a request presents as a bearer, or null when it presents none.
  *  `readBearer` is the same read from a Request. */
 export function bearerOf(authorization: string | null): string | null {
-  const match = /^Bearer\s+(.+)$/i.exec(authorization ?? '');
+  const token = /^Bearer\s+(.+)$/i.exec(authorization ?? '')?.[1]?.trim() ?? '';
 
-  return match?.[1]?.trim() || null;
+  return token === '' ? null : token;
 }
 
 export function readBearer(request: Request): string | null {
@@ -205,15 +205,17 @@ export async function authenticateCliToken(
   };
 }
 
-export async function startCliAuth(
-  env: CliAuthEnv,
-  origin: string,
-  approvalOrigin: string,
-  deviceName?: string,
-  clientKey?: string,
-): Promise<CliAuthStartResult> {
+export interface CliAuthRequest {
+  origin: string;
+  approvalOrigin: string;
+  deviceName?: string;
+  clientKey?: string;
+}
+
+export async function startCliAuth(env: CliAuthEnv, request: CliAuthRequest): Promise<CliAuthStartResult> {
+  const { origin, approvalOrigin, deviceName, clientKey } = request;
   const now = Date.now();
-  await rateLimit(env.AUTH_KV, `start:${cleanRateKey(clientKey)}`, 20, RATE_WINDOW_MS, now);
+  await rateLimit(env.AUTH_KV, `start:${cleanRateKey(clientKey)}`, 20, now);
 
   const expiresAt = now + AUTH_TTL_MS;
 
@@ -274,10 +276,10 @@ export async function inspectCliAuth(kv: KvStore, userCode: string): Promise<Cli
 
 export async function pollCliAuth(env: CliAuthEnv, deviceToken: string, clientKey?: string): Promise<CliAuthPollResult> {
   const now = Date.now();
-  await rateLimit(env.AUTH_KV, `poll-ip:${cleanRateKey(clientKey)}`, 300, RATE_WINDOW_MS, now);
+  await rateLimit(env.AUTH_KV, `poll-ip:${cleanRateKey(clientKey)}`, 300, now);
 
   const hash = await sha256Hex(deviceToken);
-  await rateLimit(env.AUTH_KV, `poll-device:${hash}`, 180, RATE_WINDOW_MS, now);
+  await rateLimit(env.AUTH_KV, `poll-device:${hash}`, 180, now);
 
   const record = await readKvJson(env.AUTH_KV, deviceKey(hash), CliAuthRecordSchema);
 
@@ -308,8 +310,7 @@ export async function pollCliAuth(env: CliAuthEnv, deviceToken: string, clientKe
     env.AUTH_KV, deviceKey(hash), { ...record, status: 'consumed' }, record.expiresAt + RETENTION_MS,
   );
 
-  // SAFETY: Env.UserDO is generated from the UserDO binding, whose stubs implement UserDO RPC methods.
-  const userDO = env.UserDO.get(env.UserDO.idFromName(record.userId)) as DurableObjectStub<UserDO>;
+  const userDO = env.UserDO.get(env.UserDO.idFromName(record.userId));
   let minted: { token: string; expiresAt: number };
 
   try {
@@ -342,7 +343,7 @@ export async function approveCliAuth(
   clientKey?: string,
 ): Promise<{ ok: true; status: 'approved'; user: { id: string; email: string } }> {
   const now = Date.now();
-  await rateLimit(env.AUTH_KV, `approve:${identity.userId}:${cleanRateKey(clientKey)}`, 30, RATE_WINDOW_MS, now);
+  await rateLimit(env.AUTH_KV, `approve:${identity.userId}:${cleanRateKey(clientKey)}`, 30, now);
 
   const found = await readByUserCode(env.AUTH_KV, userCode);
 
@@ -369,8 +370,7 @@ export async function approveCliAuth(
     throw new CliAuthCodeError('CLI auth code expired. Run kinu auth again.');
   }
 
-  // SAFETY: Env.UserDO is generated from the UserDO binding, whose stubs implement UserDO RPC methods.
-  const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId)) as DurableObjectStub<UserDO>;
+  const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId));
   await userDO.ensureProfile(await ownerCaller(env), identity.email);
   await writeKvJson(env.AUTH_KV, deviceKey(deviceHash), {
     ...record,
@@ -391,14 +391,12 @@ export async function approveCliAuth(
  *  hammering the approve endpoint, neither of which the exactness would
  *  change — a user code is one in 32^8 and cannot be guessed inside a window
  *  at any rate. */
-async function rateLimit(
-  kv: KvStore, key: string, limit: number, windowMs: number, now: number,
-): Promise<void> {
+async function rateLimit(kv: KvStore, key: string, limit: number, now: number): Promise<void> {
   const bucketKey = `cli-auth-rate:${key}`;
   const bucket = await readKvJson(kv, bucketKey, RateBucketSchema);
 
   if (!bucket || bucket.resetAt <= now) {
-    const resetAt = now + windowMs;
+    const resetAt = now + RATE_WINDOW_MS;
     await writeKvJson(kv, bucketKey, { count: 1, resetAt }, resetAt);
 
     return;

@@ -53,15 +53,19 @@ export interface CreateCloudWorkspaceOptions {
   suggestDisplayName?: (mission: string) => Promise<string | null>;
 }
 
-export async function createCloudWorkspaceForUser(
-  env: Env,
-  userId: string,
-  userDO: CloudWorkspaceRegistry,
-  caller: UserCaller,
-  input: CreateCloudWorkspaceInput,
-  options: CreateCloudWorkspaceOptions = {},
-): Promise<WorkspaceEntry> {
-  const purpose = input.purpose?.trim() || undefined;
+export interface CreateCloudWorkspaceRequest {
+  env: Env;
+  userId: string;
+  userDO: CloudWorkspaceRegistry;
+  caller: UserCaller;
+  input: CreateCloudWorkspaceInput;
+  options?: CreateCloudWorkspaceOptions;
+}
+
+export async function createCloudWorkspaceForUser(request: CreateCloudWorkspaceRequest): Promise<WorkspaceEntry> {
+  const { env, userId, userDO, caller, input, options = {} } = request;
+  const trimmedPurpose = input.purpose?.trim() ?? '';
+  const purpose = trimmedPurpose === '' ? undefined : trimmedPurpose;
 
   if (input.reasoningEffort !== undefined && !isReasoningEffort(input.reasoningEffort)) {
     throw new Error(`Invalid reasoning effort: ${String(input.reasoningEffort)}`);
@@ -134,9 +138,10 @@ export async function createCloudWorkspaceForUser(
       // A Worker request owns this pre-turn generation. Callers without that
       // request owner already queued the genesis turn, whose durable
       // `auto_title` effect derives the same title without delaying dispatch.
-      options.waitUntil(scheduleCloudAgentDisplayNameGeneration(
-        env, userDO, caller, entry.name, purpose, model, options,
-      ));
+      options.waitUntil(scheduleCloudAgentDisplayNameGeneration({
+        env, userDO, caller, agentName: entry.name, mission: purpose, modelSpec: model,
+        suggestDisplayName: options.suggestDisplayName,
+      }));
     }
 
     return entry;
@@ -256,57 +261,53 @@ function createInitialCloudAgentIdentity(
 
     if (refusal !== null) throw new Error(`Invalid workspace name: ${refusal}`);
 
+    const named = input.displayName?.trim() ?? '';
+
     return {
       name: requestedName,
-      displayName: input.displayName?.trim() || requestedName,
+      displayName: named === '' ? requestedName : named,
       nameOrigin: 'user',
     };
   }
 
-  const requestedDisplayName = input.displayName?.trim();
+  const requestedDisplayName = input.displayName?.trim() ?? '';
   const fallback = fallbackWorkspaceIdentity(purpose ?? '', crypto.randomUUID());
 
   return {
     name: fallback.name,
-    displayName: requestedDisplayName || fallback.displayName,
-    nameOrigin: requestedDisplayName ? 'user' : 'auto',
+    displayName: requestedDisplayName === '' ? fallback.displayName : requestedDisplayName,
+    nameOrigin: requestedDisplayName === '' ? 'auto' : 'user',
   };
 }
 
-async function scheduleCloudAgentDisplayNameGeneration(
-  env: Env,
-  userDO: CloudWorkspaceRegistry,
-  caller: UserCaller,
-  agentName: string,
-  mission: string,
-  modelSpec: string,
-  options: CreateCloudWorkspaceOptions,
-): Promise<void> {
+interface CloudAgentNaming {
+  env: Env;
+  userDO: CloudWorkspaceRegistry;
+  caller: UserCaller;
+  agentName: string;
+  mission: string;
+  modelSpec: string;
+  suggestDisplayName?: (mission: string) => Promise<string | null>;
+}
+
+async function scheduleCloudAgentDisplayNameGeneration(naming: CloudAgentNaming): Promise<void> {
   try {
-    await applyGeneratedDisplayName(
-      env, userDO, caller, agentName, mission, modelSpec, options.suggestDisplayName,
-    );
+    await applyGeneratedDisplayName(naming);
   } catch (cause) {
     diagnostics.failure('workspace.display_name_generation_failed', toKinuError({
       doing: "generating a new workspace's display name",
       cause,
       otherwise: 'unavailable',
-    }), { workspace: agentName });
+    }), { workspace: naming.agentName });
   }
 }
 
-async function applyGeneratedDisplayName(
-  env: Env,
-  userDO: CloudWorkspaceRegistry,
-  caller: UserCaller,
-  agentName: string,
-  mission: string,
-  modelSpec: string,
-  suggestDisplayName?: (mission: string) => Promise<string | null>,
-): Promise<void> {
+async function applyGeneratedDisplayName(naming: CloudAgentNaming): Promise<void> {
+  const { env, agentName, mission, suggestDisplayName } = naming;
+
   const displayName = suggestDisplayName
     ? await suggestDisplayName(mission)
-    : await suggestCloudAgentDisplayName(env, userDO, caller, mission, modelSpec, agentName);
+    : await suggestCloudAgentDisplayName(naming);
 
   if (!displayName) return;
 
@@ -326,14 +327,9 @@ async function applyGeneratedDisplayName(
  * port a facet uses, because the total that has to account for it lives in that
  * Durable Object and not in this Worker.
  */
-async function suggestCloudAgentDisplayName(
-  env: Env,
-  userDO: CloudWorkspaceRegistry,
-  caller: UserCaller,
-  mission: string,
-  modelSpec: string,
-  agentName: string,
-): Promise<string | null> {
+async function suggestCloudAgentDisplayName(naming: CloudAgentNaming): Promise<string | null> {
+  const { env, userDO, caller, mission, modelSpec, agentName } = naming;
+
   const provider = createAgentProviderRegistry({ env, userDO: { stub: userDO, caller }, fetch });
 
   const result = await generateText({

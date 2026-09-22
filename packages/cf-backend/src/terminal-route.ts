@@ -47,16 +47,24 @@ import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { WORKSPACE_TERMINAL_PATH } from "@kinu.run/core";
 
 /**
- * The PTY entry points the SDK's client proxy adds around the container stub.
+ * The PTY entry point the SDK's client proxy adds around the container stub.
  *
  * `PtyOptions` carries `cols`, `rows` and `shell` and nothing else — no cwd, no
  * env — because the container derives both from the SESSION the terminal opens
  * in. `getSession` is a pure wrapper on the container object (no existence
  * check), and the container's PTY handler creates the session it is handed, so
  * naming a session here is how a terminal gets a shell of its own.
+ *
+ * OPTIONAL because the class the `Sandbox` binding names does not declare it:
+ * `getSandbox` returns a Proxy whose `enhancedMethods` add `getSession`,
+ * `terminal` and `wsConnect` (verified in the shipped bundle; `terminal` absent
+ * from the class), and the SDK's own bridge declares exactly this pair
+ * (https://github.com/cloudflare/sandbox-sdk/blob/main/packages/sandbox/src/bridge/routes.ts, `BridgeSandbox`). A property rather than a
+ * method, so the one read of it below carries no receiver: the proxy's entries
+ * are closures over the stub.
  */
 type SandboxPty = {
-  getSession(sessionId: string): Promise<{ terminal(request: Request, options?: PtyOptions): Promise<Response> }>;
+  getSession?: (sessionId: string) => Promise<{ terminal: (request: Request, options?: PtyOptions) => Promise<Response> }>;
 };
 
 /** The executor name for the owner's own machine. */
@@ -496,6 +504,12 @@ async function sandboxAttach(sandbox: KinuSandbox & SandboxPty, call: TerminalCa
 
   if (request.signal.aborted) return abandonedAttach();
 
+  const openSession = sandbox.getSession;
+
+  if (openSession === undefined) {
+    return err(503, "the installed Sandbox SDK adds no PTY session surface to the container stub");
+  }
+
   try {
     // `shell` is deliberately not named: the container's default is `bash`, and
     // `PtyOptions.shell` is spawned as ONE argv token (`Bun.spawn([shell])`),
@@ -503,7 +517,7 @@ async function sandboxAttach(sandbox: KinuSandbox & SandboxPty, call: TerminalCa
     // xterm-256color either way — the container sets it on the child, which is
     // why `top` and `htop` paint instead of refusing.
     await sandbox.noteTerminalActivity();
-    const session = await sandbox.getSession(TERMINAL_SESSION);
+    const session = await openSession(TERMINAL_SESSION);
     const upgrade = session.terminal(ptyUpgradeRequest(request), ptySize(call.url));
     const settled = await Promise.race([upgrade, clientGone(request.signal)]);
 
@@ -562,21 +576,14 @@ async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, '
   // for an id, and it persists the value, so every call site for one sandbox
   // passes the same options.
   //
-  // SAFETY: `getSandbox` is DECLARED to return the Durable Object class, but it
-  // returns a Proxy around that stub whose `enhancedMethods` add the session and
-  // PTY surface — verified in the shipped bundle (`getSession`, `terminal`,
-  // `wsConnect` on the proxy; `terminal` absent from the class), and the SDK's
-  // own bridge declares exactly this pair and narrows once at acquisition
-  // (https://github.com/cloudflare/sandbox-sdk/blob/main/packages/sandbox/src/bridge/routes.ts, `BridgeSandbox`). Every member used
-  // below is therefore reachable: `getSession` and `terminal` from the proxy,
-  // `deleteSession` from the class, and `noteTerminalActivity` from KinuSandbox
-  // through the same proxy's fall-through to the stub — which is how
-  // `runtime.ts` already calls `configureEgress`. The narrowing is done here, at
-  // the one acquisition point, so every call site below is type-checked.
-  const sandbox = getSandbox(env.Sandbox, sandboxIdForWorkspace(agentName), {
+  // `deleteSession` is the class's own and `noteTerminalActivity` is KinuSandbox's,
+  // reached through the same proxy's fall-through to the stub — which is how
+  // `runtime.ts` already calls `configureEgress`. Only {@link SandboxPty} is the
+  // proxy's addition, and `sandboxAttach` reads it before it opens a shell.
+  const sandbox: KinuSandbox & SandboxPty = getSandbox(env.Sandbox, sandboxIdForWorkspace(agentName), {
     normalizeId: true,
     transport: SANDBOX_TRANSPORT,
-  }) as KinuSandbox & SandboxPty;
+  });
 
   if (call.verb === "keepalive") return sandboxKeepalive(sandbox, call);
 

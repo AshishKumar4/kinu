@@ -126,15 +126,17 @@ interface Observed {
   annotated: boolean;
 }
 
+interface FeedbackRefusal {
+  deps: FeedbackDeps;
+  status: number;
+  message: string;
+  reason: Exclude<FeedbackRejectReason, ''>;
+  observed: Observed;
+}
+
 /** A rejected submission still produces its marker, because a rejection rate is
  *  the number that says the endpoint is refusing real reports. */
-function refuse(
-  deps: FeedbackDeps,
-  status: number,
-  message: string,
-  reason: Exclude<FeedbackRejectReason, ''>,
-  observed: Observed,
-): Response {
+function refuse({ deps, status, message, reason, observed }: FeedbackRefusal): Response {
   deps.mark({
     feedbackId: deps.newId(),
     outcome: 'rejected',
@@ -256,13 +258,13 @@ async function handleFeedbackSubmission(
   };
 
   if (identity === null) {
-    return refuse(deps, 401, 'Sign in to send feedback.', 'unauthenticated', blank);
+    return refuse({ deps, status: 401, message: 'Sign in to send feedback.', reason: 'unauthenticated', observed: blank });
   }
 
   const contentType = request.headers.get('content-type') ?? '';
 
   if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
-    return refuse(deps, 415, 'Send feedback as multipart/form-data.', 'bad_content_type', blank);
+    return refuse({ deps, status: 415, message: 'Send feedback as multipart/form-data.', reason: 'bad_content_type', observed: blank });
   }
 
   // Before the body is read: a declared length that cannot fit one screenshot
@@ -270,19 +272,19 @@ async function handleFeedbackSubmission(
   const declared = Number(request.headers.get('content-length') ?? '');
 
   if (Number.isFinite(declared) && declared > FEEDBACK_MAX_REQUEST_BYTES) {
-    return refuse(deps, 413, OVER_REQUEST_LIMIT, 'too_large', blank);
+    return refuse({ deps, status: 413, message: OVER_REQUEST_LIMIT, reason: 'too_large', observed: blank });
   }
 
   const bounded = await readBounded(request, FEEDBACK_MAX_REQUEST_BYTES);
 
   if (bounded === 'too_large') {
-    return refuse(deps, 413, OVER_REQUEST_LIMIT, 'too_large', blank);
+    return refuse({ deps, status: 413, message: OVER_REQUEST_LIMIT, reason: 'too_large', observed: blank });
   }
 
   if (bounded instanceof KinuError) {
     diagnostics.failure('feedback.body_unreadable', bounded);
 
-    return refuse(deps, 400, UNREADABLE_FORM, 'malformed', blank);
+    return refuse({ deps, status: 400, message: UNREADABLE_FORM, reason: 'malformed', observed: blank });
   }
 
   const form = await parseMultipart(request.url, contentType, bounded);
@@ -293,7 +295,7 @@ async function handleFeedbackSubmission(
     // logged would be deciding what its caller's failure means.
     diagnostics.failure('feedback.body_unparseable', form, { bytes: bounded.byteLength });
 
-    return refuse(deps, 400, UNREADABLE_FORM, 'malformed', blank);
+    return refuse({ deps, status: 400, message: UNREADABLE_FORM, reason: 'malformed', observed: blank });
   }
 
   const note = readField(form, FEEDBACK_FIELDS.note, FEEDBACK_MAX_NOTE_CHARS);
@@ -311,7 +313,7 @@ async function handleFeedbackSubmission(
   const shot = part instanceof Blob ? part : null;
 
   if (part !== null && shot === null) {
-    return refuse(deps, 415, 'The screenshot must be a PNG file.', 'bad_content_type', observed);
+    return refuse({ deps, status: 415, message: 'The screenshot must be a PNG file.', reason: 'bad_content_type', observed });
   }
 
   if (shot !== null) {
@@ -323,7 +325,7 @@ async function handleFeedbackSubmission(
   }
 
   if (shot === null && note.length === 0) {
-    return refuse(deps, 400, 'Add a note or a screenshot before sending.', 'no_content', observed);
+    return refuse({ deps, status: 400, message: 'Add a note or a screenshot before sending.', reason: 'no_content', observed });
   }
 
   // WHO THE REPORT IS ABOUT IS NOT THE REPORTER'S TO ASSERT. The workspace field
@@ -340,11 +342,11 @@ async function handleFeedbackSubmission(
     : await deps.attributeWorkspace(identity.userId, workspaceField);
 
   if (attribution?.kind === 'refused') {
-    return refuse(
-      deps, 403,
-      'That workspace is not one of yours. Send the report without a workspace, or file it from the workspace it is about.',
-      'unowned_workspace', observed,
-    );
+    return refuse({
+      deps, status: 403,
+      message: 'That workspace is not one of yours. Send the report without a workspace, or file it from the workspace it is about.',
+      reason: 'unowned_workspace', observed,
+    });
   }
 
   if (attribution?.kind === 'unavailable') {
@@ -357,11 +359,11 @@ async function handleFeedbackSubmission(
       otherwise: 'unavailable',
     }), { feedbackRoute: feedbackRouteFamily(route) });
 
-    return refuse(
-      deps, 503,
-      'That workspace could not be confirmed right now. Try again in a moment.',
-      'workspace_unverified', observed,
-    );
+    return refuse({
+      deps, status: 503,
+      message: 'That workspace could not be confirmed right now. Try again in a moment.',
+      reason: 'workspace_unverified', observed,
+    });
   }
 
   let screenshot: { key: string; bytes: Uint8Array } | null = null;
@@ -376,23 +378,23 @@ async function handleFeedbackSubmission(
     // deserves "that is not a PNG" rather than "those bytes are corrupt". The
     // gate is `sanitizePng` below, which reads the bytes.
     if (shot.type.toLowerCase() !== FEEDBACK_SCREENSHOT_TYPE) {
-      return refuse(deps, 415, 'The screenshot must be a PNG.', 'bad_content_type', observed);
+      return refuse({ deps, status: 415, message: 'The screenshot must be a PNG.', reason: 'bad_content_type', observed });
     }
 
     if (shot.size > FEEDBACK_MAX_SCREENSHOT_BYTES) {
-      return refuse(
-        deps, 413,
-        `That screenshot is ${String(Math.ceil(shot.size / (1024 * 1024)))} MiB, over the ${String(FEEDBACK_MAX_SCREENSHOT_BYTES >> 20)} MiB limit. Send the note on its own, or capture a smaller area.`,
-        'too_large', observed,
-      );
+      return refuse({
+        deps, status: 413,
+        message: `That screenshot is ${String(Math.ceil(shot.size / (1024 * 1024)))} MiB, over the ${String(FEEDBACK_MAX_SCREENSHOT_BYTES >> 20)} MiB limit. Send the note on its own, or capture a smaller area.`,
+        reason: 'too_large', observed,
+      });
     }
 
     if (deps.store === null) {
-      return refuse(
-        deps, 503,
-        'Screenshots are unavailable on this deployment. Your note can still be sent on its own.',
-        'storage_unavailable', observed,
-      );
+      return refuse({
+        deps, status: 503,
+        message: 'Screenshots are unavailable on this deployment. Your note can still be sent on its own.',
+        reason: 'storage_unavailable', observed,
+      });
     }
 
     // The gate. Whatever the part was declared or named, these bytes have to be
@@ -403,7 +405,7 @@ async function handleFeedbackSubmission(
     if ('fault' in clean) {
       const { status, reason } = pngRefusalFor(clean.fault);
 
-      return refuse(deps, status, `That screenshot could not be read: ${clean.error}`, reason, observed);
+      return refuse({ deps, status, message: `That screenshot could not be read: ${clean.error}`, reason, observed });
     }
 
     observed.screenshotBytes = clean.bytes.length;
@@ -422,11 +424,11 @@ async function handleFeedbackSubmission(
         otherwise: 'unavailable',
       }), { objectKey: screenshot.key, feedbackId: id });
 
-      return refuse(
-        deps, 503,
-        'The screenshot could not be stored. Try again, or send the note on its own.',
-        'storage_unavailable', observed,
-      );
+      return refuse({
+        deps, status: 503,
+        message: 'The screenshot could not be stored. Try again, or send the note on its own.',
+        reason: 'storage_unavailable', observed,
+      });
     }
   }
 
@@ -469,7 +471,7 @@ async function handleFeedbackSubmission(
       }
     }
 
-    return refuse(deps, 500, 'Feedback could not be saved. Try sending it again.', 'row_write_failed', observed);
+    return refuse({ deps, status: 500, message: 'Feedback could not be saved. Try sending it again.', reason: 'row_write_failed', observed });
   }
 
   deps.mark({
