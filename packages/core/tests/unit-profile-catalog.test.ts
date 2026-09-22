@@ -1,13 +1,6 @@
 /**
- * The profile catalog wire format — what an authority may ship, and what every
- * validator refuses.
- *
- * Two defect classes live here. First, duplicated identity: role ids are record
- * keys and catalog version is envelope metadata, so a definition carrying `id`
- * or a catalog carrying `version` is a second source of truth in the making —
- * strict parsing rejects both rather than stripping them. Second, digest drift:
- * the digest must be pure content, so key insertion order cannot move it and
- * envelope metadata cannot hide inside it.
+ * The profile catalog wire format. Strict parsing refuses duplicated identity (`id` in a definition, `version`
+ * in a catalog), and the digest is pure content, independent of key order.
  */
 import { describe, expect, test } from 'bun:test';
 import {
@@ -30,9 +23,7 @@ const SCOUT: RoleDefinition = {
 
 const BUILTINS: Readonly<Record<BuiltinRoleId, RoleDefinition>> = BUILTIN_ROLE_DEFINITIONS;
 
-/** The five ids the product ships, spelled here rather than read from the
- *  constant under test: comparing the shipped definitions against their own
- *  id list can only ever agree, so a role renamed in both places would pass. */
+/** The shipped ids, spelled here: comparing definitions to their own id list could only agree. */
 const BUILTIN_IDS = [
   'task', 'researcher', 'planner', 'auditor', 'designer',
 ] as const satisfies readonly BuiltinRoleId[];
@@ -82,11 +73,8 @@ describe('catalog validation', () => {
   });
 
   test('an owner-added tier is a tier: roles may name it, and a role naming one the catalog lacks is refused', () => {
-    // Tiers are an open vocabulary like roles: the builtins plus whatever the
-    // owner configured. `review` here is such a tier. A role naming a tier
-    // nobody configured is refused at write, not aliased to default at the
-    // first turn, because aliasing silently moves the model the role was
-    // pinned to.
+    // Tiers are open like roles; a role naming an unconfigured tier is refused at write, not aliased to
+    // default.
     const withReview = { ...VALID_CATALOG, tiers: { ...VALID_CATALOG.tiers, review: { model: 'm-review' } } };
     expect(validateProfileCatalog({ value: withReview }).tiers.review).toEqual({ model: 'm-review' });
     expect(validateProfileCatalog({ value: { ...withReview, roles: { x: { ...SCOUT, tier: 'review' } } } }).roles.x?.tier).toBe('review');

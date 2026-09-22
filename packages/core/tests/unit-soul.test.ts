@@ -1,13 +1,4 @@
-/**
- * SOUL.md — a file in the workspace filesystem, and the mission row a
- * read-only listing reads instead.
- *
- * The property that matters is that those two cannot drift: `writeSoul` is the
- * only writer of either, so a listing showing a stale mission would mean a
- * second write path existed. Nothing here tests a storage encoding: the document
- * is a file, and its physical representation belongs to the filesystem
- * implementation.
- */
+/** SOUL.md and its mission row cannot drift: `writeSoul` is the only writer of either. */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -34,8 +25,6 @@ describe('the soul is a file', () => {
     await writeSoul(vfs, sql, '# Atlas\n\n## Mission\n\nHelp with testing.');
 
     expect(await readSoul(vfs)).toBe('# Atlas\n\n## Mission\n\nHelp with testing.');
-    // Reachable by the ordinary path, so `file`, workspace.readFile and grep
-    // all address the same document.
     expect(await vfs.readFile(SOUL_PATH, { encoding: 'utf8' })).toContain('Help with testing.');
   });
 
@@ -79,9 +68,7 @@ describe('the mission a read-only listing reads', () => {
     const { db, sql, vfs } = freshWorkspace();
     await seedSoul(vfs, sql, { name: 'atlas', mission: 'ship the thing' });
 
-    // A second handle that never builds a workspace filesystem: exactly what
-    // `kinu list` has, and what stops a listing from writing to every
-    // workspace it walks past.
+    // A handle with no workspace filesystem, as `kinu list` has, so a listing never writes.
     const listing = makeSql(db);
     expect(readMission(listing)).toBe('ship the thing');
   });
@@ -118,10 +105,7 @@ describe('workspace birth', () => {
     expect(await rt.storage.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toContain('Atlas');
   });
 
-  /** `name` is the ADDRESS and `title` is the name. Heading a document with the
-   *  address is what showed a workspace's own model `# handwrought-walnut-…`,
-   *  and the untitled case is the one that produced it: a workspace is titled
-   *  by its first prompt, so it is born without one. */
+  /** `name` is the address and `title` is the name; a workspace is born untitled. */
   test('the documents a model reads are headed by the title, never by the slug', async () => {
     const titled = await createWorkspace(makeAgentDatabase(new Database(':memory:')), {
       name: 'quiet-harbor-1a4e20', title: 'Callback Audit', purpose: 'Audit it.', llm: TEST_LLM,
@@ -142,11 +126,7 @@ describe('workspace birth', () => {
 });
 
 describe('the mission of a document that is still bytes', () => {
-  // Every shape the whole-document reader distinguishes, plus the ones a
-  // chunked scan could get wrong: a mission far past any fixed prefix, a
-  // mission split across the 64 KiB scan boundary, a multi-byte character on
-  // that boundary, an empty mission that falls back to the first content line,
-  // and a document that is one enormous line.
+  // Includes the chunked-scan edge cases: missions past or split across the scan boundary.
   const filler = (bytes: number): string => 'filler line\n'.repeat(Math.ceil(bytes / 12));
 
   const documents = {

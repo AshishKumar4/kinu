@@ -1,24 +1,5 @@
-// The head journal announces its own writes, so a running search is live.
-//
-// Shared rather than cf-only: the listener is injected, and the CLI is exposed
-// in a stronger form — its nodes always run in process, so an announcement
-// bolted to an RPC hop would never fire there at all.
-//
-// `head_activity` as a side effect on two RPC methods, both reachable only from
-// a facet calling back to its parent, announces nothing for a top-level node's
-// or head's COMPLETION, and nothing at all for an UNHOSTED node's whole run — a
-// workspace with no owner gets no facet, and core then wires `reportStep`
-// straight to `journal.appendStep`. Those rows land correctly and a manual
-// reload shows them, which is the worst shape a liveness defect can take.
-//
-// The property under test is that the announcement rides the WRITE. Every path
-// into the journal goes through the one instance this backend hands to core, so
-// a test that drives the journal directly is testing every one of them: hosted
-// and unhosted, head and node, top-level and recursive.
-//
-// The last two tests are the ones that stop the others passing vacuously: the
-// order (write first, then announce) and the isolation (a socket with no
-// listeners must not fail a durable write).
+// The head journal announces its own writes, so every path into it (hosted or not, head or node) is live.
+// Shared, not cf-only: CLI nodes run in process, so an announcement bolted to an RPC hop never fires there.
 
 import { describe, expect, test } from 'bun:test';
 import { createTestSql, createTestActorsOver } from '@kinu.run/test-utils';
@@ -45,7 +26,6 @@ function report(id: string): HeadReport {
   };
 }
 
-/** The journal over a real store, plus the ids it announced, in order. */
 function live() {
   const sql = createTestSql();
   initHeadsTables(sql.execRaw);
@@ -63,9 +43,6 @@ describe('LiveHeadJournal', () => {
     const { journal, announced } = live();
     journal.recordSplit('root-1', 'a swarm', Date.now());
     journal.insertSpawn(spawn('n1', 'root-1'));
-    // The run itself is announced under its root: for a swarm that row is what
-    // makes the search exist, and it is the first thing a watching client can
-    // learn about it.
     expect(announced).toEqual(['root-1', 'n1']);
   });
 
@@ -90,9 +67,7 @@ describe('LiveHeadJournal', () => {
     const sql = createTestSql();
     initHeadsTables(sql.execRaw);
     const actor = createTestActorsOver(sql.db).main;
-    // Read the store from INSIDE the announcement. A row that is not there yet
-    // would send a client to an empty ledger, and an announcement that
-    // overtook its own write is indistinguishable from a dropped one.
+    // Read the store inside the announcement: an announcement that overtook its write reads as a dropped one.
     const seen: (string | null)[] = [];
 
     const journal = new LiveHeadJournal(sql.sql, actor, (id) => {
@@ -112,20 +87,15 @@ describe('LiveHeadJournal', () => {
       throw new Error('no listeners');
     });
 
-    // The caller is core, mid-search. A socket with nobody on it must not cost
-    // the search its journal — the row is the durable fact, the announcement is
-    // a courtesy.
+    // A socket with no listeners must not fail the durable write.
     expect(() => journal.insertSpawn(spawn('n1', 'root-1'))).not.toThrow();
     expect(journal.readHead('n1')?.task).toBe('do n1');
   });
 
   test('the plain journal announces nothing — the wrapper is the only channel', () => {
-    // The pre-fix shape, so the tests above cannot pass over a journal that
-    // announced by itself all along.
+    // The unwrapped journal, so the tests above cannot pass vacuously.
     const sql = createTestSql();
     initHeadsTables(sql.execRaw);
-    // ONE owner, two journals over its store: the wrapper is the only thing
-    // that differs between them.
     const actor = createTestActorsOver(sql.db).main;
     const plain = new HeadJournal(sql.sql, actor);
     let announcements = 0;

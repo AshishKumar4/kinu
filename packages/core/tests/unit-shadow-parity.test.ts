@@ -1,16 +1,5 @@
 import type { ChatEvent } from '../src/chat';
-/**
- * Shadow context parity — a context-dependent task does not auto-lose in the
- * shadow eval.
- *
- * The live answer is produced with the full conversational context. Give the
- * shadow's pending (a) a task-text-only host.defaultInference reconstruction
- * and (b) its ui_chunk output dropped from the judged text, and a delegating
- * pending is structurally tie-prone or worse. The orchestrator replays the live
- * turn's prepared streamText opts into the shadow's defaultInference; these
- * tests pin the core side of that contract: the delegating pending's
- * full-context output reaches the judge verbatim.
- */
+/** Shadow context parity: a delegating pending's full-context output reaches the judge verbatim. */
 
 import { describe, test, expect } from 'bun:test';
 import {
@@ -24,8 +13,6 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createEvalExecutor, createTestRuntime } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
 
-/** A pending scaffold that delegates to the default loop — the bootstrap
- *  pattern, and the shape most proposals build on. */
 const DELEGATING_PENDING = `async function* run(rt, task) {
   await host.defaultInference();
 }`;
@@ -51,10 +38,7 @@ async function setup(): Promise<AgentRuntime> {
   return rt;
 }
 
-/** A deterministic judge that decides purely from CONTENT — which it must,
- *  since the protocol shows the two responses unlabelled in a randomized
- *  order. It rewards whichever response cites the codename; when both (or
- *  neither) do, it ties. */
+/** Decides from content alone (responses are unlabelled, shuffled): rewards citing the codename, else ties. */
 const contextJudge: StructuredJudgeFn = async (prompt) => {
   const [a, b] = prompt.split('\nResponse B:\n');
   const aSaw = a.slice(a.indexOf('\nResponse A:\n')).includes('BLUEFIN');
@@ -72,8 +56,7 @@ const contextJudge: StructuredJudgeFn = async (prompt) => {
   };
 };
 
-/** What the orchestrator's defaultInference bridge streams: AI-SDK UI
- *  message chunks. With the live opts replayed it can answer from context. */
+/** What the orchestrator's defaultInference bridge streams: AI-SDK UI message chunks. */
 function uiStream(answer: string): () => AsyncIterable<ScaffoldDefaultInferenceChunk> {
   return async function* () {
     yield { value: { type: 'text-delta', delta: answer } };
@@ -88,11 +71,9 @@ describe('shadow context parity', () => {
       events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt,
       task: TASK,
-      currentOutput: CONTEXT_AWARE_ANSWER, // the live answer, produced with full context
+      currentOutput: CONTEXT_AWARE_ANSWER,
       judge: contextJudge,
       llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
-      // The orchestrator replays the live turn's full streamText opts — so
-      // defaultInference yields the context-aware answer.
       defaultInference: uiStream(CONTEXT_AWARE_ANSWER),
       random: () => 0,
     });
@@ -100,8 +81,6 @@ describe('shadow context parity', () => {
     expect(result.skipped).toBe(false);
     expect(result.evaluation?.winner).toBe('tie');
 
-    // The judged pending output is the delegated full-context answer — the
-    // ui_chunk text reached the eval row verbatim.
     const row = rt.storage.sql<{ pending_output: string; winner: string }>`
       SELECT pending_output, winner FROM scaffold_evaluations
       WHERE actor_id = ${rt.actor.actorId}`[0];
@@ -118,7 +97,6 @@ describe('shadow context parity', () => {
       rt,
       task: TASK,
       currentOutput: CONTEXT_AWARE_ANSWER,
-      // Old behavior: a task-text-only reconstruction can't know the codename.
       defaultInference: uiStream(CONTEXT_FREE_ANSWER),
       judge: contextJudge,
       llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },

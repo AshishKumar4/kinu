@@ -1,4 +1,3 @@
-// Reading back the agent's own running commentary.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initAllTables, readActivityLog, writeActivityLog } from '../src/index';
@@ -11,9 +10,7 @@ function setup() {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   initAllTables(execRaw, sql);
-  // `activity_log` is keyed `(actor_id, id)`: the commentary is the running
-  // account of ONE actor's turn, and the writer and the reader below have to
-  // name the same handle or the read comes back empty.
+  // `activity_log` is keyed `(actor_id, id)`: writer and reader must name the same handle or the read is empty.
   const actor = createTestActors(sql, execRaw).main;
 
   const write = (event: string, detail: string | null, createdAt: number): void => {

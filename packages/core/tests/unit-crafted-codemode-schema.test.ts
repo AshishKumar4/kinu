@@ -1,26 +1,7 @@
 /**
- * Phase D evidence: buildActorTools hands crafted tools to the injected
- * eval builder under the shape that produces the `tools.<name>()`
- * namespace — the LLM-visible contract.
- *
- * We do NOT import the real @cloudflare/codemode here (it's a cf-backend peer
- * dep, not a core dep). Instead we capture the `craftedTools` resolver passed
- * to the builder, call it as the sandbox would, and assert:
- *
- *   1. The resolved map has an entry keyed by each crafted tool's name.
- *      codemode's createCodeTool turns this into `declare const tools: {
- *      <name>(input: ...): Promise<...>; }` — see
- *      @cloudflare/codemode/dist/ai.js:113-155 (generateTypes).
- *
- *   2. Each entry's execute is the function produced by our Phase C executor
- *      factory. Calling it fans out to the injected craftedToolExecute.
- *
- *   3. Low-score tools are filtered BEFORE reaching the builder — they can't
- *      appear in the namespace at all.
- *
- * Phase G's live-server test provides the true end-to-end proof that the LLM
- * actually sees `tools.double` in the request body. This test exercises the
- * wiring-level invariant: if it's in craftedToolSet, codemode will advertise it.
+ * buildActorTools hands crafted tools to the injected eval builder in the shape codemode turns into
+ * `tools.<name>()`. The real @cloudflare/codemode is a cf-backend dep, so the resolver is called here as the
+ * sandbox would.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -40,13 +21,7 @@ interface CapturedExecuteTool {
   surface: () => CodemodeSurface;
 }
 
-/**
- * Capture the surface a backend's builder is handed.
- *
- * A box rather than a `let`: TypeScript cannot see an assignment made inside a
- * callback, so a `let x: T | null = null` reads back as `null` and every use
- * needs a cast to undo the narrowing.
- */
+/** Capture the builder's surface. A box, not a `let`: TypeScript cannot see an assignment inside a callback. */
 function captureExecuteTool(): CapturedExecuteTool {
   const seen: CodemodeSurface[] = [];
 
@@ -71,8 +46,7 @@ function captureExecuteTool(): CapturedExecuteTool {
 }
 
 function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'craftedToolExecute' | 'codemode'>) {
-  // The runtime's OWN actor: a claim is keyed by its owner, and a second
-  // handle here would let this actor's tool call replay under nobody's turn.
+  // The runtime's own actor: a claim is keyed by its owner.
   return buildActorTools({
     rt,
     history: storesFor(rt).history,
@@ -104,8 +78,7 @@ describe('Phase D — crafted tools reach the eval builder under tools.*', () =>
     actorTools(rt, { craftedToolExecute: factory, codemode: capture.builder });
 
     const captured = capture.surface();
-    // Nothing is resolved until the sandbox asks: the crafted set is read per
-    // execute so a tool crafted mid-turn is callable on the next call.
+    // The crafted set is read per execute, so a tool crafted mid-turn is callable on the next call.
     expect(factoryCallCount).toBe(0);
 
     const resolved = captured.craftedTools();
@@ -113,13 +86,12 @@ describe('Phase D — crafted tools reach the eval builder under tools.*', () =>
     // The builder sees the finished native surface it declares as `tools.*`.
     expect(Object.keys(captured.native)).toEqual(expect.arrayContaining(['shell', 'file', 'memory', 'tasks']));
 
-    // Entry shape — description and execute
     const doubleEntry = resolved.double;
     expect(doubleEntry).toBeDefined();
     expect(doubleEntry.description).toBe('Doubles its numeric argument');
     expect(doubleEntry.execute).toBeFunction();
 
-    // Phase C factory was called exactly once for this tool, per resolution.
+    // The executor factory ran once for this tool, per resolution.
     expect(factoryCallCount).toBe(1);
   });
 

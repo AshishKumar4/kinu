@@ -1,19 +1,5 @@
-/**
- * The prompt-cache warm: when one is armed, what it re-sends, and when the
- * chain stops.
- *
- * ASSERTED THROUGH THE LANE, not through the policy function, because the lane
- * is the whole of what a backend can call: the refusals are observable as an
- * arm that answers null and a wake that sends nothing, and a test that reached
- * past it would be pinning an internal helper rather than the rule.
- *
- * The numbers are literals here on purpose. They are the vendor's, not ours —
- * a five-minute entry refreshed fifteen seconds early, three times per idle
- * stretch, with `max_tokens: 0` ("do not use `max_tokens: 1`",
- * docs/research/harness/anthropic-sources.md §2, read 2026-09-13; oh-my-pi
- * `packages/ai/src/stream.ts:1209-1211`) — so changing one in the source has to
- * fail here rather than quietly re-deriving its own expectation.
- */
+/** The prompt-cache warm, asserted through the lane a backend calls. The vendor's numbers are literals on
+ *  purpose (docs/research/harness/anthropic-sources.md §2), so changing one in the source fails here. */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -65,13 +51,11 @@ function laneProbe(): LaneProbe & { readonly lane: CacheWarmingLane } {
     now: () => probe.clock,
   };
 
-  // One object, not a copy: the seams above close over `probe`, so a test that
-  // moves the clock has to move THIS one.
+  // One object: the seams close over `probe`, so a test that moves the clock moves this one.
   return Object.assign(probe, { lane: new CacheWarmingLane(seams) });
 }
 
-/** The turn's last request, as the accumulator carries it out of the loop: the
- *  provider body it sent, when it left, and what its answer reported. */
+/** The turn's last request as the accumulator carries it out: body sent, send time, reported usage. */
 function lastRequest(usage: Usage = { input: 40_004, cacheRead: 40_000, cacheWrite: 0 }) {
   return {
     body: {
@@ -168,9 +152,7 @@ describe('what a warm sends', () => {
 
     expect(body.max_tokens).toBe(0);
     expect(body.stream).toBeUndefined();
-    // The PREFIX, byte for byte: the same tools/system/messages and the same
-    // effort, which the vendor requires because those values are rendered into
-    // the prompt the entry is keyed on.
+    // The prefix byte for byte, including effort: the vendor keys the entry on those rendered values.
     expect(body.system).toEqual(original.system);
     expect(body.messages).toEqual(original.messages);
     expect(body.output_config).toEqual(original.output_config);
@@ -220,8 +202,7 @@ describe('when the chain stops', () => {
 
     expect(await probe.lane.runDue(DUE_AT)).toBeNull();
     expect(probe.sent).toHaveLength(0);
-    // The fold asks the same question the fire does, so a suppressed warm stops
-    // arming wakes instead of re-arming at `now` on every tick.
+    // The fold asks the fire's question, so a suppressed warm stops arming instead of re-arming every tick.
     expect(probe.lane.nextWarmAt()).toBeNull();
   });
 
@@ -277,9 +258,7 @@ describe('when the chain stops', () => {
 
     // The failure reaches the caller ONCE, wrapped, so the tick diagnoses it.
     await expect(lane.runDue(DUE_AT)).rejects.toThrow(KinuError);
-    // And the obligation is gone: a row left armed with a past due_at is a wake
-    // the fold answers every tick, which is one request a second against a
-    // provider that just refused one.
+    // A row left armed with a past due_at would fire a request every tick at a provider that just refused one.
     expect(lane.nextWarmAt()).toBeNull();
     expect(await lane.runDue(DUE_AT)).toBeNull();
     expect(sends).toBe(1);

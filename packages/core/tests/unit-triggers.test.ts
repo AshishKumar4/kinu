@@ -1,13 +1,4 @@
-/**
- * Unit tests: TriggerRegistry — the durable subscription lifecycle.
- *
- * The registry owns two things that are easy to break silently: the state
- * machine (active → paused → active, anything → revoked, each transition
- * idempotent and reporting whether it actually changed anything), and the alarm
- * contract (when the DO is asked to wake). Both are exercised here through the
- * public API over real in-memory SQLite, so the CHECK constraints in the DDL
- * are live.
- */
+/** TriggerRegistry over real in-memory SQLite, so the DDL CHECK constraints are live. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -23,8 +14,7 @@ import {
 } from '../src/index';
 import { makeSqlExec } from './helpers';
 
-/** Records every wake request so the alarm contract is assertable, and models
- *  the real scheduler's "converge on the soonest pending time" semantics. */
+/** Records wake requests and converges on the soonest pending time, as the real scheduler does. */
 class RecordingAlarm implements AlarmScheduler {
   readonly requested: number[] = [];
   private at: number | null = null;
@@ -60,9 +50,7 @@ function setup() {
   const sql = makeSqlExec(db);
   initEventsHubTables(sql);
   const alarm = new RecordingAlarm();
-  // A trigger produces events into ITS actor's inbox, so the registry is bound
-  // to a real owner over this same database — `pauseAll` means "everything this
-  // actor registered", which is unaskable without one.
+  // `pauseAll` means everything this actor registered, so the registry needs a real owner.
   const actor = createTestActorsOver(db).main;
 
   return { registry: new TriggerRegistry(sql, actor, alarm), alarm, actor };
@@ -100,7 +88,7 @@ describe('TriggerRegistry.register', () => {
   });
 
   test('an explicit rate limit of 0 is preserved, not defaulted away', async () => {
-    // `?? 60` must not degrade into `|| 60` — 0 means "block", not "unset".
+    // `?? 60` must not degrade into `|| 60`: 0 means "block", not "unset".
     const { registry } = setup();
     expect(present(registry.get(await registry.register(spec({ rate_limit_per_min: 0 }), NOW)), 'registered trigger').rate_limit_per_min).toBe(0);
   });
@@ -171,9 +159,9 @@ describe('TriggerRegistry pause / resume', () => {
     const id = await registry.register(spec(), NOW);
     registry.pause(id, NOW);
 
-    expect(registry.pause(id, NOW + 1)).toBe(false);      // already paused
-    expect(registry.pause('nope', NOW)).toBe(false);       // unknown id
-    expect(present(registry.get(id), 'registered trigger').paused_at).toBe(NOW);         // not re-stamped
+    expect(registry.pause(id, NOW + 1)).toBe(false);
+    expect(registry.pause('nope', NOW)).toBe(false);
+    expect(present(registry.get(id), 'registered trigger').paused_at).toBe(NOW);
   });
 
   test('a revoked trigger cannot be paused', async () => {
@@ -197,8 +185,7 @@ describe('TriggerRegistry pause / resume', () => {
   });
 
   test('resume does NOT backfill a fire time that elapsed while paused', async () => {
-    // The missed window is gone by design; re-arming on a past time would fire
-    // the trigger immediately on unarchive.
+    // Re-arming on a past time would fire the trigger immediately on unarchive.
     const { registry, alarm } = setup();
     const id = await registry.register(spec({ next_fire_at: NOW + 10 }), NOW);
     registry.pause(id, NOW + 20);
@@ -239,8 +226,8 @@ describe('TriggerRegistry pauseAll / resumeAll', () => {
     const { registry, alarm } = setup();
     await registry.register(spec({ next_fire_at: NOW + 90_000 }), NOW);
     await registry.register(spec({ next_fire_at: NOW + 30_000 }), NOW);
-    await registry.register(spec({ next_fire_at: NOW - 5 }), NOW);   // already elapsed
-    await registry.register(spec({ kind: 'peer_inbox' }), NOW);       // no fire time
+    await registry.register(spec({ next_fire_at: NOW - 5 }), NOW);
+    await registry.register(spec({ kind: 'peer_inbox' }), NOW);
     registry.pauseAll(NOW + 1);
     alarm.requested.length = 0;
 
@@ -400,7 +387,6 @@ describe('TriggerRegistry.forkPlan', () => {
 
     expect(copy.map(t => t.id).sort()).toEqual(expected('copy'));
     expect(share.map(t => t.id).sort()).toEqual(expected('share'));
-    // Severed kinds appear in neither bucket.
     const planned = new Set([...copy, ...share].map(t => t.id));
 
     for (const kind of expected('sever')) expect(planned.has(kind)).toBe(false);
@@ -408,7 +394,6 @@ describe('TriggerRegistry.forkPlan', () => {
 
   test('a per-trigger fork_policy overrides the kind default in both directions', async () => {
     const { registry } = setup();
-    // timer_cron defaults to copy; mcp_route defaults to sever.
     const severedCron = await registry.register(spec({ kind: 'timer_cron', fork_policy: 'sever' }), NOW);
     const copiedRoute = await registry.register(spec({ kind: 'mcp_route', fork_policy: 'copy' }), NOW);
     const sharedRoute = await registry.register(spec({ kind: 'mcp_route', fork_policy: 'share' }), NOW);
@@ -438,21 +423,14 @@ describe('TriggerRegistry.forkPlan', () => {
   });
 });
 
-/**
- * Timer ingress — registering a schedule and firing the ones that are due.
- *
- * This is the loop every backend's clock drives: it published the timer event,
- * re-armed cron, revoked one-shot, and it existed once per backend until the
- * two copies became this one. What a host still owns is only when it is called.
- */
+/** Timer ingress: the loop every backend's clock drives; a host owns only when it is called. */
 describe('timer ingress', () => {
   function timers() {
     const db = new Database(':memory:');
     const sql = makeSqlExec(db);
     initEventsHubTables(sql);
     const alarm = new RecordingAlarm();
-    // One actor for both: a timer fires into the inbox its own registry writes,
-    // and two handles here would fire into an inbox nothing drains.
+    // One actor for both, or the timer fires into an inbox nothing drains.
     const actor = createTestActorsOver(db).main;
     const registry = new TriggerRegistry(sql, actor, alarm);
     const log = new EventLog(sql, actor);
@@ -481,7 +459,6 @@ describe('timer ingress', () => {
     expect(row.fire_count).toBe(1);
     const rearmedAt = present(row.next_fire_at, 'the re-armed fire time');
     expect(rearmedAt).toBeGreaterThan(firesAt);
-    // …and the next wake was requested, so the chain does not end here.
     expect(t.alarm.requested).toContain(rearmedAt);
   });
 
@@ -498,7 +475,6 @@ describe('timer ingress', () => {
     expect(t.fired()[0]).toMatchObject({ user_payload: { task: 'ship' }, mission_label: 'release' });
     expect(t.registry.get(timer.id)).toMatchObject({ state: 'revoked', next_fire_at: null });
 
-    // Nothing is due any more, so a second tick publishes nothing.
     expect(await t.fire(NOW + 2000)).toEqual({ fired: 0 });
     expect(t.fired()).toHaveLength(1);
   });
@@ -508,7 +484,6 @@ describe('timer ingress', () => {
     const timer = await createTimerTrigger(t.registry, { cron: '*/5 * * * *' }, NOW);
     const firesAt = present(timer.nextFireAt, 'the cron trigger\'s first fire time');
     await t.fire(firesAt);
-    // The same due row, fired again at the same scheduled time: one event.
     await t.registry.markFired(timer.id, firesAt, timer.nextFireAt);
     expect(await t.fire(firesAt)).toEqual({ fired: 1 });
     expect(t.fired()).toHaveLength(1);
@@ -547,7 +522,6 @@ describe('timer ingress', () => {
     }]);
 
     expect(cancelTrigger({ registry: t.registry, trigger_id: timer.id, now: NOW, caller: 'owner' })).toEqual({ ok: true, changed: true });
-    // Idempotent: cancelling twice is not an error, and reports no change.
     expect(cancelTrigger({ registry: t.registry, trigger_id: timer.id, now: NOW, caller: 'owner' })).toEqual({ ok: true, changed: false });
     expect(await t.fire(present(timer.nextFireAt, 'the cancelled trigger\'s fire time'))).toEqual({ fired: 0 });
   });

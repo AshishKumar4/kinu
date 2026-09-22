@@ -1,9 +1,4 @@
-// The device-code poll's answers.
-//
-// The poll answered null for both "not yet" and "code expired" (403 and
-// 404), so the caller could not tell a live code from a dead one and
-// waited out its clock on the dead one. Each test feeds one provider
-// answer and asserts the caller can tell them apart.
+// The device-code poll's answers: the caller must tell a live code from an expired one.
 import { describe, expect, test } from 'bun:test';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { createCodexOAuthClient } from '../src/index';

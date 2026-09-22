@@ -1,12 +1,5 @@
 import type { ChatEvent } from '../src/chat';
-// host.history — the scaffold's read-only view of the conversation it is the
-// inference loop for.
-//
-// Until this existed a scaffold received one string (`task`) plus a prepared
-// default stream, so it could not see the context it was supposed to be
-// managing. The properties that matter are that the view is READ-ONLY (nothing
-// a scaffold does through it changes the history) and BUDGETED (no query, however
-// asked, hands an unbounded page back across the sandbox boundary).
+// host.history: the scaffold's read-only, budgeted view of the conversation it runs inference for.
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
@@ -170,9 +163,7 @@ describe('rendering', () => {
   });
 });
 
-// The bridge as the sandbox actually sees it: a `host` provider whose `fns`
-// cross the codemode boundary. The scaffold body itself cannot run here (the
-// executor is mocked), so the contract under test is the provider surface.
+// The scaffold body cannot run here (mocked executor), so the contract is the `host` provider surface.
 describe('the sandbox bridge', () => {
   async function callHostHistory(
     opts: { history?: NonNullable<Parameters<typeof runScaffold>[0]['history']> },

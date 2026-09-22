@@ -1,11 +1,4 @@
-// The shared turn has no elapsed deadline. An open provider stream may pause
-// for as long as its work needs and stays pending until it completes or the
-// caller cancels it. A provider stream that closes without a finish reason is
-// different: that is a definitive transport failure and must not fake-complete.
-//
-// These tests drive runChat through the real openai-compatible provider against
-// a local scripted server. They pin all three boundaries: delayed work remains
-// live, explicit cancellation cuts it, and definitive failures propagate.
+// The shared turn has no elapsed deadline; a stream that closes without a finish reason must not fake-complete.
 import { describe, test, expect } from 'bun:test';
 import { stepCountIs, tool, type StopCondition, type ToolSet } from 'ai';
 import { z } from 'zod';
@@ -14,12 +7,7 @@ import {
   type ChatEvent,
 } from '../src/index';
 
-/** The openings the two silent-turn messages actually ship with.
- *
- *  Written out rather than imported: importing the module-scoped constants makes
- *  the classifier's own test compare a value with itself, so rewording either
- *  sentence stays green while every stored row changes shape. Spelled here, a
- *  reword fails this file, which is the point. */
+/** Spelled out rather than imported, so rewording either sentence fails this file. */
 const STALLED_OPENING = 'Turn stalled:';
 
 const RATE_LIMITED_OPENING = 'Turn ended by provider rate limiting:';
@@ -30,7 +18,6 @@ function sse(events: string[]): string {
   return events.map((e) => `data: ${e}\n\n`).join('');
 }
 
-/** Step 1: text + one `shell` tool call, finishing normally on tool_calls. */
 function healthyToolStep(): Response {
   return new Response(sse([
     JSON.stringify({ choices: [{ delta: { content: 'Let me look' } }] }),
@@ -139,17 +126,10 @@ describe('dead provider stream fails the turn', () => {
   });
 });
 
-// The detector fires on the CONJUNCTION of an unmapped finish reason and an
-// empty step. The cases above cover unmapped+empty (dead) and mapped+content
-// (alive); these are the two remaining cells, and they are the ones that would
-// take real turns down if the detector ever widened to the reason alone.
-// 'other' and 'unknown' are routine for several providers.
+// The detector needs an unmapped reason and an empty step together: 'other'/'unknown' are routine for several providers.
 describe('an unmapped finish reason alone is not a dead stream', () => {
   test('a FINAL step whose only output was a TOOL CALL survives an unmapped reason', async () => {
-    // A tool-call step legitimately emits no text, so it is the step most
-    // easily mistaken for empty. It has to be the LAST step to be worth
-    // asserting — the dead-stream verdict is read once, after the loop, so a
-    // mid-turn step could not exercise it and the case would be untestable.
+    // A tool-call step emits no text; it must be the last step because the verdict is read after the loop.
     const toolStepEndingOnOther = () => new Response(sse([
       JSON.stringify({ choices: [{ delta: { tool_calls: [
         { index: 0, id: 'tc9', type: 'function', function: { name: 'shell', arguments: '{"command":"ls"}' } },
@@ -243,8 +223,7 @@ describe('definitive provider failures propagate', () => {
     }));
 
     expect(done).toBeUndefined();
-    // The boundary message carries the closed facts — HTTP status and the
-    // provider's error type — never the provider's own prose (KINU-043).
+    // Only closed facts (HTTP status, provider error type), never provider prose (KINU-043).
     expect(threw?.message ?? '').toContain('the provider refused the request');
     expect(threw?.message ?? '').toContain('400');
     expect(threw?.message ?? '').toContain('transport_error');

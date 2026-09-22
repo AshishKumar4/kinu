@@ -9,16 +9,8 @@ import {
   USAGE_FIELDS, UsageSchema, addUsage, normalizeUsage, usageReported, usageTotal, type Usage,
 } from '../src/usage';
 
-/**
- * The provider shapes are driven through the REAL SDK provider adapters rather
- * than hand-typed into `normalizeUsage`, because the defect being guarded lives
- * in those adapters: they fabricate `0` for fields the provider never mentioned.
- * A test that fed `normalizeUsage` a tidy object would assert nothing about the
- * thing that actually goes wrong.
- *
- * The Workers AI usage below is a verbatim capture off the deployed proxy
- * (`POST /api/user/ai/v1/chat/completions`, `@cf/deepseek-ai/deepseek-v4-pro-0813`).
- */
+/** Provider shapes go through the real SDK adapters, which fabricate `0` for fields the provider never sent.
+ *  The Workers AI usage is a verbatim capture off the deployed proxy. */
 
 /** Workers AI / my-gateway / ai-gateway / openrouter, and OpenAI chat-completions. */
 interface OpenAICompatUsage {
@@ -51,9 +43,8 @@ interface OpenAIResponsesUsage {
   readonly output_tokens_details?: { readonly reasoning_tokens?: number };
 }
 
-/** Verbatim from the deployed proxy. Note `reasoning_content` WITH no
- *  `completion_tokens_details` — the model reasoned and reported no reasoning
- *  token count — and `cached_tokens: 0`, a real reported zero. */
+/** Verbatim from the deployed proxy: `reasoning_content` with no reasoning token count, and
+ *  `cached_tokens: 0`, a real reported zero. */
 const WORKERS_AI_USAGE: OpenAICompatUsage = {
   prompt_tokens: 88,
   completion_tokens: 24,
@@ -76,8 +67,7 @@ function jsonReply(serialized: string): FetchFunction {
     headers: { 'content-type': 'application/json' },
   });
 
-  // `FetchFunction` is the platform `typeof fetch`, which carries `preconnect`.
-  // The SDK never calls it; the type requires it to exist.
+  // `FetchFunction` requires `preconnect` (platform `typeof fetch`); the SDK never calls it.
   return Object.assign(stub, { preconnect: async (): Promise<void> => {} });
 }
 
@@ -171,10 +161,9 @@ describe('normalizeUsage over the OpenAI-compatible family (Workers AI)', () => 
     });
 
     const r = await generateText({ model: provider('m'), prompt: 'hi' });
-    // The defect, demonstrated: the SDK hands over a 0 the provider never sent.
+    // The SDK hands over a 0 the provider never sent.
     expect(r.usage.outputTokenDetails?.reasoningTokens).toBe(0);
     expect(r.usage.raw).not.toHaveProperty('completion_tokens_details');
-    // The normalized view refuses to repeat it.
     const u = normalizeUsage(r.usage);
     expect(u.reasoning).toBeUndefined();
     expect('reasoning' in u).toBe(false);

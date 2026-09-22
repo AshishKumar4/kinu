@@ -1,14 +1,4 @@
-/**
- * The run ledger records what a tool RETURNED, never a rendering of it.
- *
- * A tool's output is a value — an object with an `action`, a list, a number —
- * and the readers that ask the ledger for it read fields off that value: the
- * first-run row for a sandbox write asks the `tool_call_end` row for
- * `{ action: 'created' }`. The loop renders the output to text for every
- * surface that renders; the ledger row is the value. Read back through the
- * turn accumulator's own record and the durable `tool_call_end` event the
- * turn's sinks receive.
- */
+/** The run ledger records what a tool returned as a value, never its text rendering. */
 import { expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import { createTestRuntime, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
@@ -91,7 +81,6 @@ test('a narrated multi-step turn answers with its final step, whatever it stream
   const profile = resolveTurnProfile({ ...inputs, roleId: 'runner', workMode: 'build', availableTools: Object.keys(tools), activeSkills: [] });
   let calls = 0;
 
-  // Narration before each tool call, then the answer the prompt asked for:
   // "reply with only PASS or FAIL" is answered by the last step alone.
   const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
     const step = calls++;
@@ -120,8 +109,7 @@ test('a narrated multi-step turn answers with its final step, whatever it stream
         dynamic: () => ({ factsBlock: '' }),
       }, (event) => { if (event.type === 'text-delta') streamed.push(event.delta); });
 
-      // The narration reached whoever was watching, one step at a time; the
-      // answer the turn is recorded under is the final step's alone.
+      // Narration streams per step; the recorded answer is the final step's alone.
       expect(streamed).toEqual(['Copying the files into the sandbox:', 'Running the test in the sandbox:', 'FAIL']);
       expect(result.text).toBe('FAIL');
       expect(result.failure).toBeNull();

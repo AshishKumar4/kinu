@@ -1,7 +1,4 @@
-// extractJsonObject + generateJson — robust structured output (the heads merge
-// path). generateJson replaces ai-v6 generateObject (whose tool-mode `.input`
-// deref crashed on Workers AI); these tests pin that it extracts + validates a
-// model's text response and throws (caller falls back) on a schema mismatch.
+// generateJson replaces ai-v6 generateObject, whose tool-mode `.input` deref crashed on Workers AI.
 import { describe, test, expect } from "bun:test";
 import * as v from "valibot";
 import { MockLanguageModelV3 } from "ai/test";
@@ -70,10 +67,7 @@ describe("generateJson", () => {
     const seen: Array<number | undefined> = [];
     const model = modelReturning('{"a":1,"b":[]}', (options) => seen.push(options.maxOutputTokens));
     await generateJson({ model, schema: Schema, prompt: "go" });
-    // This substrate carries the heads merge, the scaffold judge and the GEPA
-    // metric, and every one of them asks a model for JSON it must finish. A cap
-    // here truncates that JSON mid-object, which arrives as a parse failure and
-    // a fallback rather than as the cost control it was mistaken for.
+    // No output cap: a cap truncates the JSON these callers need, arriving as a parse failure.
     expect(seen).toEqual([undefined]);
   });
 

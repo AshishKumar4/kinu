@@ -1,10 +1,4 @@
-/**
- * Mission budget governor — the durable, label-scoped, transitive spend cap.
- *
- * Behaviour under test through the public surface only: declare/guard/debit/
- * snapshot and the governed `LLM` seam. The invariant that matters most is the
- * FIRST one: an actor that never declares a budget behaves exactly as before.
- */
+// Mission budget governor. First invariant: an actor that never declares a budget behaves as before.
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -19,10 +13,7 @@ import { estimateUsdCost } from '../src/llm';
 import type { LLM } from '../src/types/primitives';
 import type { ModelPricing } from '../src/providers/types';
 
-/** A governor and the actor whose spend it caps. The mission ledger is keyed by
- *  the owner, so `actor` is returned too: the "fresh governor over the same
- *  storage" case has to revive over the SAME handle or it would open an empty
- *  ledger and read as a lost mission rather than a scoping fault. */
+/** The ledger is keyed by the owner, so revival must reuse the same `actor` handle. */
 function makeGovernor(opts: {
   onExhausted?: (r: MissionBudgetRefusal) => void;
   pricing?: () => ModelPricing | null;
@@ -38,8 +29,7 @@ function makeGovernor(opts: {
 /** Claude Sonnet's published models.dev rates, USD per 1M tokens. */
 const SONNET: ModelPricing = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
 
-/** A scripted LLM whose completions are fixed-length, so the char estimate is
- *  deterministic. No network, no model. */
+/** Fixed-length completions keep the char estimate deterministic. */
 function scriptedLLM(reply: string, calls: string[] = []): LLM {
   return {
     // eslint-disable-next-line require-yield
@@ -164,9 +154,7 @@ describe('mission budget — transitive rollup', () => {
     governor.activate(['mission']);
     governor.debit(100);
 
-    // The SAME actor, because the ledger row is that actor's: reviving under a
-    // new handle would read an empty ledger, which is indistinguishable from
-    // the durability failure this case exists to catch.
+    // The same actor: a new handle would read an empty ledger, indistinguishable from lost durability.
     const revived = new MissionGovernor({ storage, actor });
     revived.activate(['mission']);
     expect(revived.scope).toEqual(['mission']);
@@ -234,7 +222,7 @@ describe('mission budget — USD at catalog prices', () => {
     const { governor } = makeGovernor({ pricing: () => SONNET });
     governor.declare('mission', {});
     governor.activate(['mission']);
-    // 10k cache-INCLUSIVE input of which 8k came from the cache, 2k output.
+    // 10k cache-inclusive input, 8k of it cached, 2k output.
     governor.debit(12_000, { calls: 1, usage: { input: 10_000, output: 2_000, cacheRead: 8_000 } });
 
     const [row] = governor.snapshot();
@@ -243,7 +231,6 @@ describe('mission budget — USD at catalog prices', () => {
     expect(row.spent.usd).toBeCloseTo(expected, 10);
     expect(row.spent.tokens).toBe(12_000);
     expect(row.pricing).toEqual({ blendedTokens: 0, source: 'catalog' });
-    // The blended rate would have been wrong by more than 2x here.
     expect(row.spent.usd).not.toBeCloseTo(estimateUsdCost(12_000), 4);
   });
 
@@ -259,7 +246,6 @@ describe('mission budget — USD at catalog prices', () => {
     const { governor } = makeGovernor({ pricing: () => SONNET });
     governor.declare('m', {});
     governor.activate(['m']);
-    // A fork reporting one total across its sub-agents' models — no split.
     governor.debit(4_000, { spawns: 1 });
 
     const [row] = governor.snapshot();
@@ -284,8 +270,6 @@ describe('mission budget — USD at catalog prices', () => {
   });
 
   test('a USD cap now refuses on what the model actually costs', () => {
-    // 200k output tokens on Sonnet is $3.00; the blended rate would have called
-    // the same spend $0.60 and let the run continue.
     const { governor } = makeGovernor({ pricing: () => SONNET });
     governor.declare('expensive', { usd: 2 });
     governor.activate(['expensive']);
@@ -295,7 +279,6 @@ describe('mission budget — USD at catalog prices', () => {
     const refusal = governor.guard('model_call');
     expect(refusal?.error).toBe('budget_exhausted');
     expect(refusal?.spent.usd).toBeCloseTo(3, 10);
-    // Catalog-priced spend is stated as a measurement, not an approximation.
     expect(refusal?.note).toContain('= $3.0000');
     expect(governor.snapshot()[0].remaining.usd).toBe(0);
   });
@@ -304,9 +287,7 @@ describe('mission budget — USD at catalog prices', () => {
     const { governor } = makeGovernor({ pricing: () => SONNET });
     governor.declare('m', {});
     governor.activate(['m']);
-    // What a provider that reported nothing now hands back: an EMPTY report,
-    // never a fabricated set of zeros. The caller still knows a token estimate,
-    // so the spend is recorded — at the blended rate, stated as blended.
+    // An empty report, never fabricated zeros; the spend is recorded at the blended rate, stated as blended.
     governor.debit(1_000, { calls: 1, usage: {} });
     const [row] = governor.snapshot();
     expect(row.spent.usd).toBeCloseTo(estimateUsdCost(1_000), 10);
@@ -315,51 +296,36 @@ describe('mission budget — USD at catalog prices', () => {
 });
 
 describe('priceCall — the one place tokens are multiplied by a rate', () => {
-  /** The real Anthropic report shape: `input` is cache-INCLUSIVE, so 12 fresh
-   *  prompt tokens + 1024 written into the cache + 2048 read back is 3084. */
+  /** Anthropic's `input` is cache-inclusive: 12 fresh + 1024 cache-written + 2048 cache-read is 3084. */
   const ANTHROPIC: Usage = { input: 3_084, output: 500, cacheRead: 2_048, cacheWrite: 1_024 };
 
   test('a cache WRITE is charged at the catalog cacheWrite rate, not the input rate', () => {
     const expected = (12 * 3 + 2_048 * 0.3 + 1_024 * 3.75 + 500 * 15) / 1_000_000;
     expect(priceCall(ANTHROPIC, SONNET)?.usd).toBeCloseTo(expected, 12);
-    // Cache writes falling into `fresh` bill at the plain input rate, which
-    // under-charges them by the 25% premium Anthropic publishes.
     const asPlainInput = (1_036 * 3 + 2_048 * 0.3 + 500 * 15) / 1_000_000;
     expect(priceCall(ANTHROPIC, SONNET)?.usd).toBeGreaterThan(asPlainInput);
   });
 
   test('a catalog with no cacheWrite rate charges the write at the input rate', () => {
-    // Every model without a published cache-write price, which is most of them.
     expect(priceCall({ input: 1_024, output: 0, cacheWrite: 1_024 }, { input: 3, output: 15 })?.usd)
       .toBeCloseTo(1_024 * 3 / 1_000_000, 12);
   });
 
   test('cacheWrite1h is a subset of cacheWrite and is never charged twice', () => {
-    // models.dev publishes ONE cache_write rate, so the 1h retention split is
-    // priced by the line that already charged the write it belongs to. An
-    // invented second rate for the tier would charge the same bytes again.
+    // models.dev publishes one cache_write rate, so the 1h split is not charged a second time.
     const withRetention: Usage = { ...ANTHROPIC, cacheWrite1h: 1_000 };
     expect(priceCall(withRetention, SONNET)?.usd)
       .toBeCloseTo((12 * 3 + 2_048 * 0.3 + 1_024 * 3.75 + 500 * 15) / 1_000_000, 12);
   });
 
   test('a 1h-retention write prices as an ESTIMATE; a call without one prices as exact', () => {
-    // Same FIGURE as the test above — no second rate was invented — but not the
-    // same FACT. Anthropic prices the 1h tier above the 5m one models.dev
-    // publishes, so a call carrying that tier was under-charged and its price is
-    // a floor. A reader has to be able to tell that from a price nothing had to
-    // qualify, which is why the floor says how many tokens made it one.
+    // Same figure, but Anthropic prices the 1h tier higher, so the price is a floor and says by how many tokens.
     const withRetention: Usage = { ...ANTHROPIC, cacheWrite1h: 1_000 };
     expect(priceCall(withRetention, SONNET)?.floorTokens).toBe(1_000);
-    // ABSENT on an exact price, never `0`. A figure checked and found sound and
-    // a figure nothing ever had to qualify would read identically as `0`, and
-    // only the second is what this can honestly say.
+    // Absent on an exact price, never `0`.
     expect('floorTokens' in (priceCall(ANTHROPIC, SONNET) ?? {})).toBe(false);
-    // A tier the provider reported as EMPTY leaves the price exact: zero tokens
-    // at an unpublished rate is nothing to qualify.
     expect('floorTokens' in (priceCall({ ...ANTHROPIC, cacheWrite1h: 0 }, SONNET) ?? {})).toBe(false);
-    // The floor cannot exceed the write it is a subset of, however the provider
-    // reports it — a nonsense split must not claim more than was written.
+    // The floor cannot exceed the write it is a subset of.
     expect(priceCall({ ...ANTHROPIC, cacheWrite1h: 9_999 }, SONNET)?.floorTokens).toBe(1_024);
   });
 
@@ -367,7 +333,6 @@ describe('priceCall — the one place tokens are multiplied by a rate', () => {
     expect(priceCall({}, SONNET)).toBeUndefined();
     // Neurons are Cloudflare's own billing unit; no per-token rate can price them.
     expect(priceCall({ neurons: 42 }, SONNET)).toBeUndefined();
-    // A reported zero, by contrast, IS a measurement — and it costs $0.
     expect(priceCall({ input: 0, output: 0 }, SONNET)?.usd).toBe(0);
   });
 

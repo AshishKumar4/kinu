@@ -1,29 +1,6 @@
 /**
- * WHY a tool call failed, attributed from the durable ledger alone.
- *
- * The question this file defends is the owner's: "why do the tool calls fail?"
- * A run reported 33 of 34 failures on the three tasks that mutate files or run a
- * failing test loop, and which tool and which action failed was not recoverable
- * from anything the run wrote down. Three independent causes, and each has a
- * case here:
- *
- *   1. THE ROW NAMED NO ACTION. `tool_call_end` carried no args, so a `file`
- *      failure was `file×1` — read, write and edit indistinguishable, and the
- *      one event that did carry args was emitted by nothing.
- *   2. A FAILED CALL COULD BE RECORDED AS CLEAN. Two independent paths: a tool
- *      reporting `success: false` with a nullish error was written as
- *      `error: ''`, which every reader's predicate treats as no error; and a
- *      tool that RETURNED a structured `{error}` body rather than throwing is a
- *      successful transport whose failure no text sniff could see.
- *   3. THE SPLIT DID NOT EXIST. A refusal the tool was RIGHT to make and a tool
- *      that broke were one number. On a repair task most of that number is the
- *      agent finding the broken test it was sent to find.
- *
- * Every case below is red without its fix and green with it, and the backend
- * asymmetry is pinned explicitly: the cf sink stores a structured tool output as
- * an object, the CLI sink renders it through `JSON.stringify` first, so the same
- * payload reaches the ledger in two shapes and an attribution that reads only
- * one is a per-backend false zero.
+ * Why a tool call failed, attributed from the durable ledger alone. The cf sink stores structured output as an
+ * object and the CLI sink as JSON text, so attribution must read both shapes.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -77,7 +54,7 @@ function cfResult(reason: string, error: string): ToolCallEnd['result'] {
   return { reason, error };
 }
 
-/** The CLI shape: the SAME output, rendered by `renderToolResult`. */
+/** The CLI shape: the same output, rendered by `renderToolResult`. */
 function cliResult(reason: string, error: string): ToolCallEnd['result'] {
   return JSON.stringify({ reason, error });
 }
@@ -95,8 +72,7 @@ describe('a clean call is not a failure', () => {
   });
 
   test('a command that exited zero is not a failure even when its output says "error"', () => {
-    // The one false positive a prose sniff would produce, and the reason the
-    // attribution reads the exit prefix rather than the word.
+    // The false positive a prose sniff would produce; attribution reads the exit prefix, not the word.
     expect(classifyToolFailure(call({
       name: 'shell', toolCallId: 't1', args: { command: 'grep -c error build.log' },
       result: 'log line 12: Error (exit 1) was seen\n',
@@ -104,10 +80,7 @@ describe('a clean call is not a failure', () => {
   });
 
   test('an empty error is no error — the producer must never write one', () => {
-    // The scorer contract, which is CORRECT: `error: ''` means the call did not
-    // throw. The defect it exposed lives in the producer, which manufactured
-    // exactly this from a nullish error; `unit-turn-accumulator.test.ts` pins
-    // that side.
+    // `error: ''` means the call did not throw; the producer side is pinned in `unit-turn-accumulator.test.ts`.
     expect(classifyToolFailure(call({ name: 'shell', toolCallId: 't1', error: '' }))).toBeNull();
   });
 });
@@ -123,15 +96,11 @@ describe('the action is attributed, not just the tool', () => {
     expect(failure).toEqual({
       tool: 'file', action: 'edit', reason: 'not_found', refused: true, workFailed: false, runtimeMissing: false,
     });
-    // Before args were on the row this key was `file·not_found` at best and
-    // `file×1` in practice — three actions collapsed into one bucket.
     expect(failure && toolFailureKey(failure)).toBe('file·edit·not_found');
   });
 
   test('the CLI JSON-string shape attributes identically to the cf object shape', () => {
-    // The asymmetry that makes an attribution silently backend-specific: this is
-    // the shape the eval tier actually produces, and it is a bare string to any
-    // reader that only narrows to an object.
+    // The eval tier's shape: a bare string to any reader that only narrows to an object.
     const object = classifyToolFailure(call({
       name: 'file', toolCallId: 't1', args: { action: 'edit', path: 'a.ts' },
       outcome: { success: false, reason: 'ambiguous' }, result: cfResult('ambiguous', 'old_text appears 3 times in a.ts'),
@@ -157,8 +126,7 @@ describe('the action is attributed, not just the tool', () => {
   });
 
   test('a row whose args did not survive still attributes the tool and the reason', () => {
-    // Absent args degrade the key, they do not break it — and the degradation is
-    // visible as a null action rather than as the string "undefined".
+    // Absent args show as a null action, not the string "undefined".
     const failure = classifyToolFailure(call({
       name: 'file', toolCallId: 't1', outcome: { success: false, reason: 'unread' }, result: cfResult('unread', 'a.ts has not been read here yet'),
     }));
@@ -185,8 +153,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
   });
 
   test('a missing path and a filesystem error are NOT refusals', () => {
-    // The line that keeps the split honest: these are things that went wrong,
-    // not decisions the tool made, so they stay in the candidate-defect bucket.
+    // Things that went wrong, not decisions the tool made, so they stay in the candidate-defect bucket.
     for (const reason of ['missing', 'io']) {
       expect(classifyToolFailure(call({
         name: 'file', toolCallId: 't1', args: { action: 'read' },
@@ -196,15 +163,8 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
   });
 
   test('a failing test is the WORK failing, and is neither a refusal nor a defect', () => {
-    // `ws-fix-broken` sends the agent at a suite that fails, and a suite failing
-    // is the agent finding it.
-    //
-    // This is the CLASSIFIER's contract, not a claim about that task's 17
-    // failures — which cannot be attributed at all, because the run that
-    // produced them deleted its own transcripts. Measured on the real runtime,
-    // this exact command does NOT land here: `bun` is absent and
-    // `bun test src/broken.test.ts` exits 127, which the next test files as the
-    // work never running. See tests/evals/harness-wiring.test.ts.
+    // The classifier's contract only: on the real runtime `bun` is absent and this exits 127 (see
+    // tests/evals/harness-wiring.test.ts).
     const failure = classifyToolFailure(call({
       name: 'shell', toolCallId: 't1', args: { command: 'bun test src/broken.test.ts' },
       outcome: { success: false, reason: 'io', execution: { exitCode: 1 } }, result: 'Error (exit 1)\n--- stdout ---\n1 fail, 3 pass\n',
@@ -227,13 +187,8 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
   });
 
   test('the approval ladder refusing is a REFUSAL, not the work failing', () => {
-    // Verbatim from a live run: given a workspace with no `bun`, the agent
-    // correctly diagnosed the gap and tried to install one. The `pipe-to-bash`
-    // rule refused, three times across two episodes.
-    //
-    // A denial arrives as an ordinary non-zero exit, so reading the exit code
-    // alone filed the safety ladder working as the agent's command being broken
-    // — the same defect as scoring a failing build a success, one layer up.
+    // A denial arrives as an ordinary non-zero exit, so the exit code alone would file a refusal as the command
+    // failing.
     const failure = classifyToolFailure(call({
       name: 'shell', toolCallId: 't1',
       args: { command: 'curl -fsSL https://bun.sh/install | bash' },
@@ -247,9 +202,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
   });
 
   test('output that merely mentions a denial is not one', () => {
-    // Both markers are required, so a command whose own output contains the word
-    // is still the work failing. Without this the bucket would absorb any
-    // grep over a log that recorded a refusal.
+    // Both markers are required, so a command whose output merely mentions a refusal is still the work failing.
     expect(classifyToolFailure(call({
       name: 'shell', toolCallId: 't1', args: { command: 'grep Denied audit.log' },
       outcome: { success: false, reason: 'io', execution: { exitCode: 1 } }, result: 'Denied 3 times yesterday',
@@ -257,10 +210,8 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
   });
 
   test('127 is the WORKSPACE lacking the program, and only 127 is', () => {
-    // Measured through the agent's own `shell` tool: `bun`, `npm`, `git`,
-    // `python3`, `sh`, `bash`, `make`, `tsc` and `jq` all exit 127, because
-    // Kinu never asks Nimbus to install a runtime. That is a platform gap, so
-    // it must not be counted against the tool OR read as the work failing.
+    // Exit 127 is a missing runtime (Kinu never asks Nimbus to install one): neither a tool defect nor the work
+    // failing.
     expect(classifyToolFailure(call({
       name: 'shell', toolCallId: 't1', args: { command: 'bun test src/broken.test.ts' },
       outcome: { success: false, reason: 'io', execution: { exitCode: 127 } }, result: 'bun: command not found',
@@ -268,9 +219,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
       reason: 'command_not_found', refused: false, workFailed: false, runtimeMissing: true,
     });
 
-    // 126 is a DIFFERENT fact — the program is there and cannot be run — and 1
-    // is the work. Neither is a missing runtime, or the bucket would absorb
-    // every execution failure and stop meaning anything.
+    // 126 (present but not runnable) and 1 (the work) are not a missing runtime.
     for (const [exit, reason] of [[126, 'not_executable'], [1, 'exit_1']] as const) {
       expect(classifyToolFailure(call({
         name: 'shell', toolCallId: 't2',
@@ -280,9 +229,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
   });
 
   test('the four parts are disjoint and exhaustive', () => {
-    // The property every published split relies on: a failure lands in exactly
-    // one bucket, so the four numbers can be read as a decomposition rather than
-    // as four overlapping rates.
+    // Each failure lands in exactly one bucket, so the four numbers decompose rather than overlap.
     const census = censusToolFailures([
       call({ name: 'file', toolCallId: 't1', args: { action: 'edit' },
         outcome: { success: false, reason: 'not_found' }, result: cfResult('not_found', 'no anchor') }),
@@ -319,10 +266,8 @@ describe('a failure cannot hide', () => {
   });
 
   test('a bare error-looking string is deliberately NOT a failure', () => {
-    // A decision, not an oversight. This shape carries no discriminator anywhere
-    // in the system, and sniffing its prose would fire on any command whose
-    // stdout mentions a missing function. The fix belongs at the seam that
-    // decides what `success` means, not in a downstream sniff.
+    // Deliberate: this shape has no discriminator and a prose sniff would misfire; the fix belongs where
+    // `success` is decided.
     expect(classifyToolFailure(call({
       name: 'eval', toolCallId: 't1',
       result: 'workspace.createTool is not a function.',
@@ -330,9 +275,7 @@ describe('a failure cannot hide', () => {
   });
 
   test('a tool that failed without saying why gets its own reason, not `threw`', () => {
-    // The producer writes the sentinel; the census names it. Folded into `threw`
-    // it would read as an ordinary exception, when it is a defect in the tool's
-    // own contract.
+    // A defect in the tool's own contract, kept apart from `threw`.
     expect(classifyToolFailure(call({
       name: 'eval', toolCallId: 't1', error: FAILURE_WITHOUT_ERROR,
     }))).toMatchObject({ reason: 'failed_without_error', refused: false, workFailed: false });
@@ -352,8 +295,7 @@ describe('a failure cannot hide', () => {
 
 describe('the census over a run', () => {
   test('counts by tool·action·reason, heaviest first, over FAILURES not calls', () => {
-    // The histogram bug: built over every row, so the mix summed to the
-    // denominator and described tool USAGE while sitting beside a failure rate.
+    // Built over failures only; over every row it would describe tool usage, not failures.
     const rows = [
       call({ name: 'file', toolCallId: 't1', args: { action: 'read' }, result: 'ok\n' }),
       call({ name: 'file', toolCallId: 't2', args: { action: 'read' }, result: 'ok\n' }),
@@ -380,9 +322,8 @@ describe('the census over a run', () => {
       ['file·write·unread', 1],
       ['shell·exit_1', 1],
     ]);
-    // The three parts are disjoint and exhaust the failures: the refusals are
-    // the contract working, the exit 1 is the agent finding a broken suite, and
-    // nothing here is a defect.
+    // Disjoint and exhaustive: the refusals are the contract working, exit 1 is the agent finding a broken
+    // suite.
     expect(census.refused).toBe(3);
     expect(census.workFailed).toBe(1);
     expect(census.broke).toBe(0);
@@ -390,8 +331,7 @@ describe('the census over a run', () => {
   });
 
   test('a call that both threw AND returned failing text is ONE failure', () => {
-    // Summing two predicates double-counted it, which could drive a passed
-    // count negative. One classification per row makes that unrepresentable.
+    // One classification per row, so a passed count cannot go negative.
     const census = censusToolFailures([call({
       name: 'shell', toolCallId: 't1', error: 'exit 2', result: 'Error (exit 2)\nboom\n',
     })]);
@@ -411,14 +351,8 @@ describe('the census over a run', () => {
 
 describe('the classification the `shell` tool actually produced reaches the reader', () => {
   /**
-   * The vertical slice, end to end and with nothing hand-written in the middle:
-   * the real `shell` tool computes the refusal, the real payload crosses the ledger
-   * in BOTH backend shapes, and the real reader attributes it.
-   *
-   * Before the classification existed this row was `returned_error` with
-   * `refused: false` — filed in `broke`, the one bucket that is a candidate
-   * defect. A runtime that Kinu never provisioned is a platform gap the agent
-   * did nothing to cause, and it was being counted against the tool.
+   * End to end: the real `shell` tool refuses, the payload crosses the ledger in both backend shapes, and the
+   * real reader attributes it.
    */
   async function refuseEscalation(runtime: string): Promise<{
     record: ToolCallEnd;
@@ -440,8 +374,7 @@ describe('the classification the `shell` tool actually produced reaches the read
       expect(failure).toMatchObject({
         tool: 'shell',
         reason: 'unavailable',
-        // Not the tool declining and not the work failing: the environment was
-        // never there. Exactly where an exit 127 lands, for the same reason.
+        // Neither the tool declining nor the work failing: the environment was never there.
         refused: false,
         workFailed: false,
         runtimeMissing: true,
@@ -460,8 +393,7 @@ describe('the classification the `shell` tool actually produced reaches the read
   });
 
   test('the same decision is logged under a stable dotted event name', async () => {
-    // The log and the ledger row are two readers of ONE classification. A log line
-    // that said something the row did not would be a second source of truth.
+    // The log and the ledger row read one classification.
     const { logger } = await refuseEscalation('sandbox');
     expect(logger.emitted).toEqual([{
       event: 'shell.escalation_refused',
@@ -472,8 +404,8 @@ describe('the classification the `shell` tool actually produced reaches the read
   });
 
   test('a shell-less workspace is `unsupported`, which is a different fact', async () => {
-    // `unavailable` retries and `unsupported` does not, so pooling them would read
-    // a permanent capability gap as a cold start.
+    // `unavailable` retries and `unsupported` does not; pooling them would read a permanent gap as a cold
+    // start.
     const { rt } = createTestRuntime();
     const logger = createRecordingLogger();
     const tools = buildBuiltinTools({ rt: { ...rt, shell: undefined }, logger, history: storesFor(rt).history });
@@ -490,19 +422,8 @@ describe('the classification the `shell` tool actually produced reaches the read
 type CensusPart = 'refused' | 'workFailed' | 'runtimeMissing' | 'broke';
 
 /**
- * WHICH PART OF THE SPLIT EACH CLASS LANDS IN.
- *
- * The five executor tools now classify their own failures, and a code that lands
- * work in the wrong part of this census is worse than no code at all: the census
- * is published as four numbers and somebody quotes them. So the code→part mapping
- * is asserted here as a TOTAL table over `ErrorCode` — a new code cannot be added
- * without a verdict, the same way `CODE_IS_REFUSAL` forces one — and then proven
- * on the payloads the real executors really produce.
- *
- * The invariant behind the table, and the reason nothing maps to `workFailed`: a
- * classified refusal always means the work did NOT run. The work running and
- * failing arrives as an ordinary successful result prefixed `Error (exit N)` and
- * is read off the exit code, never off a class.
+ * Which part of the split each class lands in, as a total table over `ErrorCode`. Nothing maps to `workFailed`:
+ * a classified refusal means the work did not run.
  */
 const PART_BY_CODE = {
   // The tool established that proceeding would be wrong and declined.
@@ -511,11 +432,9 @@ const PART_BY_CODE = {
   unsupported: 'refused',
   // A bound the caller hit before the work ran — declined, like denied.
   budget: 'refused',
-  // The environment the call addressed is not there. A platform gap: Kinu never
-  // provisioned it, so it is neither a defect nor the work.
+  // The addressed environment is absent: a platform gap, neither a defect nor the work.
   unavailable: 'runtimeMissing',
-  // Nothing decided these and nothing here proves the environment was absent, so
-  // they stay in the residual — the only part that is a candidate defect.
+  // Nothing proves the environment was absent, so these stay in the residual candidate-defect part.
   missing: 'broke',
   timeout: 'broke',
   cancelled: 'broke',
@@ -523,8 +442,7 @@ const PART_BY_CODE = {
   io: 'broke',
 } satisfies Readonly<Record<ErrorCode, CensusPart>>;
 
-/** The four counts, so a wrong part fails on the OTHER three too rather than on a
- *  single boolean that happened to be false for two different reasons. */
+/** The four counts, so a wrong part also fails on the other three. */
 function parts(census: ToolFailureCensus) {
   return {
     refused: census.refused, workFailed: census.workFailed,
@@ -538,9 +456,8 @@ function onlyPart(part: CensusPart) {
 
 describe('every error class lands in exactly one part of the census', () => {
   test('the code→part mapping is total, and no class is ever the work failing', () => {
-    // Total by construction: `PART_BY_CODE` is `satisfies Record<ErrorCode, …>`, so
-    // this loop covers the whole vocabulary and a new code fails to compile above
-    // rather than silently skipping the assertion below.
+    // `PART_BY_CODE` satisfies `Record<ErrorCode, …>`, so a new code fails to compile rather than skip this
+    // loop.
     expect(Object.keys(PART_BY_CODE).sort()).toEqual([...ERROR_CODES].sort());
 
     for (const code of ERROR_CODES) {
@@ -551,8 +468,7 @@ describe('every error class lands in exactly one part of the census', () => {
 
       expect(census.failures).toHaveLength(1);
       expect(parts(census)).toEqual(onlyPart(PART_BY_CODE[code]));
-      // Never `workFailed`: a class means the work did not run. The work failing
-      // is an exit code, and conflating them would report a refusal as a finding.
+      // Never `workFailed`: a class means the work did not run.
       expect(census.workFailed).toBe(0);
     }
   });
@@ -575,18 +491,8 @@ describe('every error class lands in exactly one part of the census', () => {
 });
 
 /**
- * THE FIVE EXECUTOR TOOLS, on the payloads they really produce.
- *
- * Read through the real `shell` tool wherever `shell` can reach the executor, because
- * that is the seam that writes the durable row: `shell` calls `provider.tools.exec`,
- * decides the escalation outcome from `isFailingResultText`, and hands the text on
- * as the tool result the ledger stores.
- *
- * What every case here would have shown before the conversion: `null`. Prose like
- * `exec error: …` or `No device connected.` is not a failure to
- * `isFailingResultText`, so the escalation was recorded `ok` and the census never
- * saw the call at all. A platform condition read as SUCCESS is worse than one read
- * as a defect, because nobody goes looking for it.
+ * The five executor tools on the payloads they really produce, read through the real `shell` tool where it
+ * reaches the executor: that seam writes the durable row.
  */
 describe('each executor tool files its own failure in the right part', () => {
   async function escalate(provider: ExecutorProvider, command = 'pytest -q'): Promise<ToolCallEnd> {
@@ -604,29 +510,22 @@ describe('each executor tool files its own failure in the right part', () => {
   }
 
   test('sandbox: an unconfigured binding is a platform gap, not a broken tool', async () => {
-    // The stub the router really registers when the binding is absent
-    // (cf-backend/src/runtime.ts:509,512) — so this is the deployed shape, not a
-    // hypothetical one.
+    // The stub the router registers when the binding is absent (cf-backend/src/runtime.ts).
     const census = censusOf(await escalate(createSandboxExecutor()));
     expect(census.byKey).toEqual([['shell·unavailable', 1]]);
     expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
   });
 
-  // The pair that makes either case mean something: the same thrown sandbox
-  // prose is filed by what it says happened, not by where it happened.
+  // The same thrown sandbox prose is filed by what it says happened, not where.
   const sandboxFaults = [
     {
-      // 429 on the container start-rate burst. `withSandboxRetry` has already spent
-      // three attempts, so what reaches the census is a container Kinu could not
-      // get — `unavailable`. Filed `io` it would have been a candidate defect in
-      // this tool, which is the platform's capacity ceiling wearing our name.
+      // 429 on the container start-rate burst after `withSandboxRetry` gave up: `unavailable`, not an `io`
+      // defect in this tool.
       name: 'sandbox: admission control that outlived its retries is also a platform gap',
       thrown: 'Too many containers per second', key: 'shell·unavailable', part: 'runtimeMissing' as const,
     },
     {
-      // The contrast that makes the case above mean something. Pooling the two under one
-      // prose string puts every container fault in the bucket that says "Kinu never
-      // provisioned this".
+      // Pooling both under one prose string would file every container fault as never provisioned.
       name: 'sandbox: a transport fault is NOT a platform gap',
       thrown: 'the container hung up mid-write', key: 'shell·io', part: 'broke' as const,
     },
@@ -648,18 +547,11 @@ describe('each executor tool files its own failure in the right part', () => {
   }
 
   test('sandbox: a classified not-ready refusal is asked once, never folded into the retry loop', async () => {
-    // The caller-side answer the CF adapter mints for a devbox that is still
-    // restoring: `unavailable` is the verdict, already classified — and the
-    // reason CAN carry the platform's own transient text ('no container
-    // instance' is a marker string). `withSandboxRetry` reads prose, so
-    // without the narrow KinuError guard this refusal would be attempted
-    // three times and land identically anyway; the measurable property is
-    // the attempt count.
+    // Already classified `unavailable` though the reason can carry transient marker text; the KinuError guard
+    // keeps `withSandboxRetry` from retrying it.
     let readinessCalls = 0;
 
-    // The adapter throws this BEFORE the command exists, on the `exec` call —
-    // the member `withSandboxRetry` wraps — so the retry's own view is exactly
-    // what production hands it.
+    // Thrown on the `exec` call, the member `withSandboxRetry` wraps, as in production.
     const notReady = (): SandboxHandle => ({
       ...sandboxHandleLifecycle,
       exec: async () => {
@@ -690,10 +582,7 @@ describe('each executor tool files its own failure in the right part', () => {
     expect(absent.byKey).toEqual([['shell·unavailable', 1]]);
     expect(parts(absent)).toEqual(onlyPart('runtimeMissing'));
 
-    // `unsupported` and therefore `refused`: this deployment's handle has no
-    // `runCode`, retrying cannot grow one, and declining is the correct outcome.
-    // The two codes are the retry/permanent line, and the census reads them as
-    // two different findings — which is the whole reason both exist.
+    // `unsupported`, so `refused`: this handle has no `runCode` and retrying cannot grow one.
     const narrow = createNimbusExecutor({
       box: { ready: async () => {},
         exec: async () => ({ command: 'noop', success: true, exitCode: 0, stdout: '', stderr: '' }),
@@ -713,8 +602,7 @@ describe('each executor tool files its own failure in the right part', () => {
       refreshStatus: async () => ({ connected: false, registered: true, toolchain: null }),
     }));
 
-    // The regression this locks: prose read as a SUCCESSFUL call leaves the census
-    // counting nothing at all here.
+    // Prose read as a successful call would leave the census counting nothing here.
     expect(payload.outcome).toMatchObject({ success: false, reason: 'unavailable' });
     const census = censusOf(payload);
     expect(census.byKey).toEqual([['shell·unavailable', 1]]);
@@ -724,10 +612,7 @@ describe('each executor tool files its own failure in the right part', () => {
   });
 
   test('parent: the errno the parent raised is the class, and it is not re-guessed', async () => {
-    // This executor writes no reason of its own, on purpose: `makeVfsError` puts
-    // the parent's code on the error and the classifier reads errnos, so ENOENT
-    // arrives as `missing` without parent.ts naming anything. Adding a code here
-    // would have added one whose value never varies.
+    // No reason of its own: `makeVfsError` carries the parent's errno, so ENOENT classifies as `missing`.
     const census = censusOf(await escalate(createParentExecutor({
       handle: {
         read: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such file', path: '/p' } }),
@@ -744,9 +629,7 @@ describe('each executor tool files its own failure in the right part', () => {
   });
 
   test('parent: an aborted exec ends as `cancelled`, which it could not before', async () => {
-    // The signal was parsed and dropped, so this executor's exec had no way to end
-    // as `cancelled` at all — one class of the nine was unreachable on one of the
-    // five tools, and a caller could not tell a cancelled wait from a dead parent.
+    // The signal must reach exec, or `cancelled` is unreachable and a cancelled wait looks like a dead parent.
     const controller = new AbortController();
 
     const provider = createParentExecutor({
@@ -770,10 +653,7 @@ describe('each executor tool files its own failure in the right part', () => {
   });
 
   test('workspace: the inline plane refuses with a class its own caller can read', async () => {
-    // `shell` never reaches this tool — the workspace branch calls `rt.shell`
-    // directly — so what the classification buys here is the OTHER caller:
-    // LLM-generated code inside `eval`, which can now branch on `reason`
-    // instead of matching prose, and a block reader that can see a failure at all.
+    // `shell` never reaches this tool; the classification serves `eval` code, which can branch on `reason`.
     const { rt } = createTestRuntime();
 
     const workspace = createInlineExecutor({
@@ -787,9 +667,7 @@ describe('each executor tool files its own failure in the right part', () => {
   });
 
   test('workspace: the misevolution gate working is a refusal, not a defect', async () => {
-    // Measured shape of the bug this class removes: the veto answered
-    // `{ ok: false, error }` with no reason, so the census read `returned_error`
-    // and filed the gate DOING ITS JOB under `broke`.
+    // Without a reason the veto read as `returned_error` and filed the gate doing its job under `broke`.
     const { rt } = createTestRuntime();
 
     const workspace = createInlineExecutor({

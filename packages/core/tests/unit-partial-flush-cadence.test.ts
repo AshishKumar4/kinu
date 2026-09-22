@@ -1,10 +1,4 @@
-/**
- * The one flush cadence for an in-flight answer: the rule both the loop's
- * step ledger and a backend's wire replay store make a partial durable by,
- * so a continuing turn and a reconnecting client read the same amount of an
- * interrupted answer. Read back as the sequence of decisions the cadence
- * gives one stream of signals.
- */
+/** The one flush cadence the step ledger and the wire replay store use to make a partial answer durable. */
 import { expect, test } from 'bun:test';
 import { partialFlushCadence, type PartialFlushSignal } from '@kinu.run/core';
 
@@ -12,9 +6,7 @@ function decisions(signals: readonly PartialFlushSignal[], cadence = partialFlus
   return signals.map((signal) => cadence.flushes(signal));
 }
 
-/** The cadence's own period, read off it: content chunks from the first
- *  flush to the second. Measured rather than restated, so the number lives
- *  in one place. */
+/** The cadence's period, measured rather than restated, so the number lives in one place. */
 const PERIOD = decisions(Array<PartialFlushSignal>(100).fill('content')).indexOf(true, 1);
 
 test('the first content chunk flushes, then every period of content chunks', () => {

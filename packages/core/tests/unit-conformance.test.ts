@@ -1,12 +1,5 @@
-// Backend conformance — the comparator itself, and the LLM-facing phantom
-// scan.
-//
-// The comparator is a guard, and a guard that cannot fail is the exact defect
-// class it belongs to (assertEventSequence passed every input; the broadcast
-// gate once matched a producer string and called it a consumer). So the first
-// tests here are falsifiability proofs: every finding kind is driven to fire
-// from a fabricated observation. The per-backend harnesses that feed REAL
-// observations live in packages/cf-backend and packages/cli.
+// Backend conformance comparator and the LLM-facing phantom scan. Every finding kind is driven to fire
+// here; the harnesses feeding real observations live in packages/cf-backend and packages/cli.
 import { describe, test, expect } from 'bun:test';
 import {
   BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_ROOTS, PLANE_UNIVERSE,
@@ -18,8 +11,6 @@ import {
 import { renderForLLM } from '../src/events/hub/index';
 import type { KinuEvent } from '../src/events/hub/index';
 
-// ── Falsifiability: every finding kind can fire ─────────────────────────────
-
 function observing(planes: ObservedSurface['planes']): ObservedSurface {
   return { root: 'cli', planes };
 }
@@ -28,7 +19,6 @@ describe('compareSurface can fail (canaries)', () => {
   test('declared wired but not observed → missing', () => {
     const report = compareSurface(observing({ tool: new Set(['shell']) }));
     const missing = report.findings.filter((f) => f.kind === 'missing').map((f) => f.name);
-    // Every tool the manifest wires on cli except `shell` must be reported.
     expect(missing).toContain('eval');
     expect(missing).toContain('memory');
     expect(missing).not.toContain('shell');
@@ -100,8 +90,6 @@ describe('compareSurface can fail (canaries)', () => {
   });
 });
 
-// ── Manifest hygiene ────────────────────────────────────────────────────────
-
 describe('manifest hygiene', () => {
   test('every deliberate absence names a reason', () => {
     for (const plane of CONFORMANCE_PLANES) {
@@ -121,16 +109,14 @@ describe('manifest hygiene', () => {
   });
 
   test('the closed planes cover their registry universe exactly', () => {
-    // A registry addition without a manifest decision is a compile error via
-    // the Record key type; this locks the runtime view to the same truth.
+    // The Record key type catches this at compile time; this locks the runtime view.
     expect(Object.keys(BACKEND_CONFORMANCE.tool).sort()).toEqual([...PLANE_UNIVERSE.tool].sort());
     expect(Object.keys(BACKEND_CONFORMANCE['agents-action']).sort()).toEqual([...AGENTS_TOOL_ACTIONS].sort());
     expect(Object.keys(BACKEND_CONFORMANCE['memory-action']).sort()).toEqual([...PLANE_UNIVERSE['memory-action']].sort());
     expect(Object.keys(BACKEND_CONFORMANCE.producer).sort()).toEqual([...PLANE_UNIVERSE.producer].sort());
   });
 
-  /** A declaration is dead when no root holds the capability. A root that
-   *  creates it on first use holds it; the observer only looks at boot. */
+  /** A root that creates the capability on first use holds it; the observer only looks at boot. */
   function heldSomewhere(statuses: RootStatuses): boolean {
     return CONFORMANCE_ROOTS.some((root) => 'wired' in statuses[root] || 'lazy' in statuses[root]);
   }
@@ -156,8 +142,6 @@ describe('manifest hygiene', () => {
     expect(heldSomewhere({ ...nowhere, 'cf-orchestrator': { lazy: 'created on first use by a registration' } })).toBe(true);
   });
 });
-
-// ── Observation helpers ─────────────────────────────────────────────────────
 
 describe('normalizeObservedTables', () => {
   test('drops sqlite bookkeeping and FTS5 shadows, keeps the virtual table', () => {
@@ -185,8 +169,6 @@ describe('observedActionEnum', () => {
   });
 });
 
-// ── Phantom callables in LLM-facing text ────────────────────────────────────
-
 describe('phantomCallables', () => {
   test('flags a snake_case instruction that resolves to nothing', () => {
     expect(phantomCallables('use read_external_payload(event_id) if authorized', new Set(BUILTIN_TOOLS)))
@@ -198,8 +180,7 @@ describe('phantomCallables', () => {
     expect(phantomCallables(text, callables)).toEqual([]);
   });
   test('a single-word tool is a phantom on a root that did not wire it', () => {
-    // `web` is a real single-word tool, not prose: a root without it that
-    // tells the model to `web(...)` names a callable that resolves to nothing.
+    // `web` is a real single-word tool, not prose.
     expect(phantomCallables('call web(url) now', new Set(['eval']))).toEqual(['web']);
   });
   test('a wired single-word tool is real whatever its shape', () => {
@@ -208,9 +189,6 @@ describe('phantomCallables', () => {
 });
 
 describe('event briefs name only real callables', () => {
-  // The whole point: text injected into the prompt is an API contract. Render
-  // every payload-visibility branch and every variant brief the hub can emit,
-  // then require each call-shaped instruction to resolve.
   const CALLABLES = new Set<string>([...BUILTIN_TOOLS, ...AGENTS_TOOL_ACTIONS.map((a) => `agents.${a}`)]);
 
   const EVENT_BASE = {
@@ -268,8 +246,7 @@ describe('event briefs name only real callables', () => {
   });
 
   test('the scan sees the brief surface at all (guards the guard)', () => {
-    // If renderForLLM's shape changes so briefs go empty, the phantom test
-    // above would pass while checking nothing.
+    // Guards the phantom test above from passing on empty briefs.
     const briefs = BRIEF_SOURCES.map((e) => renderForLLM(e).brief);
     expect(briefs.filter((b) => b.length > 0).length).toBeGreaterThanOrEqual(9);
   });

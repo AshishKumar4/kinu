@@ -1,5 +1,4 @@
-// The long-horizon family's generator and scorer. Everything here is pure, so
-// the whole instrument is checkable without a model, a sandbox, or a provider.
+// Long-horizon generator and scorer: pure, so checkable without a model, sandbox, or provider.
 import { describe, test, expect } from 'bun:test';
 import {
   LONGHORIZON_ANSWER_FILE, LONGHORIZON_CORPUS_DIR,
@@ -208,8 +207,7 @@ describe('the spec round-trips into the check argv', () => {
     // Hand-derived array encoding, so a field-order change fails here.
     expect(encodeLongHorizonSpec(digest)).toBe('["digest",11,120,60,5,1]');
 
-    // Field order in the encoding must not follow object-literal order — the
-    // encoded string lands in the check argv, so it lands in the task hash.
+    // The encoding lands in check argv and so the task hash: field order must not follow literal order.
     const reordered: LongHorizonSpec = {
       parts: 1, markers: 5, filler: 60, entries: 120, seed: 11, mode: 'digest',
     };

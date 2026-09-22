@@ -16,9 +16,7 @@ function setup() {
   const memoryExec = toolExecute<MemoryToolInput, JsonValue>(tools.memory);
   let row = 0;
 
-  // The canonical write both backends make: one message and its transcript
-  // entry, published together. `recorded_at` is wall-clock, so the stamp the
-  // browse order reads is set explicitly.
+  // One message and its transcript entry published together; `recorded_at` is wall-clock, so it is set explicitly.
   const insert = async (conversationId: string, role: 'user' | 'assistant', content: string): Promise<string> => {
     const id = `m-${++row}`;
     const recordedAt = 1_000_000 + row * 1000;

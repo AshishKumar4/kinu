@@ -148,16 +148,14 @@ describe('one workspace actor directory', () => {
   });
 
   test('a stored node row loads as a head — the fold retires the write path, not the row', () => {
-    // No API writes 'node' anymore; the only way to meet one is a row stored
-    // before the fold, inserted here as raw SQL.
+    // No API writes 'node' anymore; raw SQL stands in for a row stored before the fold.
     const { directory, sql } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
     const actorId = crypto.randomUUID();
     const now = Date.now();
     void sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, lifetime, created_at, creation_id)
       VALUES (${actorId}, 'workspace', ${main.actorId}, 'exp:node-before-the-fold', ${actorId}, 'node', 'task', ${now}, 'c-fold')`;
-    // The production read path presents it as what it behaviorally was: a head
-    // with its own scaffold under its own storage key.
+    // Read back as what it behaviorally was: a head with its own scaffold under its own storage key.
     const read = directory.describe(directory.open(actorId));
     expect(read.kind).toBe('head');
     expect(read.name).toBe('exp:node-before-the-fold');
@@ -165,9 +163,7 @@ describe('one workspace actor directory', () => {
     expect(directory.list().map((actor) => actor.kind)).toContain('head');
     expect(actorScaffoldPath(read)).toBe(`.kinu/agents/${encodeURIComponent(actorId)}/scaffold/agent.js`);
     expect(actorScaffoldPath(read)).not.toBe('scaffold/agent.js');
-    // And the write path is closed: nothing registers 'node' anymore. A change
-    // reaches the directory as JSON, so the retired spelling arrives the same
-    // way, and the bad_input refusal proves the schema rejects it.
+    // The write path is closed: bad_input proves the directory schema rejects 'node'.
     expect(() => directory.apply(main, [], JSON.parse(JSON.stringify({ action: 'register', creationId: 'c-new', name: 'exp:node-new', kind: 'node', lifetime: 'task' }))))
       .toThrow(expect.objectContaining({ code: 'bad_input' }));
   });

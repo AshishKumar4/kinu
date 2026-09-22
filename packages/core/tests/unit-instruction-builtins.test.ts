@@ -1,14 +1,4 @@
-// KINU-N028 — built-in skill names are reserved.
-//
-// `/workspace/skills/` is writable by the agent's own `file` tool, its codemode
-// and its shell. Seeding the corpus with the built-ins and then letting a file
-// of the same name overwrite the entry — "the agent can override us" — is a
-// replacement of shipped doctrine, including the `allowed_tools` a built-in
-// declares, chosen by picking a filename. It is refused outright.
-//
-// This is an invariant, not an approval question: there is no digest an owner
-// could approve that would make shadowing a built-in the right answer, because
-// the built-in would simply be gone.
+// KINU-N028: built-in skill names are reserved; a writable `/workspace/skills/` file must never shadow one.
 import { describe, test, expect } from 'bun:test';
 import {
   discoverSkills, stringifySkillFile,
@@ -18,7 +8,6 @@ import {
 
 const BUILTIN_NAME = BUILTIN_SKILLS[0].name;
 
-/** The smallest plane discovery can walk: a filename → contents map. */
 function vfsWith(files: Record<string, string>): SkillsVfs {
   return {
     exists: async (path) => path in files,
@@ -77,10 +66,8 @@ describe('built-in skill names are reserved', () => {
 
     const found = discovery.skills.find((s) => s.name === BUILTIN_NAME);
     expect(found).toBeDefined();
-    // The BUILT-IN survived, with its module-constant body.
     expect(found?.bodyRef.kind).toBe('builtin');
     expect(found?.source).toBe('builtin');
-    // Nothing from the file leaked into the corpus.
     expect(found?.description).not.toBe('Authored by the agent.');
     expect(found?.allowed_tools).not.toEqual(['shell']);
   });
@@ -100,7 +87,7 @@ describe('built-in skill names are reserved', () => {
   });
 
   test('an ordinary workspace skill is still discovered beside the built-ins', async () => {
-    // The guard must not have turned into a blanket refusal of workspace skills.
+    // The guard must not become a blanket refusal of workspace skills.
     const discovery = await discoverSkills(
       vfsWith({ [`${SKILLS_DIR}/house-style.md`]: skillFile('house-style', 'Write plainly.') }),
       WIDE,

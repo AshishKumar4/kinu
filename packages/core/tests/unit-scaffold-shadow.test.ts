@@ -1,15 +1,3 @@
-/**
- * Unit tests for shadow-mode scaffold rollout logic.
- *
- * Covers:
- *   - initShadowTables creates scaffold_evaluations + extends scaffold_versions
- *   - getPendingScaffold returns null when no pending row
- *   - getPendingScaffold returns counts from scaffold_evaluations
- *   - recordShadowEvaluation persists with correct schema
- *   - decidePromotion logic: continue / promote / rollback / forced
- *   - applyPromotionDecision flips status correctly
- */
-
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -40,9 +28,7 @@ function setup() {
   initShadowTables(execRaw);
   const sql = makeSql(db);
 
-  // A REAL handle over this database: every reader below is actor-scoped, so a
-  // fixture that seeded rows under one id and read under another would pass
-  // vacuously on empty results.
+  // A real handle: every reader is actor-scoped, so mismatched ids would pass vacuously on empty results.
   return { sql, actor: testActorHandle(sql), execRaw, db };
 }
 
@@ -181,13 +167,10 @@ describe('decidePromotion', () => {
   }
 
   test('tolerates one loss (maxRegressions=1, Monte-Carlo settled) but vetoes the second', () => {
-    // 6-1 (winRate 0.86): within the regression tolerance → promote. The old
-    // maxRegressions=0 rolled this back and thereby rejected most genuinely-
-    // better variants (see DEFAULT_SHADOW_CONFIG simulation table).
+    // 6-1 (winRate 0.86): within the regression tolerance, so promote (see DEFAULT_SHADOW_CONFIG).
     const oneLoss = make({ trialsSoFar: 8, pendingWins: 6, currentWins: 1 });
     expect(decidePromotion(oneLoss, cfg).decision).toBe('promote');
-    // 6-2 (winRate 0.75 — still promotable on win-rate alone): the hard veto
-    // fires on the second decisive loss regardless. This is the safety core.
+    // 6-2 (winRate 0.75): the hard veto fires on the second decisive loss regardless.
     const twoLosses = make({ trialsSoFar: 9, pendingWins: 6, currentWins: 2 });
     expect(decidePromotion(twoLosses, cfg).decision).toBe('rollback');
   });
@@ -220,9 +203,8 @@ describe('decidePromotion', () => {
   });
 
   test('maxTrials force decides on a thin decisive record, ignoring minDecisiveTrials', () => {
-    // The ceiling is the forced decision: a bare >0.5 majority promotes even
-    // with 2 decisive trials. That is why maxTrials is budgeted against the
-    // judge's decisive YIELD rather than raw turns (see DEFAULT_SHADOW_CONFIG).
+    // At the ceiling a bare majority promotes even with 2 decisive trials, so maxTrials is budgeted on the
+    // judge's decisive yield.
     const ahead = make({ trialsSoFar: cfg.maxTrials, pendingWins: 2, currentWins: 0, ties: cfg.maxTrials - 2 });
     expect(decidePromotion(ahead, cfg).decision).toBe('promote');
     const level = make({ trialsSoFar: cfg.maxTrials, pendingWins: 1, currentWins: 1, ties: cfg.maxTrials - 2 });
@@ -230,9 +212,7 @@ describe('decidePromotion', () => {
   });
 
   test('an all-tie record keeps observing PAST the ceiling — the window legitimately extends', () => {
-    // The double-win judge makes long tie runs common; the ceiling is not a
-    // guaranteed stopping point, and a pure-tie record must not be forced into
-    // a coin-flip verdict.
+    // Long tie runs are common, so a pure-tie record at the ceiling must not be forced into a verdict.
     const p = make({ trialsSoFar: cfg.maxTrials * 3, ties: cfg.maxTrials * 3 });
     expect(decidePromotion(p, cfg).decision).toBe('continue');
   });
@@ -274,10 +254,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
   });
 
   test('promote copies the versioned pending code into the live file', async () => {
-    // Regression for `kinu-scaffold-gap`: the pending lives in
-    // scaffold/agent.js.v{N}, never in the live file at proposal time, so
-    // promote is a real file swap and not a SQL flag flip with no on-disk
-    // effect. This test exercises the full proposal → promote round-trip.
+    // The pending lives in scaffold/agent.js.v{N}, so promote is a real file swap (kinu-scaffold-gap).
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
@@ -306,9 +283,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     expect(promo.action).toBe('promote');
     expect(promo.newCurrentVersion).toBe(pending.version);
     expect(await rt.identity.scaffold.read()).toBe(pendingCode);
-    // The decision is DATED on the run-event log, whichever path moved the
-    // pointer: the changelog reads this row, and one backend wrote it only from
-    // its manual RPC while the other never did.
+    // The decision is dated on the run-event log whichever path moved the pointer; the changelog reads it.
     expect(decisionRows(rt)).toEqual([
       { type: 'scaffold_promotion', payload: { fromVersion: 0, toVersion: 1 } },
     ]);
@@ -392,9 +367,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
   });
 
   test('promote → modify → rollback cycle restores the correct current version', async () => {
-    // After a promote, a fresh modify, then a rollback, the live file must
-    // return to the PROMOTED version — not pending.version-1, which would be
-    // the wrong (pre-promote) version under non-contiguous numbering.
+    // After promote, modify and rollback, live returns to the promoted version, not pending.version-1.
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);

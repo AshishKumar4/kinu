@@ -1,13 +1,4 @@
-/**
- * Where a turn's conversation comes from — one rule, on every backend.
- *
- * A turn queued to answer a delivery (`metadata.drainTurnId`) opens on the
- * actor's own conversation when it has one, and is born from the delivery's
- * conversation when it has none; every other turn appends its input to what
- * is there. The rule lives on the actor session so the hosted root and the
- * local session cannot answer it differently, and it is read back here
- * through the session's own history.
- */
+/** A drain turn opens on the actor's conversation, else the delivery's; the rule lives on the actor session. */
 import { expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';

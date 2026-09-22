@@ -1,17 +1,5 @@
 import type { ChatEvent } from '../src/chat';
-/**
- * The promotion gate's trials are OFFLINE.
- *
- * A shadow trial is a whole candidate turn plus two judge calls. What a turn
- * owes the gate is ONE ROW; the rollout happens on the cadence lane. Run on the
- * lane the finished turn is still holding, a trial makes a `kinu exec` process
- * wait it out before it can exit and has a Durable Object run a second full
- * inference beside the next request.
- *
- * These tests pin both halves and the seam between them: the turn executes
- * nothing, the drain executes what the turn queued, and a queued trial is never
- * counted as evidence in the meantime.
- */
+/** Shadow trials run offline: a turn only queues one row, and the cadence-lane drain runs it. */
 
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -68,8 +56,6 @@ function evalExecutor(): Executor {
   };
 }
 
-/** The decision every sampled turn in these suites carries: version 1 is the
- *  candidate `setup` leaves pending. */
 const PLAN = { pendingVersion: 1 } as const;
 
 const PENDING_SOURCE = 'async function* run(rt, task) { yield { type: "chunk", data: "pending: " + task }; }';
@@ -89,8 +75,7 @@ async function setup(): Promise<AgentRuntime> {
   return rt;
 }
 
-/** Every executable port of the control plane, counted. Nothing here may be
- *  touched by a completed turn — that is the whole property under test. */
+/** Every executable control-plane port, counted: a completed turn may touch none. */
 interface CountedControl {
   control: ScaffoldControl;
   counts: { surface: number; judge: number; defaultInference: number };
@@ -128,8 +113,7 @@ function countedControl(
     judge: async ({ schema }) => {
       counts.judge++;
 
-      // Content-blind, but the protocol is order-swapped, so a fixed slot would
-      // flip and tie. Attribute by the pending's known output instead.
+      // The protocol is order-swapped, so attribute by the pending's known output, not a fixed slot.
       const out: JudgeOutput = verdict === 'tie'
         ? { winner: 'tie', rationale: 'm', scoreA: 0.5, scoreB: 0.5 }
         : { winner: 'a', rationale: 'm', scoreA: 0.8, scoreB: 0.4 };
@@ -141,8 +125,7 @@ function countedControl(
   return { control, counts, contexts };
 }
 
-/** A judge that decides by CONTENT, so it survives the order swap and yields a
- *  decisive trial. `pendingText` is what the candidate scaffold emits. */
+/** Decides by content, so it survives the order swap. */
 function contentJudge(
   pendingText: string,
   winner: 'pending' | 'current',
@@ -174,10 +157,8 @@ describe('the interactive path runs no trial', () => {
     }, PLAN);
 
     expect(outcome).toBe('queued');
-    // The candidate was never built, never run, never judged.
     expect(counts).toEqual({ surface: 0, judge: 0, defaultInference: 0 });
     expect(rt.storage.sql`SELECT id FROM scaffold_evaluations WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
-    // What it left behind instead: one durable row, carrying the whole turn.
     const queued = listQueuedShadowTrials(rt.storage.sql, rt.actor, 1);
     expect(queued).toHaveLength(1);
     expect(queued[0].task).toBe(TASK);
@@ -193,9 +174,7 @@ describe('the interactive path runs no trial', () => {
 
     const sampled = countedControl(rt, { sampleRate: 1 });
     expect(shadowTrialPlan(sampled.control, 'turn-1')).toBe(1);
-    // An unkeyed turn has no durable identity to record a trial under.
     expect(shadowTrialPlan(sampled.control, '')).toBeNull();
-    // Reproducible: a replaying caller re-derives the plan it recorded.
     const half = countedControl(rt, { sampleRate: 0.5 });
     const keys = Array.from({ length: 64 }, (_, i) => `turn-${String(i)}`);
     const first = keys.map((key) => shadowTrialPlan(half.control, key));
@@ -230,7 +209,6 @@ describe('a queued trial is not evidence', () => {
     const rt = await setup();
     const { control } = countedControl(rt);
 
-    // Four decisive wins recorded — one short of the ladder's minimum.
     for (let i = 0; i < 4; i++) {
       void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
@@ -242,7 +220,7 @@ describe('a queued trial is not evidence', () => {
     }
 
     const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
-    // Ten trials exist in some sense; four have been RUN, and only those count.
+    // Only trials actually run count as evidence.
     expect(pending.trialsSoFar).toBe(4);
     expect(decidePromotion(pending, DEFAULT_SHADOW_CONFIG).decision).toBe('continue');
 
@@ -253,7 +231,6 @@ describe('a queued trial is not evidence', () => {
     expect(status.queuedTrials).toBe(6);
     expect(status.pending.trialsSoFar).toBe(4);
 
-    // And the honest refusal survives an explicit ask.
     const forced = await applyScaffoldDecision(control, 'auto');
     expect(forced).toEqual({ ok: false, error: 'inconclusive; need more trials' });
   });
@@ -272,9 +249,7 @@ describe('the offline drain is what executes trials', () => {
     expect(counts.judge).toBe(2); // the order-swapped pair
     expect(present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold').trialsSoFar).toBe(1);
     expect(listQueuedShadowTrials(rt.storage.sql, rt.actor, 1)).toHaveLength(0);
-    // The candidate ran against the turn's OWN conversation, not a task-text
-    // reconstruction of it — the shadow-parity contract, carried through the
-    // queue rather than through a live closure.
+    // Shadow parity: the candidate runs against the turn's own conversation, carried through the queue.
     expect(contexts[0]).toEqual(CONTEXT);
   });
 
@@ -307,8 +282,6 @@ describe('the offline drain is what executes trials', () => {
       WHERE actor_id = ${rt.actor.actorId}`.map((r) => [r.version, r.status]));
 
     expect(statuses.get(1)).toBe('current');
-    // The two trials still queued were evidence about a candidate nobody is
-    // deciding on any more.
     expect(rt.storage.sql`SELECT id FROM scaffold_trial_queue WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
   });
 
@@ -316,7 +289,6 @@ describe('the offline drain is what executes trials', () => {
     const rt = await setup();
     const { control, counts } = countedControl(rt);
     queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] }, PLAN);
-    // The operator resolved it by hand while the trial sat in the queue.
     void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back'
       WHERE actor_id = ${rt.actor.actorId} AND version = 1`;
 
@@ -347,8 +319,6 @@ describe('the offline drain is what executes trials', () => {
 });
 
 describe('auto-evolution off runs no trial and leaves no trial to run', () => {
-  /** Both halves of the loop as a host wires them — the ports the backends
-   *  supply, over the counted control plane. */
   function hostEngine(rt: AgentRuntime, control: ScaffoldControl, enabled: boolean): EvolutionEngine {
     return new EvolutionEngine(rt, storesFor(rt).history, {
       enabled,
@@ -368,36 +338,27 @@ describe('auto-evolution off runs no trial and leaves no trial to run', () => {
     const engine = hostEngine(rt, control, false);
 
     engine.queueShadowTrial(completedTurn(), CONTEXT, PLAN);
-    // No evolution state: nothing recorded for a later evolution-enabled host
-    // to evolve on this run's behalf. Asserted before the drain as well as
-    // after it, or a drain that ran would hide a turn that queued.
+    // Asserted before the drain too, or a drain would hide a turn that queued.
     expect(rt.storage.sql`SELECT id FROM scaffold_trial_queue WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
 
     await engine.runDueShadowTrials();
 
     expect(rt.storage.sql`SELECT id FROM scaffold_trial_queue WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
     expect(rt.storage.sql`SELECT id FROM scaffold_evaluations WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
-    // No evolution compute: no candidate rollout, no judge call.
     expect(counts).toEqual({ surface: 0, judge: 0, defaultInference: 0 });
-    // The candidate an earlier run left pending is untouched, not lost — the
-    // next host that does evolve resolves it.
     expect(getPendingScaffold(rt.storage.sql, rt.actor)?.version).toBe(1);
   });
 
   test('such a host does not drain what an earlier evolution-enabled run queued', async () => {
     const rt = await setup();
     const { control, counts } = countedControl(rt);
-    // The row an interactive session or the daemon left in this workspace.
     hostEngine(rt, control, true).queueShadowTrial(completedTurn(), CONTEXT, PLAN);
 
     await hostEngine(rt, control, false).runDueShadowTrials();
 
-    // The candidate rollout and its two judge calls are evolution compute, and
-    // this run was told to spend none.
     expect(counts).toEqual({ surface: 0, judge: 0, defaultInference: 0 });
     expect(rt.storage.sql`SELECT id FROM scaffold_evaluations WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
-    // Deferred, not dropped: the queue is durable, so the evidence waits for a
-    // host that does evolve rather than being consumed by one that does not.
+    // Deferred, not dropped: the evidence waits for a host that does evolve.
     expect(listQueuedShadowTrials(rt.storage.sql, rt.actor, 1)).toHaveLength(1);
   });
 
@@ -441,9 +402,7 @@ describe('the stored replay context is bounded', () => {
   });
 });
 
-// The queue row is the whole conflict target, and the runner deletes it the
-// moment it has scored the trial. A caller that OWES the queueing — a durable
-// terminal effect whose disposition was never recorded — replays it after that.
+// The runner deletes the queue row once scored, but a caller that owes the queueing may replay it after.
 describe('a keyed trial survives the consumption of its queue row', () => {
   function openQueue() {
     const { sql, execRaw } = createTestSql();
@@ -469,12 +428,9 @@ describe('a keyed trial survives the consumption of its queue row', () => {
     expect(queueShadowTrial(sql, actor, trial('trial:seq-1', 1))).toBe('queued');
     expect(listQueuedShadowTrials(sql, actor, 2)).toHaveLength(1);
 
-    // Scored, and the row that carried it deleted.
     dropQueuedShadowTrial(sql, actor, 'trial:seq-1');
     expect(listQueuedShadowTrials(sql, actor, 2)).toEqual([]);
 
-    // The replay: the obligation is discharged and nothing is queued for a
-    // second scoring.
     expect(queueShadowTrial(sql, actor, trial('trial:seq-1', 9))).toBe('queued');
     expect(listQueuedShadowTrials(sql, actor, 2)).toEqual([]);
   });

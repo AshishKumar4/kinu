@@ -1,12 +1,4 @@
-/**
- * The source half of the fork wire: one workspace read into sealed, bounded
- * frames.
- *
- * The central property is EQUIVALENCE — the frames reassemble to exactly the
- * value the in-process snapshot materializes — plus the two bounds the framing
- * exists for: no row batch and no file range exceeds the frame budget, and a
- * single oversized row crosses alone rather than being refused.
- */
+/** Frames must reassemble to the in-process snapshot, stay within the frame budget, and carry an oversized row alone. */
 
 import { describe, expect, test } from 'bun:test';
 import { createTestWorkspace, type TestWorkspace } from './helpers';
@@ -43,18 +35,13 @@ async function seedChain(ws: TestWorkspace): Promise<ForkConversation> {
 
 function framesFor(ws: TestWorkspace, frameBytes = 2048, untilMessageId = 'm3'): Promise<ForkFrame[]> {
   return Array.fromAsync(forkTransferFrames({
-    // The OWNER of the conversation being forked: entries and memberships are
-    // keyed on it, so a snapshot taken under any other handle carries a
-    // sibling's transcript — or, here, none at all.
+    // Entries and memberships are keyed on the conversation owner; any other handle snapshots the wrong transcript.
     sql: ws.sql, actor: openWorkspaceMainActor(ws.sql), vfs: ws.vfs,
     artifactDirectory: SOURCE_ARTIFACTS,
     untilMessageId, transferId: 'transfer', frameBytes,
   }));
 }
 
-/** The snapshot a stream carries, rebuilt from its frames — so the comparison
- *  below is against the in-process value rather than against a restatement of
- *  what the streamer happens to emit. */
 function reassemble(frames: ForkFrame[]): ForkSnapshot {
   const begin = frames[0];
 
@@ -90,8 +77,6 @@ function reassemble(frames: ForkFrame[]): ForkSnapshot {
   };
 }
 
-/** The same measure the sender batches by, restated per section so a frame that
- *  exceeded the budget with more than one row is visible here. */
 function rowPayloadBytes(frame: ForkFrame): number {
   const bytes = (value: string | null): number => (value === null ? 0 : Buffer.byteLength(value));
 
@@ -178,8 +163,7 @@ describe('forkTransferFrames source streamer', () => {
   test('bounds every row batch and file range while sending an oversized row intact', async () => {
     const ws = createTestWorkspace();
     const chat = await seedChain(ws);
-    // The largest content the store keeps inline is one message row that
-    // cannot be split, so it crosses alone rather than being refused.
+    // An unsplittable inline row crosses alone rather than being refused.
     const inline = 'x'.repeat(INLINE_PAYLOAD_BYTES - 200);
     await chat.say({ id: 'm4', role: 'user', text: inline });
     await ws.vfs.writeFile('memory/large.md', 'y'.repeat(1_000_000));
@@ -205,8 +189,7 @@ describe('forkTransferFrames source streamer', () => {
     const payloads = frames.filter(isFileFrame).filter((frame) => frame.artifact);
 
     expect(payloads.length).toBeGreaterThan(0);
-    // Relative: an absolute path would name the SOURCE's plane, and the
-    // receiver re-roots it under its own.
+    // Relative: the receiver re-roots paths under its own plane.
     expect(payloads.every((frame) => !frame.path.startsWith('/'))).toBe(true);
     const bytes = Bun.concatArrayBuffers(payloads.map((frame) => frame.bytes));
     expect(JSON.parse(new TextDecoder().decode(bytes))).toEqual([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text: spilled } }]);
@@ -239,8 +222,7 @@ describe('forkTransferFrames source streamer', () => {
     const ws = createTestWorkspace();
     const chat = await seedChain(ws);
     await chat.say({ id: 'm4', role: 'user', text: 'p'.repeat(SPILLED_BYTES) });
-    // A reference into another plane: re-rooting it would name a file this
-    // fork does not have, copying it verbatim a directory it does not own.
+    // A reference into another plane can be neither re-rooted nor copied verbatim.
     void ws.sql`UPDATE session_messages SET content_path = '/other/plane/escape.json' WHERE content_path IS NOT NULL`;
 
     await expect(framesFor(ws, 64 * 1024, 'm4')).rejects.toThrow(/outside the artifact directory/);

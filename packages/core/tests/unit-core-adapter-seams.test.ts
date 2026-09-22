@@ -1,8 +1,5 @@
-// The nine core seams where measured backend drift lands (CoreAdapterAudit).
-//
-// Each block below pins the ONE thing the two backends can disagree about, so
-// an adapter cannot open it silently. Where a test looks trivially true, the
-// drift it prevents is named — that is the point of the assertion.
+// Core seams where backend drift lands (CoreAdapterAudit): each block pins one thing the two
+// backends could otherwise disagree about silently.
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -31,12 +28,8 @@ import {
 import { makeSqlExec } from './helpers';
 import { isJsonObject, type JsonValue } from '../src/utils/json';
 
-// ── Seam 7: the variant picklist and the type are one declaration ────────────
-
 describe('EVENT_VARIANTS — the array and the type cannot disagree', () => {
-  // The drift: one backend mirrored these literals into its own valibot
-  // picklist, so a variant added in core compiled here and was silently
-  // REFUSED at that route. The array is now the single declaration.
+  // One declaration: a hand-mirrored picklist would compile yet refuse a new variant at its route.
   test('every declared variant is accepted by a picklist built from the array', () => {
     const schema = v.picklist(EVENT_VARIANTS);
 
@@ -48,32 +41,24 @@ describe('EVENT_VARIANTS — the array and the type cannot disagree', () => {
   });
 
   test('the type is derived from the array, both directions', () => {
-    // Assignability in BOTH directions is the equality. If the type were ever
-    // re-declared by hand, one of these two lines stops compiling — which is
-    // the mechanism, so these are deliberately about compilation.
+    // Assignability both ways is type equality; a hand re-declared type stops compiling here.
     const fromArray: EventVariant = EVENT_VARIANTS[0];
     const toArray: (typeof EVENT_VARIANTS)[number] = fromArray;
     expect(EVENT_VARIANTS).toContain(toArray);
-    // A duplicate would make the picklist and the union quietly disagree about
-    // cardinality, which is the shape a careless append produces.
     expect(new Set(EVENT_VARIANTS).size).toBe(EVENT_VARIANTS.length);
   });
 });
 
-// ── Seam 2: the model_call usage and pricing policy ──────────────────────────
-
 describe('buildModelCallEvent — usage is always present, pricing is guarded', () => {
-  // Per-1M-token rates, which is what priceCall divides by. One million input
-  // and one million output tokens therefore cost 1 + 2 = $3.
+  // Per-1M-token rates: 1M input + 1M output tokens cost 1 + 2 = $3.
   const pricing: ModelPricing = { input: 1, output: 2 };
 
   const report = (over: Partial<ModelCallReport> = {}): ModelCallReport => ({
     source: 'judge', usage: { input: 1_000_000, output: 1_000_000 }, spec: 'openai/gpt-x', ...over,
   });
 
-  // THE ARM THAT DRIFTED. One backend gated `usage` behind usageReported(), so
-  // the same silent call had no usage field there and `{}` on the other — and a
-  // spend reader could not tell "unmeasured" from "not recorded".
+  // Both backends must shape usage for an unreported call identically, or a spend reader cannot
+  // tell unmeasured from not recorded.
   test('a provider that reported nothing still carries usage, as {}', () => {
     const event = buildModelCallEvent(report({ usage: {} }), { effectiveSpec: 'openai/gpt-x', pricing });
     expect(event.usage).toEqual({});
@@ -90,8 +75,7 @@ describe('buildModelCallEvent — usage is always present, pricing is guarded', 
     expect(event.usd).toBeCloseTo(3, 10);
   });
 
-  // A judge deliberately runs on a DIFFERENT model from the actor. Pricing it at
-  // the actor's rate would invent a number, which is worse than no number.
+  // A judge runs on a different model; pricing it at the actor's rate would invent a number.
   test('NOT priced when the call ran on a different model than the rate', () => {
     const event = buildModelCallEvent(report(), { effectiveSpec: 'anthropic/claude-x', pricing });
     expect(event.usd).toBeUndefined();
@@ -104,8 +88,7 @@ describe('buildModelCallEvent — usage is always present, pricing is guarded', 
     expect('spec' in bare).toBe(false);
   });
 
-  // An absent spec must not match an absent effective spec — the `undefined ===
-  // null` accident this guard is written to avoid.
+  // Guards the `undefined === null` accident: an absent spec must not match an absent effective spec.
   test('an absent spec does not match an absent effective spec', () => {
     const event = buildModelCallEvent(report({ spec: undefined }), { effectiveSpec: null, pricing });
     expect(event.usd).toBeUndefined();
@@ -122,14 +105,9 @@ describe('buildModelCallEvent — usage is always present, pricing is guarded', 
   });
 });
 
-// ── Seam 3: run_end.reason is derived, never chosen ──────────────────────────
-
 describe('classifyRunEnd — a user Stop is aborted on every backend', () => {
-  // THE DRIFT that the second row names: the identical user action sealed as
-  // 'aborted' on one backend and 'error' on the other, so every cross-backend
-  // run-ledger reader counted local stops as failures. The third row is there
-  // because runChat yields `done` and THEN throws the interruption, so both
-  // facts can arrive true — and the user's Stop is the one that names the run.
+  // A local Stop must seal 'aborted' on both backends. runChat yields `done` and then throws the
+  // interruption, so when both are true the Stop names the run.
   const ends = [
     { name: 'a finished turn completes', completed: true, interrupted: false, reason: 'completed' },
     { name: 'an interrupted turn is aborted, never error', completed: false, interrupted: true, reason: 'aborted' },
@@ -144,8 +122,6 @@ describe('classifyRunEnd — a user Stop is aborted on every backend', () => {
     });
   }
 
-  // The interruption sentence is the flag beside it, restated. A run sealed
-  // 'aborted' that still carries a failure text is the same drift, relabelled.
   test('the interruption text is dropped, not carried onto the aborted row', () => {
     const classified = classifyRunEnd({
       completed: false, interrupted: true,
@@ -168,29 +144,15 @@ describe('classifyRunEnd — a user Stop is aborted on every backend', () => {
   });
 
   test('a turn that stopped with work pending is its own reason, not a completion', () => {
-    // The fourth word exists because the state does: a loop that ended while
-    // the model was still calling tools did not reach an end of its own, and
-    // sealing it 'completed' is what made issue #16 read as a finished turn.
+    // A loop that ended while the model was still calling tools did not finish (issue #16).
     expect([...RUN_END_REASONS]).toEqual(['completed', 'aborted', 'error', 'incomplete']);
     const every: readonly RunEndReason[] = RUN_END_REASONS;
     expect(every).toHaveLength(4);
   });
 });
 
-// ── R4: a turn must never end with tool calls pending ────────────────────────
-//
-// THE DEFECT THIS GUARDS. `@cloudflare/think` OR-s `stepCountIs(this.maxSteps)`
-// — default 10 — ahead of anything a caller passes, so the cloud loop was hard
-// capped: four of four production runs that reached ten steps were cut with the
-// model still emitting tool calls, and every one sealed 'completed'.
-//
-// WHY THE LEDGER GAINED NO WORD FOR IT. The ceiling was the ONLY producer, and
-// removing it removes the state — so a fourth reason would have been vocabulary
-// no run could carry, plus a dead branch in a union, a valibot mirror, two read
-// models, a status dot and an analytics row. What is owed instead is a tripwire
-// that fires if any of the facts behind "unreachable" stops being true: a vendor
-// release re-introducing a cap, an actor that starts requesting structured
-// output, a tool that stops executing server-side.
+// R4: a turn must never end with tool calls pending (`@cloudflare/think` once capped steps at 10).
+// No ledger reason exists for it; this tripwire fires if the state becomes reachable again.
 
 describe('the mid-work invariant is loud when it breaks', () => {
   /** One classification with the diagnostics sink captured. */
@@ -212,18 +174,12 @@ describe('the mid-work invariant is loud when it breaks', () => {
 
     const tripped = emitted.filter((row) => row.event === TURN_ENDED_MID_WORK);
     expect(tripped).toHaveLength(1);
-    // A failure with a classification, not a bare event: the state is impossible,
-    // so whatever produced it is broken rather than merely notable.
     expect(tripped[0]?.code).toBe('unavailable');
     expect(tripped[0]?.cause).toContain('tool calls pending');
-    // And it names the thing to go looking for.
     expect(tripped[0]?.cause).toContain('step ceiling');
   });
 
   test('it is sealed incomplete, and carries no failure text it did not observe', () => {
-    // The diagnostic says the loop is broken; the STATUS says what the turn is.
-    // Sealing it 'completed' told every reader — the UI, the evolution window,
-    // eval triage — that a turn which stopped mid-work had answered.
     const { classified } = classifyWithLog({
       completed: true, interrupted: false, lastFinishReason: TOOL_CALLS_PENDING,
     });
@@ -233,8 +189,7 @@ describe('the mid-work invariant is loud when it breaks', () => {
   });
 
   test('a turn whose last step stopped on its own trips nothing', () => {
-    // The control. Without it the test above would pass on a tripwire that fired
-    // for every turn.
+    // Control: without it the test above would pass on a tripwire that fires for every turn.
     const { classified, emitted } = classifyWithLog({
       completed: true, interrupted: false, lastFinishReason: 'stop',
     });
@@ -268,30 +223,18 @@ describe('the mid-work invariant is loud when it breaks', () => {
   });
 
   test("the pending word is the SDK's own, not a Kinu spelling", () => {
-    // If the AI SDK renamed this finish reason the tripwire would silently stop
-    // firing, which is the failure mode it exists to prevent. `ai`'s union is the
-    // source of the string.
+    // Typed against `ai`'s union: a renamed finish reason would silently stop the tripwire.
     const sdkReason: FinishReason = TOOL_CALLS_PENDING;
     expect(sdkReason).toBe('tool-calls');
   });
 });
 
-// ── R5: an upstream that closed without saying why did not finish ────────────
-//
-// The counterpart of R4, and the mode R4 does not reach. A stream cut
-// mid-TOOL-CALL leaves `tool-calls` standing and trips the tripwire above; a
-// stream cut mid-PROSE leaves the provider's end unnamed, and the driver —
-// which saw a stream that stopped producing and a loop that ran out of work —
-// reports a clean end. The answer the user reads is then whatever arrived
-// before the socket died, sealed 'completed' and indistinguishable in the
-// ledger from a model that stopped because it was done.
+// R5: a stream cut mid-prose leaves the provider's end unnamed; the driver must not seal it
+// 'completed' as though the model had finished.
 
 describe('a turn whose provider never named an end is not completed', () => {
-  // The SDK's own default: every mapper in the families this tree uses —
-  // openai, openai-compatible, anthropic — falls through to this one string
-  // when `finish_reason` never arrived, and `ai` folds its own 'unknown' onto
-  // it. The annotation is the pin — a renamed word stops compiling here, and
-  // the arms below would otherwise go quiet.
+  // The SDK default when `finish_reason` never arrived; the annotation pins the word so a rename
+  // stops compiling.
   const unnamedEnd: FinishReason = 'other';
 
   test('an unnamed end seals error with text, not completed', () => {
@@ -322,8 +265,6 @@ describe('a turn whose provider never named an end is not completed', () => {
   });
 });
 
-// ── Seam 4: the settle rule — failed turns are evidence ──────────────────────
-
 function seamOrchestrator(opts?: { enabled?: boolean }) {
   const recorded: CompletedTurn[] = [];
   const { sql, execRaw } = createTestSql();
@@ -345,10 +286,8 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
     runDueShadowTrials: async () => {},
     recordRecovery: () => {},
     deferTurnReview: () => 'queued',
-    // Every turn here has no conversational follow-up coming, so the recording
-    // writes its review obligation onto the turn row and this DRAIN is what runs
-    // it — the same claim-guarded path production takes. A double that returned
-    // an empty drain would make the recording look like it lost the review.
+    // With no follow-up turn, this drain runs the review the recording wrote onto the turn row, the
+    // same claim-guarded path production takes.
     runDeferredTurnReviews: async () => {
       const taken = store.takeQueuedReviews(8);
 
@@ -390,8 +329,7 @@ const settledTurn = (over: Partial<CompletedTurn> = {}): CompletedTurn => ({
 });
 
 describe('the settled turn’s recording — every settled turn is recorded', () => {
-  /** The roster a settled turn owes, for the status under test. What the
-   *  `turn_record` and `turn_end_extensions` rows are read off. */
+  /** The rows a settled turn owes for the status under test (`turn_record`, `turn_end_extensions`). */
   const roster = (status: RunEndReason, over: Partial<Parameters<typeof declareTerminalRoster>[0]> = {}) =>
     declareTerminalRoster({
       messageId: 'm1', status, workMode: 'build', continuity: 'independent_task',
@@ -399,10 +337,8 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
       scopedTurn: {}, recordedAt: 1, evolutionEnabled: true, ...over,
     }, { turnEndExtensions: true });
 
-  // THE DIVERGENCE. One backend early-returned on any status but 'completed', so
-  // a failed cloud turn reached neither the outcome-review buffer nor the
-  // session cadence — the evolution loop graded successes against successes
-  // there and the whole distribution locally.
+  // Failed turns are evidence: every status must reach the outcome-review buffer and the session
+  // cadence, or evolution grades successes against successes.
   for (const status of ['error', 'aborted'] as const) {
     test(`an ${status === 'error' ? 'errored' : status} turn is recorded`, () => {
       const { orch, recorded } = seamOrchestrator();
@@ -413,10 +349,8 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
   }
 
   test('a FAILED turn still owes its extension end, and owes it before the recording', () => {
-    // Recorded AFTER the hook: the hook's effects (memory writes, compaction
-    // state) are part of the turn the review then reads. Both rows are owed on
-    // EVERY status — the half easiest to lose, since a failed cloud turn can
-    // reach neither.
+    // Recorded after the hook, since its effects are part of the turn the review reads. Both rows are
+    // owed on every status.
     for (const status of RUN_END_REASONS) {
       const owed = roster(status).map((effect) => effect.name);
       expect(owed).toContain('turn_end_extensions');
@@ -424,10 +358,8 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
     }
   });
 
-  // A turn can throw outside the accumulator's view, which is why one backend had
-  // to set acc.hadError by hand in its catch. A user pressing Stop did not make
-  // the agent fail, so stamping their turn as an error would feed the outcome
-  // classifier a negative label nothing earned.
+  // A user Stop is not an agent failure; stamping it an error would feed the outcome classifier an
+  // unearned negative label.
   const stamps = [
     { name: 'an errored turn is stamped hadError even when the accumulator missed it',
       status: 'error', hadError: true },
@@ -449,14 +381,11 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
     const { orch, recorded } = seamOrchestrator({ enabled: false });
     orch.recordTurn(orch.recordedTurn('completed', settledTurn()), 'independent_task');
     expect(recorded).toEqual([]);
-    // Extensions are not evolution: `--no-auto-evolve` must not silence them, so
-    // the row that announces the turn's end is owed whatever the gate says.
+    // Extensions are not evolution: `--no-auto-evolve` must not silence the turn-end row.
     expect(roster('completed', { evolutionEnabled: false }).map((effect) => effect.name))
       .toContain('turn_end_extensions');
   });
 });
-
-// ── Seam 8: the provider snapshot builder ───────────────────────────────────
 
 describe('buildProviderCatalogSnapshot — one formula, deterministic', () => {
   test('input order does not change the revision', () => {
@@ -473,9 +402,8 @@ describe('buildProviderCatalogSnapshot — one formula, deterministic', () => {
     expect(twice.revision).toBe(once.revision);
   });
 
-  // The producer obligation resolve.ts documents: a snapshot taken while a
-  // provider was down is a DIFFERENT availability picture, so anything keyed on
-  // revision must not serve it as though it were complete.
+  // A snapshot taken while a provider was down is a different availability picture, so it must not
+  // share a revision with a complete one.
   test('a failure changes the revision even with an identical model list', () => {
     const clean = buildProviderCatalogSnapshot(['a/1'], []);
     const degraded = buildProviderCatalogSnapshot(['a/1'], [{ provider: 'b', reason: '503' }]);
@@ -501,12 +429,8 @@ describe('buildProviderCatalogSnapshot — one formula, deterministic', () => {
     ]);
   });
 
-  // The `!` prefix separates the two halves of the hashed body. Its guarantee is
-  // CONDITIONAL on no real model spec beginning with `!`, which holds because a
-  // spec is `<provider>/<id>` and a provider id is not punctuation. Feeding the
-  // builder a synthetic `'!b\tx'` model DOES collide — asserting otherwise would
-  // be asserting a property the code does not have, on an input production
-  // cannot produce. What is worth pinning is that both halves reach the hash.
+  // The `!` separator is collision-free only because no real spec starts with `!`; what is pinned is
+  // that both halves reach the hash.
   test('both halves reach the revision — models and failures each move it', () => {
     const bare = buildProviderCatalogSnapshot(['a/1'], []);
     const moreModels = buildProviderCatalogSnapshot(['a/1', 'a/2'], []);
@@ -514,8 +438,6 @@ describe('buildProviderCatalogSnapshot — one formula, deterministic', () => {
     expect(new Set([bare.revision, moreModels.revision, moreFailures.revision]).size).toBe(3);
   });
 });
-
-// ── Seam 8: the cache policy ────────────────────────────────────────────────
 
 describe('ProviderListingCache — complete listings only, guarded by generation', () => {
   const clean: ProviderListing = { models: ['a/1'], failures: [] };
@@ -534,8 +456,8 @@ describe('ProviderListingCache — complete listings only, guarded by generation
     expect(sweeps).toBe(1);
   });
 
-  // A non-empty failure set admits every configured model unverified. Caching
-  // one would hold that window open past the fault it came from.
+  // A non-empty failure set admits every configured model unverified; caching it would hold that
+  // window open past the fault.
   test('a degraded listing is returned but never cached', async () => {
     let sweeps = 0;
 
@@ -569,9 +491,8 @@ describe('ProviderListingCache — complete listings only, guarded by generation
     expect([a.cache, b.cache]).toEqual(['miss', 'joined']);
   });
 
-  // THE GENERATION GUARD. A credential change landing mid-sweep must not let a
-  // listing of the world BEFORE the change become the answer for every
-  // resolution after it — while still being returned to the caller waiting on it.
+  // A credential change mid-sweep must not let the pre-change listing become the cached answer,
+  // though the waiting caller still gets it.
   test('a listing whose sweep straddled an invalidation is returned but not cached', async () => {
     let sweeps = 0;
     const gate = Promise.withResolvers<void>();
@@ -608,10 +529,7 @@ describe('ProviderListingCache — complete listings only, guarded by generation
   });
 
   test('nothing expires but a signal', async () => {
-    // Asserted structurally rather than by sleeping: a wall-clock wait short
-    // enough for CI cannot disprove a long TTL, so it would be a test that
-    // passes for the wrong reason. Repeated reads with no invalidation between
-    // them is the observable form of "only a signal expires this".
+    // Structural rather than sleeping: a CI-short wait cannot disprove a long TTL.
     let sweeps = 0;
 
     const cache = new ProviderListingCache(async () => {
@@ -625,15 +543,12 @@ describe('ProviderListingCache — complete listings only, guarded by generation
   });
 });
 
-// ── Seam 9: the default-model rule ──────────────────────────────────────────
-
 describe('defaultSpecFor — never the first thing in the menu', () => {
   test('a configured choice the account can serve wins', () => {
     expect(defaultSpecFor('paid/x', ['paid/x', DEFAULT_WORKERS_AI_MODEL_SPEC])).toBe('paid/x');
   });
 
-  // A stored default naming a provider whose key was revoked is not an answer,
-  // it is a turn that fails on its first call.
+  // A default naming a provider whose key was revoked would fail on its first call.
   test('a configured choice the account cannot serve is refused, not honoured', () => {
     expect(defaultSpecFor('paid/gone', [DEFAULT_WORKERS_AI_MODEL_SPEC]))
       .toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
@@ -644,8 +559,7 @@ describe('defaultSpecFor — never the first thing in the menu', () => {
       .toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
-  // THE PINNED REGRESSION: falling through to menu[0] silently signed new
-  // workspaces up to a paid BYO provider.
+  // Falling through to menu[0] would silently sign new workspaces up to a paid BYO provider.
   test('never falls through to whatever happened to be first', () => {
     expect(defaultSpecFor(null, ['paid/x', 'paid/y'])).toBeNull();
     expect(defaultSpecFor('', ['paid/x'])).toBeNull();
@@ -657,8 +571,6 @@ describe('defaultSpecFor — never the first thing in the menu', () => {
     expect(workersAiSpec('workers-ai/@cf/meta/llama')).toBe('workers-ai/@cf/meta/llama');
   });
 });
-
-// ── Seam 1: the sandbox contract ────────────────────────────────────────────
 
 describe('the sandbox contract — one namespace for every tool', () => {
   test('the namespace is `tools`, and a crafted tool without a description is labelled', () => {
@@ -723,8 +635,7 @@ describe('the sandbox contract — one namespace for every tool', () => {
     expect(jsonSchemaToTs({ anyOf: [{ type: 'string' }, { type: 'null' }] })).toBe('string | null');
   });
 
-  /** Deep-freeze, so a renderer that mutated the schema it was handed throws
-   *  on the attempt instead of quietly changing the provider's copy. */
+  /** Deep-freeze, so a renderer that mutates the schema it was handed throws. */
   function deepFreeze(value: JsonValue | undefined): void {
     if (Array.isArray(value)) {
       for (const member of value) deepFreeze(member);
@@ -742,11 +653,8 @@ describe('the sandbox contract — one namespace for every tool', () => {
   }
 
   test('a property description stays on the native schema; the declaration carries only the shape', () => {
-    // The sandbox declaration is a SECOND serialisation of every input schema,
-    // shipped inside the eval docstring on every request. A property's
-    // description already rides the native schema the provider receives, so
-    // repeating it inside the rendered type duplicated that text per request —
-    // the drift this test locks against returning.
+    // The sandbox declaration ships in the eval docstring on every request; descriptions already ride
+    // the native schema, so repeating them duplicates text per request.
     const markers = ['UNIQACTION', 'UNIQQUERY', 'UNIQPATH', 'UNIQNESTED', 'UNIQTARGET', 'UNIQDEPTH', 'UNIQINCLUDE'];
 
     const native = {
@@ -796,14 +704,10 @@ describe('the sandbox contract — one namespace for every tool', () => {
 
     const rendered = renderToolsDeclaration(native, []);
 
-    // Every field, literal and optionality distinction survives...
     expect(rendered).toContain('file(input: { action: "read" | "edit" | "write"; query: "status"; path?: string; target?: { depth: number; include?: string[] } | string }): Promise<unknown>;');
-    // ...while no property description is repeated into the declaration.
 
     for (const marker of markers) expect(rendered).not.toContain(marker);
 
-    // The provider's copy is untouched: byte-identical after the render and
-    // still carrying every description.
     expect(JSON.stringify(native.file.inputSchema)).toBe(frozen);
     const providerSchema = JSON.stringify(nativeToolInputSchema(native.file));
 
@@ -811,11 +715,7 @@ describe('the sandbox contract — one namespace for every tool', () => {
   });
 });
 
-// ── Seam 6: craft failure attribution in both substrates ────────────────────
-
-/** The Error a rejected promise threw, narrowed once here so no test has to
- *  assert its way past an `unknown`. A non-Error rejection fails loudly rather
- *  than being coerced into one. */
+/** The Error a rejected promise threw; a non-Error rejection fails loudly rather than being coerced. */
 async function rejectionOf(work: Promise<unknown>): Promise<Error> {
   try {
     await work;
@@ -844,20 +744,15 @@ describe('craft failure attribution — the same marker in both substrates', () 
     expect(await wrapped(21)).toBe(42);
   });
 
-  // THE HAZARD A SECOND WRAPPER CREATES. buildCraftedTools is the ONE runtime
-  // attribution point on every backend, and blame matches on the marker — so a
-  // substrate that wraps its own compile as well makes one failure read as
-  // several (`[crafted:x] [crafted:x]`), which is strictly worse than the
-  // missing stamp attribution exists to fix.
+  // buildCraftedTools is the one attribution point; a substrate that also wraps its own compile makes
+  // one failure read as several (`[crafted:x] [crafted:x]`).
   test('attribution stamps exactly once, never twice', async () => {
     const wrapped = attributeCraftedFailure('brokenIt', async () => { throw new Error('nope'); });
     const message = (await rejectionOf(wrapped())).message;
     expect(message.split(craftFailureMarker('brokenIt')).length - 1).toBe(1);
   });
 
-  // The codec and the label answer different questions, and the codec's
-  // losslessness is pinned. Kept beside each other so a future reader does not
-  // "simplify" them back into one.
+  // The codec and the label answer different questions; do not merge them.
   test('the label replaces an empty description; the codec preserves it', () => {
     expect(craftedToolDescription('f', '')).toBe('Crafted tool: f');
 
@@ -870,8 +765,6 @@ describe('craft failure attribution — the same marker in both substrates', () 
   });
 });
 
-// ── Seam 7: the remaining literal mirrors ───────────────────────────────────
-
 describe('the declared ids no adapter spells by hand', () => {
   test('the default role is a declared constant', () => {
     expect(DEFAULT_ROLE_ID).toBe('task');
@@ -882,9 +775,8 @@ describe('the declared ids no adapter spells by hand', () => {
     expect(REPORT_TOOL).toBe('report');
   });
 
-  // submit_plan is deliberately NOT a BuiltinToolName: it exists only on a Plan
-  // turn whose actor owns the submission boundary, so it never joins the
-  // standing surface.
+  // submit_plan is deliberately not a BuiltinToolName: it exists only on Plan turns whose actor owns
+  // the submission boundary.
   test('submit_plan is declared but is not a standing builtin', () => {
     expect(SUBMIT_PLAN_TOOL).toBe('submit_plan');
     expect(DEPS_GATED_TOOLS).not.toContain(SUBMIT_PLAN_TOOL);
@@ -903,9 +795,8 @@ describe('the post-settle lane verdict is ONE core decision', () => {
     test(`a ${status} ${mode} turn ${open ? 'opens' : 'closes'} the improvement lanes`, () => {
       const { orch } = seamOrchestrator();
       orch.beginTurn(Date.now(), mode === 'plan' ? { kinuMode: 'plan' } : {});
-      // Asked exactly as the `improvement_lanes` row's body asks it: the live
-      // turn's mode when the row is running on the activation that produced it,
-      // and the RECORDED mode on a replay.
+      // As the `improvement_lanes` row asks: the live mode on the producing activation, the recorded
+      // mode on replay.
       expect(orch.improvementLanesOpen(status)).toBe(open);
       expect(orch.improvementLanesOpen(status, mode)).toBe(open);
     });

@@ -1,6 +1,3 @@
-// TaskListStore — the agent's own task list. Behaviour through the store's
-// public surface: what an id is, what nesting is allowed, what a capped read
-// promises, and what `listOpen` (the live-context roster) actually contains.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS } from '../src/tasks/store';
@@ -31,8 +28,7 @@ describe('TaskListStore', () => {
     const s = newStore();
     s.add(['one', 'two'], null, 1);
     s.update('t2', { status: 'dropped' }, 2);
-    // Minting from MAX(seq), not COUNT(*): a reused id would silently re-label
-    // an item the model already referred to in prose.
+    // Minting from MAX(seq), not COUNT(*): a reused id would re-label an item the model already cited.
     expect(s.add(['three'], null, 3).added[0].id).toBe('t3');
   });
 
@@ -97,8 +93,7 @@ describe('TaskListStore', () => {
     const open = s.listOpen();
     expect(open.items.map((t) => t.id)).toEqual(['t1', 't2']);
     expect(open.total).toBe(3);
-    // t1 itself is done, but it is shown because t3 hangs off it — a subtask
-    // rendered without its parent reads as an unrelated item.
+    // Done t1 is shown because t3 hangs off it.
     expect(open.items[0].subtasks.map((t) => t.id)).toEqual(['t3']);
     expect(open.items[1].subtasks).toEqual([]);
 
@@ -106,10 +101,7 @@ describe('TaskListStore', () => {
     expect(s.listOpen().items.map((t) => t.id)).toEqual(['t2']);
   });
 
-  // The incident shape: a store bound that truncated BEFORE the open filter
-  // made an open task behind closed siblings vanish from the live context
-  // entirely. The filter must run first, and the true open count must ride
-  // beside the page so a renderer can state its elision honestly.
+  // The open filter must run before the bound, and the true open count rides beside the page.
   test('listOpen filters BEFORE its bound: an open task behind 200 closed ones is still visible', () => {
     const s = newStore();
     s.add(Array.from({ length: 200 }, (_, i) => `closed ${i + 1}`), null, 1);
@@ -131,8 +123,6 @@ describe('TaskListStore', () => {
       if (batch % 2 === 0) for (const t of added) s.update(t.id, { status: 'done' }, 100);
     }
 
-    // 2 open batches of 5 = 10 open rows; the default bound is far larger,
-    // so shrink it to prove the split between page and total.
     const page = s.listOpen(4);
     expect(page.items.length).toBeLessThanOrEqual(4);
     expect(page.total).toBe(10);
@@ -146,16 +136,11 @@ describe('TaskListStore', () => {
     expect(s.list(2)[1].subtasks).toEqual([]);
     expect(s.count()).toBe(3);
   });
-  // A workspace whose table predates the status CHECK can hold a value the
-  // vocabulary never minted. Reading it back must refuse naming the value —
-  // coercing it to open answers open under get() while the open-filtered
-  // reads skip the same row.
+  // A table predating the status CHECK can hold an unminted value: reading it must refuse, naming it.
   test('a stored status outside the vocabulary is refused naming the value', () => {
     const db = new Database(':memory:');
     const actor = createTestActorsOver(db).main;
     const sql = makeSql(db);
-    // No status CHECK, and the row is this actor's — the shape a workspace
-    // whose table predates the vocabulary still holds.
     db.exec(`CREATE TABLE agent_tasks (
       actor_id TEXT NOT NULL,
       id TEXT NOT NULL,
@@ -176,10 +161,7 @@ describe('TaskListStore', () => {
     const s = new TaskListStore(sql, actor, write => db.transaction(write)());
     expect(() => s.get('t9')).toThrow('bogus');
   });
-  // Pinned on the PLAN rather than on a stopwatch: the statement is captured
-  // from the store itself (no second copy of the SQL to drift), and answering
-  // one parent's open subtasks through the status index is the regression
-  // this guards — it fails with "USING INDEX idx_agent_tasks_status".
+  // Pinned on the query plan: answering subtasks through the status index shows as "USING INDEX idx_agent_tasks_status".
   test('countOpenSubtasks seeks the parent index', () => {
     const db = new Database(':memory:');
     initTaskListTable(makeExecRaw(db));

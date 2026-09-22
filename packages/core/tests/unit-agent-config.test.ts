@@ -83,7 +83,7 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getModel()).toBeNull();
     c.setModel('codex/gpt-5.5');
     expect(c.getModel()).toBe('codex/gpt-5.5');
-    // Confirm it writes to the canonical key (other readers depend on it).
+    // Other readers depend on the canonical key.
     expect(c.get(AGENT_CONFIG_KEYS.model)).toBe('codex/gpt-5.5');
   });
 
@@ -109,7 +109,6 @@ describe('AgentConfigStore — typed accessors', () => {
     c.setCacheRetention('none');
     expect(c.getCacheRetention()).toBe('none');
 
-    // A garbage row must never leave the caching seam without an answer.
     c.set(AGENT_CONFIG_KEYS.cacheRetention, 'forever');
     expect(c.getCacheRetention()).toBe('short');
   });
@@ -135,15 +134,13 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getShellApprovalMode()).toBe('allow_all');
     c.setShellApprovalMode('deny_all');
     expect(c.getShellApprovalMode()).toBe('deny_all');
-    // Garbage in DB → strict fallback.
     c.set(AGENT_CONFIG_KEYS.shellApprovalMode, 'bogus');
     expect(c.getShellApprovalMode()).toBe('strict');
   });
 
   test('role policy, shell mode and severity setters refuse what their getters would hide', () => {
     const c = setup();
-    // Decoded, not written: runtime garbage arrives past the type boundary
-    // (deserialized input, untyped callers), so the fixture does too.
+    // Decoded, not written: runtime garbage arrives past the type boundary.
     const bogus = JSON.parse('"bogus"');
     c.setRoleChangePolicy('approval');
     expect(() => c.setRoleChangePolicy(bogus)).toThrow(/Invalid role change policy/);
@@ -164,7 +161,6 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getShellApprovalGrants()).toEqual([]);
 
     c.grantShellApproval([{ rule: 'rm-recursive', executor: 'device' }]);
-    // Granting the same thing twice is one grant, not two.
     c.grantShellApproval([
       { rule: 'rm-recursive', executor: 'device' },
       { rule: 'sudo', executor: 'parent' },
@@ -174,14 +170,13 @@ describe('AgentConfigStore — typed accessors', () => {
       { rule: 'sudo', executor: 'parent' },
     ]);
 
-    // Revoking one leaves the other; revoking something never granted is fine.
     c.revokeShellApproval([
       { rule: 'rm-recursive', executor: 'device' },
       { rule: 'nothing', executor: 'nowhere' },
     ]);
     expect(c.getShellApprovalGrants()).toEqual([{ rule: 'sudo', executor: 'parent' }]);
 
-    // A value that cannot be parsed must never widen what runs.
+    // An unparseable value must never widen what runs.
     c.set(AGENT_CONFIG_KEYS.shellApprovalGrants, 'bogus,@,rule@,,sudo@device');
     expect(c.getShellApprovalGrants()).toEqual([{ rule: 'sudo', executor: 'device' }]);
 
@@ -222,7 +217,6 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getShadowSampleRate()).toBe(0.25);
     c.set(AGENT_CONFIG_KEYS.shadowSampleRate, '0.5');
     expect(c.getShadowSampleRate()).toBe(0.5);
-    // Out-of-range / NaN → default.
     c.set(AGENT_CONFIG_KEYS.shadowSampleRate, '2.0');
     expect(c.getShadowSampleRate()).toBe(0.25);
     c.set(AGENT_CONFIG_KEYS.shadowSampleRate, 'not-a-number');
@@ -242,15 +236,12 @@ describe('AgentConfigStore — typed accessors', () => {
     c.setScaffoldExploreShare(0);
     expect(c.getScaffoldExploreShare()).toBe(0);
 
-    // A probability given as a percentage is a caller bug, not something to
-    // silently clamp to 1 — otherwise every turn would run in shadow.
+    // A percentage is a caller bug; clamping to 1 would run every turn in shadow.
     expect(() => c.setShadowSampleRate(100)).toThrow(/invalid shadow_sample_rate/);
     expect(() => c.setScaffoldExploreShare(-0.1)).toThrow(/invalid scaffold_explore_share/);
     expect(() => c.setShadowSampleRate(Number.NaN)).toThrow(/invalid shadow_sample_rate/);
     expect(c.getShadowSampleRate()).toBe(0.5);
 
-
-    // The budget's bounds are a cost policy, so a setter clamps rather than throws.
     c.setGepaEvalBudget(1000);
     expect(c.getGepaEvalBudget()).toBe(64);
     c.setGepaEvalBudget(1);
@@ -309,7 +300,7 @@ describe('AgentConfigStore — GEPA eval budget', () => {
     expect(c.getGepaEvalBudget()).toBe(12);
     c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '500');
     expect(c.getGepaEvalBudget()).toBe(64);
-    // Below the floor a disjoint split is impossible — clamp up, don't accept.
+    // Below the floor a disjoint split is impossible.
     c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '1');
     expect(c.getGepaEvalBudget()).toBe(4);
     c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, 'many');
@@ -317,13 +308,6 @@ describe('AgentConfigStore — GEPA eval budget', () => {
   });
 });
 
-/**
- * The lifetime counters, on a store nobody has written to yet.
- *
- * `countClosedTurnWindow` touches exactly the one key it names: no read-through
- * to another key and no write of one, which is what makes a fresh store's first
- * count both 1 and its only row.
- */
 describe('AgentConfigStore — lifetime counters', () => {
   test('a fresh store counts from one and writes only its own key', () => {
     const c = setup();
@@ -335,8 +319,7 @@ describe('AgentConfigStore — lifetime counters', () => {
   });
 
   test('an unreadable counter row resumes from one rather than throwing', () => {
-    // The caller uses the RETURN value, so a poisoned row must still answer a
-    // number — and 1 is the only honest reading of a count nobody can parse.
+    // Callers use the return value, so a poisoned row must still answer a number.
     const c = setup();
     c.set(AGENT_CONFIG_KEYS.closedTurnWindows, 'lots');
     expect(c.countClosedTurnWindow()).toBe(1);
@@ -353,22 +336,8 @@ describe('AgentConfigStore — lifetime counters', () => {
   });
 });
 
-/**
- * Every config key must be writable by something.
- *
- * Three keys have shipped read-only so far — a getter consulted at runtime with
- * no setter, no RPC and no command anywhere, so the behaviour it gated could
- * never actually be turned on. This guard makes that state unshippable: adding a
- * key to AGENT_CONFIG_KEYS forces you to name the store method that writes it,
- * and a key nothing writes fails here rather than years later.
- *
- * Runtime, not source-scanning: each writer is really invoked against a real
- * store and the keys it touches are read back out of the table, so the guard
- * cannot drift from how the store is actually implemented.
- */
+/** Every config key must have a real write path, checked by invoking each writer against a real store. */
 describe('AgentConfigStore — every key has a write path', () => {
-  /** One call per store method that writes config. Values are arbitrary but
-   *  valid; only which KEYS get written matters. */
   const WRITERS: ReadonlyArray<(c: ReturnType<typeof setup>) => void> = [
     (c) => c.setModel('openai/gpt-5'),
     (c) => c.setReasoningEffort('high'),
@@ -401,9 +370,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => { canonicalConversationId(c); },
   ];
 
-  /** Internal plumbing written through the generic `set` from outside the
-   *  store (memory-sync's lazy Vectorize backfill). Exempt because the write
-   *  path is real, just not a typed method here. */
+  /** Written through generic `set` from outside the store (memory-sync's Vectorize backfill). */
   const GENERIC_WRITE_PATH: ReadonlyArray<string> = [
     AGENT_CONFIG_KEYS.memoryVectorBackfillDone,
     AGENT_CONFIG_KEYS.memoryVectorBackfillCursor,
@@ -420,8 +387,7 @@ describe('AgentConfigStore — every key has a write path', () => {
   });
 
   test('the guard actually catches an unwritten key', () => {
-    // Proves the assertion above is load-bearing: drop one writer and the key
-    // it owns shows up as unwritable.
+    // Negative control: dropping one writer surfaces its key as unwritable.
     const c = setup();
 
     for (const write of WRITERS.slice(1)) write(c);
@@ -441,10 +407,6 @@ describe('the canonical conversation id lives under its registered key', () => {
   });
 });
 
-/** A hired subordinate's assignment: the role its parent gave it, and the tier
- *  its parent pinned. Both are read at the child's next turn boundary, which is
- *  where a dropped assignment turns into an agent running as `task` at the
- *  default tier with nothing saying so. */
 describe('the hired assignment a child reads at its turn boundary', () => {
   test('role and tier round-trip through the typed accessors', () => {
     const c = setup();
@@ -455,9 +417,7 @@ describe('the hired assignment a child reads at its turn boundary', () => {
   });
 
   test('an unpinned tier reads null — the instruction to derive from the role', () => {
-    // Null is not "the default tier". It says nothing was pinned, so the
-    // resolver takes the role's own — the documented promise that a role's
-    // default tier is re-derived from its roleId at the next boundary.
+    // Null means nothing was pinned, so the role's own default tier is re-derived.
     const c = setup();
     c.setRoleSelection('auditor');
     expect(c.getAssignedTier()).toBeNull();
@@ -473,10 +433,7 @@ describe('the hired assignment a child reads at its turn boundary', () => {
   });
 
   test('a malformed stored tier reads as unpinned, never as a throw', () => {
-    // A working turn beats a dead agent: the role's own tier is a correct
-    // answer for a value nothing here can interpret. Whether a WELL-FORMED
-    // tier exists is the catalog's question, asked at the turn boundary
-    // (`resolveTurnProfile`), because an owner can add one.
+    // Well-formed tier existence is checked at the turn boundary (`resolveTurnProfile`).
     const c = setup();
     c.set(AGENT_CONFIG_KEYS.assignedTier, 'Not A Tier!');
     expect(c.getAssignedTier()).toBeNull();
@@ -493,7 +450,6 @@ describe('the hired assignment a child reads at its turn boundary', () => {
     expect(c.get(AGENT_CONFIG_KEYS.assignedTier)).toBe('deep');
   });
 
-  // An invalid id reads as the default, and the read does NOT overwrite it.
   const unreadableRoles = [
     { name: 'a malformed role_selection row reads as general and is left alone', stored: 'not json' },
     { name: 'an unknown role id still reads as general and the read leaves the row alone', stored: 'Not A Role!!' },
@@ -517,7 +473,6 @@ describe('the hired assignment a child reads at its turn boundary', () => {
 
   test('a read never mints a role row; only an explicit selection persists one', () => {
     const c = setup();
-    // Absent reads as the default and writes nothing.
     expect(c.getRoleSelection()).toBe('task');
     expect(c.all()).toEqual({});
 

@@ -1,17 +1,4 @@
-// KINU-041. A model response that ends because the PROVIDER cut it at its
-// output limit was accepted as the turn's answer: `runChat` read the mapped
-// finish reason only to detect a dead stream ('other'), and the AI SDK's own
-// loop re-issues a request only while a step ended with tool calls whose
-// outputs all landed. So a `length` finish with no pending call ended the loop
-// and the turn published truncated prose — and, when the truncation landed
-// after a completed tool result, published a turn whose actual work was never
-// done.
-//
-// These tests drive the public `runChat` against a mock provider that reports
-// `length`, and assert the continuation the turn is owed: exactly one, over the
-// same prefix plus what the turn already produced, with no completed tool call
-// replayed, and a second `length` accepted as honest partial completion rather
-// than continued forever.
+// KINU-041: a provider `length` finish is owed exactly one continuation, with no completed tool call replayed.
 import { describe, test, expect } from 'bun:test';
 import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -54,9 +41,7 @@ function text(id: string, delta: string): LanguageModelV3StreamPart[] {
   ];
 }
 
-/** A mock provider that plays one scripted stream per request and records the
- *  prompt each request carried — the evidence for what a continuation replays
- *  and what it does not. */
+/** Plays one scripted stream per request and records each request's prompt. */
 function scriptedModel(scripts: ReadonlyArray<readonly LanguageModelV3StreamPart[]>) {
   const prompts: LanguageModelV3Prompt[] = [];
   let call = 0;
@@ -91,8 +76,6 @@ async function drain(model: LanguageModel, tools: ToolSet = {}): Promise<ChatEve
   return events;
 }
 
-/** Every role in one converted request, in order — enough to say what a
- *  continuation was handed. */
 function roles(prompt: LanguageModelV3Prompt): string[] {
   return prompt.map((message) => message.role);
 }
@@ -115,13 +98,9 @@ describe('output-limit continuation', () => {
     const done = events.find((e) => e.type === 'done');
 
     expect(prompts.length).toBe(2);
-    // The turn is ONE answer: the continuation's text is appended, not replacing.
     expect(done?.type === 'done' && done.text).toBe('first half second half');
-    // The second request is the first request's prefix plus the truncated
-    // assistant message the turn already produced.
     expect(roles(prompts[0] ?? [])).toEqual(['system', 'user']);
     expect(roles(prompts[1] ?? [])).toEqual(['system', 'user', 'assistant']);
-    // Both halves ride the durable history the caller persists.
     const produced = done?.type === 'done' ? done.responseMessages : [];
     expect(produced.filter((m) => m.role === 'assistant').length).toBe(2);
   });
@@ -141,9 +120,6 @@ describe('output-limit continuation', () => {
       }),
     };
 
-    // Two narrated tool steps, then the answer. Each step's prose is that
-    // step's — streamed live and recorded on its own `step_finish` row — and
-    // the turn's answer is what it said when it stopped.
     const { model } = scriptedModel([
       [...text('n1', "I'll look at the workspace first."),
         { type: 'tool-call', toolCallId: 'tc1', toolName: 'look', input: '{}' }, finish('tool-calls')],
@@ -157,8 +133,6 @@ describe('output-limit continuation', () => {
 
     expect(looked).toBe(2);
     expect(done?.type === 'done' && done.text).toBe('pong\n\nhttps://preview.invalid/');
-    // The narration is not lost: it reached whoever was watching, as the
-    // deltas of the steps that produced it.
     expect(events.flatMap((e) => e.type === 'text-delta' ? [e.delta] : [])).toEqual([
       "I'll look at the workspace first.",
       'Files in place. Starting the preview.',
@@ -171,9 +145,6 @@ describe('output-limit continuation', () => {
       look: tool({ description: 'look', inputSchema: z.object({}), execute: async () => 'looked' }),
     };
 
-    // The cut step issued a call and the SDK continued it on that call's
-    // result: the step is narration the result followed, and the answer is
-    // the step the turn stopped on alone.
     const { model } = scriptedModel([
       [...text('n1', 'Looking first, and the narration ran long'),
         { type: 'tool-call', toolCallId: 'tc1', toolName: 'look', input: '{}' }, finish('length')],
@@ -202,8 +173,6 @@ describe('output-limit continuation', () => {
     };
 
     const { model, prompts } = scriptedModel([
-      // Step 1: the model calls the tool. Step 2: it starts reporting and the
-      // provider cuts it at the output limit.
       [{ type: 'tool-call', toolCallId: 'tc1', toolName: 'look', input: '{}' }, finish('tool-calls')],
       [...text('t1', 'the tool said'), finish('length')],
       [...text('t2', ' 41, and here is the rest'), finish('stop')],
@@ -212,11 +181,9 @@ describe('output-limit continuation', () => {
     const events = await drain(model, tools);
     const done = events.find((e) => e.type === 'done');
 
-    // Two requests inside the SDK's own loop, then exactly one continuation.
     expect(prompts.length).toBe(3);
     expect(done?.type === 'done' && done.text).toBe('the tool said 41, and here is the rest');
-    // THE POINT: the completed call is carried as history, paired with its
-    // result, so the SDK sees it as finished and the tool never runs twice.
+    // The completed call rides as history paired with its result, so the tool never runs twice.
     expect(executions).toBe(1);
     expect(partTypes(prompts[2] ?? [])).toContain('tool-call');
     expect(partTypes(prompts[2] ?? [])).toContain('tool-result');
@@ -235,8 +202,6 @@ describe('output-limit continuation', () => {
     const done = events.find((e) => e.type === 'done');
 
     expect(prompts.length).toBe(2);
-    // Everything the turn produced is kept, and nothing beyond the second call
-    // was requested.
     expect(done?.type === 'done' && done.text).toBe('part one part two');
   });
 
@@ -254,21 +219,12 @@ describe('output-limit continuation', () => {
   });
 
   test('the finish reason the continuation reads is the SDK-mapped one', () => {
-    // Not a provider payload string: the adapter normalizes `max_tokens`,
-    // `MAX_TOKENS` and `length` onto this one word, which is why detection reads
-    // it rather than matching on the endpoint's own prose.
+    // The adapter normalizes `max_tokens`, `MAX_TOKENS` and `length` onto this one word.
     expect(OUTPUT_LIMIT_REACHED).toBe('length');
   });
 });
 
-/**
- * The same allowance, for the loop that cannot spend it inside the turn.
- *
- * `runChat` continues its own turn above. Think's loop ends at a `length`
- * finish and no hook can extend it, so the cloud backend asks this predicate
- * whether the settled turn owes a continuation TURN. One policy, so the two
- * loops cannot come to different answers about the same three facts.
- */
+/** Think's loop cannot extend a `length` finish, so the cloud backend asks this same predicate for a continuation turn. */
 describe('the continuation a loop cannot run inside its turn', () => {
   const cut = {
     completed: true, lastFinishReason: OUTPUT_LIMIT_REACHED, turnWasContinuation: false,
@@ -280,16 +236,13 @@ describe('the continuation a loop cannot run inside its turn', () => {
 
   test('a turn that finished on its own owes none', () => {
     expect(owesOutputLimitContinuation({ ...cut, lastFinishReason: 'stop' })).toBe(false);
-    // A turn still mid-work is the OTHER impossible ending (TURN_ENDED_MID_WORK)
-    // and is not an answer waiting to be finished.
+    // Mid-work is the other impossible ending (TURN_ENDED_MID_WORK), not an answer to finish.
     expect(owesOutputLimitContinuation({ ...cut, lastFinishReason: 'tool-calls' })).toBe(false);
-    // No step reported one at all: nothing says the provider cut anything.
     expect(owesOutputLimitContinuation({ ...cut, lastFinishReason: undefined })).toBe(false);
   });
 
   test('a turn that did not reach its own end owes none', () => {
-    // A cut turn was stopped by its owner and a failed one has the overflow
-    // recovery; continuing either would answer over the top of that decision.
+    // A cut turn was stopped by its owner and a failed one has overflow recovery.
     expect(owesOutputLimitContinuation({ ...cut, completed: false })).toBe(false);
   });
 

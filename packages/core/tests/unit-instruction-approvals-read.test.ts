@@ -1,12 +1,5 @@
-// KINU-N028 — the surface the owner decides from.
-//
-// Three things are defended here. The list is DERIVED, so there is no durable
-// "pending" row the agent could mint by writing a file. It is PAGED and carries
-// metadata only, so a workspace full of agent-written skill files cannot decide
-// how much work the settings page does — bytes are read one row at a time, on
-// demand. And `previewInstruction` exists because an approval is worth exactly
-// as much as the owner's reading of what they approved, so content that can
-// display as something other than what it is would make the decision hollow.
+// KINU-N028: the owner's approvals surface is derived and paged metadata; bytes are read one row at a time, on
+// demand. `previewInstruction` exists so content cannot display as something it is not.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -33,8 +26,7 @@ function store(scope = 'test') {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   initInstructionApprovalsTable(execRaw);
-  // Keyed by ACTOR before scope: an approval the owner gave the root is not one
-  // a subordinate reading the same file inherits.
+  // Keyed by actor before scope: a subordinate does not inherit the root's approval.
   const actor = createTestActors(sql, execRaw).main;
 
   return {
@@ -67,8 +59,7 @@ describe('listInstructionApprovals — metadata only', () => {
   });
 
   test('a carried-over file is distinguishable from one the owner chose', () => {
-    // No API writes 'grandfathered' anymore; the row below stands in for one
-    // stored before the deletion, which the listing must keep reporting.
+    // Stands in for a stored 'grandfathered' row, which the listing must keep reporting.
     const { db, actor, approvals } = store();
     db.exec(`INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision)
       VALUES ('${actor.actorId}', 'test', '${AGENTS}', '${instructionDigest(DOCTRINE)}', 'grandfathered')`);
@@ -111,9 +102,7 @@ describe('gatherApprovableInstructions — what the owner is allowed to not know
     const sources = await gatherApprovableInstructions({
       agentsMd: {
         admitted: [],
-        // The model IS told to open this path, so the owner must be able to see
-        // and revoke it. An agent that grows a file past the window would
-        // otherwise delete it from the owner's page by doing so.
+        // The model is told to open this path, so the owner must see it however large the file grows.
         referenced: [{ path: '/repo/huge/AGENTS.md', bytes: 900_000 }],
       },
       skillsVfs: emptySkills,
@@ -205,9 +194,7 @@ describe('listInstructionApprovals — the cursor contract', () => {
   });
 
   test('a REWRITE between pages does not move the cursor', () => {
-    // Ordering is derived from identity alone, never from bytes, so an edit
-    // changes what a row SAYS when opened and never where it sits. Without that,
-    // a mid-read rewrite could skip a file past the owner or serve one twice.
+    // Order derives from identity, never bytes, so a mid-read rewrite cannot skip or repeat a row.
     const first = listInstructionApprovals({ sources: many, decisions: [], limit: 3 });
 
     if (first.status !== 'more') throw new Error('expected a bounded page');
@@ -260,8 +247,7 @@ describe('readInstructionSource — one row, opened', () => {
   });
 
   test('the digest is over the REAL bytes, never over the clipped preview', () => {
-    // Otherwise approving a clipped rendering would grant force to bytes nobody
-    // hashed.
+    // Otherwise approving a clipped rendering would grant force to unhashed bytes.
     const long = `${POISON}${'y'.repeat(5_000)}`;
 
     const row = readInstructionSource({

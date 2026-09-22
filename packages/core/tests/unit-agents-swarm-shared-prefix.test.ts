@@ -1,20 +1,6 @@
 /**
- * The `compactShared` seam, wired through the one production constructor.
- *
- * `SwarmRunDeps.compactShared` is the *Inherited context* barrier: a parent whose transcript
- * crosses ~85% of the window must be compacted ONCE, and every fork child of that parent must
- * read the same compacted prefix — never the verbatim mass that the provider then refuses.
- * The engine side (threshold, memoisation, events) is swarm-run's; what this file pins is the
- * WIRING: `runSwarmAction` is the only production constructor of `SwarmRunDeps`, so a fork
- * parent past the threshold must arrive compacted through the deps the `agents` tool hands
- * the run, or the knob is dead exactly as the audit found it (#199 against #137/#140).
- *
- * The compactor here is a spy on purpose: this suite proves the plumbing (called once per
- * branch point, the spy's output is what the child reads). That the spy's job is done in
- * production by the real better-compact ladder is packages/compaction's own suite. The run
- * composition is a real measured tree (`uct` over an exec-ratio objective) because that is
- * the one legal depth-2 shape; a prose candidate simply measures as nothing, which is all
- * the tree needs to keep expanding.
+ * `runSwarmAction` is the only production constructor of `SwarmRunDeps`, so a fork parent past the
+ * compaction threshold must arrive compacted through it. The compactor is a spy: this pins wiring only.
  */
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
@@ -31,10 +17,7 @@ import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
 
 const MARKER = 'COMPACTED-PREFIX-MARKER';
 
-/** The bulk rides a comment INSIDE the measured code block, so one scripted
- *  answer is simultaneously over the compaction threshold (a bare prose answer
- *  is not measurable, and an unmeasured node is taken out of selection) and
- *  scoreable by the exec-ratio verifier. */
+/** The bulk rides a comment inside the measured code block: over the threshold yet still scoreable. */
 const BULK = 'x'.repeat(455_000);
 
 const REFERENCE = `export function solve(input, oracle) {
@@ -44,7 +27,6 @@ const REFERENCE = `export function solve(input, oracle) {
 }
 `;
 
-/** One instance, one metered primitive — the reference's own answer as ground truth. */
 const BODY = `
 const oracle = { step: meter((seen) => seen + 1) };
 const decode = (out) => (out === undefined || out === null ? null : out);
@@ -59,11 +41,9 @@ const VERIFY_SPEC = {
   lowerBoundOps: 1,
 };
 
-/** The request prompt a scripted turn receives, derived from the factory's own
- *  contract rather than asserted — the same derivation turn-model.ts pins. */
+/** Derived from the factory's contract, as turn-model.ts pins. */
 type TurnPrompt = Parameters<Parameters<typeof scriptedTurnModel>[0]['doGenerate']>[0]['prompt'];
 
-/** One text step and stop, capturing every request prompt the run issues. */
 function capturingModel(prompts: TurnPrompt[]) {
   return scriptedTurnModel({
     provider: 'fake',
@@ -86,10 +66,7 @@ function capturingModel(prompts: TurnPrompt[]) {
 
 type CapturingModel = ReturnType<typeof capturingModel>;
 
-/** The swarm deps a caller hands the agents tool. Takes the caller's DATABASE as
- *  well as its runtime, because `unit:'answer'` makes every child an agent node
- *  and each acquires its own actor of that one workspace — one seat per node,
- *  never one shared handle. */
+/** Takes the caller's database: `unit:'answer'` makes every child an agent node with its own actor. */
 function swarmDeps(
   world: { rt: AgentRuntime; db: Database },
   model: CapturingModel,
@@ -106,11 +83,7 @@ function agentsTool(deps: AgentsToolDeps) {
   return { ...entry, execute: toolExecute<AgentsToolInput, object>(entry) };
 }
 
-/** A legal depth-2 measured tree under `best-first`: the policy takes each node
- *  once, so the one legal chain is root -> child -> grandchild, and the child —
- *  whose transcript carries the bulk answer — is the branch point the barrier
- *  fires at. `uct` re-widens the root instead of descending, which never builds
- *  the depth-2 shape this seam needs. */
+/** `best-first` takes each node once, so root -> child -> grandchild is the one legal depth-2 chain; `uct` re-widens the root. */
 function forkCall(branches: number) {
   return {
     action: 'swarm' as const,
@@ -143,10 +116,7 @@ describe('compactShared wiring through runSwarmAction', () => {
 
     const tool = agentsTool({
       mode: 'build',
-      // The child's own answer is ~116k estimated tokens — past the estimate
-      // gate — so this run needs the barrier's compactor to reach its
-      // grandchild at all; without one the documented loud failure is an
-      // admission refusal before the request is sent.
+      // Without the barrier's compactor the grandchild request is refused at admission.
       swarm: swarmDeps({ rt, db }, capturingModel(prompts), {
         originContext: () => origin,
         compactShared: async () => [{ role: 'user' as const, content: MARKER }],
@@ -178,17 +148,10 @@ describe('compactShared wiring through runSwarmAction', () => {
 
     await tool.execute(forkCall(1));
 
-    // The barrier fired at the one branch point above the threshold, over that parent's
-    // transcript.
     expect(compacted.length).toBe(1);
     expect(JSON.stringify(compacted[0])).toContain(BULK.slice(0, 64));
 
-    // The depth-2 child read the compacted marker and NOT the verbatim mass. The bulk
-    // still reaches a grandchild's seed through the parent-conclusion and inherited-
-    // artifact briefs — channels the barrier does not own — so the seam's contract is
-    // about the PREFIX: the inherited transcript arrives as the compacted marker
-    // message, and the parent's assistant turn (the verbatim mass) is gone. The depth-1
-    // child inherited the root's empty transcript, so its request carries neither.
+    // The bulk still reaches the grandchild via briefs the barrier does not own; the contract is the prefix.
     expect(prompts.length).toBe(2);
     const grandchild: Readonly<TurnPrompt> = prompts[1];
     expect(grandchild.some((m) => m.role === 'user' && JSON.stringify(m.content).includes(MARKER))).toBe(true);
@@ -216,11 +179,7 @@ describe('compactShared wiring through runSwarmAction', () => {
 
     await tool.execute(forkCall(2));
 
-    // ONE compaction for the branch point; both grandchildren read its output. Sibling
-    // REQUESTS differ by design — expand:'sample' gives each its own angle brief — so
-    // byte-identity is asserted on what the seam owns: the inherited prefix, which is
-    // the same compacted marker message in both, with the parent's verbatim assistant
-    // turn present in neither.
+    // Sibling requests differ by design (expand:'sample'), so identity is asserted on the inherited prefix.
     expect(compactions).toBe(1);
     expect(prompts.length).toBe(4);
 
@@ -236,9 +195,7 @@ describe('compactShared wiring through runSwarmAction', () => {
     }
   });
 
-  // KINU-048's gate against this seam: the child's request is measured AS IT
-  // IS SENT, so the barrier's compacted prefix — not the transcript it
-  // replaced — is what admission sees.
+  // KINU-048: admission measures the request as sent, so it sees the compacted prefix.
   test('a child over the estimate gate on the verbatim prefix is admitted on the compacted one', async () => {
     const { rt, db } = createTestRuntime();
     await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
@@ -246,8 +203,6 @@ describe('compactShared wiring through runSwarmAction', () => {
     let sawMassInBarrier = 0;
 
     const compactShared = async (messages: readonly ModelMessage[]) => {
-      // The barrier received the transcript whose verbatim mass would have
-      // pushed the child request past the 64k estimate gate.
       if (JSON.stringify(messages).includes(BULK.slice(0, 64))) sawMassInBarrier += 1;
 
       return [{ role: 'user' as const, content: MARKER }];
@@ -260,8 +215,6 @@ describe('compactShared wiring through runSwarmAction', () => {
 
     await tool.execute(forkCall(1));
 
-    // Both nodes reported: the depth-2 request — which carried the compacted
-    // prefix, not the ~116k-token verbatim one — was admitted and answered.
     expect(sawMassInBarrier).toBe(1);
     expect(prompts.length).toBe(2);
   });

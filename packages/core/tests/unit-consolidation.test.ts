@@ -21,12 +21,11 @@ describe('CraftStore consolidation', () => {
     const { rt } = createTestRuntime();
     initCraftedToolsTables(rt.storage.sql);
 
-    // Add a tool with many uses but old timestamp (120 days ago → effective ≈ 0.0625)
+    // 120 days old → effective ≈ 0.0625
     rt.craftStore.create({ name: 'stale_tool', description: 'old', params: null, code: 'fn()', scope: 'local' });
     const hundredTwentyDaysAgo = Date.now() - 120 * 86_400_000;
         void rt.storage.sql`UPDATE crafted_tools SET score = 0.5, uses = 5, last_used_at = ${hundredTwentyDaysAgo} WHERE name = 'stale_tool'`;
 
-    // Add a fresh tool
     rt.craftStore.create({ name: 'fresh_tool', description: 'new', params: null, code: 'fn()', scope: 'local' });
         void rt.storage.sql`UPDATE crafted_tools SET score = 0.8, uses = 3, last_used_at = ${Date.now()} WHERE name = 'fresh_tool'`;
 
@@ -49,10 +48,9 @@ describe('CraftStore consolidation', () => {
 
     await periodicCraftConsolidation(rt);
 
-    // BUG-2 guard: should NOT have retired everything
     const remaining = rt.craftStore.list();
     expect(remaining.length).toBeGreaterThan(0);
-    expect(remaining).toHaveLength(2); // both kept because retiring all is blocked
+    expect(remaining).toHaveLength(2);
   });
 
   test('skips tools with fewer than 2 uses', async () => {
@@ -63,13 +61,12 @@ describe('CraftStore consolidation', () => {
     rt.craftStore.create({ name: 'low_use', description: 'x', params: null, code: 'fn()', scope: 'local' });
         void rt.storage.sql`UPDATE crafted_tools SET score = 0.5, uses = 1, last_used_at = ${old} WHERE name = 'low_use'`;
 
-    // Also add a high-use fresh tool to avoid BUG-2 guard
     rt.craftStore.create({ name: 'fresh', description: 'y', params: null, code: 'fn()', scope: 'local' });
         void rt.storage.sql`UPDATE crafted_tools SET score = 0.9, uses = 10, last_used_at = ${Date.now()} WHERE name = 'fresh'`;
 
     await periodicCraftConsolidation(rt);
 
-    // low_use should NOT be retired (only 1 use < 2 minimum)
+    // 1 use is below the 2-use minimum
     expect(rt.craftStore.list().map((tool) => tool.name).sort()).toEqual(['fresh', 'low_use']);
   });
 });

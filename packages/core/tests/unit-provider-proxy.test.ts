@@ -1,12 +1,4 @@
-// Behavior tests for the general provider proxy's client half — the wire
-// contract that lets a machine holding no secret drive a provider whose key
-// lives in the owner's Kinu account.
-//
-// Contract under test:
-//   - a proxied AuthResolution carries a marker, never secret material
-//   - the fetch wrapper relocates only marked requests, verbatim otherwise
-//   - the base URL a credential may be spent on is derivable from the key
-//   - target admission is origin + path-prefix, https only
+// Provider proxy client: a proxied AuthResolution carries a marker, never a secret; only https origin+path-prefix targets are admitted.
 import { describe, expect, test } from 'bun:test';
 import {
   PROXY_CRED_HEADER, PROXY_TARGET_HEADER,
@@ -24,8 +16,7 @@ const CATALOG = {
   bespoke: { id: 'bespoke', name: 'Bespoke SDK only', npm: '@ai-sdk/bespoke', models: {} },
 };
 
-/** A fetch identity of its own so the models.dev module cache never bleeds
- *  between tests (it keys on the function object). */
+/** A distinct fetch identity: the models.dev cache keys on the function object. */
 function catalogFetch(): typeof fetch {
   return asFetchFunction(async () => Response.json(CATALOG));
 }
@@ -133,9 +124,7 @@ describe('providerProxyBaseURL', () => {
 
   const NO_BASE_URL = [
     {
-      // The Cloudflare bearer also authorizes account administration, and Codex
-      // refuses Worker egress, so proxying it would break a local credential
-      // that works today.
+      // The Cloudflare bearer also authorizes account administration, and Codex refuses Worker egress.
       name: 'refuses the credentials the proxy is not allowed to spend',
       credentials: ['cloudflare.oauth', 'cloudflare.ai-gateway', 'codex.oauth'],
     },
@@ -173,10 +162,7 @@ describe('proxyTargetAllowed', () => {
   });
 
   test('refuses model MANAGEMENT — an inference scope does not buy DELETE', () => {
-    // The defect: the allowlist took no method, so a token holding only
-    // `ai.proxy` could spend the owner's provider credential on
-    // `DELETE /v1/models/{id}` — deleting a fine-tuned model on every provider
-    // that offers the verb.
+    // The allowlist is method-scoped, or `ai.proxy` could spend the credential on `DELETE /v1/models/{id}`.
     for (const method of ['DELETE', 'POST', 'PUT', 'PATCH', 'delete']) {
       expect(proxyTargetAllowed(`${base}/models/ft-abc123`, base, method)).toBe(false);
       expect(proxyTargetAllowed(`${base}/models`, base, method)).toBe(false);
@@ -184,8 +170,6 @@ describe('proxyTargetAllowed', () => {
   });
 
   test('refuses an inference endpoint under a verb it is not', () => {
-    // The other direction of the same matrix: a completion is a POST, so GET
-    // and DELETE against it are not this capability's either.
     for (const method of ['GET', 'DELETE', 'HEAD']) {
       expect(proxyTargetAllowed(`${base}/chat/completions`, base, method)).toBe(false);
       expect(proxyTargetAllowed(`${base}/embeddings`, base, method)).toBe(false);

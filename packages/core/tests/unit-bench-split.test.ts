@@ -59,10 +59,7 @@ describe('partitionCorpus', () => {
 
   test('the dev split provably contains no sealed task', () => {
     const corpus = partitionCorpus(tasks);
-    // `dev` is what the partition produced, so it is the denominator. The sibling
-    // above asserts `dev.length + sealed.size === tasks.length`, which an empty
-    // dev satisfies too — a partition that sealed everything would leave this
-    // claim true of nothing while destroying the dev split it names.
+    // An empty dev split also satisfies the sibling's size check, so this pins `dev` as the denominator.
     expect(corpus.dev.length).toBeGreaterThan(0);
     expect(corpus.dev.length).toBeLessThan(tasks.length);
 
@@ -88,7 +85,6 @@ describe('SealedSplit', () => {
     const card = await split.evaluate(async () => ({ a: [false], b: [true] }), { seed: 1, iterations: 500 });
     expect(card.tasks).toBe(6);
     expect(card.stats.onlyB).toBe(6);
-    // The whole point: nothing task-identifying escapes.
     const serialized = JSON.stringify(card);
 
     for (const t of sealedTasks) {
@@ -147,7 +143,6 @@ describe('SealedSplit', () => {
     expect(result.ok).toBe(true);
     expect(result.attempts).toBe(2);
     expect(result.passedOnAttempt).toBe(2);
-    // The operator learns BOTH that it validated and that it needed a retry.
     expect(result.detail).toContain('FLAKY');
     expect(result.detail).toContain('oracle→FAIL sandbox symlink');
   });
@@ -195,7 +190,6 @@ describe('SealedSplit', () => {
 
     expect(result.checked).toBe(6);
     expect(result.invalid).toEqual(['s3']);
-    // s5 validated, but only on a retry: valid corpus, unreliable task.
     expect(result.flaky).toEqual(['s5']);
   });
 });

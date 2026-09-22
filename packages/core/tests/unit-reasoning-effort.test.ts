@@ -1,10 +1,4 @@
-// The reasoning-effort levels a control offers are the MODEL's (#9).
-//
-// The settings control once hardcoded low|medium|high beside a "model
-// default" entry, so a model that takes xhigh could not be set to it and a
-// model that takes only low|high offered a medium it would refuse. The
-// offer is now derived from the model's catalog entry through one helper,
-// which every surface (web settings, CLI /effort, TUI pickers) renders.
+// The reasoning-effort levels a control offers are the model's (#9), via one shared helper.
 import { describe, expect, test } from 'bun:test';
 import {
   REASONING_EFFORTS, isReasoningEffort, knownReasoningEfforts, offeredReasoningEfforts,
@@ -26,8 +20,7 @@ describe('what a control offers for one model', () => {
   });
 
   test('a stored level the catalog no longer lists stays visible rather than reading as unset', () => {
-    // The row must show what the assignment HOLDS: silently rendering it as
-    // "model default" would hide a value that still reaches the wire.
+    // Rendering a held value as "model default" would hide what still reaches the wire.
     expect(offeredReasoningEfforts(['low', 'high'], 'medium')).toEqual(['low', 'high', 'medium']);
     expect(offeredReasoningEfforts(['low', 'high'], 'high')).toEqual(['low', 'high']);
   });

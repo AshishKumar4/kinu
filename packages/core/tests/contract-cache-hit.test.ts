@@ -1,45 +1,5 @@
-/**
- * A stable prefix reads back as a NONZERO cache hit — the missing half of the
- * cache contract (docs/ARCHITECTURE-DECISIONS.md O1). contract-cache-markers
- * proves the addressing lands on the wire; this file proves the addressing
- * pays off, in the only currency a caller can observe: the accumulated
- * `Usage.cacheRead` a three-step turn (tool call, tool call, continuation)
- * leaves in the TurnAccumulator.
- *
- * The method: runChat drives each real provider adapter against a mocked
- * fetch, and the mock carries the provider's prompt cache. Every request is
- * first reduced to its canonical cacheable unit — the prompt chain with the
- * addressing fields (`cache_control` markers, `prompt_cache_key`,
- * `x-session-affinity`) stripped, since those are cache bookkeeping rather
- * than prompt bytes — then judged by that provider's own cache model. A
- * request reports a nonzero read when, and only when, its deepest addressed
- * prefix continues a previous request's addressed prefix byte for byte on
- * the same route. That predicate, not a number baked into a fixture, is what
- * this gate proves about Kinu: the prefix engineering held.
- *
- * The predicate per provider, stated from its own docs:
- *   - anthropic / openrouter-claude: `cache_control` breakpoints; a request
- *     stores the prefix ending at its last breakpoint and a later request
- *     reads the longest stored prefix it still begins with. Modelled
- *     all-or-nothing — the read counter is the WHOLE stored prefix or zero,
- *     where a real cache also serves partial hits below a mutation.
- *     https://docs.claude.com/en/docs/build-with-claude/prompt-caching and
- *     https://openrouter.ai/docs/guides/best-practices/prompt-caching
- *     (cache_control pass-through to Claude upstreams).
- *   - openai / codex (Responses API): `prompt_cache_key` routes the lookup;
- *     the cached unit is the full prompt (instructions + tools + input).
- *     https://platform.openai.com/docs/guides/prompt-caching
- *   - my-gateway / ai-gateway / openai-compat: the same routing through the
- *     provider's own options namespace, spread onto the body as
- *     `prompt_cache_key`; no provider doc — the premise is the strategy
- *     map's, and the read field is the shared openai-compatible one.
- *   - workers-ai: `x-session-affinity` pins a replica whose default-on prefix
- *     cache keys the request bytes; no public doc — measured by live
- *     two-shot probes (cf-backend/src/providers/workers-ai-catalog.ts,
- *     2026-08-15).
- *   - a provider the map gives nothing (no key, no marker, no header) can
- *     never read anything back, whatever it reports.
- */
+/** A stable prefix reads back as a nonzero cache hit (docs/ARCHITECTURE-DECISIONS.md O1). The mocked fetch
+ *  models each provider's cache: a request reads only when its addressed prefix continues a stored one byte for byte. */
 
 import { describe, test, expect } from 'bun:test';
 import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
@@ -60,18 +20,10 @@ import {
 } from '../src/index';
 import { createMockFetch, type MockFetchHandle, type RecordedRequest } from '@kinu.run/test-utils';
 
-/* ── The provider-cache oracle ───────────────────────────────────────────── */
-
 interface WireView {
-  /** The route the cache lives behind: a prompt-cache key, an affinity
-   *  header, or undefined where the cache is unkeyed. A request on a
-   *  different route sees an empty cache. */
+  /** The cache route (prompt-cache key or affinity header); a different route sees an empty cache. */
   route?: string;
-  /** The canonical prompt chain this request addresses, in the provider's
-   *  prefix order — per tool, per system block, then per wire content part
-   *  (Anthropic), per wire message (chat-completions), or per input item
-   *  (Responses API). Marker dialects end the chain at the LAST element
-   *  carrying a breakpoint; key-routed dialects take the whole chain. */
+  /** The addressed prompt chain: marker dialects end at the last breakpoint; key-routed take the whole chain. */
   elements: string[];
 }
 
@@ -80,9 +32,7 @@ const ADDRESSING_KEYS = new Set(['cache_control', 'cacheControl', 'prompt_cache_
 
 const JsonPrimitiveSchema = v.union([v.string(), v.number(), v.boolean(), v.null()]);
 
-/** JSON.stringify minus every addressing key, recursively — the prompt bytes
- *  a cache lookup would hash. `value` is wire JSON already; `JsonValue` is
- *  the domain type the body schemas deliver. */
+/** JSON.stringify minus every addressing key, recursively: the bytes a cache lookup would hash. */
 function canon(value: JsonValue): string {
   if (v.is(JsonPrimitiveSchema, value)) return JSON.stringify(value);
 
@@ -94,28 +44,20 @@ function canon(value: JsonValue): string {
     .join(',')}}`;
 }
 
-/** Whether an element carries a `cache_control` breakpoint anywhere inside —
- *  provider-level on a tool, block-level on a system block, last-part-level
- *  on a message part. Our own fixtures never embed the literal in content. */
+/** Whether an element carries a `cache_control` breakpoint; fixtures never embed that literal in content. */
 function marked(value: JsonValue): boolean {
   return JSON.stringify(value).includes('"cache_control"');
 }
 
-/** chars/4 — the scale the context budget already prices on. The figure is
- *  fabricated only in that the real provider tokenizes; the gate is
- *  zero-versus-nonzero, which this preserves. */
+/** chars/4: the gate is zero-versus-nonzero, so tokenizer accuracy does not matter. */
 function tokensOf(elements: readonly string[]): number {
   return Math.max(1, Math.round(elements.join('').length / 4));
 }
 
 interface Verdict { read: number; write: number }
 
-/**
- * One provider's prompt cache, modelled on the request stream it is fed.
- * `stored` is the previous request's addressed prefix; a request reads only
- * when its own addressed region contains that prefix byte for byte — the
- * strictest honest reading of "the prefix is stable".
- */
+/** One provider's prompt cache: a request reads only when its addressed region contains the
+ *  previously stored prefix byte for byte. */
 class PrefixCacheOracle {
   private stored: { route?: string; elements: string[] } | undefined;
 
@@ -137,16 +79,13 @@ class PrefixCacheOracle {
   }
 }
 
-/* ── Canonical wire views, one per dialect ───────────────────────────────── */
-
 const AnthropicBodySchema = v.looseObject({
   tools: v.optional(v.array(JsonValueSchema)),
   system: v.optional(v.union([v.string(), v.array(JsonValueSchema)])),
   messages: v.optional(v.array(JsonValueSchema)),
 });
 
-/** Anthropic: tools + system blocks + message content parts, prefix order,
- *  addressed through the last element carrying a breakpoint. */
+/** Anthropic: tools + system + message parts, addressed through the last breakpoint. */
 function anthropicView(body: JsonObject): WireView {
   const parsed = v.parse(AnthropicBodySchema, body);
   const elements: string[] = [];
@@ -191,13 +130,8 @@ const CompatBodySchema = v.looseObject({
   messages: v.optional(v.array(JsonValueSchema)),
 });
 
-/**
- * Chat-completions wire (openrouter, gateways, openai-compat, workers-ai):
- * one head element for the fixed fields (model, params), then one per wire
- * message — the system prompt rides as a message here. On a marker dialect
- * the addressed region ends at the last message carrying `cache_control`,
- * and a request that marks nothing addresses nothing.
- */
+/** Chat-completions wire: the system prompt rides as a message; on a marker dialect a request
+ *  that marks nothing addresses nothing. */
 function compatView(body: JsonObject, request: RecordedRequest, markers: boolean): WireView {
   const parsed = v.parse(CompatBodySchema, body);
   const { messages, prompt_cache_key: _key, ...rest } = parsed;
@@ -250,10 +184,7 @@ function responsesView(body: JsonObject): WireView {
   };
 }
 
-/* ── Streamed reply shapes, per dialect ──────────────────────────────────── */
-
-/** Anthropic usage: read + write split the request's prompt into served and
- *  stored. The decoy keeps the whole count on the WRITE counter. */
+/** Anthropic usage; the decoy keeps the whole count on the write counter. */
 function anthropicUsage(verdict: Verdict, decoy: boolean): JsonObject {
   return {
     input_tokens: 12,
@@ -263,9 +194,7 @@ function anthropicUsage(verdict: Verdict, decoy: boolean): JsonObject {
   };
 }
 
-/** Responses API usage. The decoy lands the count on the sibling detail
- *  fields — `orchestration_input_cached_tokens`, which the normaliser has no
- *  business reading, and `reasoning_tokens` on the output side. */
+/** Responses API usage; the decoy puts the count on sibling fields the normaliser must not read. */
 function responsesUsage(verdict: Verdict, decoy: boolean): JsonObject {
   const details: JsonObject = { cached_tokens: decoy ? 0 : verdict.read };
 
@@ -280,8 +209,7 @@ function responsesUsage(verdict: Verdict, decoy: boolean): JsonObject {
   };
 }
 
-/** Chat-completions usage, same decoy: the count rides the output-side
- *  reasoning detail while the read detail says 0. */
+/** Chat-completions usage; the decoy puts the count on output reasoning while the read detail says 0. */
 function compatUsage(verdict: Verdict, decoy: boolean): JsonObject {
   return {
     prompt_tokens: 12 + verdict.read + verdict.write,
@@ -327,8 +255,6 @@ function anthropicSse(step: number, usage: JsonObject): string {
   return `${frames.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n`).join('\n')}\n`;
 }
 
-/** Responses API stream: function_call items on tool steps, a message item on
- *  the last, `response.completed` carrying usage. */
 function responsesSse(step: number, usage: JsonObject): string {
   const events: JsonObject[] = [
     { type: 'response.created', response: { id: `resp_${step}`, created_at: 1700000000, model: 'gpt-5.5' } },
@@ -352,8 +278,6 @@ function responsesSse(step: number, usage: JsonObject): string {
   return events.map((data) => `event: ${v.parse(v.string(), data.type)}\ndata: ${JSON.stringify(data)}\n\n`).join('');
 }
 
-/** Chat-completions stream: a tool_calls delta on tool steps, usage on the
- *  finish chunk, `[DONE]`. */
 function compatSse(step: number, usage: JsonObject): string {
   const chunk = (delta: JsonObject, finish: string | null, usageChunk?: JsonObject) => {
     const frame: JsonObject = {
@@ -374,8 +298,6 @@ function compatSse(step: number, usage: JsonObject): string {
 
   return `${body}data: [DONE]\n\n`;
 }
-
-/* ── The provider table ──────────────────────────────────────────────────── */
 
 type WireDialect = 'anthropic' | 'responses' | 'compat';
 
@@ -450,9 +372,7 @@ const CACHING_PROVIDERS: readonly ProviderCase[] = [
     model: (deps) => createOpenAICompatProvider().createModel('llama-4', deps),
   },
   {
-    // The affinity header is attached where the model is built in production
-    // (cf-backend workers-ai.ts requestHeaders); a credential header reaches
-    // the wire the same way through core's authed fetch.
+    // The affinity header is attached where production builds the model (cf-backend workers-ai.ts requestHeaders).
     label: 'workers-ai', providerId: 'workers-ai', modelId: '@cf/moonshotai/kimi-k2.6', dialect: 'compat', markers: false,
     credentials: {
       'workers-ai': {
@@ -473,16 +393,13 @@ const CACHING_PROVIDERS: readonly ProviderCase[] = [
   },
 ];
 
-/** A provider id the strategy map resolves to `none`: the turn runs, the
- *  request leaves unaddressed, and the provider reports plain usage. */
+/** A provider id the strategy map resolves to `none`: unaddressed request, plain usage. */
 const UNADDRESSED_PROVIDER: ProviderCase = {
   label: 'unaddressed', providerId: 'claude', modelId: 'claude-sonnet-4-x', dialect: 'compat',
   unaddressed: true,
   credentials: { 'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: 'https://claude.example/v1' } },
   model: (deps) => createOpenAICompatProvider().createModel('claude-sonnet-4-x', deps),
 };
-
-/* ── The turn ────────────────────────────────────────────────────────────── */
 
 const HISTORY: ModelMessage[] = [
   { role: 'user', content: 'first question' },
@@ -543,16 +460,12 @@ function usageFor(entry: ProviderCase, verdict: Verdict, decoy: boolean): JsonOb
 
 interface TurnResult {
   mock: MockFetchHandle;
-  /** The per-step usage reports, in order — the same projection the
-   *  step_finish activity line renders. */
   steps: Usage[];
   /** The turn's accumulated usage, from the real TurnAccumulator. */
   total: Usage;
 }
 
-/** One three-step turn — tool call, tool call, answer — against the
- *  provider's mocked cache. The mock reads each request's addressed prefix
- *  BEFORE deciding what the usage line reports. */
+/** One three-step turn (tool call, tool call, answer) against the provider's mocked cache. */
 async function driveTurn(
   entry: ProviderCase,
   opts: { decoy?: boolean; extension?: KinuExtension; dynamic?: () => DynamicContext } = {},
@@ -599,11 +512,7 @@ async function driveTurn(
   return { mock, steps, total: acc.reportedUsage() ?? {} };
 }
 
-/* ── Wire-body surgery for the marker-placement proof ────────────────────── */
-
-/** Strip `cache_control` everywhere — tools, system, every message — and
- *  re-place ONE breakpoint on the first message: a marker inside the prefix
- *  step 1 already stored, nowhere near the tail. */
+/** Strip `cache_control` everywhere and re-place one breakpoint on the first message, inside the stored prefix. */
 function demoteBreakpoints(entry: ProviderCase, body: JsonObject): JsonObject {
   const stripped = removeBreakpoint(body);
   const messages = stripped.messages;
@@ -648,8 +557,6 @@ function placeBreakpoint(entry: ProviderCase, value: JsonObject): JsonObject {
 
   return { ...value, cache_control: breakpoint };
 }
-
-/* ── The gate ────────────────────────────────────────────────────────────── */
 
 const BLIND_SPOTS = [
   "a mocked fetch cannot prove a live cache; each predicate is the test's own model of the provider's cache, stated from its docs in the file header",
@@ -697,8 +604,6 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
 
       expect(mock.requests.length).toBe(3);
       expect(steps.length).toBe(3);
-      // Step 1 writes the prefix; steps 2 and 3 must READ it back — and the
-      // read grows as the addressed prefix extends.
       expect(steps[0]?.cacheRead ?? 0).toBe(0);
       expect(steps[1]?.cacheRead ?? 0).toBeGreaterThan(0);
       expect(steps[2]?.cacheRead ?? 0).toBeGreaterThan(steps[1]?.cacheRead ?? 0);
@@ -724,13 +629,11 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
       expect(request.headers['x-session-affinity']).toBeUndefined();
     }
 
-    // The provider reported plain usage; the read field was never mentioned.
     expect(total.cacheRead ?? 0).toBe(0);
   });
 
   test('a per-step mutation before the deepest breakpoint drops the hit to 0', async () => {
-    // A clock-derived string spliced into the FIRST history message at every
-    // step — the failure mode this gate exists to catch.
+    // A clock-derived string in the first history message: the failure mode this gate exists to catch.
     const clock: KinuExtension = {
       name: 'clock-mutation',
       prepareStep: ({ stepNumber, messages }) => messages.map((message, index) => {
@@ -744,8 +647,7 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
       const { mock, total } = await driveTurn(entry, { extension: clock });
 
       expect(mock.requests.length).toBe(3);
-      // The mutation reached the wire — the miss is its fault, not a silent
-      // turn that never ran.
+      // The mutation reached the wire, so the miss is its fault, not a turn that never ran.
       expect(requestAt(mock, 1).body).toContain('#step-1');
       expect(requestAt(mock, 2).body).toContain('#step-2');
       expect(total.cacheRead ?? 0).toBe(0);
@@ -753,26 +655,18 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
   });
 
   test('breakpoints anywhere but the tail read 0 — the oracle discriminates on real wire bytes', async () => {
-    // The pipeline marks the tail unconditionally, so no live turn can place
-    // a marker wrong; the discrimination is proved on the REAL captured
-    // bodies, replayed through the same oracle the green path used.
+    // The pipeline always marks the tail, so misplacement is proved by replaying real captured bodies.
     for (const entry of CACHING_PROVIDERS.filter((e) => e.markers === true || e.dialect === 'anthropic')) {
       const { mock } = await driveTurn(entry);
       const first = requestAt(mock, 0);
       const second = requestAt(mock, 1);
 
-      // Control: the real pair hits.
       const control = new PrefixCacheOracle();
       control.submit(viewOf(entry, first));
       expect(control.submit(viewOf(entry, second)).read).toBeGreaterThan(0);
 
-      // Move every tail breakpoint onto the FIRST message — inside the
-      // prefix step 1 already stored, so the request's addressed region no
-      // longer extends it.
       const demoted = demoteBreakpoints(entry, parseJsonObject(v.parse(v.string(), second.body)));
 
-      // The demoted body still carries exactly one breakpoint — on the
-      // first message, not the tail.
       expect(JSON.stringify(demoted).match(/"cache_control"/g)?.length).toBe(1);
 
       const mutated = new PrefixCacheOracle();
@@ -787,7 +681,6 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
       const { steps, total } = await driveTurn(entry, { decoy: true });
 
       expect(total.cacheRead ?? 0).toBe(0);
-      // The count DID arrive — on the wrong field, where it stays.
       expect(steps[1]?.cacheWrite ?? steps[1]?.reasoning ?? 0).toBeGreaterThan(0);
     }
   });

@@ -1,11 +1,4 @@
-/**
- * The fork driver's policy, through its public seam.
- *
- * The policy is backend-agnostic: a backend supplies only the transport — how
- * to reach a workspace that does not exist yet — and these tests drive the
- * driver over a recording one. A driver built out of Durable Object methods
- * would exist on exactly one backend.
- */
+/** The fork driver's backend-agnostic policy, driven over a recording transport. */
 
 import { describe, test, expect } from 'bun:test';
 import {
@@ -63,9 +56,8 @@ function recordingTransport(taken: readonly string[] = []) {
         name, untilMessageId: source.untilMessageId, artifactDirectory: source.artifactDirectory,
       });
 
-      // The transport is handed sql + the cut, never an actor: the real transfer
-      // resolves the source's main actor itself (`forkTransferFrames`), and this
-      // recording stand-in reads the chain the same way.
+      // The transport gets sql and the cut, never an actor: the real transfer resolves the source's main actor
+      // itself.
       const entry = source.sql<{ recorded_at: number }>`
         SELECT recorded_at FROM conversation_entries
         WHERE actor_id = ${openWorkspaceMainActor(source.sql).actorId}
@@ -90,9 +82,7 @@ describe('forkWorkspace', () => {
     expect(out.workspaceId).toBe('DO-my-fork');
     expect(out.name).toBe('my-fork');
     expect(t.delivered).toHaveLength(1);
-    // The transport receives the cut and the source's payload plane, not a
-    // materialized snapshot: its source side streams rows and files in bounded
-    // frames, and m2 is past this cut.
+    // The transport receives the cut and the payload plane, not a snapshot; m2 is past this cut.
     expect(t.delivered[0]).toEqual({
       name: 'my-fork', untilMessageId: 'm1', artifactDirectory: SOURCE_ARTIFACTS,
     });
@@ -107,8 +97,7 @@ describe('forkWorkspace', () => {
 
     expect(workspaceAddressRefusal(out.name)).toBeNull();
     expect(out.name).not.toContain('atlas');
-    // Failing a fork over a random-id collision helps nobody, so a generated
-    // name is not probed at all.
+    // A generated name is not probed: failing on a random-id collision helps nobody.
     expect(t.probed).toEqual([]);
     expect(out.forkPointMs).toBeGreaterThan(0);
     src.workspace.db.close();
@@ -131,8 +120,7 @@ describe('forkWorkspace', () => {
       cut: 'm1', forkName: 'has spaces', says: 'invalid agent name',
     },
     {
-      // The primary-key preflight is bounded: it proves the cut exists without
-      // materialising its ancestry, so no pending target is ever addressed.
+      // The preflight proves the cut exists without materialising its ancestry.
       name: 'an unknown cut point is refused by the bounded preflight',
       cut: 'nope', forkName: 'my-fork', says: 'fork point not found',
     },

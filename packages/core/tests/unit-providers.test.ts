@@ -12,7 +12,6 @@ import {
   type ModelProvider, type ProviderDeps, type AuthResolution,
 } from '../src/index';
 
-/** Tiny in-memory auth fixture for tests. */
 function createTestAuth(store: Map<string, AuthResolution> = new Map()): Pick<ProviderDeps, 'getAuth' | 'hasCredential'> {
   return {
     async getAuth(key) { return store.get(key) ?? null; },
@@ -94,9 +93,7 @@ describe('ProviderRegistry', () => {
     expect(() => r.register(fakeProvider('alpha', 'a2', true))).toThrow('already registered');
   });
 
-  /** The regression this suite exists for: a connected provider whose token
-   *  refresh (or endpoint) is broken must not reject the whole listing — ONE
-   *  failure would empty the model picker for every other provider. */
+  /** One provider's broken refresh must not reject the whole listing and empty the model picker. */
   describe('one broken provider never empties the menu', () => {
     function throwingProvider(
       id: string,
@@ -148,8 +145,7 @@ describe('ProviderRegistry', () => {
 
     test('defaultSpec skips a throwing provider instead of leaving the agent modelless', async () => {
       const r = createProviderRegistry();
-      // No static defaultModel, so defaultSpec must reach the throwing
-      // listModels to find one — the path a rejection would escape from.
+      // No static defaultModel, so defaultSpec must reach the throwing listModels.
       r.register(throwingProvider('codex', 'listModels'));
       r.register(fakeProvider('beta', 'b-default', true));
       expect(await r.defaultSpec(baseDeps())).toBe('beta/b-default');
@@ -172,16 +168,9 @@ describe('ProviderRegistry', () => {
     });
   });
 
-  /** The listing methods sit in front of a turn's first token, so a sequential
-   *  probe adds one slow vendor's whole latency to every provider behind it.
-   *  These pin the two properties that cost nothing: probes overlap, and the
-   *  answer's ORDER comes from registration rather than from whoever replied
-   *  first. */
+  /** Listing sits before a turn's first token: probes overlap, and order comes from registration. */
   describe('provider probes overlap instead of queueing', () => {
-    /** A provider that yields the event loop `ticks` times inside its listing,
-     *  recording when it starts and finishes. Microtasks only — no timers, so
-     *  the proof is deterministic and a sequential regression fails rather than
-     *  hanging on a clock. */
+    /** Yields `ticks` microtasks (no timers), so a sequential regression fails rather than hangs. */
     function tracedProvider(id: string, ticks: number, trace: string[]): ModelProvider {
       const model = new MockLanguageModelV3({ provider: id });
 
@@ -209,10 +198,7 @@ describe('ProviderRegistry', () => {
 
       await r.listAllModels(baseDeps());
 
-      // THE PROOF: `quick` both starts AND finishes while `slow` is still
-      // running. Sequentially that is unreachable — `slow:end` would precede
-      // `quick:start` — so this assertion cannot pass on a queued
-      // implementation, whatever the tick counts are.
+      // Unreachable sequentially: `slow:end` would precede `quick:start`.
       expect(trace.indexOf('quick:start')).toBeLessThan(trace.indexOf('slow:end'));
       expect(trace.indexOf('quick:end')).toBeLessThan(trace.indexOf('slow:end'));
     });
@@ -224,9 +210,7 @@ describe('ProviderRegistry', () => {
       r.register(tracedProvider('quick', 0, trace));
 
       const { models, failures } = await r.listAllModels(baseDeps());
-      // Completion order was quick-then-slow; the answer is slow-then-quick.
-      // A menu that reordered itself by vendor latency would be a different
-      // list on every call, and callers compare these lists.
+      // Callers compare these lists, so order must not follow vendor latency.
       expect(trace.indexOf('quick:end')).toBeLessThan(trace.indexOf('slow:end'));
       expect(models.map((m) => m.provider)).toEqual(['slow', 'quick']);
       expect(failures).toEqual([]);

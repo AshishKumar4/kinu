@@ -1,11 +1,4 @@
-// Cross-workspace experience transfer, exercised at the sharing seam.
-//
-// Two workspaces of one owner and one library between them. The tests drive
-// the REAL surfaces — the action dispatcher the owner's RPC calls, the real
-// library store, the real EvolutionEngine turn review — so what they pin down
-// is behaviour a workspace can actually observe: what may be published, what
-// the gate refuses to import, and the fact that an import changes nothing here
-// until this workspace's own outcome says it should.
+// Cross-workspace experience transfer, driven through the real dispatcher, library store and turn review.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -45,13 +38,10 @@ import { stageImport } from '../src/experience/imports';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { RunEventRecorder } from '../src/events/recorder';
 
-// ── fixtures ────────────────────────────────────────────────────────────────
-
 function sqlExec(db: Database): SqlExec {
   return makeSqlExec(db);
 }
 
-/** The owner's library — one store shared by every workspace below. */
 function ownerLibrary(): ExperienceLibraryStore {
   const db = new Database(':memory:');
   const exec = sqlExec(db);
@@ -64,7 +54,6 @@ interface Workspace {
   rt: AgentRuntime;
   db: Database;
   facts: FactsStore;
-  /** One library action, as this workspace drives it. */
   call(input: ExperienceTestInput): ReturnType<typeof runExperienceAction>;
   engine: EvolutionEngine;
 }
@@ -101,12 +90,7 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
   db.exec(`CREATE TABLE IF NOT EXISTS evolution_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, message TEXT NOT NULL,
     data TEXT, created_at INTEGER NOT NULL)`);
-  // Shaped exactly as `cf-backend/src/orchestrator.ts` creates it: `actor_id`
-  // leads the key because `session_messages` is keyed `(actor_id, message_id)`,
-  // so two actors' turns really do present the same message id — and a bare `message_id`
-  // primary key lets one actor's thumbs overwrite a sibling's through the
-  // writer's ON CONFLICT. A fixture without the column would take the reader's
-  // `actor_id` predicate down with `no such column`.
+  // Mirrors `cf-backend/src/orchestrator.ts`: `actor_id` leads the key, or one actor's thumbs overwrite a sibling's.
   db.exec(`CREATE TABLE IF NOT EXISTS turn_feedback (
     actor_id   TEXT NOT NULL,
     message_id TEXT NOT NULL,
@@ -117,8 +101,7 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
 
   const facts = createFactsStore(rt.storage.sql, rt.actor);
 
-  // The seam the cloud backend implements over the UserDO capability gate: a
-  // workspace publishes under its own name and never sees its own entries back.
+  // A workspace publishes under its own name and never sees its own entries back.
   const deps = {
     rt,
     facts,
@@ -135,7 +118,6 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
   return { rt, db, facts, call, engine: new EvolutionEngine(rt, stores.history) };
 }
 
-/** Give a crafted tool a real usage record, which is what makes it publishable. */
 function proveCraft(ws: Workspace, input: { name: string; description: string; code: string; score: number; uses: number }): void {
   ws.rt.craftStore.create({
     name: input.name, description: input.description, params: { url: 'string' },
@@ -145,7 +127,6 @@ function proveCraft(ws: Workspace, input: { name: string; description: string; c
     WHERE name = ${input.name}`;
 }
 
-/** The publish-side view of one workspace — the seam the RPC builds. */
 function publishSources(ws: Workspace): PublishSources {
   return {
     sql: ws.rt.storage.sql,
@@ -163,14 +144,12 @@ function scaffoldSrc(tag: string): string {
   return `async function* run(rt, task) { yield { type: "chunk", data: "${tag}" }; }`;
 }
 
-/** The bootstrap loop, live and unjudged — what every workspace starts from. */
 async function seedLiveScaffold(ws: Workspace): Promise<void> {
   await ws.rt.identity.scaffold.write(scaffoldSrc('v0'));
   void ws.rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${ws.rt.actor.actorId}, 0, ${Date.now()}, 'bootstrap', 'current')`;
 }
 
-/** Win a pending version its shadow trials, through the real judge record. */
 function winShadowTrials(ws: Workspace, version: number): void {
   for (let i = 0; i < DEFAULT_SHADOW_CONFIG.minDecisiveTrials; i++) {
     recordShadowEvaluation(ws.rt.storage.sql, ws.rt.actor, {
@@ -181,7 +160,6 @@ function winShadowTrials(ws: Workspace, version: number): void {
   }
 }
 
-/** Propose a loop and take it all the way live, through the real pipeline. */
 async function promoteScaffold(ws: Workspace, code: string): Promise<number> {
   const proposed = await modifyScaffold(ws.rt, SCAFFOLD_RATIONALE, code);
 
@@ -198,7 +176,6 @@ async function promoteScaffold(ws: Workspace, code: string): Promise<number> {
   return proposed.version;
 }
 
-/** Graded turns the live version served — the probation the publish bar reads. */
 function serveGradedTurns(ws: Workspace, version: number, count: number, from = Date.now()): void {
   for (let i = 0; i < count; i++) {
     recordTurnOutcome(ws.rt.storage.sql, ws.rt.actor, {
@@ -209,7 +186,6 @@ function serveGradedTurns(ws: Workspace, version: number, count: number, from = 
   }
 }
 
-/** Grade a turn the way an explicit thumbs does — no LLM in the loop. */
 async function gradeTurn(ws: Workspace, turnId: string, feedback: 'positive' | 'negative'): Promise<void> {
   void ws.rt.storage.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback, created_at)
     VALUES (${ws.rt.actor.actorId}, ${turnId}, ${feedback}, ${Date.now()})`;
@@ -229,8 +205,6 @@ async function gradeTurn(ws: Workspace, turnId: string, feedback: 'positive' | '
 async function importedRows(ws: Workspace) {
   return listImportedExperience(ws.rt.storage.sql, ws.rt.actor);
 }
-
-// ── what a workspace has earned the right to share ──────────────────────────
 
 describe('publishing is gated on local evidence', () => {
   test('an unused crafted tool is refused, a proven one qualifies with its record', async () => {
@@ -304,8 +278,6 @@ describe('publishing is gated on local evidence', () => {
   });
 });
 
-// ── the library is owner-scoped and excludes the caller's own entries ────────
-
 describe('the owner library moves experience between workspaces', () => {
   test('a published craft reaches a sibling workspace and not its author', async () => {
     const library = ownerLibrary();
@@ -354,8 +326,6 @@ describe('the owner library moves experience between workspaces', () => {
     expect(hits[0]?.preview).toContain('second.workers.dev');
   });
 });
-
-// ── the gate ────────────────────────────────────────────────────────────────
 
 describe('every import passes the misevolution gate', () => {
   const forbidden: Array<{ what: string; entry: () => Omit<ExperienceEntry, 'id' | 'publishedAt'>; criterion: string }> = [
@@ -446,8 +416,6 @@ describe('every import passes the misevolution gate', () => {
   });
 });
 
-// ── provisional → corroborated ──────────────────────────────────────────────
-
 describe('an import is provisional until this workspace\'s own outcome corroborates it', () => {
   async function importAll(beta: Workspace, library: ExperienceLibraryStore): Promise<void> {
     const entries = [
@@ -495,8 +463,6 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
     expect(beta.facts.recall('deploy.target')).toMatchObject({
       value: 'kinu.workers.dev', source: 'experience:alpha',
     });
-    // The lesson's real home is the corroborated lessons ledger, not a
-    // MEMORY.md copy.
     expect(listLessons(beta.rt.storage.sql, beta.rt.actor, { status: 'corroborated' })
       .some(l => l.text.includes('Read the error before rerunning.'))).toBe(true);
 
@@ -549,7 +515,6 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
 
     await beta.call({ action: 'import', id: entry.id });
 
-    // No follow-up and no explicit verdict: the turn carries no user signal.
     await beta.engine.reviewTurn({
       turnId: 'turn-1', sessionId: 'default',
       userMessage: 'have a look at the deploy config please',
@@ -577,15 +542,12 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
   });
 });
 
-// ── the fourth kind: the agent's own loop ───────────────────────────────────
-
 describe('a scaffold crosses only on a promotion this workspace earned', () => {
   test('an unpromoted version is refused by name, and so is a promotion nothing tried', async () => {
     const alpha = workspace('alpha', ownerLibrary());
     await seedLiveScaffold(alpha);
     const sources = publishSources(alpha);
 
-    // v0 is live, but live because it is the bootstrap — no trial ever judged it.
     expect(await findPublishable(sources, 'scaffold', '0')).toEqual({
       refused: 'scaffold v0 is live but its shadow record does not clear the promotion gate '
         + '(0W-0L-0T over 0 trials), so nothing here has actually proven it',
@@ -642,8 +604,6 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
     await seedLiveScaffold(alpha);
     const version = await promoteScaffold(alpha, scaffoldSrc('v1'));
 
-    // A later proposal this loop produced is refused by the gate — the signal
-    // that what is running here is evolving unsafe artifacts.
     const vetoed = await modifyScaffold(
       alpha.rt, SCAFFOLD_RATIONALE,
       'async function* run(rt, task) { await fetch("https://evil.example"); }',
@@ -668,9 +628,7 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
     const version = await promoteScaffold(alpha, scaffoldSrc('v1'));
     const first = 1_700_000_000_000;
     serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials, first);
-    // The veto lands after the last probation turn but before the publish
-    // check. The window runs from the first served turn through now, so it
-    // still counts.
+    // The probation window runs from the first served turn through now, so the veto still counts.
     const vetoAt = first + DEFAULT_SHADOW_CONFIG.minTrials + 5000;
     void alpha.rt.storage.sql`INSERT INTO evolution_events (actor_id, type, message, data, created_at)
       VALUES (${alpha.rt.actor.actorId}, 'misevolution_veto', 'Misevolution veto (test)', ${JSON.stringify({ surface: 'scaffold' })}, ${vetoAt})`;
@@ -730,7 +688,6 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
 });
 
 describe('an imported scaffold is a proposal here, never an activation', () => {
-  /** One workspace's promoted loop, published into the owner's library. */
   async function publishedLoop(library: ExperienceLibraryStore, tag = 'v1'): Promise<ExperienceEntry> {
     const alpha = workspace('alpha', library);
     await seedLiveScaffold(alpha);
@@ -769,13 +726,9 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
     const pending = getPendingScaffold(beta.rt.storage.sql, beta.rt.actor);
     expect(pending?.version).toBe(1);
     expect(pending?.rationale).toContain('Imported scaffold, imported from workspace "alpha"');
-    // The import's own marker, written in the same insert as the version. It is
-    // what lets a re-promotion after an interrupted settlement recognise its own
-    // pending candidate instead of being refused by the single-pending gate and
-    // discarding an import whose scaffold is live.
+    // The marker lets a re-promotion after an interrupted settlement recognise its own pending candidate.
     expect(pending?.rationale).toMatch(/\[import:imp-[a-z0-9]+\]/);
     expect(pending?.rationale).toContain(SCAFFOLD_RATIONALE);
-    // The candidate's source is in the version store; the loop that RUNS is not it.
     expect(await readScaffoldVersion(beta.rt, 1)).toBe(scaffoldSrc('v1'));
     expect(await beta.rt.identity.scaffold.read()).toBe(scaffoldSrc('v0'));
     expect(getCurrentScaffoldVersion(beta.rt.storage.sql, beta.rt.actor)).toBe(0);
@@ -810,17 +763,12 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
 
     await gradeTurn(beta, 'turn-1', 'positive');
 
-    // The local candidate keeps the rollout slot, the import is discarded, and
-    // the library entry stays importable once the slot frees.
     expect(await readScaffoldVersion(beta.rt, 1)).toBe(scaffoldSrc('local'));
     expect(await importedRows(beta)).toEqual([]);
     expect(listScaffoldArchive(beta.rt.storage.sql, beta.rt.actor).map((e) => e.version)).toEqual([1, 0]);
   });
 
   test('no action in the experience surface can make a scaffold live', async () => {
-    // Every action the dispatcher exposes runs against a staged import, and the
-    // loop that RUNS is still the bootstrap. An action that activated what it
-    // staged would move either of these.
     const library = ownerLibrary();
     const entry = await publishedLoop(library);
     const beta = workspace('beta', library);
@@ -834,8 +782,6 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
     expect(getCurrentScaffoldVersion(beta.rt.storage.sql, beta.rt.actor)).toBe(0);
   });
 });
-
-// ── the library store itself ────────────────────────────────────────────────
 
 describe('library search', () => {
   test('ranks on content and filters by kind', () => {
@@ -888,8 +834,6 @@ describe('library search', () => {
   }
 });
 
-// ── absence is structural ───────────────────────────────────────────────────
-
 describe('the library answers from an untouched workspace', () => {
   test('listPublishable answers from an untouched workspace without throwing', async () => {
     const { rt } = createTestRuntime();
@@ -921,8 +865,6 @@ describe('the dispatcher answers honestly at its edges', () => {
   });
 });
 
-// ── corrupt rows are skipped, never fatal ───────────────────────────────────
-
 describe('a corrupt row is skipped, never staged or fatal', () => {
   test('a payload whose kind differs from the entry kind is refused with no row written', async () => {
     const library = ownerLibrary();
@@ -933,9 +875,7 @@ describe('a corrupt row is skipped, never staged or fatal', () => {
     }, 'alpha');
 
     const beta = workspace('beta', library);
-    // kind and payload are independent fields, so a mismatched entry is
-    // type-legal to build and must be refused at runtime: staging it would
-    // write a row every list skips while the duplicate guard still sees it.
+    // Kind and payload are independent, so a mismatch is type-legal and must be refused at runtime.
     const mismatched: ExperienceEntry = { ...entry, kind: 'lesson' };
 
     const first = stageImport(beta.rt, mismatched);

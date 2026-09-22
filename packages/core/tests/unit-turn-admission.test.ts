@@ -1,16 +1,4 @@
-// KINU-048. Turn admission runs on a COUNTED request, never on catalog metadata:
-// the resolved model's `contextWindow` is a fact about the MODEL, and the context
-// meter's chars/4 scale says of itself that it is an estimate, so admitting on
-// those lets an oversized request pass locally and be refused remotely — with the
-// one forced-compaction recovery then running without ever proving the compacted
-// request fits.
-//
-// These tests drive the shared assembly (`assembleTurnMessages`, the ONE
-// ordering both backends run) with a provider counter, and pin the whole
-// decision: count the assembled request, compact once, count again, and refuse
-// before submission rather than hand back a request that cannot be sent. The
-// Anthropic counter is exercised through its own endpoint, because it is the
-// one active provider that publishes a pre-request count.
+// KINU-048: admission counts the assembled request, compacts once, recounts, and refuses before submission.
 import { describe, expect, test } from 'bun:test';
 import { tool, type ModelMessage } from 'ai';
 import * as v from 'valibot';
@@ -32,8 +20,6 @@ import { createOpenAICompatProvider } from '../src/providers/openai-compat';
 import type { ProviderDeps } from '../src/providers/types';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 
-/** The JSON a captured request carried: a string body is the only shape these
- *  fakes are ever handed, and an absent one is an empty object. */
 function bodyText(init: RequestInit | undefined): string {
   const body = v.safeParse(v.string(), init?.body);
 
@@ -47,14 +33,7 @@ const HISTORY: ModelMessage[] = [
 
 const COMPACTED: ModelMessage[] = [{ role: 'user', content: 'summary of the long conversation' }];
 
-/** A window whose input allocation is a round number: a 200k window with a 40k
- *  answer reserve, so `stepContextLimit` is 160k. Read from that function rather
- *  than restated, so this suite budgets against the one allocation every
- *  producer divides instead of a second copy of the arithmetic.
- *
- *  MEASURED, because that is what entitles this gate to refuse at all: a window
- *  the static table stood in for is admitted over rather than refused against
- *  (the last case in this suite). */
+/** Measured window: an unmeasured one is admitted over rather than refused against. */
 const LIMITS = { contextWindow: 200_000, modelOutputLimit: 40_000, windowMeasured: true };
 
 const LIMIT = stepContextLimit(LIMITS);
@@ -63,7 +42,6 @@ function base() {
   return { system: 'SYS', history: HISTORY, sessionKey: 'k', contextWindow: LIMITS.contextWindow };
 }
 
-/** The count body as this suite reads it back off the wire. */
 const SentCountBodySchema = v.looseObject({
   system: v.string(),
   messages: v.array(v.looseObject({
@@ -73,10 +51,7 @@ const SentCountBodySchema = v.looseObject({
   tools: v.array(v.looseObject({ name: v.string(), input_schema: v.looseObject({}) })),
 });
 
-/** One Anthropic request body, read only for the fields a token count depends
- *  on. Loose on purpose: the vendor's body carries sampling fields and cache
- *  markers the count endpoint does not take, and comparing those would fail on
- *  differences that cost no tokens. */
+/** Loose: vendor-only fields cost no tokens and the count endpoint does not take them. */
 const WireBodySchema = v.looseObject({
   system: v.optional(v.union([
     v.string(),
@@ -98,7 +73,6 @@ const WireBodySchema = v.looseObject({
 
 type WireBody = v.InferOutput<typeof WireBodySchema>;
 
-/** The system channel's text, whichever shape the body carries it in. */
 function systemTextOf(body: WireBody): string {
   const system = body.system;
 
@@ -109,7 +83,6 @@ function systemTextOf(body: WireBody): string {
   return system;
 }
 
-/** One message reduced to what it costs: its block types, and their text. */
 function countedBlocks(message: WireBody['messages'][number]): Array<{ type: string; text: string }> {
   const content = message.content;
 
@@ -118,13 +91,10 @@ function countedBlocks(message: WireBody['messages'][number]): Array<{ type: str
   return content.map((block) => ({ type: block.type, text: block.text ?? '' }));
 }
 
-/** One tool definition's priced identity: what the provider tokenizes of it. */
 function toolIdentity(entry: NonNullable<WireBody['tools']>[number]): string {
   return JSON.stringify([entry.name, entry.description ?? '', entry.input_schema ?? {}]);
 }
 
-/** A compaction extension that records every trigger it was run with — the
- *  evidence for "compacted exactly once". */
 function compactionProbe() {
   const triggers: string[] = [];
 
@@ -140,13 +110,10 @@ function compactionProbe() {
   return { extensions, triggers };
 }
 
-/** A counter that answers from a script, one entry per call. */
 function scriptedCounter(counts: readonly number[]) {
   const seen: CountableRequest[] = [];
   let call = 0;
 
-  // Typed at its own definition rather than through an annotation on the
-  // factory: the seam's contract belongs to the function that implements it.
   const count = async (request: CountableRequest): Promise<InputTokenCount> => {
     seen.push(request);
     const tokens = counts[Math.min(call, counts.length - 1)] ?? 0;
@@ -158,13 +125,7 @@ function scriptedCounter(counts: readonly number[]) {
   return { seen, count };
 }
 
-/**
- * The error an assembly refused with, or null when it admitted the request.
- *
- * A caught binding rather than a rejection callback: the refusal IS the
- * observation these tests are about, so it must arrive as a value the
- * assertions can read rather than as an untyped handler parameter.
- */
+/** The error an assembly refused with, or null when it admitted the request. */
 async function refusalOf(assembly: Promise<readonly ModelMessage[]>): Promise<Error | null> {
   try {
     await assembly;
@@ -207,7 +168,6 @@ describe('exact turn admission', () => {
       admission: { count: counter.count, limits: LIMITS },
     });
 
-    // The COMPACTED request is what leaves the assembly, and it was counted.
     expect(out).toEqual(COMPACTED);
     expect(triggers).toEqual(['auto', 'force']);
     expect(counter.seen.length).toBe(2);
@@ -229,20 +189,12 @@ describe('exact turn admission', () => {
     const message = failure?.message ?? '';
     expect(message).toContain('refused before submission');
     expect(message).toContain((LIMIT + 1).toLocaleString('en-US'));
-    // One compaction, two counts: the second count is what proved the refusal.
     expect(triggers).toEqual(['auto', 'force']);
     expect(counter.seen.length).toBe(2);
   });
 
   test('the refusal carries its own failure class, not a transient one', async () => {
-    // A local refusal must NOT arm the shared recovery: that policy answers a
-    // REMOTE context-length failure by force-compacting and enqueuing one retry
-    // turn, and this request was already compacted and re-counted. A retry would
-    // be a second forced compaction of history that just proved it cannot shrink
-    // enough. Nor is it `transient`, which says "a blip, try again" about a turn
-    // that can only refuse again — that reading is what left #20's workspace
-    // wedged with nothing the client could do about it. The wording is pinned
-    // here so it cannot drift out of the one pattern that names it.
+    // A local refusal must not arm the remote context-length recovery or read as `transient`: it can only refuse again.
     const { extensions } = compactionProbe();
     const counter = scriptedCounter([LIMIT + 1, LIMIT + 1]);
 
@@ -251,16 +203,13 @@ describe('exact turn admission', () => {
       admission: { count: counter.count, limits: LIMITS },
     }));
 
-    // Asserted before the classification, so an assembly that refused NOTHING
-    // cannot pass this by classifying the empty string.
+    // Asserted first so an assembly that refused nothing cannot pass by classifying the empty string.
     expect(failure).toBeInstanceOf(Error);
     const message = failure?.message ?? '';
     expect(classifyTurnFailure(message)).toBe('admission_refused');
     expect(planOverflowRecovery({ error: message, turnWasOverflowRetry: false }))
       .toEqual({ failureClass: 'admission_refused', forceCompaction: false, enqueueRetry: false });
-    // Negative control for the oracle above: the classifier DOES name a real
-    // remote refusal, so the assertion is about this wording and not about a
-    // classifier that never fires.
+    // Negative control: the classifier does fire on a real remote refusal.
     expect(classifyTurnFailure('prompt is too long: 300000 tokens > 200000 maximum'))
       .toBe('context_length');
   });
@@ -272,8 +221,6 @@ describe('exact turn admission', () => {
     const failure = await refusalOf(assembleTurnMessages({
       ...base(),
       extensions,
-      // The caller consumed an armed force flag to get here: the one forced
-      // compaction this turn is entitled to has already been spent.
       trigger: 'force',
       admission: { count: counter.count, limits: LIMITS },
     }));
@@ -283,9 +230,6 @@ describe('exact turn admission', () => {
     expect(counter.seen.length).toBe(1);
   });
 
-  // KINU-048. No count endpoint is not a gap in the gate: the shared estimate
-  // measures the assembled request and the same one-compaction-then-refuse
-  // decision applies to that number.
   test('a provider with no count endpoint is gated by the estimate: an over-window request compacts once, then is admitted or refused', async () => {
     const { extensions, triggers } = compactionProbe();
     let asked = 0;
@@ -304,8 +248,6 @@ describe('exact turn admission', () => {
       },
     });
 
-    // This history fits on the estimate too, so nothing is compacted — but the
-    // counter WAS consulted and the estimate, not an absence, is what admitted.
     expect(asked).toBe(1);
     expect(out).toEqual(HISTORY);
     expect(triggers).toEqual(['auto']);
@@ -313,16 +255,13 @@ describe('exact turn admission', () => {
 
   test('with no count endpoint, an estimate over the window triggers the one forced compaction instead of submitting', async () => {
     const { extensions, triggers } = compactionProbe();
-    // The assembled request serializes to 128 chars (est 32 tokens); the
-    // compacted one to 90 (est 23). A 28-token input allocation sits between
-    // them, so the estimate — not an absence — is what forces the compaction.
+    // The allocation sits between the assembled and compacted estimates, so the estimate forces the compaction.
     const tight = { contextWindow: 48, modelOutputLimit: 20, windowMeasured: true };
 
     const out = await assembleTurnMessages({
       ...base(),
       extensions,
       trigger: 'auto',
-      // No `count` at all: the provider publishes nothing to ask.
       admission: { limits: tight },
     });
 
@@ -332,7 +271,6 @@ describe('exact turn admission', () => {
 
   test('with no count endpoint, an estimate that still overflows after compaction is refused, not submitted', async () => {
     const { extensions } = compactionProbe();
-    // Even the compacted summary (est 23) overflows a 4-token allocation.
     const tight = { contextWindow: 8, modelOutputLimit: 4, windowMeasured: true };
 
     const failure = await refusalOf(assembleTurnMessages({
@@ -343,7 +281,6 @@ describe('exact turn admission', () => {
     }));
 
     expect(failure).not.toBeNull();
-    // refusalOf returns Error|null; `in` narrows to the KinuError's `code`.
     expect(failure !== null && 'code' in failure ? failure.code : undefined).toBe('bad_input');
   });
 
@@ -365,8 +302,6 @@ describe('exact turn admission', () => {
     const counted = counter.seen[0];
     expect(counted?.system).toBe('SYS');
 
-
-    // The tail is part of the request, so it is part of what was counted.
     expect(counted?.messages.at(-1)).toEqual({ role: 'user', content: 'turn-local tail' });
     expect(Object.keys(counted?.tools ?? {})).toEqual(['look']);
   });
@@ -380,9 +315,7 @@ const NO_DEPS: ProviderDeps = {
 
 describe('provider count support', () => {
   test('every active provider without a pre-request count endpoint says so', async () => {
-    // The matrix, as runtime behavior rather than a comment: only Anthropic
-    // publishes a documented pre-request count, so every other active provider
-    // reports the absence and nothing invents a number for it.
+    // Only Anthropic publishes a pre-request count; every other provider reports the absence.
     for (const provider of [
       createOpenAIProvider(),
       createOpenRouterProvider({ appTitle: 'test' }),
@@ -442,15 +375,12 @@ describe('provider count support', () => {
 
     expect(answer).toEqual({ kind: 'counted', tokens: 4242 });
     expect(url).toContain('/messages/count_tokens');
-    // Parsed rather than asserted: this is raw JSON off the wire, and a cast
-    // would let a body that lost its tools or its roles satisfy the reads below.
+    // Parsed, not cast, so a body that lost its tools or roles cannot satisfy the reads below.
     const sent = v.parse(SentCountBodySchema, body);
     expect(sent.system).toBe('SYS');
     expect(sent.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
-    // The vendor's request drops an unsigned reasoning part, so the count body
-    // drops it too: counting text the request will not send would over-report.
+    // The vendor drops unsigned reasoning, so the count body must too or it over-reports.
     expect(sent.messages[1]?.content.map((c) => c.type)).toEqual(['text', 'tool_use']);
-    // Anthropic carries tool results on a USER message.
     expect(sent.messages[2]?.content.map((c) => c.type)).toEqual(['tool_result']);
     expect(sent.tools[0]?.name).toBe('look');
     expect(sent.tools[0]?.input_schema).toMatchObject({ type: 'object' });
@@ -464,7 +394,6 @@ describe('provider count support', () => {
 
     const answer = await countRequestInputTokens(createAnthropicProvider(), 'claude-opus-4-7', deps, {
       system: 'SYS',
-      // No media type, so the count body cannot say what this image costs.
       messages: [{ role: 'user', content: [{ type: 'image', image: 'AAAA' }] }],
     });
 
@@ -475,10 +404,7 @@ describe('provider count support', () => {
   test('an endpoint that refuses the count does not fail the turn', async () => {
     const deps: ProviderDeps = {
       ...NO_DEPS,
-      // A refusal the shared transport does NOT retry, so this asserts the
-      // preflight's own behavior rather than the rate-limit ladder's: a count
-      // call rides `createAuthedFetch`, so a 429/529 waits and retries exactly
-      // as the model request would.
+      // A status the shared transport does not retry (429/529 go through the rate-limit ladder).
       fetch: asFetchFunction(async () => new Response('{"error":{"message":"bad body"}}', { status: 400 })),
     };
 
@@ -486,24 +412,11 @@ describe('provider count support', () => {
       system: 'SYS', messages: [{ role: 'user', content: 'ask' }],
     });
 
-    // Reported as uncounted — the request is exactly as submittable as it was
-    // before anyone asked, so admission proceeds ungated rather than the turn
-    // failing on its own preflight.
     expect(answer.kind).toBe('unsupported');
     expect(answer.kind === 'unsupported' && answer.reason).toContain('400');
   });
 
-  /**
-   * THE DRIFT TRIPWIRE. `@ai-sdk/anthropic` does not export its message
-   * converter, so `anthropic-count.ts` owns a second conversion of the same
-   * ModelMessages — and a count taken over a body that differs from the body
-   * actually submitted is not an exact count, it is a coincidence. This drives
-   * BOTH conversions over one input and compares the fields the count depends
-   * on: the system text, the message roles, the block types and their text, and
-   * the tool names with their schemas. Vendor-only request fields (max_tokens,
-   * stream, cache_control) are deliberately not compared — they carry no
-   * content and the count endpoint does not take them.
-   */
+  // `@ai-sdk/anthropic` does not export its converter, so `anthropic-count.ts` duplicates it; this catches drift.
   test('the count body matches the AI SDK own Anthropic request, field for field', async () => {
     const system = 'SYS';
 
@@ -527,8 +440,6 @@ describe('provider count support', () => {
 
     const tools = { look: tool({ description: 'look something up', inputSchema: z.object({ q: z.string() }) }) };
 
-    // What the vendor's own adapter submits for this turn. The 400 is the
-    // point: the request is the observation.
     let vendorBody: unknown;
 
     const vendorDeps: ProviderDeps = {
@@ -549,16 +460,10 @@ describe('provider count support', () => {
       refused = caught;
     }
 
-    // Accounted, not swallowed: the turn MUST have reached the wire, or the
-    // comparison below would be against an empty capture.
     expect(refused).toBeInstanceOf(Error);
-    // The DISCRIMINATOR: a turn that threw for any other reason (a missing
-    // import, a refused model construction) would satisfy the assertion above
-    // while capturing nothing, and the comparison would then be against an
-    // empty body. The capture itself is what proves the vendor converted.
+    // Proves the vendor converted: a turn failing for another reason would capture nothing.
     expect(vendorBody).toBeDefined();
 
-    // What the counter sends for the same input.
     let countBody: unknown;
 
     const countDeps: ProviderDeps = {

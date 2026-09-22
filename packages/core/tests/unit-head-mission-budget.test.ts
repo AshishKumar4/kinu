@@ -1,20 +1,4 @@
-/**
- * The mission governor reaching a head mid-flight.
- *
- * Head execution caps were removed outright: no wall clock, no token pool, no
- * step guard — a fork gets the parent turn's 500-step envelope. The mission
- * budget is therefore the ONLY remaining bound on a head's spend, and until now
- * it could not reach one: the ledger lives with the actor that declared it, a
- * cf head runs as a separate facet resolving its own model, and the governed
- * `LLM` the fork seam wraps never saw the calls the head actually made.
- * Coverage was refuse-to-spawn plus one lump debit after the whole fork
- * returned — which cannot stop anything.
- *
- * The half of this that matters most is the negative: a run that declared no
- * budget must never touch the table, never run a query, and never see a
- * refusal. The first describe below proves that against a real ledger by
- * counting every statement the head's runtime issues.
- */
+/** The mission budget is the only bound on a head's spend; an unbudgeted run must never touch the ledger. */
 
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
@@ -34,8 +18,6 @@ import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { hostedSeatsOver } from './helpers-actor-host';
 import type { HostedNodeSeat } from '../src/strategy/node-agent';
 
-/** A model that keeps calling a tool so the agentic loop keeps stepping,
- *  reporting a fixed spend per step. */
 function steppingModel(perStep: { input: number; output: number; stopAfter?: number }): LanguageModel {
   let step = 0;
 
@@ -82,15 +64,7 @@ function headInput(missionLabels?: readonly string[]): HeadInput {
   return missionLabels ? { ...input, missionLabels } : input;
 }
 
-/**
- * The hosted actor this head's turn runs on, over ONE workspace database.
- *
- * A head's turn is a claimed turn on the actor's own `ActorSession`, so the
- * fixture supplies the actor rather than a bare runtime — through the
- * production directory, host and session `hostedSeatsOver` builds. The MISSION
- * ledger under test is a separate database on purpose: the counting seam below
- * has to observe the governor's statements and nothing else.
- */
+/** The mission ledger is a separate database so the counting seam sees only the governor's statements. */
 async function hostedHead(): Promise<HostedNodeSeat> {
   const { rt, testSql } = createTestRuntime();
 
@@ -115,15 +89,7 @@ async function runHead(mission: MissionScope | null, opts: { stopAfter?: number 
   return { report, capture };
 }
 
-/**
- * A ledger over real SQLite that counts every statement issued through it,
- * plus the actor whose spend it holds.
- *
- * `mission_budget` is keyed by actor — a label is caller-authored prose, so two
- * actors of one workspace declare the same one — and the handle is bound over
- * THIS database through the counting seam, so nothing the governor does can
- * reach the table without the counter seeing it.
- */
+/** Real SQLite ledger that counts every statement issued through it. */
 function countingLedger() {
   const db = new Database(':memory:');
   const rawSql = makeSql(db);
@@ -154,18 +120,15 @@ describe('an undeclared run is never governed', () => {
   test('a head with no labels issues no ledger statement at all', async () => {
     const ledger = countingLedger();
     const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
-    // The constructor's own DDL is the only thing that may have run.
     const afterConstruction = ledger.statements.length;
 
-    // This is the production shape: the runtime builds a scope from the head's
-    // labels, and an empty set produces no scope, so no port is ever handed in.
+    // Production shape: an empty label set produces no scope, so no port is handed in.
     const scope = localMissionScope(governor, []);
     expect(scope).toBeNull();
 
     const { report } = await runHead(scope, { stopAfter: 4 });
     expect(report.status).toBe('completed');
     expect(usageTotal(report.usage)).toBe(1_200 * 5);
-    // Not one query, not one write.
     expect(ledger.statements.slice(afterConstruction)).toEqual([]);
     expect(ledger.sql`SELECT COUNT(*) AS n FROM mission_budget`).toEqual([{ n: 0 }]);
     ledger.db.close();
@@ -184,7 +147,6 @@ describe('an undeclared run is never governed', () => {
   });
 
   test('a head under a label with no LIMITS meters but never refuses', async () => {
-    // A pure accounting scope: the operator wanted the number, not a cap.
     const ledger = countingLedger();
     const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     governor.declare('audit', {}, {});
@@ -213,7 +175,6 @@ describe('a declared budget reaches the head mid-flight', () => {
 
     await runHead({ labels: ['mission'], port }, { stopAfter: 3 });
 
-    // One debit per step, each the provider's own report for that step.
     expect(seen).toEqual([1_200, 1_200, 1_200, 1_200]);
     expect(governor.snapshot('mission')[0].calls).toBe(4);
     ledger.db.close();
@@ -222,16 +183,12 @@ describe('a declared budget reaches the head mid-flight', () => {
   test('an exhausted budget stops the head mid-flight and says which budget', async () => {
     const ledger = countingLedger();
     const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
-    // Room for two steps' worth of spend, on a model that would otherwise run
-    // for fifty.
     governor.declare('mission', { tokens: 2_500 }, {});
 
     const { report } = await runHead(localMissionScope(governor, ['mission']), { stopAfter: 50 });
 
     expect(report.status).toBe('budget_exceeded');
     expect(report.errorMessage).toContain('Mission budget "mission" is spent');
-    // Stopped where the ledger ran out, nowhere near the 50 steps the model
-    // was willing to take or the 500-step envelope it had.
     expect(report.stepCount).toBeLessThan(5);
     expect(governor.snapshot('mission')[0].exhausted).toBe(true);
     ledger.db.close();
@@ -246,10 +203,7 @@ describe('a declared budget reaches the head mid-flight', () => {
     const { report } = await runHead(localMissionScope(governor, ['mission']), { stopAfter: 50 });
     expect(report.status).toBe('budget_exceeded');
     expect(report.stepCount).toBe(0);
-    // Nothing of its own was spent — the guard ran before the first call, so
-    // NOTHING was reported. `{}` rather than zeros, and no scalar total: the
-    // head may have been about to cost real money and never got the chance,
-    // which is not the same claim as a head that ran and cost nothing.
+    // `{}`, not zeros: a head stopped before its first call is not a head that cost nothing.
     expect(report.usage).toEqual({});
     expect(usageTotal(report.usage)).toBeUndefined();
     ledger.db.close();
@@ -263,7 +217,6 @@ describe('a declared budget reaches the head mid-flight', () => {
     const { report } = await runHead(localMissionScope(governor, ['mission']), { stopAfter: 50 });
     expect(report.summary).toContain('did not complete');
     expect(report.summary).toContain('Mission budget "mission" is spent');
-    // The evidence it did record is still reported.
     expect(report.evidence.length).toBeGreaterThan(0);
     ledger.db.close();
   });

@@ -1,9 +1,5 @@
-// Egress gate — what a container may spend, where, and what it can learn.
-//
-// The properties under test are the ones a leak would violate: a placeholder
-// reveals nothing, a secret only reaches its bound host, a facet never
-// out-reaches its parent, and nothing the container reads carries the secret
-// back. Everything here goes through the public surface.
+// Egress gate: a placeholder reveals nothing, a secret reaches only its bound host, a facet never
+// out-reaches its parent, and nothing the container reads carries the secret back.
 import { describe, expect, test } from 'bun:test';
 import {
   EGRESS_PLACEHOLDER_PREFIX,
@@ -42,8 +38,7 @@ describe('placeholders', () => {
   test('a placeholder is recognised by shape, and a secret is not', () => {
     expect(isEgressPlaceholder(STRIPE.placeholder)).toBe(true);
     expect(isEgressPlaceholder(['sk_live_', 'deadbeefdeadbeefdeadbeef'].join(''))).toBe(false);
-    // Right prefix, wrong length: a truncated placeholder must not pass, or a
-    // prefix-matching fragment in a log line would be treated as a binding.
+    // A truncated placeholder must not pass, or a prefix fragment in a log would read as a binding.
     expect(isEgressPlaceholder(`${EGRESS_PLACEHOLDER_PREFIX}tooshort`)).toBe(false);
   });
 
@@ -67,9 +62,7 @@ describe('host matching', () => {
     expect(egressHostMatches('api.stripe.com', 'api.github.com')).toBe(false);
   });
 
-  // The suffix trick in the second row: an unanchored check would let an
-  // attacker-controlled domain that merely CONTAINS the bound host collect
-  // the secret.
+  // Second row: an unanchored check would let a domain containing the bound host collect the secret.
   const globs = [
     { name: 'a glob spans a label but stays anchored at both ends',
       matches: [['*.stripe.com', 'api.stripe.com']],
@@ -185,8 +178,7 @@ describe('grants are the workspace set, or a subset', () => {
   ];
 
   test('a facet that has recorded nothing inherits the whole root set', () => {
-    // The live bug: a facet reads its own empty actor_config and re-asks for
-    // consent the owner already gave on the workspace.
+    // A facet must not re-ask for consent the owner already gave on the workspace.
     expect(resolveInheritedGrants({ root, own: null })).toEqual(root);
     expect(resolveInheritedGrants({ root, own: [] })).toEqual(root);
   });
@@ -253,9 +245,7 @@ describe('inherited approval policy', () => {
     expect(policy.requestApproval).toBeUndefined();
   });
 
-  /** The ladder as production reaches it: `gateExec` over a command whose
-   *  review gates on the agent's own container. A force-push reaches out, so
-   *  `sandbox` does not exempt it — the same standing an egress binding has. */
+  /** `gateExec` over a command reviewed on the agent's container; `sandbox` does not exempt a force-push. */
   const GATED = 'git push --force origin main';
   const GATED_RULE = 'git-force-push';
 
@@ -277,8 +267,6 @@ describe('inherited approval policy', () => {
   }
 
   test('the ladder resolves the root before reading, so a granted facet does not re-ask', async () => {
-    // The whole point, end to end: the owner granted this on the workspace,
-    // the facet holds no grant of its own, and the facet does not ask again.
     const probe = rootSource('strict', [{ rule: GATED_RULE, executor: 'sandbox' }]);
     const gate = ladder(createInheritedApprovalPolicy(probe.source));
     expect(await gate.run()).toBe(`ran:${GATED}`);

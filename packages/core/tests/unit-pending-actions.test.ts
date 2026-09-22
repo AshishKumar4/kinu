@@ -1,13 +1,6 @@
 /**
- * The needs-you queue.
- *
- * Two claims are worth pinning. First, what counts as pending: badge a running
- * job — which needs no one — and leave a release approval awaiting a decision
- * badging NOTHING, and the one thing blocking the agent on its owner is
- * invisible from the tab strip. Second, the containment: this queue must never
- * become a data source an agent-authored view can read, or a view could draw a
- * convincing fake of the surface an owner reads right before authorising a
- * deploy.
+ * The needs-you queue: only what blocks the agent on its owner, and never readable by an agent-authored
+ * view, which could otherwise fake the surface an owner reads before authorising a deploy.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -75,11 +68,7 @@ describe('buildPendingActions', () => {
   });
 
   test('a failed background job is the agent\'s to fix and never reaches the owner queue', () => {
-    // The runner wakes the agent with the error (`jobs/runner.ts#wake`); the
-    // owner sees the job in the journal with Retry. Filing it here was the
-    // product asking its owner to fix its own red build, which is the
-    // opposite of what the queue is for. The inputs carry no jobs at all, so
-    // no later change can quietly file one.
+    // A failed job wakes the agent (`jobs/runner.ts#wake`); it is not the owner's to fix.
     expect('jobs' in EMPTY).toBe(false);
   });
 
@@ -102,9 +91,7 @@ describe('buildPendingActions', () => {
     expect(action.title).toBe('1 self-change you have not seen');
   });
 
-  // The row a brand-new workspace gets after its very first turn: the digest's
-  // first entry is a graded turn, which is a measurement with no keep and no
-  // revert. Promising a decision over a card that offers none is the same lie
+  // A graded turn offers no keep or revert, so it must not promise a decision.
   // as pointing at the wrong tab.
   const UNSEEN_WINDOWS = [
     {
@@ -151,8 +138,6 @@ describe('buildPendingActions', () => {
   });
 
   test('a decided parked command has stopped needing anyone', () => {
-    // Every non-queued status: an answered action is history, and an approval
-    // the agent has since spent doubly so.
     expect(buildPendingActions({
       ...EMPTY,
       deferredActions: [
@@ -216,8 +201,7 @@ describe('a plan awaiting a decision', () => {
 
 describe('the needs-you queue stays host-owned', () => {
   test('listPendingActions is not a read model a Slate may read', () => {
-    // Same doctrine as listPendingConsents: a Slate that can read the queue an
-    // owner reads before approving something can draw a plausible fake of it.
+    // Same doctrine as listPendingConsents.
     const readModels = new Set<string>(SLATE_READ_MODELS);
     expect(readModels.has('listPendingActions')).toBe(false);
   });

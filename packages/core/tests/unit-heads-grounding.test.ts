@@ -1,16 +1,6 @@
 /**
- * Behavior tests for the grounded heads path (THINKING-AUDIT §4 DO-NOW #2).
- *
- *  1. Grounded outcome score — each head's report is scored by the SAME
- *     execution-grounded evaluator the MCTS engine uses. A head whose work
- *     failed/was aborted scores below one whose code ran and held up.
- *  2. k-sample median merge — with a grounding seam the merge runs k synthesis
- *     samples and keeps the median-scored one (not n=1).
- *  3. No evidence clipping — a long finding survives verbatim into the merge
- *     prompt (no 6×200-char truncation).
- *  4. Heads → Alternate-Takes — a completed heads run emits a take set (source
- *     'heads') into the ledger, claimed against the turn so the pick is a
- *     preference signal.
+ * Grounded heads (THINKING-AUDIT §4 DO-NOW #2): outcome scoring by the MCTS evaluator, k-sample median merge,
+ * unclipped evidence, and an Alternate-Takes set per run.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -24,8 +14,6 @@ import {
 } from '../src/index';
 import { createJSONLLM, present } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, captureConsole, createTestActor } from './helpers';
-
-// ── fakes ────────────────────────────────────────────────────────────
 
 function newJournal() {
   const db = new Database(':memory:');
@@ -62,8 +50,7 @@ function mergeOut(narrative: string): MergeOutput {
   return { narrative, selected_decisions: [], unresolved_questions: [], recommendations: [], blind_spots: [] };
 }
 
-/** A runtime returning canned reports keyed by task, a scripted merge LLM, and
- *  an optional grounding seam. Records every merge prompt + counts merge calls. */
+/** Canned reports keyed by task, a scripted merge LLM, and an optional grounding seam. */
 function buildRuntime(opts: {
   reports: Record<string, HeadReport>;
   grounding?: HeadGrounding;
@@ -103,8 +90,6 @@ function grounding(over: Partial<HeadGrounding> = {}): HeadGrounding {
   return { executor: verdictExecutor(), explorer: judge, judge, ...over };
 }
 
-// ── 1. grounded outcome score ─────────────────────────────────────────
-
 describe('grounded head outcome scores', () => {
   test('a head whose code RAN outscores a head whose code FAILED', async () => {
     const { journal } = newJournal();
@@ -121,8 +106,7 @@ describe('grounded head outcome scores', () => {
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'good', rationale: 'a' }, { task: 'bad', rationale: 'b' }] },
-      // Every split in this file forks once and merges what comes back, so each
-      // one states the single level of recursion room it actually uses.
+      // Each split forks once, so it states one level of recursion room.
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
@@ -168,13 +152,8 @@ describe('grounded head outcome scores', () => {
   });
 
   test('a judge the provider cannot answer costs the split its grounded signal, not the split', async () => {
-    // The heads have already run and banked their findings. The shared evaluator
-    // propagates a judge FAILURE deliberately (mcts/evaluation.ts) because the
-    // MCTS engine answers one per branch under its own allSettled; this caller
-    // has no branch to fail, so an unreachable or rate-limited judge must not
-    // reject `shell` and take the whole split with it — that discards both
-    // reports, the merge that would have carried them, and the `head_merge`
-    // phase that is the only durable trace a fork ran at all.
+    // The evaluator propagates judge failures (mcts/evaluation.ts); here a broken judge must not reject `shell`
+    // and lose the split.
     const { journal } = newJournal();
 
     const brokenJudge: LLM = {
@@ -197,13 +176,11 @@ describe('grounded head outcome scores', () => {
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
-    // Reaching 'merge' is the whole point: that phase is what the run-event
-    // ledger records a fork's cost and productivity from.
+    // The 'merge' phase is what the run-event ledger records a fork's cost from.
     expect(phases).toEqual(['split', 'merge']);
     expect(result.costSummary.headsWithFindings).toBe(2);
     expect(result.mergedNarrative).toBe('merged');
-    // Each head reports the absence of a grounded verdict rather than a 0 it
-    // did not earn — its judge broke, its work did not.
+    // No grounded verdict rather than an unearned 0: the judge broke, not the work.
     expect(result.headScores.map((s) => s.score)).toEqual([0.5, 0.5]);
     expect(result.headScores.map((s) => s.status)).toEqual(['completed', 'completed']);
   });
@@ -223,10 +200,8 @@ describe('grounded head outcome scores', () => {
     expect(result.headScores.every((s) => s.score === 0.5)).toBe(true);
   });
 
-  // The invisible spend ceiling (2026-08-18): heads reuse the MCTS judge knobs,
-  // so a split told `judgeSamples: 20` scored its heads with three-sample
-  // ensembles — the request shares one per-head-score call pool with check
-  // generation — and nothing said so.
+  // Heads reuse the MCTS judge knobs, and the request shares one per-head-score call pool with check
+  // generation.
   test('a head judge request the call budget cannot fund is realised at the ceiling AND disclosed', async () => {
     const { journal } = newJournal();
 
@@ -257,10 +232,7 @@ describe('grounded head outcome scores', () => {
   });
 });
 
-// ── 2. k-sample median merge ──────────────────────────────────────────
-
-/** The ensemble's three synthesized candidates, scored by keyword so the median
- *  is the one the selection has to land on. */
+/** Three synthesized candidates scored by keyword, so the median is known. */
 function synthesisScore(prompt: string): number {
   if (prompt.includes('CAND-low')) return 0.1;
 
@@ -274,8 +246,6 @@ describe('k-sample median merge', () => {
     const { journal } = newJournal();
     const mergePrompts: string[] = [];
 
-    // Three distinct candidate narratives; the judge scores them low/mid/high
-    // by keyword so the median ("mid") must be the one selected.
     const scoringJudge: LLM = {
       async *stream() { yield ''; },
       async complete(prompt: string) {
@@ -303,7 +273,7 @@ describe('k-sample median merge', () => {
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
-    // k=3 merge synthesis calls were made (the merge prompt is identical each time).
+    // k=3 merge synthesis calls with the same prompt.
     expect(mergePrompts).toHaveLength(3);
     // The median-scored candidate ("mid") wins — not low, not high.
     expect(result.mergedNarrative).toBe('CAND-mid');
@@ -313,11 +283,8 @@ describe('k-sample median merge', () => {
     const { journal } = newJournal();
     const mergePrompts: string[] = [];
 
-    // The per-head judge answers; only the merge-narrative scorer rejects. The
-    // k syntheses are already in hand and paid for at that point, so losing the
-    // ensemble's tie-break is the honest cost — losing the merge is not. This
-    // only bites with mergeSamples > 1, which is why nothing caught it when the
-    // judge-failure catch was removed; k defaults to 1.
+    // Only the merge-narrative scorer rejects: the k syntheses are paid for, so lose the tie-break, not the
+    // merge.
     const halfBrokenJudge: LLM = {
       async *stream() { yield ''; },
       async complete(prompt: string) {
@@ -341,8 +308,7 @@ describe('k-sample median merge', () => {
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
-    // All k samples were still produced, and one of them is the merge — not an
-    // exception that discards the split and its head_merge ledger row.
+    // All k samples were produced and one is the merge, not an exception.
     expect(mergePrompts).toHaveLength(3);
     expect(result.mergedNarrative).toBe('CAND-a');
   });
@@ -368,8 +334,6 @@ describe('k-sample median merge', () => {
     expect(result.mergedNarrative).toBe('only');
   });
 });
-
-// ── 3. no evidence clipping ───────────────────────────────────────────
 
 describe('evidence is not clipped into the merge', () => {
   test('a long finding body survives verbatim into the merge prompt', async () => {

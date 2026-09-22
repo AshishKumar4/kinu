@@ -114,8 +114,7 @@ describe('buildBenchReport', () => {
       devAttempts: [
         ...repeats('t1', 'baseline', [true, false, true]),
         ...repeats('t1', 'candidate', [true, true, true]),
-        // Emitted out of repeat order on purpose: the report must not depend
-        // on the order the runner happened to produce.
+        // Out of repeat order on purpose: the report must not depend on runner order.
         attempt('t2', 'baseline', false, { repeat: 1, tokens: 400, durationMs: 30, peakPromptTokens: 9000, modelCalls: 6 }),
         attempt('t2', 'baseline', false, { repeat: 0, tokens: 200, durationMs: 10, peakPromptTokens: 3000, modelCalls: 4 }),
         attempt('t2', 'baseline', false, { repeat: 2, tokens: 300, durationMs: 20, budgetBreach: 'tokens', peakPromptTokens: 6000, modelCalls: 8 }),
@@ -129,9 +128,7 @@ describe('buildBenchReport', () => {
     // Mean per attempt, so a k=3 row reads against the same per-attempt budget.
     expect(t2.tokensA).toBe(300);
     expect(t2.modelCallsA).toBe(6);
-    // Cost fields are means so a k=3 row reads against the same per-attempt
-    // budget a k=1 row does — except the PEAK, which is a maximum: averaging
-    // peaks would report a working set no attempt ever reached.
+    // Cost fields are per-attempt means, except the peak, which is a maximum.
     expect(t2.peakPromptTokensA).toBe(9000);
     expect(t2.durationMsA).toBe(20);
     expect(t2.breachA).toBe('tokens');
@@ -151,9 +148,7 @@ describe('buildBenchReport', () => {
       runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
       devAttempts: [
         attempt('t1', 'baseline', true, { repeat: 0, tokens: 400, peakPromptTokens: 4000 }),
-        // The crashed attempt: its worker died before the meter reported, so it
-        // carries no token figures at all. Averaged in as a zero it would have
-        // halved this variant's apparent cost.
+        // Worker died before the meter reported: no token figures, which must not average in as zero.
         attempt('t1', 'baseline', false, {
           repeat: 1, tokens: undefined, peakPromptTokens: undefined, error: 'worker died',
         }),
@@ -164,8 +159,7 @@ describe('buildBenchReport', () => {
     const [t1] = report.dev.cases;
     expect(t1.tokensA).toBeNull();
     expect(t1.peakPromptTokensA).toBeNull();
-    // The measured arm is untouched, so one row distinguishes unmeasured from
-    // genuinely cheap.
+    // The measured arm is untouched: unmeasured stays distinct from cheap.
     expect(t1.tokensB).toBe(100);
     expect(renderBenchSummary(report)).toContain('tokens/task A=unreported  B=100');
     expect(renderBenchSummary(report)).toContain('peak prompt tokens A=unreported  B=1000');
@@ -240,10 +234,7 @@ describe('decideBenchOutcome — rejection by default', () => {
   }
 
   test('an improvement over 3 differing pairs rejects on the floor, not on the p-value', () => {
-    // 12 tasks, 3 of which differed. "not significant" would imply a design
-    // that could have said otherwise; 3 differing pairs bottom out at p=0.25, so
-    // nothing here could ever be accepted. Naming the floor is the stronger and
-    // more useful refusal.
+    // 3 differing pairs floor at p=0.25, so the refusal names the floor, not "not significant".
     const decision = decideBenchOutcome(scorecard([
       { a: false, b: true }, { a: false, b: true }, { a: true, b: false },
       ...Array.from({ length: 9 }, () => ({ a: true, b: true })),
@@ -255,8 +246,7 @@ describe('decideBenchOutcome — rejection by default', () => {
   });
 
   test('an improvement that is not significant, over enough differing pairs, rejects for that', () => {
-    // 7 differing pairs is past the 6-pair floor, so the design could have
-    // decided and the reason has to be the p-value rather than the design.
+    // 7 differing pairs clears the 6-pair floor, so the reason must be the p-value.
     const decision = decideBenchOutcome(scorecard([
       ...Array.from({ length: 4 }, () => ({ a: false, b: true })),
       ...Array.from({ length: 3 }, () => ({ a: true, b: false })),
@@ -271,8 +261,7 @@ describe('decideBenchOutcome — rejection by default', () => {
     const decision = decideBenchOutcome(scorecard(Array.from({ length: 6 }, () => ({ a: false, b: true }))));
     expect(decision.accept).toBe(true);
     expect(decision.reason).toContain('significant');
-    // 6 pairs cannot have 80% power for any attainable effect; the finding
-    // stands but the magnitude is flagged as inflated.
+    // 6 pairs cannot have 80% power for any attainable effect: the magnitude is flagged inflated.
     expect(decision.caveat).toContain('overestimate');
   });
 
@@ -288,9 +277,7 @@ describe('renderBenchSummary', () => {
     });
 
     const text = renderBenchSummary(report);
-    // The rendered figure has to be the budget the run actually used, not a copy of
-    // it — a second literal here is how the summary came to advertise a wall clock
-    // the harness had stopped enforcing. The VALUE is pinned in unit-turn-envelope.
+    // The rendered figure is the budget the run used, not a copy; its value is pinned in unit-turn-envelope.
     expect(text).toContain(`Budget: ${DEFAULT_ATTEMPT_BUDGET.wallClockMs}ms wall-clock`);
     expect(text).toContain('opened 3 time(s)');
     expect(text).toContain('DECISION: KEEP');
@@ -355,13 +342,8 @@ describe('gain report', () => {
     attempt(taskId, CONFIG.variantB, true),
   ]);
 
-  // A gain of exactly zero has two entirely different meanings and the report
-  // is required to tell them apart. `computeGain` counts DIFFERING pairs, not
-  // tasks, so a corpus on which the arms never disagreed cannot have decided
-  // anything — calling that "no measurable contribution" would publish an
-  // absence of evidence as evidence of absence. Both polarities are asserted
-  // here because the distinction is the whole point: one of these two reports
-  // is allowed to make the claim and the other is not.
+  // Zero gain means two things: no differing pairs decides nothing, while differing pairs that cancel
+  // is a real null. Both polarities are asserted.
   test('a zero gain with no differing task is UNDECIDABLE, with the calibration attached', () => {
     const report = buildGainReport({
       runId: 'g1', config: CONFIG,
@@ -384,9 +366,7 @@ describe('gain report', () => {
   });
 
   test('a zero gain that could have decided IS reported as no measurable contribution', () => {
-    // Three wins against three losses: the arms differed on every task, which
-    // is at the exact test's six-differing-pair floor, so this contrast was
-    // capable of resolving an effect and simply found none.
+    // Three wins, three losses: at the six-differing-pair floor, so a real null.
     const ids = ['t1', 't2', 't3', 't4', 't5', 't6'];
 
     const report = buildGainReport({
@@ -479,8 +459,7 @@ describe('run mechanics', () => {
   });
 
   test('usageTokens reads the provider-level nested LanguageModelV3 shape', () => {
-    // Captured verbatim from a real doStream finish part — inputTokens and
-    // outputTokens are OBJECTS here, and summing them directly yields a string.
+    // A real doStream finish part: inputTokens and outputTokens are objects, so summing them yields a string.
     const usage = {
       inputTokens: { total: 1234, noCache: 1234, cacheRead: 0 },
       outputTokens: { total: 56, text: 56, reasoning: 0 },
@@ -495,14 +474,12 @@ describe('run mechanics', () => {
   });
 
   test('usageTokens never returns a non-number, whatever a provider sends', () => {
-    // Unreadable is UNMEASURED, not free: undefined travels to the budget caller,
-    // which declines to judge it, where a 0 would have read as inside the cap.
+    // Unreadable is unmeasured, not free: undefined lets the budget caller decline to judge.
     for (const bad of [undefined, null, 'nonsense', 42, {}, { inputTokens: {} }]) {
       expect(usageTokens({ reported: bad })).toBeUndefined();
     }
 
-    // A non-finite figure is discarded, not propagated: the readable half still
-    // counts and NaN never reaches an arithmetic comparison.
+    // A non-finite figure is discarded so NaN never reaches a comparison.
     expect(usageTokens({ reported: { inputTokens: NaN, outputTokens: 3 } })).toBe(3);
     expect(usageTokens({ reported: { inputTokens: Number.POSITIVE_INFINITY, outputTokens: 3 } })).toBe(3);
     // A provider that reported zeros reported something, and that is not absence.

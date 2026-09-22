@@ -56,10 +56,7 @@ describe('release path safety', () => {
   });
 
   test('secrecy is a decided fact, not a phrase inside the error message', () => {
-    // isSecretReleasePath reads a decided field, never runs /secret|config/ over
-    // the human-readable error, so rewording that sentence cannot silently change
-    // the predicate. A rejection for a DIFFERENT reason is not secret even when
-    // its message happens to contain neither word.
+    // isSecretReleasePath reads a decided field, so rewording the error cannot change the predicate.
     expect(isSecretReleasePath('packages/cf-backend/.dev.vars')).toBe(true);
     expect(isSecretReleasePath('.ssh/id_rsa')).toBe(true);
     expect(isSecretReleasePath('packages/core/src/index.ts')).toBe(false);
@@ -131,10 +128,6 @@ describe('release sql store', () => {
   });
 });
 
-/**
- * The three authorities the release ledger and engine spend, each of which had
- * an exported guard that the production path did not consult.
- */
 describe('release authority', () => {
   function store() {
     const db = new Database(':memory:');
@@ -148,14 +141,10 @@ describe('release authority', () => {
     const s = store();
     const binding = s.upsertSourceBinding({ kind: 'local', label: 'local', localRoot: '/w' });
     const change = s.createChange('jarvis', { bindingId: binding.id, userPrompt: 'p' });
-    // A diff whose ADDED line trips the secret heuristic. Redacted in storage,
-    // this is what `git apply` writes into the file — the literal marker.
     const patch = '--- a/app.ts\n+++ b/app.ts\n-const old = 1;\n+const API_TOKEN = process.env.X;\n';
     s.updateChange(change.id, { patch });
 
-    // The authority read — what the engine hands to `git apply`.
     expect(s.getChange(change.id)?.patch).toBe(patch);
-    // The display read, and only it, redacts.
     expect(s.board('jarvis').changes[0].patch).toContain('[redacted sensitive diff line]');
   });
 
@@ -173,8 +162,7 @@ describe('release authority', () => {
     ['plaintext http', 'http://github.com/o/r.git', /must be https/],
     ['credentials in the URL', 'https://user:pass@github.com/o/r.git', /must not carry credentials/],
   ])('a github binding refuses %s', (_label, repoUrl, pattern) => {
-    // `apply` installs a github credential as an authorization header before
-    // cloning this URL, so the URL is the destination of a secret.
+    // `apply` sends a github credential to this URL, so the URL is a secret's destination.
     expect(() => store().upsertSourceBinding({ kind: 'github', label: 'src', repoUrl }))
       .toThrow(pattern);
   });
@@ -205,7 +193,6 @@ describe('release authority', () => {
 
   test('an ordinary patch passes, and a non-diff is not silently allowed', () => {
     expect(validateReleasePatchTargets('--- a/src/app.ts\n+++ b/src/app.ts\n+ok\n')).toBeNull();
-    // "Validated nothing" must not read as "found nothing wrong".
     expect(validateReleasePatchTargets('just some prose')).toContain('not a unified diff');
   });
 });

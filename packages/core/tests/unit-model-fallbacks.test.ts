@@ -5,11 +5,7 @@ import {
   type ModelInfo,
 } from '../src/index';
 
-// These are the FALLBACK paths used when the live models.dev catalog is
-// unreachable (the catalog's reported contextWindow/capabilities always win).
-// A new model release must not silently land on the 128k default window or a
-// bare tools+streaming profile — that under-reports the window enough to
-// trigger premature compaction and drops reasoning/caching from the prompt.
+// Fallbacks for when models.dev is unreachable: a new release must not land on the default window or a bare profile.
 describe('model fallbacks track new releases', () => {
   test('DeepSeek V4 Pro keeps its documented context window without a catalog', () => {
     expect(contextWindowForModel('workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813'))
@@ -43,10 +39,7 @@ describe('model fallbacks track new releases', () => {
   });
 });
 
-// The catalog session is what turns an async lookup into a synchronous answer
-// for the whole turn: the static fallbacks hold until it lands, and nothing
-// ever blocks on it. Pricing joins the window and the media policy there —
-// null until the catalog answers, so the budget ledger blends and says so.
+// Pricing is null until the catalog lands, so the budget ledger blends and says so.
 describe('ModelCatalogSession.pricing', () => {
   test('null until the lookup lands, then the catalog rates', async () => {
     let resolveLookup: (info: ModelInfo | null) => void = () => {};
@@ -77,9 +70,7 @@ describe('ModelCatalogSession.pricing', () => {
   });
 });
 
-// KINU-045. Context admission reserves the resolved model's answer allowance,
-// so the catalog has to report one — and has to say nothing rather than guess
-// when it has not answered.
+// KINU-045: admission reserves the answer allowance, so the catalog reports it or nothing, never a guess.
 describe('ModelCatalogSession.modelOutputLimit', () => {
   test('an operation awaits limits for its selected model instead of borrowing the chat cache', async () => {
     const selected = Promise.withResolvers<{ id: string; contextWindow: number; modelOutputLimit: number }>();
@@ -128,11 +119,7 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
   });
 
   test('an unanswered catalog reports NO allowance rather than the whole window', async () => {
-    // The reading this replaced — "the answer may take all of it" — sounds like
-    // the honest one and is not: `outputReserveTokens` then withholds half the
-    // window from every model nobody has published an allowance for, which is
-    // how #20's 1M-window model came to be refused against 64,000 tokens. An
-    // absent figure is absent; the provider bounds its own answer either way.
+    // Absent, not "all of it": `outputReserveTokens` would otherwise withhold half of every unpublished window.
     const session = new ModelCatalogSession({
       effectiveSpec: () => 'workers-ai/@cf/moonshotai/kimi-k2.6',
       lookup: async () => null,
@@ -164,9 +151,7 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
   });
 
   test('`resolved` waits for the lookup the synchronous reads answered without', async () => {
-    // The first turn of a fresh isolate is the case: `contextWindow()` answers
-    // from the stand-in table while the lookup that knows better is still in
-    // flight, and a gate that refuses work has to wait for the second answer.
+    // A gate that refuses work must wait for the catalog answer, not the stand-in table.
     const landed = Promise.withResolvers<ModelInfo>();
 
     const session = new ModelCatalogSession({
@@ -195,9 +180,7 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
   });
 });
 
-// The spelling every model_call row is priced against and every analytics row
-// is grouped by. Both backends resolve it here; a backend reading its own cache
-// instead handed the ledger a second spelling of the same model.
+// The one model spelling every model_call row is priced against; both backends resolve it here.
 describe('resolveEffectiveModelSpec', () => {
   const canonical = (spec: string | null): string => {
     const trimmed = spec?.trim() ?? '';

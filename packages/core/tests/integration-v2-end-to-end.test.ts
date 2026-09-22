@@ -1,41 +1,16 @@
-/**
- * v2 end-to-end integration test.
- *
- * Exercises the v2 additions together against in-memory SQLite + stubbed
- * LLMs. After the duplicacy cleanup, this validates:
- *
- *   1. Inline executor (`createInlineExecutor`) — the pre-existing
- *      ExecutorProvider that backs codemode's workspace.* namespace.
- *      Round-trip a file + shell exec through its tool surface.
- *   2. Branching heads — HeadController spawns N heads, awaits, merges
- *      via a deterministic mock LLM, persists the journal + cached merge.
- *   3. Scaffold shadow rollout — write pending version, record N trials
- *      with biased outcomes, decidePromotion fires the right verdict,
- *      applyPromotionDecision flips statuses correctly.
- *   4. Durable event log — emit events through the full turn lifecycle,
- *      replay via readSince (the SSE-resume semantics).
- *   5. Approval gate — wrap a fake exec function and confirm allow/warn/
- *      gate/deny classification routes correctly.
- *
- * No network. No LLM calls. The test asserts contracts, not behaviors.
- */
+/** v2 end-to-end: inline executor, branching heads, scaffold shadow rollout, durable event log, approval gate. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  // Execution layer (pre-existing — no parallel sandbox abstraction)
   createInlineExecutor,
-  // Heads
   HeadController, HeadJournal, initHeadsTables,
   type HeadInput, type HeadReport, type HeadRuntime, type SpawnedHead,
   type SerializedMessage, type SplitRequest, type MergeOutput,
-  // Scaffold
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision, readScaffoldVersion,
   DEFAULT_SHADOW_CONFIG, recordShadowEvaluation,
   initScaffoldTables, modifyScaffold,
-  // Events
   initRunEventTables, RunEventRecorder,
-  // Approval
   reviewCommand, gateExec,
 } from '../src/index';
 import { present, testActorHandle } from '@kinu.run/test-utils';
@@ -44,8 +19,6 @@ import { makeSql, makeExecRaw, createTestRuntime, createTestActor } from './help
 interface HeadReportIndex {
   [headId: string]: HeadReport;
 }
-
-// ── 1. Inline executor (workspace provider) ──────────────────────────
 
 describe('v2 e2e: workspace executor via createInlineExecutor', () => {
   test('writeFile + readFile + exec round-trip through ExecutorProvider tools', async () => {
@@ -68,8 +41,6 @@ describe('v2 e2e: workspace executor via createInlineExecutor', () => {
     expect(await provider.tools.exec.execute('echo hi')).toBe('hi\n');
   });
 });
-
-// ── 2. Branching heads e2e ───────────────────────────────────────────
 
 describe('v2 e2e: branching heads → merge', () => {
   test('split 3 heads, await all, merge with deterministic mock LLM', async () => {
@@ -152,8 +123,7 @@ describe('v2 e2e: branching heads → merge', () => {
       rootId: 'root-1',
       inheritedContext,
       request,
-      // One level of forking is the whole scenario: the three heads report and
-      // the split merges them, so the recursion room they inherit is zero.
+      // One level of forking: the recursion room the heads inherit is zero.
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
@@ -162,8 +132,6 @@ describe('v2 e2e: branching heads → merge', () => {
     expect(result.selectedDecisions.length).toBe(2);
     expect(result.costSummary.headCount).toBe(3);
     expect(result.evidenceAggregate.length).toBe(3);
-    // v2: headIds is now populated from the actual spawned handles (not
-    // a hack mapping evidence ids).
     expect(result.headIds.length).toBe(3);
     expect(result.headIds.every((id) => id.length > 0)).toBe(true);
 
@@ -182,8 +150,6 @@ describe('v2 e2e: branching heads → merge', () => {
     expect(cached.mergedNarrative).toBe(result.mergedNarrative);
   });
 });
-
-// ── 3. Scaffold shadow rollout e2e ───────────────────────────────────
 
 describe('v2 e2e: scaffold shadow rollout', () => {
   test('modifyScaffold writes new version with status=pending', async () => {
@@ -212,7 +178,6 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     expect(pending.version).toBe(1);
     expect(pending.trialsSoFar).toBe(0);
 
-    // Verify v0 is still current; v1 is pending.
     const statuses = rt.storage.sql<{ version: number; status: string }>`
       SELECT version, status FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
@@ -231,13 +196,8 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
       VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'try alternate loop with retry', 'pending')`;
 
-    // The files those rows are rows ABOUT. `modifyScaffold` gate 4 archives the
-    // outgoing current at `.v0` and writes the proposal at `.v1`, never into the
-    // live file — so a fixture with rows and no files is a state the pipeline
-    // cannot produce, and it passes anyway: promotion falls through to reading
-    // the LIVE file, copies v0's bytes back over itself, and the assertions
-    // below (statuses, action, newCurrentVersion) stay true of a promotion that
-    // moved no code.
+    // `modifyScaffold` gate 4 archives v0 at `.v0` and writes the proposal at `.v1`; without these files
+    // promotion copies v0 over itself and the status assertions still pass.
     const V0 = 'async function* run(rt, task) { yield { type: "chunk", data: "v0" }; }';
     const V1 = 'async function* run(rt, task) { yield { type: "chunk", data: "v1-retry" }; }';
     await rt.identity.scaffold.write(V0);
@@ -250,8 +210,6 @@ describe('v2 e2e: scaffold shadow rollout', () => {
       pendingScore: winner === 'pending' ? 0.8 : 0.5,
     });
 
-    // A clean 5-0 win: past minTrials/minDecisiveTrials with no losses beyond
-    // the regression tolerance — promotable.
     for (let i = 0; i < 5; i++) {
       recordShadowEvaluation(rt.storage.sql, rt.actor, {
         currentVersion: 0, pendingVersion: 1,
@@ -282,17 +240,12 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     expect(byVersion.get(1)).toBe('current');
     expect(byVersion.get(0)).toBe('historical');
 
-    // A promotion that flips statuses without swapping the source is the failure
-    // this whole shadow machinery exists to avoid — the agent would keep running
-    // v0 while every read-model called it v1.
+    // Flipping statuses without swapping the source would leave the agent running v0 labelled v1.
     expect(await rt.identity.scaffold.read()).toBe(V1);
     expect(await rt.identity.scaffold.version()).toBe(1);
-    // v0 stays recoverable, so the promotion is revertable.
     expect(await readScaffoldVersion(rt, 0)).toBe(V0);
   });
 });
-
-// ── 4. Durable event log ─────────────────────────────────────────────
 
 describe('v2 e2e: durable event log', () => {
   test('emit through a turn lifecycle; replay via readSince', () => {
@@ -328,8 +281,6 @@ describe('v2 e2e: durable event log', () => {
     expect(tools[0].type).toBe('tool_call_end');
   });
 });
-
-// ── 5. Approval gate ─────────────────────────────────────────────────
 
 describe('v2 e2e: approval gate', () => {
   test('classifies and routes correctly through gateExec', async () => {

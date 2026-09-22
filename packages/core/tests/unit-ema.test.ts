@@ -1,6 +1,4 @@
-/**
- * Unit tests: EMA scoring + time decay + the shared injection filter.
- */
+/** EMA scoring, time decay and the shared injection filter. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';

@@ -1,10 +1,6 @@
 /**
- * The approval gate.
- *
- * The property that matters most here is that a decision is a function of
- * (rule, executor). Every test that asserts a 'gate' names the executor it is
- * gating ON, because the same string on the agent's own machine is not the
- * same question.
+ * The approval gate. A decision is a function of (rule, executor), so every 'gate' assertion names its
+ * executor.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -83,13 +79,8 @@ describe('reviewCommand — the rule table', () => {
   });
 
   test('gates a publish in every ecosystem, not only the one this repo is written in', () => {
-    // The rule's `why` has always been language-agnostic — "Publishes to a
-    // public package registry" — while its pattern matched npm alone, so an
-    // identical Rust, Python, Ruby, Java or .NET task shipped to a public
-    // registry with no prompt. Each line here is a registry reached from a
-    // different toolchain; `python -m twine` is separate because the binary in
-    // command position is the interpreter, and `binaries` decides whether the
-    // rule fires at all.
+    // A public registry reached from each toolchain; `python -m twine` is separate because `binaries` sees the
+    // interpreter.
     for (const cmd of [
       'cargo publish',
       'poetry publish --build',
@@ -382,8 +373,7 @@ describe('gateExec', () => {
 });
 
 describe('gateExec — standing grants', () => {
-  /** The owner's remembered answers plus a record of who got asked — exactly
-   *  the two things a config store and a prompt surface supply. */
+  /** The owner's remembered answers plus a record of who got asked. */
   function grantStore(initial: readonly string[] = []) {
     const held = new Set(initial);
     const asked: string[] = [];
@@ -440,8 +430,7 @@ describe('gateExec — standing grants', () => {
     expect([...store.held]).toEqual(['rm-recursive@device']);
     expect(store.asked).toEqual([THEIRS]);
 
-    // A DIFFERENT command of the same kind, in the same place: no second ask.
-    // This is the whole point — an exact-string memory would ask again here.
+    // A different command of the same kind, in the same place: no second ask.
     expect(await store.on(THEIRS, 'deny').run('rm -r /tmp/two')).toBe('ran:rm -r /tmp/two');
     expect(store.asked).toEqual([THEIRS]);
   });
@@ -486,8 +475,7 @@ describe('the grant vocabulary', () => {
   });
 
   test('a grant covers its rule on its executor and nothing wider, on every policy that asks', () => {
-    // Three `granted()` bodies spelled this comparison for themselves; one
-    // that compared the rule alone would honour a device `sudo` in the sandbox.
+    // Comparing the rule alone would honour a device `sudo` in the sandbox.
     const held: ApprovalGrant[] = [{ rule: 'sudo', executor: 'device' }];
     expect(holdsGrant(held, { rule: 'sudo', executor: 'device' })).toBe(true);
     expect(holdsGrant(held, { rule: 'sudo', executor: 'sandbox' })).toBe(false);

@@ -1,13 +1,6 @@
 /**
- * The claim's context is the request the turn sent, not the history alone.
- *
- * A turn's prompt is the working history plus a turn-local tail — unapproved
- * instruction files, activation reasons — that is spliced in at assembly and
- * never enters the durable history. The claim names the context the turn was
- * admitted against, and a shadow trial replays exactly that, so a claim that
- * dropped the tail would score a narrower prompt than the live turn ran. Read
- * back through the execution's own admission evidence and the model's own
- * first request, with the working history checked to still exclude the tail.
+ * The claim's context is the request the turn sent, including the turn-local tail spliced in at
+ * assembly, or a shadow trial would score a narrower prompt than the live turn ran.
  */
 import { expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
@@ -66,8 +59,7 @@ for (const withTail of [true, false]) {
         // The claim is the first request, tail included when there is one.
         expect(admitted).toEqual(withTail ? ['What does the file say?', textOf(TURN_LOCAL)] : ['What does the file say?']);
         expect(sent).toEqual(admitted);
-        // The tail is the request's, never the conversation's: the working
-        // history the turn leaves carries the question and the answer only.
+        // The tail belongs to the request, never the working history.
         expect(history).toEqual(['What does the file say?', 'done']);
       } finally {
         actor.session.finishTurn(lease);

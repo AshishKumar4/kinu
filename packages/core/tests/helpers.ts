@@ -1,7 +1,4 @@
-/**
- * Test helpers — in-memory SQLite via bun:sqlite, mock LLM, mock Executor.
- * These satisfy the core primitive interfaces for testing.
- */
+/** Test helpers: in-memory SQLite via bun:sqlite, mock LLM, mock Executor. */
 
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -26,7 +23,6 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import type { CraftedTool } from '../src/types/craft';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 
-/** What a test may hand the SQL seam as a bound value, before normalization. */
 type TestSqlBinding = JsonValue | ArrayBuffer | Uint8Array | undefined;
 
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
@@ -53,25 +49,15 @@ export function createTestActor(sql: SqlExecutor, execRaw: RawSqlExec, workspace
   return new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' }).createMain({ name });
 }
 
-/** One in-memory workspace database with the three SQL handles onto it. */
 export interface TestWorkspace {
   readonly db: Database;
   readonly sql: SqlExecutor;
   readonly execRaw: RawSqlExec;
-  /** The embedded Nimbus plane itself, so a test can drive the ranged read the
-   *  fork wire requires rather than a narrowed view of it. */
+  /** The embedded Nimbus plane, for the ranged read the fork wire requires. */
   readonly vfs: WorkspaceVFS;
 }
 
-/**
- * A workspace database carrying the PRODUCTION schema.
- *
- * `initWorkspaceSchema` rather than a hand-picked subset: a harness that
- * creates fewer tables than a real workspace tests a shape no workspace ever
- * has, and the code under test then has to tolerate absences that only the
- * harness produces. That tolerance is what hid a fork silently dropping the
- * parent's assistant messages and memory index.
- */
+/** A workspace database with the production schema: a subset would test a shape no workspace has. */
 export function createTestWorkspace(): TestWorkspace {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -80,8 +66,6 @@ export function createTestWorkspace(): TestWorkspace {
 
   return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs };
 }
-
-// ── SqlExecutor from bun:sqlite ──────────────────────────────────
 
 export function makeSql(db: Database): SqlExecutor {
   return function <T = unknown>(
@@ -98,8 +82,7 @@ export function makeSql(db: Database): SqlExecutor {
       value instanceof ArrayBuffer ? new Uint8Array(value) : value);
 
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
-    // DELETE … RETURNING is a write that yields rows, exactly as the
-    // production executors answer it (agent-utils craft store spends this).
+    // DELETE … RETURNING yields rows, as production executors answer it (agent-utils craft store).
     const stmt = db.prepare<T, SQLQueryBindings[]>(query);
 
     if (!isRead && !/\bRETURNING\b/i.test(query)) {
@@ -130,7 +113,6 @@ function canonicalSqlValue(value: NativeSqlValue): SqlValue {
   return copy.buffer;
 }
 
-/** Dynamic-SQL peer of makeSql, with the same canonical ArrayBuffer BLOBs. */
 export function makeSqlExec(db: Database): SqlExec {
   return {
     exec(query, ...bindings) {
@@ -154,27 +136,14 @@ export function makeSqlExec(db: Database): SqlExec {
   };
 }
 
-// ── In-memory VFS ────────────────────────────────────────────────
-
-/** The production workspace filesystem over the test database — the same
- *  Nimbus component both backends run, so tests catch real writer/reader
- *  drift rather than a fixture's. */
+/** The production workspace filesystem (Nimbus) over the test database. */
 export function createMemoryVFS(db: Database): WorkspaceVFS {
   return createWorkspaceBundle(db).vfs;
 }
 
 /**
- * `vfs`, with every call ordered after the fixture's own seed — so a fixture's seed can never land
- * on top of what a test wrote.
- *
- * `seed` is a THUNK, run at most once on the first VFS call, not a promise started eagerly. An
- * eagerly-started seed is a floating promise racing the test: a test that never touches the VFS and
- * closes its database still had a `writeFile` in flight, and it landed as
- * `RangeError: Cannot use a closed database` from inside nimbus's sqlite-vfs, attributed to
- * whichever test happened to be running. Deferring it means a test that does not use the
- * filesystem never starts one. A seed FAILURE is still not absorbed — it rejects the first VFS
- * call, because a suite silently running against a workspace with no scaffold is how a production
- * swallow gets excused as "the test target lacks the file".
+ * `vfs` with every call ordered after the fixture's seed. `seed` is a thunk run on the first VFS call:
+ * an eager seed outlives a test that closes its database. A seed failure rejects the first call.
  */
 function afterSeed(vfs: WorkspaceVFS, seed: () => Promise<void>): VFS & Pick<VfsNativeReads, 'readRange'> {
   let seeded: Promise<void> | null = null;
@@ -199,7 +168,6 @@ function afterSeed(vfs: WorkspaceVFS, seed: () => Promise<void>): VFS & Pick<Vfs
   };
 }
 
-/** The workspace filesystem AND its shell over the test database. */
 export function createWorkspaceBundle(db: Database) {
   const sql = {
     exec(query: string, ...bindings: TestSqlBinding[]) {
@@ -251,23 +219,10 @@ export function makeAgentDatabase(db: Database): AgentDatabase {
   };
 }
 
-// ── In-memory Memory ─────────────────────────────────────────────
-
-/**
- * The Memory a test runtime gets: the SAME inline primitive the local CLI path
- * builds, over the same `memory_chunks` shape.
- *
- * One shared DDL, because a hand-rolled copy carrying its own columns — say
- * `(id, path, content)` against the real seven-column table — fails on every
- * insert, and the catch around it still reports the file as indexed. Every
- * memory assertion in this suite would then be passing against a memory that
- * had never stored anything.
- */
+/** The same inline Memory the local CLI builds, over the shared `memory_chunks` DDL. */
 export function createMemoryMemory(db: Database, vfs: VFS & Pick<VfsNativeReads, 'readRange'>): Memory {
   return createInlineMemory(makeAgentDatabase(db), vfs);
 }
-
-// ── Mock LLM ─────────────────────────────────────────────────────
 
 export function createMockLLM(responses: Record<string, string> = {}): LLM {
   return {
@@ -283,13 +238,10 @@ export function createMockLLM(responses: Record<string, string> = {}): LLM {
   };
 }
 
-// ── Mock Executor ────────────────────────────────────────────────
-
 export function createMockExecutor(): Executor {
   return {
     languages: ['javascript'],
     async execute(code: string, _providers: ResolvedProvider[] | Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>): Promise<ExecuteResult> {
-      // Just check if the code parses
       try {
         new Function(code);
 
@@ -336,10 +288,7 @@ export function createEvalExecutor(): Executor {
 export function createMemoryCraftStore(db: Database): CraftStore {
   initCraftedToolsTables(makeSql(db));
 
-  // The row→tool mapping the production CraftStore performs. Handing raw rows
-  // back instead would hide real drift: `params` is stored as JSON text and the
-  // timestamps are snake_case, so a caller reading `tool.params` would get a
-  // string in tests and an object in production.
+  // The production row→tool mapping: `params` is JSON text and timestamps are snake_case.
   interface CraftRow {
     name: string; description: string; params: string | null; code: string;
     scope: string; created_at: number; updated_at: number;
@@ -389,7 +338,6 @@ export function createMemoryCraftStore(db: Database): CraftStore {
     delete(name) { db.run('DELETE FROM crafted_tools WHERE name = ?', [name]); },
     list() { return rows('SELECT * FROM crafted_tools').map(toTool); },
     search(query, limit = 10) {
-      // Word-level search: match tools where any query word appears in description
       const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
 
       return rows('SELECT * FROM crafted_tools')
@@ -400,19 +348,9 @@ export function createMemoryCraftStore(db: Database): CraftStore {
   };
 }
 
-// ── In-memory Schedule ───────────────────────────────────────────
-
 /**
- * A fiber lane per ACTOR, over the production `fibers` table.
- *
- * The production initializer owns the DDL here too, because a copy in this file
- * drifts from it: the real table carries `actor_id` in its primary key, since a
- * fiber name is minted per lane ('reactor', 'advisor-lane') and every actor of a
- * workspace therefore presents the SAME names. A local
- * `(id PRIMARY KEY, name, snapshot, created_at)` leaves `initWorkspaceSchema`
- * finding the table already there, skipping its own
- * `CREATE TABLE IF NOT EXISTS`, and then failing to build
- * `idx_fibers_actor_name` on a column the copy knows nothing about.
+ * A fiber lane per actor over the production `fibers` table; the production initializer owns the DDL
+ * because the real primary key includes `actor_id`.
  */
 export function createMemorySchedule(db: Database, actor: ActorHandle): Schedule {
   initActorTables(makeExecRaw(db), makeSql(db));
@@ -439,38 +377,24 @@ export function createMemorySchedule(db: Database, actor: ActorHandle): Schedule
   };
 }
 
-// ── Full test runtime ────────────────────────────────────────────
-
 export function createTestRuntime(opts?: {
   llmResponses?: Record<string, string>;
 }) {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  // One workspace, so the shell and the VFS are two views of the SAME bytes —
-  // building a second bundle over the same database would be two filesystems
-  // again, which is the thing this design removed.
+  // One workspace, so the shell and the VFS are two views of the same bytes.
   const workspace = createWorkspaceBundle(db);
 
-  // The scaffold seed is a real file write, so it is a promise. `afterSeed` runs it on the first
-  // VFS call and orders every later call behind it: a test that writes its own scaffold cannot be
-  // overtaken by the seed landing afterwards, and a test that never touches the filesystem never
-  // starts a write that could outlive its database. A failed seed is NOT absorbed.
+  // `afterSeed` runs the scaffold seed on the first VFS call and orders later calls behind it.
   const { readRange, ...vfs } = afterSeed(workspace.vfs, () =>
     workspace.vfs.mkdir('scaffold', { recursive: true })
       .then(() => workspace.vfs.writeFile('scaffold/agent.js', 'initial')));
 
-  // The PRODUCTION schema FIRST, for the reason spelled out on
-  // createTestWorkspace: a hand-picked subset tests a shape no workspace ever
-  // has, and the code under test is then forced to tolerate absences only this
-  // harness produces. First rather than last, because these tables are
-  // actor-scoped and a helper that created its own copy of one would win the
-  // `IF NOT EXISTS` race and leave the production index building on a column
-  // its copy never had.
+  // Production schema first: a helper's own copy of an actor-scoped table would win `IF NOT EXISTS`.
   initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
   const actor = createTestActor(sql, execRaw, 'test-agent-id', 'test-agent');
-  // The memory's tail reads through the plane's ranged read; `storage.vfs`
-  // stays the seven base methods, the plane a viewer must refuse to slice.
+  // The memory's tail reads through the plane's ranged read; `storage.vfs` stays the seven base methods.
   const memory = createMemoryMemory(db, { ...vfs, readRange });
   const craftStore = createMemoryCraftStore(db);
   const llm = createMockLLM(opts?.llmResponses);
@@ -507,8 +431,7 @@ export function createTestRuntime(opts?: {
   return { rt, db, stores: storesFor(rt) };
 }
 
-/** The store bundle over an already-built runtime — what a fixture that hands
- *  back a bare `AgentRuntime` reaches for to name its one `SessionHistory`. */
+/** The store bundle over an already-built runtime. */
 export function storesFor(rt: AgentRuntime): AgentStores {
   return createAgentStores(
     () => rt.storage.sql,
@@ -517,8 +440,6 @@ export function storesFor(rt: AgentRuntime): AgentStores {
     async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' }),
   );
 }
-
-// ── Mock session writer ──────────────────────────────────────────
 
 export function createMockSession(): import('../src/mcts/record-node').SessionWriter {
   const messages: Array<{ id: string; parentId?: string | null; role: string; content: string }> = [];
@@ -529,7 +450,6 @@ export function createMockSession(): import('../src/mcts/record-node').SessionWr
       messages.push({ id: msg.id, parentId, role: msg.role, content });
     },
     async getHistory(leafId) {
-      // Walk up via parentId
       const result: Array<{ role: string; content: string }> = [];
       let current = messages.find(m => m.id === leafId);
 
@@ -544,10 +464,7 @@ export function createMockSession(): import('../src/mcts/record-node').SessionWr
   };
 }
 
-/** Collect the workspace text-file walk into a map. Production never does this
- *  — holding every body at once is the defect `walkWorkspaceTextFiles` exists
- *  to prevent — but a test asserting the walk's admission policy wants the
- *  whole result in one place. */
+/** Collect the workspace text-file walk into a map; production never holds every body at once. */
 export async function collectWorkspaceTextFiles(rt: AgentRuntime): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   await walkWorkspaceTextFiles(rt, (path, content) => { out[path] = content; });
@@ -555,24 +472,13 @@ export async function collectWorkspaceTextFiles(rt: AgentRuntime): Promise<Recor
   return out;
 }
 
-// ── Diagnostic-line capture ──────────────────────────────────────
-
-/** Both console channels for one awaited call. WHICH channel a diagnostic lands
- *  on is itself a contract — stdout is the CLI's machine stream — so both are
- *  collected and asserted on separately. */
+/** Both console channels for one awaited call; stdout is the CLI's machine stream. */
 export interface ConsoleCapture {
   stdout: string[];
   stderr: string[];
 }
 
-/**
- * Run `fn` with both console channels collected.
- *
- * Manual reassignment rather than `spyOn(console, …)`: bun:test's spy does not
- * intercept calls made from inside the async work awaited here (its own reporter
- * appears to hold a pre-mock reference), verified against a direct count. Plain
- * reassignment is what actually observes the calls.
- */
+/** Run `fn` with both console channels collected. Reassigns rather than `spyOn`: bun:test's spy misses async calls. */
 export async function captureConsole<Result>(fn: () => Promise<Result>): Promise<ConsoleCapture> {
   const originalLog = console.log;
   const originalError = console.error;

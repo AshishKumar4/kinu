@@ -1,9 +1,3 @@
-// Focused proofs for the profile integration slice:
-//   - resolveModelRoute covers every producer and resolves each through the
-//     immutable turn profile (platform and cache warming excepted).
-//   - The resolver carries the whole tier table so producers never re-resolve.
-//   - Durable role change: persistence, next-turn resolution, locked/approval
-//     policy, capability-widening classification.
 import { describe, expect, test } from 'bun:test';
 import {
   BUILTIN_PROFILE_CATALOG, TIER_IDS,
@@ -58,18 +52,15 @@ function memoryConfig(): RoleStateStore & { dump: () => Map<string, string> } {
   };
 }
 
-/** The lanes whose tier the ACCOUNT fixes, so a turn cannot move them. */
+/** Lanes whose tier the account fixes, so a turn cannot move them. */
 const FIXED_LANES = [
   ['scaffold', 'deep'], ['judge', 'deep'], ['advisor', 'deep'],
   ['compaction', 'fast'], ['fast', 'fast'], ['reflection', 'fast'],
 ] as const;
 
-/** The lanes that ride the TURN's own tier, because they carry its resolved
- *  profile with them. */
 const INVOCATION_LANES = ['agent', 'head', 'mcts', 'swarm'] as const;
 
-/** The producers no turn profile routes: a binding-bound platform call, and a
- *  cache warm, whose model is the spec frozen with the request it replays. */
+/** Producers no turn profile routes: a binding-bound platform call, and a cache warm replaying a frozen spec. */
 const UNROUTED: readonly SpendSource[] = ['platform', 'warming'];
 
 describe('exhaustive model routing', () => {
@@ -109,20 +100,15 @@ describe('exhaustive model routing', () => {
 
     const judge = resolveModelRoute('judge', profile);
     expect(judge).toMatchObject({ source: 'judge', tier: 'deep', model: '@cf/b/model-b' });
-    // A fixed lane resolves its OWN slot's model, not the turn's.
     expect(resolveModelRoute('agent', profile)?.model).toBe('@cf/a/model-a');
-    // invocation routes ride the ROLE's tier (researcher → fast), not a pin.
     const researcherProfile = resolveTurnProfile(baseInput({ roleId: 'researcher' }));
-    // The built-in catalog ships only `default`, so the role's `fast` slot
-    // aliases it — the invocation route still follows the ROLE.
+    // The built-in catalog ships only `default`, so the role's `fast` slot aliases it.
     expect(resolveModelRoute('agent', researcherProfile)?.tier).toBe('default');
     expect(resolveModelRoute('platform', researcherProfile)).toBeNull();
   });
 
   test("invocation lanes answer the turn's pinned model, fixed lanes the catalog slot", () => {
-    // One resolution: the pin overrides the turn's tier model while the
-    // catalog slots stay the account's. A lane that re-read the slot would run
-    // the turn's own work on the model the pin displaced.
+    // The pin overrides the turn's tier model while catalog slots stay the account's.
     const profile = resolveTurnProfile(baseInput({ workspaceModel: '@cf/a/model-a' }));
 
     expect(profile.tier).toMatchObject({ source: 'workspace', model: '@cf/a/model-a' });
@@ -158,7 +144,6 @@ describe('resolver tier snapshot', () => {
 
     const a = resolveTurnProfile(baseInput({ envelope: localEnv }));
     const b = resolveTurnProfile(baseInput({ envelope: accountEnv }));
-    // Authority is part of the profile cache identity, so its digest differs too.
     expect({ ...a, authority: null, digest: null })
       .toEqual({ ...b, authority: null, digest: null });
     expect(a.authority).toEqual({ kind: 'local' });
@@ -175,7 +160,7 @@ describe('durable role change', () => {
     expect(config.get('role_changed_by')).toBe('user');
     const nextTurn = resolveTurnProfile(baseInput({ roleId: 'auditor' }));
     expect(nextTurn.role.id).toBe('auditor');
-    expect(nextTurn.tier.id).toBe('default'); // slow unset → aliases default
+    expect(nextTurn.tier.id).toBe('default');
   });
 
   test('locked refuses agent self-switch but not the owner', () => {
@@ -205,17 +190,12 @@ describe('durable role change', () => {
       tiers: { ...BUILTIN_PROFILE_CATALOG.tiers },
     });
 
-    // general (full surface) → scout (narrow): not widening, lands now.
     const narrowed = changeActiveRole({ envelope: restricted, config, to: 'scout', actor: 'agent' });
     expect(narrowed.kind).toBe('applied');
-    // scout → generalist widens: refused with the approval named, active
-    // unchanged, and no request row staged for an owner surface that reads one.
     const widened = changeActiveRole({ envelope: restricted, config, to: 'generalist', actor: 'agent' });
     expect(widened).toEqual({ kind: 'refused', reason: 'approval-required' });
     expect(config.get(AGENT_CONFIG_KEYS.roleSelection)).toBe('scout');
     expect(config.get('pending_role_id')).toBeNull();
-    // The widening classification itself is proved by the two outcomes above:
-    // the narrowing switch landed and the widening one did not.
   });
   test('unknown roles are refused with nothing stored', () => {
     const config = memoryConfig();
@@ -225,22 +205,16 @@ describe('durable role change', () => {
   });
 });
 
-/** The one sentence both backends speak about a role change. Owned in core
- *  because the two callers live in packages with no dependency between them:
- *  written twice, a new outcome member earns a wrong sentence in two places
- *  instead of a compile error in one. */
+/** Owned in core so both backends share one sentence and a new outcome member is one compile error. */
 describe('what a caller is told about a role change', () => {
   const say = (outcome: RoleChangeOutcome, requested = 'auditor', current = 'task') =>
     roleChangeOutcomeText(requested, outcome, current);
 
   test('an approval widening is refused with the approval named', () => {
-    // A widening self-switch answering `staged` would promise an owner approval
-    // no surface ever delivers. The refusal names the approval instead, so the
-    // agent asks the owner to switch.
+    // A widening self-switch must not answer `staged`: no surface delivers that approval.
     const text = say({ kind: 'refused', reason: 'approval-required' });
     expect(text).toContain('approval');
     expect(text).not.toContain('awaiting owner approval');
-    // And it names what runs meanwhile, which is the actionable half.
     expect(text).toContain('"task"');
   });
 
@@ -262,24 +236,17 @@ describe('what a caller is told about a role change', () => {
     for (const outcome of outcomes) {
       const text = say(outcome);
       expect(text.length).toBeGreaterThan(0);
-      // The role a caller has to act on appears in every arm: the new one where
-      // the change landed, the standing one where it did not.
       expect(text).toMatch(/"(auditor|general)"/);
     }
   });
 
   test('an applied change says when it takes effect, not that it already has', () => {
-    // profiles/role-change.ts's contract: the running step keeps the profile it
-    // already resolved. A message claiming the switch is live now would
-    // contradict the turn the agent is in.
+    // The running step keeps its resolved profile (profiles/role-change.ts), so the switch is never live now.
     const text = say({ kind: 'applied', from: 'task', to: 'auditor', catalogVersion: 3 });
     expect(text).toContain('next turn');
   });
 
   test('the message reads the OUTCOME\'s roles, not the caller\'s guess', () => {
-    // `currentRole` is consulted only for the members carrying no `from`, so a
-    // stale read passed by a caller cannot make the sentence disagree with what
-    // actually happened.
     const text = say({ kind: 'applied', from: 'scout', to: 'generalist', catalogVersion: 3 }, 'generalist', 'stale-value');
     expect(text).toContain('"scout"');
     expect(text).not.toContain('stale-value');

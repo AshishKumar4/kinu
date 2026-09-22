@@ -1,20 +1,5 @@
-/**
- * The fork-copy pipeline end-to-end, across the transport boundary.
- *
- *   1. The source workspace materializes a ForkSnapshot from its own SQL rows
- *      (snapshotWorkspaceForFork)
- *   2. The snapshot crosses the wire — structuredClone, which is what DO RPC
- *      does, and what preserves the canonical BLOB vfs rows
- *   3. The target lands it in its own SQLite (writeForkSnapshot)
- *
- * Both halves are core's, so this exercises the production path rather than a
- * transcription of it. Any second definition of the copy — a SqlExecutor stub
- * inside the CF backend answering the exact SELECTs the write issues, or a
- * hand-rolled one in this file — is a place the shapes can drift apart in
- * silence.
- *
- * Verifies the same invariants as unit-fork.test.ts, over the full round trip.
- */
+/** The fork-copy pipeline end to end: snapshotWorkspaceForFork, structuredClone across the wire (as DO RPC),
+ *  writeForkSnapshot. Both halves are core's, so no second definition of the copy can drift. */
 
 import { describe, test, expect } from 'bun:test';
 import {
@@ -54,8 +39,7 @@ describe('fork pipeline (end-to-end)', () => {
   test('a cloned snapshot replays into the fork database as one conversation', async () => {
     const src = fresh();
     const tgt = fresh();
-    // The fork DO's onStart bootstrap: an identity and a main actor exist
-    // before any frame arrives.
+    // The fork DO's onStart bootstrap: identity and main actor exist before any frame.
     await seedForkTarget(tgt, { workspaceId: 'FORK-DO-ID', workspaceName: 'fork-bootstrap' });
     await seedSource(src);
 
@@ -76,7 +60,6 @@ describe('fork pipeline (end-to-end)', () => {
     expect(chain.ids[2]?.startsWith('fork-marker-')).toBe(true);
     expect(chain.text.slice(0, 2)).toEqual(['hello', 'hi there']);
 
-    // The model's context came with it, in its positions.
     expect((await readWorkingContext(tgt, TARGET_ARTIFACTS)).entryIds).toEqual(['m1', 'm2']);
 
     expect(tgt.sql<{ name: string }>`SELECT name FROM crafted_tools`).toEqual([{ name: 'helper' }]);
@@ -149,8 +132,7 @@ describe('fork pipeline (end-to-end)', () => {
       expect(await tgt.vfs.exists(`${TARGET_ARTIFACTS}/${artifact.path}`)).toBe(true);
     }
 
-    // Read through the production reader: it resolves the re-rooted path and
-    // refuses a payload whose digest differs from the row's.
+    // The production reader resolves the re-rooted path and refuses a digest mismatch.
     expect((await readChain(tgt)).text[0]).toBe(spilled);
   });
 
@@ -214,8 +196,7 @@ describe('fork pipeline (end-to-end)', () => {
     expect(tgt.sql<{ id: string }>`SELECT id FROM workspace_identity`).toEqual([{ id: 'FINAL' }]);
     expect(tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM fork_lineage`[0]?.c).toBe(1);
     expect(readForkLineage(tgt.sql)?.forkedAt).toBe(99999);
-    // The transcript landed ONCE: a redelivery replaces what the last attempt
-    // staged rather than duplicating the conversation.
+    // A redelivery replaces what the last attempt staged rather than duplicating the conversation.
     expect((await readChain(tgt)).ids.slice(0, 2)).toEqual(['m1', 'm2']);
     expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_entries`[0]?.c).toBe(3);
     expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM session_messages`[0]?.c).toBe(3);

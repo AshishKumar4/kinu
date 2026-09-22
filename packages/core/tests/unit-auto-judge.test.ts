@@ -1,7 +1,3 @@
-/**
- * Unit tests for runAutoShadowEval — auto-judge shadow eval loop.
- */
-
 import { describe, test, expect } from 'bun:test';
 import {
   runAutoShadowEval,
@@ -17,12 +13,9 @@ import { present } from '@kinu.run/test-utils';
 
 const noOpLlmStream = async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; };
 
-/** The live scaffold's output in these tests. Distinctive on purpose: the
- *  pending's output under the mock executor is a scaffold error string, and a
- *  content-based judge must not confuse the two. */
+/** Distinct from the mock executor's scaffold error string, so a content-based judge cannot confuse them. */
 const LIVE_OUTPUT = '<<live-answer>>';
 
-/** The two response bodies of a judge prompt, in presentation order. */
 function judgePromptResponses(prompt: string): [string, string] {
   const head = '\nResponse A:\n', mid = '\n\nResponse B:\n', tail = '\n\nRespond with';
   const bMark = prompt.indexOf(mid);
@@ -33,12 +26,7 @@ function judgePromptResponses(prompt: string): [string, string] {
   ];
 }
 
-/**
- * A judge that always favours `winner`. It has to identify the candidates by
- * CONTENT — the protocol presents them unlabelled in a randomized order, and
- * a position-based judge would flip on the swapped call and score every trial
- * a tie. `currentOutput` is the text the live scaffold produced this turn.
- */
+/** Picks `winner` by content: candidates arrive unlabelled in random order, so a positional judge would tie. */
 function makeJudge(
   winner: 'current' | 'pending' | 'tie',
   currentOutput: string,
@@ -62,17 +50,14 @@ async function setup(): Promise<ReturnType<typeof createTestRuntime>['rt']> {
   const { rt } = createTestRuntime();
   initScaffoldTables(rt.storage.execRaw);
   initShadowTables(rt.storage.execRaw);
-  // Bootstrap a pending scaffold v1, current v0.
   void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
   void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alternative', 'pending')`;
-  // Write the pending scaffold's backup file (executor reads this).
   await rt.storage.vfs.writeFile(
     'scaffold/agent.js.v1',
     'async function* run(rt, task) { yield { type: "chunk", data: "pending: " + task }; }',
   );
-  // Also write current.
   await rt.identity.scaffold.write(
     'async function* run(rt, task) { yield { type: "chunk", data: "current: " + task }; }',
   );
@@ -114,11 +99,10 @@ describe('runAutoShadowEval', () => {
       config: { autoApply: false },
     });
 
-    expect(judgeCalls).toBe(2); // one call per presentation order
+    expect(judgeCalls).toBe(2);
     expect(result.skipped).toBe(false);
     expect(result.evaluation?.winner).toBe('pending');
 
-    // Verify it was recorded.
     const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
     expect(pending.trialsSoFar).toBe(1);
     expect(pending.pendingWins).toBe(1);
@@ -142,7 +126,6 @@ describe('runAutoShadowEval', () => {
   test('auto-applies when conclusive + autoApply=true', async () => {
     const rt = await setup();
 
-    // Seed 5 prior pending wins so this 6th call crosses the promote threshold.
     for (let i = 0; i < 5; i++) {
       void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
@@ -161,7 +144,6 @@ describe('runAutoShadowEval', () => {
     expect(result.decision).toBe('promote');
     expect(result.applied).toBe('promote');
 
-    // v1 should be 'current'; v0 should be 'historical'.
     const statuses = rt.storage.sql<{ version: number; status: string }>`
       SELECT version, status FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
@@ -174,11 +156,7 @@ describe('runAutoShadowEval', () => {
   test('auto-applies ROLLBACK on regressions beyond tolerance (regression veto, end-to-end)', async () => {
     const rt = await setup();
 
-    // Seed 5 pending wins + 1 loss (a strong 5-1 record, within the
-    // maxRegressions=1 tolerance); this turn the judge picks 'current' again —
-    // the SECOND regression must roll the pending back despite the 5-2 record
-    // (winRate 0.71 would promote on win-rate alone). Proves the hardened gate
-    // gates auto-apply.
+    // A 5-2 record would promote on win-rate alone; the second regression must still roll back.
     for (let i = 0; i < 6; i++) {
       const winner = i < 5 ? 'pending' : 'current';
       void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
@@ -189,7 +167,7 @@ describe('runAutoShadowEval', () => {
     const result = await runAutoShadowEval({
       events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt, task: 't', currentOutput: LIVE_OUTPUT,
-      judge: makeJudge('current', LIVE_OUTPUT), // the regression
+      judge: makeJudge('current', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
       config: { autoApply: true },
       random: () => 0,
@@ -203,14 +181,12 @@ describe('runAutoShadowEval', () => {
       WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
 
     const map = new Map(statuses.map((s) => [s.version, s.status]));
-    expect(map.get(0)).toBe('current');      // live scaffold unchanged
-    expect(map.get(1)).toBe('rolled_back');  // bad pending discarded
+    expect(map.get(0)).toBe('current');
+    expect(map.get(1)).toBe('rolled_back');
   });
 
   test('records the STATUS-derived current version after rollback cycles', async () => {
-    // Regression: the eval row hardcoded currentVersion = pending - 1. After
-    // a rollback cycle the numbering is non-contiguous (live=v0 while the new
-    // pending is v3), so pending-1 pointed at a rolled_back row.
+    // After a rollback the numbering is non-contiguous, so currentVersion is not pending - 1.
     const rt = await setup();
     void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back'
       WHERE actor_id = ${rt.actor.actorId} AND version = 1`;
@@ -238,22 +214,17 @@ describe('runAutoShadowEval', () => {
       WHERE actor_id = ${rt.actor.actorId}`[0];
 
     expect(row.pending_version).toBe(3);
-    expect(row.current_version).toBe(0); // the live status='current' row, NOT 2
+    expect(row.current_version).toBe(0);
   });
 
   test('skips gracefully when pending file unreadable', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
-    // Pending row exists but no scaffold/agent.js current file. version()
-    // returns max(scaffold_versions.version)=1 which matches our pending=1,
-    // so readScaffoldVersion follows the "read current" path; with no file,
-    // it throws ENOENT, caught in the try/catch → returns null.
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
       VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
       VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alt', 'pending')`;
-    // Explicitly DO NOT write 'scaffold/agent.js'.
 
     const result = await runAutoShadowEval({
       events: new RunEventRecorder(rt.storage.sql, rt.actor),
@@ -263,43 +234,24 @@ describe('runAutoShadowEval', () => {
       random: () => 0,
     });
 
-    // One outcome, not two. This accepted BOTH — skipped with the reason, or
-    // not skipped with an evaluation recorded — so the claim in the title was
-    // undefended: a regression that stopped skipping and judged a missing
-    // scaffold as an empty candidate took the `else` arm and stayed green. The
-    // comment even argued "it shouldn't have recorded a meaningful evaluation"
-    // while the `else` asserted that it had.
-    //
-    // `readScaffoldVersion` returns null for an absent file, and auto-judge.ts
-    // turns that into `{ skipped: true, reason: 'pending_unreadable' }` before
-    // any scaffold runs. That is the contract.
     expect(result).toEqual({ skipped: true, reason: 'pending_unreadable' });
-    // Skipping means nothing was judged and nothing was written, so a later
-    // trial still sees a clean slate.
     expect(rt.storage.sql`SELECT COUNT(*) AS n FROM scaffold_evaluations
       WHERE actor_id = ${rt.actor.actorId}`[0]).toEqual({ n: 0 });
   });
 
   test('config defaults honor DEFAULT_AUTO_JUDGE_CONFIG', () => {
-    // Sanity check on the public defaults.
     expect(DEFAULT_SHADOW_CONFIG.minTrials).toBe(5);
     expect(DEFAULT_SHADOW_CONFIG.promoteThreshold).toBe(0.6);
   });
 
   test('the trial carries no elapsed deadline — the config exposes no timeout knob', () => {
-    // The candidate runs to completion, exactly as the live turn does. Under a
-    // wall clock a candidate that attempts substantial work is cut and scored 0
-    // for running out of room rather than for being worse — so there is no
-    // timeout field left to tune and no default to drift.
+    // No timeout: a wall clock would score a candidate 0 for running out of room, not for being worse.
     expect('scaffoldTimeoutMs' in DEFAULT_AUTO_JUDGE_CONFIG).toBe(false);
     expect('scaffoldTimeoutMs' in structuredClone(DEFAULT_AUTO_JUDGE_CONFIG)).toBe(false);
   });
 
   test('a slow pending scaffold is awaited, not cut', async () => {
     const rt = await setup();
-    // The executor holds the trial's scaffold run open until released; the
-    // eval must still be pending while it runs, then complete on the run's
-    // own settlement — never on a timer.
     const gate = Promise.withResolvers<void>();
     let executorReleased = false;
     rt.executor = {
@@ -323,7 +275,7 @@ describe('runAutoShadowEval', () => {
     await Promise.resolve();
     let settled = false;
     const settledPromise = evalPromise.then(() => { settled = true; });
-    expect(settled).toBe(false);          // still running with the executor gated
+    expect(settled).toBe(false);
 
     gate.resolve();
     const [result] = await Promise.all([evalPromise, settledPromise]);
@@ -332,17 +284,12 @@ describe('runAutoShadowEval', () => {
   });
 });
 
-/**
- * The order-swapped double-win protocol — the position/status-quo debiasing
- * that sits directly upstream of the promotion rule.
- */
 describe('order-swapped double-win judging', () => {
   interface RecordingJudge {
     fn: StructuredJudgeFn;
     prompts: string[];
   }
 
-  /** Records every prompt the judge saw and answers with a fixed slot. */
   function recordingJudge(answer: (call: number) => JudgeOutput): RecordingJudge {
     const prompts: string[] = [];
 
@@ -356,8 +303,7 @@ describe('order-swapped double-win judging', () => {
     };
   }
 
-  /** Runs one trial with an injected RNG. `orderRoll` decides the presentation
-   *  order of the FIRST call (< 0.5 → pending first). */
+  /** `orderRoll` < 0.5 puts the pending first on the first call. */
   async function runTrial(judge: StructuredJudgeFn, orderRoll: number) {
     const rt = await setup();
 
@@ -385,8 +331,7 @@ describe('order-swapped double-win judging', () => {
     const judge = recordingJudge(() => ({ winner: 'tie', rationale: 'r', scoreA: 0.5, scoreB: 0.5 }));
     await runTrial(judge.fn, 0);
 
-    // The floor: a containment claim over an empty set is true of nothing, so a
-    // trial that never reached the judge would satisfy every line below.
+    // Containment over an empty set is vacuously true; the judge must have been reached.
     expect(judge.prompts).toHaveLength(2);
 
     for (const prompt of judge.prompts) {
@@ -405,14 +350,11 @@ describe('order-swapped double-win judging', () => {
 
     expect(judgePromptResponses(pendingFirst.prompts[0])[1]).toContain(LIVE_OUTPUT);
     expect(judgePromptResponses(currentFirst.prompts[0])[0]).toContain(LIVE_OUTPUT);
-    // Swapping the roll swaps the whole pair, not just the first call.
     expect(judgePromptResponses(pendingFirst.prompts[1])[0]).toContain(LIVE_OUTPUT);
     expect(judgePromptResponses(currentFirst.prompts[1])[1]).toContain(LIVE_OUTPUT);
   });
 
   test('winning BOTH orders is a win, and the scores average across them', async () => {
-    // This judge always picks the response holding LIVE_OUTPUT — a
-    // content-based verdict, so it survives the swap and takes both orders.
     const result = await runTrial(makeJudge('current', LIVE_OUTPUT), 0);
     expect(result.evaluation?.winner).toBe('current');
     expect(result.evaluation?.currentScore).toBe(0.8);
@@ -420,15 +362,11 @@ describe('order-swapped double-win judging', () => {
   });
 
   test('a flip between the two orders is a TIE, not a coin-flip win', async () => {
-    // The pathological judge: always picks "Response A". Under the old
-    // single-call protocol that was a guaranteed win for whoever sat in slot A
-    // — the incumbent, every single time.
     const judge = recordingJudge(() => ({ winner: 'a', rationale: 'position', scoreA: 0.9, scoreB: 0.1 }));
     const result = await runTrial(judge.fn, 0);
 
     expect(result.evaluation?.winner).toBe('tie');
     expect(result.evaluation?.rationale).toContain('Order-swap flip');
-    // Averaging across the swap cancels the positional score inflation too.
     expect(result.evaluation?.currentScore).toBe(0.5);
     expect(result.evaluation?.pendingScore).toBe(0.5);
   });

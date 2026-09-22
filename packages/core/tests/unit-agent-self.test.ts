@@ -1,4 +1,3 @@
-// agent.* codemode provider — the agent's self-direction namespace.
 import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as v from "valibot";
@@ -23,8 +22,7 @@ const ScheduledBudgetSchema = v.object({
   }),
 });
 
-/** A real governor over in-memory SQLite — the ledger is the subject here, so
- *  stubbing it would test nothing. */
+/** A real governor: the ledger is the subject, so stubbing it would test nothing. */
 function realGovernor(): MissionGovernor {
   const db = new Database(":memory:");
   const sql = makeSql(db);
@@ -32,9 +30,7 @@ function realGovernor(): MissionGovernor {
 
   return new MissionGovernor({
     storage: { sql, execRaw },
-    // The cap is per actor: a mission label is caller-authored prose, so two
-    // actors of one workspace declare the same one and a shared row would have
-    // one actor's spend exhaust the other's.
+    // The cap is per actor: two actors may declare the same caller-authored mission label.
     actor: createTestActors(sql, execRaw).main,
   });
 }
@@ -115,7 +111,7 @@ describe("createAgentSelfProvider — shape", () => {
     const p = createAgentSelfProvider(fakeHost());
     expect(p.name).toBe("agent");
     expect(p.positionalArgs).toBe(true);
-    expect(p.types).toContain("schedule"); // declares schedule
+    expect(p.types).toContain("schedule");
 
     for (const name of ["proposeCurriculum", "listCurriculum", "acceptCurriculumTask", "proposeScaffold", "scaffoldVersions", "schedule", "cancelSchedule", "compactNow"]) {
       const descriptor = p.tools[name];
@@ -207,10 +203,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
   });
 
   test("jobResult on a job still RUNNING returns a note instead of an empty poll — no loop to spin on", async () => {
-    // The mechanism defect B's fix rests on: a bare {status:'running'} read
-    // invites another read a moment later (that is what a poll loop IS). The
-    // shaped read states the wake contract instead, so there is nothing to gain
-    // by reading again.
+    // A bare {status:'running'} invites a poll loop; the shaped read states the wake contract instead.
     const running: BackgroundJob = {
       id: "bgjob-2", kind: "agents", label: null, workMode: "build", status: "running",
       result: null, error: null, createdAt: 1, settledAt: null, epoch: 0, resumeAttempts: 0,
@@ -224,8 +217,6 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     expect(r.status).toBe("running");
     expect(r.id).toBe("bgjob-2");
     expect(r.kind).toBe("agents");
-    // No result/error fields to misread as "it returned nothing" — and no
-    // invitation to call again.
     expect("result" in r).toBe(false);
     expect("error" in r).toBe(false);
     expect(r.note).toContain("woken");
@@ -244,7 +235,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     const p = createAgentSelfProvider(host);
     const r = await p.tools.acceptCurriculumTask.execute(42);
     expect(r).toEqual({ error: expect.stringContaining("id must be a non-empty string") });
-    expect(host.calls).toEqual([]); // never delegated
+    expect(host.calls).toEqual([]);
   });
 
   test("schedule requires cron or atMs, and a future atMs", async () => {
@@ -278,7 +269,6 @@ describe("createAgentSelfProvider — delegation + validation", () => {
 
     expect(out.budget).toMatchObject({ label: "nightly-sweep", limits: { usd: 5 }, spent: { tokens: 0 } });
     expect(host.calls).toEqual(["timer:0 12 * * *:nightly-sweep"]);
-    // The label the trigger carries is the one agent.budget reads back.
     expect(await p.tools.budget.execute("nightly-sweep")).toMatchObject([{ label: "nightly-sweep" }]);
   });
 
@@ -301,7 +291,6 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
     expect(await p.tools.compactNow.execute()).toEqual({ armed: true, appliesAt: "next-turn-assembly" });
-    // Idempotent from the caller's side: the flag itself is one-shot.
     expect(await p.tools.compactNow.execute()).toEqual({ armed: true, appliesAt: "next-turn-assembly" });
     expect(host.calls).toEqual(["compactNow", "compactNow"]);
     expect(p.types).toContain("compactNow");

@@ -1,9 +1,5 @@
-// The closed turn-failure classifier + the shared overflow-recovery decision
-// (turn-failure.ts). The size heuristic is deliberately fed the PER-REQUEST
-// measured prompt (lastPromptTokens), never a turn's cumulative input —
-// production-proven on workspace-1a4e20, where a 429 after 1.5M CUMULATIVE
-// tokens (per-request ~60k against a 128k window) is a real rate limit that
-// must NOT force-compact.
+// The size heuristic is fed the per-request measured prompt (lastPromptTokens), never the turn's cumulative
+// input: a cumulative-sized 429 is a real rate limit that must not force-compact.
 import { describe, test, expect } from 'bun:test';
 import {
   classifyTurnFailure,
@@ -43,8 +39,7 @@ describe('classifyTurnFailure', () => {
 
   test('auth: a dead or revoked credential is its own class, not noise', () => {
     for (const error of [
-      // The bare upstream word Cloudflare answers a rejected credential with —
-      // the exact text the owner's failed-turn card showed (audit 2.15).
+      // The bare upstream word Cloudflare answers a rejected credential with (audit 2.15).
       'Unauthorized',
       'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.',
       'Your ChatGPT login is no longer valid. Reconnect ChatGPT in User settings, or run `kinu setup` on this machine.',
@@ -66,11 +61,8 @@ describe('classifyTurnFailure', () => {
     const rateLimited = 'Failed after 3 attempts. Last error: Too Many Requests';
     expect(classifyTurnFailure(rateLimited, { lastPromptTokens: 70_000, contextWindow: 128_000 }))
       .toBe('context_length');
-    // The production case: per-request ~60k of a 128k window (the turn's
-    // CUMULATIVE 1.5M is never passed here) — a genuine throughput limit.
     expect(classifyTurnFailure(rateLimited, { lastPromptTokens: 60_000, contextWindow: 128_000 }))
       .toBe('rate_limit');
-    // Missing signals leave the heuristic off.
     expect(classifyTurnFailure(rateLimited, { lastPromptTokens: 0, contextWindow: 128_000 }))
       .toBe('rate_limit');
     expect(classifyTurnFailure(rateLimited, { lastPromptTokens: 70_000 })).toBe('rate_limit');
@@ -78,7 +70,7 @@ describe('classifyTurnFailure', () => {
 });
 
 describe('planOverflowRecovery', () => {
-  // An overflow always re-arms compaction; only the FIRST one buys a retry.
+  // An overflow always re-arms compaction; only the first one buys a retry.
   const overflowCases = [
     { name: 'context_length failure → force compaction + ONE retry', wasRetry: false, enqueueRetry: true },
     { name: 'a failed retry turn re-arms compaction but NEVER enqueues another retry', wasRetry: true, enqueueRetry: false },
@@ -105,8 +97,6 @@ describe('planOverflowRecovery', () => {
   });
 
   test('an auth failure never force-compacts and never enqueues a retry', () => {
-    // Retrying a revoked login without re-authenticating can only fail again —
-    // the remedy is the re-auth path the error names, not another turn.
     expect(planOverflowRecovery({
       error: 'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.',
       turnWasOverflowRetry: false,

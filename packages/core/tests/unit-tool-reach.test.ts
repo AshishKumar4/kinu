@@ -1,20 +1,4 @@
-/**
- * The reach axis — TOOL_REACH, and the two directions that keep it honest.
- *
- * How the model reaches a capability is DECLARED, not emergent. Left emergent,
- * native means "whichever names buildBuiltinTools happened to emit", codemode
- * means "whichever createXCodemodeProvider some backend actor class happened to
- * call", and the Tools panel guesses `nativeNames.has(name) ? 'native' :
- * 'codemode'` — a binary with no way to say "neither", which is how the one
- * deps-gated builtin (`report`) renders as codemode-only on an orchestrator,
- * an actor that has it on no surface at all.
- *
- * Every codemode factory takes its provider `name` straight from the table,
- * so a namespace the table stops declaring fails to COMPILE. What a test still
- * has to catch is the reverse: a row added to the table with nothing built for
- * it — a capability declared reachable that the model can never call, which is
- * this codebase's signature defect shape.
- */
+/** TOOL_REACH is declared; a table row with nothing built for it must fail here. */
 
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -43,9 +27,7 @@ import {
 } from '../src/index';
 import { refuseHostNode } from './helpers-actor-host';
 
-/** `createAgentSelfProvider` reads nothing off the host at construction — the
- *  host is consumed inside each member's execute, which unit-agent-self.test.ts
- *  covers. This exists only so the provider can be built here. */
+/** The host is only consumed inside member execute (covered by unit-agent-self.test.ts). */
 function agentSelfHost(
   storage: AgentRuntime['storage'], actor: AgentRuntime['actor'],
 ): AgentSelfHost {
@@ -65,8 +47,6 @@ function agentSelfHost(
   };
 }
 
-/** The ledger half only — `release.*`'s action set is gated on `engine`, and
- *  which half is present is not what this test is about. */
 const releaseSource: ReleaseSource = {
   id: 'src-1', kind: 'github', label: 'app', repoUrl: null, defaultBranch: null,
   localDeviceId: null, localRoot: null, deployTarget: null, createdAt: 1, updatedAt: 1,
@@ -104,9 +84,7 @@ describe('the reach declaration', () => {
       .map(([name]) => name);
 
     expect(declaredNative.sort()).toEqual([...BUILTIN_TOOLS].sort());
-    // The count the owner set deliberately (10 → 8, 2026-08-13). Making reach
-    // declarative must not become a quiet way to grow the standing surface, so
-    // the number is asserted, not merely the set.
+    // Owner-set count: declarative reach must not quietly grow the standing surface.
     expect(BUILTIN_TOOLS.length).toBe(8);
     expect(BUILTIN_TOOLS).toEqual(['eval', 'shell', 'file', 'agents', 'memory', 'tasks', 'web', 'report']);
   });
@@ -118,9 +96,6 @@ describe('the reach declaration', () => {
     const factories = {
       agents: () => createAgentsCodemodeProvider(() => ({
         mode: 'build',
-        // REFUSES to seat a node rather than answering with a stub: this case
-        // only builds each provider, so a node hosted here would be a node
-        // nothing asked for, running under a fabricated actor.
         swarm: {
           rt, model: new MockLanguageModelV3(),
           hostNode: refuseHostNode('the tool-reach suite builds providers and runs no node'),
@@ -141,11 +116,7 @@ describe('the reach declaration', () => {
       report: () => createReportCodemodeProvider(() => ({ report: async () => ({ delivered: true }) })),
       release: () => createReleaseCodemodeProvider(() => releaseDeps),
       agent: () => createAgentSelfProvider(agentSelfHost(rt.storage, rt.actor)),
-      // The agent-data namespace over a REAL store on this runtime's own
-      // database. `events` and `runId` are read per mutation, and this case
-      // performs none — but they are the actor's real recorder and a named run
-      // rather than throwing stubs, because a factory that cannot be built is
-      // indistinguishable here from a namespace nobody wired.
+      // Real deps: an unbuildable factory is indistinguishable from an unwired namespace.
       db: () => createDbCodemodeProvider(createAppDataStore({
         sql: rt.storage.sql,
         actor: rt.actor,
@@ -159,26 +130,19 @@ describe('the reach declaration', () => {
       .filter(([name, reach]) => reach.codemode === name)
       .map(([name]) => name);
 
-    // Set equality is the exhaustiveness half: a row added to TOOL_REACH with
-    // nothing built for it fails here.
     expect(Object.keys(factories).sort()).toEqual(declared.sort());
 
     for (const [namespace, build] of Object.entries(factories)) {
       const provider = build();
       expect(provider.name).toBe(namespace);
-      // A namespace with no members is a declaration the model cannot use.
       expect(Object.keys(provider.tools).length).toBeGreaterThan(0);
     }
   });
 
   test('run and file point at a namespace they do not own', () => {
-    // The reason `codemode` is a namespace string rather than a boolean: these
-    // two are reachable in the sandbox through the shared `workspace`
-    // primitives they already dispatch into, under a different name.
     expect(TOOL_REACH.shell.codemode).toBe('workspace');
     expect(TOOL_REACH.file.codemode).toBe('workspace');
     expect(TOOL_REACH.slate).toEqual({ native: false, codemode: 'workspace', replay: 'claimed' });
-    // eval IS the sandbox, so it owns no namespace inside it.
     expect(TOOL_REACH.eval.codemode).toBeNull();
   });
 
@@ -190,10 +154,6 @@ describe('the reach declaration', () => {
   });
 
   test('report is declared on BOTH surfaces', () => {
-    // The owner's report: the Tools panel showed `report` as codemode-only. It
-    // is native wherever it exists AND owns a codemode namespace; what the panel
-    // was actually rendering was absence on that actor, with no third state to
-    // say so.
     expect(TOOL_REACH.report).toEqual({ native: true, codemode: 'report', replay: 'claimed' });
   });
 });

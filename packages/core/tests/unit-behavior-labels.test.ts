@@ -1,12 +1,5 @@
-/**
- * The behavioural weak labeler, and the harness that scores raters against it.
- *
- * No model is involved anywhere here: the labeler is mechanical by design, and
- * the eval's raters are scripted LLMs, so the whole file runs offline and free.
- * That is a property worth pinning, not just an implementation detail — a rule
- * that consulted a model would turn the corpus into a measurement of
- * model-versus-model agreement.
- */
+/** The behavioural weak labeler and its rater-scoring harness. No model anywhere: a rule that consulted
+ *  one would turn the corpus into model-versus-model agreement. */
 import { describe, expect, test } from 'bun:test';
 import { createScriptedLLM } from '@kinu.run/test-utils';
 import {
@@ -51,8 +44,7 @@ describe('the rules read acts, not opinions', () => {
   });
 
   test('an interrupt with no follow-up settles nothing', () => {
-    // Abandonment, and the classifier under test has no `abandoned` verdict to
-    // be scored against — so a label here would manufacture a disagreement.
+    // No `abandoned` verdict exists to score against, so a label here would manufacture disagreement.
     const label = weakLabel(turn({ signals: { interrupted: true }, followup: null }));
     expect(label.label).toBeNull();
     expect(label.rules).toEqual([]);
@@ -111,9 +103,7 @@ describe('the rules read acts, not opinions', () => {
   });
 
   test('a bare resume request vetoes rather than decides', () => {
-    // The corpus's biggest confounder: an Escape for a rate limit or a reboot,
-    // followed by "continue". Read naively that is a correction and it is the
-    // exact opposite.
+    // Escape for a rate limit or reboot, then "continue": reads as a correction but is the opposite.
     const resumed = weakLabel(turn({ signals: { interrupted: true }, followup: 'limits were reset, continue' }));
     expect(resumed.label).toBeNull();
     expect(resumed.conflicted).toBe(true);
@@ -185,8 +175,6 @@ describe('corpusStats counts what fired and what did not', () => {
     ]);
   });
 });
-
-// ── The eval harness ─────────────────────────────────────────────
 
 /** Six labeled turns: three the rules called corrected, three accepted. */
 const scoredTurns: CorpusTurn[] = [
@@ -275,8 +263,7 @@ describe('runCorpusEval scores raters against the rules', () => {
     expect(report.panelSplit).toBe(1);
     expect(report.panel?.answered).toBe(6);
     expect(report.judges.map((j) => j.name)).toEqual(['vendor-a/model', 'vendor-b/model']);
-    // The member that agreed with the rules everywhere beats the panel it
-    // belongs to — visible, which is the point of scoring members separately.
+    // The member that agreed with the rules everywhere beats its panel, visible because members are scored separately.
     expect(report.judges[0].kappa?.value).toBeGreaterThan(report.panel?.kappa?.value ?? 1);
   });
 
