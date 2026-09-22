@@ -754,7 +754,7 @@ describe('egress interception denominator', () => {
         { "class_name": "A", "instances": [1, 2] },
         { "class_name": "B" }
       ],
-      "env": { "staging": { "containers": [ { "class_name": "C" } ] } }
+      "env": { "preview": { "containers": [ { "class_name": "C" } ] } }
     }`);
     expect(wranglerContainerClasses(parseJsonc(readFileSync(config, 'utf8'), WranglerContainers, 'wrangler.jsonc'))).toEqual(['A', 'B', 'C']);
   });

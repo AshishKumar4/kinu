@@ -383,7 +383,7 @@ describe("deploy gate", () => {
   test("the published version is annotated with the build sha", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
     expect(source).toContain(
-      'KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu $KINU_ENV $KINU_SHA")',
+      'KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu production $KINU_SHA")',
     );
     expect(source).toContain('npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}"');
   });
@@ -693,7 +693,7 @@ describe("deploy gate", () => {
   // ── The bootstrap option and the phase it selects ──────────────
   //
   // Without it, a deploy that DECLARES a resource only a deploy can create
-  // refuses itself: `ControlPlaneDO` landed in `migrations`, staging's 55 source gates
+  // refuses itself: `ControlPlaneDO` landed in `migrations`, the 55 source gates
   // passed, and the infrastructure gate then blocked the one upload that could
   // have created the namespace — telling the operator to run
   // `bun run infra:provision`, which cannot create a Durable Object namespace and
@@ -810,7 +810,7 @@ describe("deploy gate", () => {
     // At column zero, and after the upload: nested inside any `if`, this would be
     // a phase some deploys skip, which is the whole thing `--bootstrap` must not
     // become.
-    const invocation = 'if bun scripts/infra-verify.ts "$KINU_ENV" --phase=post-deploy; then';
+    const invocation = 'if bun scripts/infra-verify.ts --phase=post-deploy; then';
     const upload = 'if npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}" 2>&1 | tee "$KINU_DEPLOY_LOG"; then';
     expect(lines).toContain(invocation);
     expect(lines).toContain(upload);
@@ -843,14 +843,13 @@ describe("deploy gate", () => {
   // indistinguishable from an allowlist typo. So the proof has to be a gate, and
   // the gate has to be one no deploy can proceed past.
   test("no deploy can proceed without the gate that proves Access covers the admin plane", () => {
-    // The declaration, from the manifest rather than from prose: production
+    // The declaration, from the manifest rather than from prose: the Worker
     // declares the organization, the application, its Allow policy and the
     // NEGATIVE scope assertion, and every one of them is required — so an absent
     // or unreadable row is a finding and `gate:infra` exits non-zero.
     const infrastructure = deriveInfrastructure();
 
-    const access = infrastructure.resources.filter((resource) =>
-      resource.id.startsWith('access-') && resource.environments.includes('production'));
+    const access = infrastructure.resources.filter((resource) => resource.id.startsWith('access-'));
 
     expect(access.map((resource) => resource.id).sort()).toEqual([
       'access-application.kinu.run',
@@ -915,13 +914,12 @@ describe("deploy gate", () => {
 
 // ── One deploy path ───────────────────────────────────────────────────
 //
-// `scripts/deploy.sh` publishes both environments, and the way that stops being
+// `scripts/deploy.sh` is the one deploy path, and the way that stops being
 // true is a SECOND entry point rather than a change to this script. There was
-// one: `packages/cf-backend` declared `deploy:staging` as
-// `CLOUDFLARE_ENV=staging vite build && … && wrangler deploy && vite build`,
+// one: a per-package deploy script ran `vite build && … && wrangler deploy`,
 // which skips every required gate, the CLI download asset check and all six
-// post-deploy smoke checks — and docs/DEPLOYMENT.md § Staging documented it as
-// the way to deploy staging, so following the documentation was the bypass.
+// post-deploy smoke checks — and the deploy documentation named it, so
+// following the documentation was the bypass.
 //
 // The manifests, the workflows, the composite actions and the shell scripts all
 // come from the one repository enumerator, so a new package, a new workflow or a
@@ -945,9 +943,7 @@ describe("one deploy path", () => {
     "wrangler triggers deploy",
   ] as const;
 
-  /** Reaching `scripts/deploy.sh`: the root scripts, or the script itself.
-   *  `bun run deploy` is a prefix of `bun run deploy:staging`, so these two
-   *  words cover both environments and every documented spelling. */
+  /** Reaching `scripts/deploy.sh`: the root script, or the script itself. */
   const DEPLOY_ENTRYPOINTS = ["bun run deploy", "scripts/deploy.sh"] as const;
 
   /** A per-package deploy: `--cwd <package> deploy`. ONE shape, read by the
@@ -983,11 +979,8 @@ describe("one deploy path", () => {
     expect(manifests.length, "the manifest corpus collapsed").toBeGreaterThan(2);
   });
 
-  test("the root scripts are the deploy script, one per environment", () => {
-    const scripts = scriptsOf("package.json");
-
-    expect(scripts.deploy).toBe("bash scripts/deploy.sh");
-    expect(scripts["deploy:staging"]).toBeUndefined();
+  test("the root deploy script is the deploy script", () => {
+    expect(scriptsOf("package.json").deploy).toBe("bash scripts/deploy.sh");
   });
 
   test("no package script publishes anything itself", () => {

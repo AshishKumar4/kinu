@@ -58,7 +58,7 @@ export const EMBEDDER_SOURCE = 'packages/cf-backend/src/runtime.ts';
 /** Only the keys the inventory is built from. `v.object` ignores the rest, and a
  *  key present but wrongly shaped fails the parse rather than being read as
  *  absent — a config this cannot read is not a config it may certify. */
-const EnvironmentSchema = v.object({
+const WorkerSchema = v.object({
   name: v.optional(v.string()),
   account_id: v.optional(v.string()),
   routes: v.optional(v.array(v.object({
@@ -99,12 +99,15 @@ const EnvironmentSchema = v.object({
   }))),
 });
 
+/** One environment (AGENTS.md § Deploy). A named `env` section would be a
+ *  second deployment nothing here derives, verifies or tears down, so it fails
+ *  the parse instead of being ignored like an unread key. */
 const WranglerConfigSchema = v.object({
-  ...EnvironmentSchema.entries,
-  env: v.optional(v.record(v.string(), EnvironmentSchema)),
+  ...WorkerSchema.entries,
+  env: v.optional(v.never('wrangler.jsonc declares a named `env` section; Kinu has one environment')),
 });
 
-type WranglerEnvironment = v.InferOutput<typeof EnvironmentSchema>;
+type WorkerConfig = v.InferOutput<typeof WorkerSchema>;
 
 /* ── The shapes ───────────────────────────────────────────────────────── */
 
@@ -134,11 +137,6 @@ export type ResourceKind =
  *  deploy shipped. */
 export type Origin = 'precondition' | 'wrangler-cli' | 'wrangler-deploy' | 'manual';
 
-export interface BindingRef {
-  readonly environment: string;
-  readonly binding: string;
-}
-
 export interface Resource {
   /** Stable and dotted: `r2.kinu-backups`. The id every report keys on. */
   readonly id: string;
@@ -157,11 +155,9 @@ export interface Resource {
   readonly destroy: readonly string[] | undefined;
   /** What a human must do, for `manual` origins. */
   readonly manual: string | undefined;
-  /** Every environment/binding pair that references it. Empty for routes, crons
-   *  and the account. A resource referenced by two environments must not be
-   *  torn down with one of them — see `exclusiveTo`. */
-  readonly boundBy: readonly BindingRef[];
-  readonly environments: readonly string[];
+  /** The binding that references it. `undefined` for routes, crons, the
+   *  account and everything else nothing binds by name. */
+  readonly binding: string | undefined;
   /** False ⇒ the Worker states it tolerates the absence (a `?` in `Env`), so a
    *  missing one is a reported capability loss rather than a gate failure. */
   readonly required: boolean;
@@ -169,19 +165,15 @@ export interface Resource {
   readonly purpose: string;
 }
 
-export interface InfraEnvironment {
-  /** `production` for the top-level (unnamed) section, else the `env.*` key. */
-  readonly key: string;
+/** What wrangler.jsonc declares for the one deployed Worker. */
+export interface InfraWorker {
   readonly workerName: string;
-  /** The `--env` flag value wrangler needs, `undefined` for the top-level
-   *  section — which is what wrangler itself means by no flag at all. */
-  readonly wranglerEnv: string | undefined;
   readonly vars: ReadonlyMap<string, string>;
   readonly migrationTags: readonly string[];
-  /** Every binding name this environment declares, whatever its kind. */
+  /** Every binding name the Worker declares, whatever its kind. */
   readonly bindings: readonly string[];
-  /** Every route PATTERN this environment claims, verbatim. Carried on the
-   *  environment rather than recomputed per consumer because the Access scope
+  /** Every route PATTERN the Worker claims, verbatim. Carried on the
+   *  worker rather than recomputed per consumer because the Access scope
    *  assertion and the Access resource ids have to agree about which hostnames
    *  are ours — two spellings of that question is how a negative assertion
    *  silently stops covering one of them. */
@@ -202,7 +194,7 @@ export interface InfraEnvironment {
  */
 export const CONTROL_PLANE_ACCESS_PATHS = ['/control*', '/api/control*'] as const;
 
-/** The hostnames one environment claims, split by whether the claim is a
+/** The hostnames the Worker claims, split by whether the claim is a
  *  wildcard. The app host is the first non-wildcard route — the origin the SPA
  *  and the admin plane are served on — and the wildcards are the preview
  *  hostnames, which must never be behind Access. */
@@ -212,15 +204,15 @@ export interface ClaimedHosts {
 }
 
 /**
- * Which hostnames belong to an environment, from its route patterns.
+ * Which hostnames belong to the Worker, from its route patterns.
  *
  * Exported and shared, because the Access resource ids and the Access scope
  * OBSERVATION both have to answer "is this hostname ours" the same way. Two
  * spellings of that question is how a negative assertion silently stops covering
  * one host while still reporting a pass.
  */
-export function claimedHosts(environment: InfraEnvironment): ClaimedHosts {
-  const hosts = environment.routes.map((pattern) => pattern.replace(/\/.*$/u, ''));
+export function claimedHosts(worker: InfraWorker): ClaimedHosts {
+  const hosts = worker.routes.map((pattern) => pattern.replace(/\/.*$/u, ''));
 
   return {
     app: hosts.find((host) => !host.startsWith('*.')),
@@ -230,7 +222,7 @@ export function claimedHosts(environment: InfraEnvironment): ClaimedHosts {
 
 export interface Infrastructure {
   readonly accountId: string;
-  readonly environments: readonly InfraEnvironment[];
+  readonly worker: InfraWorker;
   readonly resources: readonly Resource[];
 }
 
@@ -341,7 +333,7 @@ export const UNCAPTURED: readonly Uncaptured[] = [
   },
   {
     what: "The Vectorize indexes' GEOMETRY. `wrangler.jsonc` names `kinu-memory` and "
-      + '`kinu-memory-staging` and stops there; creating an index needs `--dimensions` and '
+      + 'stops there; creating an index needs `--dimensions` and '
       + '`--metric`, and one created at the wrong dimension count accepts the binding and '
       + 'rejects every insert.',
     evidence: 'the dimension is a literal in the embedder construction in '
@@ -352,14 +344,13 @@ export const UNCAPTURED: readonly Uncaptured[] = [
   },
   {
     what: 'The proxied DNS records the `pattern + zone_name` routes need. Production takes a '
-      + 'wildcard `*` record for every preview hostname; staging takes a single `staging` '
-      + 'record for its own origin. A route matches a request that arrives — it does not make '
-      + 'the hostname resolve, so without the records every preview URL and the whole staging '
-      + 'deployment are NXDOMAIN while both routes read as present.',
+      + 'wildcard `*` record for every preview hostname. A route matches a request that '
+      + 'arrives — it does not make the hostname resolve, so without the record every preview '
+      + 'URL is NXDOMAIN while the route reads as present.',
     evidence: 'wrangler has no DNS command at all, and the zone DNS API answers 403 code 10000 '
       + 'under the wrangler OAuth token — so this is invisible to every credential a deploy has. '
       + 'Verification here resolves a hostname against each record instead.',
-    check: 'dig +short probe.kinu.run staging.kinu.run',
+    check: 'dig +short probe.kinu.run',
   },
   {
     what: 'The ZONE. `zone_name: "kinu.run"` assumes a zone already on the account, already '
@@ -370,7 +361,7 @@ export const UNCAPTURED: readonly Uncaptured[] = [
       + '(f44999d1ddda7012e9a87729eba250f1), which a custom domain requires rather than merely '
       + 'prefers, and holding ZERO DNS records, so every record this deployment needs is '
       + 'created rather than contended. Universal SSL covers `kinu.run` and `*.kinu.run` — the '
-      + 'app host, every preview host and staging — so no Advanced Certificate Manager is '
+      + 'app host and every preview host — so no Advanced Certificate Manager is '
       + 'needed. A preview suffix one label deeper would need one.',
     check: 'npx wrangler email routing list',
   },
@@ -401,28 +392,25 @@ export const UNCAPTURED: readonly Uncaptured[] = [
       + 'SANDBOX_VERSION the configured digest was resolved for. The SDK asks the container for '
       + 'its own SANDBOX_VERSION on every start.',
     evidence: 'a container application is named after its Worker and class — '
-      + '`kinu-kinusandbox` and `kinu-staging-kinusandbox-staging` — and neither exists '
-      + 'until that environment is deployed. The image is reconciled only by a deploy OF THAT '
-      + 'ENVIRONMENT, so a version bump lands in one environment and not the other until both '
-      + 'are deployed, and Sandbox.checkVersionCompatibility logs the mismatch at container '
+      + '`kinu-kinusandbox` — and it does not exist until the Worker is deployed. The image is '
+      + 'reconciled only by a deploy, and Sandbox.checkVersionCompatibility logs the mismatch at container '
       + 'start rather than failing the deploy. What IS captured, by '
-      + '`scripts/release-config.test.ts`: both environments name one immutable digest rather '
+      + '`scripts/release-config.test.ts`: the config names one immutable digest rather '
       + 'than a re-pointable tag, and the version that digest was resolved for equals the '
       + '`@cloudflare/sandbox` dependency that ships.',
     check: 'npx wrangler containers list --json',
   },
   {
-    what: 'A 90-day R2 lifecycle rule on the `feedback/` prefix of both feedback buckets. '
+    what: 'A 90-day R2 lifecycle rule on the `feedback/` prefix of the feedback bucket. '
       + 'The screenshot object is exact user feedback and the DO retains only its pointer.',
-    evidence: 'lifecycle rules are not expressible in wrangler.jsonc. Production and staging '
-      + 'were set and read back on 2026-08-24.',
-    check: 'npx wrangler r2 bucket lifecycle list kinu-feedback && '
-      + 'npx wrangler r2 bucket lifecycle list kinu-feedback-staging',
+    evidence: 'lifecycle rules are not expressible in wrangler.jsonc. Set and read '
+      + 'back on 2026-08-24.',
+    check: 'npx wrangler r2 bucket lifecycle list kinu-feedback',
   },
   {
     what: 'The KV namespace TITLES. `wrangler.jsonc` binds AUTH_KV by namespace id, and the '
-      + '`kv_namespaces` block has no title field at all — so `kinu-auth` and '
-      + '`kinu-auth-staging`, the names an operator reads and types, exist only in the account '
+      + '`kv_namespaces` block has no title field at all — so `kinu-auth`, the '
+      + 'name an operator reads and types, exists only in the account '
       + 'and in the command that created them.',
     evidence: 'a `kv_namespaces` entry carries `binding`, `id`, `preview_id` and `remote` and '
       + 'nothing else (wrangler/config-schema.json), while `wrangler kv namespace list` returns '
@@ -474,9 +462,6 @@ export const UNOBSERVABLE = new Map<string, string>([
   ['cron.kinu */15 * * * *',
     'Wrangler writes cron triggers from config but exposes no command that reads them back. '
     + 'Check Workers & Pages > kinu > Triggers in the Cloudflare dashboard.'],
-  ['cron.kinu-staging */15 * * * *',
-    'Wrangler writes cron triggers from config but exposes no command that reads them back. '
-    + 'Check Workers & Pages > kinu-staging > Triggers in the Cloudflare dashboard.'],
 ]);
 
 /* ── Supplying what the manifest does not ─────────────────────────────── */
@@ -501,11 +486,11 @@ export interface Supply {
   readonly handling: Handling;
   /** True ⇒ a deployment without it is broken, whatever `Env`'s `?` says. */
   readonly required: boolean;
-  /** When present, requiredness is DERIVED per environment instead: this value
-   *  is required exactly where that `vars` key is set. It is the rule
-   *  wrangler.jsonc already states — a provider appears on /login only when both
-   *  its CLIENT_ID var and its CLIENT_SECRET secret exist — so staging, which
-   *  configures no OAuth provider, is not held to production's secret set. */
+  /** When present, requiredness is DERIVED instead: this value is required
+   *  exactly when that `vars` key is set. It is the rule wrangler.jsonc already
+   *  states — a provider appears on /login only when both its CLIENT_ID var and
+   *  its CLIENT_SECRET secret exist — so a provider left unconfigured is not
+   *  owed its secret. */
   readonly pairedWith?: string;
   /** What happens when it is absent. The sentence the report prints. */
   readonly absent: string;
@@ -517,10 +502,7 @@ export interface Supply {
  * Every value the Worker reads that neither a binding nor a `vars` entry
  * supplies, and what has to happen for it to exist.
  *
- * PINNED BY EQUALITY against `supplyCensus()`, for EVERY environment rather than
- * for their union. A name one environment supplies says nothing about another —
- * production sets `EMAIL_DOMAIN` and staging does not, and unioning the two
- * reported both as supplied. A new field in `Env` that the manifest does not
+ * PINNED BY EQUALITY against `supplyCensus()`. A new field in `Env` that the manifest does not
  * supply fails the gate until it is classified here, which is the whole point:
  * `NIMBUS_RUNTIME_CACHE` was declared a `string` for months while being an R2
  * bucket, and the way that survives is by nobody ever having to write down what
@@ -790,7 +772,7 @@ interface Draft {
 const singleBinding = (block: { readonly binding: string } | undefined): readonly string[] =>
   block === undefined ? [] : [block.binding];
 
-function environmentRow(key: string, topName: string, config: WranglerEnvironment): InfraEnvironment {
+function workerRow(config: WorkerConfig): InfraWorker {
   const bindings = [
     ...(config.kv_namespaces ?? []).map((k) => k.binding),
     ...(config.r2_buckets ?? []).map((r) => r.binding),
@@ -805,9 +787,7 @@ function environmentRow(key: string, topName: string, config: WranglerEnvironmen
   ];
 
   return {
-    key,
-    workerName: config.name ?? topName,
-    wranglerEnv: key === 'production' ? undefined : key,
+    workerName: config.name ?? 'worker',
     vars: new Map(Object.entries(config.vars ?? {})),
     migrationTags: (config.migrations ?? []).map((m) => m.tag),
     bindings,
@@ -815,22 +795,21 @@ function environmentRow(key: string, topName: string, config: WranglerEnvironmen
   };
 }
 
-/** Everything one environment's section declares, before the cross-environment
- *  merge. Split out because the merge is where sharing becomes visible, and
- *  sharing is what makes a teardown dangerous. */
+/** Everything the Worker's config declares, as resources before requiredness
+ *  is resolved against `Env`. */
 function draftsFor(
-  environment: InfraEnvironment,
-  config: WranglerEnvironment,
+  declared: InfraWorker,
+  config: WorkerConfig,
   geometry: VectorGeometry,
 ): readonly Draft[] {
-  const worker = environment.workerName;
+  const worker = declared.workerName;
   const drafts: Draft[] = [];
 
   for (const namespace of config.kv_namespaces ?? []) {
     drafts.push({
       kind: 'kv',
-      // The id, not the binding: both environments bind AUTH_KV, and calling
-      // them one resource is how a staging teardown deletes production's.
+      // The id, not the binding: `kv_namespaces` carries no title, and the id is
+      // the one name the account and teardown agree on.
       name: namespace.id,
       origin: 'manual',
       binding: namespace.binding,
@@ -905,7 +884,7 @@ function draftsFor(
   for (const container of config.containers ?? []) {
     drafts.push({
       kind: 'container',
-      name: `${worker}-${container.class_name.toLowerCase()}${environment.wranglerEnv === undefined ? '' : `-${environment.wranglerEnv}`}`,
+      name: `${worker}-${container.class_name.toLowerCase()}`,
       origin: 'wrangler-deploy',
       required: true,
       purpose: `container application for ${container.class_name}, image ${container.image}`,
@@ -993,9 +972,8 @@ function draftsFor(
   // every preview URL an agent hands out, the public landing page, `/api/feedback`
   // and `/api/client-errors`. That failure is silent in every positive check —
   // the admin plane would work perfectly — so the scope row is the only thing
-  // that can catch it, and it is declared for EVERY environment including the one
-  // with no operators.
-  const claimed = claimedHosts(environment);
+  // that can catch it, and it is declared even when there are no operators.
+  const claimed = claimedHosts(declared);
 
   if (claimed.app !== undefined) {
     const host = claimed.app;
@@ -1013,11 +991,11 @@ function draftsFor(
         + 'the public landing page and the in-product feedback endpoint.',
     });
 
-    // The positive half exists only where operators do. Staging deliberately
-    // admits nobody (`CONTROL_PLANE_ADMINS: ""`), so demanding a Zero Trust
-    // application for a plane that already 404s everyone would be a gate
-    // complaining about a deployment shaped on purpose.
-    if ((environment.vars.get('CONTROL_PLANE_ADMINS') ?? '').trim().length > 0) {
+    // The positive half exists only where operators do. `CONTROL_PLANE_ADMINS: ""`
+    // admits nobody, so demanding a Zero Trust application for a plane that
+    // already 404s everyone would be a gate complaining about a deployment
+    // shaped on purpose.
+    if ((declared.vars.get('CONTROL_PLANE_ADMINS') ?? '').trim().length > 0) {
       drafts.push({
         kind: 'access-organization',
         name: host,
@@ -1042,7 +1020,7 @@ function draftsFor(
           + `both ${CONTROL_PLANE_ACCESS_PATHS.map((path) => `${host}${path}`).join(' and ')}. Create `
           + 'one self-hosted application with BOTH paths as destinations in Zero Trust > Access '
           + 'controls > Applications, then set CONTROL_PLANE_ACCESS_AUD and '
-          + "CONTROL_PLANE_ACCESS_TEAM_DOMAIN in this environment's `vars`. TWO applications "
+          + "CONTROL_PLANE_ACCESS_TEAM_DOMAIN in the Worker's `vars`. TWO applications "
           + 'cannot serve: each has its own AUD, so the Worker would pin one and answer 404 on '
           + 'the other path.',
       });
@@ -1062,7 +1040,7 @@ function draftsFor(
     }
   }
 
-  const emailDomain = environment.vars.get('EMAIL_DOMAIN');
+  const emailDomain = declared.vars.get('EMAIL_DOMAIN');
 
   if ((config.send_email ?? []).length > 0 && emailDomain !== undefined && emailDomain.length > 0) {
     // Email Routing is a ZONE feature and EMAIL_DOMAIN is a subdomain of one, so
@@ -1088,7 +1066,7 @@ function draftsFor(
     });
   }
 
-  const gateway = /\/v1\/[^/]+\/([^/]+)\//u.exec(environment.vars.get('AI_GATEWAY_URL') ?? '');
+  const gateway = /\/v1\/[^/]+\/([^/]+)\//u.exec(declared.vars.get('AI_GATEWAY_URL') ?? '');
 
   if (gateway !== null) {
     drafts.push({
@@ -1126,15 +1104,7 @@ function draftsFor(
   return drafts;
 }
 
-/**
- * The whole inventory, merged across environments.
- *
- * Merging is the point of this function rather than a detail of it: both
- * environments bind `nimbus-runtime-cache`, so a teardown that treated resources
- * as per-environment would delete staging's runtime store along with production.
- * `boundBy` records every holder, and `exclusiveTo` is what teardown is allowed
- * to act on.
- */
+/** The whole inventory of the one Worker wrangler.jsonc declares. */
 export function deriveInfrastructure(
   configPath = WRANGLER_CONFIG,
   geometry = vectorizeGeometry(),
@@ -1145,83 +1115,42 @@ export function deriveInfrastructure(
     configPath,
   );
 
-  const topName = config.name ?? 'worker';
-
-  const environments = [
-    environmentRow('production', topName, config),
-    ...Object.entries(config.env ?? {}).map(([key, section]) => environmentRow(key, `${topName}-${key}`, section)),
-  ];
-
-  // Raw env blocks are right for bindings and vars, which wrangler does NOT
-  // inherit into named environments — but `triggers` IS inheritable
-  // (developers.cloudflare.com/workers/wrangler/configuration, checked
-  // 2026-08-25), so an env without its own block runs the top-level cron and
-  // must own a cron resource. Without this line the staging cron existed on
-  // the deployed Worker and in UNOBSERVABLE while no run ever declared it.
-  const sections: readonly (readonly [InfraEnvironment, WranglerEnvironment])[] = [
-    [environments[0] ?? environmentRow('production', topName, config), config],
-    ...Object.entries(config.env ?? {}).map(([key, section], index) =>
-      [
-        environments[index + 1] ?? environmentRow(key, `${topName}-${key}`, section),
-        { ...section, triggers: section.triggers ?? config.triggers },
-      ] as const),
-  ];
-
+  const worker = workerRow(config);
   const optionality = new Map(envFields().map((field) => [field.name, field.optional]));
-  const merged = new Map<string, Resource>();
+  const resources = new Map<string, Resource>();
 
-  for (const [environment, section] of sections) {
-    for (const draft of draftsFor(environment, section, geometry)) {
-      const id = `${draft.kind}.${draft.name}`;
-      const previous = merged.get(id);
+  for (const draft of draftsFor(worker, config, geometry)) {
+    const id = `${draft.kind}.${draft.name}`;
 
-      const bindingRefs = draft.binding === undefined
-        ? []
-        : [{ environment: environment.key, binding: draft.binding }];
-
-      merged.set(id, {
-        id,
-        kind: draft.kind,
-        name: draft.name,
-        origin: draft.origin,
-        holds: draft.holds,
-        create: draft.create,
-        destroy: draft.destroy,
-        manual: draft.manual,
-        boundBy: [...(previous?.boundBy ?? []), ...bindingRefs],
-        environments: [...(previous?.environments ?? []), environment.key],
-        required: draft.required ?? (draft.binding === undefined
-          ? true
-          : optionality.get(draft.binding) !== true),
-        purpose: draft.purpose,
-      });
-    }
+    resources.set(id, {
+      id,
+      kind: draft.kind,
+      name: draft.name,
+      origin: draft.origin,
+      holds: draft.holds,
+      create: draft.create,
+      destroy: draft.destroy,
+      manual: draft.manual,
+      binding: draft.binding,
+      required: draft.required ?? (draft.binding === undefined
+        ? true
+        : optionality.get(draft.binding) !== true),
+      purpose: draft.purpose,
+    });
   }
 
   return {
     accountId: config.account_id ?? '',
-    environments,
-    resources: [...merged.values()],
+    worker,
+    resources: [...resources.values()],
   };
 }
 
-/** Resources only `environment` references — the only ones a teardown of that
- *  environment may delete. A resource two environments bind is retained and
- *  named, never deleted with one of them. */
-export function exclusiveTo(
-  infrastructure: Infrastructure,
-  environment: string,
-): readonly Resource[] {
-  return infrastructure.resources.filter((resource) =>
-    resource.environments.includes(environment)
-    && resource.environments.every((key) => key === environment));
-}
-
 /**
- * Whether a supplied value is required IN THIS ENVIRONMENT.
+ * Whether a supplied value is required.
  *
  * `Supply.required` is the flat answer; `pairedWith` is the derived one: a
- * secret is required exactly where the var it serves is set. A provider whose
+ * secret is required exactly when the var it serves is set. A provider whose
  * client id is unset is off on purpose, and demanding its secret would report a
  * hole in a deployment deliberately shaped that way — a gate that cries about
  * an intentional absence teaches people to ignore it.
@@ -1229,35 +1158,27 @@ export function exclusiveTo(
  * A PAIRED VAR SET TO THE EMPTY STRING COUNTS AS ABSENT, and that is the whole
  * of what "supplies" means everywhere else in this repository: `CONTROL_PLANE_ADMINS: ""`
  * means NOBODY, and `PREVIEW_HOST_SUFFIX: ""` means previews are off. Keying on `.has()` instead asked only whether the key
- * was typed, so a feature explicitly turned off in one environment would drag in
- * every value its enabled form needs — which for the Access pair means demanding
- * a Zero Trust application for an admin plane that admits nobody.
+ * was typed, so a feature explicitly turned off would drag in every value its
+ * enabled form needs — which for the Access pair means demanding a Zero Trust
+ * application for an admin plane that admits nobody.
  */
-export function requiredIn(name: string, environment: InfraEnvironment): boolean {
+export function requiredIn(name: string, worker: InfraWorker): boolean {
   const supply = SUPPLY.get(name);
 
   if (supply === undefined) return false;
 
   return supply.pairedWith === undefined
     ? supply.required
-    : (environment.vars.get(supply.pairedWith) ?? '').trim().length > 0;
+    : (worker.vars.get(supply.pairedWith) ?? '').trim().length > 0;
 }
 
-/**
- * Env fields THIS environment neither binds nor declares in `vars` — the set
- * `SUPPLY` must classify for it.
- *
- * Per environment, never unioned. Unioning was the defect: `EMAIL_DOMAIN` is a
- * production var and absent from staging, so the union reported it as supplied
- * and no check ever asked staging for it. One environment cannot answer for
- * another's supply, and a deployment tier missing a required member is exactly
- * what this census exists to name.
- */
+/** Env fields the Worker neither binds nor declares in `vars` — the set
+ *  `SUPPLY` must classify. */
 export function supplyCensus(
-  environment: InfraEnvironment,
+  worker: InfraWorker,
   fields = envFields(),
 ): readonly EnvField[] {
-  const supplied = new Set([...environment.bindings, ...environment.vars.keys()]);
+  const supplied = new Set([...worker.bindings, ...worker.vars.keys()]);
 
   return fields.filter((field) => !supplied.has(field.name));
 }

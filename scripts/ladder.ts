@@ -1376,7 +1376,7 @@ export const LADDER: readonly Gate[] = [
     tier: 'evals',
     // The CREDENTIALED cost, because that is the cost this gate actually incurs
     // where it runs. `scripts/eval-tier.sh` authenticates as `eval-service`
-    // against staging from KINU_EVAL_TOKEN, so a run that holds that credential
+    // against the deployment from KINU_EVAL_TOKEN, so a run that holds that credential
     // pays this — and it was declared at 0.3s, the credential-free path where
     // every live test skips. A gate whose declared cost is four orders of
     // magnitude under its measured one makes the tier-cost line below fiction,
@@ -2186,9 +2186,7 @@ export const LADDER: readonly Gate[] = [
       + 'trigger (writable, never readable) are DECLARED blind spots pinned by equality, so the '
       + 'list can only shrink and only on purpose, and an undeclared one fails. Also blind to '
       + 'whether a resource that exists is CORRECT beyond its name — a Vectorize geometry '
-      + 'mismatch is reported, an R2 lifecycle rule is not — and, deliberately, to every '
-      + 'environment but the one named: staging is reported as not-checked with the command that '
-      + 'checks it. The four Access rows need an API token with `Access: Apps and Policies Read` '
+      + 'mismatch is reported, an R2 lifecycle rule is not. The four Access rows need an API token with `Access: Apps and Policies Read` '
       + 'rather than the wrangler login, which has no Access scope; without one they report '
       + 'UNKNOWN and fail, because a machine that could not look at the admin plane\'s outer gate '
       + 'has not verified it.',

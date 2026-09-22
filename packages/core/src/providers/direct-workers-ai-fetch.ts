@@ -1,8 +1,8 @@
 /**
  * OpenAI-compatible fetch over Cloudflare's direct Workers AI binding.
  *
- * Development and staging have no user OAuth credential, so the binding is
- * their inference boundary. This adapter turns an AI SDK chat-completions
+ * Development and the eval identity have no user OAuth credential, so the
+ * binding is their inference boundary. This adapter turns an AI SDK chat-completions
  * request into one `binding.run()` call and turns the answer back into the
  * OpenAI wire shape the SDK and the CLI proxy both parse.
  *

@@ -42,7 +42,7 @@ import {
   wrangler,
 } from './infra-cloudflare';
 import {
-  type InfraEnvironment, type Resource, SUPPLY, UNCAPTURED, deriveInfrastructure, requiredIn,
+  type InfraWorker, type Resource, SUPPLY, UNCAPTURED, deriveInfrastructure, requiredIn,
   vectorizeGeometry,
 } from './infra-manifest';
 
@@ -52,7 +52,7 @@ const NC = '\u001B[0m';
 
 /**
  * `noted` and `refused` are deliberately different words. `noted` is a value
- * that is correctly unset here — optional in this environment, or one that only
+ * that is correctly unset here — optional for this Worker, or one that only
  * ever arrives from outside. `refused` is this program declining to act because
  * it could not know, or because there is no terminal to ask at. Printing both as
  * one would recreate, in the report, the exact conflation the three-state lookup
@@ -131,11 +131,7 @@ export type Plan =
   | { readonly action: 'skip'; readonly detail: string }
   | { readonly action: 'refuse'; readonly detail: string };
 
-export function plan(
-  resource: Resource,
-  observation: Observation,
-  wranglerEnv: string | undefined,
-): Plan {
+export function plan(resource: Resource, observation: Observation): Plan {
   if (observation.state === 'present') {
     return { action: 'skip', detail: `already exists — ${observation.detail}` };
   }
@@ -154,14 +150,11 @@ export function plan(
     };
   }
 
-  return {
-    action: 'create',
-    argv: [...resource.create, ...(wranglerEnv === undefined ? [] : ['--env', wranglerEnv])],
-  };
+  return { action: 'create', argv: resource.create };
 }
 
-function ensure(resource: Resource, environment: InfraEnvironment): Step {
-  const decision = plan(resource, look(resource), environment.wranglerEnv);
+function ensure(resource: Resource): Step {
+  const decision = plan(resource, look(resource));
 
   if (decision.action === 'skip') return { id: resource.id, outcome: 'existed', detail: decision.detail };
 
@@ -192,11 +185,11 @@ function ensure(resource: Resource, environment: InfraEnvironment): Step {
  */
 async function putSecret(
   name: string,
-  environment: InfraEnvironment,
+  worker: InfraWorker,
   ask: (question: string) => Promise<string>,
   interactive: boolean,
 ): Promise<Step> {
-  const id = `${environment.key}/${name}`;
+  const id = name;
   const supply = SUPPLY.get(name);
 
   if (!interactive) {
@@ -212,8 +205,8 @@ async function putSecret(
   const generated = name.startsWith('CREDENTIAL_ENCRYPTION_KEY');
 
   const prompt = generated
-    ? `\n${name} for ${environment.workerName}.\n  Paste an existing value, or press enter to generate one: `
-    : `\n${name} for ${environment.workerName}.\n  ${supply?.source ?? ''}\n  Paste the value (enter to skip): `;
+    ? `\n${name} for ${worker.workerName}.\n  Paste an existing value, or press enter to generate one: `
+    : `\n${name} for ${worker.workerName}.\n  ${supply?.source ?? ''}\n  Paste the value (enter to skip): `;
 
   const typed = (await ask(prompt)).trim();
 
@@ -225,10 +218,7 @@ async function putSecret(
 
   // Through stdin, never argv: an argument is visible in the process table and
   // in anything that echoes the command.
-  const run = wrangler([
-    'secret', 'put', name,
-    ...(environment.wranglerEnv === undefined ? [] : ['--env', environment.wranglerEnv]),
-  ], 120_000, value);
+  const run = wrangler(['secret', 'put', name], 120_000, value);
 
   if (!run.ok) {
     return { id, outcome: 'failed', detail: `\`wrangler secret put ${name}\` failed: ${why(run)}` };
@@ -281,39 +271,28 @@ async function main(): Promise<number> {
   }
 
   const infrastructure = deriveInfrastructure();
+  const { worker } = infrastructure;
   console.log(`${BOLD}Kinu infrastructure provisioning${NC}`);
   console.log(`Account:      ${infrastructure.accountId}`);
-  console.log(`Environments: ${infrastructure.environments.map((environment) => environment.key).join(', ')}`);
+  console.log(`Worker:       ${worker.workerName}`);
 
   const steps: Step[] = [];
-  const done = new Set<string>();
 
   console.log(`\n${BOLD}Storage${NC} — what wrangler can create, in dependency order`);
 
   // Everything before the Worker binds it. The order is the resource order out
   // of the manifest, which is already the order the sections appear in: buckets,
   // then the indexes.
-  for (const environment of infrastructure.environments) {
-    for (const resource of infrastructure.resources) {
-      if (resource.origin !== 'wrangler-cli') continue;
-
-      if (!resource.environments.includes(environment.key) || done.has(resource.id)) continue;
-      done.add(resource.id);
-      const step = ensure(resource, environment);
-      steps.push(step);
-      console.log(`  [${MARK[step.outcome]}] ${resource.id}\n           ${step.detail}`);
-    }
+  for (const resource of infrastructure.resources) {
+    if (resource.origin !== 'wrangler-cli') continue;
+    const step = ensure(resource);
+    steps.push(step);
+    console.log(`  [${MARK[step.outcome]}] ${resource.id}\n           ${step.detail}`);
   }
 
   console.log(`\n${BOLD}The Worker${NC} — created by \`bun run deploy\`, never by this command`);
-  const deployed = new Map<string, boolean>();
-
-  for (const environment of infrastructure.environments) {
-    const live = deployment(environment.wranglerEnv);
-    deployed.set(environment.key, live.state === 'deployed');
-
-    console.log(`  ${environment.key} (${environment.workerName}): ${deploymentNote(live)}`);
-  }
+  const live = deployment();
+  console.log(`  ${worker.workerName}: ${deploymentNote(live)}`);
 
   console.log('  A bare `wrangler deploy` is not a substitute: it skips the CLI-asset check and '
     + 'the post-deploy smoke gate, and production has already shipped that way once.');
@@ -321,49 +300,42 @@ async function main(): Promise<number> {
   console.log(`\n${BOLD}Secrets${NC} — presence is checked; no value is ever read back`);
   const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
   const reader = interactive ? createInterface({ input: process.stdin, output: process.stderr }) : undefined;
+  const held = live.state === 'deployed' ? secretNames() : undefined;
 
   try {
-    for (const environment of infrastructure.environments) {
-      if (deployed.get(environment.key) !== true) {
-        console.log(`  ${environment.key}: deferred — \`wrangler secret put\` needs the Worker to `
-          + 'exist. Run `bun run deploy`, then this command again.');
-        continue;
-      }
-
-      const held = secretNames(environment.wranglerEnv);
-
-      if (held.state === 'unknown') {
-        steps.push({ id: `${environment.key} secrets`, outcome: 'refused', detail: held.reason });
-        console.log(`  [${MARK.refused}] ${environment.key} secrets\n           ${held.reason}`);
-        continue;
-      }
-
+    if (held === undefined) {
+      console.log('  deferred — `wrangler secret put` needs the Worker to exist. Run '
+        + '`bun run deploy`, then this command again.');
+    } else if (held.state === 'unknown') {
+      steps.push({ id: 'secrets', outcome: 'refused', detail: held.reason });
+      console.log(`  [${MARK.refused}] secrets\n           ${held.reason}`);
+    } else {
       const names = new Set(held.state === 'present' ? held.names ?? [] : []);
 
       for (const [name, supply] of SUPPLY) {
         if (supply.handling === 'config-var') continue;
 
         if (names.has(name)) {
-          console.log(`  [${MARK.existed}] ${environment.key}/${name}\n           already set`);
+          console.log(`  [${MARK.existed}] ${name}\n           already set`);
           continue;
         }
 
         if (supply.handling === 'out-of-band') {
-          console.log(`  [${MARK.noted}] ${environment.key}/${name}\n           `
+          console.log(`  [${MARK.noted}] ${name}\n           `
             + `must be supplied out of band: ${supply.source ?? ''}\n           absent ⇒ ${supply.absent}`);
           continue;
         }
 
-        if (!requiredIn(name, environment)) {
-          console.log(`  [${MARK.noted}] ${environment.key}/${name}\n           `
-            + `optional here (no ${supply.pairedWith ?? 'paired var'} in this environment's vars). `
+        if (!requiredIn(name, worker)) {
+          console.log(`  [${MARK.noted}] ${name}\n           `
+            + `optional here (no ${supply.pairedWith ?? 'paired var'} in the Worker's vars). `
             + `absent ⇒ ${supply.absent}`);
           continue;
         }
 
         const step = await putSecret(
           name,
-          environment,
+          worker,
           async (question) => (reader === undefined ? '' : reader.question(question)),
           interactive,
         );

@@ -112,7 +112,7 @@ describe('the eval-session mint', () => {
 
   test('an origin outside the allowlist is refused before any request', async () => {
     const home = scratchDir('mint');
-    const run = await mint({ KINU_EVAL_ORIGIN: 'https://staging.kinu.run', KINU_EVAL_WEB_IDENTITY: 's3cret' }, home);
+    const run = await mint({ KINU_EVAL_ORIGIN: 'https://preview.kinu.run', KINU_EVAL_WEB_IDENTITY: 's3cret' }, home);
     expect(run.exitCode).toBe(1);
     expect(run.stderr).toContain('REFUSED');
   });

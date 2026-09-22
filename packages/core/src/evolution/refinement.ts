@@ -400,12 +400,12 @@ export interface RefinementRequestView {
  * row, so a stored path would be a third copy of the same fact.
  */
 export function refinementStagingPath(requestId: string, skillName: string): string {
-  return `${REFINEMENT_STAGING_DIR}/${requestId}/${skillName}.md`;
+  return `${REFINEMENT_STAGED_ROOT}/${requestId}/${skillName}.md`;
 }
 
 /** The staging root. Private: `refinementStagingPath` is the only way anything
  *  should name a staged file, so a caller cannot assemble half a path. */
-const REFINEMENT_STAGING_DIR = '/workspace/.kinu/refinement';
+const REFINEMENT_STAGED_ROOT = '/workspace/.kinu/refinement';
 
 export function refinementRequestView(request: RefinementRequest): RefinementRequestView {
   return {

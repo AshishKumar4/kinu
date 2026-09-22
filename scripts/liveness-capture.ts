@@ -18,9 +18,9 @@
  * took to move the surface — the window the idle revalidation cadence governs.
  *
  * Point it at any deployment:
- *   KINU_LIVENESS_ORIGIN=https://staging.kinu.run bun scripts/liveness-capture.ts
+ *   KINU_LIVENESS_ORIGIN=https://kinu.run bun scripts/liveness-capture.ts
  * The origin must already authenticate the browser (dev synthesizes an identity
- * from DEV_USER_EMAIL; staging needs a signed-in session) and the workspace
+ * from DEV_USER_EMAIL; the deployment needs a signed-in session) and the workspace
  * needs a working default model. KINU_LIVENESS_EXPECT_RESTART=1 keeps the
  * capture alive across a server restart (deploy/eviction), recording the
  * recovery instead of failing on the dropped sockets.
