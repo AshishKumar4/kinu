@@ -42,9 +42,9 @@ function runnerPolicy(agent: HarnessAgent): RunnerView['jobRunner']['policy'] {
   let prototype = Object.getPrototypeOf(agent);
 
   while (prototype) {
-    const getter = Object.getOwnPropertyDescriptor(prototype, 'jobRunner')?.get;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, 'jobRunner');
 
-    if (getter) return v.parse(RunnerViewSchema, getter.call(agent)).policy;
+    if (descriptor?.get) return v.parse(RunnerViewSchema, descriptor.get.call(agent)).policy;
     prototype = Object.getPrototypeOf(prototype);
   }
 

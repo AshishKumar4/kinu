@@ -385,7 +385,9 @@ describe('reachability of the container event channel', () => {
     // Dynamic like the imports above: orchestrator reaches cloudflare:email
     // through agents, so it loads only after the SDK mock installs.
     const { OrchestratorAgent } = await import('../src/orchestrator');
-    expect(OrchestratorAgent.prototype.acceptContainerEvent).toBeInstanceOf(Function);
+    const handler = Object.getOwnPropertyDescriptor(OrchestratorAgent.prototype, 'acceptContainerEvent');
+
+    expect(handler?.value).toBeInstanceOf(Function);
   });
 
   test('the event channel lives on a name that resolves nowhere public', () => {

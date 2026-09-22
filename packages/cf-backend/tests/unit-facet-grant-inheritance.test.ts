@@ -231,7 +231,7 @@ describe('a facet holds the root set, or a subset of it', () => {
 
   test('a facet can never record a grant, so it cannot widen itself', () => {
     const policy = createInheritedApprovalPolicy(source('strict', null).deps);
-    expect(policy.remember).toBeUndefined();
+    expect(policy).not.toHaveProperty('remember');
   });
 
   test('an unreachable root narrows the facet rather than unleashing it', async () => {

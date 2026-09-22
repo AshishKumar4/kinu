@@ -743,8 +743,8 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
   test('neither session plane declares a conditional write', async () => {
     const f = await openFixture();
     const a = credOf(await f.provision(node('cw1')));
-    expect(nimbusSessionFiles(sessionBox(f, a), a).writeFileIfRevision).toBeUndefined();
-    expect(nimbusSessionFiles(sessionBox(f, ORIGIN)).writeFileIfRevision).toBeUndefined();
+    expect(nimbusSessionFiles(sessionBox(f, a), a)).not.toHaveProperty('writeFileIfRevision');
+    expect(nimbusSessionFiles(sessionBox(f, ORIGIN))).not.toHaveProperty('writeFileIfRevision');
   });
 
   test('an in-place save is refused as unsupported and writes nothing; an unconditional save lands', async () => {

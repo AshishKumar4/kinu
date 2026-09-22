@@ -345,7 +345,7 @@ function commandWithDescendant(dir: string, name: string) {
      * before the descendant does: an answer that wins this race is a refusal,
      * and it is reported as the refusal it is.
      */
-    async pidOf(answer: Promise<unknown>): Promise<number> {
+    pidOf: async (answer: Promise<unknown>): Promise<number> => {
       const watching = new AbortController();
 
       const refused = async (): Promise<never> => {

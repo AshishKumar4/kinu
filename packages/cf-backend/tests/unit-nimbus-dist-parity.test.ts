@@ -145,7 +145,7 @@ test('dist keeps file bytes coherent across an embedder transaction rollback', (
     const files = vfs.as(ROOT);
     const original = new TextEncoder().encode('committed source bytes');
     const replacement = new TextEncoder().encode('replacement source bytes that must roll back');
-    expect(vfs.withTransaction).toBeFunction();
+    expect(vfs).toHaveProperty('withTransaction');
     const atomic = <T,>(body: () => T): T => vfs.withTransaction(body);
 
     const committed = atomic(() => {

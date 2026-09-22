@@ -337,9 +337,9 @@ describe('durable device request ownership', () => {
     const harness = await deviceHarness();
 
     const seam = {
-      transferDeviceRequestToBackgroundJob: harness.userDO.transferDeviceRequestToBackgroundJob,
-      cancelDeviceRequestsForBackgroundJob: harness.userDO.cancelDeviceRequestsForBackgroundJob,
-      acknowledgeDeviceRequest: harness.userDO.acknowledgeDeviceRequest,
+      transferDeviceRequestToBackgroundJob: harness.userDO.transferDeviceRequestToBackgroundJob.bind(harness.userDO),
+      cancelDeviceRequestsForBackgroundJob: harness.userDO.cancelDeviceRequestsForBackgroundJob.bind(harness.userDO),
+      acknowledgeDeviceRequest: harness.userDO.acknowledgeDeviceRequest.bind(harness.userDO),
     };
 
     for (const [name, member] of Object.entries(seam)) {

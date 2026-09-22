@@ -1721,7 +1721,7 @@ export interface ActorHarness<T> {
   readonly agent: T;
   readonly db: Database;
   /** All user tables currently in the actor's storage. */
-  tableNames(): string[];
+  tableNames: () => string[];
   /** Every prompt the scripted sleep-time model was asked, in order — the
    *  oracle for WHETHER a run happened and WHAT evidence it read. Empty and
    *  never appended to unless {@link orchestratorHarness} was given

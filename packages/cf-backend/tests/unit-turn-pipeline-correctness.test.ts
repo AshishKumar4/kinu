@@ -1246,13 +1246,13 @@ describe('turn-pipeline correctness wiring', () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
     const orch = agent.observeOrch();
-    const prepare = orch.turnExtension.prepareStep;
+    const extension = orch.turnExtension;
 
-    if (!prepare) throw new Error('Expected turn steering prepareStep extension');
+    if (!extension.prepareStep) throw new Error('Expected turn steering prepareStep extension');
 
     await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'add caching to the api and update the docs' }] });
     const messages = [{ role: 'user' as const, content: 'add caching to the api and update the docs' }];
-    const stepped = await prepare.call(orch.turnExtension, { stepNumber: 0, messages });
+    const stepped = await extension.prepareStep({ stepNumber: 0, messages });
     const rendered = JSON.stringify(stepped ?? messages);
     expect(rendered).not.toContain('Runtime steering');
     expect(rendered).not.toContain('action=swarm');

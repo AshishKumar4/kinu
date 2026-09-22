@@ -634,7 +634,7 @@ class Leaf extends Middle {
     sealRpcSurface(this, ['publicApi', 'markedCallable', 'overridable']);
   }
   private leafInternal(): string { return this.#secret; }
-  markedCallable(): string { return 'callable'; }
+  markedCallable(this: void): string { return 'callable'; }
   override overridable(): string { return `leaf -> ${super.overridable()}`; }
   selfCheck() {
     return {
