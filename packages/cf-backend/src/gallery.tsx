@@ -1791,6 +1791,12 @@ const REVERT_LISTING: FileCheckpointListing = REVERT_DEVICE_CONNECTED
   ? { availability: { available: true }, entries: [REVERT_CHECKPOINT] }
   : { availability: { available: false, reason: "no device connected — connect one with `kinu connect`" }, entries: [] };
 
+/** `?transcript=revert` seeds the walk-back thread into the `workspacepage`
+ *  frame; any other value, or none, mounts the frame on its empty default. */
+function seedFrameTranscript(transcript: string | null): void {
+  if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
+}
+
 /** The conversation after the walk-back, as the Durable Object broadcasts it:
  *  the entries from the picked message on leave the head's ancestry, and every
  *  open tab redraws from the transcript frame. */
@@ -7356,7 +7362,7 @@ async function mount() {
   else if (frame === "workspacepage") {
     serveGalleryRpc(workspacePageRpc);
 
-    if (new URLSearchParams(location.search).get("transcript") === "revert") seedGalleryChat(REVERT_THREAD);
+    seedFrameTranscript(new URLSearchParams(location.search).get("transcript"));
     entries = [`/workspace/${WORKSPACE_PAGE_NAME}`];
     scheduleDeviceNotice(new URLSearchParams(location.search).get("devices"));
     // Both app routes, exactly as App.tsx keys them: creating an agent
