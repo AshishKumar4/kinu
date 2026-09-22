@@ -104,8 +104,8 @@ function unreachableKvNamespace(binding: string): KVNamespace {
 
 function unreachableFetcher(binding: string): Fetcher {
   return {
-    fetch: (input) => { throw new Error(`${binding}.fetch(${String(input)}): not reachable in this test`); },
-    connect: (address) => { throw new Error(`${binding}.connect(${String(address)}): not reachable in this test`); },
+    fetch: () => { throw new Error(`${binding}.fetch: not reachable in this test`); },
+    connect: () => { throw new Error(`${binding}.connect: not reachable in this test`); },
   };
 }
 

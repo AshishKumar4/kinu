@@ -37,6 +37,7 @@ const FOREIGN_HOST = 'unrelated.example.net';
 
 function harness(assetResponse: () => Response) {
   const assetRequests: string[] = [];
+
   const env = workerEnv({
     CLI_PUBLIC_ORIGIN: `https://${APP_HOST}`,
     PREVIEW_HOST_SUFFIX: APP_HOST,

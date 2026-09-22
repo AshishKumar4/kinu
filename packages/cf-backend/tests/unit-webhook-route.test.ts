@@ -421,12 +421,17 @@ describe('the Worker entry serves delivery before the auth gate', () => {
       },
     });
 
-    // SAFETY: the Worker entry takes the deployment's whole `Env`, and a
-    // recording Durable Object namespace cannot be typed as one:
-    // `DurableObjectStub<OrchestratorAgent>` names 380+ required members, and
-    // `getAgentByName` — which `route()` binds its resolvers through — takes the
-    // platform `DurableObjectNamespace<T>`, so the binding cannot be narrowed
-    // either. Measured on this tree 2026-09-22.
+    // SAFETY: the `Object.assign` above constructs every binding the route table
+    // reads on its way to step 7b — the knock budget's KV and the
+    // route secret from `harness()`, the published origin, the SPA fallback and
+    // the Orchestrator namespace — and nothing past step 7b is reached, because
+    // each case asserts the answer the delivery endpoint itself returns. The
+    // assertion stands rather than the value being typed because the entry
+    // takes the deployment's whole `Env`: a recording namespace cannot satisfy
+    // `DurableObjectNamespace<OrchestratorAgent>` (its stub names 380+ required
+    // members), and the binding cannot be narrowed either, because `route()`
+    // binds its resolvers through the SDK's `getAgentByName`, which takes the
+    // platform namespace. Measured on this tree 2026-09-22.
     return { env: partialEnv as Env, ctx: workerContext(), probe };
   }
 
