@@ -33,8 +33,8 @@ export interface DeviceRestorePlan {
 }
 
 export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }: {
-  /** The user message the walk-back returns to, or null for no open dialog. */
-  messageId: string | null;
+  /** The user message the walk-back returns to. The dialog is mounted per open. */
+  messageId: string;
   rpc: Rpc;
   onClose: () => void;
   /** The conversation moved: the transcript arrives over the socket, and a
@@ -52,11 +52,6 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (messageId === null) return;
-    setCheckpoints([]);
-    setChecked(false);
-    setDeviceFailure(null);
-    setFailure(null);
     let current = true;
 
     startTransition(async () => {
@@ -81,31 +76,34 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
     return () => { current = false; };
   }, [messageId, rpc]);
 
-  const revert = useCallback(async (): Promise<boolean> => {
-    if (messageId === null) return false;
-    setFailure(null);
+  /** The walk-back itself: resolves the failure to show, or null once the conversation moved. */
+  const revert = useCallback(async (): Promise<string | null> => {
     setBusy(true);
 
     try {
       await rpc("revertConversation", [messageId]);
       onReverted();
 
-      return true;
+      return null;
     } catch (cause) {
-      setFailure(renderThrownChain({ cause }));
-
-      return false;
+      return renderThrownChain({ cause });
     } finally {
       setBusy(false);
     }
   }, [messageId, rpc, onReverted]);
 
   const revertConversation = useCallback(async () => {
-    if (await revert()) onClose();
+    const reverted = await revert();
+    setFailure(reverted);
+
+    if (reverted === null) onClose();
   }, [revert, onClose]);
 
   const revertWithFiles = useCallback(async () => {
-    if (!await revert()) return;
+    const reverted = await revert();
+    setFailure(reverted);
+
+    if (reverted !== null) return;
     setBusy(true);
 
     try {
@@ -122,8 +120,6 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
       setBusy(false);
     }
   }, [revert, checkpoints, rpc, onRestorePlan, onClose]);
-
-  if (messageId === null) return null;
 
   return (
     <Modal

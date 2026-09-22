@@ -1285,7 +1285,7 @@ export default function WorkspacePage() {
         />
       )}
 
-      <RevertTurnDialog
+      {revertFor !== null && <RevertTurnDialog
         messageId={revertFor}
         rpc={state.rpc}
         onClose={() => setRevertFor(null)}
@@ -1295,7 +1295,7 @@ export default function WorkspacePage() {
         // messages straight back on screen.
         onReverted={history.reset}
         onRestorePlan={setRestorePlan}
-      />
+      />}
 
       {restorePlan && (
         <RestoreFilesModal plan={restorePlan} busy={restoring}
