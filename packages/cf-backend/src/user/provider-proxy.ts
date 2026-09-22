@@ -1,34 +1,9 @@
 /**
- * The general provider proxy for signed-in CLI clients:
- *
- *   GET /api/user/ai/proxy/credentials   — which stored credentials can be proxied
- *   ANY /api/user/ai/proxy/forward       — send one upstream request with one attached
- *
- * `/api/user/ai/v1` fronts the two Cloudflare-backed providers with an
- * endpoint this server pins itself. This route is the general form: a key the
- * owner connected in the web UI (OpenRouter, OpenAI, Anthropic, any models.dev
- * provider) becomes usable by local agents with no second copy of the secret on
- * the user's disk. The credential is resolved and attached HERE, inside the
- * Worker, exactly as the DO-backed cloud path does — the raw value never
- * travels to the client in either direction.
- *
- * The client names the credential (`x-kinu-proxy-cred`) and the upstream URL
- * (`x-kinu-proxy-target`); this route decides whether that URL is one the
- * credential may be spent on, by resolving the provider's own base URL and
- * checking the target AND the caller's method against it — same https origin,
- * under that path, and one of the (method, endpoint) pairs running a model
- * needs (`proxyTargetAllowed`). Without the origin check the route would
- * attach the owner's API key to any host a caller named; without the endpoint
- * list it would reach the provider's own key-minting routes, which sit under
- * the same base as `/chat/completions`; without the method it would reach
- * `DELETE /models/{id}` with an inference-only capability. Some credentials are
- * not the proxy's to spend at all — see `PROXY_DENIED_CRED_KEYS` for each one's
- * reason.
- *
- * Bodies and responses pass through byte-for-byte, so streaming works and the
- * provider's own usage/cost fields reach the caller's `step_finish` accounting
- * unaltered. No cached-usage repair is applied here — that repair is a fix for
- * one Cloudflare endpoint's duplicate usage chunk, not a general truth.
+ * Provider proxy for signed-in CLI clients: lists proxyable credentials and forwards one upstream
+ * request with the credential attached inside the Worker; the raw secret never reaches the client.
+ * The target origin, path, and method are checked against the provider base (`proxyTargetAllowed`)
+ * so the key cannot reach other hosts or key-minting/deletion routes; see `PROXY_DENIED_CRED_KEYS`.
+ * Bodies pass through byte-for-byte; no cached-usage repair is applied here.
  */
 import {
   PROVIDER_PROXY_PATH,
@@ -44,23 +19,16 @@ import { renderCauseChain, renderThrownChain } from '@kinu.run/core/obs';
 
 export const USER_AI_PROXY_FORWARD_PREFIX = PROVIDER_PROXY_PATH;
 
-/** One proxyable credential, as the client sees it: the key it can name, and
- *  the base URL when only this side knows it (an openai-compat credential
- *  carries its own endpoint). No secret material, ever. `failure` is set
- *  instead when this one credential could not be read: the entry fails, the
- *  listing does not. */
+/** Client view of a proxyable credential; never carries secret material. `baseURL` is set for
+ * openai-compat credentials; `failure` marks an unreadable entry without failing the listing. */
 export interface ProxyableCredential {
   key: string;
   baseURL?: string;
   failure?: string;
 }
 
-/** Request headers that must not be replayed upstream: the caller's Kinu
- *  bearer (replaced by the provider credential), the proxy's own control
- *  headers, the hop-by-hop set the runtime owns, and the edge headers
- *  Cloudflare adds on the way in — `cf-connecting-ip` and friends would tell a
- *  third-party provider the CLI user's IP address, which is not the proxy's to
- *  disclose. */
+/** Headers not replayed upstream: Kinu bearer, proxy control and hop-by-hop headers, and
+ * Cloudflare edge headers, which would disclose the CLI user's IP to the provider. */
 const STRIPPED_REQUEST_HEADERS: readonly string[] = [
   'authorization', 'cookie', 'host',
   PROXY_CRED_HEADER, PROXY_TARGET_HEADER,
@@ -69,7 +37,6 @@ const STRIPPED_REQUEST_HEADERS: readonly string[] = [
   'x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'x-real-ip',
 ];
 
-/** The credential calls this proxy makes on the user's own object. */
 export type ProxyCredentialSource = Pick<UserDO, 'listCredentials' | 'getCredentialBaseURL' | 'getAuthHeaders'>;
 
 export async function handleUserProviderProxyRequest(
@@ -91,13 +58,8 @@ export async function handleUserProviderProxyRequest(
   return errorResponse(404, `No such provider proxy route: ${request.method} ${path}`);
 }
 
-/**
- * The stored credentials this route can front. A credential is proxyable when
- * a base URL can be derived for it — from the credential itself (openai-compat)
- * or from the provider layer (a static provider, or a models.dev catalog entry
- * with an OpenAI-surface endpoint). Everything else is omitted rather than
- * advertised and then refused at send time.
- */
+/** Proxyable = a base URL is derivable (credential or provider layer); others are omitted
+ * rather than advertised and refused at send time. */
 async function listProxyableCredentials(
   userDO: ProxyCredentialSource,
   owner: UserCaller,
@@ -117,10 +79,7 @@ async function listProxyableCredentials(
     }
 
     if (credentialBase) {
-      // The forward route sends to https only, so a credential naming anything
-      // else is not proxyable however well-formed it is — an endpoint on the
-      // owner's own machine is the common case, and it is theirs to reach
-      // directly, not through here.
+      // Forwarding is https-only; non-https endpoints (e.g. the owner's own machine) are not proxyable.
       if (credentialBase.startsWith('https://')) out.push({ key, baseURL: credentialBase });
       continue;
     }
@@ -175,10 +134,8 @@ async function forwardUpstream(
 
   const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
 
-  // `redirect: 'manual'` is load-bearing, not tidiness: following a 3xx would
-  // re-send the attached credential to whatever origin the provider named,
-  // which is the one way a target that passed the allowlist could still end up
-  // somewhere else. The 3xx is handed back to the caller instead.
+  // Manual redirect: following a 3xx would re-send the credential to an origin outside the
+  // allowlist. The 3xx is returned to the caller.
   const init: RequestInit = {
     method: request.method,
     headers,

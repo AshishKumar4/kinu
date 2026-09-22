@@ -1,24 +1,6 @@
 /**
- * `/api/user/*` account-authority routes — the endpoints whose writes touch the
- * account itself rather than a record inside it.
- *
- * They sit in a module of their own, ahead of `handleUserRequest` in the step-9
- * `firstResponse` chain, because the authority behind them is different: both
- * calls below land on UserDO methods floored at the `account` capability, which
- * is `owner_only` — no workspace token reaches them, so they must not pass
- * through the workspace-token surface that `handleUserRequest` answers with.
- * Keeping them in a route file of their own is what makes "which endpoints
- * touch the account" answerable by reading one file.
- *
- * Routes:
- *   POST   /api/user/onboarding/complete  — first-run setup finished (idempotent)
- *   PATCH  /api/user/profile              — rename the owner ({ displayName })
- *   DELETE /api/user/account              — the account itself ({ confirm })
- *   GET    /api/user/experience           — the owner's library (?kind=&limit=)
- *
- * The experience read sits here rather than in `routes.ts` for a plainer
- * reason than authority: that dispatcher is at its complexity ceiling, and a
- * new endpoint belongs in a module that can grow.
+ * `/api/user/*` account-authority routes. They run ahead of `handleUserRequest` because their
+ * UserDO methods are floored at the `owner_only` `account` capability; no workspace token reaches them.
  */
 import * as v from 'valibot';
 import type { AuthIdentity } from '../auth/session';
@@ -43,14 +25,10 @@ const ExperienceQuery = v.object({
   limit: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(100)),
 });
 
-/** The four account-authority calls these routes make on the account's own
- *  object, beside the share sweep's own reach. */
 export type AccountAuthority = Pick<
   UserDO, 'completeOnboarding' | 'searchExperience' | 'deleteAccount' | 'setDisplayName'
 >;
 
-/** Every binding the account routes read: the share sweep's, widened by the
- *  four calls above on the same object. */
 export interface AccountRoutesEnv<Id> extends SharesGivenEnv<Id> {
   UserDO: ObjectNamespace<Id, ShareRosterAuthority & AccountAuthority>;
 }
@@ -72,7 +50,6 @@ export async function handleAccountRequest<Id>(
 
   try { owner = await ownerCaller(env); }
   catch (cause) {
-    // Same answer the user plane gives: no root secret, nothing to authorize with.
     if (cause instanceof OwnerCapabilityUnavailableError) return err(503, cause.message);
     throw cause;
   }
@@ -96,10 +73,8 @@ export async function handleAccountRequest<Id>(
     return json({ body: await stub.searchExperience(owner, query.output) });
   }
 
-  // DELETE /api/user/account — the one that cannot be undone. The typed
-  // confirmation is the account's own email, not a password: the session is
-  // the authentication, and the phrase is what separates a stray click from a
-  // decision. There is deliberately no rate limit on it; the phrase is the gate.
+  // The typed confirmation is the account email, not a password: the session authenticates,
+  // the phrase separates a stray click from a decision. No rate limit; the phrase is the gate.
   if (path === '/account' && request.method === 'DELETE') {
     const body = await safeJson(request, DeleteConfirm);
 
@@ -107,23 +82,20 @@ export async function handleAccountRequest<Id>(
       return err(400, 'Type the account email to confirm.');
     }
 
-    // The recipients of this account's shares are named only inside the
-    // workspaces the delete destroys, so they are forgotten first.
+    // Share recipients are named only inside the workspaces the delete destroys; forget them first.
     await forgetSharesGiven(env, identity.userId, owner);
 
     try {
       await stub.deleteAccount(owner, identity.userId);
     } catch (cause) {
-      // The SDK's destroy aborts its own isolate after the durable wipe, and
-      // that exact sentinel is successful completion — the same rule
-      // `tearDownWorkspace` applies to a workspace object. Anything else is real.
+      // The SDK's destroy aborts its own isolate after the durable wipe; the 'destroyed' sentinel
+      // means success (same rule as `tearDownWorkspace`).
       if (!(cause instanceof Error) || cause.message !== 'destroyed') throw cause;
     }
 
     return json({ body: { deleted: true } });
   }
 
-  // PATCH /api/user/profile
   const body = await safeJson(request, ProfilePatch);
 
   if (!body) return err(400, 'Body must be { displayName }');

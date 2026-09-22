@@ -1,15 +1,6 @@
 /**
- * OrchestratorAgent — the self-evolving top-level workspace DO.
- *
- * The actor-agnostic substrate (runtime assembly, BackendHost, the shared
- * AgentOrchestrator, turn pipeline, tool/model/prompt caches) lives in
- * ActorAgent (actor-agent.ts); this class is the workspace-facing actor on
- * top of it: owner claim + schema, the @callable RPC surface, evolution /
- * scaffold / GEPA / alternate-takes flows, onChatResponse sequencing, peer
- * teams, email + webhook ingress, release changes, and fork.
- *
- * Tool factory, system prompt, and crafted-tool injection all live in
- * @kinu.run/core so the CLI surface shares them verbatim.
+ * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
+ * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
  */
 
 import { callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
@@ -36,9 +27,8 @@ import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } f
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
 import { CHAT_SESSION_ID, turnInputMessage, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
-// The main actor's payload plane, on both halves of a fork: the carried
-// conversation references payload files by absolute path, and the fork is a cut
-// of the MAIN actor's conversation.
+// Main actor's payload plane on both fork halves: the carried conversation references
+// payload files by absolute path, and the fork is a cut of the main actor's conversation.
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
 import type { HostedTaskResult } from './subordinate-hosting';
@@ -79,41 +69,32 @@ import {
   readActivityLog,
   summarizeSteps,
   usageReported,
-  // The whole workspace's spend, grouped by producer, with its own coverage
-  // fraction — `summarizeSteps` above is this agent's own turns only.
+  // Whole-workspace spend by producer; `summarizeSteps` covers only this agent's turns.
   workspaceSpend,
   initWorkspaceSchema,
   tableExists,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
-  // The declared reach axis — getToolDescriptions reports it rather than
-  // guessing native-vs-codemode from the assembled ToolSet's keys.
+  // Declared reach axis; getToolDescriptions reports it rather than guessing from ToolSet keys.
   TOOL_REACH,
   updateCraftScores,
   feedbackToQuality,
-  // Fork feature
   forkWorkspace, ForkTargetWriter, ForkTransferReceiver,
   type ForkTransport, type ForkFrame,
   readWorkspaceArchivePage, type ArchiveCursor, type ArchivePage,
   nanoid, type HeadRunView,
-  // The ONE delegation runner, shared with the local host: an assignment is a
-  // whole turn input and no reactor may digest it.
+  // Delegation runner shared with the local host: an assignment is a whole turn input
+  // and no reactor may digest it.
   drainAssignments,
-  // Canonical memory-note write primitive
   appendMemoryNote,
   parseMemoryNotes,
   type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT,
   type SlateBindingCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
-  // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   type ScaffoldRunResult,
-  // The scaffold evolution control plane (core owns the drivers; this actor
-  // supplies the surface they run against).
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions, shadowTrialPlan, trimTrialContext,
   previewScaffoldLive, runScaffoldCaptureText, runScaffoldGepaOptimization,
   advancePromptSectionLane,
-  // Continual refinement — `/refine` opens a request; the lane that runs it
-  // lives on the actor beside the other cadence passes.
   decideRefinementRoute, listRefinements, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
@@ -124,52 +105,37 @@ import {
   getPendingScaffold,
   readScaffoldVersion, readShadowVerdict, type ShadowVerdict,
   type RunEvent, type RunEventQuery,
-  // agent_facts world model
   AGENT_CONFIG_KEYS,
-  // Voyager curriculum + Absolute Zero learnability proposer
   listProposedTasks, updateProposedTaskStatus,
-  // Hybrid search (FTS5 + Vectorize via RRF)
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type BackgroundJob, type AgentTaskTree, TriggerRegistry, ReplyChannelStore,
   type ReasoningEffort, type ShellApprovalMode, type ResolvedTurnProfile,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
-  // GEPA run lineage (the pass itself is core's evolution control plane)
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
-  // Replay-eval loss curve (audit R3)
   listReplayEvals, type ReplayEvalSummary,
-  // K_align — the correction-rate trend over the same outcome ledger
   alignmentConvergence, type AlignmentConvergence,
   calibrationReport, sampleForLabeling, ingestOutcomeLabels, DEFAULT_LABEL_BUDGET,
   type CalibrationReport, type LabelingItem, type LabelIngestResult, type OutcomeLabel,
-  // The LLM panel that re-judges the same turns, and the bar it must clear
   ensembleReport, runEnsemble, createCompletionLLM,
   type EnsembleReport, type EnsembleRunResult,
-  // Evolution Changelog — the self-change digest + revert dispatch
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
-  // Alternate Takes — near-tied convergence candidates + the pick signal
   unclaimedAlternateTakeIds,
   listAlternateTakeSets, latestAlternateTakeSet,
   type AlternateTakeSet, type TakePickOutcome,
-  // Steer-as-Branch — a mid-turn redirect run as a parallel head
   startBranchHead, newBranchId, PendingSendStore,
   headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   type ReleaseStatus, type ReleaseToolDeps, type ReleaseLedger,
-  // Release execution engine — the driver beneath the governance ledger
   ReleaseEngine, createSandboxReleaseExec,
   readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork,
-  // Peer-agent teams (the agents tool's team deps contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
   readMission, summarizeSoul, writeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT,
-  // The durable answer an interrupted terminal transition still owes a reply
-  // for — read from the transcript, because a recovery has no live turn.
+  // Recovery has no live turn, so the owed answer is read from the transcript.
   answersForDrainTurns,
-  // The names its own prompt introduces this workspace by, and what it is
-  // called before anything names it.
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   checkpointAvailability, fileCheckpointListing, deviceFileCheckpoints,
@@ -180,8 +146,8 @@ import {
   SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type SleepTimeUpdate, type SleepTimeWindow,
   effectAlreadyDone, recordEffectDone,
-  // Ingress — core owns the gates; this actor owns the transports in front
-  // of them (the DO alarm, the Worker's webhook + email routes, cross-DO RPC).
+  // Core owns the ingress gates; this actor owns the transports in front of them
+  // (DO alarm, Worker webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
   acceptContainerEvent, type ContainerEventResult,
   initWebhookIngressTables,
@@ -191,7 +157,6 @@ import {
   EmailInbox, planOwnerNotification, readEmailAllowlist, setEmailAllowlist,
   type EmailAdmission, type IncomingEmail,
   PeerHub, type PeerMessage, type ReceiveResult,
-  // ── Read models: the folds a surface asks for, one implementation each ──
   getAgentStatus, getToolList, readLatestSearchTree, readSearchTree,
   readSearchNodeDetail, type SearchNodeDetail,
   listForkRuns, type ForkRunSummary,
@@ -224,10 +189,7 @@ import {
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   workModeUnderReview,
   JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
-  // The one declaration of the event-variant set, and the one classifier that
-  // names how a run ended. Both were hand-mirrored here.
   EVENT_VARIANTS,
-  // The one bound an untrusted caller's event-log page passes through.
   boundEventQuery,
   type WorkMode,
   resolveModelRoute,
@@ -290,67 +252,43 @@ import {
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
 
 /**
- * Admitted delegations one sweep pass drives, per activation.
- *
- * A ROW BUDGET rather than the whole queue, for the reason every other pass in
- * this gate carries one: each item is a full inference turn, and a workspace
- * that accumulated a backlog while nothing was connected must not try to pay
- * for all of it in one alarm frame. A pass that fills its budget answers
- * truncated and the wake drains the remainder on the next frame.
+ * Row budget per sweep activation: each item is a full inference turn. A full pass
+ * answers truncated and the wake drains the rest on the next frame.
  */
 const HOSTED_DELEGATION_DRAIN_BUDGET = 8;
 
-/** The tombstone scope recording that one turn's sleep-time fact update has been
- *  applied. The answer itself is kept in `sleep_time_updates`; this is the fact
- *  that it landed, and it survives that row being pruned. */
+/** Tombstone scope marking a turn's sleep-time update applied; survives pruning of
+ *  its `sleep_time_updates` row. */
 const SLEEP_TIME_APPLIED = 'sleep_time';
 
-/** The tombstone scope recording that one cadence tick has advanced the
- *  prompt-section lane. It rides the same tick as the scaffold GEPA pass but is
- *  a separate obligation: replaying the tick for the pass must not rotate the
- *  section a second time. */
+/** Tombstone scope for the prompt-section lane: separate from the GEPA pass so
+ *  replaying the tick does not rotate the section twice. */
 const PROMPT_SECTION_LANE = 'prompt_section_lane';
 
-/** The `actor_config` rows the sleep-time lane's timed triggers read. Both hold
- *  a millisecond instant. `settledAt` is when the newest UNPROCESSED completed
- *  turn landed — written when a completed turn is left for a later run, deleted
- *  when a run lands — so its presence is what says a wake has work behind it.
- *  `closedAt` is when the object's last client connection closed; deleted when
- *  one opens. Config rows rather than a table: two instants, one actor. */
+/** Millisecond instants in `actor_config`. `settledAt` present means an unprocessed
+ *  completed turn awaits a run; `closedAt` is when the last client connection closed. */
 const SLEEP_TIME_SETTLED_AT = 'sleep_time_settled_at';
 
 const SLEEP_TIME_CLOSED_AT = 'sleep_time_closed_at';
 
-/** How many transcript rows the sleep-time window reads, newest first. A turn
- *  is one answer over one opening row and its steers, and the cadence rule only
- *  ever compares against `SLEEP_TIME_CADENCE.everyTurns`, so a read that covers
- *  one more answer than that with room for steers decides every trigger the
- *  way the whole transcript would. */
+/** Covers one more answer than `SLEEP_TIME_CADENCE.everyTurns` plus steers, so the
+ *  window decides every trigger as the whole transcript would. */
 const SLEEP_TIME_READ_ROWS = (SLEEP_TIME_CADENCE.everyTurns + 1) * 8;
 
-/** The one agents-SDK schedule row that carries every Kinu-owned wake
- *  (triggers, peer outbox, email outbox). Public because `Agent.schedule()`
+/** One schedule row carries every Kinu-owned wake. Public because `Agent.schedule()`
  *  types the callback as `keyof this`, which excludes private members. */
 const KINU_TIMER_CALLBACK = '_kinuTimerTick';
 
-/** How overdue a one-shot schedule row must be before it is unrunnable rather
- *  than late: THE recovery budget, not a copy of it. Past it the framework
- *  stops recovering the fiber a continuation callback would resume, so
- *  dispatching the row can only replay dead work. The number is the value
- *  `ActorAgent.options` hands the framework (fiber-recovery.ts) rather than one
- *  hand-written here beside the words "mirrors the SDK's default", so the sweep
- *  and the framework cannot disagree about when a row is dead. */
-/** The seal's own row budget, SMALLER than {@link SWEEP_MAX_ROWS} because its
- *  per-row cost is different in kind: every sealed head takes a durable report
- *  write and a broadcast, where the other sweeps take one DELETE. A pass that
- *  fills either budget arms the maintenance wake for the rest. */
+/** Past this age the framework no longer recovers the fiber, so a one-shot row is
+ *  dead. Shares the value `ActorAgent.options` passes (fiber-recovery.ts). */
+/** Smaller than {@link SWEEP_MAX_ROWS}: each sealed head costs a durable report write
+ *  and a broadcast. A pass that fills either budget arms the maintenance wake. */
 const STALE_SCHEDULE_HORIZON_MS = FIBER_RECOVERY_MAX_AGE_MS;
 
 const ORPHAN_SEAL_MAX_ROWS = 256;
 
-/** One bounded chunk of one executor file transfer, in either direction. The
- *  transfer id is the route's, fresh per transfer, so two readers of one path
- *  cannot replace each other's snapshot. */
+/** Transfer id is fresh per transfer, so two readers of one path cannot replace
+ *  each other's snapshot. */
 export interface ExecutorFileChunkRead {
   executorId: string;
   path: string;
@@ -369,8 +307,6 @@ export interface ExecutorFileChunkWrite {
   expectedRevision?: VfsRevision;
 }
 
-/** The obligations that arm the terminal-retry wake, and how each reports a
- *  failure to arm it. */
 const WAKE_ARM_FAILURE = {
   delegation: {
     event: 'subordinate.delegation_wake_arm_failed',
@@ -391,19 +327,12 @@ const ACTIVITY_STEP_WINDOW = 400;
 
 const ACTIVITY_LOG_WINDOW = 200;
 
-/**
- * Widest single stream one terminal row carries out of `executor_output`.
- *
- * 16 KiB is roughly 200 lines at 80 columns — deeper than any command output a
- * person reads in the pane, and three orders of magnitude below what the read
- * was actually answering with: 12.89 MiB across 36 rows on one production
- * workspace, measured 2026-08-20, five rows over 1.7 MiB each. The clip is
- * always declared, never silent — see {@link OrchestratorAgent.getExecutorOutput}.
- */
+/** Widest single stream one terminal row carries out of `executor_output` (~200 lines at 80 cols).
+ * The clip is always declared, never silent; see {@link OrchestratorAgent.getExecutorOutput}. */
 const EXECUTOR_OUTPUT_CLIP = 16 * 1024;
 
-/** One clipped `executor_output` row. `stdout_len`/`stderr_len` are the STORED
- *  lengths, so a reader can tell a short command from a clipped one. */
+/** `stdout_len`/`stderr_len` are the stored lengths, so a reader can tell a short command
+ *  from a clipped one. */
 interface ExecutorOutputRow {
   id: string; executor: string; command: string;
   stdout: string; stdout_len: number;
@@ -411,25 +340,18 @@ interface ExecutorOutputRow {
   exit_code: number; created_at: number;
 }
 
-/** The route validator for `?variant=`, built FROM core's array rather than
- *  beside it. Hand-list the literals here and a new variant compiles in core and
- *  then silently fails validation on this route, because a picklist of strings
- *  cannot be checked against a union of strings. `EVENT_VARIANTS` is the one
- *  declaration and `EventVariant` derives from it, so the two cannot
- *  disagree. */
+/** Built from core's `EVENT_VARIANTS` so a new variant cannot compile in core yet fail
+ *  validation on this route. */
 const EventVariantSchema = v.picklist(EVENT_VARIANTS);
 
-/** One row of the events read: the log's row minus its own plumbing
- *  (`schema_version`, `dedupe_key`, `reply_channel`), which no operator surface
- *  shows. Derived from core's event so a field renamed there fails here rather
- *  than silently dropping out of the projection. */
+/** The log's row minus its plumbing; derived from core's event so a renamed field fails
+ *  here rather than silently dropping out. */
 export type RecentEventRow = Pick<
   KinuEvent,
   'id' | 'trace_id' | 'caused_by' | 'ingress' | 'variant' | 'trust' | 'priority'
   | 'payload_visibility' | 'payload' | 'received_at'
 >;
 
-/** A caller-supplied row limit, clamped to [1, max]. */
 function clampLimit(requested: number | undefined, max: number): number {
   if (requested === undefined || !Number.isFinite(requested)) return max;
 
@@ -443,12 +365,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     sealRpcSurface(this, ORCHESTRATOR_RPC_SURFACE);
   }
 
-  /** The workspace's own top-level actor — the one a person talks to. */
   protected actorKind(): AgentKind {
     return 'orchestrator';
   }
 
-  /** One workspace over this object's SQLite, shared across boot retries. */
+  /** Shared across boot retries. */
   private _workspace: HostedWorkspace | undefined;
 
   private hostedWorkspace(): HostedWorkspace {
@@ -472,9 +393,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.hostedWorkspace().box(shellId);
   }
 
-  /** This workspace's own stores plus a client for the owner's library, every
-   *  call of which crosses the UserDO capability gate. Absent until the
-   *  workspace is claimed — there is no owner library to reach before that. */
+  /** Every owner-library call crosses the UserDO capability gate. Absent until the workspace
+   *  is claimed. */
   private getExperienceDeps(): ExperienceActionDeps | undefined {
     if (!this.getOwnerUserDO()) return undefined;
 
@@ -486,15 +406,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The owner's experience library — publish / search / import, driven by the
-   * owner rather than by the agent.
-   *
-   * It was a tool once. Sharing proven work between workspaces is a rare and
-   * deliberate decision, and a tool costs the model attention on every turn it
-   * is not the answer to, so the same dispatcher now sits behind this RPC for
-   * the webUI to call. It runs on the workspace DO, not the UserDO, for a
-   * reason the UserDO enforces: publishing happens under a workspace's own
-   * name, and import stages into this workspace's ledger.
+   * Owner-driven publish / search / import. Runs on the workspace DO because publishing happens
+   * under the workspace's own name and import stages into this workspace's ledger.
    */
   @callable()
   async experienceAction(input: ExperienceActionInput) {
@@ -509,57 +422,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The one method a workspace host mounts for its facets.
-   *
-   * A facet runs in its own isolate and reaches the object that owns the
-   * filesystem through the supervisor entrypoint, which resolves this object
-   * out of the composed `OrchestratorAgent` namespace and calls this. The
-   * envelope carries only an op name and arguments — the pid, the
-   * append-writer incarnation and the mutation-lease owner are stamped by the
-   * entrypoint from its own trusted props, never by the facet — so a process
-   * can neither choose nor drop the credential its writes land under.
-   *
-   * It answers under EVERY name this class is opened under. Nimbus opens
-   * siblings of this namespace by name — `nbf:npm-resolve-fanout:<doId>:<n>`
-   * for the resolver's wide layers, and the same shape for peer process
-   * hosting — and each one must answer with a hosted runtime of its own. A
-   * sibling is not a Kinu workspace: it claims no owner, keeps no transcript
-   * and runs no turn, because a `supervisorOp` call reaches this method
-   * without the lifecycle gate `onStart` sits behind.
-   *
-   * Deliberately NOT `@callable`: like `workspaceBoxOp` below, this is how a
-   * Durable Object in this Worker reaches the object that owns the
-   * filesystem, and a browser socket that could reach it could ask for any
-   * operation under any pid. `sealRpcSurface` keeps it on the stub transport
-   * and off the public one.
+   * Pid, writer incarnation and lease owner are stamped by the supervisor entrypoint, never the
+   * facet. Answers under every name (Nimbus siblings like `nbf:npm-resolve-fanout:<doId>:<n>`),
+   * bypassing the `onStart` lifecycle gate. Not `@callable`: `sealRpcSurface` keeps it off the
+   * public transport, since a browser could otherwise run any op under any pid.
    */
   async supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult> {
     return await this.hostedWorkspace().supervisorOp(envelope);
   }
 
   /**
-   * One op against this workspace's box, for a facet of it.
-   *
-   * Deliberately NOT `@callable`: `NimbusExecOptions.cred` names a uid, so a
-   * browser socket that could reach this could run a command as uid 0. The
-   * caller is another Durable Object in this Worker — a subordinate, an
-   * exploration head, a swarm node — and `sealRpcSurface` keeps it off the
-   * public transport.
-   */
-  /**
-   * Hosted actors receive the workspace's composed
-   * `WorkspaceHostSeams.workspaceBox` handle and perform file, exec and port
-   * operations in the root's isolate. The uid-bearing execution handle is not
-   * exposed through an additional file-forwarding RPC surface.
+   * Hosted actors use `WorkspaceHostSeams.workspaceBox` in the root's isolate; the uid-bearing
+   * exec handle is not exposed through a file-forwarding RPC surface.
    */
 
-  /**
-   * The three things a facet home is made of — the uid-0 view, the principal
-   * registry and the uid table — all this object's own, so a home is applied
-   * here exactly as the local backend applies one. A promise rather than a
-   * value, so the workspace boots on the first provision and never at
-   * activation.
-   */
+  /** A promise so the workspace boots on the first provision, never at activation. */
   private facetHomeHost(): Promise<NodeHomeHost> {
     return this.hostedWorkspace().bundle.privileged()
       .then((privileged) => ({ ...privileged, sql: this.ctx.storage.sql }));
@@ -567,33 +444,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
 
   private _actorHost: ActorHost | null = null;
-  /** Loop origins a creation site NAMED, read back by the host at first
-   *  acquire. In memory because a creation and its first acquire are one
-   *  activation; a later acquire finds the pointer already durable and the
-   *  host's seed short-circuits before it reads an origin at all. */
+  /** Read by the host at first acquire; in memory because a creation and its first acquire
+   *  share one activation, and later acquires find the pointer already durable. */
   private readonly _chosenLoopOrigins = new Map<string, LoopOrigin>();
   /**
-   * Write observers a live RUN named, read back by the host when it builds that
-   * actor's runtime.
-   *
-   * In memory and only in memory, and unlike the loop pointer beside it there
-   * is nothing durable underneath: a `HeadFileChanges` is one run's own
-   * accumulator, so an activation that lost it lost the run it belonged to as
-   * well. An entry lives exactly as long as the run that registered it —
-   * `hostHead` drops it in its `finally` — so a re-registered head cannot
-   * inherit a previous run's changes.
+   * In memory only; an entry lives exactly as long as its run (`hostHead` drops it in
+   * `finally`), so a re-registered head cannot inherit a previous run's changes.
    */
   private readonly _actorWriteObservers = new Map<string, WriteObserver>();
 
-  /**
-   * THE workspace's one actor host.
-   *
-   * One `createActorHost` over this object's own `sql`, `transactionSync` and
-   * `exec` — there is no second `Storage` to pass, which is the property
-   * open-38 exists to make structural rather than agreed. Every logical actor
-   * comes from here: a hired subordinate, an ask-by-role temporary, a branching
-   * head, a swarm node, an MCTS rollout branch.
-   */
+  /** The workspace's single actor host over this object's own storage (open-38); every logical
+   * actor comes from here. */
   protected actorHost(): ActorHost {
     this._actorHost ??= createWorkspaceActorHost(this.workspaceHostSeams());
 
@@ -605,26 +466,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Everything this workspace lends the actors it hosts.
-   *
-   * Read the two halves as different in kind, because they are: the immutable
-   * catalogs (env, box, profile authority, provider registry, pricing) are
-   * shared BY VALUE, while everything that accumulates per actor — event log,
-   * evolution engine, mission governor, broadcast — is built per actor inside
-   * `actor-hosting.ts` and is never this object's own. That split is what makes
-   * "a delegated task admitted for a subordinate does not drain on the
-   * workspace" true by construction rather than by convention.
+   * Immutable catalogs are shared by value; per-actor state (event log, governor, broadcast)
+   * is built per actor in `actor-hosting.ts` and is never this object's own.
    */
-  /**
-   * The ONE adapter between the platform's `SqlStorage` and core's positional
-   * `SqlExec`.
-   *
-   * `SqlExec` is a two-line protocol — `exec(query, ...bindings)` returning
-   * something with `toArray()` — and the DO's `SqlStorage` is the platform
-   * object that happens to satisfy the call but not the type. Adapted at the
-   * seam rather than by widening core's port, and in ONE place rather than at
-   * each call site, so the two ports meet exactly once.
-   */
+  /** The single adapter from the DO's `SqlStorage` to core's positional `SqlExec`. */
   protected boundExec(): SqlExec {
     return { exec: (query: string, ...bindings: SqlValue[]) => this.ctx.storage.sql.exec(query, ...bindings) };
   }
@@ -643,34 +488,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       capabilityToken: () => this.workspaceCapabilityToken(),
       workspaceBox: (shellId) => this.workspaceBox(shellId),
       homeHost: () => this.facetHomeHost(),
-      // This object's own runtime, for an inheriting child registered under
-      // main. The root's durable program is always readable because the root IS
-      // this runtime; `loopFor` explains why hosting is the wrong question.
+      // The root's durable program is always readable because the root is this runtime;
+      // `loopFor` explains why hosting is the wrong question.
       rootRuntime: () => this.rt,
-      // ONE authority for every hosted turn, and deliberately the same one an
-      // actor chat resolves through: a role restriction that narrows a chat
-      // narrows a head identically, and a search whose branches ran under a
-      // profile this workspace never resolved is unreproducible, which is the
-      // reason the digest exists at all.
+      // Same profile authority an actor chat resolves through, so a role restriction narrows
+      // a chat and a head identically; branches under an unresolved profile are unreproducible.
       resolveProfile: (input) => this.hostedActorProfile(input),
       reportModelCall: (report) => { this.reportModelCall(report); },
       modelOperations: this.modelOperations,
       pricing: () => this.modelCatalog.pricing(),
       broadcast: (actorId, event) => {
-        // Stamped with the actor AND addressed to it: the stamp is what a pane
-        // reads, the recipient set is what keeps a subordinate's cards off
-        // every other socket on this one object. A frame for an actor the
-        // directory no longer names has no pane to reach.
+        // Stamped with the actor for the pane, and addressed to it so a subordinate's cards
+        // stay off other sockets. An actor the directory no longer names has no pane.
         const name = this.actorHost().describe(actorId)?.name;
 
         if (name === undefined) return;
         this.broadcastToActor(name, JSON.stringify({ ...event, actorId }));
       },
       enqueueTurn: (actor, input) => this.enqueueHostedTurn(actor, input),
-      // The reference the host ISSUED, off the bound actor, never rebuilt from
-      // an id: the root's own parent is null, so synthesizing `parentActorId:
-      // root` here made `hosted()` refuse the root's liveness read and the
-      // root's event drain died on it.
+      // Use the reference the host issued, never one rebuilt from an id: the root's parent is
+      // null, and a synthesized reference makes `hosted()` refuse the root's liveness read.
       turnInFlight: (actor) => {
         const live = this.actorHost().hosted(actor.reference);
 
@@ -691,16 +528,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * A programmatic turn for one hosted actor.
-   *
-   * The actor's OWN event log is the durable queue, so admission is a write
-   * plus a drain on that actor's orchestration rather than a message pushed
-   * into this object's transcript. That is the whole difference from the root's
-   * own enqueueTurn, which uses the root's ChatSession and transcript.
-   *
-   * The mode comes off the turn's own metadata through core's one reader, which
-   * answers `build` for a turn that named none. Hardcoding `build` here was the
-   * same value by coincidence and lost a Plan bar the producer had stated.
+   * The actor's own event log is the durable queue: admission is a write plus a drain.
+   * Mode comes from turn metadata via core's reader, which defaults to `build`.
    */
   private async enqueueHostedTurn(
     actor: BoundActor, input: ProgrammaticTurn,
@@ -712,7 +541,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { status: admitted.admitted ? 'queued' : 'skipped' };
   }
 
-  /** What an exploration runner needs of this workspace. */
   protected explorationSeams(): ExplorationHostSeams {
     return {
       host: this.actorHost(),
@@ -730,17 +558,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return () => { this._actorWriteObservers.delete(reference.actorId); };
       },
-      // THIS actor's own role and tier, not the root's. The seam takes an
-      // `actor` to say whose profile it wants; resolving the root's here is what
-      // let a narrowed head run unrestricted.
+      // This actor's own role and tier, not the root's; the root's would leave a narrowed
+      // head unrestricted.
       profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
       webSearch: () => this.ownedModelServices.getWebSearchProvider(),
-      // The host's OWN provisioner, not a second one: `provisionHostedActorHome`
-      // is the single implementation `createWorkspaceActorHost` builds every
-      // hosted runtime over, keyed on the actor's storage key. Reporting through
-      // it is what makes the node's disclosed boundary and its real credential
-      // the same fact.
+      // The host's own provisioner, the one every hosted runtime is built over, so the node's
+      // disclosed boundary and its real credential are the same fact.
       nodeHome: (actor) => provisionHostedActorHome(
         { homeHost: () => this.facetHomeHost(), directory: this.workspaceActors() },
         actor.record, actor.reference, 'head',
@@ -760,9 +584,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (labels.length === 0) return null;
 
-        // In-process now: the ledger is this object's, and a hosted head runs
-        // in this isolate, so the guard/debit port is a pair of calls rather
-        // than the cross-Durable-Object RPC a facet had to make.
+        // In-process: the ledger is this object's and a hosted head runs in this isolate.
         return {
           labels,
           port: {
@@ -771,15 +593,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           },
         };
       },
-      // The splitting head's own actor and runtime are NOT needed here: the
-      // journal and merge model belong to the workspace, and every child is
-      // acquired by id from the same host. This keeps every subtree's journal
-      // and step rows joinable in one database (C2).
+      // Journal and merge model belong to the workspace, keeping every subtree's journal and
+      // step rows joinable in one database (C2).
       split: (_actor, _runtime, input) => (request) => this.runHostedSplit(input, request),
     };
   }
 
-  /** What the subordinate rung needs of this workspace. */
   protected subordinateSeams(): SubordinateHostSeams {
     return {
       host: this.actorHost(),
@@ -789,9 +608,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       transaction: (body) => this.ctx.storage.transactionSync(body),
       roster: (actor) => new SubordinateRosterStore(this.ctx.storage.sql, actor.handle),
       vfs: () => this.rt.storage.vfs,
-      // The HIRE's own role, not the root's. A delegated turn's prompt and
-      // advertised tool surface are framed from this, so resolving the root's
-      // told a `scribe` child it had the workspace's whole surface.
+      // The hire's own role, not the root's: a delegated turn's prompt and advertised tool
+      // surface are framed from it.
       profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
       suggestTitle: (mission) => this.suggestTitle(mission),
@@ -806,32 +624,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The tool surface a hosted actor's DELEGATED turn admits.
-   *
-   * THE FULL-AGENT SURFACE, built by the SAME `buildActorTools` the workspace
-   * root's own turns are built by, over THAT actor's runtime — so every file
-   * and command it reaches acts as its own uid on both planes, its memory and
-   * task rows are its own `actor_id`-scoped rows, and its delegation rungs
-   * carry its own depth. A hire is a colleague with a role: docs/TOOLS.md and
-   * AGENTS.md promise it the eight builtins gated by the deps this workspace
-   * wires for it, and the confined head set gave it four — no `agents`, no
-   * `memory`, no `tasks`, and not even the `report` lane the manifest declares
-   * for exactly this root.
-   *
-   * What it does NOT get is `peers`: `hire scope=workspace` mints the root of a
-   * fresh tree, so a subordinate holding the peer transport could leave its own
-   * subtree in one call and the depth cap below would be decorative.
-   *
-   * `codemode` rather than a pre-built entry: the sandbox declares every
-   * other tool as `tools.<name>`, so it is built last over the finished surface
-   * and keeps the clamp and the effect claim the registry declares for it.
-   *
-   * The whole surface is then wrapped so every call this turn makes lands in
-   * the run's own capture, which is what puts a tool tally in the report when
-   * the turn ends without closing prose. Core's rule for that wrapper is not to
-   * apply it to a self-recording builder, and the two that record themselves —
-   * the head accumulators — are not on this surface: a delegated turn reports
-   * upward through `report`, it does not bank findings for a merge.
+   * Full `buildActorTools` surface over the actor's own runtime, minus `peers` (it would
+   * escape the subtree); codemode built last; all calls wrapped into the run's capture.
    */
   private async hostedTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
@@ -839,10 +633,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const factory = createCodemodeToolFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), rt: turn.runtime,
       sql: this.boundSql, workspace: this.workspaceName(), webSearch,
-      // `report.*` in the sandbox as well as at the top level, on the factory's
-      // own provider seam — the same wiring the CLI gives the same capability.
-      // A thunk, so it reads the ledger-writing closure declared below rather
-      // than a copy of it taken at construction.
+      // A thunk, so it reads the `report` deps declared below rather than a construction-time copy.
       extraProviders: () => [createReportCodemodeProvider(() => report)],
     });
 
@@ -855,28 +646,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         });
 
         turn.reports.spoke = true;
-        // Only a run-SETTLING report counts as the answer. The same predicate
-        // the ingress settles a waiter on, so the child cannot come to believe
-        // it has answered while its caller is still waiting.
+        // Only a run-settling report counts as the answer, the same predicate the ingress
+        // settles a waiter on.
         turn.reports.settled ||= reportSettlesRun(input.status, 'report_tool');
 
         return { id: relayed.id, disposition: relayed.disposition };
       },
     };
 
-    // NAMED, because both halves of the profile read it: the surface registers
-    // the tool from these deps and the framing renders the rungs they gate.
+    // Named: both the tool surface and the framing read these deps.
     const agents = this.hostedAgentsToolDeps(turn);
 
     const deps: ActorToolsetDeps = {
       rt: turn.runtime,
       workMode: turn.input.mode,
-      // This actor's own conversation — the rows the `memory` tool recalls are
-      // the ones this actor wrote, never the workspace's.
+      // This actor's own conversation, never the workspace's.
       history: turn.actor.stores.history,
-      // Keyed on the TURN this surface was built for, because that is the id a
-      // recovery re-admits: an effect claimed under a fresh id would replay on
-      // the turn that is already holding it.
+      // Keyed on the turn id a recovery re-admits; a fresh id would replay the effect.
       effectClaims: {
         actor: turn.actor.handle,
         sql: turn.runtime.storage.sql,
@@ -885,46 +671,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       codemode: ({ native }) => factory.toolFor(native),
       craftedToolExecute: null,
       agents,
-      // This actor's own semantic index and its own keyed world model — the
-      // rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite
-      // what the workspace observed under the same words.
+      // Rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite what the workspace
+      // observed under the same words.
       vectorStore: turn.runtime.vectorStore,
       facts: turn.actor.stores.facts,
       webSearch,
     };
 
-    // THE ASSIGNED TURN'S LANE, added after the surface's own fields for the
-    // same reason the cli adds it after its own (`local-session.ts`'s
-    // `reportGateOpen`): `report` belongs to a turn the PARENT drove, and an
-    // owner chat with this actor must not carry it. The gate is satisfied at
-    // the call site here — `runHostedTask` is the only caller and a delegated
-    // task is by definition parent-driven — where the cli, whose surface is
-    // cached across turns, has to re-ask per turn.
+    // `report` belongs only to a parent-driven turn; an owner chat with this actor must not carry it.
+    // `runHostedTask` is the only caller, so the gate is satisfied here.
     deps.report = report;
     const tools = withHeadCaptureRecording(buildActorTools(deps), turn.capture);
 
-    // FRAMED FROM THE SURFACE THAT WAS BUILT, not from a second idea of it: the
-    // prompt's tool index and delegation rungs are rendered from these exact
-    // names, and `report` among them is what makes core's `state/delegation`
-    // section name this actor as a hire whose progress goes back to whoever
-    // assigned the work.
+    // Framing is rendered from these exact tool names; `report` among them makes core's
+    // `state/delegation` section name this actor as a hire.
     return { tools, framing: await this.hostedTaskFraming(turn, tools, agents) };
   }
 
   /**
-   * WHAT A DELEGATED TURN IS TOLD IT IS: core's assigned-turn framing, over
-   * this actor's own prompt surface.
-   *
-   * Every option is that actor's own fact, and each is the same value the
-   * workspace's own turns pass for themselves: the workspace soul (its world
-   * is this workspace), the executors ITS runtime routes to, the builtins
-   * actually on the surface above, the rungs its deps gate, the role its
-   * profile resolved, the sections its own evolution promoted, and its shown
-   * name beside the workspace's. The turn-time reads a chat turn adds — the
-   * AGENTS.md chain and the skill set, both of which are I/O and trust
-   * classification — are deliberately not taken here: this path runs no turn
-   * preamble, and a section rendered from bytes nobody classified is the one
-   * thing the instruction-trust boundary exists to prevent.
+   * Core's assigned-turn framing over this actor's own prompt surface. AGENTS.md and skills are
+   * not read: this path runs no preamble, and unclassified bytes must not become a section.
    */
   private async hostedTaskFraming(
     turn: HostedTaskTurn, tools: ToolSet, agents: AgentsToolDeps,
@@ -944,9 +710,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         model: { id: turn.profile.profile.tier.model },
         currentDate: currentDateForPrompt(),
         sectionOverrides: activePromptSectionOverrides(this.boundSql, turn.actor.handle),
-        // Its own shown name beside the workspace's, which is what makes the
-        // prompt address it as a named agent OF this workspace rather than as
-        // the workspace's own chat.
+        // Makes the prompt address it as a named agent of this workspace, not the workspace's own chat.
         identity: {
           ...(await this.promptIdentity()),
           agent: turn.actor.stores.config.getDisplayName() ?? turn.actor.record.name,
@@ -956,13 +720,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The delegation deps ONE hosted actor's turn holds.
-   *
-   * Both rungs are that actor's own: the search substrate runs over its
-   * runtime and its model, and the roster rung is bounded by ITS depth off the
-   * directory row — at the cap the team deps are absent and hire/ask/send/list
-   * /dismiss vanish from the enum, which is the recursion bound stated as
-   * structure rather than as a refusal.
+   * Rungs are bounded by this actor's own depth; at the cap team deps are absent, so
+   * hire/ask/send/list/dismiss vanish from the enum rather than refusing.
    */
   private hostedAgentsToolDeps(turn: HostedTaskTurn): AgentsToolDeps {
     const seams = this.explorationSeams();
@@ -971,15 +730,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       rt: turn.runtime,
       model: turn.model,
       resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
-      // The same catalog session that answers the context window and prices the
-      // mission ledger, so a search's estimate and the ledger that debits it
-      // read one rate.
+      // Same catalog session as the mission ledger, so a search's estimate and its debit read one rate.
       costModel: () => ({
         spec: this.effectiveModelSpec(),
         pricing: this.modelCatalog.pricing(),
       }),
-      // Each node's own actor, asked when the wave reaches it. Workspace-level
-      // seams, because a node is an actor of the WORKSPACE whoever spawned it.
+      // Workspace-level seams: a node is an actor of the workspace whoever spawned it.
       hostNode: (node) => hostNodeSeat(seams, node),
       provisionNodeHome: () => async (node) => seams.nodeHome((await hostNodeSeat(seams, node)).actor),
       runtimeForNodeWorkspace: null,
@@ -993,8 +749,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       budget: this.budget,
     };
 
-    // THIS turn's own resolution, not a second one: the rungs narrow by the
-    // role and tier the claim recorded.
+    // This turn's own resolution: rungs narrow by the role and tier the claim recorded.
     deps.profile = () => agentsProfileContext(turn.profile.profile, turn.profile.inputs);
     const team = this.hostedTeamToolDeps(turn.actor);
 
@@ -1004,20 +759,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The roster rung one hosted actor holds over its OWN subtree, or null at the
-   * delegation cap.
-   *
-   * Every part is that actor's: the rows it hires into, the child substrate
-   * that registers them under it, and the depth the directory says it is at. A
-   * rung built from the workspace root's roster would let a hire of a hire land
-   * as a sibling of its own parent.
-   *
-   * No `temporary` port, and that absence is a boundary rather than an
-   * oversight: the port holds live `shell` promises and must outlive the turn
-   * that parked them, and the one the report ingress resolves waiters through
-   * is the HIRING actor's. So a hosted actor gets the two durable rungs — hire,
-   * ask by name, send, list, dismiss — and no role-targeted temporary of its
-   * own.
+   * Built from this actor's own roster (the root's would land a hire of a hire beside its parent).
+   * No `temporary` port: it holds live `shell` promises that must outlive the turn. Null at the cap.
    */
   private hostedTeamToolDeps(actor: HostedActor): TeamToolDeps | null {
     const seams = this.subordinateSeams();
@@ -1032,11 +775,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       roster,
       runtime: hostedSubordinateRuntime(seams, () => actor),
       now: () => Date.now(),
-      // This actor's own transcript, capped — what a child it hires inherits.
       inheritedContext: () => this.readInheritedContext(actor.handle),
       originContext: async () => actor.session.history,
-      // The WORKSPACE's purpose, which is the same fact for every actor in it:
-      // an agent added here is here for what this workspace is for.
+      // The workspace's purpose, shared by every actor in it.
       ownMission: () => this.ownMission(),
       createName: mintSubordinateName,
       broadcast: (event) => this.broadcastSubordinatesChanged(event),
@@ -1048,13 +789,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The live plane a hosted actor's delegated turn reports per step.
-   *
-   * Its OWN hires and its OWN search roster, from its own stores — not this
-   * workspace's. `memoryTail` is absent and `missingCapabilities` empty, and
-   * both are facts: a delegated turn's framing is its brief rather than
-   * `MEMORY.md`, and a hosted actor connects no MCP servers of its own, so
-   * there is no unreachable server to name.
+   * Uses the actor's own stores. No `memoryTail` (framing is the brief, not `MEMORY.md`) and no
+   * `missingCapabilities` (hosted actors connect no MCP servers).
    */
   private hostedActorDynamicContext(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
     return collectDynamicContext({
@@ -1071,15 +807,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * A head splitting further, run in this isolate.
-   *
-   * The journal is the WORKSPACE's, and that closes the C2 defect structurally
-   * rather than by discipline: a depth-1 head writing its children's spawn and
-   * report rows into its OWN SQLite while their step rows land on the root
-   * leaves the surface's `head_journal` → `head_steps` join unable to match and
-   * a depth-2 head unreadable from anywhere. One database means one journal, and
-   * the port below is a set of local calls rather than four
-   * cross-Durable-Object RPCs.
+   * The journal is the workspace's: `head_journal` → `head_steps` joins need spawn/report rows and
+   * step rows in one database, so a depth-2 head stays readable.
    */
   private async runHostedSplit(parent: HeadInput, request: HeadSplitRequest): Promise<HeadSplitResult> {
     const journal: HeadJournalPort = {
@@ -1108,8 +837,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       model: parent.model,
     };
 
-    // A subtree charges the same mission its root does — otherwise a head
-    // escapes its budget simply by splitting again.
+    // A subtree charges its root's mission, or a head escapes its budget by splitting again.
     if (parent.missionLabels?.length) controllerInput.missionLabels = parent.missionLabels;
     const result: MergeResult = await controller.run(controllerInput);
 
@@ -1124,21 +852,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * A HOSTED ACTOR'S HOME IS NOT AN RPC.
-   *
-   * The uid table, the uid-0 view and the principal registry all live on THIS
-   * object, and `confinePrincipal` has no RPC — so both halves of provisioning
-   * are in this isolate: the host provisions each actor's home from those same
-   * three members, keyed on the actor's immutable storage key, before it builds
-   * that actor's runtime (`actor-hosting.ts` → `hostedActorAgentName`).
-   * `facetHomeHost()` above is what it reaches them through.
+   * Home provisioning stays in this isolate: `confinePrincipal` has no RPC, so the host provisions
+   * each actor's home via `facetHomeHost()` before building its runtime (`actor-hosting.ts`).
    */
 
-  /**
-   * A preview request the edge authenticated, routed into this workspace's port
-   * registry. Reached by RPC for ordinary requests and through `fetch` for a
-   * WebSocket upgrade, which cannot cross an RPC boundary as a 101.
-   */
+  /** Reached by RPC, or via `fetch` for a WebSocket upgrade, which cannot cross RPC as a 101. */
   async routeWorkspacePreview(
     port: number, handle: string, request: Request, pathname: string,
   ): Promise<Response> {
@@ -1146,10 +864,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * A preview WebSocket upgrade. Partyserver owns `fetch` for the chat
-   * transport, so this one path is answered before the base sees it — the label
-   * that produced it was signature-checked at the edge and the capability handle
-   * is checked again inside `routePreview`.
+   * Partyserver owns `fetch` for chat, so preview upgrades are answered first; the capability
+   * handle is rechecked inside `routePreview`.
    */
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -1165,14 +881,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return await this.routeWorkspacePreview(parsed, handle, request, `/${rest.join('/')}`);
     }
 
-    // A share socket cannot cross a DO RPC boundary, so the share route
-    // forwards it by `fetch` under this path — the label was already verified
-    // at the edge; `routeShare` admits by the share row and routes the port.
+    // A share socket cannot cross a DO RPC boundary, so the share route forwards it by `fetch` here;
+    // the label was verified at the edge and `routeShare` admits by the share row.
     if (url.pathname.startsWith(`${SLATE_SHARE_PATH}/`)) {
       const [handle, claimText, ...rest] = url.pathname.slice(SLATE_SHARE_PATH.length + 1).split('/');
-      // The claim segment is JSON the edge wrote; anything that does not parse
-      // was never written by the edge — valibot carries the parse failure into
-      // the same 404 the shape check would produce.
+      // The claim segment is JSON the edge wrote; a parse failure yields the same 404 as a bad shape.
 
       const claim = v.safeParse(
         v.pipe(v.string(), v.parseJson(), ShareViewerClaimSchema),
@@ -1189,16 +902,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await super.fetch(request);
   }
 
-  /** A socket the terminal route forwarded is tagged as the workspace's shell,
-   *  ahead of the identity tags the base reads off the same request. */
+  /** A socket forwarded by the terminal route is tagged as the workspace shell, ahead of identity tags. */
   override async getConnectionTags(connection: Connection, ctx: ConnectionContext): Promise<string[]> {
     const tags = await super.getConnectionTags(connection, ctx);
 
     return new URL(ctx.request.url).pathname === WORKSPACE_TERMINAL_PATH ? [WORKSPACE_TERMINAL_TAG, ...tags] : tags;
   }
 
-  /** The SDK's identity, state and MCP frames are for a pane that speaks the
-   *  actor protocol; a terminal socket carries the shell's frames only. */
+  /** A terminal socket carries only shell frames, not the SDK's identity, state and MCP frames. */
   override shouldSendProtocolMessages(_connection: Connection, ctx: ConnectionContext): boolean {
     return new URL(ctx.request.url).pathname !== WORKSPACE_TERMINAL_PATH;
   }
@@ -1213,8 +924,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
 
   /** Send the replies a drained turn owes, then close its delivery leases.
-   *  False while a reply channel is still open; a failed dispatch or close
-   *  rejects, so the caller records it as the failure it is. */
+   * False while a reply channel is still open; a failed dispatch or close rejects. */
   private async completeEventBatch(turnId: string, assistantText: string): Promise<boolean> {
     const replies = await dispatchEmailRepliesForTurn(
       { log: this.eventLog, replies: this.replyChannels },
@@ -1233,13 +943,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Every open drain lease paired with the answer its turn already gave.
-   *
-   * Two durable reads and no new state: the leases come from the event log, the
-   * answers from the persisted transcript (core's `answersForDrainTurns`, over
-   * the pane store's own parent edge). Deliberately NOT `this.messages` — a
-   * recovery may run on an activation that has hydrated nothing, and the
-   * transcript is the authority either way.
+   * Open drain leases paired with the answers their turns gave, read from the persisted transcript.
+   * Not `this.messages`: recovery may run on an activation that has hydrated nothing.
    */
   private async owedDrainReplies(): Promise<ReadonlyMap<string, string>> {
     const leases = this.eventLog.openDrainLeases();
@@ -1250,77 +955,37 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Does this workspace owe anything a wake has to finish?
-   *
-   * FIVE existence reads, one per store, because each predicate is its OWNER's
-   * policy and not this method's: an open drain lease is a consumed `evt-%` row
-   * in the event log, an owed transition is an unsettled claim in the terminal
-   * ledger, an unfinished head includes the `interrupted` ones the resume gate
-   * still owes, a headless swarm is a `running` row of the `swarm` engine, a
-   * live job is a `running` registry row. One query over five tables would put
-   * five schemas in this class and drift from all of them. Every read is
-   * `LIMIT 1` and the `||` chain short-circuits, so the common case costs one
-   * read and no case materializes a roster — this runs in the init gate.
-   *
-   * A PREDICATE, and that is the boundary the init ruling draws. What an open
-   * lease MEANS — a question nobody answered, or an answer nobody delivered —
-   * takes the transcript join in {@link owedDeliveryWork}, under the wake,
-   * because every dispatch is external mail and an activation launches none.
+   * One `LIMIT 1` existence read per store, short-circuited, since each predicate is its owner's
+   * policy; runs in the init gate. Interpreting a lease is left to {@link owedDeliveryWork}.
    */
   protected override owedUntimedWork(): boolean {
     return this.eventLog.hasOpenDrainLease()
-      // An interrupted terminal sequence with no retry instant of its own; one
-      // waiting on a refused effect's retry is timed, read by `nextOwedAt`.
+      // Interrupted terminal sequence with no retry instant; one awaiting a retry is timed (`nextOwedAt`).
       || (this.terminal.hasIncomplete() && this.terminal.nextRetryAt() === null)
       || this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms()
-      // A job running with no resume instant: live in some process, or
-      // orphaned by one that died. A job WAITING on an instant is timed and
-      // read by `nextOwedAt` instead, so a lone deferred job costs one wake
-      // at its instant rather than a lap-paced chain.
+      // A running job with no resume instant (live or orphaned); jobs waiting on an instant are timed
+      // and read by `nextOwedAt`, so a lone deferred job costs one wake at its instant.
       || this.jobs.hasUntimedLiveJobsInWorkspace() || this.workspaceActors().hasRetirements()
       || this.subordinateRoster.hasPendingBirths() || this.subordinateRoster.hasPendingDeletions()
-      // An unsettled hosted claim, asked at limit 1 because presence is the
-      // whole question. Without this the recovery arm of `maintenanceWork` is
-      // unreachable on the one activation that needs it: a workspace whose ONLY
-      // owed work is an interrupted hosted turn armed no wake, so nothing
-      // dispatched the sweep that would have rebuilt it.
+      // An unsettled hosted claim; without this, a workspace whose only owed work is an interrupted
+      // hosted turn arms no wake and the recovery arm of `maintenanceWork` never runs.
       || this.actorHost().resumable(1).length > 0
-      // The same question for work ADMITTED but never started. `resumable`
-      // covers claims; a delegated task that no turn has taken yet holds none.
+      // Admitted but unstarted delegations hold no claim, so `resumable` does not cover them.
       || this.hasAdmittedDelegations()
-      // And the root's own loop: a turn the last process died inside, or a
-      // send it acknowledged and never drained.
+      // The root's loop: a turn a dead process was inside, or an acknowledged send never drained.
       || this.chatLoopOwesWork();
   }
 
-  /** The soonest instant a TIMED ledger owes a wake — the terminal retry and
-   *  the job runner's deferred resumes — or null when nothing timed waits.
-   *  Untimed owed work is excluded on purpose: it is {@link owedUntimedWork},
-   *  which keeps the tick's lap-paced row, so the only read this needs is the
-   *  minimum the two timed stores already keep. */
+  /** Soonest instant a timed ledger (terminal retry, deferred job resume) owes a wake, or null.
+   * Untimed owed work is excluded; it is {@link owedUntimedWork}. */
   protected override nextOwedAt(): number | null {
     const at = Math.min(this.terminal.nextRetryAt() ?? Infinity, this.jobRunner.nextResumeAt() ?? Infinity);
 
     return Number.isFinite(at) ? at : null;
   }
   /**
-   * Whether ANY actor in this workspace holds an admitted delegation nothing
-   * has run yet — the arming half of the delegation drain.
-   *
-   * WORKSPACE-WIDE BY DESIGN, not by omission. This answers "does this OBJECT
-   * need to wake", not "what does this actor own". The alarm belongs to the
-   * workspace object and serves every actor in it, so scoping it to the root
-   * would make the object sleep through a hired child's admitted task — the
-   * same failure as the local daemon sleeping through a subordinate's due
-   * trigger, which is why `nextTriggerAt` takes a bare database and
-   * `hasUntimedLiveJobsInWorkspace`/`countRunningInWorkspace` are workspace-wide by
-   * contract. Bounded at one row, exactly as `resumable(1)` beside it is:
-   * presence is the whole question, and materializing the queue to answer it
-   * would read every child's backlog on every activation.
-   *
-   * The predicate matches `EventLog.pending`'s own: unbound (`turn_id IS
-   * NULL`) and neither deferred nor dismissed (`step_idx` -1 and -2), so the
-   * wake arms exactly when the drain has something to take.
+   * Workspace-wide on purpose: the alarm serves every actor, so root-only scoping would sleep through
+   * a child's admitted task. Matches `EventLog.pending`'s predicate; bounded at one row.
    */
   private hasAdmittedDelegations(): boolean {
     return this.boundExec().exec(
@@ -1332,20 +997,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * ARM 2 OF THE ACTOR SWEEP: run the delegated turns this workspace admitted.
-   *
-   * A hired subordinate is a full actor whose work arrives as a row in its OWN
-   * event log — `admitHostedTask` writes it and arms the wake, and that is all
-   * admission may do: a turn run inside the admitting request would live
-   * exactly as long as the caller's activation, which is a `waitUntil` shape
-   * nothing here may take. So the runner is here, on the durable wake, where
-   * nothing holds a request open.
-   *
-   * What one child's queue COSTS is core's `drainAssignments` — the lease
-   * order, the double-execution guard and the failed-run policy are its
-   * invariants, stated once there and shared with the local host. This method
-   * is the cf half: which actors have a queue, the budget across them, and what
-   * running one assignment means here.
+   * Runs admitted delegated turns on the durable wake; admission must not run them (`waitUntil` shape).
+   * Per-queue policy lives in core's `drainAssignments`; this is the cf budget and runner.
    */
   private async drainAdmittedDelegations(): Promise<boolean> {
     const seams = this.subordinateSeams();
@@ -1364,17 +1017,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       };
 
       try {
-        // `bindStores` and not `acquire`: the enumeration needs this child's
-        // handle over the one database and nothing else — no runtime, no
-        // session, no model — and it still refuses a retired or re-parented
-        // actor, so reading a child's queue is not a way around membership.
+        // `bindStores`, not `acquire`: only the child's handle is needed, and it still refuses a retired
+        // or re-parented actor, so reading a child's queue does not bypass membership.
         const log = new EventLog(exec, this.actorHost().bindStores(reference).handle);
 
         const swept = await drainAssignments(log, {
           now, budget, staleMs: STALE_EVENT_DELIVERY_MS,
           run: async (task) => {
-            // The actor's own pane rides the root's wire: the turn opens under
-            // the message that admitted it, streams, and closes over its row.
             const room = this.chatRooms.hostedRoom(record.name);
             const answerId = crypto.randomUUID();
 
@@ -1402,8 +1051,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (swept.truncated) truncated = true;
       } catch (cause) {
-        // One unreadable child must not end the sweep — the same per-actor
-        // isolation core's recovery arm applies for the same reason.
+        // One unreadable child must not end the sweep; same per-actor isolation as core recovery.
         diagnostics.failure('subordinate.delegation_drain_failed', toKinuError({
           doing: 'reading a hired actor\'s admitted delegations', cause, otherwise: 'io',
         }), { workspace: this.name, actor: record.name });
@@ -1414,36 +1062,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * ARM 1½: give the assignments an interrupted turn still owes back to the
-   * sweep below.
-   *
-   * `recoverActorTurns` establishes WHICH claims a dead activation left owed —
-   * it verifies the claimed program, settles what it cannot verify
-   * `indeterminate`, and leaves a live actor alone — and then does nothing
-   * more, deliberately: "verified claims remain owed: retained program bytes
-   * alone do not provide a resumable execution". Nothing re-executed them. A
-   * hosted subordinate's interrupted turn therefore sat with its claim
-   * unsettled and its assignment row bound to the runner's `evt-*` lease, and
-   * the ONLY thing that would ever free it was `unbindStale` once the row had
-   * been leased for the full `STALE_EVENT_DELIVERY_MS` — ten minutes during
-   * which the caller's `agents.ask` is blocked on an answer nothing is
-   * producing.
-   *
-   * The lease grace is right for what it guards (an activation racing its own
-   * predecessor) and wrong as the recovery path, because recovery has just
-   * ANSWERED that question for these actors. So the rows it names are re-pended
-   * here, and the sweep that runs immediately below re-runs each through
-   * `runHostedTask`.
-   *
-   * NO NEW STATE, and the identity that makes the re-run safe already exists: a
-   * delegated turn is claimed under `turnId = assignmentId` (the ROW's id), so
-   * a recovered claim names its own row, the re-run carries the same
-   * `sequenceId`, and the parent's report ingress dedupes a replayed report
-   * rather than counting a second answer. `beginTurn` re-admits the same turn
-   * under the next epoch, which is what the epoch fence is for.
-   *
-   * A claim id that names no row — every head and swarm node, whose turn id is
-   * the head's own name — matches nothing and unbinds nothing.
+   * Re-pend assignment rows whose recovered turn claims are still owed, so the sweep below re-runs them.
+   * Safe: a delegated turn's id is its row id, so the re-run keeps its `sequenceId` and reports dedupe.
    */
   private rependRecoveredAssignments(owedClaims: readonly string[]): void {
     if (owedClaims.length === 0) return;
@@ -1473,42 +1093,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Finish what one interrupted terminal transition still owes: the reply an
-   * answered event batch never dispatched.
-   *
-   * This is the ONE effect of a settled turn that a later activation can
-   * re-derive, and every input it needs is already durable — which is why no
-   * new state was added to make the resume possible:
-   *
-   *   • WHICH batches are owed — the open recovery lease. `markConsumed` bound
-   *     the rows to a synthetic `evt-*` turn and stamped `consumed_at`; the
-   *     completion clears it. A lease still open is a delivery a turn was
-   *     handed and never closed.
-   *   • WHAT to reply with — the persisted assistant message of the turn that
-   *     absorbed the batch, found through the `drainTurnId` its own user row
-   *     carries.
-   *   • WHETHER a resend is safe — the reply channel's outbox key. Each reply
-   *     is keyed on its channel, so a re-drive puts the SAME Message-ID on the
-   *     wire and the receiver (and Kinu's own inbound dedupe) treats it as the
-   *     message it already has.
-   *
-   * A lease whose turn has no durable answer is left alone: nothing was
-   * answered, so there is nothing to send, and `unbindStale` re-pends it to be
-   * asked again. That ordering is why this runs BEFORE the unbind sweep — a
-   * batch that WAS answered must have its reply finished rather than the
-   * question asked a second time.
-   *
-   * Replies run before the base terminal replay so both ride the ONE durable
-   * wake: an owed reply is an answer somebody is actively waiting on, and the
-   * terminal replay's own resume closes the same leases when it finishes a
-   * transition.
+   * Resend the reply an answered event batch never dispatched; the outbox key makes a resend idempotent.
+   * Must run before the unbind sweep so an answered batch is finished rather than re-asked.
    */
   protected override async owedDeliveryWork(): Promise<void> {
-    // The lease JOIN lives here, in the alarm frame — the activation only
-    // proved existence. Sweep first with the answered set excluded, so a
-    // question whose answer exists is finished below rather than re-asked;
-    // then the replies; then the terminal replay, which closes the same
-    // leases when it finishes a transition.
+    // Order: sweep with the answered set excluded, then replies, then the terminal replay
+    // (which closes the same leases when it finishes a transition).
     let owed: ReadonlyMap<string, string> = new Map<string, string>();
 
     try {
@@ -1530,9 +1120,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }), { workspace: this.name });
     }
 
-    // One reply's failure is recorded and leaves only ITS lease open, which
-    // keeps the wake armed for it: the other owed replies and the terminal
-    // replay below still run in this frame.
+    // One reply's failure leaves only its lease open (keeping the wake armed for it);
+    // the other owed replies and the terminal replay below still run.
     for (const [drainTurnId, answer] of owed) {
       try {
         const closed = await this.completeEventBatch(drainTurnId, answer);
@@ -1551,22 +1140,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private _engine: EvolutionEngine | null = null;
   private _emailOutbox: EmailOutbox | null = null;
-  /** Outbound-email intent log: write-ahead + idempotency for mission-inbox
-   *  replies and owner notifications (SPEC §7.4). The shared outbox creates
-   *  its own table on first use, so there is nothing to initialize here. */
+  /** Outbound-email intent log (SPEC §7.4); creates its own table on first use. */
   private get emailOutbox(): EmailOutbox {
     this._emailOutbox ??= new EmailOutbox(this.ctx.storage.sql, (at) => this.armTimer(at));
 
     return this._emailOutbox;
   }
 
-  /** The orchestrator's own planes, as source callbacks the shared assembler
-   *  reads per step — no second assembly to drift from the base class's.
-   *
-   * APPROVALS are both kinds of decision parked on the human in one roster: a
-   * consent prompt someone may still answer in the next minutes, and a command
-   * parked for hours. The second is also the structural reminder that its
-   * effect has NOT happened — restated on every step until it is decided. */
+  /** Approvals combine consent prompts and parked commands; a parked command's effect has not happened. */
   protected override extraDynamicContext(): ActorDynamicContextExtras {
     return {
       approvals: () => {
@@ -1584,31 +1165,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
 
 
-  // Steer-as-Branch redirects launched against the in-flight turn — each runs
-  // as one budgeted head (a facet in head mode) and settles into Alternate
-  // Takes when the turn completes (onChatResponse).
+  // Steer-as-Branch redirects against the in-flight turn; settle into Alternate Takes on completion.
   protected _pendingBranches: PendingBranch[] = [];
 
   private _triggerRegistry: TriggerRegistry | null = null;
   private _replyChannels: ReplyChannelStore | null = null;
   private _cacheWarming: CacheWarmingLane | null = null;
 
-  /**
-   * This workspace's prompt-cache warming lane.
-   *
-   * FOUR SEAMS, and each is the cloud backend's own answer to a question the
-   * lane does not have: the row lives in this object's SQLite, the wake is the
-   * ONE Kinu schedule row (`armTimer`, never a `setTimeout` — nothing in this
-   * isolate outlives the hibernation a warm waits through), the request goes
-   * out through the provider that served the frozen one, and the spend is
-   * reported where every non-turn model call is.
-   */
+  /** Wakes go through `armTimer`, never `setTimeout`: nothing in the isolate survives hibernation. */
   protected get cacheWarming(): CacheWarmingLane {
     this._cacheWarming ??= new CacheWarmingLane({
       store: new CacheWarmStore(this.boundSql, this.actorHandle()),
-      // The armed instant is not passed on: `armDurableWake` re-derives the
-      // soonest wake this workspace owes over every source, the warm row now
-      // among them, so one fold decides and one row carries it.
+      // `armDurableWake` re-derives the soonest wake over every source, so the instant is not passed.
       wake: () => { this.armDurableWake(); },
       send: async ({ modelSpec, body }) => {
         const providers = this.providerRegistry();
@@ -1629,15 +1197,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.cacheWarming;
   }
 
-  /** Per-activation guard so the full table-init DDL runs once, not on every
-   *  onStart + claimOwner. Resets on DO eviction, so a cold start always
-   *  re-creates any newly-added tables (no schema-version bookkeeping). */
+  /** Per-activation guard; resets on eviction so a cold start re-creates newly added tables. */
   private _schemaReady = false;
 
   protected get triggerRegistry(): TriggerRegistry {
     if (!this._triggerRegistry) {
       const alarmScheduler: AlarmScheduler = {
-        // Idempotent: pick the soonest of (existing alarm, new ts).
         scheduleAt: (ts: number) => this.armTimer(ts),
       };
 
@@ -1648,9 +1213,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
   protected get replyChannels(): ReplyChannelStore {
     if (!this._replyChannels) {
-      // ws_session dispatcher: push the reply back through the chat
-      // broadcast. The reply() tool's content becomes a synthetic assistant
-      // message visible to connected WS clients.
       const wsDispatcher: ReplyDispatcher = {
         dispatch: async (_channel: ReplyChannelRow, payload: JsonValue) => {
           try {
@@ -1665,8 +1227,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
               parts: [{ type: 'text', text }],
             } as const;
 
-            // The tab's conversation, from the store the transcript writes —
-            // the same rows a redial reads — with the reply appended.
             this.broadcast(JSON.stringify({
               type: 'cf_agent_chat_messages',
               messages: [...await this.chatTranscript.history(), message],
@@ -1679,9 +1239,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         },
       };
 
-      // email_thread dispatcher: a drained email turn's answer goes back onto
-      // the inbound mail's thread via the send_email binding. Context resolves
-      // per dispatch so binding/display-name changes never go stale.
+      // Context resolves per dispatch so binding/display-name changes never go stale.
       const emailDispatcher = createEmailThreadDispatcher(() => ({
         email: this.env.EMAIL,
         agentDisplayName: this.safeDisplayName(),
@@ -1690,8 +1248,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       this._replyChannels = new ReplyChannelStore(this.ctx.storage.sql, this.actorHandle(), {
         ws_session: wsDispatcher,
-        // peer_back: route the answer to a peer ask back over the outbox
-        // transport. Lazily bound — PeerHub needs this store to construct.
+        // Lazily bound: PeerHub needs this store to construct.
         peer_back: {
           dispatch: (channel, payload) => this.peerHub.dispatchPeerBack(channel, payload),
         },
@@ -1702,12 +1259,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._replyChannels;
   }
 
-  /** The From name on this workspace's outbound mail — never throws pre-schema.
-   *
-   *  An untitled workspace sends as the product, not as its slug. A person
-   *  reading their inbox is the last place a Durable Object name belongs, and
-   *  `handwrought-walnut-4166c321` in a From header is the same defect as it in
-   *  the workspace bar. */
+  /** Never throws pre-schema; an untitled workspace sends as the product, not its slug. */
   private safeDisplayName(): string {
     try { return this.titleState().displayName || UNTITLED_WORKSPACE_NAME; }
     catch (error) {
@@ -1717,14 +1269,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
-  // ── Peer transport endpoint (agent teams) ────────────────────────────────
-  // Sender: `outbox_peer` rows dispatched via DO RPC (inline + alarm retry).
-  // Receiver: the receivePeerMessage cross-DO RPC below. The agents tool's
-  // ask/send/reply actions ride this hub; spawn adds the create-agent path.
+  // Peer transport (agent teams): `outbox_peer` rows go out via DO RPC (inline + alarm retry);
+  // receivePeerMessage below is the receiver.
   private _peerHub: PeerHub | null = null;
 
-  /** The owner peer messaging acts as, resolved at call time: a toolset built
-   *  before the claim must still see the owner after it. */
+  /** Resolved at call time: a toolset built before the claim must still see the owner after it. */
   private requireOwnerUserId(): string {
     const userId = this.getOwnerUserId();
 
@@ -1749,8 +1298,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return await stub.receivePeerMessage(msg);
       },
       isSameOwner: async (senderUserId) => senderUserId === this.getOwnerUserId(),
-      // A lookup that fails admits nothing and is not a refusal either: it
-      // rejects the delivery, and the sender's outbox retries it.
+      // A failed lookup is not a refusal: it rejects the delivery, and the sender's outbox retries it.
       hasGrant: async (senderAgentName, senderUserId) => {
         const { stub, caller } = await this.userHub();
 
@@ -1763,45 +1311,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._peerHub;
   }
 
-  /** Idempotent soonest-wins arm of Kinu's own wake-up, expressed as the
-   *  agents-SDK schedule row `KINU_TIMER_CALLBACK`. A Durable Object has a
-   *  single alarm slot and the SDK owns it (`_scheduleNextAlarm` deletes any
-   *  alarm it does not recognise), so this must never call `setAlarm` itself.
-   *
-   *  The write-first collapse, the post-write read and the keeper rule are
-   *  {@link ActorAgent.armWakeRow}'s — this chain and the terminal-retry chain
-   *  ask the same question of the same registry, and the two answers must not
-   *  be able to drift. What is this chain's own is the CALLBACK and the
-   *  consumers: every one of them awaits this directly. There is no
-   *  void-returning wrapper — one existed, handed the promise to
-   *  `ctx.waitUntil`, and claimed the write "lands even if the caller's
-   *  invocation ends first", which is false in a Durable Object, where
-   *  `waitUntil` is a no-op (`do.wait_until.no_op`) and an in-flight promise is
-   *  cancelled with no signal on reset or eviction
-   *  (`do.background_task.cancelled_on_reset`). Awaiting inside the invocation
-   *  is the only retention this object has: the output gate then holds the
-   *  response until the schedule row commits, and a failure reaches the caller
-   *  instead of a console line. */
+  /**
+   * Soonest-wins arm of the `KINU_TIMER_CALLBACK` schedule row; never call `setAlarm` (the SDK owns
+   * the alarm). Await it: `waitUntil` is a no-op (`do.wait_until.no_op`,
+   * `do.background_task.cancelled_on_reset`).
+   */
   private async armTimer(atMs: number): Promise<void> {
     await this.armWakeRow(KINU_TIMER_CALLBACK, atMs);
   }
 
   /**
-   * Restore the wake row when durable work is waiting and no Kinu timer row
-   * exists.
-   *
-   * Every Kinu wake rides ONE schedule row, so losing it strands triggers, peer
-   * retries and email reconciliation together — and the only thing that re-arms
-   * it is a new scheduling write, which a stranded workspace has no reason to
-   * make. Platform redelivery does not cover this either: it is bounded, and a
-   * row that was never written is not a delivery that can be retried.
-   *
-   * No new state records the loss, because none is needed: the row is DERIVED
-   * from the same durable ledgers the tick re-arms from, through the same
-   * reader, so this is that computation run at activation instead of at the end
-   * of a tick. ANY Kinu timer row — due or future — counts as armed: a due row
-   * is a wake the platform still owes, and `armTimer` is what decides whether
-   * it is soon enough.
+   * Restore the wake row when durable work is waiting and no Kinu timer row exists.
+   * Any Kinu timer row, due or future, counts as armed; the row is derived from the tick's ledgers.
    */
   protected async reconcileTimerRow(): Promise<void> {
     const next = this.nextWakeAt(Date.now());
@@ -1819,40 +1340,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return;
     }
 
-    // A row already DUE is a wake the platform still owes: it runs at or before
-    // now, so it covers anything due now and re-arming over it would add a
-    // second row on every touch. What is new is the other direction — a row
-    // still in the FUTURE, later than the wake this workspace actually owes. A
-    // cron six hours out counting as armed leaves a reaction pending right now
-    // waiting six hours for it. `armTimer` is soonest-wins and collapses, so
-    // pulling it earlier still leaves exactly one row.
+    // A due row already covers now; only a future row later than the owed wake needs pulling earlier.
+    // `armTimer` collapses, so this still leaves exactly one row.
     if (Math.min(...armed) * 1000 <= next) return;
     await this.armTimer(next);
     diagnostics.event('schedule.timer_pulled_earlier', { at: next });
   }
 
-  /** The next wake this workspace owes, over every durable source that can ask
-   *  for one: timer triggers, the peer outbox, the email outbox, and the
-   *  reactions already pending in the event log. ONE reader, because two of them
-   *  existed and a fourth source wired into only one would be a workspace that
-   *  wakes for it on the tick and never at activation.
-   *
-   *  The event log was exactly that missing fourth source. A pending reaction
-   *  had only the in-memory drain debounce behind it, so an event admitted just
-   *  before an eviction — or re-pended by a compensating signal — was durable,
-   *  unreachable, and invisible to the activation reconcile that exists to
-   *  notice a lost wake. `nextPendingDrainAt` is derived from the same rows the
-   *  drain selects, so the two cannot disagree about what counts as work.
-   *
-   *  A SOURCE FOLDED HERE OWES A PHASE IN {@link _kinuTimerTick}, and the event
-   *  log arrived without one: the wake landed on a frame that fired triggers,
-   *  pushed both outboxes and re-armed from this same fold, which still
-   *  answered due. Arming a chain whose frame cannot take the work is not a
-   *  wake — it is a one-second loop that never drains, which is what an idle
-   *  workspace did with every webhook, email and peer message that outlived its
-   *  debounce. Measured 2026-09-17, D6. The drain phase is that rule's other
-   *  half; the delegation queue is NOT folded here for the mirror reason, and
-   *  {@link armDelegationWake} says why. */
+  /** The next wake owed across triggers, peer outbox, email outbox and pending reactions.
+   * Every source folded here must have a phase in {@link _kinuTimerTick} (D6); delegation is not. */
   private nextWakeAt(now: number): number | null {
     return nextAlarmTime(
       now,
@@ -1860,53 +1356,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.peerHub.nextRetryAt(),
       this.emailOutbox.nextRetryAt(),
       this.eventLog.nextPendingDrainAt(now),
-      // The prompt-cache warm: a due-trigger-shaped obligation on the root
-      // actor, folded here so an eviction cannot lose it — the row is durable
-      // and the activation reconcile re-arms from this same fold. Its phase in
-      // `_kinuTimerTick` is `alarm.cache_warm`, which is the other half of this
-      // file's one rule for the chain.
+      // Prompt-cache warm; its tick phase is `alarm.cache_warm`.
       this.cacheWarming.nextWarmAt(),
-      // The sleep-time lane's idle and closed-tab triggers, folded for the
-      // same reason: the instants are durable rows, and the phase is
-      // `alarm.sleep_time`. The fold answers only while an unprocessed turn
-      // is recorded, and the phase releases that record whenever it refuses,
-      // which is what keeps the two agreeing.
+      // Sleep-time triggers (phase `alarm.sleep_time`); answers only while an unprocessed turn is recorded,
+      // and the phase releases that record whenever it refuses.
       this.nextSleepTimeWakeAt(),
     );
   }
 
   /**
-   * Arm the wake that RUNS an admitted delegation.
-   *
-   * TWO wake chains exist and only one of them drains an assignment:
-   * `drainAdmittedDelegations` is reachable from {@link maintenanceWork}
-   * alone, and `_kinuTerminalRetryTick` is the only caller of that, so the arm
-   * an admission owes is the terminal-retry row. `armTimer` is the other
-   * chain: `_kinuTimerTick` fires due triggers, re-drives the peer outbox,
-   * reconciles outbound email and re-arms itself, and touches no actor's
-   * assignment queue.
-   *
-   * REVERSES the arm half of D3 (docs/ARCHITECTURE-DECISIONS.md), which folded
-   * `hasAdmittedDelegations()` into `nextWakeAt` and therefore armed the chain
-   * that cannot take the row: the tick woke at once, ran three phases that do
-   * not look at `subordinate_task`, and re-armed at `now` from the same fold,
-   * while the child's assignment waited for whatever unrelated obligation next
-   * put a row on the retry chain. D3 carries the measurement under both
-   * shapes; its headline is the hire tier's first four rows at 60,722 /
-   * 67,002 / 61,003 / 60,988 ms under the fold against 640 / 6,995 / 1,006 /
-   * 983 ms under this arm.
-   *
-   * The predicate stays where it already was — `owedUntimedWork` counts an
-   * admitted delegation, so the retry chain KEEPS its lap row while one is
-   * pending and the activation arms it through `owedWorkExists`. What was
-   * missing is only the arm at admission time.
+   * Arms the terminal-retry chain, the only one that drains admitted delegations (reverses the arm
+   * half of D3, docs/ARCHITECTURE-DECISIONS.md); `armTimer`'s tick never touches assignment queues.
    */
   private armDelegationWake(): void {
     this.armOwedWorkWake('delegation');
   }
 
-  /** Arm the terminal-retry wake outside this turn. `reason` names the
-   *  obligation that asked for it, and how a failure to arm is reported. */
+  /** `reason` names the obligation that asked for the wake and how an arm failure is reported. */
   private armOwedWorkWake(reason: keyof typeof WAKE_ARM_FAILURE): void {
     const failure = WAKE_ARM_FAILURE[reason];
 
@@ -1922,16 +1388,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Re-derive and arm the wake, because the durable work that needs one changed.
-   *
-   * The BackendHost seam core's `scheduleDrain` reaches (`reconcileDurableWake`),
-   * and the one this actor offers it. `armTimer` is soonest-wins and collapses
-   * onto a single row, so calling this on every ingress and every compensation
-   * costs at most one early tick and never a second wake row.
-   *
-   * Distinct from {@link reconcileTimerRow}, which only heals a MISSING row at
-   * activation: this one moves an existing wake earlier when new work is due
-   * before it.
+   * Re-derive and arm the wake when durable work changed; safe on every ingress since `armTimer`
+   * collapses. Unlike {@link reconcileTimerRow}, this moves an existing wake earlier.
    */
   protected override durableWakeOwner(): () => void {
     return () => this.armDurableWake();
@@ -1952,22 +1410,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /**
-   * The orchestrator's own budgeted sweeps folded onto the base seam.
-   *
-   * EVERY pass RUNS — no short-circuit — because each owns a different table,
-   * and all three are the same shape: synchronous, row-budgeted, fenced by the
-   * construction cutoff, and idempotent. That is what makes this ONE seam the
-   * init gate and the alarm frame can both run, rather than a list the gate
-   * re-folds by hand and drifts from.
-   */
+  /** Every pass runs (no short-circuit): each owns a different table and is budgeted and idempotent. */
   protected override maintenanceSweeps(): boolean {
     const branches = this.reconcileOrphanedBranches();
     const fibers = super.maintenanceSweeps();
-    // A schedule sweep that THREW has not finished its work, so it answers
-    // unfinished rather than failing the caller: the gate must complete, and
-    // the wake's own capped backoff is what keeps a pass that cannot succeed
-    // from becoming a one-second loop.
+    // A throwing schedule sweep reports unfinished instead of failing: the gate must complete, and the
+    // wake's capped backoff prevents a one-second loop.
     let schedules = true;
 
     try {
@@ -1984,52 +1432,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * A callback name this class still carries a member for.
-   *
-   * The framework dispatches `this[row.callback]`, so a row naming nothing on
-   * this object is unrunnable by construction — no age makes it runnable and no
-   * deploy brings the method back, because the code in one isolate is one
-   * version. Membership rather than callability, because every arming call site
-   * names a METHOD (`Agent.schedule` types its callback as `keyof this`), so a
-   * same-named non-function property is not a row this class can produce.
+   * `this[row.callback]` is what the framework dispatches, so a row naming nothing here is unrunnable.
+   * Membership, not callability: every arming site names a method (`keyof this`).
    */
   private canDispatch(callback: string): boolean {
     return callback in this;
   }
 
-  /** Drop schedule rows that came due so long ago that nothing downstream can
-   *  still act on them — a chat-recovery continuation is only meaningful while
-   *  its fiber is recoverable, and the SDK stops recovering fibers past
-   *  `fiberRecoveryMaxAgeMs`. Dropping is safe rather than lossy because the
-   *  continuation is DERIVED state: `_checkRunFibers`/`_checkFacetRunFibers`
-   *  re-register it from the fiber snapshot on the same wake, after this runs.
-   *  Recurring rows are left alone — `cron`/`interval` re-date themselves to
-   *  the next fire after one catch-up run, so they cannot pile up. Running on
-   *  every wake (rather than as a one-shot migration) keeps this a standing
-   *  invariant: normally it matches nothing, and it stops any future backlog
-   *  from stampeding one alarm cycle.
-   *
-   *  The Kinu wake is EXEMPT, however overdue. It is not a continuation whose
-   *  moment passed: it is the chain itself, its work is state-driven (whatever
-   *  is due when it finally runs), and it is the workspace's only wake — so
-   *  dropping it stops triggers, peer retries and email reconciliation
-   *  permanently, while running it late costs one immediate tick. This sweep
-   *  runs BEFORE the SDK reads the due rows, which is exactly why the omission
-   *  mattered: the row was deleted on the activation that would have run it. */
+  /**
+   * Drop one-shot rows overdue past `fiberRecoveryMaxAgeMs`-era horizon; the fiber checks re-register
+   * live continuations on the same wake. Recurring rows re-date themselves and are left alone.
+   * The Kinu wake is exempt however overdue: it is the workspace's only, state-driven wake.
+   */
   private sweepUnrunnableSchedules(): boolean {
     const cutoffSec = Math.floor((Date.now() - STALE_SCHEDULE_HORIZON_MS) / 1000);
 
-    // The terminal retry is exempt for the same reason the Kinu timer is: it is a
-    // STATE-driven wake, not a dated one. Its obligation is whatever the ledger
-    // still holds, and that does not expire — deleting an overdue row left owed
-    // effects with no carrier, and for a facet's row the root cannot even read
-    // the ledger it stranded.
-    // LIMIT-bounded for the init gate: deletion is the cursor, and a pass that
-    // filled its budget reports truncated so the caller arms the maintenance
-    // wake — the remainder must not wait for the next eviction. Selected THEN
-    // deleted (one synchronous frame, so nothing interleaves) because the
-    // count decides truncation and must not depend on a driver's RETURNING
-    // support.
+    // The terminal retry is exempt like the Kinu timer: a state-driven wake whose ledger obligation
+    // never expires. LIMIT-bounded; select then delete so the count decides truncation portably.
     const rowidOf = (row: Record<string, SqlStorageValue>): number =>
       v.parse(v.object({ rowid: v.number() }), row).rowid;
 
@@ -2043,18 +1462,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       TERMINAL_RETRY_CALLBACK,
     ).toArray().map(rowidOf));
 
-    // THE SECOND CLASS, and it is not a matter of age or type. A row whose
-    // callback is NOT a method of this class cannot run at any date: the
-    // alarm loop logs `Callback <name> not found or is not a function` and moves
-    // on WITHOUT deleting the row, so it re-reports on every wake for as long as
-    // the object exists. Production carries exactly that shape — a snapshot
-    // callback armed by a class whose method moved to another package — and no
-    // horizon reaches it, because a `cron` or `interval` row re-dates itself
-    // past the cutoff on every pass.
-    //
-    // Asked as DISTINCT callbacks first, which is a handful of identifiers
-    // however many rows exist, so the dispatch check runs once per name rather
-    // than once per row.
+    // A row whose callback is not a method here never runs and the alarm loop never deletes it, and
+    // recurring rows escape the horizon. DISTINCT keeps the dispatch check once per name.
     const dead = this.ctx.storage.sql.exec(`SELECT DISTINCT callback FROM cf_agents_schedules`)
       .toArray()
       .map((row) => v.parse(v.object({ callback: v.string() }), row).callback)
@@ -2086,8 +1495,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       diagnostics.event('schedule.stale_rows_dropped', {
         dropped,
         horizonMs: STALE_SCHEDULE_HORIZON_MS,
-        // Identifiers from this repository's own code, and the whole diagnosis
-        // when a row outlives its method.
         unrunnableCallbacks: dead.join(','),
       });
     }
@@ -2098,30 +1505,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected get engine(): EvolutionEngine {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, this.stores.history, {
-        // The grading pass's verdict row, craft scores, tombstone and
-        // announcement as ONE unit. A synchronous run inside a Durable Object is
-        // already atomic, so this is the honest identity — but answering through
-        // the platform's own primitive keeps the group one unit whatever core
-        // comes to put between its statements, exactly as the terminal claim
-        // does.
+        // Verdict row, craft scores, tombstone and announcement commit as one unit via transactionSync.
         transaction: (body) => { this.ctx.storage.transactionSync(body); },
-        // The turn review's own model calls debit the mission the reviewed turn
-        // ran under — the same ledger, through the same seam, as the work it
-        // reviews. Unbudgeted turns never reach it.
+        // The turn review's model calls debit the reviewed turn's mission; unbudgeted turns never reach it.
         governor: this.budget,
-        // The same sink an agent-initiated agents(action:'swarm') uses — one
-        // broadcast for every search this workspace runs (ActorAgent).
+        // Same broadcast sink as agents(action:'swarm') in ActorAgent.
         onMctsProgress: (event) => this.onMctsProgress(event),
-        // Replay-eval rollout: the LIVE scaffold with the real LLM + tool
-        // bridges — the closest re-run of "what would the agent do today".
+        // Replay-eval rollout runs the live scaffold with the real LLM and tool bridges.
         replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
-        // The promotion gate's evidence is gathered on the cadence lane rather
-        // than on the turn: a DO under keepAlive can afford a candidate
-        // rollout without blocking the chat queue.
+        // Promotion-gate evidence runs on the cadence lane so rollouts don't block the chat queue.
         ...this.shadowTrialPorts,
       });
-      // Mission Inbox: the session-end changelog digest also goes to the
-      // owner's inbox — the "what I changed about myself" email.
+      // The session-end changelog digest is also emailed to the owner.
       this._engine.onEvent((event) => {
         if (event.type !== 'changelog_digest') return;
         this.emailOwnerNotification('Evolution changelog digest', event.message);
@@ -2131,23 +1526,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._engine;
   }
 
-  /** The hash of the token this workspace holds — not the secret, and not
-   *  invertible, so it is safe for the owner's UserDO to ask for. It is what
-   *  lets the one-shot backfill skip workspaces that already agree instead of
-   *  rotating every token it touches. Worker-side DO RPC only. */
+  /** Non-invertible token hash, safe for the owner's UserDO to read; worker-side DO RPC only. */
   async getWorkspaceCapabilityHash(): Promise<string | null> {
     return this.workspaceCapabilityHash();
   }
 
 
-  /** The claimed owner, once read. A claim never changes hands mid-activation:
-   *  a second user claiming throws, so a cached non-null answer cannot go
-   *  stale. Null (unclaimed) is never cached — the next read must see a claim
-   *  that lands later. Protected so a harness cold activation drops it with
-   *  the other latches. */
+  /**
+   * Cached owner; a claim never changes mid-activation. Null (unclaimed) is never cached.
+   * Protected so a harness cold activation drops it with the other latches.
+   */
   protected _ownerUserId: string | undefined;
 
-  /** Read the owner userId from workspace_identity; '' (empty) means unclaimed. */
+  /** '' in workspace_identity means unclaimed. */
   protected getOwnerUserId(): string | null {
     if (this._ownerUserId !== undefined) return this._ownerUserId;
     const rows = this.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM workspace_identity LIMIT 1`;
@@ -2221,14 +1612,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const retirement = (async (): Promise<ActorDirectoryResult> => {
       const entry = directory.apply(caller, path, input);
       await this.scheduleTerminalRetry(Date.now());
-      // The PHYSICAL half of a retirement is the host's, in one call: it drops
-      // the actor's runtime objects, cuts its `actor_id`-scoped rows inside the
-      // retirement transaction, and — only for a destroy — releases the bytes
-      // outside SQL (its home on the session, its `.kinu/agents/<key>/`
-      // subtree). ONE call, not a teardown apiece for the two things a facet
-      // owned: there is no descendant facet database to destroy over the SDK's
-      // facet tree, and no `facetHomeReleaser` standing apart from the host that
-      // provisioned the home.
+      // The host does the whole physical retirement in one call: runtime objects, `actor_id` rows in
+      // the retirement transaction, and on destroy the home and `.kinu/agents/<key>/` subtree.
       await this.actorHost().retire(caller, {
         reference: input.reference, name: input.name, destroy: true,
       });
@@ -2261,20 +1646,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Does this workspace host a chat-reachable actor under this LOGICAL name.
-   *
-   * The edge asks before it hands the request over, so a name this workspace
-   * does not host is a 404/403 at the boundary rather than a refusal inside an
-   * actor. It answers a REFUSAL or nothing — never a storage key, which is the
-   * change: the old `resolveSubordinateClientKey` handed one back so
-   * `server.ts` could substitute it into the SDK's `/sub/<class>/<key>` hop,
-   * which put a physical key in a client-visible URL. There is no hop and no
-   * rewrite; the root serves the actor itself.
-   *
-   * Still checks BOTH authorities, because they answer different questions: the
-   * directory says the actor exists and belongs to this workspace, and the
-   * roster says it is not dismissed. A dismissed subordinate keeps its rows
-   * (an archive is readable) and must not keep its chat.
+   * Answers whether this workspace hosts a chat-reachable actor under this logical name; never a
+   * storage key. Checks both the directory (exists, belongs here) and the roster (not dismissed;
+   * dismissed keeps rows, not chat).
    */
   async resolveHostedActorRoute(name: string): Promise<{ ok: true } | Refusal> {
     try {
@@ -2293,21 +1667,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * ONE HOSTED ACTOR'S CHAT, as the room serving its pane's sockets asks for
-   * it: that actor's transcript, that actor's queue, that actor's connections.
-   *
-   * The ROSTER is the authority here and the directory is not, because they
-   * answer at different times: the directory's validation ran at the edge
-   * before this socket was admitted (`resolveHostedActorRoute`), and what can
-   * change under an open socket is dismissal — a dismissed actor keeps its
-   * rows and must lose its chat.
-   *
-   * `send` is the delegation runner's own admission path, so a message typed
-   * in a pane and a task handed over by the `agents` tool land the same way:
-   * a row on that actor's event log plus a durable wake. The opening row is
-   * written under the id the CLIENT renders it by — the hook sends its whole
-   * list on every request, so `admitted` has to recognise it — and the answer
-   * is recorded when the turn ends ({@link recordHostedChatAnswer}).
+   * The roster is the authority here: directory validation ran at the edge, and dismissal can change under an
+   * open socket. The opening row uses the client's id so `admitted` recognises resent lists.
    */
   protected override transcriptFor(actor: ActorHandle): SessionTranscript {
     return this.actorHost().bindStores(actor).stores.history.transcript(CHAT_SESSION_ID);
@@ -2329,9 +1690,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       history: () => rows.history(),
       admitted: (id) => rows.has(id),
       send: async (input) => {
-        // The opening row FIRST, under the id the client renders it by: the
-        // hook resends its whole list, and `admitted` is what stops the same
-        // words becoming a second turn.
+        // Opening row first, under the client's id: the hook resends its whole list, and `admitted`
+        // stops the same words becoming a second turn.
         const message = await history.admitInput({
           id: input.id, turnId: input.id, message: turnInputMessage(input),
           assertOwner: () => bound.handle.assertCurrent(),
@@ -2347,18 +1707,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           kind: 'message', body: input.text, mode: input.mode, messageId: input.id,
         });
 
-        // NOTHING IS ARMED HERE, and that is a decision rather than an
-        // omission: `admitHostedTask` already arms it (`seams.armWake`,
-        // subordinate-hosting.ts), and which CHAIN that is belongs to that one
-        // seam. The distinction is load-bearing and was measured: the arm has
-        // to land on the chain whose frame reaches `drainAdmittedDelegations`,
-        // and an arm on the other chain wakes a frame that reads no
-        // `subordinate_task` row and re-arms itself, which held every hire for
-        // a full minute. A second arm from here would either duplicate that
-        // row or, worse, name the wrong chain beside the seam that owns it.
+        // Nothing is armed here: `admitHostedTask` arms the wake (`seams.armWake`), and only that seam knows
+        // the right chain; a second arm would duplicate the row or name the wrong chain.
 
-        // A message the actor takes now opened its turn; one that joined work
-        // already running landed mid-turn, which is what the composer reports.
         return handoff.delivery === 'starts_now' ? 'turn' : 'mid-turn';
       },
       interrupt: () => { this.actorHost().hosted(reference)?.session.interrupt(); },
@@ -2374,15 +1725,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /**
-   * The answer one hosted turn produced, into that actor's own chat.
-   *
-   * `runHeadInference` records the turn's steps in the run ledger and reports
-   * its summary; nothing wrote the actor's conversation, so a hired agent's
-   * pane had no transcript of its own to render — which is half of why the
-   * root's leaked into it. The row lands here, at the one place a hosted turn
-   * ends, and the pane is told in the same breath.
-   */
+  /** Records a hosted turn's answer into that actor's own chat; `runHeadInference` writes only the
+   *  run ledger. */
   private async recordHostedChatAnswer(reference: ActorReference, id: string, completion: HostedTaskResult['canonicalCompletion']): Promise<void> {
     if (completion === undefined) return;
     const history = this.actorHost().bindStores(reference).stores.history;
@@ -2398,13 +1742,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     this.ctx.storage.transactionSync(() => transcript.appendAssistant(entry));
   }
-  /** The agents tool's peer deps over the cross-workspace transport. Owner
-   *  resolution is lazy inside each action (the toolset is cached across
-   *  turns — including a pre-claim build — so deps must not capture owner
-   *  state at construction). */
+  /** Owner resolution is lazy inside each action: the toolset is cached across turns (including
+   *  pre-claim). */
   private getPeersToolDeps(): PeersToolDeps {
-    /** Same-owner roster check so a typo'd name errors clearly instead of
-     *  materializing a fresh unowned DO that rejects the message. */
+    /** Same-owner roster check so a typo'd name errors instead of materializing an unowned DO. */
     const requirePeer = async (agent: string): Promise<void> => {
       this.requireOwnerUserId();
 
@@ -2455,11 +1796,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** release.* (tools/release-codemode.ts) is constructed once per DO
-   *  lifetime along with eval, so it cannot re-check ownership on
-   *  every call the way a callable RPC does. An unclaimed workspace gets a
-   *  deps object whose every method rejects with the same honest reason,
-   *  rather than a namespace that silently vanished or crashed on first use. */
+  /** release.* is built once per DO lifetime and cannot re-check ownership per call, so an unclaimed
+   *  workspace gets deps that all reject with the same reason. */
   private unclaimedReleaseDeps(): ReleaseToolDeps {
     const reject = async (): Promise<never> => {
       throw new Error('This agent has no owner yet, so there is no release lane to reach. Open it through the authenticated app or CLI first.');
@@ -2471,8 +1809,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** The release ledger's writes over the owner's UserDO. The release tool and
-   *  the engine beneath it reach the same governed board through these. */
   private releaseLedgerWrites(): Omit<ReleaseLedger, 'detail'> {
     return {
       update: async (changeId, patch) => {
@@ -2529,11 +1865,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private _releaseEngine: ReleaseEngine | null = null;
-  /** The execution engine beneath the release ledger: apply/checks in
-   *  the agent's sandbox container (raw exit codes), preview through the
-   *  path-style preview proxy, deploy/rollback verified against real command
-   *  output. Ledger writes go through the owner's UserDO so the engine's
-   *  results land on the same governed board the UI reads. */
   private getReleaseEngine(): ReleaseEngine {
     if (this._releaseEngine) return this._releaseEngine;
     const handle = this.rt.sandboxHandle;
@@ -2550,9 +1881,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           return stub.getReleaseDetail(caller, changeId);
         },
       },
-      // A stored `github` credential (POST /api/user/credentials/github with a
-      // bearer PAT) authorizes clone/push for github source bindings; absent →
-      // the engine's honest add-a-credential error.
+      // A stored `github` credential authorizes clone/push for github source bindings; null otherwise.
       gitHubAuth: async () => {
         const { stub, caller } = await this.userHub();
         const headers = await stub.getAuthHeaders(caller, 'github');
@@ -2564,9 +1893,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._releaseEngine;
   }
 
-  /** The actor profile (ActorAgent): the orchestrator wires the full
-   *  user-facing tool surface — cross-workspace peers, cross-workspace
-   *  experience transfer, and the release lane. */
   protected actorToolDeps(): ActorToolDeps {
     return {
       ...this.teamProfile(),
@@ -2576,18 +1902,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** The root of the workspace's subordinate tree: depth 0, the whole cap below
-   *  it. A constant and not a stored value — the orchestrator IS the root, so
-   *  there is nothing an eviction could lose. */
+  /** A constant, not stored: the orchestrator is the root (depth 0), so eviction cannot lose it. */
   protected delegationBudget(): DelegationBudget {
     return ROOT_DELEGATION_BUDGET;
   }
 
 
-  /** `agent.*` (self-steering) and `release.*` (the governed release lane —
-   *  left the native surface; see tools/release-codemode.ts). Both read
-   *  their deps lazily so a claimOwner mid-DO-lifetime lands without
-   *  rebuilding eval. */
+  /** Both providers read deps lazily so a mid-lifetime claimOwner lands without rebuilding eval. */
   protected extraCodemodeProviders(): CodemodeProvider[] {
     return [
       createAgentSelfProvider(agentSelfHost({
@@ -2596,7 +1917,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         triggers: () => this.triggerRegistry,
         jobs: () => this.jobs,
         budget: () => this.budget,
-        // The owner's revoke path, which drops the webhook secret with the row.
+        // Owner's revoke path; drops the webhook secret with the row.
         cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
         armCompactNow: () => { this.compactionState.armForceCompaction(this.name); },
       })),
@@ -2604,19 +1925,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ];
   }
 
-  /** Mission Inbox: owner notifications go out as email. */
   protected notifyOwner(subject: string, body: string): void {
     this.emailOwnerNotification(subject, body);
   }
 
-  /** Worker calls this on every authenticated request before any other RPC.
-   *  Claims the agent for `userId` if unclaimed; 403s on cross-user collision.
-   *
-   *  Defensive: claimOwner can fire BEFORE onStart() completes on a fresh DO
-   *  activation (the agents SDK doesn't strictly guarantee onStart→RPC order).
-   *  ensureSchema() creates all required tables so the SELECT/UPDATE never hits
-   *  a missing table or column, and is flag-gated so onStart won't repeat it.
-   */
+  /** Called by the Worker on every authenticated request before any other RPC; 403s on cross-user collision.
+   *  May run before onStart() completes, so ensureSchema() runs here first. */
   async claimOwner(userId: string): Promise<{ owner: string; capabilityHash: string | null }> {
     if (!userId) throw new Error('userId required');
 
@@ -2630,15 +1944,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }), { workspace: this.name });
     }
 
-    // The HASH, not a boolean: the owner's UserDO compares it against what it
-    // has registered, so any disagreement — a workspace holding nothing, or one
-    // holding a token the UserDO no longer knows — is repaired rather than
-    // mistaken for "already provisioned".
+    // A hash, not a boolean: the UserDO compares it to its registration so any mismatch gets repaired.
     const capabilityHash = await this.workspaceCapabilityHash();
     const current = this.getOwnerUserId();
 
     if (current === null) {
-      // Unclaimed — first touch. Ensure identity has the owner marker.
       const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
 
       if (exists.length === 0) {
@@ -2663,34 +1973,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       throw new Error(`Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`);
     }
 
-    // No scaffold probe on this branch: it runs on EVERY authenticated
-    // request, and a cold activation paid a Nimbus network round trip inside
-    // it (claimOwner p90 1170ms / max 2456ms across 48h of production). The
-    // first claim bootstraps; if that bootstrap was interrupted, the first
-    // turn finishes it — beforeTurn awaits ensureOwnedScaffold before
-    // anything reads the workspace files.
+    // No scaffold probe here: this runs on every authenticated request. An interrupted bootstrap
+    // is finished by beforeTurn, which awaits ensureOwnedScaffold before reading workspace files.
     return { owner: current, capabilityHash };
   }
 
-  // The reactor (drain-then-stop) lives on the core AgentOrchestrator
-  // (it binds selected pending events via markConsumed, then injects one
-  // signal through the core delivery seam). Ingress paths use
-  // the debounced `this.orch.scheduleDrain()`; the post-turn hook drains
-  // immediately via `this.orch.drainPendingEvents()`.
+  // The reactor lives on the core AgentOrchestrator. Ingress uses the debounced
+  // `this.orch.scheduleDrain()`; the post-turn hook drains via `this.orch.drainPendingEvents()`.
 
   /**
-   * The facts and parts THIS root's settled response owes, handed to core's one
-   * declaration.
-   *
-   * Everything here is a READING — the accumulator's takes, this activation's
-   * pending branches, the scaffold candidate, the mission — and every one of them
-   * is taken NOW, before any effect runs, because the whole list is claimed up
-   * front: an input only the previous effect could produce could not be recorded,
-   * and would not survive an interruption between the two.
-   *
-   * Which readings become rows, in what order, on which lane and behind which
-   * gate is core's {@link declareTerminalRoster}, because the workspace root, the
-   * subordinate facet and the CLI must not answer those questions three ways.
+   * Readings this root's settled response owes; all taken now, before any effect runs, since the
+   * list is claimed up front. Row order, lanes and gates belong to {@link declareTerminalRoster}.
    */
   protected owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
     const facts: TerminalTurnFacts = {
@@ -2701,30 +1994,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       completed: input.completed,
       userText: input.userText,
       assistantText: input.assistantText,
-      // SCOPED once, here: the mission labels the turn ran under have to travel
-      // with every recording, and a cold replay has no active governor scope.
+      // Scoped here: mission labels must travel with every recording, and a cold replay
+      // has no active governor scope.
       scopedTurn: projectJsonValue({ value: this.orch.scopedTurn(input.turn) }),
       recordedAt: Date.now(),
       evolutionEnabled: this._turnEvolutionEnabled,
     };
 
-    // Keyed on the turn rather than rolled — `queueTurnShadowTrial` re-reads the
-    // pending version on every call, so a replay would otherwise score this turn
-    // against a candidate that was not under trial when it ran.
+    // Keyed on the turn, not rolled: `queueTurnShadowTrial` re-reads the pending version,
+    // so a replay would otherwise score this turn against a candidate not under trial then.
     const sampledVersion = owesShadowTrial(facts) ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
 
     return declareTerminalRoster(facts, this.rosterParts(input, sampledVersion, readMission(this.boundSql)));
   }
 
-  /** The optional halves of this root's terminal roster, each present only when
-   *  this turn earned it — the caller-side decision the roster's own type leaves
-   *  to the backend that knows its lifetime. */
   private rosterParts(
     input: OwedTerminalEffectsInput, sampledVersion: number | null, mission: string | null,
   ): TerminalTurnParts {
     const parts: TerminalTurnParts = {
-      // Over the row the transcript is about to persist, so the announcement a
-      // cut turn still owes replays from what the row holds.
+      // Over the row the transcript is about to persist, so a cut turn's announcement replays from it.
       turnEndExtensions: true,
       takes: {
         credited: input.credited,
@@ -2739,16 +2027,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       taskReminder: input.taskReminder ?? undefined,
       advisor: projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn), input.reachableTools) }),
       sleepTime: true,
-      // The genesis turn owes the naming the create left to it: the title the
-      // create stored is a stand-in, and no other turn replaces one.
+      // The genesis turn owes the naming: the create stored a stand-in title, and no
+      // other turn replaces one.
       autoTitle: { mission, standIn: input.event === WORKSPACE_CREATED_EVENT },
       autoGepa: true,
       shadowTrial: sampledVersion === null ? undefined : {
         pendingVersion: sampledVersion,
-        // BOUNDED at declaration, not at the queue insert three effects later:
-        // a recorded input is a SQLite row too, and one built from a
-        // million-token turn fails its insert partway through a claimed
-        // sequence, leaving a prefix recovery reads as the whole roster.
+        // Bounded at declaration: an oversized recorded input fails its SQLite insert partway through
+        // a claimed sequence, leaving a prefix recovery reads as the whole roster.
         trialContext: projectJsonValue({
           value: trimTrialContext([...input.trialContext]),
         }),
@@ -2760,17 +2046,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
 
   /**
-   * The bodies of this root's terminal effects.
-   *
-   * EVERY ONE OF THEM IS REPLAYABLE, and that is a property each body has to
-   * earn rather than a policy the ledger can grant. The earlier shape declared
-   * two of them "indeterminate" and had the ledger refuse a pending row, which
-   * meant an interruption BEFORE the effect ran permanently dropped the
-   * extension turn-end, the completed-turn append, the session cadence and the
-   * pending-event drain. So the compound spine is split into four separately
-   * keyed boundaries, each idempotent at its own edge: a stable id on the window
-   * append, a keyed extension emit, a drain that selects only unbound rows, and
-   * a lane scheduler whose queues are durable.
+   * Every body here must be replayable on its own: each boundary is idempotent at its edge
+   * (stable window-append id, keyed extension emit, drain of unbound rows, durable lane queues).
    */
   protected override terminalEffectTable(): TerminalEffectTable {
     return {
@@ -2793,11 +2070,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         input: v.object({
           drainTurnId: v.string(), answer: v.string(), requestId: v.string(),
         }),
-        // Replayable because every send is keyed: the outbound-email intent log
-        // stamps a deterministic Message-ID per reply channel, so a re-drive puts
-        // the SAME message on the wire and the receiver treats it as the one it
-        // already has. A batch whose channel is still open reports `owed` and
-        // keeps both its lease and its row, which is what leaves it recoverable.
+        // Replayable: the outbound-email intent log stamps a deterministic Message-ID per channel.
+        // A batch with an open channel reports `owed`, keeping its lease and row for recovery.
         run: async ({ drainTurnId, answer }) => {
           const closed = await this.completeEventBatch(drainTurnId, answer);
 
@@ -2816,27 +2090,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         journal: this.headJournal,
       }),
 
-      // ── the settle spine, as four keyed boundaries ──────────────────────
-
       sleep_time: terminalEffect({
-        // No recorded input: the evidence is the transcript, read at run time.
-        // The row carries the turn-count trigger's TURN — that this turn
-        // completed — and nothing a replay could not re-read.
+        // No recorded input: evidence is the transcript, read at run time.
         input: v.object({}),
-        // NOT swallowed. Catching every import, model and write failure in
-        // `runSleepTimeCompute` and resolving normally lets the row record
-        // `completed` and be pruned even when no fact update ran. The throw
-        // reaches the ledger, which keeps the row owed until the compute
+        // Failures must throw, not be swallowed, so the ledger keeps the row owed until the compute
         // actually finishes.
         run: async () => {
           if (!this.config.getSleepTimeComputeEnabled()) return { status: 'completed', detail: 'the lane is off' };
           const window = await this.sleepTimeWindow();
 
-          // THE TURN-COUNT TRIGGER. A turn that does not reach the cadence is
-          // left for a later one, or for the idle and closed-tab wakes, which
-          // read the instant recorded here. Named on the log: "why did this
-          // turn remember nothing" is answered by this row, and the workerd
-          // probes join a settled turn on it beside `memory.facts_compressed`.
+          // Turn-count trigger: a turn below the cadence is left for a later turn or the idle and
+          // closed-tab wakes. The logged event is joined by workerd probes beside `memory.facts_compressed`.
           if (!sleepTimeDue(window)) {
             this.armSleepTimeWake(window);
             diagnostics.event('memory.facts_deferred', {
@@ -2854,10 +2118,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       auto_title: terminalEffect({
         input: v.object({ subject: v.string(), standIn: v.optional(v.boolean()) }),
-        // Replayable from the recorded input. A row without `standIn` names only
-        // a placeholder, so its replay over a titled workspace changes nothing;
-        // the genesis row keeps `standIn` through every retry, so a model call
-        // that failed is asked again until a name lands.
+        // Replayable. A row without `standIn` over a titled workspace changes nothing; the
+        // genesis row keeps `standIn` through retries, so titling is retried until a name lands.
         run: async ({ subject, standIn }) => {
           const unreachable = await this.titlingRefusal();
 
@@ -2870,11 +2132,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       auto_gepa: terminalEffect({
         input: v.object({}),
-        // AWAITED. The earlier body returned before `advancePromptSections` and
-        // `runScaffoldGepaOptimization` finished, so an eviction after that return
-        // cancelled the model work with no pending row left to replay. The cadence
-        // is a durable turn count, so a replay either finds the interval reached —
-        // and is the run that was owed — or does nothing.
+        // Awaited so eviction cannot cancel the model work without a pending row. The cadence is a
+        // durable turn count, so a replay either runs the owed run or does nothing.
         run: async (_input, scope) => {
           await this.maybeRunAutoGepa(keyedScope(scope));
 
@@ -2886,12 +2145,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
 
   /**
-   * The turns the sleep-time lane has not read, over this root's transcript.
-   *
-   * `lastRunTurn` is DERIVED, never counted: the walk stops at the newest answer
-   * whose tombstone says a run read it, so the same rows that hold the evidence
-   * hold the cadence, and a wake and a turn-count trigger cannot both run over
-   * one set of turns — the second finds the first's tombstone and nothing owed.
+   * `lastRunTurn` is derived from the newest answer tombstoned as read, so a wake and a
+   * turn-count trigger cannot both run over one set of turns.
    */
   private async sleepTimeWindow(): Promise<SleepTimeWindow> {
     return sleepTimeWindow(
@@ -2901,12 +2156,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Leave a completed turn for the timed triggers: record the instant it
-   * settled, and put it on the object's one durable wake.
-   *
-   * ARMED ONLY WHEN A WAKE COULD RUN. A first turn, or a window with nothing
-   * unprocessed, would put an instant on the fold that the phase then refuses
-   * — the one-second loop `nextWakeAt` documents — so those clear the row.
+   * Armed only when a wake could run; otherwise the row is cleared, avoiding the one-second
+   * loop documented on `nextWakeAt`.
    */
   private armSleepTimeWake(window: SleepTimeWindow): void {
     if (window.completedTurns < 2 || window.turns.length === 0) {
@@ -2919,7 +2170,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.armDurableWake();
   }
 
-  /** A stored sleep-time instant, or null when the row is absent or unreadable. */
   private sleepTimeInstant(key: string): number | null {
     const raw = this.config.get(key);
     const at = raw === null ? Number.NaN : Number(raw);
@@ -2927,7 +2177,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return Number.isFinite(at) ? at : null;
   }
 
-  /** When the idle or closed-tab trigger next owes a wake, for {@link nextWakeAt}. */
   private nextSleepTimeWakeAt(): number | null {
     return sleepTimeWakeAt({
       settledAt: this.sleepTimeInstant(SLEEP_TIME_SETTLED_AT),
@@ -2936,23 +2185,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The idle and closed-tab triggers, in the alarm frame armed for them.
-   *
-   * Answers whether a run landed. The window is re-read here rather than
-   * carried from the arm: turns may have completed and been processed since,
-   * and the transcript and its tombstones are what say so.
-   *
-   * A window the timed triggers can never run over — a turn admitted since
-   * (its completion re-arms), nothing unprocessed, a first turn — RELEASES the
-   * settled instant, because the fold would otherwise keep answering an instant
-   * this phase keeps refusing.
+   * Runs the idle and closed-tab triggers; returns whether a run landed. The window is re-read, not
+   * carried from the arm. A window nothing can run over releases the settled instant.
    */
   private async runSleepTimeIfDue(now: number): Promise<boolean> {
     const settledAt = this.sleepTimeInstant(SLEEP_TIME_SETTLED_AT);
 
     if (settledAt === null) return false;
-    // The lane switched off after the arm is one more window nothing can run
-    // over, and releases the instant for the same reason the others do.
+    // A lane switched off after the arm also releases the instant.
     const window = this.config.getSleepTimeComputeEnabled() ? await this.sleepTimeWindow() : null;
 
     if (window === null || window.completedTurns < 2 || window.turns.length === 0 || window.inputPending) {
@@ -2976,12 +2216,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return true;
   }
 
-  /**
-   * The closed-tab trigger's clock: the last client connection on this object
-   * closed with nothing reopened. The grace is not armed here — it is the fold's
-   * reading of this instant beside the settled one, so a close with no
-   * unprocessed turn arms nothing and a reconnect inside the grace clears it.
-   */
+  /** The grace is not armed here; the fold reads this instant beside the settled one, so a
+   * reconnect inside the grace clears it. */
   protected override lastConnectionClosed(): void {
     this.config.set(SLEEP_TIME_CLOSED_AT, String(Date.now()));
     this.armDurableWake();
@@ -2991,23 +2227,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.config.delete(SLEEP_TIME_CLOSED_AT);
   }
 
-  /** Background memory compression over the turns since the last run. Updates
-   *  agent_facts; keyed on the newest answer the window covers. */
   private async runSleepTimeCompute(window: SleepTimeWindow): Promise<void> {
     try {
-      // The KEY is the newest answer the window read, which is what the next
-      // window walks back to. A terminal effect's own scope is usually that
-      // answer; it is not when a later turn committed before this row replayed,
-      // and keying on the scope then would leave the newer turn unprocessed
-      // while its rows sat behind the tombstone.
+      // Key on the newest answer the window read, not the effect's scope: a later turn committed
+      // before replay would otherwise sit unprocessed behind the tombstone.
       const key = window.newestId;
 
       if (key === null) return;
-      // The RECORDED update, when a previous attempt got that far. The model
-      // call and the fact mutation are two steps, and an eviction between them
-      // would otherwise mean a replay paid for another call and applied each
-      // decay twice. Persisting the update first makes the replay apply the
-      // SAME answer, and the tombstone below makes it apply it once.
+      // The update is persisted before applying so a replay after eviction reuses the same answer
+      // instead of paying for another model call.
       const stored = this.recordedSleepTimeUpdate(key);
 
       const currentFacts = this.facts.all()
@@ -3019,35 +2247,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         currentFacts,
       });
 
-      // A null answer is a MALFORMED one — extraction or validation failed. A
-      // model that genuinely wants no change returns empty arrays, so this is a
-      // failure, and tombstoning it would report a fact update that never landed.
+      // Null means extraction/validation failed; a no-change answer is empty arrays, not null.
       if (update === null) {
         throw new KinuError('unavailable', 'the sleep-time compute returned no usable update');
       }
 
       if (stored === undefined) this.persistSleepTimeUpdate(key, update);
 
-      // ONE TRANSACTION over the fact writes and their tombstone. The update is
-      // several upserts and several CUMULATIVE confidence decays, and none of them
-      // is idempotent: an isolate termination after a prefix left the whole update
-      // retryable, so a replay decayed a fact it had already decayed and took 0.4
-      // of confidence off it instead of 0.2. Committed together, a replay either
-      // reads the tombstone and applies nothing or finds no prefix to repeat.
-      //
-      // The body MUST NOT await — `transactionSync` commits when its synchronous
-      // body returns, so an async one would commit at its first await and take the
-      // atomicity with it. `applySleepTimeUpdate` is synchronous, which is what
-      // makes this possible at all.
+      // One transaction over the non-idempotent fact writes and their tombstone, so a replay never
+      // repeats a prefix. The body must not await: `transactionSync` commits when it returns.
       const summary = this.ctx.storage.transactionSync(() => {
         const applied = applySleepTimeUpdate(this.facts, update);
 
         recordEffectDone(this.boundSql, this.actorHandle(), { scope: SLEEP_TIME_APPLIED, key: key });
         void this.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
-        // Nothing is left unprocessed, so no timed trigger is owed. The close
-        // instant goes too: a tab closed once earns one run over what was
-        // pending, and turns an unattended workspace completes afterwards are
-        // paced by the cadence and the idle interval like any other.
+        // Nothing is unprocessed, so no timed trigger is owed; a tab close earns one run only.
         this.config.delete(SLEEP_TIME_SETTLED_AT);
         this.config.delete(SLEEP_TIME_CLOSED_AT);
 
@@ -3067,17 +2281,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
 
       diagnostics.failure('memory.fact_compression_failed', failure);
-      // RETHROWN. Resolve normally and the terminal effect that drives this
-      // records `completed` and is pruned even when no fact update landed, so
-      // the advertised replay never sees a transient failure. The named event is
-      // the evidence; the throw is what keeps the row owed.
+      // Rethrown so the terminal effect stays owed instead of recording `completed`.
       throw failure;
     }
   }
 
-  /** The sleep-time answer a previous attempt already paid for, if it got that
-   *  far. Stored under the effect key so a replay applies the same update rather
-   *  than asking the model again. */
+  /** The update a previous attempt already paid for, so a replay applies it without a new call. */
   private recordedSleepTimeUpdate(key: string): SleepTimeUpdate | undefined {
     const row = this.sql<{ update_json: string }>`
       SELECT update_json FROM sleep_time_updates WHERE effect_key = ${key}`[0];
@@ -3093,32 +2302,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ON CONFLICT(effect_key) DO NOTHING`;
   }
 
-  /** What this workspace is FOR. The titling source for the root itself, and
-   *  what an additional agent the owner adds to it inherits. */
+  /** Titling source for the root, and inherited by agents the owner adds. */
   protected ownMission(): string {
     return readMission(this.boundSql) ?? '';
   }
 
-  /** UserDO is authoritative for a workspace's shown name, so an auto title
-   *  commits through the same propagation an owner rename does — which is
-   *  also where the "a manual rename claimed it first" refusal lives (in
-   *  UserDO's `name_origin`, not a local copy of it). */
+  /** UserDO is authoritative for the shown name; the manual-rename refusal lives in its
+   * `name_origin`. */
   protected async persistAutoTitle(displayName: string): Promise<boolean> {
     return await this.propagateDisplayName(displayName, 'auto');
   }
 
-  /**
-   * The workspace title, cached PER ACTIVATION from the root registry. UserDO
-   * owns the row; this actor holds no `actor_config` mirror — a mirror would
-   * drift the moment another writer (the owner rename route, the generated-title
-   * scheduler) commits to the root. Sync readers use whatever is hydrated;
-   * every mutation path hydrates BEFORE deciding.
-   */
+  /** Per-activation cache of the UserDO-owned title; no local mirror, since other writers commit
+   * to the root. Mutation paths hydrate before deciding. */
   protected _titleCache: { displayName: string; nameOrigin: NameOrigin } | null = null;
-  /** Whether the registry was read this activation. A null row (untitled) is
-   *  an answer too — without this, every turn re-reads UserDO for a workspace
-   *  nobody named. Failures leave it false so the next read retries. Protected
-   *  so a harness cold activation drops it with the other latches. */
+  /** A null row is an answer too; failures leave this false so the next read retries. */
   protected _titleHydrated = false;
   private async hydrateTitle(): Promise<void> {
     if (!this.getOwnerUserId()) return;
@@ -3140,35 +2338,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._titleCache ?? { displayName: this.name, nameOrigin: 'auto' as const };
   }
 
-  /**
-   * Hydrate the naming state BEFORE the title policy decides anything.
-   *
-   * `titleInputs` is synchronous by contract, so a cold activation answers it
-   * from the placeholder cache — and a durable auto-title replayed on that
-   * activation would plan over a title its first attempt had already persisted,
-   * pay for another suggestion, and overwrite it. The root overrides the hook so
-   * the decision is made against the registry that owns the answer.
-   */
+  /** Hydrates from the registry before the title policy decides, so a replayed auto-title does not
+   * plan over the cold placeholder cache. */
   protected override async hydrateTitleInputs(): Promise<void> {
-    // THROWING, unlike the opportunistic `hydrateTitle`. A durable title effect
-    // that planned from the cold placeholder cache would pay for another
-    // suggestion and overwrite a title its own first attempt had persisted; the
-    // failure keeps the row owed until the authoritative read works. Reached only
-    // once `titlingRefusal` has established the read can be made at all.
+    // Throws, unlike `hydrateTitle`, so the title effect stays owed until the read works.
     const { stub, caller } = await this.userHub();
     this._titleCache = await stub.getWorkspaceTitle(caller, this.name);
     this._titleHydrated = true;
   }
 
-  /**
-   * UserDO owns this root's title, so a root that cannot reach UserDO cannot
-   * title itself yet.
-   *
-   * Without an owner or a capability there is no registry row to read or write.
-   * A `completed` here would report a title that only the activation cache holds
-   * — lost on the next cold start — so the row stays OWED with the reason on it,
-   * and the activation that finds the workspace claimed is the one that titles it.
-   */
+  /** Without an owner or capability the registry is unreachable; the row stays owed rather than
+   * reporting a title only the activation cache holds. */
   protected override async titlingRefusal(): Promise<string | null> {
     if (!this.getOwnerUserId()) return 'this workspace has no owner to hold its title';
 
@@ -3187,15 +2367,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * What a person calls this workspace, or null while nobody has named it.
-   *
-   * Public because this workspace's own subagents read it: their prompts name
-   * the workspace they work in, and a subagent holds only the slug.
-   *
-   * Hydrated only from a COLD cache. Every write to the registry row goes
-   * through `propagateDisplayName`, which refreshes the cache in the same call,
-   * so a warm activation already holds the current title and a per-turn read
-   * would buy nothing for its Durable Object hop.
+   * Public because subagents, which hold only the slug, name the workspace in their prompts.
+   * Hydrated only when cold: `propagateDisplayName` refreshes the cache on every registry write.
    */
   async workspaceTitle(): Promise<string | null> {
     if (!this._titleHydrated) await this.hydrateTitle();
@@ -3208,25 +2381,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * EVAL-ONLY: end this activation, now, the way the platform ends one — the
-   * object is reset, every in-flight invocation rejects, the next request
-   * builds a fresh activation over the same storage, and the schedule rows
-   * stand. Nothing in the product can ask for this; it exists so the
-   * first-run `background-wake` row can measure the continuation of a
-   * multi-step turn across activations on the deployed build, which no other
-   * surface can force (the platform's own idle eviction is neither forcible
-   * nor repeatable). Sealed in `rpc-surface.ts`: stub-reachable from this
-   * Worker only, never `@callable`, and the one route that calls it refuses
-   * every caller but the eval-service identity (`eval/abort-route.ts`).
-   * ARCHITECTURE-DECISIONS C3.
+   * Eval-only: aborts this activation as the platform would; schedule rows stand. Sealed in
+   * `rpc-surface.ts`, eval-service identity only (`eval/abort-route.ts`). ARCHITECTURE-DECISIONS
+   * C3.
    */
   evalAbortActivation(): void {
     this.ctx.abort('eval-service: the activation was aborted on request');
   }
 
-  /** Commit one display name to the ROOT registry, then refresh the activation
-   *  cache and live clients. An auto-title is refused if the owner has claimed
-   *  the naming — decided at the root, in the same write. */
+  /** Commits to the root registry, then refreshes cache and clients. An auto-title is refused
+   *  if the owner has claimed the naming, decided at the root in the same write. */
   private async propagateDisplayName(
     displayName: string,
     origin: NameOrigin,
@@ -3247,12 +2411,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return true;
   }
 
-  // ── Background jobs (#173) — auto-detach >30s tool calls, wake on completion ──
-  // Lifecycle (detach → settle → wake + cancel + recover) lives in the core
-  // BackgroundJobRunner (this.jobRunner) and the control plane above it in core
-  // read-models; what follows is the @callable transport for that plane.
+  // Background jobs (#173): lifecycle lives in core BackgroundJobRunner; below is the @callable transport.
 
-  /** Read a background job's result (the synthesis turn calls this). */
+  /** Called by the synthesis turn. */
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
     return jobResult(this.jobs, jobId);
   }
@@ -3262,15 +2423,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listBackgroundJobs(this.jobs, limit);
   }
 
-  /**
-   * One background-job lifecycle operation and whether it took effect.
-   *
-   * Wrapped rather than emitted at each of the four sites, because the four are
-   * one boundary and the interesting number is the RATIO — a retry rate that
-   * climbs is the visible half of jobs that keep dying, and no single call site
-   * can see that. The job id is not a field: it is high-cardinality and answers
-   * no fleet question.
-   */
+  /** Wrapped at one boundary so the retry ratio is visible across all four sites.
+   *  Job id omitted: high-cardinality. */
   private countJobOperation<Outcome extends { ok: boolean }>(
     operation: string,
     outcome: Outcome,
@@ -3310,19 +2464,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.countJobOperation('clear', await clearBackgroundJobs(this.jobs));
   }
 
-  /** The agent's own task list, for the Tasks surface. Read-only on purpose:
-   *  the agent maintains this list from the `tasks` tool and re-reads it in
-   *  its live context, so a second writer would swap its plan underneath it
-   *  with nothing to say so. Changing what it is doing goes through chat. */
+  /** Read-only: the agent maintains this list via the `tasks` tool; a second writer would
+   *  swap its plan silently. Changes go through chat. */
   @callable()
   async listAgentTasks(): Promise<AgentTaskTree[]> {
     return this.taskList.list();
   }
 
-  /** The workspace's work across every actor — each actor's plan reviews with
-   *  the tasks linked to that revision, and each actor's unlinked tasks. The
-   *  roster is the retired-inclusive list: a dismissed subordinate's rows are
-   *  still in the database and the board that shows workspace work shows them. */
+  /** Roster includes retired actors: a dismissed subordinate's rows still show on the board. */
   @callable()
   async listWorkspaceWork(): Promise<WorkspaceWork> {
     return readWorkspaceWork(
@@ -3332,22 +2481,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     );
   }
 
-  /** The orchestrator's half of the shared Stop: settle the turn that was
-   *  cancelled. The call itself is ActorAgent's. */
   protected override onWorkCancelled({ abortedTools }: Omit<CancelWorkOutcome, 'ok'>): void {
     this.logActivity('work_cancelled', `${abortedTools} foreground aborted`);
   }
 
-  // ── Device consent — ask-once-then-remember ──────────────────────────
-  // The UserDO (device hub) calls awaitDeviceConsent when this agent touches a
-  // device with no remembered policy. The registry is core's; what a Durable
-  // Object contributes is fanning the prompt out to connected sockets and the
-  // activity line. "Always" is persisted on the hub, not here — and the card
-  // itself is a row here, so the prompt an eviction loses is the caller's
-  // parked promise, never the owner's question.
-  //
-  // Lazy for the same reason `deferrals` is: the store needs the schema, and
-  // field initializers run before ensureSchema can.
+  // Lazy like `deferrals`: the store needs the schema, and field initializers run before
+  // ensureSchema can. "Always" is persisted on the UserDO hub, not here.
   private _consents: DeviceConsentRegistry | null = null;
   private get consents(): DeviceConsentRegistry {
     if (!this._consents) {
@@ -3355,9 +2494,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this._consents = new DeviceConsentRegistry({
         store: new DeviceConsentStore(this.boundSql),
         newId: () => `cons-${nanoid(10)}`,
-        // The wire shapes stay written out here rather than behind a helper: the
-        // broadcast-wiring gate reads `broadcast({ type: … })` off the source, and
-        // a channel it cannot see is a channel it cannot prove has a consumer.
+        // Wire shapes stay inline: the broadcast-wiring gate reads `broadcast({ type: … })` off source.
         announce: (notice) => {
           if (notice.kind === 'raised') {
             const { consent } = notice;
@@ -3383,17 +2520,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._consents;
   }
 
-  /** Called by the UserDO over a DO-to-DO RPC. Resolves when the user decides,
-   *  or as `timeout` after the registry's window so a device call never hangs
-   *  forever. `timeout` is deliberately NOT `deny`: an unanswered prompt means
-   *  the owner was away, and telling the agent it was refused turns that into a
-   *  permanent, self-imposed capability loss. */
+  /** Called by the UserDO over DO RPC. Resolves on decision or `timeout`; `timeout` is not
+   *  `deny`, since an unanswered prompt means the owner was away. */
   async awaitDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
     return this.consents.request(req);
   }
 
-  /** A refused device call names the owner's registered machines that are not
-   *  connected, on the workspace's own socket. Not {@link callable}. */
+  /** Not {@link callable}. */
   async announceDeviceUnavailable(
     devices: Array<{ id: string; label: string; lastSeenAt: number | null }>,
   ): Promise<{ ok: boolean }> {
@@ -3402,45 +2535,36 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { ok: true };
   }
 
-  /** A daemon's socket was accepted: the offline notice everywhere goes away.
-   *  Not {@link callable}. */
+  /** Not {@link callable}. */
   async announceDeviceAvailable(device: { id: string; label: string }): Promise<{ ok: boolean }> {
     this.broadcast(JSON.stringify({ type: 'device_available', deviceId: device.id, label: device.label }));
 
     return { ok: true };
   }
 
-  /** The chat UI calls this when the user clicks a consent card button. */
   @callable()
   async resolveDeviceConsent(consentId: string, decision: DeviceConsentAnswer): Promise<{ ok: boolean }> {
     return { ok: this.consents.resolve(consentId, decision) };
   }
 
-  /** Pending consent requests — so the chat re-renders cards after a reload. */
+  /** Lets the chat re-render cards after a reload. */
   @callable()
   async listPendingConsents(): Promise<PendingDeviceConsent[]> {
     return this.consents.list();
   }
 
-  // ── Deferred approval — the owner is asleep, the run carries on ──────
-  // A call that needs the owner parks here: the approvable thing is queued,
-  // and keeps working (or ends its turn), and the owner's decision wakes it
-  // through the same signal seam a settled background job uses. Nothing is
-  // ever reported as having run — see core's safety/deferred-approval.ts.
+  // Deferred approval: nothing is ever reported as having run (core safety/deferred-approval.ts).
   protected _deferrals: DeferredApprovalQueue | null = null;
   protected get deferrals(): DeferredApprovalQueue {
     this._deferrals ??= new DeferredApprovalQueue({
       store: new DeferredApprovalStore(this.boundSql, this.actorHandle()),
-      // Read through `this.orch` at DELIVERY time, never captured: this
-      // getter is reachable from the runtime's own construction path.
+      // Read through `this.orch` at delivery time, never captured: this getter is reachable
+      // from the runtime's own construction path.
       inbox: { send: (signal) => this.orch.inbox.send(signal) },
-      // Where an 'always' answer lands: the same actor_config the approval
-      // MODE lives in, read live by the gate on the very next command.
+      // Same actor_config as the approval mode, read live by the gate on the next command.
       remember: (grants) => { this.config.grantShellApproval(grants); },
-      // A spent grant's row is DELETED, so this run event is the only
-      // durable record that the owner's approval was consumed. Written into
-      // the spending turn's own run log; outside any turn it falls back to
-      // the workspace run so the audit still lands.
+      // A spent grant's row is deleted, so this event is the only durable record of consumption.
+      // Outside any turn it falls back to the workspace run.
       audit: (record) => {
         this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, {
           type: 'approval_consumed', ...record,
@@ -3452,7 +2576,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._deferrals;
   }
 
-  /** The gate's channel. Overrides the base actor's "no queue here". */
+  /** Overrides the base actor's "no queue here". */
   protected override deferralChannel(): DeferredApprovalChannel {
     return this.deferrals.channel;
   }
@@ -3465,25 +2589,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.logActivity('approval_decided', `${notice.actions.length} ${first?.status ?? 'decided'}`);
     }
 
-    // The needs-you queue is polled, not pushed; one frame tells a connected
-    // client to re-read it rather than duplicating the rows onto the wire.
+    // The needs-you queue is polled, not pushed; this frame tells clients to re-read it.
     this.broadcast(JSON.stringify({ type: 'pending_actions_changed' }));
   }
 
-  /** Everything the agent has parked on the owner. Read by the needs-you
-   *  queue; also callable on its own so a surface can render just this. */
+  /** Read by the needs-you queue; also callable alone so a surface can render just this. */
   @callable()
   async listDeferredApprovals(): Promise<DeferredApproval[]> {
     return this.deferrals.list();
   }
 
-  /**
-   * The owner decides — one parked action, or a night's worth in one click.
-   *
-   * Bulk is the point: an unattended run can park a dozen commands, and
-   * deciding them one prompt at a time is the friction this whole mechanism
-   * exists to remove. One call, one durable write per row, ONE wake.
-   */
+  /** Decides one or many parked actions: one durable write per row, one wake for the batch. */
   @callable()
   async decideDeferredApprovals(
     ids: string[], decision: DeferredApprovalAnswer,
@@ -3494,60 +2610,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
 
-  // ── DO initialization ──────────────────────────────────────────
-
-  // Device connection is user-level: UserDO owns the tunnel socket and the
-  // tokens, and the device executor forwards to it. Nothing per-agent verifies,
-  // attaches, issues or lists a device token.
+  // Device connection is user-level: UserDO owns the tunnel socket and tokens; nothing
+  // per-agent verifies, attaches, issues or lists a device token.
 
   /**
-   * Create/migrate every agent table. Idempotent and gated by an in-memory
-   * flag so the full DDL set runs once per DO activation (both onStart and a
-   * pre-onStart claimOwner route through here). No persistent schema-version is
-   * tracked: a cold activation always re-runs, so newly-added tables in code
-   * are created without migration bookkeeping.
-   *
-   * THREE PHASES, and the order is the contract. Plain DDL first; then the
-   * workspace's own identity and main-actor ROWS; only then anything that
-   * resolves this actor's handle. The directory refuses to issue a handle over
-   * a database with no identity row, so an actor-bound step hoisted above the
-   * bootstrap throws on every fresh workspace — and `claimOwner` swallows that
-   * throw as a diagnostic, which is how the same mistake stayed invisible: the
-   * flag stayed false, the claim wrote the rows itself, and the actor-bound
-   * half silently did not run until some later activation.
+   * Idempotent; flag-gated to run once per activation, no persisted schema version.
+   * Order is the contract: DDL, then identity/main-actor rows, then anything resolving a handle.
    */
   protected ensureSchema(): void {
     if (this._schemaReady) return;
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
-    // Every table a workspace has, on any backend — one list, in core.
     initWorkspaceSchema({ execRaw, sql: this.boundSql, exec: this.ctx.storage.sql });
     initWorkspaceBaselineTable(execRaw);
     initWorkspaceActorTable(execRaw);
 
-    // ── planes this root alone carries (declared per-root in
-    //    core/conformance/manifest.ts, observed against sqlite_master) ──
+    // Planes only this root carries (declared in core/conformance/manifest.ts).
     initWebhookIngressTables(this.ctx.storage.sql);
-    // The workspace's OWN rows, before anything that needs a handle over them.
-    // `createMain` is idempotent, so a warm activation re-reads rather than
-    // re-writing, and the transaction is the one this bootstrap always had.
+    // The workspace's own rows, before anything that needs a handle over them.
     this.bootstrapWorkspaceActor();
     this.subordinateRoster.ensureSchema();
 
-    // Workspace-diff baseline (path → content snapshot) for the Output surface's
-
-    // Per-turn user feedback (thumbs up/down). The chat UI's thumbs button
-    // writes here via setTurnFeedback, which re-scores the crafted tools used
-    // in that turn — feedback is inherently asynchronous (it arrives after the
-    // turn completes), so it can't be read at turn time.
-    //
-    // KEYED (actor_id, message_id), never message_id alone. A message id is
-    // minted PER ACTOR — the transcript is keyed `(actor_id, session_id, id)`
-    // for exactly this reason — so ids are not unique across the actors sharing this one
-    // database. Under a bare `message_id` primary key two actors' turns that
-    // collide do not error, they silently OVERWRITE each other's thumbs, and
-    // the graded-outcome read behind them grades one actor's turn with a
-    // sibling's verdict.
+    // Keyed (actor_id, message_id): message ids are minted per actor, so a bare message_id
+    // key would let two actors' thumbs silently overwrite each other.
     execRaw(`CREATE TABLE IF NOT EXISTS turn_feedback (
       actor_id   TEXT NOT NULL,
       message_id TEXT NOT NULL,
@@ -3555,20 +2640,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       created_at INTEGER NOT NULL,
       PRIMARY KEY (actor_id, message_id)
     )`);
-    // Records which crafted tools each assistant turn used, keyed by the
-    // assistant message id, so async thumbs feedback can re-score exactly
-    // those tools' EMA. Only crafted tools are stored (built-ins aren't scored).
-    // The sleep-time answer a terminal effect already paid for. The model call
-    // and the fact mutation are two steps; persisting the answer between them is
-    // what makes the replay apply the SAME update instead of buying another.
+    // Persisting the paid-for answer between model call and fact mutation makes a replay
+    // apply the same update instead of buying another.
     execRaw(`CREATE TABLE IF NOT EXISTS sleep_time_updates (
       effect_key  TEXT PRIMARY KEY,
       update_json TEXT NOT NULL,
       created_at  INTEGER NOT NULL
     )`);
-    // Same per-actor key as turn_feedback above, for the same reason: this is
-    // the table the thumbs re-score reads, so a bare message_id key would let
-    // one actor's feedback re-score a sibling's crafted tools.
+    // Same per-actor key as turn_feedback: the thumbs re-score reads this table.
     execRaw(`CREATE TABLE IF NOT EXISTS turn_craft_usage (
       actor_id   TEXT NOT NULL,
       message_id TEXT NOT NULL,
@@ -3576,57 +2655,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       created_at INTEGER NOT NULL,
       PRIMARY KEY (actor_id, message_id)
     )`);
-    // The container's own lifecycle failures, so an incident is announced once
-    // and stays readable afterwards. Owned by this root because the container
-    // is the WORKSPACE's — a subordinate rides its parent's and has none of
-    // its own to report.
+    // Owned by this root: the container is the workspace's; subordinates ride their parent's.
     initSandboxLifecycleTable(execRaw);
 
-    // Moved out of the ActorAgent constructor: the extension's ports read the
-    // compaction store, which resolves this actor's handle, which needs the
-    // rows above to exist. `ensureSchema` is flag-gated, so this still runs
-    // exactly once.
+    // Must follow the rows above: the extension's ports resolve this actor's handle.
     this.registerCompactionExtension();
 
     this._schemaReady = true;
   }
 
-  /** Activation init, synchronous by contract: partyserver runs `onStart()`
-
-   *  inside `ctx.blockConcurrencyWhile()` (its `#ensureInitialized`), and
-   *  `fetch`, `webSocketMessage`, `webSocketClose` and `alarm` all await that
-   *  same gate. So anything awaited here stalls EVERY request on this object,
-   *  pure `@callable` reads included, and at 30s the Workers runtime cancels the
-   *  block and RESETS the object — `do.block_concurrency.cancel_ms` in the
-   *  platform catalog, which owns these measurements: a bare `SELECT` behind an
-   *  `onStart` awaiting a second Durable Object took 2303ms / 10215ms / 25212ms
-   *  for a 2s / 10s / 25s answer, and reset the object at 31s. Preconditions
-   *  that need I/O belong on the turn path (`ActorAgent.beforeTurn`); recovery
-   *  work that must reach the model is detached, as below.
-   *
-   *  The explicit `: void` is load-bearing but is NOT self-enforcing: the base
-   *  declares `onStart(props?): void | Promise<void>` (partyserver's .d.ts), so
-   *  `async onStart(): Promise<void>` still typechecks. What the annotation buys
-   *  is that an `await` added here is a compile error (TS1308) and that widening
-   *  it is visible in the diff; `scripts/do-init-gate.ts` is what refuses the
-   *  widening. */
+  /** Synchronous by contract: runs inside blockConcurrencyWhile, which gates every request and
+   *  resets the object at 30s (`do.block_concurrency.cancel_ms`); `scripts/do-init-gate.ts` enforces. */
   async onStart(): Promise<void> {
     this.installClientMessageGate();
     this.ensureSchema();
-    // EVERY budgeted sweep this actor owns, through the seam the alarm frame
-    // runs — one list, not a hand-folded copy of it, so a sweep added to the
-    // seam cannot be missing from the gate. They run inside `Agent.alarm()`'s
-    // initialization, before the SDK reads its own tables, so a backlog is
-    // pruned rather than paid for in one go; every pass carries a ROW BUDGET
-    // because this is the init gate, and every cutoff is this construction
-    // instant, so under `blockConcurrencyWhile` no request can have spawned the
-    // work a pass is about to retire. A pass that filled its budget answers
-    // truncated and the wake below drains the remainder in alarm frames, never
-    // against the gate and never waiting for the next eviction.
+    // Every budgeted sweep via the alarm-frame seam; row-budgeted because this is the init gate,
+    // and a truncated pass is drained by the wake below in alarm frames.
     const sweepsTruncated = this.maintenanceSweeps();
-    // The wake chain, reconciled: an activation is the one moment a workspace
-    // whose only wake row was lost can notice. Detached because arming a
-    // schedule row is I/O and this method runs inside the init gate.
+    // An activation is the only moment a workspace whose wake row was lost can notice.
+    // Detached because arming a schedule row is I/O and this method runs inside the init gate.
     this.detachOwned(async () => {
       try {
         await this.reconcileTimerRow();
@@ -3637,46 +2684,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }
     });
 
-    // The activation CLASSIFIES and ARMS: bounded existence reads plus the
-    // sweep verdicts above, one schedule row when anything is owed. Every
-    // DISPATCH — owed replies, interrupted terminal transitions, fork and job
-    // recovery, the remainder of a truncated sweep — runs under that durable
-    // wake, because a reply is external mail and an activation launches no
-    // external work, awaited or detached.
+    // The activation only classifies and arms a wake; all dispatch runs under that durable wake,
+    // because an activation launches no external work, awaited or detached.
     if (sweepsTruncated || this.owedWorkExists()) {
       this.armOwedWorkWake('reconcile');
     }
 
-    // A cold activation is the moment the fork journal's `running` heads become
-    // provably stale: nothing in this isolate is executing one, and
-    // `head_journal.status` has no other writer for that — so a stale `running`
-    // keeps feeding "N of M heads running" into every model step's
-    // dynamic-context block for the life of the workspace.
-    //
-    // BUT CORRECTING THAT CLAIM IS NOT RETIRING THE WORK. Fork recovery runs
-    // under the terminal wake (`maintenanceWork` below): it first marks stale
-    // heads interrupted, then offers their roots to the orphan-job recovery
-    // gate, and retires only roots that gate refuses. A fiber row can
-    // disappear with the activation that owned it (that is the case
-    // `jobs/runner.ts` documents its registry sweep for), so recovery cannot
-    // depend solely on a surviving `bg:*` fiber callback or retire work
-    // before offering it for re-entry.
-    //
-    // So the reconciliation owns the order. It marks the stale rows
-    // `interrupted` — non-terminal, so the roster stops lying without discarding
-    // the run — then offers their roots to the job sweep, and retires only what
-    // the sweep refused. The CLI runs the same sweep at startup
-    // (`local-session.ts`); the sweep is idempotent, because every recovery
-    // reclaims under a fresh lease and a job this isolate is already driving
-    // is skipped.
-    //
-    // Telling the agent goes through the signal seam and can run a turn.
-    // Awaiting that work inside the init gate can reset the object.
-    // Fork-journal recovery is turn-capable — the signal seam queues a turn —
-    // so it runs under the terminal wake's alarm frame (`maintenanceWork`),
-    // and the delivery reconcile above is what arms that wake: its existence
-    // reads cover owed deliveries, interrupted transitions, running heads AND
-    // live job rows, so recovery is owed exactly when one of them answers.
+    // Stale `running` fork heads are recovered under the terminal wake (`maintenanceWork`), not here:
+    // recovery can queue a turn, and awaiting that inside the init gate can reset the object.
 
     // Boot awaits only this object's SQLite and session composition. A failure
     // clears the memo so the next workspace request can retry after activation.
@@ -3692,37 +2707,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * When this activation began — the isolate's own construction instant.
-   *
-   * THE RECOVERY CUTOFF, threaded through every predicate a recovery pass
-   * reads: the branch-head seal, the fork journal's marks and retirements, the
-   * swarm ledger's offered and unclaimed sets, the run-event closer. A head,
-   * swarm row or run created AFTER this moment belongs to a live request of
-   * THIS activation — requests land between construction and the wake's first
-   * tick — and no recovery pass may settle one. Strict `<` on purpose: a
-   * same-millisecond tie reads as live and waits one activation, where the
-   * inclusive bound would kill live work.
+   * Recovery cutoff: heads, swarm rows and runs created at or after this belong to this activation.
+   * Strict `<` on purpose: a same-millisecond tie reads as live rather than killing live work.
    */
   private readonly activationStartedAt = Date.now();
 
   /**
-   * Whether this activation still owes its ONE fork-journal recovery pass.
-   *
-   * In-memory ON PURPOSE: "once per activation" is a property of the isolate,
-   * and an eviction resets the flag and the cutoff together. It is what keeps
-   * the reconcile off the ordinary terminal retries that arm the same wake
-   * mid-activation, and the constraint is sharper than "the pass is
-   * idempotent": a root the resume gate CLAIMED stays `interrupted`, so a
-   * second pass in this activation would offer it to a gate that can no longer
-   * claim it — the job is no longer an orphan, this isolate is already driving
-   * it — and retire the live re-driven run underneath its own executor.
+   * In-memory on purpose: fork-journal recovery runs once per isolate; a second pass could retire
+   * a root the resume gate already claimed and re-drove in this activation.
    */
   private activationRecoveryPending = true;
 
-  /** Carry one fork-recovery notice durably until the delivery seam accepts
-   *  it — each attempt its own fiber row, `undelivered` retried forever at the
-   *  capped pace `dispatchRecoveredNotice` owns, the idempotency key colliding
-   *  any landed duplicate. */
+  /** Carry a fork-recovery notice durably until delivered; the idempotency key collides duplicates. */
   private dispatchForkNotice(signal: AgentSignal): void {
     const notice: RecoveredNotice = {
       kind: signal.kind, text: signal.text,
@@ -3740,17 +2736,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     );
   }
 
-  /** The orchestrator's asynchronous maintenance: reconcile the fork journal a
-   *  dead activation left running (marks, job re-drives, the notice that may
-   *  queue a turn), then reclaim settled exploration facets against the
-   *  ledgers it just settled. Idempotent per activation by the guard below —
-   *  every recovery reclaims under a fresh lease, and a job this isolate
-   *  already drives is skipped. */
+  /** Reconcile the fork journal a dead activation left running, then reclaim settled facets.
+   *  Runs once per activation by the guard below. */
 
   protected override async maintenanceWork(): Promise<boolean> {
-    // The root's own loop first: a turn the last process died inside continues
-    // from its ledger, and the sends it acknowledged rerun, before anything
-    // else the wake finishes on their behalf.
+    // Resume the root's own loop before anything else the wake finishes on its behalf.
     this.resumeChatLoop();
 
     for (const pending of this.workspaceActors().retirements()) {
@@ -3766,7 +2756,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const rootActorId = this.actorHandle().actorId;
       const rootIsLive = () => this._inFlight;
 
-      // Read root liveness from its chat driver, including after awaits.
       const recovered = await recoverActorTurns({
         resumable: (limit) => host.resumable(limit),
         acquire: async (reference) => {
@@ -3797,14 +2786,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (!this.activationRecoveryPending) return delegationsTruncated || await super.maintenanceWork();
 
-    // AFTER the branch seal has drained, and the seal's own remainder is what
-    // says so: a branch head still `running` from before the cutoff is a row
-    // the LIMIT-256 seal has not reached, and the fork reconcile — which reads
-    // every pre-cutoff running head as a stale FORK — would retire it as lost
-    // fork work and announce a steer branch as a fork run. Asked at limit 1,
-    // because presence is the whole question, and asked of the journal rather
-    // than threaded from the sweep so the precondition is a fact about the
-    // world instead of a boolean from another method.
+    // Wait for the branch seal to drain: the fork reconcile would retire a pre-cutoff running
+    // steer branch head as lost fork work.
     if (this.headJournal.listRunningBranchHeads(
       STEER_BRANCH_RUN_ID_PREFIX, 1, this.activationStartedAt,
     ).length > 0) return true;
@@ -3814,16 +2797,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       await reconcileInterruptedForks({
         now: this.activationStartedAt,
         journal: this.headJournal,
-        // The notice's queueing promise belongs outside this alarm frame. The
-        // wait is owned, so a failure still classifies and the harness join
-        // still sees it.
+        // The notice's queueing promise belongs outside this alarm frame.
         inbox: {
-          // DURABLE before 'queued' is claimed: the fiber row the redrive
-          // writes synchronously is the acceptance boundary, and an eviction
-          // between the journal's terminal writes and the turn landing replays
-          // the DELIVERY through the fork-notice lane — where the signal's
-          // idempotency key makes an already-landed replay collide instead of
-          // stacking cards.
+          // The fiber row written synchronously is the acceptance boundary; replays after eviction
+          // collide on the signal's idempotency key.
           send: (signal) => {
             this.dispatchForkNotice(signal);
 
@@ -3832,9 +2809,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         },
         search: this.mctsSearchStore,
         runEvents: this.eventRecorder,
-        // The loop this wake resumed first: a turn it re-opened continues
-        // under the run the dead activation left, which this sweep must not
-        // seal as wreckage.
+        // Runs the resumed loop re-opened are live and must not be sealed as wreckage.
         liveRuns: () => this.chatLoop.drivenRuns(),
         resume: jobRedriveResumeGate({
           recoverOrphans: () => this.jobRunner.recoverOrphans(),
@@ -3857,18 +2832,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return delegationsTruncated || await super.maintenanceWork();
   }
   /**
-   * Retire exploration ACTORS a reset left behind, against the ledgers the
-   * fork reconciliation just settled (S13). Runs AFTER
-   * `reconcileInterruptedForks` so a head it marked `interrupted` reads as
-   * resumable here, never terminal.
-   *
-   * A much smaller claim than the facet sweep made. That one had to destroy
-   * DATABASES — an unreclaimed facet was a permanent SQLite inside this object,
-   * charged against a quota whose overflow is a reset rather than a catchable
-   * error — so it read the SDK's sub-agent registry and deleted storage on the
-   * strength of a ledger match. What is left behind now is a roster row and an
-   * `actor_id`-scoped set of rows in the one database, so being late costs
-   * nothing and the sweep is bookkeeping.
+   * Retire exploration actors a reset left behind, against ledgers fork reconciliation settled (S13).
+   * Must run after `reconcileInterruptedForks` so an `interrupted` head reads as resumable, not terminal.
    */
   protected async reclaimSettledExplorationActors(): Promise<void> {
     try {
@@ -3888,19 +2853,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The lifecycle ledgers are the ONLY status authority — no per-actor copy.
-   *
-   * `completed`, `aborted`, `errored` and `budget_exceeded` are terminal
-   * report outcomes; `running` and `interrupted` remain resumable. Name two
-   * of the four by hand and treat the rest as resumable, and a head that
-   * threw or blew its budget keeps its actor rows live past the point their
-   * journal says they settled. Unknown or absent journal statuses remain
-   * unknown, so reclamation does not guess about unledgered actors while
-   * exploration is live.
+   * The lifecycle ledgers are the only status authority. `completed`, `aborted`, `errored`,
+   * `budget_exceeded` are terminal; `running`, `interrupted` resumable; anything else is unknown.
    */
-  /** Kept as the one place the head journal's four statuses are read as a
-   *  lifecycle verdict; `reclaimSettledExplorationActors` asks the journal the
-   *  same question through its own `readHead` port. */
   protected explorationFacetLedgerStatus(id: string): 'resumable' | 'terminal' | 'unknown' {
     const head = this.headJournal.readHead(id);
 
@@ -3915,34 +2870,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSearches();
   }
 
-  // ── Timer ingress ──────────────────────────────────────────────
-  //
-  // Kinu's own wake-up, dispatched by `Agent.alarm()` from the SDK's
-  // `cf_agents_schedules` table (see `armTimer`). NOT an `alarm()` override:
-  // the DO's single alarm slot belongs to the SDK, which also drives fiber
-  // recovery, facet schedules and the keepAlive heartbeat off the same wake.
-  //
-  // The TriggerRegistry arms this timer; the tick fires every due trigger
-  // (cron + one-shot), publishes Timer events via the hub, re-arms cron,
-  // revokes one-shot, DRAINS the reactions the log holds pending, and re-arms
-  // itself for the next-soonest wake.
-  //
-  // ONE RULE FOR THIS CHAIN: every source `nextWakeAt` folds has a phase here.
-  // Triggers, the peer outbox, the email outbox — and the event log, which was
-  // folded in without one. See {@link nextWakeAt} and the drain phase below.
-  //
-  // Crash-safe: dedupe via `(trigger_id, scheduled_fire_at)` means a
-  // re-fire after DO eviction is a no-op publish.
-  //
-  // TRACED, and this is the path the tracing seam was wired on first because it is
-  // the one the contract is about: a wake is a SEPARATE invocation from whatever
-  // armed it. The turn that scheduled this trigger finished minutes or days ago, in
-  // an isolate that may since have been reset, so a span covering both would be
-  // measuring an interval nothing observed. `tracing.invocation` makes that
-  // unreachable rather than discouraged — it revokes the handle when this method's
-  // promise settles, so a span opened from anything that escaped this tick throws.
-  // The phases are sibling spans under one root, which is what turns "the alarm
-  // was slow" into "the email reconcile was slow".
+  // Kinu's timer, dispatched by `Agent.alarm()` from `cf_agents_schedules` (see `armTimer`); not an
+  // `alarm()` override because the SDK owns the DO's single alarm slot.
+  // Every source `nextWakeAt` folds must have a phase here. Dedupe on
+  // `(trigger_id, scheduled_fire_at)` makes a re-fire after eviction a no-op publish.
+  // A wake is a separate invocation from whatever armed it; `tracing.invocation` revokes the handle
+  // when this promise settles, so spans cannot cover both.
   async _kinuTimerTick(): Promise<void> {
     const now = Date.now();
     await this.tracing.invocation('alarm', 'tick', async (tick) => {
@@ -3957,28 +2890,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
             otherwise: 'io',
           });
 
-          // `fail` and not a rethrow: the tick tolerates this and continues to the
-          // next phase, so the span closes SUCCESSFULLY unless it says otherwise.
+          // `fail`, not rethrow: the tick continues to the next phase, so the span must be marked failed.
           span.fail(failure);
           diagnostics.failure('schedule.due_triggers_failed', failure);
         }
       });
 
-      // THE REACTION THIS WAKE WAS ARMED FOR. `nextWakeAt` folds
-      // `nextPendingDrainAt`, so a pending external event is one of the four
-      // things that put this row in the registry — and until this phase existed
-      // it was the one with nothing behind it. The tick fired triggers, pushed
-      // two outboxes and re-armed from the same fold, which still answered
-      // "due": an event that arrived at an idle object and lost its in-memory
-      // debounce to an eviction woke the object every second and was never
-      // taken. Measured 2026-09-17, D6.
-      //
-      // The CONDITION is the fold's own reader, asked with the tick's own
-      // clock — the same call the re-arm below makes, so the two cannot
-      // disagree about whether this wake was owed. Not `fired > 0`, which is
-      // what stood here: a trigger firing is one way a row becomes drainable
-      // and every other ingress is another, and `scheduleDrain`'s 250 ms
-      // debounce is an in-memory timer this frame does not outlive anyway.
+      // `nextWakeAt` folds `nextPendingDrainAt`, so pending events owe a drain here (D6). The condition
+      // uses the same reader and clock as the re-arm so the two cannot disagree about whether it was due.
       await tick.span('alarm.event_drain', async (span) => {
         const dueAt = this.eventLog.nextPendingDrainAt(now);
         span.setAttribute('kinu.drain_due', dueAt !== null && dueAt <= now);
@@ -3986,11 +2905,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (dueAt === null || dueAt > now) return;
 
         try {
-          // RETHROWING into this phase's own catch: the drain absorbs its
-          // failures for ambient callers, and this caller is not one — a
-          // swallowed selection failure would close the span green over a row
-          // still pending. The re-arm below is what retries it, because the
-          // fold it reads still answers due.
+          // Rethrow so a selection failure fails this span; the re-arm below retries, since the fold still
+          // answers due.
           await this.orch.drainPendingEvents({ rethrow: true });
         } catch (err) {
           const failure = toKinuError({
@@ -4004,9 +2920,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         }
       });
 
-      // Re-drive pending outbound peer messages (crash/eviction recovery + the
-      // exponential-backoff retry path — inline tool dispatch handles the happy
-      // path, this alarm is the durable one).
+      // Durable re-drive of pending outbound peer messages (eviction recovery and backoff retries).
       await tick.span('alarm.peer_dispatch', async (span) => {
         try {
           await this.peerHub.dispatchOutbox(now);
@@ -4022,9 +2936,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         }
       });
 
-      // Reconcile indeterminate outbound email: an intent left `pending` (crash
-      // between the send and its status write) is safely re-driven here — the
-      // stored Message-ID makes the re-send idempotent downstream (SPEC §7.4).
+      // Re-drive `pending` outbound email; the stored Message-ID makes re-send idempotent (SPEC §7.4).
       await tick.span('alarm.email_reconcile', async (span) => {
         try {
           if (this.env.EMAIL) await this.emailOutbox.reconcile(this.env.EMAIL, now);
@@ -4040,12 +2952,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         }
       });
 
-      // THE PROMPT-CACHE WARM this wake may have been armed for. A SIBLING
-      // phase, never a branch inside another: `nextWakeAt` folds the warm row,
-      // and this file's one rule for the chain is that every source it folds
-      // owes a phase here. The lane re-checks the durable request counter
-      // itself, so a turn that started after the arm suppresses the refresh
-      // rather than racing it.
+      // Sibling phase because `nextWakeAt` folds the warm row. The lane re-checks the request counter,
+      // so a turn started after the arm suppresses the refresh.
       await tick.span('alarm.cache_warm', async (span) => {
         try {
           const warmed = await this.cacheWarming.runDue(now);
@@ -4062,13 +2970,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         }
       });
 
-      // THE SLEEP-TIME TRIGGERS this wake may have been armed for: a turn left
-      // idle, or a tab closed and not reopened. A sibling phase for the reason
-      // the warm is one. A FAILED RUN IS NOT RETRIED BY THIS CHAIN, and the
-      // settled instant is released before the failure is diagnosed — the same
-      // shape as a failed warm: an instant left in the past would answer due on
-      // every re-arm and turn a model outage into one wake per second. The
-      // turns stay unprocessed, and the next completed turn is what re-arms.
+      // A failed sleep-time run is not retried by this chain; the settled instant is released first so
+      // it cannot answer due on every re-arm. The next completed turn re-arms.
       await tick.span('alarm.sleep_time', async (span) => {
         try {
           const ran = await this.runSleepTimeIfDue(now);
@@ -4087,10 +2990,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         }
       });
 
-      // Re-arm for the next-soonest wake (triggers ∪ peer-outbox ∪ email-outbox
-      // retries). A due/past-due retry is clamped to `now` (see nextAlarmTime),
-      // and the arm is soonest-wins so this never clobbers a sooner wake armed
-      // during dispatch. Awaited, not fire-and-forget: this is the link that
+      // Soonest-wins arm, so it never clobbers a sooner wake armed during dispatch. Awaited: this link
       // keeps the timer chain alive.
       await tick.span('alarm.timer_rearm', async (span) => {
         try {
@@ -4107,25 +3007,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
           span.fail(failure);
           diagnostics.failure('schedule.timer_rearm_failed', failure);
-          // RETHROWN, unlike the three phases above it. Their work is state
-          // driven and the NEXT wake retries it; this failure IS the loss of
-          // the next wake, so nothing is left to retry anything. An uncaught
-          // throw out of the alarm is what makes the runtime redeliver it
-          // (proven under workerd in tests/workerd/do-alarm.test.ts), and a
-          // redelivered tick re-arms from the same durable state. Swallowing it
-          // reported a successful alarm over a chain that had just ended.
+          // Rethrown: this failure loses the next wake. An uncaught alarm throw makes the runtime redeliver
+          // it (tests/workerd/do-alarm.test.ts), and the redelivered tick re-arms from durable state.
           throw failure;
         }
       });
     });
   }
-
-  /** Compute the next firing time for a cron expression after `from`.
-   *  Simple implementation: supports `*\/n * * * *` (every n minutes) and
-   *  `m h * * *` (daily at hh:mm UTC); enough for v1 schedules. Full cron
-   *  parsing arrives with the Triggers UI. */
-
-  // ── Callable RPC methods ───────────────────────────────────────
 
   @callable()
   async getReleaseBoard(limit = 20) {
@@ -4155,9 +3043,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       approvalId, decision, approvedBy: this.getOwnerUserId() ?? this.name, note,
     });
 
-    // Refusing a ROLLBACK leaves the deployed change deployed, which is also
-    // why `deployed -> rejected` is not a legal transition. Every other
-    // approval is the gate on shipping the change, so refusing it rejects it.
+    // Refusing a rollback leaves the change deployed (`deployed -> rejected` is illegal); refusing any
+    // other approval rejects the change.
     if (decision === 'rejected' && decided.approvalType !== 'rollback') {
       await stub.transitionReleaseChange(caller, decided.changeId, 'rejected');
     }
@@ -4189,91 +3076,52 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return getToolList(this.boundSql, this.rt.craftStore);
   }
 
-  /** The LATEST search's tree only — settled earlier searches stay in
-   *  search_nodes and must never shadow the run the operator is watching. */
+  /** Latest search's tree only; settled earlier searches in search_nodes must not shadow it. */
   @callable() async getMctsTree() {
     return readLatestSearchTree(this.boundSql, this.actorHandle());
   }
 
-  /** One named search's tree. The unified fork list can select a competed run
-   *  that is not the latest, and `getMctsTree` would then answer with another
-   *  search's branches under it. */
+  /** One named search's tree; `getMctsTree` would answer with the latest search's branches instead. */
   @callable() async getSearchTree(rootId: string) {
     return readSearchTree(this.boundSql, this.actorHandle(), rootId);
   }
 
-  /**
-   * A page of every exploration run this workspace has, newest first — the one entry
-   * point the Exploration surface lists.
-   *
-   * Cursored because a bare `LIMIT 20` said "that is every run" about the newest
-   * twenty, and the twenty-first was then reachable only by permalink.
-   */
+  /** A page of every exploration run in this workspace, newest first. */
   @callable() async listForkRuns(request?: PageRequest): Promise<Page<ForkRunSummary>> {
     return listForkRuns(this.boundSql, this.actorHandle(), request?.cursor ?? null, request?.limit);
   }
 
   /**
-   * One named run for a permalink, independent of the recent-list window — the SAME
-   * composed row {@link getExplorationCanvas} pages.
-   *
-   * The composed row rather than the bare summary, because parameters that travel
-   * only on the canvas page leave the full-screen drill-down — which opens one run
-   * by id — with no way to read that run's own knobs, so the judge clamp shows in
-   * the list column and vanishes in the view with room to show it. Fetching a page
-   * of thirty runs and their trees to render one is not the answer.
+   * One named run for a permalink, independent of the recent-list window.
+   * Returns the composed canvas row so the drill-down can read the run's own parameters.
    */
   @callable() async getForkRun(rootId: string): Promise<ExplorationCanvasRun | null> {
     return readExplorationRun(this.boundSql, this.actorHandle(), rootId);
   }
 
-  /**
-   * A page of the Exploration canvas: each fork with its dispatch parameters and
-   * its tree, newest first.
-   *
-   * ONE call rather than one per tree — see the read model for why that is what
-   * made a multi-tree canvas possible at all, and for why it is one row per fork
-   * rather than three collections a client re-associates by id.
-   */
+  /** A page of the Exploration canvas: each fork with its dispatch parameters and tree, newest first. */
   @callable() async getExplorationCanvas(request?: PageRequest): Promise<Page<ExplorationCanvasRun>> {
     return readExplorationCanvas(this.boundSql, this.actorHandle(), request?.cursor ?? null, request?.limit);
   }
 
   /**
-   * A page of every comparable set the records store holds, most recently written
-   * first — the discovery read the leaderboard had none of.
-   *
-   * The store's own reads are scoped by an `ObjectiveIdentity`, which includes the
-   * digest of the verifier's source, so no surface could name a set it had not already
-   * been told about. This is where a surface gets the handle; the two reads below take
-   * it back opaquely rather than rebuilding it from parts.
-   *
-   * Each row carries the metric, the unit, the direction and the scale, because a
-   * leaderboard drawn on a bare value shows a number that cannot be read.
+   * A page of every comparable set in the records store, most recently written first.
+   * Supplies the `ObjectiveIdentity` handle the cell reads take back opaquely.
    */
   @callable() async listRecordObjectives(request?: PageRequest): Promise<Page<RecordObjectiveSummary>> {
     return listRecordObjectives(this.boundSql, this.actorHandle(), request?.cursor ?? null, request?.limit);
   }
 
-  /**
-   * One set's cells and each cell's elite.
-   *
-   * `floorDigest` is REQUIRED and nullable: null is "the objective declared no floor",
-   * and a floor-blind handle would collapse a corrected floor and a wrong one.
-   */
+  /** `floorDigest` is required and nullable: null means the objective declared no floor. */
   @callable() async listRecordCells(
     request: RecordObjectiveHandle & PageRequest,
   ): Promise<Page<RecordCellSummary>> {
     return listRecordCells(this.boundSql, this.actorHandle(), request, { cursor: request.cursor ?? null, limit: request.limit });
   }
 
-  /**
-   * One cell's population, best first, a page at a time.
-   *
-   * Paged rather than whole because a cell's population is provably unbounded
-   * (`ArchiveAdmission.lean — separated_cells_are_unboundedly_large`), and
-   * `descriptor: null` is the NO-PARTITION cell rather than an unnamed one.
-   */
+  /** One cell's population, best first, paged because it is unbounded
+   *  (`ArchiveAdmission.lean — separated_cells_are_unboundedly_large`); `descriptor: null` is the
+   *  no-partition cell. */
   @callable() async readRecordCell(
     request: RecordCellHandle & PageRequest,
   ): Promise<Page<ExplorationRecord>> {
@@ -4281,21 +3129,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Everything asynchronous that is waiting on the owner, in one queue.
-   *
-   * Host-owned: SLATE_READ_MODELS excludes the needs-you queue and consent
-   * decisions, so an authored preview cannot counterfeit the approval surface.
-   *
-   * An unclaimed workspace has no release hub to ask, so it contributes no
-   * approvals and no changes. Anything else that fails is a real failure and
-   * reaches the caller: "nothing is pending" is the one answer an owner acts
-   * on by doing nothing, so it must never be what a broken read looks like.
+   * Host-owned: SLATE_READ_MODELS excludes this queue so a preview cannot counterfeit approvals.
+   * Only an unclaimed workspace yields no approvals; other read failures must throw, never look empty.
    */
   @callable() async listPendingActions(): Promise<PendingAction[]> {
     const board = this.getOwnerUserId() ? await this.getReleaseBoard(20) : null;
-    // The unseen window itself, not the whole digest: the queue row needs the
-    // count, the newest entry's time, and how many of those entries actually
-    // offer keep/revert rather than being measurements to read.
+    // The queue row needs the unseen count, newest time, and how many entries offer keep/revert.
     const unseen = getUnseenChangelog(this.boundSql, this.rt.actor);
 
     return buildPendingActions({
@@ -4313,25 +3152,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** The run-level MCTS ledger (mcts_search_runs): every search this workspace
-   *  has run, newest-updated first, with its status/iteration/budget. Distinct
-   *  from getMctsTree's node rows — this is how a caller tells which search is
-   *  the latest without inferring it from node ordering. */
+  /** Run-level MCTS ledger, newest-updated first; identifies the latest search without node ordering. */
   @callable() async getMctsSearchRuns(limit = 20): Promise<MctsSearchRunSummary[]> {
     return this.mctsSearchStore.list(limit);
   }
 
-  /** One node, its ancestry and its children (core read-models/search-tree.ts).
-   *  The CLI serves the same projection over bun:sqlite, so `kinu inspect
-   *  mcts <id>` formats one shape however it reached it. */
+  /** The CLI serves the same projection over bun:sqlite (core read-models/search-tree.ts). */
   @callable() async getMctsNodeDetail(nodeId: string): Promise<SearchNodeDetail | null> {
     return readSearchNodeDetail(this.boundSql, this.actorHandle(), nodeId);
   }
 
-  // ── Evolution Changelog — the self-change digest + revert (core builder) ──
-
-  /** The "what I changed about myself" digest, assembled on demand from the
-   *  durable ledgers (core buildChangelog — no second event system). */
+  /** Assembled on demand from the durable ledgers; no second event system. */
   @callable()
   async getEvolutionChangelog(opts?: { limit?: number; changesOnly?: boolean }): Promise<{
     entries: ChangelogEntry[]; unseenCount: number; seenAt: number;
@@ -4339,22 +3170,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return getEvolutionChangelog(this.boundSql, this.actorHandle(), opts?.limit, opts?.changesOnly === true);
   }
 
-  /** The operator viewed the changelog — zero the unseen badge. */
   @callable()
   async markChangelogSeen() {
     return markChangelogSeen(this.config);
   }
 
-  /** Revert one changelog entry through the REAL machinery (scaffold
-   *  rollback / craft retire / fact forget). Id-addressed against a fresh
-   *  digest so a shifted list can never revert the wrong row. */
+  /** Id-addressed against a fresh digest so a shifted list cannot revert the wrong row. */
   @callable()
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
     const result = await revertChangelogEntryById({ rt: this.rt, facts: this.facts, events: this.eventRecorder }, id);
 
     if (result.ok) {
-      // Crafted-tool retirement must drop the cached tool surface, exactly
-      // like the consolidation path.
+      // Crafted-tool retirement must drop the cached tool surface.
       this._cachedTools = null;
       this._cachedToolsKey = '';
     }
@@ -4362,10 +3189,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return result;
   }
 
-  // ── Alternate Takes — near-tied convergence candidates + the pick ──
-
-  /** Claimed take sets keyed by their turn's assistant message id — one
-   *  round-trip so the chat hydrates its "Take 1 of N" chips on load. */
+  /** Claimed take sets keyed by their turn's assistant message id. */
   @callable()
   async listAlternateTakes(): Promise<Record<string, AlternateTakeSet>> {
     const byTurn: Record<string, AlternateTakeSet> = {};
@@ -4378,18 +3202,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return byTurn;
   }
 
-  /** The newest take set, picked or not — the TUI's /takes comparison source. */
   @callable()
   async latestAlternateTakes(): Promise<AlternateTakeSet | null> {
     return latestAlternateTakeSet(this.boundSql, this.actorHandle());
   }
 
   /**
-   * Steer-as-Branch: run a mid-turn redirect as ONE budgeted head against the
-   * live turn's input conversation (the same snapshot heads inherit), in
-   * parallel — the live turn is never interrupted. When both finish the pair
-   * settles into Alternate Takes claimed on this turn (onChatResponse);
-   * progress streams as 'branch_status' broadcasts.
+   * Runs a mid-turn redirect as one budgeted head in parallel; the live turn is never interrupted.
+   * The pair settles into Alternate Takes on this turn; progress streams as 'branch_status'.
    */
   @callable()
   async branchTurn(text: string): Promise<{ accepted: boolean; branchId?: string; reason?: string }> {
@@ -4436,11 +3256,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
 
-  /** Record the user's pick between the explored takes — the explicit
-   *  preference signal (turn_outcomes source 'take_pick' + convergence
-   *  repoint via core recordTakePick). A pick that differs from the answered
-   *  take queues a gentle programmatic continuation through the BackendHost
-   *  seam (same machinery as the reactor / background-job wake). */
+  /** A pick differing from the answered take queues a programmatic continuation via BackendHost. */
   @callable()
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     const outcome = await pickAlternateTake(
@@ -4453,12 +3269,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The unified Run Timeline spine. ONE server-side merge of the durable
-   * per-run event log (run_events: tool/step/head/scaffold/turn) + the
-   * agent-level evolution stream (evolution_events, `data` preserved) + the
-   * MCTS search nodes — normalized into ordered TimelineSpans. The client
-   * renders this single source, so there is no fragile client-side merge of
-   * three RPCs. Defaults to the active run, else the most recent recorded run.
+   * Server-side merge of run_events, evolution_events, and MCTS nodes into ordered TimelineSpans.
+   * Defaults to the active run, else the most recent recorded run.
    */
   @callable()
   async getRunTimeline(opts?: { runId?: string; limit?: number }): Promise<TimelineSpan[]> {
@@ -4471,48 +3283,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }, opts);
   }
 
-  // ── Scaffold loop closure — RPCs for manual exercise + shadow rollout ──
-
   /**
-   * Execute the agent's current scaffold for a one-shot task. Captures all
-   * events the scaffold emits and returns them — does NOT inject anything
-   * back into the chat conversation. Use this to test scaffold mutations
-   * without affecting the main turn loop.
-   *
-   * When `useShadowOverride` is true, runs the pending scaffold instead of
-   * the current one (if a pending exists).
-   *
-   * Wire form only: the MCP Worker adapter is this method's one consumer, and
-   * no remote transport dispatches the plain name, so the structured result
-   * crosses as its JSON twin and is decoded at the call site.
+   * Runs the current (or pending, with `useShadowOverride`) scaffold one-shot; nothing is injected
+   * into chat. Wire form only: the MCP Worker adapter decodes the JSON result at the call site.
    */
   async runScaffoldOnce(task: string, opts?: { useShadowOverride?: boolean }): Promise<ScaffoldRunReport> {
     return scaffoldRunReport(await runScaffoldOnce(this.scaffoldControl, task, opts));
   }
 
-  /** Return the current shadow-rollout status: pending version, win counts, decision. */
   async getShadowStatus(): Promise<ShadowStatus> {
     return getShadowStatus(this.boundSql, this.rt.actor);
   }
 
-  /**
-   * Apply the pending scaffold rollout decision manually.
-   *
-   * `mode='auto'` consults decidePromotion and acts on its verdict (only
-   * acts if decision != 'continue').
-   * `mode='promote'` / `mode='rollback'` forces the corresponding action.
-   */
+  /** `auto` acts on decidePromotion only when its decision != 'continue'; others force the action. */
   @callable()
   async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
     return applyScaffoldDecision(this.scaffoldControl, mode);
   }
 
-  /**
-   * The per-trial shadow-eval verdict grid that drives the promote/rollback
-   * decision — the moat surface's data source. Thin wrapper over core's
-   * `readShadowVerdict` (reads `scaffold_evaluations`, regressions-first;
-   * NOT `task_history`, which is the MCTS converge outcome ledger).
-   */
+  /** Reads `scaffold_evaluations` (regressions-first), not `task_history` (the MCTS ledger). */
   @callable()
   async getShadowVerdict(version?: number): Promise<ShadowVerdict> {
     const pendingVersion = version ?? getPendingScaffold(this.boundSql, this.rt.actor)?.version ?? null;
@@ -4521,11 +3310,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Line diff of a scaffold version against its predecessor — what the agent
-   * actually rewrote in its own inference loop. Reads the versioned VFS backups
-   * (`scaffold/agent.js.vN`); `previousVersion` is the highest existing version
-   * below `version` (robust to non-contiguous numbering after rollbacks). v0 /
-   * no-predecessor diffs render as all-additions.
+   * `previousVersion` is the highest existing version below `version` (numbering may have gaps
+   * after rollbacks). No-predecessor diffs render as all-additions.
    */
   @callable()
   async getScaffoldDiff(version: number): Promise<{
@@ -4546,13 +3332,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { version, previousVersion, added: d.added, removed: d.removed, lines: d.lines };
   }
 
-  /**
-   * Run an arbitrary scaffold version against a task and return its captured
-   * result — so the user can PREVIEW a candidate scaffold live before
-   * promoting it. Reuses the existing runScaffold path with an explicit code
-   * override (same mechanism runScaffoldOnce uses for the pending), reading
-   * the version's source from the VFS `agent.js.vN` backup.
-   */
+  /** Runs a scaffold version (source from VFS `agent.js.vN`) so it can be previewed before promotion. */
   @callable()
   async previewScaffoldLive(
     version: number,
@@ -4562,65 +3342,46 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Change how the `shell` builtin handles 'gate' decisions from the
-   * approval-gate review. Stored in actor_config; effective on the NEXT
-   * turn (the tool cache rebuilds when CraftStore changes — and on cold-
-   * start any value here is read).
-   *
-   *   strict     — default; reject gate commands (sudo, rm-recursive, etc.)
-   *   allow_all  — treat gate decisions as warn (logged + executed). Use
-   *                ONLY for trusted dev environments.
-   *   deny_all   — reject gate AND warn (env-dump, secret-file-read).
+   * Stored in actor_config; effective on the next turn. strict (default) rejects gate commands;
+   * allow_all treats gate as warn (trusted dev only); deny_all rejects gate and warn.
    */
   @callable()
   async setShellApprovalMode(mode: 'strict' | 'allow_all' | 'deny_all') {
     return setShellApprovalMode({
       config: this.config,
-      // Force a tool cache rebuild on the next getTools().
       onChanged: () => { this._cachedTools = null; this._cachedToolsKey = ''; },
     }, mode);
   }
 
-  /** Current shell-approval mode (strict | allow_all | deny_all). */
   @callable()
   async getShellApprovalMode(): Promise<{ mode: ShellApprovalMode }> {
     return getShellApprovalMode(this.config);
   }
 
-  /** Every rule the owner has said "always" to, and where. The revoke list. */
   @callable()
   async getShellApprovalGrants(): Promise<{ grants: ApprovalGrant[] }> {
     return getShellApprovalGrants(this.config);
   }
 
-  /** Take a standing grant back. The gate reads grants live, so the next
-   *  command of that kind asks again — no toolset rebuild, no restart. */
+  /** The gate reads grants live, so revocation needs no toolset rebuild or restart. */
   @callable()
   async revokeShellApprovalGrants(grants: ApprovalGrant[]): Promise<{ grants: ApprovalGrant[] }> {
     return revokeShellApprovalGrants(this.config, grants);
   }
 
-  /**
-   * Pin a set of skills as always-active for this agent. Empty array clears
-   * the pin. Operators use this from the Settings page; without an RPC the
-   * only way to set `always_active_skills` is direct SQL, which the spec
-   * explicitly wants to avoid.
-   */
+  /** Empty array clears the pin. */
   @callable()
   async setAlwaysActiveSkills(names: string[]) {
     return setAlwaysActiveSkills(this.config, names);
   }
 
-  /** Current pinned always-active skill names. Empty array means none. */
   @callable()
   async getAlwaysActiveSkills(): Promise<{ names: string[] }> {
     return getAlwaysActiveSkills(this.config);
   }
 
-  // ── File checkpoints (device shadow-git) ─────────────────────────────
-  // The store lives on the user's machine; these forward to the daemon via
-  // the user hub. Restore is owner-invoked (web turn card / CLI /undo), so
-  // it bypasses the per-agent consent gate — pure added reversibility.
+  // Checkpoints live on the user's machine, reached via the user hub. Restore is owner-invoked,
+  // so it bypasses the per-agent consent gate.
 
   private get deviceCheckpoints(): FileCheckpointReads {
     return this._deviceCheckpoints ??= deviceFileCheckpoints({
@@ -4650,15 +3411,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Record thumbs-up/down feedback for a completed assistant message and
-   * re-score the crafted tools that turn used. Pass `feedback: null` to clear.
-   *
-   * Feedback is inherently asynchronous (the user clicks after the turn ends),
-   * so it can't flow through the turn-time heuristic. Instead, this applies a
-   * fresh EMA observation — derived from the feedback via the same mapping the
-   * turn-time path uses (feedbackToQuality) — to exactly the crafted tools
-   * recorded for this message in turn_craft_usage. That makes the thumbs a
-   * real, load-bearing learning signal rather than a stored-but-ignored value.
+   * `feedback: null` clears. Applies an EMA observation (feedbackToQuality) to the crafted tools
+   * recorded for this message in turn_craft_usage.
    */
   @callable()
   async setTurnFeedback(
@@ -4686,8 +3440,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
                feedback   = excluded.feedback,
                created_at = excluded.created_at`;
 
-    // Re-score the crafted tools this turn used with the feedback-derived
-    // quality. No-op when the turn used no crafted tools.
     let rescored = 0;
 
     const usageRows = this.sql<{ tool_names: string }>`
@@ -4701,14 +3453,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       if (names.length > 0) {
         updateCraftScores(this.boundSql, names, feedbackToQuality(feedback));
         rescored = names.length;
-        // The next getTools() should reflect the new scores.
         this._cachedTools = null;
         this._cachedToolsKey = '';
       }
     }
 
-    // One outcome ledger: the explicit verdict overrides any classifier row
-    // for this turn and, when negative, corroborates provisional lessons.
+    // The explicit verdict overrides any classifier row for this turn and, when negative,
+    // corroborates provisional lessons.
     try {
       await this.engine.applyExplicitFeedback(messageId, feedback);
     } catch (err) {
@@ -4722,12 +3473,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { ok: true, messageId, feedback, rescored };
   }
 
-  /** All recorded feedback keyed by message id — one round-trip so the chat
-   *  hydrates its thumbs marks on load instead of forgetting them.
-   *
-   *  THIS actor's marks. The ids are unique only within an actor, so an
-   *  unscoped read would hand this chat a sibling's thumbs under ids that
-   *  happen to collide. */
+  /** Scoped to this actor: message ids are unique only within an actor. */
   @callable()
   async listTurnFeedback(): Promise<Record<string, 'positive' | 'negative'>> {
     const rows = this.sql<{ message_id: string; feedback: 'positive' | 'negative' }>`
@@ -4737,23 +3483,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return Object.fromEntries(rows.map((r) => [r.message_id, r.feedback]));
   }
 
-  /** The scaffold variant archive: recent versions with status, DGM lineage
-   *  (parent_version) and aggregated shadow-eval record. Read-only — also the
-   *  backing for the agent.scaffoldVersions codemode helper. Computed by
-   *  core's listScaffoldArchive; keys stay snake_case here because this RPC's
-   *  wire shape predates the archive (ScaffoldLineage.tsx reads written_at). */
+  /** Scaffold variant archive (read-only); also backs the agent.scaffoldVersions codemode helper.
+   *  Keys stay snake_case: ScaffoldLineage.tsx reads the wire shape (written_at). */
   @callable()
   async listScaffoldVersions(limit = 20): Promise<ScaffoldVersionView[]> {
     return listScaffoldVersions(this.boundSql, this.rt.actor, limit);
   }
 
-  // ── GEPA offline scaffold optimisation ─────────────────────────
-
-  /**
-   * Run a GEPA (Genetic-Pareto) optimisation pass over this agent's scaffold.
-   * The pass itself is core's — see `runScaffoldGepaOptimization` in
-   * evolution/control.ts for what it does and what it costs.
-   */
+  /** GEPA optimisation pass; see `runScaffoldGepaOptimization` in evolution/control.ts for cost. */
   @callable()
   async runScaffoldGepaOptimization(opts?: {
     maxIterations?: number;
@@ -4763,32 +3500,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return runScaffoldGepaOptimization(this.scaffoldControl, opts);
   }
 
-  /** List recent GEPA optimisation runs for the UI. */
   @callable()
   async getGepaRuns(limit = 20): Promise<GepaRunSummary[]> {
     return listGepaRuns(this.boundSql, this.actorHandle(), limit);
   }
 
-  // ── Replay-eval loss curve ──────────────────────────────────────
-
-  /** The persisted loss curve (replay_evals), newest first. Read-only — the
-   *  data a loss chart would render. */
+  /** The persisted loss curve (replay_evals), newest first. */
   @callable()
   async getReplayEvals(limit = 50): Promise<ReplayEvalSummary[]> {
     return listReplayEvals(this.boundSql, this.actorHandle(), limit);
   }
 
-  /** K_align: the correction rate per 100 graded turns, per scaffold version,
-   *  with 95% Wilson intervals — the self-improvement question answered from
-   *  telemetry alone, no benchmark and no judge. */
+  /** K_align: correction rate per 100 graded turns, per scaffold version, with 95% Wilson
+   *  intervals, from telemetry alone. */
   @callable()
   async getAlignmentConvergence(): Promise<AlignmentConvergence> {
     return alignmentConvergence(this.boundSql, this.actorHandle());
   }
 
-  /** What hand labels establish about the turn-outcome classifier, and the
-   *  bias-corrected rates they buy. Reads "uncalibrated" until labels exist —
-   *  K_align above is the classifier's opinion until this one has numbers. */
+  /** Classifier calibration from hand labels; reads "uncalibrated" until labels exist. */
   @callable()
   async getOutcomeCalibration(): Promise<CalibrationReport> {
     return calibrationReport(this.boundSql, this.actorHandle());
@@ -4800,8 +3530,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return sampleForLabeling(this.boundSql, this.actorHandle(), { size });
   }
 
-  /** Store a labeling pass. Append-only; ids the ledger no longer knows are
-   *  reported back rather than losing the pass. */
+  /** Append-only; ids the ledger no longer knows are reported back rather than dropping the pass. */
   @callable()
   async recordOutcomeLabeling(
     labeler: string,
@@ -4810,42 +3539,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return ingestOutcomeLabels(this.boundSql, this.actorHandle(), { labeler, labels });
   }
 
-  /** How the LLM panel scored against the owner's own labels, and whether it
-   *  cleared the pre-registered bar to stand in for them. */
+  /** How the LLM panel scored against the owner's labels, and whether it cleared the
+   *  pre-registered bar to stand in for them. */
   @callable()
   async getOutcomeEnsemble(): Promise<EnsembleReport> {
     return ensembleReport(this.boundSql, this.actorHandle());
   }
 
   /**
-   * Put the hand-labeled turns to the panel — one blind pass per judge, stored
-   * append-only. Judges come from `specs` when the owner names them, else one
-   * model per connected vendor family other than the one the graded turns ran
-   * on.
-   *
-   * Fewer than two families available is reported as the gap it is (by
-   * `runEnsemble`, after the prerequisites the owner would fix first); nothing
-   * is padded with a second model from the same vendor, which would agree with
-   * the first for reasons that have nothing to do with the turn.
-   *
-   * The baseline is the ROUTED turn model, not the stored spec. What this panel
-   * has to differ from is whatever actually graded-work ran on, and
-   * `MODEL_ROUTE_POLICY.agent` is `invocation` — the tier the active role
-   * selected. Reading `getStoredModelId()` instead named the account's chat
-   * default, so a role running on any other tier could have its own model
-   * selected as an "independent" judge: a panel agreeing with the turn because
-   * it IS the turn.
-   *
-   * This panel is the ONE declared exception to `MODEL_ROUTE_POLICY`'s
-   * exhaustiveness, and the rationale lives in that table's own header rather
-   * than here — a claim of exhaustiveness has to carry its own counter-example,
-   * and a comment in this package is invisible from the file making the claim.
-   * Read `core/src/profiles/model-route.ts` before changing this: the short
-   * version is that its members must disagree for reasons other than the turn,
-   * so `resolveModelRoute('judge', …)` would read as tidier and silently make
-   * every judge the same model. The spend label stays `judge` because that is
-   * what the work IS, and the EFFORT stays on the stage table for the reason
-   * the header gives.
+   * Judges must come from vendor families other than the routed turn model (not the stored spec);
+   * the one declared exception to `MODEL_ROUTE_POLICY`, see core/src/profiles/model-route.ts.
    */
   @callable()
   async runOutcomeEnsemble(specs?: string[]): Promise<EnsembleRunResult> {
@@ -4862,10 +3565,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         spec,
         llm: createCompletionLLM({
           model: registry.resolveModel(spec), spec, stage: 'judge',
-          // One call per judge per hand-labelled turn, on a model deliberately
-          // chosen from a different vendor family than the graded turns' — so
-          // this is spend the actor's own catalog rate cannot price and the step
-          // telemetry never saw.
+          // Cross-vendor judge spend: the actor's catalog rate cannot price it and step telemetry
+          // never saw it.
           spend: {
             source: 'judge', report: (report) => this.reportModelCall(report),
             operations: this.modelOperations,
@@ -4875,9 +3576,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** One GEPA run in full: its candidates (scores/feedback per instance) +
-   *  the Pareto-front membership — drives the Exploration surface's Pareto
-   *  scatter + ancestry tree. Maps are flattened to plain objects for RPC. */
+  /** One GEPA run with candidates and Pareto-front membership; Maps flattened to objects for RPC. */
   @callable()
   async getGepaRun(runId: string): Promise<{
     run: GepaRunSummary | null;
@@ -4897,8 +3596,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         aggregateScore: c.aggregateScore, createdAt: c.createdAt,
       }));
 
-      // The membership table is core's; its loader derives the front from the
-      // rows that persist. No raw SELECT across the package boundary.
+      // The membership table is core's; no raw SELECT across the package boundary.
       const pareto = loadGepaParetoFront(this.boundSql, this.actorHandle(), runId);
 
       return { run, candidates, pareto };
@@ -4909,92 +3607,52 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
-  /**
-   * The cumulative workspace change-set since the baseline — what the agent has
-   * created/changed/deleted, for review on the Output surface. The baseline is
-   * captured at workspace birth and re-markable via resetWorkspaceBaseline
-   * ("mark reviewed"). A read never changes the review boundary.
-   */
+  /** Cumulative workspace change-set since the baseline (reset via resetWorkspaceBaseline).
+   *  A read never changes the review boundary. */
   async getWorkspaceDiff(): Promise<WorkspaceDiffResult> {
     return getWorkspaceDiff(this.rt);
   }
 
-  /** General per-executor change-set: the VFS snapshot baseline for the agent
-   *  workspace, a real `git diff` of /workspace for shell executors. */
+  /** VFS snapshot baseline for the agent workspace; a real `git diff` of /workspace for shell executors. */
   @callable()
   async getExecutorDiff(executorId: string): Promise<ExecutorDiffResult> {
     return getExecutorDiff(this.rt, executorId);
   }
 
-  /** Mark the current workspace as the new baseline ("reviewed" — the diff
-   *  resets to empty and accrues from here). */
   @callable()
   async resetWorkspaceBaseline(): Promise<{ ok: true; files: number }> {
     return resetWorkspaceBaseline(this.rt);
   }
 
-  /** Recent branching-head runs (think strategy=heads): each split grouped by
-   *  root_id with its heads (incl. the ordered per-head step trace) + the merged
-   *  synthesis — drives the Exploration surface's Branches strip. */
+  /** Recent branching-head runs, grouped by root_id with heads, step traces and merged synthesis. */
   @callable()
   async getHeadRuns(limit = 20): Promise<HeadRunView[]> {
     return this.headJournal.listRuns(limit);
   }
 
-  /** One merged fork's journal, independent of unrelated recent head runs. */
   @callable()
   async getHeadRun(rootId: string): Promise<HeadRunView | null> {
     return this.headJournal.readRun(rootId);
   }
 
-  /**
-   * One branch's whole behaviour — the transcript the Exploration surfaces open
-   * when a node is clicked.
-   *
-   * One entry point across both fork mechanisms, unlike `getHeadRun` /
-   * `getSearchTree`: a reader who clicked a node wants the task, the steps and
-   * the answer whatever strategy produced it, and making the CLIENT choose the
-   * store is how the explorer ended up showing a one-line footer chip for a
-   * search node and nothing at all for a head. Core decides; see
-   * read-models/node-transcript.ts for what each store can honestly report.
-   */
+  /** One branch's transcript across both fork mechanisms; core picks the store, not the client.
+   *  See read-models/node-transcript.ts for what each store can report. */
   @callable()
   async getNodeTranscript(runId: string, nodeId: string, request?: PageRequest): Promise<NodeTranscriptView | null> {
     return readNodeTranscript(this.boundSql, this.actorHandle(), { runId, nodeId }, request ?? {});
   }
 
   /**
-   * One finished step of a head, written into the journal as it lands.
-   *
-   * A head runs in a FACET with its own storage, and the journal lives here — so
-   * the write has to come back over RPC, exactly as the mission ledger's
-   * per-step guard/debit does (`missionGuard`/`missionDebit`). Without this the
-   * whole trace path was declared and connected nowhere: `head_steps` existed,
-   * `HeadJournal.appendStep` existed with no callers, and
-   * `HeadInferenceDeps.reportStep` was an optional seam with no provider, so
-   * `await deps.reportStep?.(…)` silently no-opped on every step of every head.
-   * The visible consequence was every branch reading `STEPS 0 · TOOLS 0` with
-   * "no step trace" for its whole life, running or finished.
-   *
-   * Announced as well as written, so an open transcript grows as the branch
-   * works instead of on a poll clock. The step itself is NOT on the wire: the
-   * same reasoning as `pending_actions_changed` — the client re-reads the ledger
-   * it already renders from, so one channel cannot start disagreeing with the
-   * other, and a subscriber that missed a frame is corrected by the next one.
-   *
-   * TRACED, and it is the cheapest span with the highest leverage here: every
-   * step of every head and every node blocks on this RPC, so its duration is on
-   * the critical path of the whole search. A journal write that has gone slow
-   * looks exactly like a facet that has gone quiet.
+   * Journal write for one finished head step; facets have their own storage, so it comes back over RPC.
+   * The step is not on the wire: clients re-read the ledger. Traced because every step blocks on it.
    */
   @callable()
   async recordHeadStep(headId: string, seq: number, step: HeadStep): Promise<{ ok: true }> {
     return await this.tracing.invocation('rpc', 'head.record_step', async (_invocation, span) => {
       span.setAttribute('kinu.head_id', headId);
       span.setAttribute('kinu.step_seq', seq);
-      // The announcement rides the journal write itself (LiveHeadJournal), so
-      // it happens once whether a step arrives through this RPC from a hosted
-      // facet or straight from an in-isolate node that has no facet at all.
+      // Announcement rides the journal write (LiveHeadJournal), so it fires once for facet and
+      // in-isolate steps.
       this.headJournal.appendStep(headId, seq, step);
 
       return { ok: true };
@@ -5002,50 +3660,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * `publishHeadStreamFrame` is the in-process head-stream publisher, reached
-   * through `reportNodeDelta` and `ExplorationHostSeams.publishDelta`; an
-   * inbound forwarding RPC would duplicate that implementation (reachability
-   * reference: 0b6d36886). The RPC allowlist exposes only required remote
-   * capabilities, so local publication does not create another transport entry.
+   * `publishHeadStreamFrame` is reached in-process via `reportNodeDelta` and
+   * `ExplorationHostSeams.publishDelta`; the RPC allowlist exposes only required remote capabilities.
    */
 
   /**
-   * The immutable turn profile a facet of this workspace runs under.
-   *
-   * A facet resolves its own model, its own provider registry and its own
-   * runtime, but it must NOT resolve its own profile. Two reasons, and the
-   * second is the one that bit:
-   *
-   *   • `MODEL_ROUTE_POLICY.mcts`, `.head` and `.swarm` are `invocation` —
-   *     the tier the ACTIVE ROLE selected for this turn. A facet knows neither
-   *     the role nor the turn, so a locally resolved profile would answer a
-   *     different question and quietly run the account default while the turn
-   *     it belongs to ran somewhere else.
-   *   • A second resolution can disagree with the first. The provider snapshot
-   *     moves whenever a credential does, so a facet resolving moments later
-   *     can land a different `providerRevision` and a different digest — and a
-   *     search whose branches ran under a profile the parent never resolved is
-   *     unreproducible for exactly the reason the digest exists.
-   *
-   * So the parent's profile is the answer, and this is the one wire it crosses.
-   * `routingProfile()` returns the live turn's profile when a turn is open and
-   * resolves one otherwise, which is what a durable head that outlived its
-   * turn needs.
+   * The parent's turn profile for a facet; facets must not resolve their own (they lack the role/turn,
+   * and a later resolution can land a different digest). Resolves one if no turn is open.
    */
 
   /**
-   * One page of this workspace's portable archive — the owner's own copy of
-   * everything the workspace durably holds, in the same format the local
-   * backend writes and `kinu import` reads.
-   *
-   * Paged because a workspace's SQL rows and Nimbus files have no bounded
-   * size, and neither a DO response nor an isolate's memory should have to hold
-   * all of it: the caller walks `next` until it is null and appends each page's
-   * lines to a file. Owner-scoped by the RPC access table
-   * ('interactive' — a scoped CI token is denied on every transport) on top of
-   * the ownership check every workspace route already makes. Workspace
-   * capability tiers do not gate it: this reads the workspace's own storage
-   * for the owner who asked, and reaches nothing in the wider account.
+   * One page of the portable archive (format `kinu import` reads); walk `next` until null.
+   * Owner-scoped ('interactive'); workspace capability tiers do not gate it.
    */
   @callable()
   async exportWorkspaceArchive(cursor?: ArchiveCursor): Promise<ArchivePage> {
@@ -5062,44 +3688,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** Tear down every per-agent resource, then wipe this Durable Object. Called
-   *  by UserDO.removeWorkspace on delete so a same-name recreate starts clean and
-   *  no orphaned alarm / process / port lingers.
-   *
-   *  The optional Sandbox container goes first because it is the one plane that
-   *  is somewhere else: its teardown can fail without touching the workspace,
-   *  and once its storage is gone nothing knows which R2 objects were its. The
-   *  WORKSPACE needs no step of its own — its tables are rows in THIS object, so
-   *  `this.destroy()` drops the filesystem, the conversation and the ledgers in
-   *  one teardown. That is why a same-name recreate cannot find half a
-   *  workspace: there is no second object to be out of step with.
-   *
-   *  Deliberately NOT @callable: destruction goes through UserDO's ownership
-   *  check, never the raw websocket. */
+  /**
+   * Tear down per-agent resources (Sandbox first), then wipe this DO; called by UserDO.removeWorkspace.
+   * Not @callable: destruction must go through UserDO's ownership check.
+   */
   async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
     if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new Error('invalid expected owner user id');
 
-    // Asked, never caught: a workspace whose creation died between naming and
-    // `ensureSchema` has no `workspace_identity` table, so the owner read below
-    // throws on the object rather than answering — and with no row to compare,
-    // the check that gates the healthy path has nothing to decide. There is no
-    // second authorization to make: the caller is the owner's own
-    // `removeWorkspace`, which already matched this workspace's name to a row in
-    // the calling user's roster (`user/routes.ts` DELETE), so the route carries
-    // the ownership evidence the missing table cannot.
+    // A workspace whose creation died before `ensureSchema` has no `workspace_identity` table; the
+    // caller `removeWorkspace` already verified ownership via the user's roster.
     if (tableExists(this.boundSql, 'workspace_identity')) {
       const ownerUserId = this.getOwnerUserId();
 
       if (ownerUserId !== expectedOwnerUserId) throw new Error('Agent owner mismatch; refusing to destroy.');
     }
 
-    // FIRST, and before the container object's own token store is deleted with
-    // it: every preview URL this workspace published stops resolving at the
-    // edge. Without this, a URL somebody still holds — chat history, a
-    // screenshot, a bookmark — would prove an exposure whose object no longer
-    // exists, and answering it would CREATE a fresh empty container object.
-    // One write, no enumeration: the watermark outranks every record published
-    // before now (core preview/preview-exposures.ts).
+    // First: revoke all preview URLs, else answering a stale one would create a fresh container object.
+    // The watermark outranks every earlier record (core preview/preview-exposures.ts).
     if (this.env.AUTH_KV) {
       await sandboxPreviewExposures(
         this.env.AUTH_KV, sandboxIdForWorkspace(this.name),
@@ -5107,9 +3712,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     if (this.env.Sandbox) {
-      // {@link SANDBOX_TRANSPORT} — the SDK drops in-flight requests if the
-      // transport changes between calls on one sandbox, so the constant is the
-      // agreement. The measured reasoning for `rpc` lives on the constant.
+      // {@link SANDBOX_TRANSPORT}: the SDK drops in-flight requests if the transport changes between calls.
       const sb = getSandbox(this.env.Sandbox, sandboxIdForWorkspace(this.name), {
         normalizeId: true, transport: SANDBOX_TRANSPORT,
       });
@@ -5120,16 +3723,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       await sb.destroy();
     }
 
-    // agents base: drops SDK tables + deleteAlarm + deleteAll + aborts the
-    // isolate. `deleteAll` is what takes the workspace filesystem with it.
+    // agents base: drops SDK tables, deleteAlarm, deleteAll (takes the filesystem), aborts the isolate.
     await this.destroy();
 
     return { ok: true };
   }
 
-  /** The agent's world model — keyed agent_facts, most-recent first — for the
-   *  Self surface. Wraps FactsStore (otherwise consumed only internally for
-   *  prompt injection). */
   @callable()
   async getFacts(limit = 100): Promise<Array<{
     key: string; value: unknown; confidence: number; source: string; lastObservedAt: number;
@@ -5139,39 +3738,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  /** Run a scaffold against a task and return the concatenated text it
-   *  produced. With candidateCode it is the GEPA metric's rollout; without,
-   *  it rolls the LIVE scaffold — the replay-eval harness's current-config
-   *  runner. */
+  /** With candidateCode: the GEPA metric's rollout; without: runs the live scaffold. */
   private runScaffoldCaptureText(task: string, candidateCode?: string): Promise<string> {
     return runScaffoldCaptureText(this.scaffoldControl, task, candidateCode);
   }
 
-  // ── Durable run-event log — read endpoints + run listing ──
-
-  /**
-   * Paginated read of a single run's events. For SSE-style resume, pass
-   * the last seen `since` index and the recorder returns events strictly
-   * after it.
-   */
+  /** For resume, pass the last seen `since` index; returns events strictly after it. */
   async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
     return getRunEvents(this.eventRecorder, runId, opts);
   }
 
-  /**
-   * A page of the agent's recent runs with each one's latest timestamp and event
-   * count, newest first.
-   *
-   * Not `@callable()` — the web UI reads runs through `getRunSummaries`. This
-   * serves the `/runs` HTTP route, the MCP tool and the CLI, and it is cursored
-   * for the same reason they are: those callers pass a limit and had no way to
-   * learn whether it had cut anything off.
-   */
+  /** Not @callable: the web UI uses `getRunSummaries`; serves `/runs`, MCP and CLI. */
   async listRuns(request?: PageRequest): Promise<Page<RunListEntry>> {
     return listRuns(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
-  /** Owner-only inspection of retained subordinate paths. */
   @callable()
   async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
     const owner = this.getOwnerUserId();
@@ -5182,36 +3763,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * ONE hosted actor's own identity, program and open work, for the tab that is
-   * looking at it.
-   *
-   * ONE allowlist row for this capability, and nothing beside it. The display
-   * name, the role, the plan and the steers are `actor_id`-scoped rows in the one
-   * workspace database, so the question is six local reads answered in process —
-   * a private per-facet database is the only thing that would force an RPC into a
-   * second isolate over a stub for them.
-   *
-   * NAMED FOR THE ACTOR, not the kind. Every kind is an actor, so a snapshot
-   * keyed to `subordinate` would be stale vocabulary on the day it landed. The SHAPE is honestly subordinate-shaped today and the name does not
-   * pretend otherwise: `mission` comes off the hire's birth seed, which a head
-   * or a node does not have — they carry a task and a rootId instead. So this
-   * serves any actor whose row the directory resolves, and a head asking it
-   * would get `mission: ''` rather than a lie; widening the shape for the
-   * exploration kinds is a change to the payload, not to this seam.
-   *
-   * READ-ONLY AND IT STARTS NOTHING: `bindStores`, never `acquire`. Reading a
-   * retained actor must not start work — an inspection RPC that acquired would
-   * break that invariant from outside the object, where core's own host suite
-   * cannot see it.
-   *
-   * AUTHORISED TWICE OVER. The workspace must have an owner, as every other
-   * owner-gated read here requires; and the name is resolved THROUGH THE
-   * DIRECTORY under this root's own handle, so it can only name a child of this
-   * root. A browser-reachable read that answered for any actor id handed to it
-   * would be the first cross-actor read reachable from outside this object.
+   * One hosted actor's identity, program and open work. Read-only: `bindStores`, never `acquire`,
+   * so inspecting a retained actor starts nothing. Owner-gated and resolved through the directory.
    */
-  /** One child of this root, resolved THROUGH THE DIRECTORY under this root's
-   *  handle: a name can only reach an actor of this workspace. */
+  /** Resolved through the directory under this root's handle, so a name only reaches this root's children. */
   private hostedChild(name: string) {
     if (!this.getOwnerUserId()) throw new KinuError('denied', 'The workspace has no owner.');
     const entry = this.subordinateRoster.requireExisting(name);
@@ -5227,17 +3782,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async getActorSnapshot(name: string) {
     const { entry, child } = this.hostedChild(name);
 
-    // The model a pane shows is the actor's EFFECTIVE one — its own pin, else
-    // the workspace's, else its tier's — with the source that chose it.
+    // The effective model: the actor's own pin, else the workspace's, else its tier's, with its source.
     const { profile } = await this.hostedActorProfile({
       actor: child.handle, availableTools: [], workMode: 'build',
     });
 
     return {
       name: entry.name,
-      // The actor this name resolves to, which is the id every frame the
-      // hosting seam broadcasts for it is stamped with. The pane reads it to
-      // tell its own stamped frames from a sibling's on the shared socket.
+      // The id every frame broadcast for this actor is stamped with; the pane uses it to filter frames.
       actorId: child.handle.actorId,
       displayName: child.stores.config.getDisplayName() ?? entry.name,
       role: child.stores.config.getRoleSelection(),
@@ -5245,10 +3797,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       model: { model: profile.tier.model, source: profile.tier.source },
       reasoningEffort: profile.tier.reasoningEffort,
       activePlan: child.stores.planReviews.getActive(CHAT_SESSION_ID),
-      // The child's OWN acknowledged-but-not-landed steers, read with the
-      // child's actor id rather than this root's — the same rows, the same
-      // rule and the same ordering `pendingSteerRuns()` reads for the
-      // workspace actor: a steer is a row bound to a turn.
+      // Read with the child's actor id; same rule as `pendingSteerRuns()`: a steer is a row bound to a turn.
       pendingSteers: new PendingSendStore(this.boundSql, child.handle.actorId).restore()
         .filter((row) => row.turnId !== null)
         .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null })),
@@ -5256,32 +3805,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * A facet of this workspace has a new plan revision, and this workspace's own
-   * clients are told a REFERENCE to it — nothing else.
-   *
-   * NATIVE ONLY, and deliberately its own name rather than the inherited
-   * `broadcast`. `sealRpcSurface` shadows every unlisted member as an own
-   * property, which leaves it callable in process and unresolvable over a stub,
-   * so `broadcast` is not something a facet can reach and must not become
-   * something a facet can reach: a generic string channel to every connected
-   * client is the one hole this file's allowlist exists to keep shut. This
-   * takes a parsed reference, spells the event name here, and can carry nothing
-   * else. Not `@callable`, exactly like `workspaceBoxOp` and `supervisorOp`:
-   * reachable by a Durable Object stub in this Worker, unreachable from the
-   * browser or the CLI.
-   *
-   * BROADCAST ONLY: no SQL write, no state, nothing read back, and no plan body
-   * — the same shape as {@link publishHeadStream}, for the same reason. It is a
-   * HINT. The recipient re-reads the exact reference through the owner-gated
-   * `inspectSubordinate`, which verifies every stored ownership hop, before it
-   * displays or focuses anything; that read, not this call, is the authority.
-   *
-   * The one check worth making here is the one this object can answer from its
-   * OWN records without trusting its caller: the actor named at the head of the
-   * path has to be on this workspace's roster. A stub call carries no caller
-   * identity, so this cannot prove WHICH facet is speaking — which is exactly
-   * why the reader's authoritative read is where authority lives, and why a
-   * hint that survives this check still buys nothing it was not already owed.
+   * Broadcasts only a plan reference; not `@callable`, and deliberately not `broadcast`, which
+   * facets must not reach. A hint: readers re-verify via owner-gated `inspectSubordinate`; a stub
+   * call carries no caller identity.
    */
   async announceSubordinatePlan(reference: WorkspacePlanReference): Promise<void> {
     const parsed = v.parse(WorkspacePlanReferenceSchema, reference);
@@ -5300,24 +3826,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The Activity surface: what the newest request cost, what it was made of,
-   * how the recent ones have behaved — and what the WHOLE workspace spent.
-   *
-   * `steps` bounds the SAMPLE and nothing else. `telemetry` is a distribution
-   * over recent steps — a cache-hit EMA and a p95 — so it needs a window, and
-   * the bound comes back on the result so a reader can see what the rates are
-   * over. `spend` is a SUM and takes no window at all: it is summed in SQL over
-   * every row the log holds, so no `steps` a caller passes can turn the
-   * workspace total into a floor. Were that possible it would be invisible: a
-   * caller asking for 2000 gets 400, and the panel says "newest 400 rows" in
-   * small text beside a figure the owner decides on.
-   *
-   * `telemetry` and `spend` answer two different questions and are deliberately
-   * not merged. `telemetry` is THIS AGENT'S OWN TURNS: its prefix-cache EMA only
-   * means something over one prompt lineage, and a judge's cold prompt in that
-   * window would read as a cache regression the agent never had. `spend` is every
-   * producer in the workspace, grouped, with its own coverage fraction — the
-   * answer to "is this all of the usage, including the async models".
+   * `steps` bounds only the telemetry sample; `spend` is summed in SQL over the whole log, never windowed.
+   * `telemetry` is this agent's own turns; `spend` covers every producer in the workspace.
    */
   @callable()
   async getActivitySnapshot(opts?: { steps?: number; logs?: number }): Promise<ActivitySnapshot> {
@@ -5326,11 +3836,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const events = this.eventRecorder.readRecentByType('step_finish', windowLimit);
     const steps = events.flatMap((e) => (e.type === 'step_finish' ? [e] : []));
 
-    // The same window's cache WARMS. A warm is a `model_call` row, never a
-    // step, so it cannot reach the EMA or the percentiles by construction —
-    // `summarizeSteps` takes the rows only to count them, because a refresh
-    // reads the whole prefix and writes nothing and would pull the
-    // conversation's hit rate toward 100% it never earned.
+    // Warms are `model_call` rows, never steps, so they cannot skew the EMA; they are only counted.
     const warms = this.eventRecorder.readRecentByType('model_call', windowLimit)
       .flatMap((e) => (e.type === 'model_call' && e.source === 'warming' ? [e] : []));
 
@@ -5357,32 +3863,22 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.
       telemetry: summarizeSteps(steps, { windowLimit, warms }),
-      // Both axes of the same money, from one read: the producer rows and the
-      // per-mission rows. `this.budget.snapshot()` is deliberately NOT read
-      // beside it — it answers a narrower question (the labels the turn in
-      // flight is under) out of the same ledger, and two mission figures on one
-      // panel is how a reader learns to distrust both. No window: the producer
-      // rows are summed over the whole log, so this is the total rather than the
-      // newest slice of it.
+      // Not `this.budget.snapshot()`: that answers a narrower question, and two mission figures
+      // would conflict.
       spend: workspaceSpend({ events: this.eventRecorder, sql: this.boundSql, actor: this.actorHandle() }),
       log: readActivityLog(this.boundSql, this.actorHandle(), logLimit),
     };
   }
 
-  // ── MCP server bridge — small RPCs the MCP handler needs ──
-  /** Used by the /mcp/v1/<name> save_note tool. Routes through the same
-   *  appendMemoryNote primitive as workspace.saveNote + the `memory` builtin. */
+  /** Routes through the same appendMemoryNote primitive as workspace.saveNote and the `memory` builtin. */
   async saveNoteFromMcp(content: string): Promise<{ ok: true }> {
     await appendMemoryNote(this.rt.memory, content);
 
     return { ok: true };
   }
 
-  /** MCP `run_task`: deliver a task signal through the SAME seam the event→turn
-   *  reactor and background-job wake use. Not a new execution path.
-   *
-   *  The words are whoever is driving the MCP client — the operator, not the
-   *  harness — so the signal names its author and the chat keeps its bubble. */
+  /** Delivers a task signal through the same seam as the event→turn reactor and background-job wake.
+   * The words come from the MCP client's operator, so the signal names its author. */
   async runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
     const trimmed = text.trim();
 
@@ -5396,9 +3892,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { status: outcome === 'undelivered' ? 'skipped' : 'queued' };
   }
 
-  /** MCP `send_peer`: fire-and-forget a message to one of the owner's other
-   *  agents over the exact peer-deps transport (owner + same-owner roster
-   *  gate enforced inside getPeersToolDeps). */
+  /** Fire-and-forget over the peer-deps transport; owner + same-owner roster gate is enforced there. */
   async sendPeerFromMcp(input: { agent: string; topic?: string; message: string }): Promise<PeerSendOutcome> {
     if (!input?.agent || !input?.message) throw new Error('send_peer requires agent and message');
 
@@ -5410,28 +3904,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** MCP `send_peer` roster helper — the owner's other agents (self excluded). */
+  /** The owner's other agents, self excluded. */
   async listPeersFromMcp(): Promise<Array<{ name: string; displayName?: string }>> {
     return this.getPeersToolDeps().listPeers();
   }
 
-  // ── Hybrid memory search — FTS5 + Vectorize via RRF ──
   /**
-   * Semantic + lexical search merged via Reciprocal Rank Fusion.
-   * Falls back to pure FTS5 when the Vectorize binding isn't configured.
-   *
-   * Returns enriched HybridHit[] with sources, RRF score, and individual
-   * lexical/semantic scores when available. THE one memory-search surface for
-   * every remote caller — browser rpc, the CLI /rpc transport, MCP
-   * search_memory — one behavior everywhere.
+   * FTS5 + Vectorize merged via Reciprocal Rank Fusion; pure FTS5 when Vectorize isn't bound.
+   * The single memory-search surface for all remote callers (browser rpc, CLI /rpc, MCP).
    */
   @callable() async searchMemoryHybrid(query: string, limit = 10): Promise<HybridHit[]> {
     const lexicalSearchFn = async (q: string, k: number) => {
       const results = await this.rt.memory.search(q, k);
 
       return results.map((r) => ({
-        // Canonical chunk id (`path:start-end`) — matches the id the vector
-        // store returns, so RRF fuses the lexical and semantic hits.
+        // Must match the vector store's chunk id (`path:start-end`) so RRF fuses lexical and semantic hits.
         id: `${r.path}:${r.startLine}-${r.endLine}`,
         path: r.path,
         startLine: r.startLine,
@@ -5447,8 +3934,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable() async getMemoryContent() {
-    // `read` returns null only for an absent file; every other VFS failure
-    // throws, and must — "" is indistinguishable from an empty MEMORY.md.
+    // `read` returns null only for an absent file; other VFS failures must throw, since "" would
+    // be indistinguishable from an empty MEMORY.md.
     return await this.rt.memory.read("memory/MEMORY.md") ?? "";
   }
 
@@ -5472,7 +3959,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return v.parse(JsonValueSchema, await reads[source]());
   }
 
-  /** The owner's browser acting on its own workspace: the root caller, minted here. */
+  /** The owner's browser acting on its own workspace, as the root caller. */
   @callable() async slate(operation: SlateOperation): Promise<SlateCallResult> {
     return this.slates.operation(this.slateCaller(), operation);
   }
@@ -5483,10 +3970,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * What a live share's capability graph is drawn against: the workspace's
-   *   executors, MCP servers, crafted tools, model tiers and slates. Names —
-   *   never surfaces: the graph tells the dialog what a binding COULD reach,
-   *   and dispatch still decides what it does reach per call.
+   * Names only, never surfaces: the graph shows what a binding could reach;
+   * dispatch still decides per call what it does reach.
    */
   protected async slateBindingCatalog(): Promise<SlateBindingCatalog> {
     const [profile, descriptors] = await Promise.all([
@@ -5542,9 +4027,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.slates.bindingCall(caller, id, name, request);
   }
 
-  /** A request the share route already verified for this workspace's handle:
-   *   admission and routing live on the slate host — the same grant the
-   *   runtime checks — and never in this method. */
+  /** The share route has already verified the request; admission and routing live on the slate host,
+   * never in this method. */
   async routeSlateShare(
     handle: string,
     claim: ShareViewerClaim,
@@ -5559,26 +4043,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return slateShareUrl(this.env, this.name, handle);
   }
 
-  /** The viewer ticket the share origin's exchange path consumes for one
-   *  named account — minted by the app host because only the app host knows
-   *  the signed-in user, and it binds that user to this workspace's share. */
+  /** Minted by the app host because only it knows the signed-in user; binds that user to this share. */
   viewerEntryUrl(handle: string, userId: string): Promise<string | null> {
     return viewerEntryUrl(this.env, this.name, handle, userId);
   }
 
-  /** The live share the app host's open-route reads — the row re-read through
-   *   the S6 gate, plus its title and description off the slate's package.json. */
+  /** The share row re-read through the S6 gate, plus title and description from the slate's package.json. */
   async readLiveShare(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>> {
     return this.slates.readLiveShareRecord(share);
   }
 
   /**
-   * The bundle a live-share fork carries: the share row re-read through the
-   *   S6 gate — a revoked share answers 'missing' — the grant's fork flag,
-   *   and the viewer's own admission: a `users` share forks only for the
-   *   accounts it names (and the owner), a `public` share for anyone signed
-   *   in. The skeleton itself is the host's — the running slate's current
-   *   tree, never a publication.
+   * Share row re-read through the S6 gate (revoked answers 'missing'); a `users` share forks only for
+   * named accounts and the owner, `public` for anyone signed in. Skeleton is the running slate's tree.
    */
   async liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>> {
     const record = await this.slates.readLiveShareRecord(share);
@@ -5598,8 +4075,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.slates.liveShareBundle(row);
   }
 
-  /** Record the users the owner named on a live share — DO-only beside the
-   *  blueprint twin, for the same reason. */
+  /** DO-only, like the blueprint twin, for the same reason. */
   async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
     return this.slates.shareLiveWith(share, users);
   }
@@ -5608,26 +4084,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.slates.list(ROOT_SLATE_CALLER);
   }
 
-  // Blueprints cross workspaces, so these four are DO-only: the app host
-  // verifies the viewer, the address and the forker's ownership before it
-  // calls, and a browser holds no stub that reaches them.
+  // Blueprints cross workspaces, so these four are DO-only: the app host verifies viewer, address and
+  // forker ownership before calling, and no browser stub reaches them.
 
-  /** One published blueprint for a viewer: the row re-read now, refused when revoked. */
+  /** Re-reads the row now; refused when revoked. */
   async readBlueprint(share: string): Promise<SlateAnswer<BlueprintReading>> {
     return this.slates.readBlueprint(share);
   }
 
-  /** The bytes a forker's workspace admits. */
   async blueprintBundle(share: string): Promise<SlateAnswer<BlueprintBundle>> {
     return this.slates.blueprintBundle(share);
   }
 
-  /** Record the users the owner named on a blueprint. */
   async shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>> {
     return this.slates.shareBlueprintWith(share, users);
   }
 
-  /** Admit a blueprint into THIS workspace as a new slate with every binding unmapped. */
+  /** Admits into this workspace as a new slate with every binding unmapped. */
   async admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>> {
     return this.slates.admitBlueprint(bundle);
   }
@@ -5637,29 +4110,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable() async getToolDescriptions() {
-    // Descriptions AND reach sourced from @kinu.run/core/tools/registry — one
-    // truth for both. Guessing reach here as
-    // `nativeNames.has(name) ? 'native' : 'codemode'` is a binary that cannot
-    // express "this actor has it on neither surface": `report` is the one
-    // deps-gated builtin, so on an orchestrator it falls out of the else-branch
-    // and the Tools panel reads "code mode" — false twice over, because `report`
-    // is native wherever it exists and its `report.*` namespace is wired only
-    // on a subordinate. The two facts are reported separately, because they
-    // are two facts: what the capability IS (declared) and what this actor
-    // WIRES (observed from the ToolSet the turn actually built).
+    // Descriptions and reach come from @kinu.run/core/tools/registry. Declared capability and what
+    // this actor wires (from the built ToolSet) are reported separately; a native/codemode binary
+    // can't say "neither".
     const mode = await this.preparedWorkMode();
     const wiredNames = new Set(Object.keys(this.getRawToolsForWorkMode(mode)));
 
     const builtIn = BUILTIN_TOOLS.map(name => ({
       name,
-      // Both registers, from the one spec: the headline a list row shows and
-      // the docstring the model is given. The UI must never recover one from
-      // the other by splitting text.
+      // Both registers come from one spec (list headline and model docstring);
+      // the UI must never recover one from the other by splitting text.
       summary: BUILTIN_TOOL_SPECS[name].summary,
       description: BUILTIN_TOOL_DESCRIPTIONS[name],
-      // Every name in BUILTIN_TOOLS is native by type (BuiltinToolName is
-      // derived from the declaration), so owning a codemode namespace is what
-      // makes it both.
+      // Every BUILTIN_TOOLS name is native by type, so owning a codemode namespace makes it both.
       exposure: TOOL_REACH[name].codemode ? 'both' as const : 'native' as const,
       wired: wiredNames.has(name),
     }));
@@ -5667,8 +4130,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const craftedRaw = this.rt.craftStore.list();
 
     const crafted = craftedRaw.map(t => {
-      // Quality lives on the crafted_tools row, keyed by name alone: the table
-      // is workspace-wide and carries no actor_id (`agent-utils/stores/craft.ts`).
+      // crafted_tools is workspace-wide with no actor_id, so quality is keyed by name alone.
       const scoreRow = this.sql<{ score: number; uses: number }>`
         SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
 
@@ -5676,9 +4138,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         name: t.name,
         description: t.description || "Crafted tool",
         isLearned: true,
-        // A crafted tool is never a ToolSet entry — buildCraftedToolSetFromExecute
-        // routes it through createExecuteTool's providers — so codemode is its
-        // reach by construction, and it is wired exactly when the store holds it.
+        // Crafted tools are never ToolSet entries (routed via createExecuteTool's providers),
+        // so codemode is their reach and they are wired whenever the store holds them.
         exposure: 'codemode' as const,
         wired: true,
         qualityScore: scoreRow[0]?.score ?? 0.5,
@@ -5691,8 +4152,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { builtIn, crafted, executors };
   }
 
-  // setModel moved below — validates spec via the provider registry before storing.
-
   @callable() async setDisplayName(displayName: string) {
     await this.propagateDisplayName(displayName, 'user');
 
@@ -5700,9 +4159,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) {
-    // Genesis only, right after the create path registered the row in the
-    // root registry. The activation cache is seeded from what was just
-    // written; the root remains the authority.
+    // Genesis only, after the create path registered the row in the root registry;
+    // the cache is seeded from that write, and the root remains the authority.
     this._titleCache = { displayName, nameOrigin };
     this._titleHydrated = true;
 
@@ -5710,21 +4168,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The workspace's first turn, taken by the agent instead of waited for.
-   *
-   * Deliberately NOT `@callable`: a client cannot fabricate a genesis turn.
-   * Creation calls it once, last, so the mission, model and reasoning effort the
-   * turn runs under are already durable.
-   *
-   * Returns as soon as the turn is queued. The agents-SDK heartbeat holds
-   * the DO instead, exactly as the drain timer does.
+   * Not `@callable`: clients cannot fabricate a genesis turn. Creation calls it once, last.
+   * Returns once the turn is queued; the agents-SDK heartbeat holds the DO.
    */
   async beginGenesisTurn(): Promise<{ started: boolean }> {
     const signal = workspaceGenesisSignal(readMission(this.boundSql));
 
     if (!signal) return { started: false };
-    // Queued on this stack: the send admits the turn before its first await, and
-    // only the wait for the turn itself is detached under the heartbeat.
+    // The send admits the turn before its first await; only the wait is detached.
     const sent = this.orch.inbox.send(signal);
     this.detachOwned(async () => {
       try {
@@ -5743,28 +4194,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.rt.executionRouter?.listExecutors() ?? [];
   }
 
-  /** The environments behind the unified file browser — one row per executor
-   *  that has a filesystem, with live state and how durable it is. */
   @callable() async listMounts() {
     return this.rt.executionRouter ? listEnvironments(this.rt.executionRouter) : [];
   }
 
-  /** Browser-only subordinate controls. These delegate to the exact same
-   *  orchestration policy as the model's agents tool, including rollback and the
-   *  authoritative roster broadcast. */
+  /** Browser-only; delegates to the same orchestration policy as the model's agents tool. */
   @callable() async listSubordinates(): Promise<SubordinateRosterEntry[]> {
     return this.subordinateViews();
   }
 
   /**
-   * Add an agent to this workspace with nothing said about it.
-   *
-   * The whole point is that the owner supplies NOTHING: no name, no mission,
-   * no role. It inherits this workspace's mission, runs as the catalog's
-   * `task`, and comes back with a blank `displayName` — which is not a gap
-   * to fill in with a placeholder string but the state the first-interaction
-   * title policy reads (`SubordinateAgent.onChatResponse`). Its `name` is a
-   * stable slug and is the thing to route to.
+   * Blank `displayName` is intentional: the first-interaction title policy reads it
+   * (`SubordinateAgent.onChatResponse`). Route by `name`, a stable slug.
    */
   @callable() async createSubordinateAgent(): Promise<{
     name: string;
@@ -5779,9 +4220,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** Retitle one of this workspace's agents. Writes the child and this
-   *  authoritative roster row together and marks the title the OWNER'S, which
-   *  is what stops it being auto-titled afterwards. */
+  /** Writes the child and the roster row together and marks the title owner-set,
+   *  which stops auto-titling. */
   @callable() async renameSubordinateAgent(name: string, displayName: string): Promise<{
     ok: true;
     name: string;
@@ -5805,25 +4245,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Recent commands on one executor, with each stream CLIPPED to
-   * {@link EXECUTOR_OUTPUT_CLIP} characters and its true length beside it.
-   *
-   * The clip is the fix for a measured unbounded read, not a nicety. `stdout`
-   * holds whatever a command printed, an agent's command may print a file, and
-   * this read is on the workspace's initial load: one production workspace
-   * answered 12.89 MiB across 36 rows on 2026-08-20, five of them over 1.7 MiB
-   * each, against a median row of 0.3 KiB. A terminal cannot render that and
-   * the reader never asked for it.
-   *
-   * `stdout_len` is the whole row's length, so the pane states what it is not
-   * showing instead of presenting a prefix as the output. SQLite counts TEXT in
-   * characters for both `length` and `substr`, so the two agree.
-   *
-   * SCOPED TO THIS ACTOR, and the predicate is not optional: `executor_output`
-   * is `PRIMARY KEY (actor_id, id)` and every write stamps the actor, so an
-   * `executor` name alone matches a SIBLING's rows too — the workspace box is
-   * shared, so two actors really do run commands on the same executor id. The
-   * `(actor_id, created_at DESC, id DESC)` index is exactly this read's.
+   * Streams are clipped to {@link EXECUTOR_OUTPUT_CLIP} chars with true length beside them.
+   * Must filter by actor: executor ids are shared across actors in the workspace box.
    */
   async getExecutorOutput(executorId: string, limit = 50) {
     return this.sql<ExecutorOutputRow>`SELECT id, executor, command,
@@ -5835,28 +4258,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ORDER BY created_at DESC LIMIT ${limit}`;
   }
 
-  /**
-   * One-round-trip initial load: what the workspace IS (status, tools, memory),
-   * what it can run (executors and their recent output), and whether a plan is
-   * waiting on the owner. A read that fails fails the snapshot — an empty tool
-   * list is a claim about the workspace, and a per-field fallback makes a broken
-   * read indistinguishable from a quiet one. Live updates arrive via the
-   * granular refresh + events.
-   *
-   * The initial snapshot carries neither canvas nor timeline data: the canvas
-   * measures 499 KiB and 824 KiB on the two production workspaces sampled on
-   * 2026-08-20, and its thirty-run page would seed a tree map that Exploration
-   * fetches for itself. A 250-span timeline seed has no component consumer,
-   * while `kinu timeline` fetches it directly, so neither payload belongs on
-   * the chat pane's opening critical path.
-   */
-  /** A reset owns no live branch fibers. Before a snapshot can say a branch is
-   * running, seal every reportless branch head with one durable error report;
-   * `recordReport` changes its status, so both the next PAGE and the next
-   * activation exclude it — the mutation is the cursor. LIMIT-bounded because
-   * this runs in the init gate; a pass that filled its budget answers
-   * truncated and the caller arms the maintenance wake for the rest.
-   */
+  /** Seals reportless branch heads with an error report; the status change is the cursor.
+   * LIMIT-bounded for the init gate; returns truncated so the caller arms the maintenance wake. */
   private reconcileOrphanedBranches(): boolean {
     const heads = this.headJournal.listRunningBranchHeads(
       STEER_BRANCH_RUN_ID_PREFIX, ORPHAN_SEAL_MAX_ROWS, this.activationStartedAt,
@@ -5877,30 +4280,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return heads.length >= ORPHAN_SEAL_MAX_ROWS;
   }
 
-  /**
-   * Whether the gated right-pane tabs have anything to show.
-   *
-   * Both facts come from the lane's OWN read path — the release board the
-   * Releases surface reads and the fork-run list the Exploration surface reads —
-   * asked at limit 1, because presence is a boolean and a full page here would
-   * be a second copy of a list this method never renders.
-   *
-   * The client called this and read `tabPresence` off the snapshot from the day
-   * the tabs were gated; neither existed on the server, so `tabPresence` arrived
-   * `undefined`, `surfaceHasContent` fell back to its "unknown is not empty"
-   * default, and BOTH gated tabs showed on a fresh workspace until the first
-   * live tick failed. A gate whose server half is missing is not a gate.
-   */
+  /** Asks each lane's own read path at limit 1, since presence is a boolean. */
   @callable() async getWorkspaceTabPresence(): Promise<TabPresence> {
-    // Same owner guard `listPendingActions` uses for the same cross-DO board
-    // read: without an owner there is no release lane to have content in.
+    // Same owner guard as `listPendingActions`: no owner means no release lane.
     const board = this.getOwnerUserId() ? await this.getReleaseBoard(1) : null;
 
-    // The Work tab's own inputs, through the same reads the tab mounts:
-    // the pending queue, the job ledger, plans and tasks across actors, the
-    // changelog, and learnings — one shared predicate says whether ANY of it
-    // exists. A live turn is not content: a workspace streaming with nothing
-    // renderable keeps the tab hidden.
+    // Same reads the Work tab mounts. A live turn is not content: streaming with
+    // nothing renderable keeps the tab hidden.
     const [pendingActions, jobs, workspaceWork, changelog, memoryContent] = await Promise.all([
       this.listPendingActions(),
       this.listBackgroundJobs(20),
@@ -5954,14 +4340,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The durable answer to "is a turn running", for the one client fold that
-   * decides both the composer's actions and the transcript's live tail.
-   *
-   * `unsettled()` is the claim ledger's wedged-turn query and it is the only
-   * record that outlives the isolate. A claim this isolate is NOT executing
-   * is stranded: the turn it fenced ended with the object that admitted it,
-   * nothing will settle it, and every later send is refused by `assertLive`
-   * while the surface offers a Stop that reaches nobody.
+   * Durable "is a turn running" answer. `unsettled()` is the only record that outlives the isolate;
+   * a claim this isolate is not executing is stranded and nothing else will settle it.
    */
   private turnClaimState(): TurnClaimState {
     const open = this.claims.unsettled(1)[0];
@@ -5975,12 +4355,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Settle a claim nobody is executing, and re-pend the work it fenced.
-   *
-   * The claim is sealed `indeterminate` — what the interrupted turn achieved
-   * is unknown, and naming any run-end reason would assert something this
-   * never observed. Owed work then decides the rest: an actor that still owes
-   * a wake gets one, so the turn resumes rather than being silently dropped.
+   * Settle a claim nobody is executing, sealed `indeterminate` since its outcome is unknown,
+   * and give any actor that still owes a wake one so the turn resumes.
    */
   @callable() async recoverStrandedTurn(): Promise<{ readonly recovered: 'sealed' | 'requeued' | 'none' }> {
     const state = this.turnClaimState();
@@ -5999,18 +4375,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The home card's one read: needs-you count, activity, updates, last run —
-   * folded from the same read models the workspace surface asks, so the card
-   * never drifts from what the workspace itself would show.
-   *
-   * Sized for a roster row: the run line is {@link RunEventRecorder.latestRunHeader},
-   * two payloads at most rather than a summary fold; the in-flight answer comes
-   * from `hosted`, never `acquire` — a status read that started a turn would
-   * make visiting the home page run work, and `slates.addressed` holds the
-   * same line: it reads the reservations the slates already hold and boots
-   * nothing. Host-owned like `listPendingActions`
-   * (rpc-gate marks it interactive), and a failed read propagates rather than
-   * zeroing, since "needs nothing" is the one false answer the card must not give.
+   * Home card read, folded from the workspace's own read models. Reads `hosted`, never `acquire`,
+   * so it boots nothing; a failed read propagates rather than zeroing the needs-you count.
    */
   @callable() async getWorkspaceOverview(): Promise<WorkspaceOverview> {
     const [pendingActions, pendingConsents, activePlan, slates] = await Promise.all([
@@ -6052,11 +4418,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (!execTool) return { error: `Executor "${executorId}" has no exec tool`,
       refusal: refusalOf(new KinuError('unsupported', `Executor "${executorId}" has no exec tool`)) };
 
-    // The fleet names its machine per call (docs/EXECUTION-LAYER-SPEC.md
-    // "The user's account is a fleet"): device rides as the tool context
-    // the device executor reads (readDeviceSelection), and a call that
-    // carries none keeps today's unnamed answer. Tools that read no context
-    // never see one.
+    // Device rides as tool context read by readDeviceSelection (docs/EXECUTION-LAYER-SPEC.md
+    // "The user's account is a fleet"); with none, the call keeps the unnamed default.
     try {
       const result = v.parse(CommandResultSchema, device === undefined ? await execTool.execute(command) : await execTool.execute(command, { device }));
 
@@ -6077,9 +4440,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const errMsg = refusal.error;
       void this.sql`INSERT INTO executor_output (actor_id, executor, command, stderr, exit_code)
         VALUES (${this.actorHandle().actorId}, ${executorId}, ${command}, ${errMsg}, ${1})`;
-      // Broadcast on error too — symmetric with the success branch above.
-      // Without this, the UI terminal silently swallows failures because
-      // it renders only from broadcasts. (STABILITY-AUDIT §B4.)
+      // Broadcast errors too: the UI terminal renders only from broadcasts. (STABILITY-AUDIT §B4.)
       this.broadcast(JSON.stringify({
         type: 'executor-output', executor: executorId, command, stdout: '',
         stderr: errMsg, exitCode: 1, refusal, timestamp: Date.now(),
@@ -6089,15 +4450,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
-  /** Typed directory listing for the file manager — read off each executor's
-   *  own raw handle, in that environment's own paths. */
+  /** Directory listing read off each executor's own raw handle, in that environment's paths. */
   @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ path?: string; entries?: DirEntry[]; error?: string }> {
     if (!this.rt.executionRouter) return { error: 'no execution router' };
 
     return getExecutorFiles(this.rt.executionRouter, executorId, path);
   }
 
-  /** Read a single file's text content for the file-manager viewer. */
   @callable() async readExecutorFile(executorId: string, path: string): Promise<{ content?: string; truncated?: boolean; error?: string }> {
     if (!this.rt.executionRouter) return { error: 'no execution router' };
 
@@ -6105,17 +4464,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
 
-  /** Rename one entry for the file manager — native where the plane renames
-   *  natively, a byte carry for a file elsewhere, a stated refusal for a
-   *  directory that only bytes could carry. Never overwrites. */
+  /** Native rename where the plane supports it, byte carry for files elsewhere, refusal for
+   * directories that only bytes could carry. Never overwrites. */
   @callable() async renameExecutorFile(executorId: string, from: string, to: string): Promise<ExecutorWriteResult> {
     if (!this.rt.executionRouter) return { error: 'no execution router' };
 
     return renameExecutorPathOp(this.rt.executionRouter, executorId, from, to);
   }
 
-  /** Delete one entry for the file manager. A directory rides the plane's
-   *  native tree removal where one exists and goes entry by entry elsewhere. */
+  /** Directories use the plane's native tree removal where it exists, entry by entry elsewhere. */
   @callable() async deleteExecutorFile(executorId: string, path: string): Promise<ExecutorWriteResult> {
     if (!this.rt.executionRouter) return { error: 'no execution router' };
 
@@ -6123,13 +4480,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
 
-  // ── Chunked file transfer for the files HTTP route (files-routes.ts).
-  //
-  // No single Worker↔actor payload of that route approaches the catalogued
-  // `do.facet.rpc_bytes` ceiling: uploads arrive as bounded chunks the actor
-  // assembles, downloads leave as bounded chunks cut from one read. The actor
-  // is single-threaded, so the maps below need no lock. HTTP routes close each
-  // transfer on final chunk, error, or stream cancellation.
+  // Chunked transfer for files-routes.ts keeps each payload under `do.facet.rpc_bytes`.
+  // The actor is single-threaded, so these maps need no lock.
   private readonly executorFileUploads = new Map<string, {
     readonly executorId: string;
     readonly path: string;
@@ -6160,9 +4512,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return opened;
   }
 
-  /** One chunk of one HTTP download. The route supplies a fresh transfer id,
-   * so a second GET of the same path cannot reuse stale bytes and concurrent
-   * readers cannot replace each other's snapshot. */
+  /** The route supplies a fresh transfer id per GET, so readers never share or reuse stale bytes. */
   async readExecutorFileChunk(read: ExecutorFileChunkRead): Promise<{ bytes: Uint8Array } | { error: string }> {
     const { executorId, path, transferId, offset, length } = read;
     const router = this.rt.executionRouter;
@@ -6189,10 +4539,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.executorFileDownloads.delete(transferId);
   }
 
-  /** One chunk of a chunked upload. An `offset === 0` chunk (re)starts the
-   *  transfer for its path, so a retry after any failure self-heals instead
-   *  of appending to stale bytes; ordering and continuity are enforced inside
-   *  the transfer itself, never trusted from the caller. */
+  /** An `offset === 0` chunk (re)starts the transfer so retries self-heal; ordering and
+   * continuity are enforced inside the transfer, not trusted from the caller. */
   async writeExecutorFileChunk(write: ExecutorFileChunkWrite): Promise<ExecutorWriteResult> {
     const { executorId, path, transferId, offset, chunk, final, expectedRevision } = write;
     const router = this.rt.executionRouter;
@@ -6230,19 +4578,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.executorFileUploads.delete(transferId);
   }
 
-  /** The preflight an interactive terminal needs before a shell is opened onto
-   *  this workspace's container: egress interception installed with THIS
-   *  workspace's grants, and /workspace attached. Both are the sandbox lane's
-   *  own `ensureReady`, so a terminal waits on exactly what an exec waits on
-   *  rather than starting the container down a second path. Not a @callable:
-   *  the caller is the terminal's HTTP route, which then upgrades the socket
-   *  the chat rail cannot carry (see terminal-route.ts). */
+  /** Terminal preflight via the sandbox lane's own `ensureReady` (egress grants, /workspace).
+   * Not @callable: called by the terminal HTTP route (see terminal-route.ts). */
   async prepareTerminal(executorId: string): Promise<{ ok: true } | { error: string }> {
-    // The owner's own machine has no container to warm. What a terminal needs
-    // there is a machine that is actually attached, and each answer below is
-    // one a person can act on: a machine that was linked and is now offline
-    // needs one command, and an account with none linked needs a different
-    // one. "device has no terminal" was true until its agent grew one.
+    // The owner's machine has no container to warm; it only needs to be attached.
     if (executorId === 'device') {
       const device = this.rt.deviceTransport.status();
 
@@ -6253,8 +4592,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return { error: 'No machine is linked to this account yet. Run `kinu connect` on the one you want.' };
     }
 
-    // The runtime's own shell. Composing the runtime is what an attach waits
-    // on; the socket itself is forwarded to this object afterwards.
     if (executorId === 'workspace') {
       try {
         await this.hostedWorkspace().terminal();
@@ -6281,10 +4618,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       return { ok: true };
     } catch (cause) {
-      // The chain, so the pane can show WHY: an attach that overran its budget
-      // and a container the platform could not start are different problems
-      // with different answers, and the outermost message tells them apart from
-      // neither.
+      // Render the full cause chain: the outermost message cannot distinguish attach timeouts
+      // from container start failures.
       return {
         error: renderCauseChain(toKinuError({
           doing: 'preparing the sandbox container for a terminal',
@@ -6296,19 +4631,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Open a terminal on the owner's machine for THIS workspace, and answer the
-   * session its pane attaches to.
-   *
-   * The workspace asks, so the workspace's own confinement applies: the hub
-   * composes the tier the owner set, the agent home under this workspace's
-   * name, and the folders they consented to — the same block it composes for a
-   * command. That is why this hop exists rather than the route calling the hub
-   * itself: only this object holds the workspace's capability token, and a
-   * terminal opened under any weaker identity would get no agent home and be
-   * refused.
-   *
-   * `user` is the object that holds both sockets. The route needs it to send
-   * the pane's upgrade to the same place the machine's own socket lives.
+   * Opens via this object because only it holds the workspace capability token the hub needs.
+   * `user` is the object holding both sockets; the route sends the pane's upgrade there.
    */
   async openDeviceTerminal(
     window: { cols: number; rows: number },
@@ -6324,10 +4648,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       return { session: opened.session, user };
     } catch (cause) {
-      // The chain, so the pane can show WHY. A declined grant, a machine that
-      // cannot sandbox, an install too old to hold terminals and a machine
-      // that went offline are four different problems with four different
-      // answers, and each already carries its own words.
+      // Render the full cause chain; each failure kind carries its own actionable message.
       return {
         error: renderCauseChain(toKinuError({
           doing: 'opening a terminal on this machine',
@@ -6338,8 +4659,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
-  /** Return exposed ports for one executor. Workspace registrations live in
-   * Nimbus, so they remain authoritative after this actor restarts. */
+  /** Workspace port registrations live in Nimbus, so they stay authoritative after a restart. */
   @callable() async getExposedPorts(executorId: string): Promise<{
     ports: Array<{ port: number; name?: string; url: string }>;
     error?: string;
@@ -6394,8 +4714,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }, spec);
   }
 
-  // ── Voyager curriculum: propose / list / accept next tasks ─────────
-
   @callable() async proposeCurriculumTasks(count?: number) {
     return { proposals: await proposeCurriculumTasks(this.rt, count) };
   }
@@ -6448,44 +4766,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
 
-  /** Continue the chat from before `entryId`, on the context the actor held
-   *  there. The walk-back and the refusal are core's; the reverted transcript
-   *  reaches every open tab as the session event this emits. */
+  /** Continue the chat from before `entryId`; open tabs get the reverted transcript via the
+   * session event this emits. */
   @callable()
   async revertConversation(entryId: string): Promise<void> {
     await this.chatLoop.revertTo(entryId);
   }
 
-  // ── Fork RPCs ──────────────────────────────────────────────────
-
   /**
-   * Fork this agent at a specific message, producing a new agent DO with:
-   *   - SOUL.md copied, messages 0..N copied, crafted tools snapshotted,
-   *     memory copied, actor_config copied (display_name overwritten)
-   *   - search tree, evolution events, scaffold, crafted-tool quality RESET
-   *
-   * The driver is core's (identity/fork-driver.ts); what a Durable Object
-   * contributes is the transport below — addressing a workspace that does not
-   * exist yet — plus the web route the UI navigates to.
-   *
-   * See docs/WORKSPACES.md for the full spec.
+   * Fork this agent at a message; driver is core's (identity/fork-driver.ts), this supplies
+   * the transport. See docs/WORKSPACES.md for the full spec.
    */
   @callable()
   async forkAgent(
     untilMessageId: string,
     opts?: { name?: string },
   ): Promise<{ id: string; name: string; url: string; forkPointMs: number }> {
-    // Before anything is read: a fork of an unclaimed workspace has nobody to
-    // own the copy, and the transport's own reservation would refuse it later
-    // with a message about a name.
+    // Check first: a fork of an unclaimed workspace has nobody to own the copy.
     this.requireOwnerForFork();
 
     const fork = await forkWorkspace({
       sql: this.boundSql,
       actor: this.rt.actor,
-      // The workspace plane's own walk, with each inherited file streamed
-      // through a native ranged read: a fork holds one frame of one file, never
-      // the file.
+      // Inherited files stream through ranged reads: a fork holds one frame, never a whole file.
       vfs: createWorkspaceForkSource(this.hostedWorkspace().bundle, this.rt.localVfs),
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
       sourceName: this.name,
@@ -6501,10 +4804,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** The owner a hosted fork needs on BOTH halves: the source session is named
-   *  from it, and so is the target's file plane. The transport refuses an
-   *  unclaimed workspace for the same reason; this refuses it before a roster
-   *  name is reserved. */
+  /** A hosted fork needs the owner for both source session and target file plane; refuse
+   * unclaimed workspaces before a roster name is reserved. */
   private requireOwnerForFork(): string {
     const ownerUserId = this.getOwnerUserId();
 
@@ -6513,8 +4814,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return ownerUserId;
   }
 
-  /** Reaching a workspace that does not exist yet: a Durable Object addressed
-   *  by name, and the raw-copy RPC that carries the snapshot to it. */
+  /** Reaches a not-yet-existing workspace DO by name and carries the snapshot via raw-copy RPC. */
   private get forkTransport(): ForkTransport {
     const ns = this.env.OrchestratorAgent;
     const stubFor = (name: string) => ns.get(ns.idFromName(name));
@@ -6536,12 +4836,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           caller,
           target: stubFor(name),
           name,
-          // The transport contract carries the two planes and the cut point;
-          // WHOSE rows those are is a question only this object can answer, and
-          // the answer is its own fenced handle — the same one `forkWorkspace`
-          // checked `untilMessageId` against a moment ago. Never a fresh handle
-          // and never a name off the wire: the frames read pane and message rows
-          // keyed per actor, so any other one snapshots a sibling.
+          // Must be this object's own fenced handle (the one `forkWorkspace` checked against),
+          // never a fresh handle or a name off the wire: rows are keyed per actor, so another would
+          // snapshot a sibling.
           source: { ...snapshot, actor: this.actorHandle() },
           ownerUserId,
         });
@@ -6550,36 +4847,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The receiver for this ACTIVATION and THIS transfer.
-   *
-   * Not the transfer's state: which frame is next, what has been staged and
-   * whether the fork published are rows in this object's own SQLite
-   * (`ForkStagingState`), so a reset between two frames resumes rather than
-   * refuses. What is cached here is the one thing an activation genuinely owns —
-   * the running hash and the sibling temp of the file whose ranges are still
-   * arriving.
-   *
-   * The sink is keyed by the transfer id, and that id is per DELIVERY, not per
-   * workspace: a failed fork whose roster row was destroyed retries the same
-   * target name under a fresh id while this isolate stays warm. So the cached
-   * receiver is keyed by the id it was built for and rebuilt when a begin names
-   * a different one — otherwise a replacement transfer stages into
-   * `.fork-<predecessor>.tmp` temps that the next activation, built from the
-   * CURRENT id, can never adopt, and a resumable transfer turns permanently
-   * unresumable after one mid-file eviction.
+   * Per-activation receiver cache (running hash, in-progress temp); transfer state lives in SQLite.
+   * Keyed by transfer id, which is per delivery, so a retry under a new id must rebuild it.
    */
   private forkReceiver: { transferId: string; receiver: ForkTransferReceiver } | null = null;
 
-  /** The receiver for the transfer a frame belongs to, rebuilt when this
-   * activation's receiver was keyed to a predecessor's transfer. */
   #forkReceiverFor(forkName: string, transferId: string, ownerUserId: string): ForkTransferReceiver {
     if (this.forkReceiver?.transferId === transferId) return this.forkReceiver.receiver;
 
     const writer = new ForkTargetWriter(this.boundSql, this.rt.storage.vfs, {
       workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
-      // This target's OWN payload plane. Every carried payload reference and
-      // payload file is re-rooted here, so the fork never reads the workspace
-      // it was cut from.
+      // The target's own payload plane: carried payloads are re-rooted so the fork never reads its source.
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
       writeSoulFile: (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
       transaction: (rows) => this.ctx.storage.transactionSync(rows),
@@ -6595,8 +4873,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return receiver;
   }
 
-  /** Receive one bounded semantic frame from the source DO. Not callable from
-   * public WS/HTTP; only the source cross-DO stub reaches this method. */
+  /** Receive one bounded frame from the source DO. Not callable from public WS/HTTP; only the
+   * source cross-DO stub reaches this. */
   async rawCopyFromFork(
     forkName: string,
     frame: ForkFrame,
@@ -6612,9 +4890,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (currentOwner && currentOwner !== ownerUserId) return { ok: false, reason: 'owned_by_another_user' };
 
-    // The owner is the Nimbus file-plane precondition. It is intentionally the
-    // only identity datum before commit; lineage, name, mission, marker and
-    // display name publish together in the writer transaction.
+    // Owner is the only identity datum written before commit (Nimbus file-plane precondition);
+    // the rest publishes together in the writer transaction.
     const identity = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
 
     if (identity.length === 0) {
@@ -6632,8 +4909,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (outcome.status === 'staged') return { ok: true, status: 'staged' };
 
-    // Copied approval rows key the source scope, so the target's copied
-    // instruction files start unverified with no marker to write.
+    // Copied approval rows key the source scope, so copied instruction files start unverified.
     if (outcome.status === 'settled') {
       return {
         ok: true, status: 'published', agentId: this.ctx.id.toString(),
@@ -6651,16 +4927,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
 
-  // ── EventsHub RPCs — triggers + events for UI ──────────────────
-
-  /** List triggers (webhooks, timers, watches, mcp routes). UI uses this
-   *  for the Supervise Automations block.
-   *
-   *  Webhook rows carry their signed delivery path, minted here rather than
-   *  assembled by a client: a URL without the route capability is a URL that
-   *  404s, so the only way to hold one is to have been handed it by a surface
-   *  that passed the owner check. `url` is absent when this deployment holds no
-   *  route secret — the same reason a delivery would be refused. */
+  /** Webhook rows carry a signed delivery path minted here, never by a client; `url` is absent
+   * when this deployment holds no route secret. */
   @callable()
   async listTriggers(): Promise<{ triggers: (TriggerView & { url?: string })[] }> {
     const listed = listTriggers(this.triggerRegistry);
@@ -6682,13 +4950,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** Create a durable webhook trigger. Returns the signed public URL.
-   *
-   *  Deliberately NOT @callable: webhook creation is step-up gated, and the
-   *  gate (auth/session isFreshAuthTime) lives in the only two entry points —
-   *  the web route POST /api/workspaces/<name>/triggers and the CLI route
-   *  POST /api/cli/workspaces/<name>/triggers/webhook. Exposing this over the
-   *  WebSocket RPC surface would bypass that gate. */
+  /** Create a durable webhook trigger; returns the signed public URL.
+   * Not @callable: creation is step-up gated in the web and CLI trigger routes only. */
   async createDurableWebhook(opts: {
     label: string;
     auth_mode: 'hmac' | 'bearer' | 'mtls';
@@ -6696,16 +4959,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     accepted_content_type?: string;
     rate_limit_per_min?: number;
   }) {
-    // Read before the row is written: a trigger whose delivery URL cannot be
-    // signed is a row no delivery could ever reach.
+    // Read before the row is written: a trigger whose URL cannot be signed is unreachable.
     const routeSecret = webhookRouteSecret(this.env);
 
     if (routeSecret === null) throw new Error(WEBHOOK_ROUTE_UNAVAILABLE);
     const now = Date.now();
-    // The secret is core's to decide and to store: an hmac/bearer trigger
-    // created without one refuses every delivery for the rest of its life, and
-    // this route hands core the secret store rather than minting a row without
-    // one when the caller sends none.
+    // Core decides and stores the secret; an hmac/bearer trigger without one refuses every delivery.
     const webhook = await registerDurableWebhook(this.triggerRegistry, this.webhookSecrets, opts, now);
 
     return {
@@ -6714,26 +4973,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         workspaceName: this.name, triggerId: webhook.trigger_id,
       }),
       auth_mode: webhook.auth_mode,
-      // For HMAC/bearer modes, the operator needs the secret once to give
-      // to the external system; we return it inline now and never again.
+      // The secret is returned once here and never again.
       secret: webhook.secret,
     };
   }
 
-  /** Cancel a trigger (revoke), deleting its plaintext secret in the same
-   *  host call — the revoked webhook leaves no live credential behind.
-   *
-   *  `caller` is the authority the request carries, and it has no default: this
-   *  one method is reached BOTH by the operator's triggers route and by the
-   *  model's `agent.cancelSchedule`, and only the first of those may close an
-   *  owner-created ingress. A default here would decide that for whichever
-   *  caller forgot to say. */
+  /** Revoke a trigger and delete its plaintext secret in the same host call.
+   * `caller` has no default: operator route and model's `agent.cancelSchedule` differ in authority. */
   async cancelTrigger(trigger_id: string, caller: TrustLevel) {
     return cancelTrigger({ registry: this.triggerRegistry, trigger_id, now: Date.now(), caller, secrets: this.webhookSecrets });
   }
 
-  /** Register a timer trigger — the `agent.schedule` tool's and the auto-GEPA
-   *  scheduler's one way to create one. */
   async createTimerTrigger(opts: Parameters<typeof createTimerTrigger>[1]): Promise<{
     id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null;
   }> {
@@ -6741,31 +4991,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Trace-driven auto-GEPA tick — called once per completed turn. When enough
-   * COMPLETED NON-PLAN TURNS have accrued since the last pass AND no pending
-   * scaffold is mid-shadow, kick GEPA in the background. The count is a SOURCE
-   * QUERY over the durable `turn_end` rows (`workMode` is what makes a turn
-   * count), not an activation-local counter: it survives every eviction, so a
-   * workspace whose turns are further apart than the eviction window still
-   * reaches its cadence. While a pending is in flight the count keeps growing,
-   * so a pass fires as soon as the shadow slot frees.
+   * Auto-GEPA tick, once per completed turn. Counts completed non-plan turns from durable
+   * `turn_end` rows (survives eviction); runs when the cadence is due and no pending is mid-shadow.
    */
   protected async maybeRunAutoGepa(
-    /** THIS tick's stable identity — the terminal scope that owes it. The
-     *  prompt-section lane keys its disposition on it, so a replay after a cut
-     *  inside the scaffold pass finds the lane already advanced. Absent for a
-     *  caller with no durable obligation behind it, which then keys nothing. */
+    /** Stable tick identity keying the prompt-section lane so a replay finds it advanced.
+     * Absent when no durable obligation backs the call; then nothing is keyed. */
     tick?: string,
   ): Promise<void> {
     const everyN = this.config.getAutoGepaEveryNTurns();
 
     if (everyN <= 0) return;
 
-    // One-time honesty note: before autonomy defaults flipped ON, a disable
-    // DELETED this key — an absent row is indistinguishable from
-    // never-configured, so the autonomous default supersedes both. Pin the
-    // default explicitly and record the activation in the evolution stream
-    // so the override is documented, never silent.
+    // An absent key is indistinguishable from an old disable; pin the default and record it.
     if (this.config.get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns) == null) {
       this.config.setAutoGepaEveryNTurns(everyN);
       void this.sql`INSERT INTO evolution_events (actor_id, type, message, created_at)
@@ -6776,33 +5014,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         }, ${Date.now()})`;
     }
 
-    // ONE cadence pass at a time in this activation. A `running` row means either
-    // an interrupted activation (owed, and this tick owes it) or THIS activation's
-    // previous turn still inside its detached pass — and the per-tick tombstones
-    // cannot separate them, because the second turn carries a different tick. Two
-    // live passes would drive candidate scaffolds through the raw tool surface
-    // concurrently and race each other's proposals.
+    // One cadence pass at a time per activation; concurrent passes would race proposals.
+    // Per-tick tombstones cannot separate an interrupted run from this activation's live one.
     if (this._gepaTickRunning) return;
     const recent = listGepaRuns(this.boundSql, this.actorHandle(), 1)[0];
 
-    // A run left `running` is an INTERRUPTED pass, not a completed one. Taking it
-    // as the cadence watermark counted its own turns against the next interval
-    // and abandoned it until a whole cadence had accrued again — so it is owed
-    // and this tick is the one that owes it.
+    // A `running` row is an interrupted pass that is owed, not a cadence watermark.
     if (recent?.status !== 'running') {
       const sinceTs = recent ? new Date(recent.startedAt).toISOString() : null;
 
       if (this.eventRecorder.completedWorkTurns(sinceTs) < everyN) return;
     }
 
-    // The prompt-section lane is the ONE automatic lane. A scaffold GEPA pass
-    // sharing this tick would optimise `scaffold/agent.js`, which the chat turn
-    // does not run: ActorSession owns the chat loop. runScaffold serves the
-    // MCP one-shot, shadow trials and GEPA rollouts. Every 25 turns it would spend
-    // rollouts and judge calls improving an artifact no user ever saw answer them
-    // (measured 2026-09-03 by grepping `runScaffold(` callers). The manual
-    // `runScaffoldGepaOptimization` RPC is where the scaffold tooling asks for
-    // one.
+    // Prompt sections are the only automatic lane: the chat turn does not run `scaffold/agent.js`.
+    // Scaffold GEPA runs only via the manual `runScaffoldGepaOptimization` RPC.
     const lane = tick === undefined ? undefined : `${this.name}:${tick}`;
     this._gepaTickRunning = true;
 
@@ -6813,39 +5038,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
-  /** Whether a cadence optimisation pass is live in THIS activation. An eviction
-   *  takes it with the isolate, which is correct: the durable `running` row is
-   *  then what says the pass was interrupted. */
+  /** Cadence pass live in this activation; eviction clears it and the durable `running` row remains. */
   private _gepaTickRunning = false;
 
   /**
-   * Run one NON-REPLAYABLE optimisation pass, at most once per cadence tick.
-   *
-   * Both lanes drive candidate scaffolds and prompt sections through the LIVE
-   * tool surface, and both append evaluation rows between model awaits. A pass
-   * the platform interrupted may therefore already have written files, driven a
-   * device or spent a judge call, and re-running it from the top repeats every
-   * one of those — which is the loss this ledger exists to prevent, arriving from
-   * the other side.
-   *
-   * So ENTRY is recorded, and the completion after it. A replay that finds the
-   * entry without the completion knows the pass was cut and abandons it, with the
-   * reason on the record. The cadence carries the work to the next tick, which is
-   * a delay rather than a loss — unlike a duplicated release.
-   *
-   * The marker says ENTERED, never "about to try", and the difference is the
-   * whole of the trade being honest. Written before `pass()` was called, a cut in
-   * between abandoned a tick whose pass had not run a single statement, and an
-   * idle workspace simply never did the work — no carrier, no record. It is
-   * written in the SAME SYNCHRONOUS SLICE as the call instead: an async function
-   * runs to its first await before returning its promise and a Durable Object
-   * cannot be evicted mid-slice, so the pass's own opening writes and this marker
-   * commit together. Either both are there and abandoning is right, or neither is
-   * and the replay runs the whole pass.
+   * Run one non-replayable pass at most once per tick; a replay seeing entry without completion abandons it.
+   * Entry is marked in the same synchronous slice as `pass()`, so it commits with the pass's first writes.
    */
   protected async oncePerTick(scope: string, tick: string | undefined, pass: () => Promise<void>): Promise<void> {
-    // No tick means no durable obligation behind this call — a live cadence pass
-    // with nothing to replay it. It runs, and it keys nothing.
+    // No tick means no durable obligation: run the pass and key nothing.
     if (tick === undefined) {
       await pass();
 
@@ -6869,29 +5070,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     recordEffectDone(this.boundSql, this.actorHandle(), { scope: scope, key: `${tick}:done` });
   }
 
-  /**
-   * Advance the evolved-prompt-section loop by one step.
-   *
-   * The order and the selection are `advancePromptSectionLane` in core: policy
-   * over a `ScaffoldControl` with nothing Cloudflare-shaped in it, and exactly
-   * what a second backend would otherwise have to copy. What stays here is what
-   * only this backend knows — that the work rides off a completed turn and must
-   * not lengthen the next one, and where a fault is reported.
-   *
-   * Detached rather than awaited, as the scaffold pass beside it is. A floating
-   * promise in a Durable Object is cancelled on eviction with its rejection
-   * swallowed, so the cost of an eviction here is a pass that did not finish —
-   * which is the same cost as the pass never starting, and the durable ledger is
-   * what the next tick reads either way.
-   */
+  /** Advance the evolved-prompt-section loop one step; policy lives in core's `advancePromptSectionLane`. */
   protected async advancePromptSections(): Promise<void> {
-    // Awaited by its caller and diagnosed here. Detaching it left the model lane
-    // cancellable by the next eviction with nothing owed to replay it, which is
-    // the loss the terminal ledger exists to prevent — so the promise travels
-    // and the cadence effect holds its row open for it. The failure is still
-    // absorbed: the lane is opportunistic and the NEXT cadence tick retries it,
-    // while a throw here would keep the whole terminal sequence owed over work
-    // nobody is waiting on.
+    // Awaited so the cadence effect holds its row open; a detached lane could be cancelled by eviction.
+    // Failure is absorbed: the lane is opportunistic and the next cadence tick retries it.
     try {
       await advancePromptSectionLane(this.scaffoldControl);
     } catch (err) {
@@ -6904,19 +5086,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Open one refinement over a trajectory — the `/refine` callable.
-   *
-   * Returns the DURABLE request immediately, at `requested`: no model has run
-   * and no artifact has moved. The refiner runs on the off-turn cadence pass
-   * (core `refinementPass`, driven by AgentOrchestrator), where it can be
-   * re-driven for free.
-   *
-   * The nudge below is DETACHED for the reason the section and GEPA passes
-   * beside it are: an owner asking explicitly should not wait for the next
-   * completed turn, and should not wait for a child agent either. A floating
-   * promise in a Durable Object is cancelled on eviction with its rejection
-   * swallowed, which costs a step that did not finish — the same cost as the
-   * step never starting, and the durable row is what the next cadence reads.
+   * Open one refinement; returns the durable request at `requested` — the refiner runs
+   * on the off-turn cadence pass. The nudge is detached; eviction only costs an unfinished step.
    */
   @callable()
   async requestRefinement(opts?: {
@@ -6934,21 +5105,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The OWNER decides one staged edit — the only path by which a proposed skill
-   * becomes trusted instructions.
-   *
-   * `interactive` in the RPC gate, like `approveInstruction` and for the same
-   * reason: this is the act that grants bytes system placement, so a scoped
-   * token that could call it would be a way for agent-written bytes to
-   * authorise themselves. It is absent from every model-facing tool surface.
+   * Owner decision on one staged edit; the only path by which a proposed skill becomes trusted.
+   * `interactive` in the RPC gate and absent from model-facing tools, so agent bytes cannot self-authorise.
    */
   @callable()
   async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
     const result = await decideRefinementRoute(this.refinementDeps, input);
 
-    // An approval puts a new trusted skill in the next prompt and its
-    // `allowed_tools` in the next tool surface, so the cached surface is dropped
-    // exactly as a craft retirement drops it.
+    // An approval changes the next prompt and its `allowed_tools`, so the cached tool surface is dropped.
     if (result.ok) {
       this._cachedTools = null;
       this._cachedToolsKey = '';
@@ -6958,21 +5122,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The WHOLE staged file for one proposed edit, and the digest a decision must
-   * quote back.
-   *
-   * `interactive` like the decision itself: it carries proposed instruction
-   * bytes, the same sensitivity class as `readInstructionApproval`. Never
-   * truncated — this is what the modal renders, and a truncated approval surface
-   * asks for a decision about bytes the decider could not see.
+   * The whole staged file for one edit plus the digest a decision must quote back.
+   * `interactive`: carries proposed instruction bytes. Never truncated; the modal renders it.
    */
   @callable()
   async showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult> {
     return showRefinementRoute(this.refinementDeps, { requestId, routeIndex });
   }
 
-  /** Refinements newest first, plus the debt that would open the next one —
-   *  what `/refine` with no argument prints. */
+  /** Refinements newest first plus the debt that would open the next one (`/refine` with no args). */
   @callable()
   async listRefinements(limit = 20): Promise<{
     requests: RefinementRequestView[]; debt: EvolutionDebt;
@@ -6980,10 +5138,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listRefinements(this.refinementDeps, limit);
   }
 
-  /** Run a webhook delivery through the hub from within the agent DO. This
-   *  RPC is invoked by the top-level webhook route (`handleHubRequest`) so
-   *  the publish + dedupe + reply channel open run atomically in the agent's
-   *  storage context. */
+  /** Called by `handleHubRequest` so publish + dedupe + reply channel open run atomically in this DO. */
   async acceptWebhookDelivery(opts: WebhookDelivery): Promise<WebhookDeliveryResult> {
     return acceptWebhookDelivery({
       triggers: this.triggerRegistry,
@@ -6997,29 +5152,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Container ingress: a process inside this workspace's container reports that
-   * something happened. Invoked by the egress layer's intercepted event host
-   * (`src/egress/outbound.ts`), whose handler runs in the Workers runtime and
-   * addresses this workspace from configuration the container cannot influence.
-   *
-   * Here rather than in the handler for the same reason as
-   * `acceptWebhookDelivery`: publish + dedupe run atomically in this agent's
-   * storage context. The FIRST producer of the `sandbox_cb` ingress arm, which
-   * the hub has modelled end to end — trust, priority, dedupe, rendering — with
-   * nothing ever emitting one.
-   *
-   * `launchingHeadTrust` is supplied HERE, never read off the wire: the
-   * container is the least trusted component in the system, and the hub's
-   * priority table admits these variants only at `owner` or `self`, so a
-   * forgeable trust field would be a privilege escalation into the plane that
-   * wakes the agent. `self` is this workspace's own rail — the container is its
-   * own machine — and the adapter refuses rather than throwing when a lower
-   * tier cannot publish.
-   *
-   * Nothing is deferred past the response: `waitUntil` is a no-op in a Durable
-   * Object and a floating promise there is cancelled on eviction with the
-   * cancellation swallowed, so the write is awaited inside the invocation that
-   * answers the container and a retry is the recovery.
+   * Container ingress via `src/egress/outbound.ts`; runs here so publish + dedupe are atomic.
+   * `launchingHeadTrust` is set here, never read off the wire: the container is least trusted.
+   * `waitUntil` is a no-op in a DO, so the write is awaited in this invocation; retry is the recovery.
    */
   async acceptContainerEvent(body: JsonValue): Promise<ContainerEventResult> {
     return acceptContainerEvent({
@@ -7031,26 +5166,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The container's Durable Object reports that its own persistence failed.
-   *
-   * Beside `acceptContainerEvent` and deliberately NOT the same path. That one
-   * is the container's own processes reporting what they did, admitted into the
-   * event hub and debounced into one turn with everything else that happened.
-   * This one is the container's HOST saying its filesystem cannot be trusted,
-   * which is a blocker: it must not be batched behind a build notification, and
-   * the agent has to hear it before it writes anything else into that
-   * filesystem. So it goes through the signal seam, whose own policy gives a
-   * blocker its own turn.
-   *
-   * Reachable on the root stub and nowhere else — a plain method rather than a
-   * `@callable`, exactly as `acceptContainerEvent` is: the caller is another
-   * Durable Object in this Worker, and a browser socket has no business
-   * announcing container incidents.
-   *
-   * Not awaited past the response, and not deferred either: the ledger write
-   * and the delivery both happen inside this invocation, because `waitUntil` is
-   * a no-op in a Durable Object. The caller's retry is the recovery, and the
-   * incident id is what makes that retry safe.
+   * Container host reports its persistence failed: a blocker, so it uses the signal seam, not the hub.
+   * Plain method (not `@callable`): only another DO calls it. `waitUntil` is a no-op in a DO, so work
+   * happens in this invocation; the incident id makes caller retries safe.
    */
   async acceptSandboxLifecycleFailure(body: JsonValue): Promise<SandboxLifecycleFailureResult> {
     this.ensureSchema();
@@ -7058,40 +5176,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return acceptSandboxLifecycleFailure({
       sql: this.boundSql,
       inbox: this.orch.inbox,
-      // The workspace is this object's own name, and it is the only dimension
-      // the lifecycle module cannot know. Everything else on the row is decided
-      // where the incident is understood.
+      // The workspace name is the only dimension the lifecycle module cannot know.
       recordRecovery: (row) => { recordSandboxRecovery(this.env, { workspace: this.name, ...row }); },
       logActivity: (event, detail) => this.logActivity(event, detail),
     }, body, Date.now());
   }
 
   private _webhookSecrets: WebhookSecretStore | null = null;
-  /** This workspace's webhook secrets. Deliberately not reachable over RPC:
-   *  secret material must never be readable over the browser websocket. */
+  /** Deliberately not reachable over RPC: secret material must never be readable over the websocket. */
   private get webhookSecrets(): WebhookSecretStore {
     this._webhookSecrets ??= createWebhookSecretStore(this.ctx.storage.sql);
 
     return this._webhookSecrets;
   }
 
-  /** Peer-agent ingress: a sender agent's DO delivers one outbox message via
-   *  cross-DO RPC. Ownership/grant checks run receiver-side (never trusted
-   *  from the sender's claim beyond intra-Worker honesty); an admitted event
-   *  either resolves the local ask waiter inline (a reply envelope) or wakes
-   *  the agent through the standard drain → programmatic turn path. */
+  /** Peer-agent ingress via cross-DO RPC; ownership/grant checks run receiver-side. */
   async receivePeerMessage(msg: PeerMessage): Promise<ReceiveResult> {
     this.ensureSchema();
 
     return this.peerHub.receive(msg);
   }
 
-  // ── Mission Inbox: email ingress + owner notifications ─────────
-
-  /** Owner's verified login email (UserDO profile). Null covers the two things
-   *  the email gate treats alike: the workspace is unclaimed, or the owner's
-   *  profile carries no email. Failing to ASK is not one of them — it must not
-   *  read as "owner email unknown" and silently refuse the owner's own mail. */
+  /** Null means unclaimed or no profile email. A failed lookup must throw, not read as null
+   * and silently refuse the owner's own mail. */
   private async getOwnerEmail(): Promise<string | null> {
     if (!this.getOwnerUserId()) return null;
     const { stub, caller } = await this.userHub();
@@ -7100,9 +5207,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private _emailInbox: EmailInbox | null = null;
-  /** This workspace's inbox: the trust gate, the shared inbound rate window,
-   *  and the deafness notice the agent reads while that window is refusing
-   *  mail. Held across the activation, like the in-memory window it owns. */
+  /** Held across the activation, like the in-memory inbound rate window it owns. */
   private get emailInbox(): EmailInbox {
     this._emailInbox ??= new EmailInbox({
       log: this.eventLog,
@@ -7117,28 +5222,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._emailInbox;
   }
 
-  /** The pre-parse half of the inbox gate, for the Worker's `email()` seam:
-   *  the same owner/allowlist comparison `acceptEmailDelivery` runs, asked
-   *  before the message is buffered and MIME-parsed so an unauthorized sender
-   *  cannot spend this workspace's parse on a platform-maximum message. It
-   *  admits nothing; the delivery below re-asks. */
+  /** Pre-parse sender check so unauthorized senders cannot force a MIME parse; admits nothing,
+   * the delivery re-checks. */
   async authorizeEmailSender(from: string): Promise<{ authorized: boolean; reason?: string }> {
     return this.emailInbox.authorizes(from);
   }
 
-  /** Run an inbound email through the hub from within the agent DO — the
-   *  email counterpart of acceptWebhookDelivery. The Worker `email()` handler
-   *  parses MIME + resolves the agent; the trust gate (owner email /
-   *  email_route allowlist), publish, and thread reply channel run here
-   *  atomically. Unauthorized senders never produce an event row.
-   *
-   *  The receipt is AWAITED, and only on a fresh admission. Awaited because
-   *  this runs inside the Durable Object that owns the outbox, where a
-   *  floating promise is cancelled on eviction with the cancellation
-   *  swallowed; fresh-only because a redelivery of a message already admitted
-   *  is the mail edge retrying, not a second message, and the sender has the
-   *  receipt for it already. The outbox's dedupe key holds the same line
-   *  durably, so an eviction between the two never sends twice. */
+  /** Email counterpart of acceptWebhookDelivery: trust gate, publish, and reply thread run here
+   * atomically. Receipt is awaited (floating promises die on eviction) and sent only on fresh admission. */
   async acceptEmailDelivery(opts: IncomingEmail): Promise<EmailAdmission> {
     const admission = await this.emailInbox.accept(opts);
 
@@ -7153,7 +5244,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return admission;
   }
 
-  /** The agent's email surface for the operator UI / routes. */
   async getEmailIngress(): Promise<{ address: string | null; allowlist: string[]; notifications: boolean }> {
     const domain = this.env.EMAIL_DOMAIN;
 
@@ -7164,26 +5254,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** Replace the inbound-email allowlist. The owner's own verified address is
-   *  always allowed and never needs listing; one active email_route trigger
-   *  (creator_trust recorded like every ingress) holds the extra senders, and
-   *  an empty list just revokes it. Reached only through the owner-
-   *  authenticated + step-up route. */
+  /** Owner's verified address is always allowed; an empty list revokes the email_route trigger.
+   * Reached only through the owner-authenticated + step-up route. */
   async setEmailAllowlist(allow: string[]): Promise<{ allowlist: string[] }> {
     return setEmailAllowlist(this.triggerRegistry, allow, Date.now());
   }
 
-  /** Toggle owner-email notifications (changelog digests, job completions). */
   async setEmailNotifications(enabled: boolean): Promise<{ notifications: boolean }> {
     this.config.setEmailNotificationsEnabled(enabled);
 
     return { notifications: this.config.getEmailNotificationsEnabled() };
   }
 
-  /** Fire-and-forget owner email. `email_notifications='false'` silences it;
-   *  missing platform pieces (binding / domain / owner email) skip quietly.
-   *  Also skipped while an operator socket is live — the owner sees the
-   *  card in-app; email is the away channel, not a duplicate feed. */
+  /** Skipped when notifications are off, platform pieces are missing, or an operator socket is live
+   * (email is the away channel, not a duplicate feed). */
   private emailOwnerNotification(subject: string, text: string): void {
     const notification = planOwnerNotification({
       enabled: this.config.getEmailNotificationsEnabled(),
@@ -7209,20 +5293,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }), { subject }));
   }
 
-  /** Recent events, newest first — `events_v` ordering (received_at desc).
-   *  Reached two ways: `kinu events` over the CLI RPC transport, and
-   *  `GET /api/workspaces/<name>/events` through the wire form below. The CLI
-   *  formats it through the one row formatter its four sibling list reads go
-   *  through, so this answers a bare list of rows and never an envelope. The
-   *  operator UI does not read it — the events it shows are the ones drained
-   *  into a turn, carried on that turn's message.
-   *
-   *  This is the boundary an UNTRUSTED caller crosses, so `boundEventQuery`
-   *  states the ceiling HERE and not only at the route: the method is on the
-   *  CLI RPC surface gated at `workspace.read`, which reaches the object with
-   *  no route in the path. The old `?? 100` caught null and undefined and
-   *  nothing else, so a caller's `-1` reached SQLite as `LIMIT -1` — no limit
-   *  at all. `EventLog.query` enforces its own invariant underneath. */
+  /** Newest first; returns bare rows, not an envelope. Reachable via CLI RPC with no route in the
+   * path, so `boundEventQuery` enforces the limit ceiling here. */
   async listRecentEvents(opts?: {
     variant?: string;
     since?: number;
@@ -7250,17 +5322,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  // ── Internal: timing-safe string compare for webhook auth ──────
-
-  // (Defined at module scope at the bottom of the file.)
-
 }
 
-// ── Module-scope helpers (referenced by OrchestratorAgent) ────────
-
-/** An export cursor arrives from a client, so it is claimed, not trusted:
- *  anything that is not the shape the previous page returned starts a fresh
- *  archive rather than binding junk into the row query. */
+/** Cursor is client-supplied: anything malformed starts a fresh archive instead of reaching the query. */
 function parseArchiveCursor(value: ArchiveCursor | undefined): ArchiveCursor | null {
   const parsed = v.safeParse(ArchiveCursorSchema, value);
 

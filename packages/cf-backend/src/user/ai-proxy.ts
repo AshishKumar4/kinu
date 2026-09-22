@@ -1,24 +1,7 @@
 /**
- * OpenAI-compatible inference proxy for signed-in CLI clients:
- *
- *   POST /api/user/ai/v1/chat/completions
- *   GET  /api/user/ai/v1/models
- *
- * Fronts the caller's stored Cloudflare credential in production, so local
- * agents use the same account as cloud agents. A deployment with
- * `DEV_USER_EMAIL` (the eval service account, or local dev) uses the platform AI Gateway binding for Workers AI
- * models; this lets the isolated eval-service account run without borrowing a
- * person's Cloudflare login. Auth is the standard CLI bearer (interactive
- * `ptc_…` session tokens, or scoped `pta_…` access tokens carrying
- * `ai.proxy`); the gate lives in cli/routes.ts.
- *
- * The body's `model` field selects the upstream:
- *   @cf/...          → production: the user's Workers AI account
- *                      with DEV_USER_EMAIL: the platform AI Gateway binding
- *   {author}/{model} → the user's AI Gateway
- *
- * Streaming responses pass through without buffering. Production failures use
- * the same actionable mapping as the cloud providers.
+ * OpenAI-compatible inference proxy for signed-in CLI clients (chat/completions, models).
+ * `@cf/...` models use the user's Workers AI account, or the platform AI Gateway binding when
+ * `DEV_USER_EMAIL` is set; `{author}/{model}` uses the user's AI Gateway. Auth gate: cli/routes.ts.
  */
 import { createUserDOAuthResolver, type UserCredentialClient } from '../providers/agent-registry';
 import type { OwnerCapabilityEnv, ProviderEnv } from '@kinu.run/core';
@@ -39,9 +22,7 @@ const ChatCompletionRouteSchema = v.object({
   model: v.pipe(v.string(), v.trim(), v.minLength(1)),
 });
 
-/** Every binding the AI proxy reads: the model listing's, plus the eval
- *  identity's direct transport, which calls `run` on the same binding the
- *  gateway path reaches through `ProviderEnv`. */
+/** The eval identity's direct transport calls `run` on the same binding the gateway path uses. */
 export interface UserAIProxyEnv<Id> extends AvailableModelsEnv<Id>, OwnerCapabilityEnv {
   AI?: NonNullable<ProviderEnv['AI']> & NonNullable<Parameters<typeof createDirectWorkersAIFetch>[0]>;
 }
@@ -128,8 +109,7 @@ async function proxyChatCompletion<Id>(
 }
 
 
-/** Forward the client's Workers AI prefix-cache pin so same-agent local turns
- *  land on the same replica — the parity of agentAffinityKey for DO agents. */
+/** Forwards the Workers AI prefix-cache pin so same-agent local turns hit the same replica. */
 function affinityHeader(request: Request): Record<string, string> | undefined {
   const affinity = request.headers.get('x-session-affinity');
 

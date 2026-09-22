@@ -1,26 +1,6 @@
 /**
- * UserDO — per-user Durable Object. Keyed by the stable Kinu userId.
- * OAuth identities are resolved to that userId by auth/store.ts before requests reach this DO.
- *
- * Owns:
- *   - identity (email, displayName, last_seen)
- *   - agent registry (replaces the browser-side localStorage list)
- *   - credentials (single source of truth — Codex OAuth, BYO API keys)
- *   - user-level config (defaults: model, strategy, inference loop, approval mode)
- *   - in-flight Codex device-code state
- *
- * All secrets live here. Orchestrator agents never store credential material;
- * they call `getAuthHeaders(key)` and get ready-to-attach HTTP headers.
- * Token refresh (Codex OAuth) happens atomically inside this DO.
- *
- * Every privileged method takes a `UserCaller` as its FIRST argument and gates
- * on `requireTier` before doing anything else. That is the whole attenuation
- * boundary: it lives where the secrets are, so no workspace-DO code path,
- * crafted tool, or forgotten tool gate can route around it. Worker routes act
- * for the owner whose identity the edge verified and present the owner
- * capability; agents present their workspace capability token and get whatever
- * their tier allows. Methods the DO calls on itself present it too, because
- * their public entry point was already gated.
+ * Per-user Durable Object keyed by the stable Kinu userId; holds all secrets, agents get headers.
+ * Every privileged method takes a `UserCaller` first and gates on `requireTier` before anything else.
  */
 import { Agent, type AgentContext } from "agents";
 import { USER_DO_RPC_SURFACE, sealRpcSurface } from "../rpc-surface";
@@ -41,9 +21,8 @@ import {
   type AgentMcpOAuthProvider,
 } from "agents/mcp/do-oauth-client-provider";
 
-// Re-exported for tests: the provider subclass binds `agents/mcp/*` at load,
-// so a test that statically imported mcp.ts itself would arrive before the
-// stub lands and hold the real base class. user-do is only imported after it.
+// Re-exported for tests: the provider binds `agents/mcp/*` at load, so tests must import it
+// via user-do (after the stub lands), not mcp.ts directly.
 export { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 
 import {
@@ -187,7 +166,6 @@ import {
   type CloudflareAIGatewaySummary,
 } from '@kinu.run/core';
 
-/** How every Drive method answers: the value, or the folded failure. */
 export type DriveAnswer<Value> = { readonly ok: true; readonly value: Value } | ({ readonly ok: false } & DriveFailure);
 
 /** One bounded chunk of a Drive upload. `offset === 0` (re)starts the transfer
@@ -200,7 +178,6 @@ export interface DriveChunkWrite {
   final: boolean;
 }
 
-/** An approver's answer on one release approval. */
 export interface ReleaseApprovalDecision {
   approvalId: string;
   decision: 'approved' | 'rejected';
@@ -213,8 +190,8 @@ interface DeviceConsentCheck {
   deviceId: string;
   method: string;
   params: JsonValue[];
-  /** Present when the caller is the named workspace itself — the card then
-   *  asks for THE WORKSPACE's binding, which is what "always" records. */
+  /** Present when the caller is the named workspace itself; the card then asks for the
+   *  workspace's binding, which is what "always" records. */
   workspaceName?: string;
 }
 
@@ -227,29 +204,20 @@ function byToolKey(a: { toolKey: string }, b: { toolKey: string }): number {
   return 0;
 }
 
-/** A pasted SKILL.md rides one RPC argument, so it stays far under the
- *  structured-clone ceiling the chunked rail exists for. */
+/** A pasted SKILL.md rides one RPC argument, so it stays far under the structured-clone ceiling. */
 const DRIVE_PASTED_SKILL_MAX_BYTES = 256 * 1024;
 
-const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
+const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
-/** How long a device link lives from its last ROTATION. Rotation happens on
- *  every accepted connect, so a machine in use renews itself and never has to
- *  be re-linked; a copy of `device.json` that stops rotating dies on this wall
- *  clock rather than living as long as someone keeps using it. */
-const DEVICE_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
+/** Measured from the last rotation (every accepted connect), so a copy of `device.json`
+ *  that stops rotating expires on this clock. */
+const DEVICE_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
 const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
 
-/** How long a fork transfer holds its reserved name without saying it is still
- *  running. Renewed as each frame lands, so the bound is on the GAP between
- *  frames rather than on the transfer: minutes of slack for a slow ranged read
- *  over a large workspace, and still an end for a sender whose Durable Object
- *  died mid-stream. */
+/** Renewed as each fork frame lands, so this bounds the gap between frames, not the transfer. */
 const FORK_RESERVATION_LEASE_MS = 5 * 60 * 1000;
 
-/** A device name is a display label, not a hostname — bounded so a UI row
- *  cannot be blown out by one paste. */
 const DEVICE_NAME_MAX_LENGTH = 80;
 
 /** Owner-facing checkpoint reads do not execute or write on the device. Every
@@ -260,9 +228,8 @@ const CONSENT_FREE_DEVICE_METHODS = {
   checkpointPlan: true,
 } as const satisfies Record<string, true>;
 
-/** The agent a device call's consent is keyed on, or undefined when the call
- *  is not gated: stopping work never is, and an owner reading a checkpoint
- *  through a workspace tier reaches one of the consent-free methods above. */
+/** The agent a device call's consent is keyed on, or undefined when the call is not gated
+ *  (stopping work, or an owner read of a consent-free method). */
 function consentAgentFor(
   resolved: ResolvedCaller,
   claimed: string | undefined,
@@ -279,47 +246,27 @@ const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
 
 const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
 
-/** Wire bound for the roster listing. A page past this size answers with the
- *  newest rows plus the whole-roster total — never a silent truncation.
- *  Numerically equal to core status.ts's MAX_HISTORY_LIMIT by coincidence
- *  only: that one caps transcript pages, this one caps registry rows. */
+/** Roster page cap; past it, the newest rows plus the whole-roster total are returned.
+ *  Equal to core's MAX_HISTORY_LIMIT by coincidence only. */
 const WORKSPACE_LIST_LIMIT = 200;
 
-/** Stable per-user OAuth callback path. The full URL is built from the
- *  request origin at add-time so it works in any environment without
- *  configuration. NOT the SDK's per-agent default (`/agents/.../callback`)
- *  — every server uses this single per-user endpoint so callback routing
- *  is uniform regardless of which agent triggered the addition. */
+/** Single per-user OAuth callback path (not the SDK's per-agent default); the full URL is
+ *  built from the request origin at add-time. */
 const MCP_OAUTH_CALLBACK_PATH = '/api/user/mcp/callback';
 
-/** The OAuth client name this user's MCP plane registers under. It keys the
- *  SDK's own storage (`/{clientName}/{serverId}/...`), so every construction
- *  and every restore has to spell it the same way. */
+/** Keys the SDK's storage (`/{clientName}/{serverId}/...`); every construction and restore
+ *  must use the same name. */
 const USER_MCP_CLIENT_NAME = 'kinu-user-mcp';
 
-/** The sentence a taken MCP server name produces, written once. Both guards
- *  refuse with it: the atomic claim in `claimMcpServerName`, and the UNIQUE
- *  index where it exists. Two spellings of one refusal is how a UI comes to
- *  show a different message than the API.
- *
- *  The MESSAGE rather than a built error, so neither caller needs an optional
- *  cause: the claim has nothing to chain and the translation below has the
- *  violation it caught. */
+/** Shared refusal text for both name guards: the claim in `claimMcpServerName` and the
+ *  UNIQUE index, so UI and API show the same message. */
 function mcpNameTakenMessage(name: string): string {
   return `An MCP server named '${name}' already exists.`;
 }
 
 /**
- * Rethrow a failed name claim, renaming the `lower(name)` UNIQUE violation to
- * that same sentence.
- *
- * ALWAYS THROWS, which is what `never` says and what lets this carry no
- * `unknown` out. Anything that is not the violation is a real storage failure —
- * including the claim's own refusal, which already carries the sentence — and is
- * rethrown untouched: a blanket rename here would report a full disk as a
- * duplicate name. Rethrowing rather than RETURNING the caught value is the whole
- * of it; a function that hands `unknown` back to be thrown by its caller has
- * only moved the boundary.
+ * Rethrow a failed name claim, renaming only the `lower(name)` UNIQUE violation to that sentence.
+ * Any other failure is rethrown untouched so storage errors are not reported as duplicates.
  */
 function rethrowMcpNameCollision(input: { cause: unknown; name: string }): never {
   if (/UNIQUE constraint failed/i.test(renderThrownChain({ cause: input.cause }))) {
@@ -329,22 +276,17 @@ function rethrowMcpNameCollision(input: { cause: unknown; name: string }): never
   throw input.cause;
 }
 
-/** One configured MCP server that produced no tools for this turn. */
 export interface McpServerUnavailable {
   server: string;
   reason: string;
 }
 
-/** What the per-user MCP plane offers a turn: the tools it CAN dispatch, and
- *  the configured servers it could not reach. */
 export interface McpToolSurface {
   descriptors: SerializableToolDescriptor[];
   unavailable: McpServerUnavailable[];
 }
 
-/** The `user_mcp_servers` columns hydration needs: what to register, and
- *  whether the row holds a sealed credential. `headers` stays SEALED here —
- *  it is opened per request inside the transport closure, never carried. */
+/** `headers` stays sealed here; it is opened per request inside the transport closure. */
 interface McpHydrationRow extends SqlRow {
   id: string;
   name: string;
@@ -362,61 +304,40 @@ type DeviceCancellationOutcome = {
   detail?: string;
 };
 
-/** The request id a cancellation frame names, parsed off the outgoing params. */
 const CancelledRequestIdSchema = v.pipe(v.string(), v.minLength(1));
 
 /**
- * What a daemon says about itself the moment its socket opens.
- *
- * Every field past `type` is optional, because a machine running an older
- * daemon still connects and still serves files. What is absent is recorded as
- * absent, never guessed: a daemon that says nothing about sandboxing has not
- * proved it can sandbox, and the hub then refuses to run a command on it
- * rather than running one unconfined.
+ * Every field past `type` is optional so older daemons still connect. Absent means absent:
+ * a daemon that says nothing about sandboxing is refused commands rather than run unconfined.
  */
 const DeviceHelloSchema = v.object({
   type: v.literal('HELLO'),
   os: v.optional(v.string()),
   hostname: v.optional(v.string()),
-  /** The directory `kinu connect` ran in — the one place besides its own agent
-   *  home a workspace reaches on this machine — and the machine's own home.
-   *  Absolute or ignored: a relative path names nothing the hub can scope a
-   *  call to. */
+  /** The directory `kinu connect` ran in, and the machine's home.
+   *  Absolute or ignored: a relative path names nothing the hub can scope a call to. */
   root: v.optional(v.string()),
   home: v.optional(v.string()),
-  /** What the daemon PROVED at start. `capability` is its own probe's verdict,
-   *  `reason` is the probe's status word, `reasonDetail` is the probe's one
-   *  line about it, `gpu` lists the device nodes it found.
-   *
-   *  The words are plain strings here. The hub narrows each one on its own
-   *  (`sandboxVerdictFromHello`) and keeps the rest of the frame. A picklist
-   *  here refused the WHOLE HELLO for one word the hub did not know, so the
-   *  daemon that said the most, `probe_failed` with the bwrap line behind it,
-   *  was recorded as having said nothing. Measured 2026-09-04 on the first-run
-   *  tier. */
+  /** What the daemon proved at start. Words stay plain strings, narrowed by
+   *  `sandboxVerdictFromHello`; a picklist would reject the whole HELLO over one unknown word. */
   sandbox: v.optional(v.object({
     capability: v.optional(v.nullable(v.string())),
     reason: v.optional(v.nullable(v.string())),
     reasonDetail: v.optional(v.nullable(v.string())),
     gpu: v.optional(v.array(v.string())),
   })),
-  /** Where this machine keeps agent homes (`<home>/.kinu/agents`). The hub
-   *  composes `<agentRoot>/<workspace>/home` per exec, so the ROOT is what
-   *  travels and the hub never guesses a path on someone else's machine. */
+  /** Where this machine keeps agent homes (`<home>/.kinu/agents`); the hub composes
+   *  `<agentRoot>/<workspace>/home` per exec and never guesses a path. */
   agentRoot: v.optional(v.string()),
-  /** The build the daemon is (the stamp the CLI wrote beside it), the
-   *  machine's `os.arch()` naming which published artifact fits it, and
-   *  whether its owner lets the hub push a newer build. All absent on a
-   *  daemon older than this contract, which then gets no UPDATE and keeps
-   *  the `daemon_outdated` reading its missing sandbox field earns. */
+  /** Build stamp, `os.arch()`, and whether the owner allows pushed updates. All absent on older
+   *  daemons, which get no UPDATE and keep the `daemon_outdated` reading. */
   version: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1))),
   arch: v.optional(v.string()),
   updateCheck: v.optional(v.boolean()),
 });
 
-/** The verdict columns of `user_devices`. An object type rather than an
- *  interface, so it satisfies the row constraint `sqlx` puts on its result
- *  shape. */
+/** An object type rather than an interface, so it satisfies the row constraint `sqlx` puts
+ *  on its result shape. */
 type SandboxColumns = {
   sandbox_capability: string | null;
   sandbox_reason: string | null;
@@ -427,18 +348,8 @@ type SandboxColumns = {
 type SandboxVerdict = Pick<DeviceSandboxStatus, 'capability' | 'reason' | 'detail'>;
 
 /**
- * The sandbox verdict a HELLO earns, in the hub's vocabulary, with the words
- * behind it. Nothing the daemon said about why is dropped. A status word the
- * hub knows becomes the reason. The daemon's own line becomes the detail. A
- * word the hub does not know stays inside the detail, because that word and
- * that line are the only cause there is.
- *
- * Two verdicts are the hub's own, and both name the build. A daemon that
- * sends no sandbox field at all is every daemon deployed before this
- * contract, and "it did not say" is nothing an owner can act on. A daemon
- * that proved a sandbox but named no agent root has left the hub nowhere to
- * put the agent's home, so no frame can be built from it. The boundary records
- * that, so a command is never promised a sandbox it cannot get.
+ * Unknown status words stay in the detail. No sandbox field means `daemon_outdated`; a proved
+ * sandbox with no agent root cannot build a frame, so no command is promised a sandbox.
  */
 function sandboxVerdictFromHello(
   hello: v.InferOutput<typeof DeviceHelloSchema>, agentRoot: string | null,
@@ -465,9 +376,7 @@ function sandboxVerdictFromHello(
   return { capability: claimed, reason, detail: line };
 }
 
-/** One reading of the verdict columns for every surface that shows them. An
- *  absent or unrecognised word narrows to "not proved". The words behind the
- *  verdict travel as written. */
+/** An absent or unrecognised word narrows to "not proved"; detail travels as written. */
 function readSandboxColumns(row: SandboxColumns | undefined): SandboxVerdict & Pick<DeviceSandboxStatus, 'gpu'> {
   return {
     capability: parseSandboxCapability(row?.sandbox_capability),
@@ -477,8 +386,6 @@ function readSandboxColumns(row: SandboxColumns | undefined): SandboxVerdict & P
   };
 }
 
-/** An absolute path, or null for anything else. A relative path names nothing
- *  the hub can send to a machine, and an older daemon sends none at all. */
 const AbsolutePathSchema = v.pipe(v.string(), v.regex(/^\/.+/));
 
 function absolutePathOrNull(value: string | undefined): string | null {
@@ -491,35 +398,19 @@ function absolutePathOrNull(value: string | undefined): string | null {
 
 const DeviceRotationAckSchema = v.object({ type: v.literal(DEVICE_TOKEN_ROTATION_ACK) });
 
-/**
- * What a device says about a terminal it is holding: bytes, or the status the
- * program ended with.
- *
- * Read before the RPC correlator, because neither frame carries a request id.
- * A correlator handed one drops it silently, which would leave a pane waiting
- * on a shell that had already answered.
- */
+/** Read before the RPC correlator: these frames carry no request id, and the correlator
+ *  would drop them silently. */
 const DeviceTerminalFrameSchema = v.variant('type', [
   v.object({ type: v.literal(DEVICE_PTY_OUTPUT), session: v.string(), data: v.string() }),
   v.object({ type: v.literal(DEVICE_PTY_EXIT), session: v.string(), exitCode: v.number() }),
 ]);
 
-/** The window a pane gets when it names none. 80x24 is what a terminal has
- *  been since DEC sold one, and every program still assumes it. */
 const TERMINAL_DEFAULT_AXIS = { cols: 80, rows: 24 } as const;
 
-/**
- * How long the hub waits for the machine to answer that a terminal is open.
- *
- * This is a control round trip, not the terminal's life: the shell then runs
- * for as long as the person keeps the window. A machine that cannot answer in
- * this long is a machine the pane should stop waiting on, and the same default
- * covers every other control call on this socket.
- */
+/** Control round-trip timeout, not the terminal's life; also the default for every other
+ *  control call on this socket. */
 const TERMINAL_OPEN_TIMEOUT_MS = 10_000;
 
-/** Base64 back to bytes. The device socket carries JSON, so a keystroke and a
- *  screen repaint both ride as text and become bytes again here. */
 function bytesFromBase64(data: string): Uint8Array {
   const binary = atob(data);
   const bytes = new Uint8Array(binary.length);
@@ -545,13 +436,11 @@ export interface UserProfile {
   displayName: string | null;
   createdAt: number;
   lastSeenAt: number;
-  /** First-run setup's completion stamp: `null` on an account the wizard has
-   *  never run to `finish()`. Lives in `user_onboarding`, a table of its own —
-   *  the genesis lock refuses a new column on the shipped `user_profile`. */
+  /** `null` until the wizard reaches `finish()`. Lives in `user_onboarding` because the
+   *  genesis lock refuses a new column on the shipped `user_profile`. */
   onboardedAt: number | null;
-  /** The roster's size, counted the way `listWorkspaces`' `total` counts it.
-   *  The gate reads it beside the stamp: an account that already owns a
-   *  workspace is established and never sees the wizard, stamp or not. */
+  /** Counted like `listWorkspaces`' `total`. An account owning a workspace never sees the
+   *  wizard, stamp or not. */
   workspaceCount: number;
 }
 
@@ -563,8 +452,7 @@ export interface WorkspaceEntry {
   archivedAt: number | null;
 }
 
-/** One `user_shares_received` row: who shared which blueprint, and the title
- *  cached at the time. `createdAt` is absent on the write side. */
+/** `title` is cached at share time. `createdAt` is absent on the write side. */
 export interface SharedBlueprintReceipt {
   ownerUserId: string;
   ownerEmail: string;
@@ -574,37 +462,26 @@ export interface SharedBlueprintReceipt {
   createdAt?: number;
 }
 
-/** One bounded page of the workspace roster. `total` is the whole active
- *  roster; `nextCursor` walks to the following page and is null past the end,
- *  so the roster's tail is reachable instead of silently dropped. */
+/** `total` is the whole active roster; `nextCursor` is null past the end. */
 export interface WorkspaceList {
   entries: WorkspaceEntry[];
   total: number;
   nextCursor: string | null;
 }
 
-/** Where a registration's title came from: the mission it may be derived from,
- *  and the origin the caller decided for it. Together rather than as two more
- *  positional arguments, because they answer one question. */
 export interface WorkspaceRegistrationSource {
   purpose?: string;
   nameOrigin?: NameOrigin;
 }
 
-/** What {@link UserDO.registerWorkspace} found under a name: the row it just
- *  inserted, the live workspace already there, or a name an uncommitted fork
- *  transfer is holding. `reserved` carries no entry on purpose — a half-written
- *  fork target is not a workspace any caller may act on, and leaving the field
- *  out is what makes acting on it unrepresentable rather than merely wrong. */
+/** `reserved` names an uncommitted fork transfer and deliberately carries no entry, so
+ *  acting on a half-written fork target is unrepresentable. */
 export type WorkspaceRegistration =
   | { readonly status: 'created' | 'active'; readonly entry: WorkspaceEntry }
   | { readonly status: 'reserved' };
 
-/** Thrown when a publish is asked to commit something that is not an open
- *  reservation — a wrong timestamp, a name nothing reserved, or a name already
- *  published. Its own class because a fork transfer treats it as its own
- *  rollback trigger and not as a transport fault. Crosses the DO RPC boundary
- *  as its message, the same way `CapabilityDeniedError` does. */
+/** Publish of something that is not an open reservation. A fork transfer treats it as a rollback
+ * trigger, not a transport fault; crosses the DO RPC boundary as its message. */
 class WorkspaceReservationNotPendingError extends Error {
   constructor(name: string, why: string) {
     super(`Workspace "${name}" cannot be published: ${why}.`);
@@ -612,11 +489,8 @@ class WorkspaceReservationNotPendingError extends Error {
   }
 }
 
-/** Thrown when a CLI device-code approval is redeemed twice. Its own class
- *  because the poll route answers it as the already-delivered outcome the flow
- *  already has words for, and because the alternative — a bare SQL uniqueness
- *  violation — is not something a caller can read. Crosses the DO RPC boundary
- *  as its message, the same way `CapabilityDeniedError` does. */
+/** A CLI device-code approval redeemed twice; the poll route answers it as already-delivered.
+ * Crosses the DO RPC boundary as its message. */
 class CliAuthorizationSpentError extends Error {
   constructor(options: ErrorOptions) {
     super('That CLI authorization has already been redeemed.', options);
@@ -624,22 +498,18 @@ class CliAuthorizationSpentError extends Error {
   }
 }
 
-/** Outcome of a compare-and-swap catalog write. A typed domain result rather
- *  than an exception because it crosses the DO RPC boundary, where error
- *  classes do not survive and callers must branch on status codes anyway. */
+/** A typed result, not an exception: error classes do not survive the DO RPC boundary. */
 export type ProfileCatalogWriteResult =
   | { readonly ok: true; readonly envelope: ProfileCatalogEnvelope }
   | { readonly ok: false; readonly kind: 'conflict'; readonly currentVersion: number; readonly currentDigest: string }
   | { readonly ok: false; readonly kind: 'malformed'; readonly reason: string };
 
-/** The one persisted account catalog row. It is parsed before profile code
- * trusts its SQL values, so a damaged row cannot become a plausible default. */
+/** Parsed before profile code trusts its SQL values, so a damaged row cannot become a default. */
 interface StoredProfileCatalogRow {
   value: string;
   version: number;
 }
 
-/** The catalog and its monotonic CAS version under one account's authority. */
 interface ProfileCatalogState {
   version: number;
   catalog: ProfileCatalog;
@@ -650,7 +520,7 @@ const StoredProfileCatalogRowSchema: v.GenericSchema<StoredProfileCatalogRow> = 
   version: v.pipe(v.number(), v.integer(), v.minValue(0)),
 });
 
-/** A page request over the roster. `limit` clamps to [1, WORKSPACE_LIST_LIMIT]. */
+/** `limit` clamps to [1, WORKSPACE_LIST_LIMIT]. */
 export interface WorkspaceListPageQuery {
   cursor?: string | null;
   limit?: number;
@@ -676,7 +546,6 @@ export interface CodexStatus {
 export interface ConnectedProvider {
   id: string;
   label: string;
-  /** Credential keys this provider can use. */
   credentialKeys: string[];
 }
 
@@ -696,36 +565,28 @@ export interface CliAgentConnectTicketVerification {
   tokenHash?: string;
   expiresAt?: number;
   capabilities?: string[];
-  /** Present only when the ticket was minted by a scoped `pta_…` access
-   *  token — the websocket boundary pins the connection to these scopes.
-   *  Interactive session tickets are unscoped. */
+  /** Present only for tickets minted by a scoped `pta_…` token; the websocket pins to these scopes. */
   scopes?: AccessTokenScope[];
-  /** The account's authorization generation this connection is admitted under.
-   *  It rides the connection's own tags, so a later revocation can name every
-   *  socket that predates it — including one restored from hibernation, whose
-   *  tags carry the only identity it has. */
+  /** Rides the connection's tags so a later revocation can name every older socket,
+   * including one restored from hibernation, whose tags are its only identity. */
   authGeneration?: number;
   error?: string;
 }
 
-/** What a browser session cookie stands for, as it stood at the sign-in that
- *  minted it. Written once with the row and never updated: a rename lands on
- *  the next sign-in, because this is what the cookie has always meant. */
+/** Identity as of the sign-in that minted the cookie. Written once, never updated;
+ * a rename lands on the next sign-in. */
 export interface BrowserSessionIdentity {
   email: string;
   displayName: string | null;
   provider: string;
-  /** Provider subject — `sub`, or the provider's own stable user id. */
+  /** `sub`, or the provider's own stable user id. */
   sub: string;
-  /** Interactive-auth time in epoch ms, which step-up checks read. */
+  /** Interactive-auth time in epoch ms, read by step-up checks. */
   authTime: number;
 }
 
-/** One browser session as its authority sees it. Being answered at all IS the
- *  liveness answer: a revoked or lapsed session has no row and reads as null.
- *
- *  `identity` is null only for a row registered before the row carried one,
- *  where the KV projection is still the only copy of it. */
+/** A revoked or lapsed session has no row and reads as null. `identity` is null only for rows
+ * registered before rows carried one; the KV projection is then the only copy. */
 export interface LiveBrowserSession {
   identity: BrowserSessionIdentity | null;
 }
@@ -748,9 +609,7 @@ function parseCapabilityList(value: string): string[] {
   return parsed.success ? parsed.output : [];
 }
 
-/** The roster cursor is the ordering key of a page's last row — `(last_visited,
- *  name)` under the listing's `last_visited DESC, name ASC` order — URL-encoded
- *  JSON so it survives query strings without a second encoding scheme. */
+/** Cursor is the last row's `(last_visited, name)` ordering key, URL-encoded JSON. */
 function encodeRosterCursor(entry: Pick<WorkspaceEntry, 'name' | 'lastVisited'>): string {
   return encodeURIComponent(JSON.stringify({ v: entry.lastVisited, n: entry.name }));
 }
@@ -783,27 +642,8 @@ function clampRosterLimit(limit?: number): number {
 }
 
 /**
- * Take the activation-time restore away from the SDK, and keep it for
- * {@link UserDO.hydrateUserMcp}.
- *
- * `agents@0.22.0` made `MCPClientManager` a lifecycle capability: it reaches
- * storage only through the `Lifecycle` it is installed on, and `Agent`
- * installs exactly one, so the manager this user plane runs on IS `this.mcp`
- * (cloudflare/agents#1897 removed `MCPClientManagerOptions.storage`; a second
- * manager throws on first use). Its `onStart` calls
- * `restoreConnectionsFromStorage` unconditionally on every activation
- * (`agents/dist/client-jagG8a9_.js:1303-1308`), with none of this plane's
- * credential closures in place yet — so every activation opened an anonymous
- * connection to every MCP endpoint the user configured, whether or not anyone
- * touched MCP: third-party 401 noise, duplicate sessions churning
- * `server_options`, and an OAuth 401 able to write a fresh `auth_url` onto the
- * row, which the user plane then reads as authenticating-and-never-connect.
- *
- * Retiring the CALL is the whole fix — the public method with a stated
- * contract, not the private flag behind it, whose rename would silently bring
- * the dialing back. The real restore is returned so hydration can run it once
- * the credentialed transports are registered. Taken in a field initializer,
- * which runs before any entry point reaches the lifecycle start.
+ * `MCPClientManager.onStart` restores connections on every activation before credential closures
+ * exist; retire the call and return the real restore for {@link UserDO.hydrateUserMcp}.
  */
 function retireActivationRestore(
   manager: MCPClientManager,
@@ -820,43 +660,29 @@ export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     sealRpcSurface(this, USER_DO_RPC_SURFACE);
-    // A Durable Object is its own isolate, so the Worker's diagnostics sink is
-    // not installed here — see the same call in `ActorAgent`'s constructor. The
-    // capability denials this DO's gate produces are the fleet's authorization
-    // signal, and without this they reach Workers Logs and no dataset.
+    // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
   }
 
-  /** The per-user OAuth provider, keyed by {@link USER_MCP_CLIENT_NAME} rather
-   *  than this object's name: it is the key every stored grant was written
-   *  under, and every restore has to spell it the same way. */
+  /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key. */
   override createMcpOAuthProvider(callbackUrl: string): AgentMcpOAuthProvider {
     return new DurableObjectOAuthClientProvider(this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl);
   }
 
   private _initialized = false;
 
-  /** The restore hydration runs, once the SDK's activation-time call has been
-   *  retired (see {@link retireActivationRestore}). */
+  /** See {@link retireActivationRestore}. */
   private readonly restoreUserMcp = retireActivationRestore(this.mcp);
 
-  /** Whether {@link hydrateUserMcp} has completed once in this activation. */
   private _userMcpHydrated = false;
 
-  /** The one full reconciliation in flight. UserDO calls interleave at every
-   *  external await; joining this makes remove/register/restore/establish one
-   *  credential-safe sequence. Cleared after either settlement so the cause
-   *  reaches every joiner and a later caller can retry. */
+  /** Calls interleave at every await; joining this keeps reconciliation one credential-safe sequence.
+   * Cleared after either settlement so a later caller can retry. */
   private _hydratingUserMcp: Promise<void> | null = null;
 
 
-  /**
-   * Once per activation. Cancellation claims are activation-scoped by
-   * construction: the sweep that holds one lives in this isolate's memory, so
-   * every claim already in storage when an activation begins was abandoned by
-   * the activation that died. Releasing them here needs no lease clock and no
-   * elapsed guess — the activation boundary IS the expiry.
-   */
+  /** Once per activation. Claims live in isolate memory, so any claim in storage at activation start
+   * was abandoned; the activation boundary is the expiry. */
   private ensureInit(): void {
     if (this._initialized) return;
     initUserTables(this.ctx.storage.sql);
@@ -872,14 +698,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * The attenuation gate. First statement of every privileged method below —
-   * the check lives here, next to the secrets, rather than in any caller.
-   *
-   * Also where this object's analytics write window reopens, for the same reason
-   * it is the gate: it runs exactly once per RPC, and the platform's 250-point
-   * budget is per INVOCATION. Opening it in the constructor alone gave a hot
-   * UserDO one budget for a whole activation, after which its capability denials
-   * and release transitions stopped reaching the dataset with nothing to say so.
+   * The attenuation gate: first statement of every privileged method below.
+   * Also reopens the analytics window, since the 250-point budget is per invocation.
    */
   private requireTier(caller: UserCaller, capability: WorkspaceCapability): Promise<ResolvedCaller> {
     this.ensureInit();
@@ -888,32 +708,13 @@ export class UserDO extends Agent<Env> {
     return requireTier(this.ctx.storage.sql, this.env, { caller }, capability);
   }
 
-  /** Provisioning in flight, per workspace. A Durable Object serializes nothing
-   *  across an outbound RPC await, so two concurrent first-touches would
-   *  otherwise each mint and each install, leaving the surviving stored hash
-   *  and the surviving installed token from DIFFERENT mints — a workspace that
-   *  can never authenticate again and never re-provisions, because it does hold
-   *  a token. Coalescing on this map is what makes the handshake atomic. */
+  /** Provisioning in flight, per workspace. A DO does not serialize across an RPC await, so
+   *  coalescing here keeps concurrent first-touches from installing tokens from different mints. */
   private readonly _provisioning = new Map<string, Promise<void>>();
 
   /**
-   * Reconcile a workspace's identity: the workspace reports the hash of the
-   * token it holds, and any disagreement with the registry is repaired by
-   * minting a fresh one and installing it.
-   *
-   * `presentedHash` makes this self-healing in both directions — a workspace
-   * that holds nothing, and a workspace holding a token this UserDO no longer
-   * recognizes (its storage was reset, or a delete tore down one side only).
-   *
-   * Deliberately ungated, and the ONLY method that is: this is the bootstrap of
-   * workspace identity, so it cannot require identity. It is safe because it
-   * hands the secret to nobody — the token is delivered straight into the
-   * Durable Object of the named workspace, which must already be in this user's
-   * registry. The worst a caller can do is force a rotation, after which both
-   * sides still agree and the tier is untouched.
-   *
-   * Being the only ungated method is also why it opens the analytics window
-   * itself: every other entry reaches `requireTier`, which does it.
+   * Reconcile a workspace's identity; any mismatch with `presentedHash` is repaired by minting anew.
+   * The only ungated method (it bootstraps identity), so it opens the analytics window itself.
    */
   async ensureWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
     this.ensureInit();
@@ -928,28 +729,13 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * The reconcile itself, from a presented hash to both sides agreeing.
-   *
-   * Split out of {@link ensureWorkspaceCapability} for
-   * {@link publishWorkspaceReservation}, which does its own admission check: a
-   * reservation is deliberately absent from the registry read that gates every
-   * other caller, so it cannot go through the same front door. One body, so the
-   * coalescing map and the re-mint rule cannot drift between the two.
-   *
-   * THE ADMISSION IS RE-CHECKED AT THE WRITE, not only at the entrance. Minting
-   * hashes, hashing is an await, and a delete that lands during it revokes an
-   * identity this call was already carrying — so the check below and the write
-   * next to it are one synchronous turn, and a reconcile that was already in
-   * flight when a teardown began cannot bring the dead workspace's identity
-   * back.
+   * Shared body for {@link ensureWorkspaceCapability} and {@link publishWorkspaceReservation}.
+   * Admission is re-checked in the same synchronous turn as the write, so a delete during minting wins.
    */
   private async reconcileWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
     if (presentedHash && presentedHash === workspaceCapabilityHash(this.ctx.storage.sql, workspaceName)) {
-      // The root holds the token the registry committed — the state that reads
-      // as "done". It is done only when no rotation is waiting on a replica:
-      // a subtree push that missed a descendant left it presenting the
-      // previous token, and nothing else ever retries that. The root is the
-      // only holder of the plaintext, so the retry asks it to re-push.
+      // Matching hash is done only if no rotation is pending on a replica; the root holds the
+      // only plaintext, so it is asked to re-push.
       const pending = pendingCapabilityReconcile(this.ctx.storage.sql, workspaceName);
 
       if (pending === null || pending !== presentedHash) return;
@@ -993,13 +779,8 @@ export class UserDO extends Agent<Env> {
     try { await task; } finally { this._provisioning.delete(workspaceName); }
   }
 
-  /** Whether this registry still holds a name an identity may be issued for.
-   *
-   *  Looser than {@link workspaceRegistered} in exactly one direction, and it
-  *  has to be: a fork reservation (`create_pending = 1`) is invisible to every
-  *  owner-facing read and is still a name {@link publishWorkspaceReservation}
-  *  mints for. What it refuses is the case that matters — a row whose teardown
-  *  has started, and a name absent from this registry. */
+  /** Like {@link workspaceRegistered} but also admits fork reservations (`create_pending = 1`);
+   *  refuses rows mid-teardown and names absent from the registry. */
   private workspaceMintable(name: string): boolean {
     return this.sqlx(
       `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 0`, name,
@@ -1012,8 +793,6 @@ export class UserDO extends Agent<Env> {
     return createReleaseStore(releaseSqlFromExec(this.ctx.storage.sql), { validateAgentName: validateWorkspaceName });
   }
 
-  // ── Profile ────────────────────────────────────────────────────────
-
   private onboardingCompletedAt(): number | null {
     const row = this.sqlx<{ completed_at: number }>(
       `SELECT completed_at FROM user_onboarding WHERE id = 1`,
@@ -1022,9 +801,7 @@ export class UserDO extends Agent<Env> {
     return row?.completed_at ?? null;
   }
 
-  /** The roster's size under the same predicate `listWorkspaces`' `total`
-   *  uses: live rows only, so a pending fork reservation or a workspace mid-
-   *  teardown cannot make a brand-new account look established. */
+  /** Same predicate as `listWorkspaces`' `total`: pending reservations and teardowns don't count. */
   private rosterCount(): number {
     return this.sqlx<{ n: number }>(
       `SELECT COUNT(*) AS n FROM user_workspaces
@@ -1085,13 +862,9 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  // ── Account ────────────────────────────────────────────────────────
-  // The account's own authorities — its 'account' capability is floored at
-  // owner_only, so no workspace token reaches either method here.
+  // The 'account' capability is floored at owner_only, so no workspace token reaches these methods.
 
-  /** First-run setup's `finish()`. Idempotent: the FIRST completion wins, so
-   *  a retried call returns the timestamp the wizard already stamped rather
-   *  than moving it forward. */
+  /** Idempotent: the first completion wins; a retry returns the original timestamp. */
   async completeOnboarding(caller: UserCaller): Promise<{ onboardedAt: number }> {
     await this.requireTier(caller, 'account');
 
@@ -1107,9 +880,6 @@ export class UserDO extends Agent<Env> {
     return { onboardedAt: stamped };
   }
 
-  /** The name every surface addresses the owner by. The constraint lives in
-   *  the object, not the form, so every client that ever renames the owner
-   *  gets the same answer. */
   async setDisplayName(caller: UserCaller, displayName: string): Promise<UserProfile> {
     await this.requireTier(caller, 'account');
     const name = displayName.trim();
@@ -1126,14 +896,9 @@ export class UserDO extends Agent<Env> {
     return profile;
   }
 
-  // ── Workspace registry ─────────────────────────────────────────────
-
   async listWorkspaces(caller: UserCaller, page?: WorkspaceListPageQuery): Promise<WorkspaceList> {
     await this.requireTier(caller, 'workspaces.read');
-    // The ordinary read IS the retry: a teardown a previous attempt could not
-    // finish gets another go here, before the listing that must not show it —
-    // and so does a fork reservation whose sender stopped renewing it, which is
-    // otherwise a name this listing hides and nothing can free.
+    // This read is the retry for unfinished teardowns and for stale fork reservations nothing else frees.
     await this.resumePendingDeletions();
     await this.reclaimStaleForkReservations();
     const limit = clampRosterLimit(page?.limit);
@@ -1172,10 +937,7 @@ export class UserDO extends Agent<Env> {
     return { entries, total: n, nextCursor: hasMore && last ? encodeRosterCursor(last) : null };
   }
 
-  /** Complete enumeration of the active roster for server-side fans (credential
-   *  invalidation, peer lists, the CLI's config reconcile) where a capped page
-   *  would silently drop targets. Identity fields only — the wide wire contract
-   *  is listWorkspaces. */
+  /** Uncapped enumeration of the active roster for server-side fans, where a page would drop targets. */
   async listActiveWorkspaces(caller: UserCaller): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
     await this.requireTier(caller, 'workspaces.read');
 
@@ -1187,23 +949,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Claim a roster name for a new workspace, and say what was found.
-   *
-   * THE STATUS IS A CLOSED WORD, not a boolean, because the three answers need
-   * three different acts from the caller and `existed` conflated two of them.
-   * `created` is an EXCLUSIVE claim: the read and the insert below are one
-   * synchronous turn, so of two creates racing on one name exactly one is told
-   * `created` and is the only one that may initialize the workspace or roll the
-   * row back. `active` is the name's live workspace, returned as it stands —
-   * the create that gets it must not re-seed a soul, reset a baseline or open a
-   * second genesis turn on a workspace that is already somebody's. `reserved`
-   * carries no entry at all: a name an uncommitted fork transfer is holding is
-   * not a workspace this caller has, and the row IS that reservation, so it is
-   * neither taken nor written.
-   *
-   * `create_pending = 0` is written rather than left to the column default:
-   * this is the path whose workspace exists by the time the row does, so it is
-   * published the moment it lands.
+   * Claim a roster name. `created` is exclusive (read+insert in one turn), and only it may initialize
+   * or roll back; `active` must not be re-seeded; `reserved` is an uncommitted fork's hold.
    */
   async registerWorkspace(
     caller: UserCaller, name: string, displayName?: string, from?: WorkspaceRegistrationSource,
@@ -1228,11 +975,8 @@ export class UserDO extends Agent<Env> {
     if (existing && existing.create_pending !== 0) return { status: 'reserved' };
 
     if (existing) {
-      // The owner asked for this name, so the workspace behind it has been
-      // visited; nothing else about it is this call's to rewrite. Returning the
-      // row's OWN timestamp is what makes the answer stable across retries —
-      // and what lets a rollback match the row it actually inserted, which a
-      // freshly generated `createdAt` silently prevented.
+      // Return the row's own timestamp: keeps the answer stable across retries and lets a
+      // rollback match the row it actually inserted.
       this.sqlx(
         `UPDATE user_workspaces SET last_visited = ?, archived_at = NULL WHERE name = ?`,
         now, name,
@@ -1252,16 +996,11 @@ export class UserDO extends Agent<Env> {
 
     const explicit = displayName?.trim() ?? '';
     const title = resolveWorkspaceTitle({ explicit, purpose, slug: name });
-    // THE ORIGIN THE CALLER DECIDED, when it decided one. Deriving it here from
-    // "is `displayName` empty" was the #18 root on this side: the create path
-    // hands over a title it DERIVED from the mission, which is non-empty and so
-    // read as the owner's choice — after which nothing was ever allowed to
-    // replace it, and the truncated prompt was the workspace's name forever.
-    // A caller that states nothing keeps the old reading.
+    // Use the origin the caller decided; a derived title is non-empty and must not read as
+    // the owner's choice. A caller that states nothing falls back to the displayName test.
     const origin: NameOrigin = nameOrigin ?? (explicit !== '' ? 'user' : 'auto');
-    // No ON CONFLICT clause: the read above and this write are one turn, so a
-    // conflict here is unreachable — and if the two were ever separated by an
-    // await, a silent upsert is exactly the wrong answer.
+    // No ON CONFLICT: the read above and this write are one turn, so a conflict is unreachable;
+    // if an await ever separated them, a silent upsert would be wrong.
     this.sqlx(
       `INSERT INTO user_workspaces (name, display_name, name_origin, created_at, last_visited, create_pending)
        VALUES (?, ?, ?, ?, ?, 0)`,
@@ -1275,24 +1014,9 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Hold a name for a fork transfer that has not happened yet.
-   *
-   * The row is inserted UNPUBLISHED (`create_pending = 1`) and is invisible to
-   * every owner-visible read until {@link publishWorkspaceReservation} commits
-   * it (KINU-027): a target being streamed into is not a workspace the owner
-   * has, and a roster that offered it would be offering a half-written one. The
-   * row exists anyway, because the name is what the reservation is FOR — the
-   * existence probe below is deliberately blind to the flag, so a pending
-   * reservation still refuses a second reservation of the same name.
-   *
-   * IT ALSO CARRIES A LEASE, which is what bounds "the transfer has not
-   * happened yet". The sender streams frames from another Durable Object; if
-   * that object dies between frames nothing runs its cleanup, and an unbounded
-   * row stays `create_pending` forever — invisible to every roster read, so the
-   * owner cannot delete it, and refusing every retry of the same name, so they
-   * cannot have it back either. A reservation whose lease has lapsed is
-   * therefore ADOPTED here: its half-written target is torn down and the name
-   * is reserved afresh for the caller asking for it now.
+   * Hold a name for a pending fork transfer: row is inserted with `create_pending = 1`, invisible
+   * until {@link publishWorkspaceReservation} (KINU-027) but still blocking the name.
+   * Carries a lease; a lapsed reservation is torn down and adopted by the new caller.
    */
   async reserveWorkspace(caller: UserCaller, name: string, displayName?: string): Promise<{ entry: WorkspaceEntry; reserved: boolean }> {
     await this.requireTier(caller, 'workspaces.write');
@@ -1350,13 +1074,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * The transfer is still running — hold the name a while longer.
-   *
-   * Called by the sender as each frame lands, so the lease tracks the transfer
-   * rather than a guess about how long one takes. Answers false when this is no
-   * longer the caller's reservation to hold (published, released, or adopted by
-   * someone else), which is how a sender that outlived its own claim learns to
-   * stop.
+   * Extend the reservation lease; called by the sender per frame. Returns false when the
+   * reservation is no longer the caller's (published, released, or adopted), so it stops.
    */
   async renewWorkspaceReservation(caller: UserCaller, name: string, createdAt: number): Promise<boolean> {
     await this.requireTier(caller, 'workspaces.write');
@@ -1372,19 +1091,13 @@ export class UserDO extends Agent<Env> {
     ).length > 0;
   }
 
-  /**
-   * Give up a reservation whose transfer stopped renewing it: destroy whatever
-   * the half-finished transfer left in the target Durable Object, then drop the
-   * row. `tearDownWorkspace` is the same teardown a delete runs and is
-   * idempotent, so a target that was never written converges too.
-   */
+  /** Tear down the target DO of a lapsed reservation, then drop the row; teardown is idempotent. */
   private async reclaimForkReservation(name: string): Promise<void> {
     const ownerUserId = this.ctx.id.name ?? '';
 
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) {
-      // Without the owner id this object cannot prove the destroy is
-      // authorized, and guessing is what that check refuses. The row keeps its
-      // lapsed lease and the next attempt tries again.
+      // Without the owner id the destroy cannot be authorized; the row keeps its lapsed lease
+      // and the next attempt retries.
       diagnostics.failure('workspace.fork_reservation_unowned', toKinuError({
         doing: 'reclaiming a fork reservation whose transfer stopped',
         cause: new Error('this user object has no user id to authorize the destroy with'),
@@ -1397,13 +1110,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Reclaim every reservation whose transfer stopped renewing it.
-   *
-   * Driven by the owner's own reads, exactly like {@link resumePendingDeletions}
-   * and for the same reason: this object has no timer of its own, and the
-   * answer to "who retries this" is the next person to look at their workspace
-   * list. Without it a wedged name is invisible AND unreachable — the roster
-   * filters `create_pending`, so the owner cannot even see what to delete.
+   * Reclaim lapsed reservations. Driven by the owner's reads like {@link resumePendingDeletions}:
+   * this object has no timer, and the roster hides `create_pending` rows.
    */
   private async reclaimStaleForkReservations(): Promise<void> {
     const stale = this.sqlx<{ name: string }>(
@@ -1426,14 +1134,7 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  /**
-   * Commit a reservation: the transfer landed, so the name it has been holding
-   * becomes a workspace the owner has.
-   *
-   * The ONE place `create_pending` is cleared, which is what makes "absent"
-   * mean the same thing on every surface — there is no second way for a
-   * half-written fork target to become visible.
-   */
+  /** Commit a reservation; the only place `create_pending` is cleared. */
   async publishWorkspaceReservation(
     caller: UserCaller,
     name: string,
@@ -1443,11 +1144,8 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
 
-    // Exactly the row `reserveWorkspace` inserted, still open. The timestamp is
-    // the identity: on the name alone, a transfer's late reply could publish a
-    // LATER reservation of the same name. `delete_pending` is excluded for the
-    // reason it is excluded from `releaseWorkspaceReservation` — a row whose
-    // teardown has started is not one anything may commit.
+    // Match on timestamp too: by name alone a late reply could publish a later reservation.
+    // Rows with teardown started (`delete_pending`) may not be committed.
     const reserved = v.safeParse(v.object({ create_pending: v.picklist([0, 1]) }), this.sqlx(
       `SELECT create_pending FROM user_workspaces
        WHERE name = ? AND created_at = ? AND delete_pending = 0`,
@@ -1462,13 +1160,8 @@ export class UserDO extends Agent<Env> {
       throw new WorkspaceReservationNotPendingError(name, 'it is already published');
     }
 
-    // Installing the capability is a cross-DO await, so it cannot sit inside the
-    // transaction: `transactionSync` commits when its SYNCHRONOUS body returns,
-    // and an async body would commit at its first await and take the atomicity
-    // with it. So the install happens first and the flip commits after it. That
-    // order is also the safe one — a failed install leaves the row unpublished,
-    // which is still invisible and still releasable, whereas publishing first
-    // would hand the owner a workspace holding no identity.
+    // Install (cross-DO await) must precede the transaction: `transactionSync` commits when its
+    // synchronous body returns. A failed install leaves the row unpublished and releasable.
     await this.reconcileWorkspaceCapability(name, capabilityHash);
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(
@@ -1479,18 +1172,15 @@ export class UserDO extends Agent<Env> {
     });
   }
 
-  /** Drop only the exact roster row a failed fork reservation inserted. This
-   * never contacts the target DO: the caller uses it only when that target
-   * proved it already belongs to another user and was left untouched. */
+  /** Drop only the exact row a failed fork reservation inserted; never contacts the target DO
+   * (used only when the target belongs to another user). */
   async releaseWorkspaceReservation(caller: UserCaller, name: string, createdAt: number): Promise<boolean> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
 
     if (!Number.isFinite(createdAt)) return false;
 
-    // A marked row is not this reservation's to drop: it belongs to a teardown
-    // that has not finished, and dropping it would lose the only record that
-    // anything is still owed.
+    // A `delete_pending` row belongs to an unfinished teardown and must not be dropped.
     const row = this.sqlx<{ created_at: number }>(
       `SELECT created_at FROM user_workspaces WHERE name = ? AND delete_pending = 0`,
       name,
@@ -1506,9 +1196,7 @@ export class UserDO extends Agent<Env> {
   async touchWorkspace(caller: UserCaller, name: string): Promise<void> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
-    // A workspace being torn down, or one a fork has not committed yet, is not
-    // one the owner can visit, so a touch finds nothing to touch — the same
-    // answer every ordinary read gives.
+    // Rows being torn down or not yet published are not visitable, matching ordinary reads.
     this.sqlx(
       `UPDATE user_workspaces SET last_visited = ?
        WHERE name = ? AND delete_pending = 0 AND create_pending = 0`,
@@ -1517,17 +1205,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Delete one workspace: its Durable Object and every external plane it owns,
-   * then its registry row.
-   *
-   * The row is MARKED before any of that and removed only after all of it, so a
-   * teardown that fails mid-way leaves a record of the intent rather than a
-   * half-deleted workspace nobody is responsible for. A marked row is invisible
-   * to every ordinary read — it is not a workspace the owner has any more — but
-   * it is still there, which is what gives the cleanup an owner: the next read
-   * of this registry drives it again (`resumePendingDeletions`), and
-   * `destroyAgent` is idempotent, so a re-run over already-destroyed planes
-   * converges instead of failing.
+   * Row is marked before teardown and removed after, so a failed teardown is resumed by the next
+   * read (`resumePendingDeletions`); `destroyAgent` is idempotent.
    */
   async removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void> {
     await this.requireTier(caller, 'workspaces.write');
@@ -1538,63 +1217,32 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * The teardown itself, from a live workspace to no row.
-   *
-   * THE FENCE COMES FIRST, IN ONE SYNCHRONOUS TURN. Marking the row and
-   * revoking the workspace's capability are the same act — an authority the
-   * owner has withdrawn must not survive into the teardown — and the destroy
-   * below is an await, during which this object accepts other calls. Revoking
-   * afterwards left the dying workspace holding a token its own registry still
-   * honoured, so for the whole length of the destroy it could still read the
-   * owner's credentials, list their other workspaces and spend their devices.
-   * The mark is what every other read already excludes; the revoke is what the
-   * capability gate reads. Neither is any use without the other, so they are
-   * written together, before anything can interleave.
-   *
-   * Tear the agent's Durable Object down (storage, alarm, sandbox) BEFORE
-   * dropping it from the registry — otherwise the DO's SQLite (conversation,
-   * model, scaffold, triggers) survives and a same-name recreate inherits stale
-   * state, and its alarm keeps firing. A real teardown failure is fail-closed:
-   * the marked row stays, so a same-name recreation cannot reconnect to
-   * resources that were not actually destroyed, and the failure reaches the
-   * caller. The revoke is not undone by that failure either: a workspace whose
-   * delete the owner has asked for does not get its authority back because its
-   * container refused to stop.
+   * Mark and revoke in one synchronous turn before the destroy await, so a dying workspace keeps no
+   * authority. Destroy the DO before dropping the row; on failure the marked row stays and the
+   * revoke is not undone.
    */
   private async tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
     this.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
-    // The device grants go with the capability, in the same synchronous turn
-    // and for the same reason. A grant is read BY NAME on every later device
-    // call, so a row that outlived its workspace is a standing
-    // full_filesystem waiting for the next workspace created with that name -
-    // which a shared template makes ordinary rather than unlikely.
+    // Grants are read by name, so a surviving row would grant full_filesystem to a same-name recreate.
     this.sqlx(`DELETE FROM device_consent WHERE agent_name = ?`, name);
 
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
       await stub.destroyAgent(ownerUserId);
     } catch (err) {
-      // agents-SDK destroy aborts its own isolate after the durable wipe. That
-      // exact sentinel is successful completion; every other error is real.
+      // agents-SDK destroy aborts its own isolate after the wipe; the 'destroyed' error means success.
       if (!(err instanceof Error) || err.message !== 'destroyed') throw err;
     }
 
     this.sqlx(`DELETE FROM user_workspaces WHERE name = ?`, name);
-    // Re-run for the row this teardown resumed from an earlier attempt, whose
-    // identity a pre-fence delete could have left registered.
+    // Re-run for a resumed row whose identity a pre-fence delete could have left registered.
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
   }
 
   /**
-   * Finish any teardown a previous attempt left marked.
-   *
-   * Driven by the owner's own reads rather than by a wake of its own: this
-   * object has no timer, and the answer to "who retries this" is the next
-   * person to look at their workspace list. A cleanup that fails again keeps its
-   * marker and states why — the row is the retry, so nothing is lost by not
-   * throwing here, and a listing that failed because an unrelated workspace
-   * could not finish dying would be the worse answer.
+   * Finish teardowns left marked; driven by the owner's reads since this object has no timer.
+   * Failures keep the marker (the row is the retry) and do not throw, so listings still succeed.
    */
   private async resumePendingDeletions(): Promise<void> {
     const pending = this.sqlx<{ name: string }>(
@@ -1605,8 +1253,6 @@ export class UserDO extends Agent<Env> {
     const ownerUserId = this.ctx.id.name ?? '';
 
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) {
-      // Without the owner id this object cannot prove to the workspace that the
-      // destroy is authorized, and guessing is exactly what the check refuses.
       diagnostics.failure('workspace.cleanup_unowned', toKinuError({
         doing: 'resuming a pending workspace teardown',
         cause: new Error('this user object has no user id to authorize the destroy with'),
@@ -1630,14 +1276,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Refuse a name whose teardown has not finished.
-   *
-   * Creating is the one path that cannot read a marked row as absent. The row
-   * still owns a Durable Object and its planes, so a same-name recreate over it
-   * would hand the owner a workspace wired to resources the pending teardown is
-   * about to destroy. The retry runs first because the ordinary way to arrive
-   * here is an owner recreating a name they just deleted, whose teardown hit
-   * something transient: that owner gets their name back, not a dead end.
+   * Refuse a name whose teardown is pending; the row still owns a DO a recreate would wire into.
+   * Retries the teardown first so a transient failure does not dead-end the name.
    */
   private async requireNotDeleting(name: string): Promise<void> {
     const marked = `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 1`;
@@ -1650,14 +1290,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * ROOT title authority. Commits the shown name AND whose it is; an 'auto'
-   * write is REFUSED when the owner has named this workspace, so a generated
-   * title can never displace a chosen one — the refusal lives here where the
-   * state is, not in a per-actor mirror that resets with its process.
-   * Returns whether the write applied.
-   *
-   * The workspace actor mirrors this value only after the cross-DO write
-   * succeeds.
+   * Root title authority: an 'auto' write is refused when the owner has named the workspace.
+   * Returns whether the write applied; the workspace actor mirrors only after this succeeds.
    */
   async setWorkspaceDisplayName(
     caller: UserCaller, name: string, displayName: string, origin: NameOrigin,
@@ -1665,15 +1299,11 @@ export class UserDO extends Agent<Env> {
     const resolved = await this.requireTier(caller, 'workspaces.rename_self');
     validateWorkspaceName(name);
 
-    // Workspace-scoped by construction: an agent renames itself, never a
-    // sibling. This is what makes rename safe to keep at the `shared` tier.
+    // An agent renames only itself; this is what makes rename safe at the `shared` tier.
     if (resolved.kind === 'workspace' && resolved.workspace !== name) {
       throw new Error(`Workspace "${resolved.workspace}" may only rename itself.`);
     }
 
-    // Both pending flags excluded as everywhere else: a workspace being torn
-    // down, or one a fork has not committed yet, has no title to commit, so the
-    // write reports the not-found answer.
     const current = this.sqlx<{ name_origin: string }>(
       `SELECT name_origin FROM user_workspaces
        WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
@@ -1690,8 +1320,7 @@ export class UserDO extends Agent<Env> {
     return { applied: true };
   }
 
-  /** The root's current naming state for one workspace, or null when it holds
-   *  no such row. This is what an actor hydrates its activation cache from. */
+  /** Null when no row exists; actors hydrate their activation cache from this. */
   async getWorkspaceTitle(caller: UserCaller, name: string): Promise<{ displayName: string; nameOrigin: NameOrigin } | null> {
     await this.requireTier(caller, 'workspaces.read');
     validateWorkspaceName(name);
@@ -1712,15 +1341,11 @@ export class UserDO extends Agent<Env> {
     return this.workspaceRegistered(name);
   }
 
-  /** Registry membership, ungated — the internal read behind `hasWorkspace`
-   *  and the ticket flows, whose own entry points are already gated. */
+  /** Ungated; callers (`hasWorkspace`, ticket flows) are gated at their own entry points. */
   private workspaceRegistered(name: string): boolean {
     validateWorkspaceName(name);
 
-    // Both pending flags excluded for the same reason `archived_at` is: a
-    // workspace whose teardown has started, and one whose fork transfer has not
-    // committed, are not ones this owner can open — and this gate is what every
-    // open goes through, including `ensureWorkspaceCapability`'s admission.
+    // Pending rows are not openable; every open, including `ensureWorkspaceCapability`, goes through here.
     const row = this.sqlx(
       `SELECT 1 AS x FROM user_workspaces
        WHERE name = ? AND archived_at IS NULL AND delete_pending = 0
@@ -1731,11 +1356,7 @@ export class UserDO extends Agent<Env> {
     return row !== undefined;
   }
 
-  // ── Peer-messaging grants (cross-owner, default deny) ──────────────
-
-  /** Read by the receiving agent's `receivePeerMessage` — whether a foreign
-   *  sender may deliver into this user's agents. Same-owner peers never need
-   *  a grant (ownership is checked before this). */
+  /** Whether a foreign sender may deliver into this user's agents; same-owner peers need no grant. */
   async hasPeerGrant(caller: UserCaller, senderAgentName: string, senderUserId: string): Promise<boolean> {
     await this.requireTier(caller, 'peers.grants');
 
@@ -1747,23 +1368,10 @@ export class UserDO extends Agent<Env> {
     return row !== undefined;
   }
 
-  // ── Browser sessions ───────────────────────────────────────────────
-  //
-  // The authority behind a session cookie: whether it is still live, and what
-  // it stands for. KV holds a projection of the identity for the fast path and
-  // is trusted for nothing, because a KV write and a KV delete both take up to
-  // a minute to reach every colo — so KV can neither say a session was revoked
-  // (a stolen cookie replayed at a lagging colo outlives logout by that
-  // window) nor say one exists yet (the first request after a sign-in redirect
-  // reads as signed out at a colo the write has not reached, and bounces
-  // the browser into a sign-in that loses the same race). This table
-  // answers both, from every colo, in one round trip.
+  // Session authority lives here: KV writes and deletes take up to a minute to reach every colo,
+  // so KV can confirm neither revocation nor existence.
 
-  /** Publish a browser session as active, with the identity it was minted for.
-   *  Called before the sign-in response hands the browser its cookie, so no
-   *  cookie is ever outstanding without authority behind it. A hash already
-   *  present is a real fault and throws: the caller compensates rather than
-   *  adopting a row it did not create. */
+  /** Called before the cookie is issued. An existing hash throws; the caller compensates. */
   async registerBrowserSession(
     caller: UserCaller,
     tokenHash: string,
@@ -1780,12 +1388,8 @@ export class UserDO extends Agent<Env> {
     );
   }
 
-  /** This cookie's session, or null when it is not a live one. Expired rows are
-   *  dropped in the same transaction as the read, so a lapsed session reads as
-   *  ABSENT and expiry needs no sweeper, no alarm and no second lifecycle
-   *  column. The identity comes back with the liveness answer rather than
-   *  behind a second round trip, so a caller whose KV projection has not
-   *  arrived yet still has something true to answer with. */
+  /** This cookie's session, or null when not live. Expired rows are deleted in the same
+   * transaction as the read, so expiry needs no sweeper or alarm. */
   async verifyBrowserSession(caller: UserCaller, tokenHash: string): Promise<LiveBrowserSession | null> {
     await this.requireTier(caller, 'auth_tokens');
 
@@ -1805,9 +1409,8 @@ export class UserDO extends Agent<Env> {
 
       if (!row) return null;
 
-      // All five were written by one INSERT, so they are present together or
-      // absent together; a row from before they existed carries no identity at
-      // all rather than a half of one.
+      // All five columns come from one INSERT, so they are present or absent together;
+      // an older row without them carries no identity rather than half of one.
       if (row.email === null || row.provider === null || row.provider_sub === null || row.auth_time === null) {
         return { identity: null };
       }
@@ -1824,26 +1427,15 @@ export class UserDO extends Agent<Env> {
     });
   }
 
-  /** Revoke exactly this session. The row's absence IS the revocation, so the
-   *  next request carrying that cookie is refused at whatever colo it reaches,
-   *  and the user's other sessions keep their own rows.
-   *
-   *  The write comes first and the fan-out second, exactly as
-   *  {@link retireCliAuthority} does it: the revocation is durable here before
-   *  any cross-DO await, so a fan-out that fails cannot leave a websocket
-   *  believing it is still authorized — the frame-time check reads this store
-   *  and refuses the next frame either way. The push is what makes the revocation
-   *  reach a socket that is only LISTENING, which a per-frame check by itself can
-   *  never reach because a client that says nothing sends no frames. */
+  /** Revoke exactly this session; the row's absence is the revocation. The write is durable
+   * before the fan-out, so a failed push cannot keep a socket authorized (see retireCliAuthority). */
   async revokeBrowserSession(caller: UserCaller, tokenHash: string): Promise<void> {
     await this.requireTier(caller, 'auth_tokens');
     this.sqlx(`DELETE FROM user_browser_sessions WHERE token_hash = ?`, tokenHash);
     await this.pushSessionSocketRevocation(tokenHash);
   }
 
-  /** Tell this account's workspaces to close every websocket that named this
-   *  session at its upgrade. Best-effort by construction, and named on each
-   *  failure, for the same reason the CLI socket push is. */
+  /** Close every websocket that named this session at upgrade. Best-effort, like the CLI socket push. */
   private async pushSessionSocketRevocation(tokenHash: string): Promise<void> {
     const workspaces = this.sqlx<{ name: string }>(
       `SELECT name FROM user_workspaces
@@ -1864,11 +1456,8 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  /** Whether a browser session that authenticated a live websocket may still
-   *  act — the session-side twin of {@link verifyCliSocketBearer}. Read at
-   *  FRAME TIME by the workspace the socket is attached to, against the row
-   *  this object owns, so there is no cached verdict to be stale. A workspace
-   *  that cannot be reached is refused by the caller, not answered here. */
+  /** Frame-time liveness check for a session-authenticated websocket; twin of verifyCliSocketBearer.
+   * An unreachable workspace is refused by the caller, not answered here. */
   async verifySocketSession(caller: UserCaller, tokenHash: string): Promise<{ live: boolean }> {
     await this.requireTier(caller, 'auth_tokens.socket');
 
@@ -1882,22 +1471,10 @@ export class UserDO extends Agent<Env> {
     return { live: row !== undefined };
   }
 
-  // ── CLI auth tokens ────────────────────────────────────────────────
-
   /**
-   * Mint a CLI bearer token against one browser approval. The raw token is
-   * returned once to the CLI; only its hash is stored. The userId is embedded
-   * solely so edge routes can route directly to the correct UserDO before
-   * verification.
-   *
-   * `authorizationHash` IS THE APPROVAL, and it is what makes this mint
-   * single-use. The device-code flow's record lives in KV, which has no
-   * compare-and-swap and answers reads from each colo's cache, so the flow
-   * cannot enforce "mint once" itself: two polls of one approved request both
-   * read `approved` and both were handed a 180-day token. This object is the
-   * one that mints, so the claim belongs in the same INSERT as the token —
-   * atomic, strongly consistent, and unique by index rather than by luck. A
-   * second attempt against the same approval finds the row and is refused.
+   * Mint a CLI bearer token; only its hash is stored. userId is embedded so edge routes can
+   * reach this UserDO before verification. `authorizationHash` is the approval: the unique index
+   * makes the mint single-use, since the KV device-code record has no compare-and-swap.
    */
   async mintCliToken(
     caller: UserCaller, userId: string, authorizationHash: string, label?: string,
@@ -1919,17 +1496,13 @@ export class UserDO extends Agent<Env> {
         tokenHash, cleanCliTokenLabel(label), now, expiresAt, authorizationHash,
       );
     } catch (cause) {
-      // The unique index owns the message, exactly as `claimMcpServerName`'s
-      // does: the refusal is a fact about the approval, not a SQL constraint
-      // the caller can act on.
       throw new CliAuthorizationSpentError({ cause });
     }
 
     return { token, tokenHash, expiresAt };
   }
 
-  /** Verify a CLI bearer token. Called by Worker HTTP routes after routing to
-   *  this UserDO via the user id embedded in the token. */
+  /** Called by Worker HTTP routes after routing here via the user id embedded in the token. */
   async verifyCliToken(caller: UserCaller, token: string): Promise<CliTokenVerification> {
     await this.requireTier(caller, 'auth_tokens');
     const userId = parseCliTokenUserId(token);
@@ -1982,12 +1555,8 @@ export class UserDO extends Agent<Env> {
     return { ok: true };
   }
 
-  /** Revoke every active CLI session token. The recovery path for a logout whose
-   *  remote revocation never landed (or a token copied off a lost machine):
-   *  the caller has no way to name the orphan, so the answer is all of them. The
-   *  owner re-authenticates afterwards — that is the cheap half of an account
-   *  whose every remaining bearer needed to die anyway. One generation rise
-   *  covers every socket at once, exactly as a single revocation does. */
+  /** Revoke every active CLI session token, for orphans the caller cannot name.
+   * One generation rise covers every socket at once. */
   async revokeAllCliTokens(caller: UserCaller): Promise<{ revoked: number }> {
     await this.requireTier(caller, 'auth_tokens');
 
@@ -2001,18 +1570,9 @@ export class UserDO extends Agent<Env> {
     return { revoked };
   }
 
-  // ── The authorization generation ────────────────────────────────────
-
   /**
-   * This account's authorization generation: one number that rises with every
-   * CLI or access-token revocation.
-   *
-   * A websocket authenticated by a bearer records the generation it was
-   * admitted under, which is what lets a revocation name every socket that
-   * predates it without enumerating token hashes — including sockets that are
-   * merely LISTENING, which a per-frame check by itself can never reach because
-   * a client that says nothing sends no frames while it keeps receiving the
-   * workspace's stream.
+   * Rises with every CLI or access-token revocation. Sockets record the generation they were
+   * admitted under, so revocation reaches listening-only sockets that send no frames.
    */
   private authGeneration(): number {
     const row = this.sqlx<{ generation: number }>(
@@ -2023,14 +1583,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Record that authority was withdrawn, then tell this account's workspaces.
-   *
-   * THE WRITE COMES FIRST AND THE FAN-OUT SECOND, and the order is the point:
-   * the revocation is durable in this object before any cross-DO await, so a
-   * fan-out that fails cannot leave a socket believing it is still authorized —
-   * the frame-time check reads this store and refuses the next frame either
-   * way. The push is what makes revocation immediate rather than
-   * next-frame-immediate; it is not what makes it true.
+   * The write must precede the fan-out: revocation is durable before any cross-DO await, so a
+   * failed push only delays closure; the frame-time check still refuses the next frame.
    */
   private async retireCliAuthority(): Promise<void> {
     this.sqlx(
@@ -2060,15 +1614,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Whether a bearer that authenticated a live websocket may still act, and
-   * the generation it must be holding.
-   *
-   * Read at FRAME TIME by the workspace the socket is attached to. A connect
-   * ticket is checked once, at the upgrade; without this the socket outlived
-   * every revocation, and hibernation made it worse — the connection came back
-   * from its tags with its scopes intact and nothing that named the bearer at
-   * all. This is the gate that cannot be bypassed: it reads the same rows the
-   * revocation writes, in the object that owns them.
+   * Frame-time check for a bearer-authenticated websocket, returning the generation it must hold.
+   * Reads the same rows revocation writes; connect tickets are only checked at upgrade.
    */
   async verifyCliSocketBearer(caller: UserCaller, tokenHash: string): Promise<{
     live: boolean; generation: number; error?: string;
@@ -2084,19 +1631,15 @@ export class UserDO extends Agent<Env> {
     return { live: true, generation };
   }
 
-  // ── CI access tokens (long-lived, scoped `pta_…` bearers) ──────────
-
-  /** Mint a scoped access token. The step-up policy (interactive session
-   *  token, freshly minted) is enforced by the CLI routes; this DO owns the
-   *  hash-only storage plus name/scope validation. */
+  /** Step-up policy is enforced by the CLI routes; this DO owns hash-only storage and
+   * name/scope validation. */
   async mintAccessToken(caller: UserCaller, userId: string, name: string, scopes: readonly string[]): Promise<AccessTokenMint> {
     await this.requireTier(caller, 'auth_tokens');
 
     return mintAccessTokenRow(this.ctx.storage.sql, userId, name, scopes);
   }
 
-  /** Verify a `pta_…` access token presented as a bearer. Same contract as
-   *  verifyCliToken, with the granted scopes attached. */
+  /** Same contract as verifyCliToken, with the granted scopes attached. */
   async verifyAccessToken(caller: UserCaller, token: string): Promise<CliTokenVerification> {
     await this.requireTier(caller, 'auth_tokens');
     const verified = await verifyAccessTokenRow(this.ctx.storage.sql, token);
@@ -2123,10 +1666,8 @@ export class UserDO extends Agent<Env> {
   async revokeAccessToken(caller: UserCaller, ref: string): Promise<{ ok: true; revoked: boolean }> {
     await this.requireTier(caller, 'auth_tokens');
     const result = revokeAccessTokenRow(this.ctx.storage.sql, ref);
-    // Unconditionally, not only when a row changed: `revoked: false` also
-    // covers an already-revoked token, and a generation that rises on a no-op
-    // costs one comparison while one that skips a real revocation costs the
-    // socket it should have closed.
+    // Unconditional: `revoked: false` also covers an already-revoked token, and a spurious
+    // generation rise is cheap while a skipped one leaves a socket open.
     await this.retireCliAuthority();
 
     return result;
@@ -2249,11 +1790,8 @@ export class UserDO extends Agent<Env> {
     return verification;
   }
 
-  /** A connect ticket stays bound to the bearer that minted it: an
-   *  interactive session token (expiring, unscoped → 'all') or a live access
-   *  token (revocable, pinned to its granted scopes). Null when the bearer is
-   *  invalid. Scopes are resolved at verify time so a revoked access
-   *  token can never ride a pre-minted ticket. */
+  /** Scopes of the ticket's bearer: session token → 'all', access token → its scopes, null if invalid.
+   * Resolved at verify time so a revoked access token cannot ride a pre-minted ticket. */
   private cliBearerScopes(tokenHash: string, now: number): 'all' | AccessTokenScope[] | null {
     const session = this.sqlx<{ expires_at: number }>(
       `SELECT expires_at FROM user_cli_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
@@ -2265,31 +1803,16 @@ export class UserDO extends Agent<Env> {
     return getActiveAccessTokenScopes(this.ctx.storage.sql, tokenHash);
   }
 
-  // ── Connected devices (user-level device/PC tunnel hub) ──────────────
-  //
-  // The reverse-WS tunnel from a user's machine terminates HERE, not on a
-  // specific agent — so one `kinu connect` lets every one of the user's
-  // agents reach the device. The worker forwards the daemon's upgrade Request
-  // to this DO (a WebSocket itself cannot cross the RPC boundary) and the
-  // socket is accepted inside fetch() as a hibernatable WebSocket owned by
-  // the DeviceSocketHub (tagging, replace-on-reconnect, DeviceTunnel rebuild
-  // on wake). Agents reach a device by forwarding to `deviceRpc()` over a
-  // DO-to-DO call.
+  // The reverse-WS tunnel from a user's machine terminates here, not on an agent, so every agent
+  // can reach the device via `deviceRpc()`. A WebSocket cannot cross RPC; the worker forwards the upgrade.
   private readonly _devices = new DeviceSocketHub(this.ctx);
 
-  /** The terminals open on this user's machines, each pairing one pane socket
-   *  with one session on one device. Both sockets live in this object because
-   *  the device's socket does: bytes cross between them here, with no second
-   *  transport and nothing dialling in to the machine. */
+  /** Pane sockets paired with device sessions; both live here because the device socket does. */
   private readonly _terminals = new DeviceTerminalHub(this.ctx, this._devices);
 
-  /** The durable record of commands running on the user's machines, and the
-   *  precedence protocol over it (see ./device-inflight.ts). This object owns
-   *  the sockets and the consent boundary; the ledger owns the table. */
+  /** Durable record of commands running on devices (see ./device-inflight.ts); the ledger owns the table. */
   private readonly _inflight = new DeviceRequestLedger(this.ctx.storage.sql);
 
-  /** Intercept device-daemon and terminal WebSocket upgrades; everything else
-   *  (agents-SDK routing, sub-agents) flows to the SDK untouched. */
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
@@ -2300,21 +1823,9 @@ export class UserDO extends Agent<Env> {
     return super.fetch(request);
   }
 
-  /** Verify + consume the daemon's connect ticket, accept its WebSocket, and
-   *  ROTATE the device's long-lived token over that socket.
-   *
-   *  Ticket verification lives HERE (not in the worker) so the upgrade is safe
-   *  no matter how the request reached this DO. Rotation lives here for the
-   *  same reason it exists: this is the one moment the real machine has proved
-   *  possession of the current secret, so it is the only moment a copy of
-   *  `device.json` can be made stale. The new secret rides the socket that was
-   *  just authenticated — it never appears in a URL or a log line.
-   *
-   *  A second socket taking the slot is never silent: the owner reads it on
-   *  the device row. The newcomer wins the slot — a real machine redialling
-   *  must not be locked out by a socket the hub has not yet noticed closing —
-   *  and the one-shot grace in {@link rotateDeviceToken} stops a displacement
-   *  from starting an alternation, not a refusal here.
+  /**
+   * Verify + consume the connect ticket here so the upgrade is safe however it arrived, then rotate
+   * the device token over the authenticated socket. A newcomer socket wins the slot.
    */
   private async acceptDeviceSocket(request: Request, url: URL): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
@@ -2335,9 +1846,7 @@ export class UserDO extends Agent<Env> {
     this._devices.accept(verified.deviceId, server);
     const now = Date.now();
 
-    // A machine landing clears the offline notice on exactly the workspaces a
-    // refused call already named it to — tracked rows, never a roster scan.
-    // An unreachable workspace keeps its row for the next accept.
+    // Clear offline notices only on tracked workspaces; an unreachable one keeps its row for next accept.
     const label = this.deviceLabel(verified.deviceId);
 
     for (const { agent_name } of this.sqlx<{ agent_name: string }>(
@@ -2374,15 +1883,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Accept a pane's WebSocket for a terminal this object just opened.
-   *
-   * The authority is the session name. It was minted here, handed to exactly
-   * one caller that had already passed the workspace's ownership check and the
-   * device's consent gate, and it is spent by the first attach — the same
-   * shape as the daemon's own connect ticket. No second identity check is
-   * possible at this point anyway: an upgrade carries no `UserCaller`, which
-   * is why the decision is made in {@link openDeviceTerminal} before the
-   * socket exists rather than here.
+   * The session name is the authority: minted once after ownership and consent checks, spent by first
+   * attach. An upgrade carries no `UserCaller`, so the check happens in {@link openDeviceTerminal}.
    */
   private acceptTerminalSocket(request: Request, url: URL): Response {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
@@ -2397,14 +1899,10 @@ export class UserDO extends Agent<Env> {
     try {
       attached = this._terminals.attach(session, server);
     } catch (cause) {
-      // An unknown or already-taken session is a value here, not a fault: the
-      // shell may have ended, or this object may have been evicted between the
-      // open and this upgrade. The pane opens a new one.
+      // Unknown or taken session is expected (shell ended or object evicted); the pane opens a new one.
       return new Response(renderThrownChain({ cause }), { status: 409 });
     }
 
-    // The pane may paint as soon as it sees this, and the shell is already
-    // running: its first bytes are on the way from the machine.
     server.send(JSON.stringify({ type: 'ready' }));
     diagnostics.event('device.terminal_attached', { device: attached.device, workspace: attached.workspace });
     const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
@@ -2413,30 +1911,13 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Mint this device's next long-lived token.
-   *
-   * `keepGrace` is the whole of the grace policy. The superseded hash is held
-   * only when the machine reached this accept with the CURRENT secret, so the
-   * one failure the grace exists for — a rotation lost with its socket — is
-   * survivable, and the machine ends it by acknowledging
-   * ({@link DEVICE_TOKEN_ROTATION_ACK}).
-   *
-   * A machine that reached this accept ON the grace gets none. It shares that
-   * secret with anyone else holding a copy of `device.json`, so the superseded
-   * hash it would leave behind is the OTHER claimant's live token: that is
-   * precisely what let two claimants alternate forever, each one's reconnect
-   * re-arming the other's. Withholding it ends the exchange at the first
-   * hand-over, at the cost of one honest failure — two rotation frames lost in
-   * a row now needs `kinu connect` again, and says so.
-   *
-   * The absolute window restarts here either way, so a machine that keeps
-   * connecting never lapses and a copy that stops rotating expires on a wall
-   * clock.
+   * Keep the superseded hash only when the machine used the current secret; a machine on the grace gets
+   * none, so two copies of `device.json` cannot alternate. The absolute window restarts either way.
    */
   private async rotateDeviceToken(deviceId: string, keepGrace: boolean): Promise<string> {
     const token = `pdt_${randomToken(32)}`;
-    // One statement: SQLite evaluates the right-hand sides against the row as
-    // it stands, so `token_hash` here is the secret being superseded.
+    // One statement: SQLite evaluates right-hand sides against the old row, so `token_hash` is the
+    // prior secret.
     this.sqlx(
       `UPDATE user_devices
           SET prev_token_hash = CASE WHEN ? THEN token_hash ELSE NULL END,
@@ -2449,18 +1930,10 @@ export class UserDO extends Agent<Env> {
     return token;
   }
 
-  /* The three hibernation entry points below are declared on this class, so
-   * `Lifecycle.installHandlers` leaves them alone
-   * (`agents/dist/durable-object-lifecycle-D6nNQJJd.js:496-502`: a name already
-   * on the host is skipped) and `Agent` itself declares none since
-   * cloudflare/agents#2133 re-parented it onto `DurableObject`. A socket that
-   * is neither a pane's nor a device's is therefore handed to the lifecycle
-   * directly — the same delegation `Agent.fetch` performs — because there is
-   * no `super` implementation left to reach. */
+  /* These hibernation handlers are declared here, so `Lifecycle.installHandlers` skips them and there
+   * is no `super`; foreign sockets are delegated to the lifecycle directly, as `Agent.fetch` does. */
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer | ArrayBufferView): Promise<void> {
-    // A pane's socket first. Its bytes are keystrokes for a machine, not a
-    // frame anything here parses: an arrow key is three bytes that are not a
-    // character, and decoding them as text would corrupt them.
+    // Pane bytes are raw keystrokes; decoding them as text would corrupt them.
     const terminal = terminalFromSocket(ws);
 
     if (terminal) {
@@ -2486,19 +1959,14 @@ export class UserDO extends Agent<Env> {
       data = new TextDecoder().decode(bytes);
     }
 
-    // The daemon's keepalive, answered here rather than by the platform's
-    // per-object auto-response: a terminal pane's socket lives in this same
-    // object, and an auto-response would eat a pasted "ping" on its way to a
-    // shell. The exact frame only — every other text falls through to the
-    // HELLO/RPC parsing below.
+    // Keepalive answered here, not by platform auto-response, which would eat a pasted "ping" to a shell.
     if (data === DEVICE_KEEPALIVE_PING) {
       ws.send(DEVICE_KEEPALIVE_PONG);
 
       return;
     }
 
-    // The daemon's HELLO carries metadata; everything else (including a frame
-    // that is not JSON at all) is an RPC response.
+    // Anything not a HELLO (including non-JSON) is treated as an RPC response.
     const hello = v.safeParse(DeviceHelloSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
 
     if (hello.success) {
@@ -2516,29 +1984,19 @@ export class UserDO extends Agent<Env> {
     const acknowledged = v.safeParse(DeviceRotationAckSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
 
     if (acknowledged.success) {
-      // The machine says the new secret is on its disk, so the superseded one
-      // has no remaining purpose. Every second it stays valid is a second a
-      // copy of the old `device.json` could spend it.
+      // New secret is on disk; drop the superseded one so a stale `device.json` copy cannot use it.
       this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL, last_seen_at = ? WHERE id = ?`,
         Date.now(), deviceId);
 
       return;
     }
 
-    // A live terminal's own frames, read before the RPC correlator: they carry
-    // a session name and no request id, and a correlator handed one would drop
-    // it without a word.
+    // Terminal frames have no request id; the RPC correlator would silently drop them.
     if (this.handleTerminalFrame(data)) return;
     this._devices.handleMessage(deviceId, data);
   }
 
-  /**
-   * A frame about a live terminal, on its way to the pane watching it.
-   *
-   * Answers whether this was such a frame, so the caller knows not to hand it
-   * to the RPC correlator. Output is bytes and goes as bytes; an exit is the
-   * one thing worth a word, and it closes the pane's socket after it.
-   */
+  /** Returns true if the frame was a terminal frame (so skip the RPC correlator); exit closes the pane. */
   private handleTerminalFrame(data: string): boolean {
     const frame = v.safeParse(DeviceTerminalFrameSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
 
@@ -2556,16 +2014,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Open a terminal on the owner's machine for one workspace, and answer with
-   * the session its pane may attach to.
-   *
-   * This is where a terminal becomes device access, so it goes through
-   * `deviceRpc` like every other call: the workspace's capability tier, the
-   * per-(workspace, device) grant — which raises the consent card when nothing
-   * is remembered — and the owner's Sandbox switch, which decides whether the
-   * shell runs inside the sandbox with the agent's own home and the folders
-   * they consented to. A session that opened any other way would be a shell on
-   * their machine with none of that, so there is no other way to open one.
+   * Open a terminal on the owner's machine for one workspace; returns the session its pane attaches to.
+   * Goes through `deviceRpc` (tier, per-device grant, Sandbox switch); there is no other way to open one.
    */
   async openDeviceTerminal(
     caller: UserCaller,
@@ -2577,13 +2027,12 @@ export class UserDO extends Agent<Env> {
       Number.isInteger(axis) && axis >= 1 && axis <= DEVICE_PTY_MAX_AXIS ? axis : fallback
     );
 
-    // The gate FIRST, before any device state is read. deviceRpc takes the
-    // same tier below, but a caller it would refuse must not learn whether a
-    // machine is connected on the way out.
+    // Gate before any device state is read: a refused caller must not learn whether a machine
+    // is connected.
     await this.requireTier(caller, 'device.rpc');
     const session = `pty-${nanoid(16)}`;
-    // Resolved before a session is minted, by the same rule every device call
-    // follows: several live and none named is a question, not a coin.
+    // Resolved before a session is minted: several live devices and none named is an error,
+    // not a coin toss.
     const target = await this.resolveDeviceForCall(deviceId, undefined);
 
     try {
@@ -2594,10 +2043,8 @@ export class UserDO extends Agent<Env> {
         { agentName, deviceId: target, timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
       );
     } catch (cause) {
-      // An install too old to hold terminals is a VALUE here: the owner can
-      // fix it, and the fix is one command. Every other failure — a refused
-      // grant, a machine that cannot sandbox, a dropped socket — already
-      // carries its own words and is passed through with the chain intact.
+      // An install too old to hold terminals gets an actionable message; every other failure
+      // already carries its own words and is passed through with the chain intact.
       if (isDeviceUnknownMethodError({ cause })) {
         throw new Error(`${this.deviceLabel(target)} runs an older Kinu. Run \`kinu update\` on that machine.`, { cause });
       }
@@ -2607,33 +2054,25 @@ export class UserDO extends Agent<Env> {
 
     this._terminals.register(session, target, agentName);
 
-    // A session nobody attached to is a shell with no window on it. The sweep
-    // runs on the next open rather than on a timer: this object has one alarm
-    // and it belongs to work the owner is waiting for.
+    // Unattached sessions are swept on the next open, not on a timer: this object's one alarm
+    // belongs to other work.
     for (const stale of this._terminals.expired()) this.closeDeviceTerminal(stale.session, stale.device);
 
     return { session };
   }
 
-  /** Close one terminal on a device, whatever it is doing. */
   private closeDeviceTerminal(session: string, device: string): void {
     try {
       this._terminals.paneClosed(session, device);
     } catch (cause) {
-      // The machine's socket dropped, which already ended every terminal on
-      // it: the shells died with the daemon's own close handler.
+      // The machine's socket dropped, which already ended every terminal on it.
       diagnostics.event('device.terminal_close_unsent', { device, error: renderThrownChain({ cause }) });
     }
   }
 
   /**
-   * Record what a daemon said about itself on connect.
-   *
-   * COALESCE, not overwrite, for the paths and the agent root: a daemon too old
-   * to send them must not erase what a newer one already recorded for this
-   * machine. The sandbox verdict is the opposite — it is a fact about THIS
-   * daemon on THIS boot, so silence means "not proved" and overwrites a stale
-   * yes. A machine that stops being able to sandbox must stop reading as able.
+   * Record a daemon's HELLO. Paths and agent root COALESCE so an older daemon can't erase them;
+   * the sandbox verdict is per-boot, so silence overwrites a stale yes.
    */
   private recordDeviceHello(deviceId: string, hello: v.InferOutput<typeof DeviceHelloSchema>): void {
     const agentRoot = absolutePathOrNull(hello.agentRoot);
@@ -2657,9 +2096,7 @@ export class UserDO extends Agent<Env> {
       deviceId,
     );
 
-    // Like the sandbox verdict, a fact about THIS daemon on THIS boot:
-    // silence overwrites, so a machine relinked with an older CLI reads as
-    // that CLI's daemon, not the last one's.
+    // Per-boot fact like the sandbox verdict: silence overwrites, so an older CLI reads as itself.
     this.sqlx(
       `INSERT INTO user_device_builds (device_id, version, update_check, reported_at)
          VALUES (?, ?, ?, ?)
@@ -2674,10 +2111,8 @@ export class UserDO extends Agent<Env> {
     );
   }
 
-  /** The build the deployment serves, or null when it published no stamp (an
-   *  incomplete deploy) or this deployment names no public origin to read
-   *  assets under. Read per HELLO: the stamp changes with every deploy, and a
-   *  HELLO is exactly a moment nothing else is asking. */
+  /** Null when the deploy published no stamp or names no public origin. Read per HELLO: the stamp
+   * changes with every deploy. */
   private async servedBuild(): Promise<string | null> {
     return (await this.servedStamp())?.version ?? null;
   }
@@ -2691,12 +2126,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * The UPDATE frame for a machine whose HELLO named another build than the
-   * served one, when its owner allows the push: the published artifact for
-   * its platform and that artifact's checksum, both as paths on the origin
-   * the daemon already trusts. Nothing for a daemon that named no build (it
-   * keeps the `daemon_outdated` path), no platform the deploy built for, an
-   * opted-out owner, or a deploy with no checksum to name.
+   * UPDATE frame for a daemon behind the served build, when its owner allows the push.
+   * Null for no reported build, unbuilt platform, opted-out owner, or no checksum.
    */
   private async deviceUpdateFrame(hello: v.InferOutput<typeof DeviceHelloSchema>): Promise<DeviceUpdateFrame | null> {
     const stamp = await this.servedStamp();
@@ -2707,9 +2138,8 @@ export class UserDO extends Agent<Env> {
     const tarball = cliArtifactPath(hello.os, hello.arch);
 
     if (tarball === null) return null;
-    // The signed manifest is the whole authority: a build that shipped no
-    // signature, or none over this artifact, pushes nothing — the daemon
-    // would refuse it, and a push it refuses is one HELLO's worth of noise.
+    // The signed manifest is the whole authority: no signature over this artifact means no push,
+    // since the daemon would refuse it.
     const sha256 = stamp.checksums?.[tarball];
 
     if (stamp.signature === undefined || stamp.checksums === undefined || sha256 === undefined || !/^[0-9a-f]{64}$/i.test(sha256)) return null;
@@ -2721,8 +2151,7 @@ export class UserDO extends Agent<Env> {
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
-    // A pane's socket closing is a person closing a terminal, so the shell on
-    // their machine is hung up rather than left running behind no window.
+    // A pane's socket closing hangs up the shell rather than leaving it running with no window.
     const terminal = terminalFromSocket(ws);
 
     if (terminal) {
@@ -2738,9 +2167,7 @@ export class UserDO extends Agent<Env> {
     this.ensureInit();
     this._devices.handleClose(deviceId, ws);
 
-    // Every terminal on this machine went with its socket: the daemon hangs up
-    // its own shells when the socket drops, so the panes are told rather than
-    // left waiting on bytes that will never come.
+    // The daemon hangs up its shells when the socket drops, so tell the panes.
     for (const session of this._terminals.panesForDevice(deviceId)) {
       this._terminals.endPane(session, NO_DEVICE_CONNECTED);
     }
@@ -2751,8 +2178,6 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  // The platform's own argument list, forwarded unchanged: what workerd hands a
-  // WebSocket error handler is the runtime's to describe, and nothing here reads it.
   override async webSocketError(...call: Parameters<NonNullable<Agent<Env>['webSocketError']>>): Promise<void> {
     const [ws] = call;
 
@@ -2760,10 +2185,8 @@ export class UserDO extends Agent<Env> {
     if (!deviceIdFromSocket(ws)) return this.lifecycle.webSocketError(...call);
   }
 
-  /** Mint a device + connect token. The authenticated CLI receives the raw
-   *  token once and writes it to the local daemon config; only its hash is
-   *  stored here. The label is the user-chosen name the CLI prompts for
-   *  (default `user@hostname`); 'Your PC' covers a caller that sent nothing. */
+  /** The raw token is returned once to the CLI; only its hash is stored. 'Your PC' is the default
+   * label when the caller sends none. */
   async registerDevice(caller: UserCaller, label?: string): Promise<{ deviceId: string; token: string }> {
     await this.requireTier(caller, 'device.manage');
     const deviceId = `dev-${nanoid(10)}`;
@@ -2779,8 +2202,6 @@ export class UserDO extends Agent<Env> {
     return { deviceId, token };
   }
 
-  /** Rename a registered device. Every surface renders this name; the id and
-   *  credentials are untouched. */
   async renameDevice(caller: UserCaller, deviceId: string, name: string): Promise<{ ok: boolean }> {
     await this.requireTier(caller, 'device.manage');
     const trimmed = name.trim().slice(0, DEVICE_NAME_MAX_LENGTH);
@@ -2796,30 +2217,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Verify a presented device token.
-   *
-   * The window is ABSOLUTE, measured from the last rotation — verification does
-   * not extend it. That is the point: an idle-sliding window kept a copied
-   * `device.json` alive forever as long as the thief kept connecting, while a
-   * real machine renews by ROTATING on every accept.
-   *
-   * The superseded secret is accepted once more, so a rotation message lost
-   * with its socket does not brick the machine. THAT GRACE IS ONE-SHOT, from
-   * both ends: any successful verification clears it, and the accept that rode
-   * it may not mint another (see {@link acceptDeviceSocket}). Clearing only on
-   * the CURRENT hash, and re-granting a grace on every accept, is what made a
-   * copied `device.json` perpetual — each accept handed the OTHER holder a
-   * fresh grace to reconnect on, so two claimants alternated indefinitely and
-   * both always held a live token. One shot means the exchange terminates: the
-   * loser's token is neither current nor grace, and its next connect is
-   * refused and recorded on the device row.
-   *
-   * `current` says which of the two matched. It travels on the ticket rather
-   * than being re-derived at the accept, because by then the hash the machine
-   * proved is gone.
-   *
-   * Rows written before the window existed carry a null `expires_at` and are
-   * stamped on their next rotation rather than being locked out.
+   * Window is absolute from last rotation; verification does not extend it. The superseded secret
+   * is a one-shot grace (see {@link acceptDeviceSocket}); `current` says which hash matched.
    */
   async verifyDeviceToken(caller: UserCaller, token: string): Promise<{ ok: boolean; deviceId?: string; current?: boolean }> {
     await this.requireTier(caller, 'device.manage');
@@ -2843,8 +2242,8 @@ export class UserDO extends Agent<Env> {
     return { ok: true, deviceId: row.id, current: row.current === 1 };
   }
 
-  /** Exchange the daemon's local long-lived token for a one-minute WebSocket
-   *  ticket. The ticket is scoped to this UserDO and can be consumed once. */
+  /** Exchange the daemon's long-lived token for a one-minute, single-use WebSocket ticket scoped to
+   *  this UserDO. */
   async issueDeviceConnectTicket(caller: UserCaller, token: string): Promise<{ ok: boolean; ticket?: string; expiresAt?: number }> {
     await this.requireTier(caller, 'device.manage');
     const verified = await this.verifyDeviceToken(await ownerCaller(this.env), token);
@@ -2868,7 +2267,6 @@ export class UserDO extends Agent<Env> {
     return { ok: true, ticket, expiresAt };
   }
 
-  /** Consume a short-lived WebSocket connect ticket. */
   async verifyDeviceConnectTicket(caller: UserCaller, ticket: string): Promise<{ ok: boolean; deviceId?: string; tokenWasCurrent?: boolean }> {
     await this.requireTier(caller, 'device.manage');
 
@@ -2895,13 +2293,11 @@ export class UserDO extends Agent<Env> {
 
     if (!active) return { ok: false };
 
-    // A null column is a ticket written before it existed: read as "not proved
-    // current", which withholds the grace rather than granting one on a guess.
+    // A null column (ticket predating it) reads as not proved current, so no grace is granted.
     return { ok: true, deviceId: row.device_id, tokenWasCurrent: row.token_was_current === 1 };
   }
 
-  /** The user-chosen names of every live machine, for an answer that has to
-   *  name them. Names only: an id is routing, and the ask is for a person. */
+  /** User-chosen names of live machines only; ids are routing, not for a person. */
   private connectedDeviceNames(): string[] {
     const live = this._devices.connectedDeviceIds();
 
@@ -2920,26 +2316,9 @@ export class UserDO extends Agent<Env> {
     )[0] !== undefined;
   }
 
-  /** Forward a JSON-RPC call to a connected device — the single binding
-   *  chokepoint. Every agent call passes its name, so we can enforce the
-   *  per-(workspace, device) binding: allow → run; deny → block; ask → call
-   *  back to the agent to raise a bind card and await the owner's decision.
-   *
-   *  A command also carries the SANDBOX FRAME this hub computed: the tier the
-   *  owner set, this workspace's own home on the machine, and the directories
-   *  the owner consented. The daemon enforces that frame and never decides the
-   *  tier itself, so one machine serving five workspaces gives each of them a
-   *  different home from the same daemon. */
   /**
-   * Which machine a call lands on, or which refusal it gets.
-   *
-   * A named machine resolves or is refused as not connected. An unnamed call
-   * resolves to the ONLY live machine; with several live it is a question for
-   * the caller, not a coin for the hub — nothing crosses to any machine, and
-   * the answer names the ones that could have been meant. With none live, a
-   * workspace operation names the registered machines on the workspace's own
-   * rail; owner-facing reads and terminal opens pass `undefined` and simply
-   * report that no machine is connected.
+   * Unnamed call resolves to the only live machine; several live is an error naming them.
+   * With none live, a workspace op is told the registered machines; `undefined` just reports none.
    */
   private async resolveDeviceForCall(
     requested: string | undefined,
@@ -2954,8 +2333,7 @@ export class UserDO extends Agent<Env> {
     throw new Error(NO_DEVICE_CONNECTED);
   }
 
-  /** The owner's registered machines that are not connected, for the notice a
-   *  refused call sends the workspace. Revoked rows are gone, not offline. */
+  /** Revoked rows are excluded: revoked means gone, not offline. */
   private registeredOfflineDevices(): Array<{ id: string; label: string; lastSeenAt: number | null }> {
     const live = new Set(this._devices.connectedDeviceIds());
 
@@ -2966,9 +2344,7 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
-  /** A refused call names the registered machines on the workspace's own rail.
-   *  The call still fails: nothing executes until a daemon is linked. The
-   *  workspace is recorded, so the next connect clears exactly this notice. */
+  /** The call still fails; the workspace is recorded so the next connect clears this notice. */
   private async announceDevicesUnavailable(workspaceOrAgent: string): Promise<void> {
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceOrAgent));
@@ -2986,9 +2362,7 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  /** The device the call would reach right now, or null when none qualifies.
-   *  An unnamed call with several live is ambiguous rather than absent, and
-   *  says so. */
+  /** Null when none qualifies; an unnamed call with several live is reported as ambiguous. */
   private liveDeviceForCall(requested: string | undefined): string | null {
     const deviceId = this._devices.connectedDeviceId(requested);
 
@@ -3011,10 +2385,8 @@ export class UserDO extends Agent<Env> {
     },
   ): Promise<string | undefined> {
     const resolved = await this.requireTier(caller, 'device.rpc');
-    // STOPPING work is never gated. Consent decides what may run on the
-    // machine, and a cancellation only ends a command the owner already let
-    // through — gating it would leave a live process waiting on a card nobody
-    // is there to answer, which is the failure the cancellation exists for.
+    // Cancellation is never consent-gated: it only ends a command already allowed, and
+    // gating it could leave a live process waiting on an unanswered card.
     const stopping = method === DEVICE_CANCEL_METHOD;
     const ownerRead = opts?.agentName === undefined && Object.hasOwn(CONSENT_FREE_DEVICE_METHODS, method);
 
@@ -3025,9 +2397,8 @@ export class UserDO extends Agent<Env> {
     if (!stopping && !this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
 
     if (consentAgent !== undefined) {
-      // Consent is keyed on the PROVEN workspace, never the claimed name — an
-      // agent cannot ride a sibling workspace's remembered grant. The three
-      // closed checkpoint reads above are the only consent-free methods.
+      // Consent is keyed on the proven workspace, never the claimed name, so an agent cannot
+      // ride a sibling workspace's grant.
       const consent = await this.checkDeviceConsent({
         agentName: consentAgent, deviceId, method, params,
         workspaceName: resolved.kind === 'workspace' ? resolved.workspace : undefined,
@@ -3036,21 +2407,8 @@ export class UserDO extends Agent<Env> {
       if (!consent.allowed) throw new Error(consent.reason);
     }
 
-    // A command and a terminal are the two calls that RUN something, so they
-    // are the two the sandbox decides. The file plane stays open in every mode
-    // — the daemon shows it the same view — and a cancellation is never gated
-    // at all.
-    //
-    // A terminal takes this branch for the same reason a command does, and
-    // taking it is the whole of the claim that a terminal is not a way around
-    // the owner's Sandbox switch: same tier, same agent home, same consented
-    // folders, same refusal on a machine that cannot sandbox. A shell is the
-    // most open-ended thing a workspace can ask a machine for, so it may not
-    // be the one call that skips this.
-    //
-    // `agentHome` is empty ONLY under the raw tier, where there is no sandbox
-    // and the daemon has no use for one. A sandboxed command with nowhere to
-    // put its home is refused three lines above instead of being sent.
+    // Commands and terminals run things, so both get the same sandbox frame; a terminal
+    // must not bypass the owner's Sandbox switch. `agentHome` is empty only under the raw tier.
     let execSandbox: JsonObject | null = null;
 
     if (method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) {
@@ -3058,9 +2416,8 @@ export class UserDO extends Agent<Env> {
       const sandbox = this.deviceSandboxFor(deviceId, workspace);
       const mode = effectiveDeviceMode(sandbox);
 
-      // Refused HERE, before the frame leaves, so a machine that cannot honour
-      // the tier never sees the command. The daemon refuses it again on its own
-      // probe; neither end ever downgrades a sandboxed command to a raw one.
+      // Refused before the frame leaves; the daemon refuses again on its own probe. Neither end
+      // ever downgrades a sandboxed command to raw.
       if (mode === 'files_only') {
         throw new Error(this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox)));
       }
@@ -3102,34 +2459,21 @@ export class UserDO extends Agent<Env> {
 
     if (opts?.requestId !== undefined) rpcOptions.requestId = opts.requestId;
 
-    // Persist BEFORE the frame leaves UserDO. The request identity is the same
-    // one the daemon registers its owned process group under and the same one
-    // `execCancel` names; an insert after send would recreate the eviction gap
-    // as a small race. Only a PROVEN workspace command carries a durable turn
-    // identity, so owner-side/out-of-turn operations do not pretend to have
-    // turn authority they do not possess.
+    // Persist before sending: an insert after send races with eviction. Only a proven
+    // workspace command carries a durable turn identity.
     const requestId = opts?.requestId;
     const durableExec = method === 'exec' && requestId !== undefined && resolved.kind === 'workspace';
 
     if (durableExec) {
-      // A probe must never ACK the command's own id: a retry may carry a
-      // retained terminal result, and ACKing it before replay would delete it.
-      // This fresh canonical id names no command and only distinguishes a
-      // daemon that implements durable result acknowledgement before work.
+      // Probe with a fresh id, never the command's own: ACKing a retry's id before replay
+      // would delete its retained terminal result.
       await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [nextDeviceRequestId(), DEVICE_CANCEL_PROTOCOL]);
 
-      // The probe is an await, so a revocation sweep can land inside it. Recheck
-      // admission before the row and the frame: a command admitted after that
-      // sweep claimed this device's requests would run with nothing left to
-      // cancel it and nothing counting it as unstopped.
+      // A revocation sweep can land during the probe await; recheck so no command runs
+      // with nothing left to cancel or count it.
       if (!this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
-      // A command issued INSIDE an already-detached scope is the background
-      // job's from the start, which is why the owner is passed to the insert
-      // rather than handed over afterwards.
-      //
-      // An owner that does not NAME a job is refused rather than stored: a blank
-      // owner would leave a row that neither a turn sweep nor a job sweep can
-      // ever select, which is precisely the orphan this table exists to prevent.
+      // A command inside a detached scope belongs to the background job from insert.
+      // A blank owner is refused: neither turn nor job sweep could ever select that row.
       const backgroundJobId = opts?.backgroundJobId ?? null;
 
       if (backgroundJobId === '') {
@@ -3148,21 +2492,15 @@ export class UserDO extends Agent<Env> {
 
     const result = await tunnel.rpc(method, params, rpcOptions);
 
-    // A tool aborting its own exec sends this frame straight through, so the
-    // answer must land in the same place a durable sweep would put it. First
-    // answer wins: it is the one that actually ended the process group, and a
-    // later sweep then reports it instead of killing a dead command again.
+    // A tool's own cancel is recorded where a durable sweep would put it; first answer wins,
+    // so a later sweep reports it instead of killing again.
     if (stopping) this.recordToolPathCancellation(params, result);
 
     return result === undefined ? undefined : JSON.stringify(result);
   }
 
-  /** Store the answer from a cancellation this UserDO merely forwarded, so the
-   *  durable authority holds ONE outcome per request whichever path stopped it.
-   *
-   *  An answer that does not NAME the request asked about is not this request's
-   *  answer, so it is neither stored nor returned: the caller is told the stop
-   *  was not confirmed, and the row stays live work for the next sweep. */
+  /** Store the answer from a forwarded cancellation so the durable authority holds one outcome per request.
+   *  An answer that does not name the requested id is neither stored nor returned; the row stays live. */
   private recordToolPathCancellation(params: JsonValue[], result: JsonValue | undefined): void {
     const requestId = v.safeParse(CancelledRequestIdSchema, params[0]);
 
@@ -3173,13 +2511,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Cloud-side acceptance of one exec result. The supervisor's normal result
-   * remains local and replayable until this RPC has the proven workspace row,
-   * then acknowledges the daemon before removing the durable row.
-   *
-   * A claimed row belongs to an in-flight cancellation, which owns the terminal
-   * outcome and sends its own acknowledgement. Completion racing cancellation
-   * therefore settles once, under whichever authority claimed the row first.
+   * Cloud-side acceptance of one exec result: acks the daemon, then removes the durable row.
+   * A claimed row belongs to an in-flight cancellation, which owns the terminal outcome and ack.
    */
   async acknowledgeDeviceRequest(caller: UserCaller, requestId: string): Promise<void> {
     const resolved = await this.requireTier(caller, 'device.rpc');
@@ -3198,28 +2531,19 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Stop every live device command of one durable turn after a fresh actor
-   * activation. The actor's in-memory AbortControllers died with that
-   * activation; these UserDO rows are the durable complement, inserted before
-   * their frames left the socket.
-   *
-   * Rows with no turn id are deliberately excluded. An operation issued outside
-   * a turn has no turn authority, so Stop must not widen into a workspace sweep.
+   * Stop every live device command of one durable turn after a fresh actor activation.
+   * Rows with no turn id are excluded so Stop never widens into a workspace sweep.
    */
   async cancelDeviceRequestsForTurn(
     caller: UserCaller,
     turnId: string,
   ): Promise<DeviceCancellationOutcome[]> {
-    // Claim ownership atomically BEFORE any device await. A snapshot-then-await
-    // sweep could still cancel a request a parallel detach moved to a background
-    // job in the meantime; the claim makes precedence one synchronous storage
-    // decision instead of a race.
+    // Claim atomically before any device await, so a parallel detach to a background job
+    // cannot race this sweep.
     return this.cancelClaimedDeviceRequests(caller, turnId,
       (workspace) => this._inflight.claimTurnRequests(workspace, turnId));
   }
 
-  /** One guard for both cancellation scopes: the device tier, the workspace
-   *  kind, and the refusal of an empty id are one policy, not two copies. */
   private async cancelClaimedDeviceRequests(
     caller: UserCaller,
     scopeId: string,
@@ -3232,11 +2556,8 @@ export class UserDO extends Agent<Env> {
     return this.cancelDeviceRequests(claim(resolved.workspace));
   }
 
-  /**
-   * Move ONE live device request to the durable background job that now owns
-   * it. Ownership is per request because a single turn can hold several
-   * parallel device calls, and only the detaching call changes hands.
-   */
+  /** Move one live device request to its background job; per request because a turn can hold
+   *  several parallel device calls and only the detaching one changes hands. */
   async transferDeviceRequestToBackgroundJob(
     caller: UserCaller,
     requestId: string,
@@ -3251,7 +2572,6 @@ export class UserDO extends Agent<Env> {
     });
   }
 
-  /** Stop all live device work owned by one durable background job. */
   async cancelDeviceRequestsForBackgroundJob(
     caller: UserCaller,
     jobId: string,
@@ -3260,21 +2580,12 @@ export class UserDO extends Agent<Env> {
       (workspace) => this._inflight.claimBackgroundJobRequests(workspace, jobId));
   }
 
-  /**
-   * Ask the device to stop each claimed request, and report what stopping it
-   * achieved. The ledger owns which row this sweep may still speak for; this
-   * loop owns the frames and what the caller is told.
-   */
   private async cancelDeviceRequests(rows: ClaimedDeviceRequest[]): Promise<DeviceCancellationOutcome[]> {
     const outcomes: DeviceCancellationOutcome[] = [];
 
     for (const row of rows) {
-      // One read, taken BEFORE any frame, answers both questions that can have
-      // changed while an earlier row was awaiting: does this sweep still own the
-      // row, and has an answer landed since it was claimed? A tool aborting its
-      // own exec stores one through `deviceRpc`, so re-reading here is what stops
-      // this sweep killing a command that is already dead and contradicting the
-      // answer the abort reported.
+      // Re-read before any frame: ownership or an answer (e.g. from a tool's own abort via
+      // `deviceRpc`) may have changed while an earlier row was awaiting.
       const held = this._inflight.held(row.requestId, row.claim);
 
       if (held === null) continue;
@@ -3298,22 +2609,16 @@ export class UserDO extends Agent<Env> {
           DEVICE_CANCEL_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL],
         )).cancelled;
 
-        // Durable BEFORE the acknowledgement, because the acknowledgement is the
-        // step that can fail. The guarded write is also this call's post-await
-        // ownership check: no row updated means the terminal authority took the
-        // claim mid-flight, and it - not this sweep - reports the request. What
-        // comes back is the answer that STANDS, which is this sweep's only when
-        // no answer landed while it was waiting.
+        // Persist before the ack, which can fail. No row updated means the terminal authority took
+        // the claim and reports the request; the returned answer is the one that stands.
         const settled = this._inflight.settleHeld(row.requestId, row.claim, answer);
 
         if (settled === null) continue;
         outcomes.push({ requestId: row.requestId, outcome: settled });
         await this.cleanUpSettledDeviceRequest(row);
       } catch (err) {
-        // The kill itself failed, so this request is still live work. The
-        // release doubles as the ownership check: releasing nothing means the
-        // terminal authority took or dropped the row mid-flight, and it - not
-        // this sweep - answers for the request.
+        // Kill failed, so the request is still live. Releasing nothing means the terminal authority
+        // took or dropped the row and answers for it.
         if (!this._inflight.releaseClaim(row.requestId, row.claim)) continue;
         outcomes.push({
           requestId: row.requestId,
@@ -3327,10 +2632,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Release the daemon's retained supervisor for a settled request, then drop
-   * the row. Cleanup failure is not cancellation failure: the stored answer
-   * stays truthful, the claim goes back so the next sweep in this activation can
-   * retry, and the row stays untransferable because it is settled.
+   * Release the daemon's supervisor, then drop the row. Cleanup failure is not cancellation
+   * failure: the stored answer stands and the claim is returned so a later sweep can retry.
    */
   private async cleanUpSettledDeviceRequest(row: ClaimedDeviceRequest): Promise<void> {
     const tunnel = this._devices.tunnel(row.deviceId);
@@ -3350,19 +2653,9 @@ export class UserDO extends Agent<Env> {
   }
 
 
-  // ── Device sandbox (the owner's per-device switch) ───────────────────
-
   /**
-   * How one device runs a command for one workspace, from the device row.
-   *
-   * The agent home is composed HERE and per call, never stored: one machine
-   * serves many workspaces, and each gets its own home under the root the
-   * daemon reported. Composed from the root the MACHINE named, so the hub
-   * never invents a path on someone else's disk.
-   *
-   * A workspace name is a path segment on that disk, so `.` and `..` are
-   * refused even though the name grammar admits them: the alternative is a
-   * home that resolves above the agent root.
+   * Agent home is composed per call from the root the daemon reported, never stored.
+   * `.` and `..` workspace names are refused so the home cannot resolve above the agent root.
    */
   private deviceSandboxFor(deviceId: string, workspace: string | null): DeviceSandboxStatus & { deviceHome: string | null } {
     const row = this.sqlx<SandboxColumns & { tier: string | null; agent_root: string | null; consented_root: string | null; device_home: string | null }>(
@@ -3383,11 +2676,6 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  /** What a model is told when a machine cannot run its command. It names the
-   *  machine, the cause, the fix, and the one switch that changes the answer —
-   *  the model cannot flip it, and the sentence says who can. The cause is
-   *  passed in because the caller is the one that knows which of the three
-   *  ways this can fail actually happened. */
   private sandboxRefusal(deviceId: string, sandbox: DeviceSandboxStatus, cause: string): string {
     return `${SANDBOX_UNAVAILABLE}: ${this.deviceLabel(deviceId)} cannot run commands — `
       + `its Kinu daemon could not start a sandbox (${cause}), and Kinu never runs a command `
@@ -3397,14 +2685,7 @@ export class UserDO extends Agent<Env> {
       + 'Reading and writing files on the device still works.';
   }
 
-  /**
-   * The owner's Sandbox switch for one device.
-   *
-   * Owner session only. A workspace holds `device.manage` for its own work, and
-   * a workspace that could turn its own sandbox off would be a workspace that
-   * grants itself the whole machine — which is the one thing this switch
-   * exists to keep in the owner's hands.
-   */
+  /** Owner session only: a workspace holding `device.manage` must not turn off its own sandbox. */
   async setDeviceTier(caller: UserCaller, deviceId: string, tier: DeviceTier): Promise<{ ok: boolean }> {
     const resolved = await this.requireTier(caller, 'device.manage');
 
@@ -3424,11 +2705,7 @@ export class UserDO extends Agent<Env> {
     return { ok: true };
   }
 
-  // ── Device binding (ask-once-then-remember) ──────────────────────────
-
-  /** Whether this workspace is bound to this device, and how it was answered.
-   *  There is no tier here: what a bound workspace may touch is the device's
-   *  own Sandbox switch, which only the owner sets. */
+  /** No tier here: what a bound workspace may touch is the device's Sandbox switch, owner-set. */
   private getDeviceBinding(agentName: string, deviceId: string): 'allow' | 'deny' | null {
     const row = this.sqlx<{ policy: string }>(
       `SELECT policy FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId,
@@ -3460,18 +2737,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Is this workspace bound to this device? Asked once, then remembered.
-   *
-   * Fails CLOSED, but says which kind of closed: a refusal the owner made, or
-   * a prompt nobody answered. The caller turns `reason` into the error the
-   * model reads, and the two must not be the same sentence — an unattended
-   * agent that reads an expired prompt as a refusal concludes the capability
-   * was taken away and stops asking for it.
-   *
-   * The method and params ride along as context for the card and for the
-   * activity line. They are not what is being approved: the answer binds the
-   * workspace to the machine, and the machine's own Sandbox switch decides
-   * what a bound workspace may then touch.
+   * Is this workspace bound to this device? Fails closed, but `reason` distinguishes a refusal from
+   * an unanswered prompt, so an unattended agent does not read an expiry as a revoked capability.
    */
   private async checkDeviceConsent(check: DeviceConsentCheck): Promise<{ allowed: true } | { allowed: false; reason: string }> {
     const { agentName, deviceId, method, params, workspaceName } = check;
@@ -3500,8 +2767,7 @@ export class UserDO extends Agent<Env> {
 
       decision = await stub.awaitDeviceConsent(request);
     } catch (error) {
-      // The agent could not be reached to raise the card at all — nobody was
-      // asked, so this is the unanswered case, not a refusal.
+      // Nobody was asked, so this is the unanswered case, not a refusal.
       diagnostics.event('device.consent_unreachable', { error: renderThrownChain({ cause: error }) });
 
       return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
@@ -3518,8 +2784,6 @@ export class UserDO extends Agent<Env> {
   }
 
 
-  /** The remembered bindings (the Devices page — see and revoke which
-   *  workspaces may use a device). */
   async listDeviceConsents(caller: UserCaller): Promise<Array<{
     agentName: string;
     deviceId: string;
@@ -3544,14 +2808,8 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
-  /** Revoke a workspace's binding on a device (the Devices page).
-   *  The row is deleted rather than flipped to 'deny', so the next call asks
-   *  again instead of reading as a standing refusal — and it takes effect on
-   *  that next call, because the chokepoint reads this table every time.
-   *
-   *  It is not a stop, and must not be read as one: a binding decides what may
-   *  START, so a command already running keeps running and still returns its
-   *  result. `revokeDevice` is the authority that ENDS live commands. */
+  /** Deletes the row (not 'deny') so the next call asks again; takes effect on that next call.
+   *  Not a stop: running commands continue. `revokeDevice` ends live commands. */
   async revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<{ ok: boolean }> {
     await this.requireTier(caller, 'device.consent');
 
@@ -3561,27 +2819,18 @@ export class UserDO extends Agent<Env> {
     return { ok: true };
   }
 
-  /**
-   * Does the device file view run unconfined?
-   *
-   * Only when the owner turned the device's Sandbox switch off. With the
-   * sandbox on, the daemon shows every file method the same view the shell
-   * gets — the agent home plus the consented directories — so the hub-side
-   * path scope stays on. One switch decides both enforcers, which is what
-   * keeps "what bash sees" and "what readFile sees" from drifting apart.
-   */
+  /** Unconfined only when the owner turned the device's Sandbox switch off; one switch governs
+   *  both the daemon and the hub-side path scope so shell and file views cannot drift. */
   async getDeviceFileView(
     caller: UserCaller, agentName: string, device?: string,
   ): Promise<{ unconfined: boolean }> {
     const resolved = await this.requireTier(caller, 'device.consent.read_self');
-    // Per machine: the switch is on the device row, and two machines have two
-    // rows. Unnamed resolves the only live machine; several with none named
-    // is "confined", the closed answer.
+    // Per machine. Unnamed resolves the only live machine; several with none named is "confined".
     const deviceId = this._devices.connectedDeviceId(device);
 
     if (!deviceId) return { unconfined: false };
-    // Named so a facet cannot read a sibling workspace's answer by asking for
-    // it: a workspace caller's identity is its token, never its argument.
+    // A workspace caller's identity is its token, never its argument, so a facet cannot read a
+    // sibling's answer.
     const workspace = resolved.kind === 'workspace' ? resolved.workspace : agentName;
 
     if (this.getDeviceBinding(workspace, deviceId) !== 'allow') return { unconfined: false };
@@ -3589,27 +2838,15 @@ export class UserDO extends Agent<Env> {
     return { unconfined: this.deviceSandboxFor(deviceId, workspace).tier === 'raw' };
   }
 
-  /**
-   * The user's devices for Account settings.
-   *
-   * Ordinary revoked rows stay hidden. A revoked row with `unstopped_at` remains
-   * visible only until its owner acknowledges the incident: hiding it on reload
-   * would make the durable warning/ack action vanish before anyone could read
-   * it. The explicit `revokedAt` tells the UI not to offer connect/rename
-   * controls for this incident row.
-   */
+  /** Revoked rows are hidden, except those with `unstopped_at`, which stay visible until the owner
+   *  acknowledges them; `revokedAt` tells the UI not to offer connect/rename controls. */
   async listDevices(caller: UserCaller): Promise<Array<{
     id: string; label: string; os: string | null; hostname: string | null;
     connected: boolean; createdAt: number; lastSeenAt: number | null; expiresAt: number | null;
     lastIp: string | null; lastAgent: string | null; replacedAt: number | null;
     revokedAt: number | null; unstoppedAt: number | null;
-    /** The owner's Sandbox switch and what the machine proved about it, with
-     *  the words behind a verdict the Settings row has to explain. No home or
-     *  roots here: those are per workspace, and this is the account's device
-     *  registry, not one workspace's view of it. */
+    /** No home or roots here: those are per workspace, and this is the account's device registry. */
     sandbox: Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
-    /** The build the daemon last reported, the build this deployment serves,
-     *  and the one word the row shows about the two. */
     version: string | null;
     servedVersion: string | null;
     update: DeviceUpdateState;
@@ -3645,39 +2882,19 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * The device plane as an agent runtime needs it: whether a machine is there,
-   * and what that machine can run. One call, because a device row that says
-   * "connected" and nothing about its toolchain is honest and useless — the
-   * declared set is what the model reads to decide where to send work.
-   *
-   * The toolchain half is asked of the machine on the first status read after it
-   * connects, and again once an answer ages out of evidence. Deliberately not
-   * asked from the WebSocket message handler where HELLO arrives: the reply is
-   * itself a frame on that socket, so awaiting it there would wait on the
-   * handler that has to deliver it. Here the caller is another Durable Object,
-   * exactly as it is for `deviceRpc`, and the round-trip is bounded.
-   *
-   * Separate from `listDevices`, which serves Account settings: that is the
-   * device REGISTRY (labels, timestamps, revocation) and must not pay for a
-   * device round-trip to render a settings page.
+   * Toolchain is probed on status read, not in the HELLO handler: the reply arrives on that socket,
+   * so awaiting it there would deadlock. Kept separate from `listDevices` to avoid a device round-trip.
    */
   async deviceRuntimeStatus(caller: UserCaller): Promise<DeviceStatus> {
     const resolved = await this.requireTier(caller, 'device.rpc');
     const workspace = resolved.kind === 'workspace' ? resolved.workspace : null;
-    // Names and liveness are visible BEFORE any grant: an agent that cannot
-    // see the machine cannot ask for it by name, and seeing it grants nothing —
-    // every call still goes through the consent chokepoint above.
-    //
-    // The fleet is answered PER MACHINE. Every live machine carries its own
-    // toolchain, its own sandbox for this workspace and this workspace's own
-    // grant on it, because two machines answer each of those independently
-    // and a single "the connected device" was what let them take turns.
+    // Names and liveness are visible before any grant; seeing grants nothing, every call still goes
+    // through the consent chokepoint. Answered per machine: each has its own toolchain, sandbox, grant.
     const now = Date.now();
 
     const devices = await Promise.all(this.deviceFleet().map(async (device): Promise<DeviceFleetEntry> => {
       if (!device.connected) return device;
-      // One row read: the sandbox verdict query already holds the consented
-      // root and the device home, so no second SELECT names the same row.
+      // The sandbox verdict query already holds the consented root and device home; no second SELECT.
       const { deviceHome, ...sandbox } = this.deviceSandboxFor(device.id, workspace);
 
       const reach: DeviceFleetEntry = {
@@ -3699,9 +2916,7 @@ export class UserDO extends Agent<Env> {
       return { connected: false, registered: devices.length > 0, toolchain: null, devices };
     }
 
-    // The single-machine fields describe THE live machine and nothing else.
-    // With several live there is no such machine, so they are absent — the
-    // per-device entries above carry each machine's own answer.
+    // Single-machine fields are absent when several machines are live; per-device entries carry them.
     if (live.length > 1) return { connected: true, registered: true, toolchain: null, devices };
     const only = live[0];
 
@@ -3714,8 +2929,7 @@ export class UserDO extends Agent<Env> {
       devices,
       consentedRoot: only.consentedRoot ?? null,
       deviceHome: only.deviceHome ?? null,
-      // Per caller, not per device: the home and the roots this workspace
-      // gets are what the model needs to know before it writes anything.
+      // Per caller, not per device: home and roots depend on the workspace.
       sandbox: only.sandbox,
     };
 
@@ -3724,10 +2938,8 @@ export class UserDO extends Agent<Env> {
     return status;
   }
 
-  /** Every registered device with its user-chosen name, platform and live
-   *  state — the pre-grant view both the agent's executor row and the UI read.
-   *  Fleet order is registration order, newest first, and it is stable across
-   *  reads: two renders of the same fleet must be the same bytes. */
+  /** Pre-grant view of registered devices. Order is newest first and stable across reads:
+   *  two renders of the same fleet must be the same bytes. */
   private deviceFleet(): DeviceFleetEntry[] {
     return this.sqlx<{ id: string; label: string; os: string | null; hostname: string | null }>(
       `SELECT id, label, os, hostname FROM user_devices
@@ -3741,26 +2953,15 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
-  /**
-   * Revoke a device only after attempting to terminate each unsettled command.
-   *
-   * A close remains the backstop for a daemon that cannot answer, but it is not
-   * proof a process stopped. Every unconfirmed request is recorded on the
-   * owner-visible device row before its active row is removed: revocation makes
-   * the daemon unable to reconnect, so retaining an active row would leave
-   * nothing that could ever act on it.
-   */
+  /** Records every unconfirmed command on the owner-visible device row before removing its active row,
+   *  since a revoked daemon cannot reconnect to act on it. A close is not proof a process stopped. */
   async revokeDevice(
     caller: UserCaller,
     deviceId: string,
   ): Promise<{ ok: boolean; unstoppedCommands: number }> {
     await this.requireTier(caller, 'device.manage');
-    // Revoking one device twice at once is one terminal act, not two. Without
-    // coalescing, two sweeps share the device row: whichever finishes last
-    // decides what the owner sees, so a confirmed sweep could erase the
-    // unconfirmed commands the other one just reported. Same reason as
-    // `_provisioning` above - a Durable Object serializes nothing across an
-    // outbound await.
+    // Coalesce concurrent revokes of one device: two sweeps sharing the row could let a confirmed
+    // sweep erase unconfirmed commands the other reported. A DO serializes nothing across an await.
     const inFlight = this._revoking.get(deviceId);
 
     if (inFlight) return inFlight;
@@ -3776,24 +2977,19 @@ export class UserDO extends Agent<Env> {
     deviceId: string,
   ): Promise<{ ok: boolean; unstoppedCommands: number }> {
     const now = Date.now();
-    // Close admission before the first cancellation await. A device RPC that
-    // resumes after its consent await rechecks this durable state before send.
+    // Close admission before the first cancellation await; a device RPC resuming after its consent
+    // await rechecks this durable state before send.
     this.sqlx(
       `UPDATE user_devices SET revoked_at = ?, connected_at = NULL
         WHERE id = ? AND revoked_at IS NULL`,
       now, deviceId,
     );
-    // Revocation is the terminal device authority, so it TAKES the claim from
-    // any in-flight sweep rather than reading a list that a concurrent detach or
-    // sweep can change under its awaits. A displaced sweep keeps reporting the
-    // outcome it observed; its guarded cleanup simply finds the row already gone.
+    // Revocation takes the claim from any in-flight sweep; a displaced sweep keeps reporting what it
+    // observed and its guarded cleanup finds the row already gone.
     const rows = this._inflight.claimEveryRequestOf(deviceId);
 
-    // Pessimistic, and written BEFORE the first await below: an activation that
-    // dies mid-sweep leaves a revoked device the owner can SEE carries commands
-    // nobody confirmed, rather than a silent revoked row with live processes and
-    // a daemon that can never reconnect to be asked again. `now` is this sweep's
-    // provisional value, and only this sweep's own value is cleared on success.
+    // Written before the first await so an activation dying mid-sweep leaves a visible unconfirmed
+    // marker. `now` is this sweep's provisional value; only it is cleared on success.
     if (rows.length > 0) {
       this.sqlx(`UPDATE user_devices SET unstopped_at = ? WHERE id = ?`, now, deviceId);
     }
@@ -3802,9 +2998,8 @@ export class UserDO extends Agent<Env> {
     const tunnel = this._devices.tunnel(deviceId);
 
     for (const row of rows) {
-      // A stored answer already says nothing runs under this request, so it is
-      // not an unstopped command however the socket behaves now. Its cleanup is
-      // owed, and revocation drops every row below in either case.
+      // A stored answer means nothing runs under this request, so it is not an unstopped command;
+      // its cleanup is still owed.
       const settled = row.settled;
 
       if (!tunnel) {
@@ -3818,17 +3013,16 @@ export class UserDO extends Agent<Env> {
             DEVICE_CANCEL_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL],
           )).cancelled;
 
-          // Durable before the acknowledgement, so an activation that dies here
-          // leaves an answer rather than a row that reads as live work.
+          // Durable before the acknowledgement, so a dying activation leaves an answer, not
+          // apparent live work.
           this._inflight.settleRevoked(row.requestId, answer);
         }
 
         try {
           await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]);
         } catch (err) {
-          // Kill confirmation is already truthful. This is only local replay
-          // cleanup; record it apart so a failed ACK never reads as a process
-          // that may still run.
+          // Kill confirmation is already truthful; this is local replay cleanup, recorded separately so a
+          // failed ACK never reads as a possibly running process.
           diagnostics.failure('device.revocation_ack_cleanup_failed', toKinuError({
             doing: 'releasing the cancelled device command supervisor on revocation',
             cause: err,
@@ -3845,11 +3039,8 @@ export class UserDO extends Agent<Env> {
       }
     }
 
-    // One sweep per device runs at a time, so this decision is the whole truth
-    // about the commands THIS sweep swept. A later revoke of an already-revoked
-    // device sweeps nothing, wrote no provisional marker, and therefore may not
-    // retract the incident an earlier sweep recorded: its unconfirmed processes
-    // can never be asked about again, and only the owner may clear that.
+    // Only a sweep that swept rows may set or clear the marker; a later revoke of an already-revoked
+    // device must not retract an earlier incident, which only the owner may clear.
     if (unstoppedCommands > 0) {
       this.sqlx(`UPDATE user_devices SET unstopped_at = ? WHERE id = ?`, now, deviceId);
     } else if (rows.length > 0) {
@@ -3857,10 +3048,8 @@ export class UserDO extends Agent<Env> {
     }
 
     this._inflight.deleteEveryRequestOf(deviceId);
-    // A revoked device can never be reached again, so its grants are dead
-    // rows the owner's roster still shows as live permissions. Deleted here
-    // rather than left: the roster is what the owner audits, and a list of
-    // grants on removed machines is what makes it unreadable.
+    // A revoked device is unreachable; drop its grants so the owner's audited roster shows only live
+    // permissions.
     this.sqlx(`DELETE FROM device_consent WHERE device_id = ?`, deviceId);
     this._devices.close(deviceId, 'device revoked');
 
@@ -3868,14 +3057,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * The owner has read the revocation incident. Only that explicit decision, or
-   * deleting the device row, may clear it - reconnect cannot revive a revoked
-   * device and must never make an unconfirmed stop look confirmed.
-   *
-   * Refused while the device still has unsettled request rows: the sweep that
-   * wrote the warning has not finished deciding, so there is nothing to read
-   * yet. Clearing there would let an activation failure retire a warning about a
-   * process nobody has confirmed and nobody can ask about again.
+   * Owner acknowledges the revocation incident; only this or deleting the device row may clear it.
+   * Refused while unsettled request rows remain, since the sweep has not finished deciding.
    */
   async acknowledgeUnstoppedDevice(caller: UserCaller, deviceId: string): Promise<{ ok: boolean }> {
     await this.requireTier(caller, 'device.manage');
@@ -3891,8 +3074,6 @@ export class UserDO extends Agent<Env> {
 
     return { ok: cleared.length === 1 };
   }
-
-  // ── Releases ─────────────────────────────────────────────────
 
   async upsertReleaseSource(caller: UserCaller, input: ReleaseSourceInput & { id?: string }): Promise<ReleaseSource> {
     await this.requireTier(caller, 'release');
@@ -3919,10 +3100,8 @@ export class UserDO extends Agent<Env> {
   async transitionReleaseChange(caller: UserCaller, changeId: string, to: ReleaseStatus): Promise<ReleaseChange> {
     await this.requireTier(caller, 'release');
     const change = this.releases().transitionChange(changeId, to);
-    // A release moving is a control-plane operation, so it lands on the audit
-    // dataset beside the rows a reader compares it with rather than on the agent
-    // one. The status is the release store's own closed vocabulary; the change id
-    // is digested because it identifies one user's work.
+    // Control-plane operation: recorded on the audit dataset, not the agent one. The change id is
+    // digested because it identifies one user's work.
     recordReleaseTransition(this.env, {
       actor: this.name,
       operation: 'transition',
@@ -3982,14 +3161,11 @@ export class UserDO extends Agent<Env> {
     return this.releases().board(agentName, limit);
   }
 
-  /** Full ledger view of one change — the execution engine's read surface. */
   async getReleaseDetail(caller: UserCaller, changeId: string): Promise<ReleaseDetail> {
     await this.requireTier(caller, 'release');
 
     return this.releases().detail(changeId);
   }
-
-  // ── Experience library (cross-workspace transfer) ───────────────────
 
   private experienceLibrary() {
     this.ensureInit();
@@ -3998,10 +3174,7 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Publish one artifact this workspace has proven. The source workspace is
-   * taken from the PROVEN caller, never from the argument — a workspace can
-   * only ever publish under its own name, and an owner session (which is not
-   * any workspace) cannot publish at all.
+   * Source workspace comes from the proven caller, never the argument; owner sessions cannot publish.
    */
   async publishExperience(caller: UserCaller, candidate: PublishableCandidate): Promise<ExperienceEntry> {
     const resolved = await this.requireTier(caller, 'experience.write');
@@ -4013,8 +3186,7 @@ export class UserDO extends Agent<Env> {
     return this.experienceLibrary().publish(candidate, resolved.workspace);
   }
 
-  /** Search the owner's library. The calling workspace's own entries are
-   *  excluded — re-importing what you already have is noise, not transfer. */
+  /** Excludes the calling workspace's own entries. */
   async searchExperience(
     caller: UserCaller,
     options: { query?: string; kind?: ExperienceKind; limit?: number } = {},
@@ -4033,8 +3205,6 @@ export class UserDO extends Agent<Env> {
     return this.experienceLibrary().get(id);
   }
 
-  // ── Credentials ────────────────────────────────────────────────────
-
   async listCredentials(caller: UserCaller): Promise<CredentialSummary[]> {
     return this.credentialSummaries(await this.requireTier(caller, 'credentials.model'));
   }
@@ -4050,9 +3220,8 @@ export class UserDO extends Agent<Env> {
       }));
   }
 
-  /** Model-inference credentials survive tainting — the agent must still be
-   *  able to think, and provider headers attach inside trusted DO code without
-   *  ever entering LLM context. Everything else in the store is owner-level. */
+  /** Model-inference credentials survive tainting (headers attach in trusted DO code, never in LLM
+   * context); everything else is owner-level. */
   private requireCredentialAccess(caller: UserCaller, key: string): Promise<ResolvedCaller> {
     return this.requireTier(caller, isModelInferenceCredentialKey(key) ? 'credentials.model' : 'credentials.other');
   }
@@ -4073,9 +3242,8 @@ export class UserDO extends Agent<Env> {
 
     await this.writeCredential(key, cred);
 
-    // Cloudflare login just landed → discover the account's AI Gateways now
-    // (single-gateway auto-select lives in listAIGateways), so my-gateway
-    // works without a settings visit. listAIGateways never throws.
+    // Discover AI Gateways right after Cloudflare login so my-gateway works without a settings visit.
+    // listAIGateways never throws.
     if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(await ownerCaller(this.env));
   }
 
@@ -4085,10 +3253,8 @@ export class UserDO extends Agent<Env> {
     this.dropCredential(key);
   }
 
-  // ── Credentials at rest ─────────────────────────────────────────────
-  // Every read and write of `user_credentials.value` goes through this pair.
-  // The value is sealed by credential-envelope.ts, so the two functions below
-  // are the only places plaintext secret material exists in this class.
+  // All reads/writes of `user_credentials.value` go through this pair; the only places plaintext
+  // secrets exist in this class (sealed by credential-envelope.ts).
 
   private _credentialsRewrapped: Promise<void> | null = null;
 
@@ -4096,16 +3262,13 @@ export class UserDO extends Agent<Env> {
     return createCredentialCipher(this.env);
   }
 
-  /** What a sealed value is bound to. The Durable Object's own id is in there
-   *  so a ciphertext lifted into a different user's store does not open, and
-   *  the credential key so it cannot be moved between rows within one. */
+  /** AAD binds the DO id (no cross-user reuse) and the credential key (no cross-row moves). */
   private credentialAad(key: string): string {
     return `${this.ctx.id.toString()}:${key}`;
   }
 
-  /** Internal read of the raw credential. Null when none is stored. A stored
-   *  row that does not open or decode REJECTS: "not connected" and "connected
-   *  but unreadable" need different remedies, so the caller must tell them apart. */
+  /** Null when no credential is stored; a stored row that does not open or decode rejects,
+   * so callers can tell "not connected" from "connected but unreadable". */
   private async readCredential(key: string): Promise<Credential | null> {
     await this.rewrapCredentials();
     const row = this.sqlx<{ value: string }>(`SELECT value FROM user_credentials WHERE key = ?`, key)[0];
@@ -4127,8 +3290,7 @@ export class UserDO extends Agent<Env> {
     return validateCredential({ value: decoded });
   }
 
-  /** Seal a credential for storage. Asynchronous and writes NOTHING, so that
-   *  {@link commitCredential} can be paired with a fence read in one turn. */
+  /** Writes nothing, so {@link commitCredential} can be paired with a fence read in one turn. */
   private async sealCredential(key: string, cred: Credential): Promise<string> {
     await this.rewrapCredentials();
 
@@ -4136,13 +3298,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Commit a sealed credential and move its revision on. Preserves
-   * `created_at` on update, exactly as the original upsert did.
-   *
-   * SYNCHRONOUS, so `expectRevision` is a real compare-and-swap: nothing can
-   * interleave between the revision read and the write. `false` means the store
-   * moved under this caller while it was sealing or waiting on a provider, so
-   * the value it is holding is the stale one and was not written.
+   * Synchronous so `expectRevision` is a real compare-and-swap; preserves `created_at` on update.
+   * `false` means the store moved while the caller was sealing, so nothing was written.
    */
   private commitCredential(input: {
     key: string; kind: Credential['kind']; sealed: string; expectRevision?: number;
@@ -4163,21 +3320,18 @@ export class UserDO extends Agent<Env> {
     return true;
   }
 
-  /** Internal write of a credential, sealed under the current key. */
   private async writeCredential(key: string, cred: Credential): Promise<void> {
     this.commitCredential({ key, kind: cred.kind, sealed: await this.sealCredential(key, cred) });
   }
 
-  /** Drop a credential and move its revision on, so a refresh already in the
-   *  air cannot land a rotated token over the absence the owner just created. */
+  /** Bumps the revision so an in-flight refresh cannot land a rotated token over this deletion. */
   private dropCredential(key: string): void {
     this.sqlx(`DELETE FROM user_credentials WHERE key = ?`, key);
     this.bumpCredentialRevision(key);
     this.bumpCredentialsRevision();
   }
 
-  /** The revision of one credential key — every write of it AND every deletion.
-   *  0 for a key this store has never held, so a first write needs no seeding. */
+  /** Moves on every write and deletion of the key; 0 for a key never held. */
   private credentialRevision(key: string): number {
     const row = v.safeParse(v.object({ revision: v.number() }), this.sqlx(
       `SELECT revision FROM user_credential_revisions WHERE key = ?`, key,
@@ -4194,15 +3348,8 @@ export class UserDO extends Agent<Env> {
     );
   }
 
-  /** This account's credential revision: one number, rising with every
-   *  mutation of the credential store. Read by a workspace before it uses its
-   *  cached provider/model state, so a mutation the fan-out notification failed
-   *  to deliver is still noticed — by comparison, at use, with no clock.
-   *
-   *  `shared` on the same reasoning as `auth_tokens.socket`: the answer is a
-   *  number about state the workspace already depends on, it names no secret
-   *  and mints nothing, and a shared workspace that could not compare would
-   *  keep a stale catalog of exactly the model providers it needs. */
+  /** Rises with every credential-store mutation; workspaces compare it before using cached state.
+   *  `shared` like `auth_tokens.socket`: it names no secret and mints nothing. */
   async getCredentialsRevision(caller: UserCaller): Promise<number> {
     await this.requireTier(caller, 'credentials.model');
 
@@ -4226,15 +3373,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Write a credential this call rotated, unless the owner moved it while the
-   * provider was answering.
-   *
-   *  Returns what the caller may act on: its own rotated credential, or
-   *  `'revoked'` when the store holds no usable one. THAT is the fence
-   *  these three lines exist for — a rotation reply arriving after a disconnect
-   *  must not reconnect the account by writing itself back, and one arriving
-   *  after the owner pasted a replacement must not overwrite it with a token
-   *  derived from the credential they just retired.
+   * Returns the rotated credential, or `'revoked'` if the owner moved it meanwhile, so a late
+   * rotation reply cannot reconnect a disconnected account or overwrite a replacement.
    */
   private async commitRefreshedCredential(
     key: string, next: OAuthCredential, expectRevision: number,
@@ -4243,35 +3383,21 @@ export class UserDO extends Agent<Env> {
 
     if (this.commitCredential({ key, kind: next.kind, sealed, expectRevision })) return next;
     diagnostics.event('credential.refresh_superseded', { outcome: 'denied', credentialKey: key });
-    // The store is the authority, so the answer comes from it and never from
-    // the token this call was carrying.
+    // The store is the authority, not the token this call was carrying.
     const current = await this.readCredential(key);
 
     return current?.kind === 'oauth' ? current : 'revoked';
   }
 
-  /** Retire a credential its provider rejected outright — unless the owner has
-   *  already replaced it, in which case the rejection belongs to a retired
-   *  credential and must not take its successor down. */
+  /** No-op if the owner already replaced the credential; the rejection belongs to the old one. */
   private retireRejectedCredential(key: string, expectRevision: number): void {
     if (this.credentialRevision(key) !== expectRevision) return;
     this.dropCredential(key);
   }
 
   /**
-   * Seal every stored credential under the CURRENT key. Runs once per DO
-   * instance, on the first credential access.
-   *
-   * One mechanism covers two stored shapes, because re-sealing is the same
-   * operation for both: a row that carries no envelope at all, and a row still
-   * sealed under a retired key after a rotation. The marker in
-   * `user_schema_meta` is the key id the whole store is known to be sealed
-   * under, so the pass is skipped entirely once it matches.
-   *
-   * A row that cannot be opened is left alone and the pass continues. Failing
-   * the pass would take every provider down over one damaged row; leaving it
-   * means that ONE credential reports its own failure when it is used, which
-   * is the isolation the rest of the provider layer already has.
+   * Re-seals unenveloped or retired-key rows under the current key once per instance; skipped when
+   * the `user_schema_meta` marker matches. Unopenable rows are left so only that credential fails.
    */
   private rewrapCredentials(): Promise<void> {
     this._credentialsRewrapped ??= (async () => {
@@ -4322,14 +3448,10 @@ export class UserDO extends Agent<Env> {
         }
       }
 
-      // Egress secrets are sealed with the same cipher, so they rotate in the
-      // same pass. Omitting them would let the marker claim the whole store is
-      // current while these rows still needed a key the next rotation drops.
+      // Egress secrets share the cipher and must rotate in the same pass as the marker.
       if (!await rewrapEgressSecrets(this.egressVaultDeps(cipher))) clean = false;
 
-      // The marker claims the WHOLE store is sealed under this key, and the
-      // documented rotation drops the retired key on the strength of that
-      // claim. A pass that left a row behind must not make it.
+      // Rotation drops the retired key based on this marker, so only write it if no row was left.
       if (!clean) return;
       this.sqlx(
         `INSERT INTO user_schema_meta (key, value) VALUES (?, ?)
@@ -4343,10 +3465,8 @@ export class UserDO extends Agent<Env> {
 
   private static readonly CREDENTIAL_ENVELOPE_MARKER = 'credential_envelope_key_id';
 
-  /** MCP `headers` hold bearer tokens for self-hosted servers — the same class
-   *  of secret as `user_credentials`, so they are sealed the same way. AAD is
-   *  the server id, so a header blob cannot be replayed against a different
-   *  server. Null passes through: most servers have no custom headers. */
+  /** MCP headers hold bearer tokens, sealed like credentials; AAD is the server id to prevent
+   *  cross-server replay. Null passes through. */
   private mcpHeadersAad(serverId: string): string {
     return `${this.ctx.id.toString()}:mcp:${serverId}`;
   }
@@ -4357,8 +3477,8 @@ export class UserDO extends Agent<Env> {
     return headers === null ? null : (await this.cipher()).seal(this.mcpHeadersAad(serverId), headers);
   }
 
-  /** Stored headers that do not open REJECT: sent without them, the request
-   *  would reach the server unauthenticated and read as a server wanting a login. */
+  /** Stored headers that do not open reject: sent without them, the request would reach
+   * the server unauthenticated and read as a server wanting a login. */
   private async openMcpHeaders(serverId: string, stored: string | null): Promise<string | null> {
     await this.rewrapCredentials();
 
@@ -4370,14 +3490,9 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  // ── Egress secret vault ─────────────────────────────────────────────
-  // The owner's per-host secrets, spent by an agent's container without ever
-  // entering it. Same DO, same cipher, same key as `user_credentials`; see
-  // user/egress-vault.ts for why the row shape is its own table.
+  // Egress secret vault: see user/egress-vault.ts for why the row shape is its own table.
 
-  /** Shared wiring for every vault call: the DO's own storage, the deployment
-   *  cipher, and an AAD naming this row in this DO so a ciphertext cannot be
-   *  replayed into another binding or another user's store. */
+  /** AAD names this row in this DO so a ciphertext cannot be replayed elsewhere. */
   private egressVaultDeps(cipher: CredentialCipher): EgressVaultDeps {
     return {
       sql: this.ctx.storage.sql,
@@ -4386,22 +3501,15 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  /** Every binding, with no secret material — this is the read-back surface,
-   *  and there is deliberately no other. A stored secret is never returned to
-   *  the owner, the UI or an agent. */
+  /** The only read-back surface; stored secrets are never returned. */
   async listEgressSecrets(caller: UserCaller): Promise<EgressSecretSummary[]> {
     await this.requireTier(caller, 'egress_secrets.manage');
 
     return listEgressSecrets(this.ctx.storage.sql);
   }
 
-  /**
-   * Add or rotate a secret, returning the binding the container will use.
-   *
-   * The returned `placeholder` is the ONLY thing that may be written into the
-   * container. Rotating an existing id keeps its placeholder, so a rotation
-   * needs no change inside the container.
-   */
+  /** The returned `placeholder` is the only thing that may enter the container; rotating an id
+   *  keeps its placeholder. */
   async putEgressSecret(caller: UserCaller, input: PutEgressSecretInput): Promise<EgressSecretBinding> {
     await this.requireTier(caller, 'egress_secrets.manage');
     await this.rewrapCredentials();
@@ -4409,8 +3517,7 @@ export class UserDO extends Agent<Env> {
     return putEgressSecret(this.egressVaultDeps(await this.cipher()), input);
   }
 
-  /** Revoke a secret. The next intercepted request carrying its placeholder is
-   *  refused rather than forwarded with a dummy. */
+  /** A later request carrying the placeholder is refused rather than forwarded with a dummy. */
   async revokeEgressSecret(caller: UserCaller, id: string): Promise<{ revoked: boolean }> {
     await this.requireTier(caller, 'egress_secrets.manage');
 
@@ -4418,14 +3525,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Resolve one intercepted request: which placeholders in it may become real
-   * secrets, for this destination.
-   *
-   * `active` is the caller's grant-filtered view of the vault, so CONSENT was
-   * decided by the approval gate before the request was made; this decides
-   * DESTINATION, on every request, and opens only what it authorises. Gated at
-   * `egress_secrets.inject` — a workspace-scoped caller must hold it, and the
-   * outbound handler presents the owner capability.
+   * `active` is already grant-filtered (consent); this decides destination per request.
+   * The outbound handler presents the owner capability.
    */
   async resolveEgressInjection(
     caller: UserCaller,
@@ -4438,15 +3539,12 @@ export class UserDO extends Agent<Env> {
     return resolveEgressInjection(this.egressVaultDeps(await this.cipher()), facts, active);
   }
 
-  /** Expose the baseURL for openai-compat credentials. The orchestrator's
-   *  provider deps need this to point the SDK at the right endpoint —
-   *  baseURL isn't a secret on its own and won't show up in
-   *  listCredentials(). */
+  /** baseURL is not a secret and is absent from listCredentials(); provider deps need it. */
   async getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null> {
     await this.requireCredentialAccess(caller, key);
     validateCredentialKey(key);
-    // The my-gateway view rides the same account-scoped /ai/v1 endpoint as
-    // Workers AI — only the cf-aig-gateway-id header differs.
+    // The my-gateway view uses the same account-scoped /ai/v1 endpoint as Workers AI;
+    // only the cf-aig-gateway-id header differs.
     const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
     const cred = await this.readCredential(storedKey);
 
@@ -4462,23 +3560,20 @@ export class UserDO extends Agent<Env> {
     return null;
   }
 
-  /** Returns headers ready to inject into a fetch. Handles Codex OAuth
-   *  refresh atomically (DO event loop serializes concurrent calls). */
+  /** Headers ready to inject into a fetch. Codex OAuth refresh is atomic: the DO event loop
+   * serializes concurrent calls. */
   async getAuthHeaders(caller: UserCaller, key: string, opts?: { forceRefresh?: boolean }): Promise<Record<string, string> | null> {
     await this.requireCredentialAccess(caller, key);
     validateCredentialKey(key);
-    // `cloudflare.ai-gateway` is a DERIVED view of the Cloudflare login: same
-    // bearer + refresh path, but cf-aig-gateway-id names the user's own
-    // selected gateway (null until one is selected — that gates my-gateway).
+    // `cloudflare.ai-gateway` is a derived view of the Cloudflare login: same bearer and refresh,
+    // but cf-aig-gateway-id names the user's selected gateway (null until selected).
     const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
     const stored = await this.readCredential(storedKey);
 
     if (!stored) return null;
-    // Explicitly-typed non-null so the conditional refresh-reassignment below
-    // doesn't re-widen back to `Credential | null`.
+    // Explicitly non-null so the refresh reassignment below doesn't re-widen to `Credential | null`.
     let cred: Credential = stored;
 
-    // Codex OAuth — auto-refresh if expiring or forced.
     if (storedKey === CODEX_CRED_KEY && cred.kind === 'oauth') {
       const refreshToken = cred.refreshToken;
 
@@ -4490,9 +3585,8 @@ export class UserDO extends Agent<Env> {
 
         if (refreshed === 'revoked') return null;
 
-        // A failed refresh keeps the old (possibly-expired) creds: the caller
-        // may still succeed, and if not it gets 401 and a clear signal that
-        // re-auth is needed.
+        // A failed refresh keeps the old creds: the call may still succeed, else its 401
+        // signals that re-auth is needed.
         if (!('failed' in refreshed)) cred = refreshed;
       }
     }
@@ -4510,8 +3604,8 @@ export class UserDO extends Agent<Env> {
       }
     }
 
-    // A credential whose stored shape does not match its key is a defect, not
-    // an absent credential: it must not reach the caller as "not connected".
+    // A credential whose stored shape doesn't match its key is a defect and must not reach
+    // the caller as "not connected".
     const headers = credentialToHeaders(storedKey, cred);
 
     if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
@@ -4520,16 +3614,12 @@ export class UserDO extends Agent<Env> {
       if (!gatewayId) return null;
       headers['cf-aig-gateway-id'] = gatewayId;
     } else if (key === CLOUDFLARE_OAUTH_CRED_KEY) {
-      // Workers AI traffic routes through the user's selected gateway when
-      // they picked one (their caching/logging/limits apply), otherwise the
-      // platform's configured default.
+      // Use the user's selected gateway if any, otherwise the platform's configured default.
       headers['cf-aig-gateway-id'] = this.selectedAIGatewayId() ?? cloudflareAIGatewayId(this.env);
     }
 
     return headers;
   }
-
-  // ── Cloudflare AI Gateway (the user's own gateway) ───────────────────
 
   private static readonly AI_GATEWAY_CONFIG_KEY = 'cloudflare_ai_gateway';
 
@@ -4541,9 +3631,8 @@ export class UserDO extends Agent<Env> {
     return row && isCloudflareAIGatewayId(row.value) ? row.value : null;
   }
 
-  /** Fresh (refreshed-if-expiring) access token + account id for management
-   *  API calls. Null when no usable Cloudflare credential is stored; rejects
-   *  when the login is there and its refresh failed. */
+  /** Null when no usable Cloudflare credential is stored; rejects when the login
+   * is there and its refresh failed. */
   private async cloudflareAPICredential(): Promise<{ accessToken: string; accountId: string } | null> {
     const stored = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
 
@@ -4564,11 +3653,8 @@ export class UserDO extends Agent<Env> {
     return accountId ? { accessToken: cred.accessToken, accountId } : null;
   }
 
-  /** The user's AI Gateways + current selection. Zero-friction rule: exactly
-   *  one gateway and nothing selected → select it (persisted). Never throws —
-   *  a login that cannot be used (unreadable, or its refresh failed) and a
-   *  failed discovery surface in `error` beside `connected: true`, so login can
-   *  call this inline. */
+  /** With exactly one gateway and nothing selected, selects it (persisted). Never throws:
+   * unusable login or failed discovery surface in `error`, so login can call this inline. */
   async listAIGateways(caller: UserCaller): Promise<{
     connected: boolean;
     selectedId: string | null;
@@ -4608,11 +3694,8 @@ export class UserDO extends Agent<Env> {
     await this.setConfig(await ownerCaller(this.env), UserDO.AI_GATEWAY_CONFIG_KEY, gatewayId);
   }
 
-  // ── Cloudflare account (which account serves this user's Workers AI) ──
-
-  /** The accounts this Cloudflare login can see, plus the one currently
-   *  serving Workers AI. Reads the stored credential only — no API call, so
-   *  this cannot fail for a reason the user did not cause. */
+  /** Reads the stored credential only, no API call, so it cannot fail for a reason the user
+   * did not cause. */
   async listCloudflareAccounts(caller: UserCaller): Promise<{
     connected: boolean;
     selectedId: string | null;
@@ -4630,9 +3713,8 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  /** Point Workers AI at another of this login's accounts — how a user whose
-   *  entitlement lives outside their first account reaches it. The AI Gateway
-   *  selection belongs to the old account, so it is dropped and rediscovered. */
+  /** Point Workers AI at another of this login's accounts. The AI Gateway selection belongs
+   * to the old account, so it is dropped and rediscovered. */
   async selectCloudflareAccount(caller: UserCaller, accountId: string): Promise<void> {
     await this.requireTier(caller, 'ai_gateway.admin');
     const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
@@ -4644,13 +3726,8 @@ export class UserDO extends Agent<Env> {
     await this.listAIGateways(owner);
   }
 
-  /** Rotate a stored OAuth credential. Returns the rotated credential;
-   *  `'revoked'` when the issuer rejected the refresh token outright
-   *  (`invalid_grant`) or the owner disconnected while the refresh was in the
-   *  air; `{ failed }` when the issuer could not be asked, the current
-   *  credential staying in place. Every write carries the revision fence: a
-   *  login the owner completed during the round trip is never demoted by its
-   *  predecessor's rejection, and a write that fails rejects. */
+  /** `'revoked'` on `invalid_grant` or a disconnect mid-refresh; `{ failed }` when the issuer
+   * could not be asked. Writes carry the revision fence so a newer login is never demoted. */
   private async refreshOAuthCredential(
     key: typeof CLOUDFLARE_OAUTH_CRED_KEY | typeof CODEX_CRED_KEY,
     rotate: () => Promise<OAuthCredential>,
@@ -4685,8 +3762,7 @@ export class UserDO extends Agent<Env> {
     return await this.commitRefreshedCredential(key, rotated, revision);
   }
 
-  /** The Cloudflare token still serves the management APIs after a rejected
-   *  refresh, so only the dead refresh token is stripped. */
+  /** The token still serves management APIs after a rejected refresh; only the refresh token is stripped. */
   private refreshCloudflareInternal(current: OAuthCredential): Promise<OAuthRefresh> {
     return this.refreshOAuthCredential(
       CLOUDFLARE_OAUTH_CRED_KEY,
@@ -4698,9 +3774,8 @@ export class UserDO extends Agent<Env> {
     );
   }
 
-  /** Nothing but model calls reads the Codex credential, so a rejected
-   *  refresh deletes the row: the credential stops counting as connected and
-   *  the connect CTA resurfaces. */
+  /** Only model calls read the Codex credential, so a rejected refresh deletes the row and
+   * the connect CTA resurfaces. */
   private refreshCodexInternal(current: OAuthCredential & { refreshToken: string }): Promise<OAuthRefresh> {
     return this.refreshOAuthCredential(
       CODEX_CRED_KEY,
@@ -4713,24 +3788,14 @@ export class UserDO extends Agent<Env> {
     );
   }
 
-  // ── Codex device flow ──────────────────────────────────────────────
-  //
-  // ONE ROW, A RISING GENERATION, AND A SETTLEMENT. Every call here waits on
-  // OpenAI, and this object accepts other calls while it waits: a second
-  // `start` supersedes the first, a `disconnect` closes whatever is open, and
-  // both stay fenced against a poll that is already in flight — which otherwise
-  // writes its tokens over the attempt the owner is actually approving, or
-  // reconnects an account that was just disconnected. The generation
-  // names the attempt a poll belongs to and `settled_at` says whether it is
-  // still the owner's live intent, so a superseded reply has something to fail
-  // against instead of a row that merely happens to be there.
+  // Codex device flow: calls wait on OpenAI while other calls run. The generation names the
+  // attempt a poll belongs to and `settled_at` whether it is still live, fencing stale polls.
 
   async startCodexDeviceFlow(caller: UserCaller): Promise<DeviceCodeStart> {
     await this.requireTier(caller, 'codex_auth');
     const client = createCodexOAuthClient();
     const result = await client.startDeviceFlow();
-    // The generation rises in the write itself rather than from a value read
-    // before it, so two starts that raced cannot land on the same number.
+    // The generation rises in the write itself so two racing starts cannot get the same number.
     this.sqlx(
       `INSERT INTO codex_device_flow
          (id, device_auth_id, user_code, poll_interval, portal_url, started_at, generation, settled_at)
@@ -4758,8 +3823,7 @@ export class UserDO extends Agent<Env> {
     )[0];
 
     if (!row) return { connected: false, error: 'No device flow in progress — call startCodexDeviceFlow first.' };
-    // Both fences are read here, BEFORE the provider wait that is the whole
-    // reason they exist.
+    // Both fences must be read before the provider wait.
     const generation = row.generation;
     const revision = this.credentialRevision(CODEX_CRED_KEY);
 
@@ -4768,7 +3832,7 @@ export class UserDO extends Agent<Env> {
     try {
       const poll = await client.pollDeviceFlow(row.device_auth_id, row.user_code);
 
-      if (poll.status === 'pending') return { connected: false }; // still pending
+      if (poll.status === 'pending') return { connected: false };
 
       if (poll.status === 'expired' || poll.status === 'denied') return { connected: false, error: poll.message };
       const accountId = decodeCodexAccountId(poll.tokens.accessToken);
@@ -4790,16 +3854,8 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  /**
-   * Commit an approved device-code sign-in: the credential and the flow's
-   * settlement, together.
-   *
-   * SYNCHRONOUS, and both fences are checked before either write, so a poll
-   * either lands whole against the attempt it belongs to or lands not at all.
-   * Splitting the two would leave the case each fence exists to refuse: a flow
-   * settled without its credential, or a credential written into an account
-   * that had already disconnected.
-   */
+  /** Commits credential and flow settlement together; synchronous, with both fences checked
+   * before either write, so a poll lands whole against its attempt or not at all. */
   private commitCodexDeviceFlow(input: {
     generation: number; revision: number; kind: Credential['kind']; sealed: string;
   }): boolean {
@@ -4822,9 +3878,8 @@ export class UserDO extends Agent<Env> {
   async disconnectCodex(caller: UserCaller): Promise<void> {
     await this.requireTier(caller, 'codex_auth');
     this.dropCredential(CODEX_CRED_KEY);
-    // Settled, not deleted: the generation has to keep rising, and a poll that
-    // is already waiting on OpenAI has to find this attempt closed rather than
-    // find no row and read that as nothing to fence against.
+    // Settled, not deleted: the generation must keep rising, and a poll already waiting on OpenAI
+    // must find this attempt closed rather than find no row to fence against.
     this.sqlx(`UPDATE codex_device_flow SET settled_at = ? WHERE id = 1 AND settled_at IS NULL`, Date.now());
   }
 
@@ -4832,9 +3887,7 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'codex_auth');
     const cred = await this.readCredential(CODEX_CRED_KEY);
 
-    // Only an OPEN attempt is a flow the owner is in the middle of. A settled
-    // row is the record that keeps the generation rising, not a prompt to go
-    // back to a portal page that has already been used.
+    // Only an open attempt is an in-progress flow; a settled row just keeps the generation rising.
     const flow = this.sqlx<{ user_code: string; portal_url: string; poll_interval: number }>(
       `SELECT user_code, portal_url, poll_interval FROM codex_device_flow
        WHERE id = 1 AND settled_at IS NULL`,
@@ -4860,8 +3913,6 @@ export class UserDO extends Agent<Env> {
         : null,
     };
   }
-
-  // ── User-level config (defaults) ───────────────────────────────────
 
   async getConfig(caller: UserCaller, key: string): Promise<string | null> {
     await this.requireTier(caller, 'config');
@@ -4903,14 +3954,9 @@ export class UserDO extends Agent<Env> {
     return out;
   }
 
-  // ── Profile catalog (the account authority over roles + tiers) ─────
-
   /**
-   * The owner's profile-catalog read. Owner-session only: the account's
-   * role/tier configuration IS authority, so unlike tier-gated capabilities
-   * even a `full`-tier workspace is refused here — until the agent runtime
-   * integration adds its narrow read surface, workspace capability has no
-   * reach into the catalog plane.
+   * Owner-session only: the role/tier catalog is authority, so even a `full`-tier workspace is
+   * refused until the agent runtime adds its narrow read surface.
    */
   private async requireOwnerSession(caller: UserCaller): Promise<void> {
     const resolved = await this.requireTier(caller, 'config');
@@ -4922,8 +3968,7 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  /** Parse the catalog value at its storage boundary. Corruption is an account
-   *  configuration error, not permission to substitute different authority. */
+  /** Corruption is an account configuration error, not permission to substitute other authority. */
   private parseStoredProfileCatalog(value: string): ProfileCatalog {
     let json: JsonValue;
 
@@ -4946,7 +3991,6 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  /** The envelope for a version + catalog pair under this account's authority. */
   private profileCatalogEnvelope(version: number, catalog: ProfileCatalog): ProfileCatalogEnvelope {
     return {
       authority: { kind: 'account', accountId: this.ctx.id.name ?? this.ctx.id.toString() },
@@ -4956,8 +4000,7 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  /** Current CAS state. A missing row starts at 0. Stored state is parsed
-   *  before use, so malformed configuration fails rather than changing roles. */
+  /** A missing row starts at version 0; malformed stored config fails rather than changing roles. */
   private readProfileCatalogState(): ProfileCatalogState {
     const rawRow = this.sqlx(
       `SELECT value, version FROM user_config WHERE key = ?`, PROFILE_CATALOG_CONFIG_KEY,
@@ -4983,8 +4026,7 @@ export class UserDO extends Agent<Env> {
     return this.profileCatalogEnvelope(current.version, current.catalog);
   }
 
-  /** Profile authority exposed to the workspace that resolves the next turn.
-   * Shared workspaces may read it, but only an owner session may mutate it. */
+  /** Shared workspaces may read the catalog; only an owner session may mutate it. */
   async getWorkspaceProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
     await this.requireTier(caller, 'profile.resolve');
     const current = this.readProfileCatalogState();
@@ -4993,11 +4035,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Compare-and-swap write of the account catalog: the caller names the
-   * version it read, and a mismatch refuses with the current state rather
-   * than overwriting a concurrent change. Validation runs before any write;
-   * the read-check-write itself contains no await, so within this DO nothing
-   * can interleave and every accepted write increments the version by one.
+   * CAS write: a version mismatch refuses with current state. Validation precedes the write, and
+   * the read-check-write has no await, so each accepted write increments the version by one.
    */
   async putProfileCatalog(caller: UserCaller, catalog: JsonValue, expectedVersion: number): Promise<ProfileCatalogWriteResult> {
     await this.requireOwnerSession(caller);
@@ -5011,10 +4050,8 @@ export class UserDO extends Agent<Env> {
     try {
       parsed = validateProfileCatalog({ value: catalog });
     } catch (cause) {
-      // The whole chain, not the outermost frame. This reason is the only thing
-      // an owner is shown about a catalog the account refused, and the frame
-      // that names the offending path can be one `cause` below the wrapper —
-      // which is exactly the loss `renderThrownChain` exists to stop.
+      // Render the whole cause chain: the frame naming the offending path may sit below the wrapper,
+      // and this reason is all the owner is shown.
       return { ok: false, kind: 'malformed', reason: renderThrownChain({ cause }) };
     }
 
@@ -5040,14 +4077,9 @@ export class UserDO extends Agent<Env> {
     return { ok: true, envelope: this.profileCatalogEnvelope(nextVersion, parsed) };
   }
 
-  // ── Shared library ────────────────────────────────────────────────
-
   /**
-   * Record that another account named this owner on a blueprint. A projection:
-   * the owner's workspace object is the authority, and every read of the row
-   * asks it again, so a share revoked after this write lists once and refuses.
-   * Idempotent per (owner, workspace, share); the cached title follows the
-   * latest write.
+   * A projection: the owner's workspace object is the authority and every read re-asks it, so a
+   * revoked share lists once and refuses. Idempotent per (owner, workspace, share).
    */
   async sharesReceived_add(caller: UserCaller, row: SharedBlueprintReceipt): Promise<void> {
     await this.requireTier(caller, 'shares');
@@ -5059,7 +4091,6 @@ export class UserDO extends Agent<Env> {
     );
   }
 
-  /** Every blueprint this owner was named on, newest first. */
   async sharesReceived_list(caller: UserCaller): Promise<SharedBlueprintReceipt[]> {
     await this.requireTier(caller, 'shares');
 
@@ -5073,26 +4104,18 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * The reverse projection of `sharesReceived_add`: every received row that
-   * names one owner goes. Run on each recipient when that owner deletes their
-   * account — their workspaces, and the share rows in them, are about to be
-   * destroyed, so a row left here would list a blueprint no object can answer
-   * for any more.
+   * Reverse of `sharesReceived_add`, run on each recipient when the owner deletes their account,
+   * so no row lists a blueprint no object can answer for.
    */
   async sharesReceived_forget(caller: UserCaller, ownerUserId: string): Promise<void> {
     await this.requireTier(caller, 'shares');
     this.sqlx(`DELETE FROM user_shares_received WHERE owner_user_id = ?`, ownerUserId);
   }
 
-  // ── Drive ─────────────────────────────────────────────────────────
-  // The owner's Mossaic tenant, as the web UI manages it. The tenant id IS
-  // the owner's user id, and this object derives it from the profile row the
-  // sign-in wrote — the same email → id derivation the edge runs — so no
-  // caller ever names a tenant: whoever reaches this object reaches its own.
-  // Every workspace of the owner mounts this same tenant at `/shared`.
+  // The Mossaic tenant id is the owner's user id, derived from the profile row's email as the
+  // edge does, so no caller names a tenant. Every owner workspace mounts it at `/shared`.
 
-  /** The tenant's plane. A seam: the hosted deployment constructs the SDK
-   *  client from its bindings, the bun:sqlite harness stands in a fake. */
+  /** Seam: the hosted deployment builds the SDK client from bindings; the bun:sqlite harness fakes it. */
   protected driveFor(tenant: string): MossaicVfs | null {
     return tenantDrive(this.env, tenant);
   }
@@ -5108,7 +4131,6 @@ export class UserDO extends Agent<Env> {
     return files;
   }
 
-  /** One gated Drive call, its failure folded into the value the wire carries. */
   private async driveOp<Value>(caller: UserCaller, op: (drive: MossaicVfs) => Promise<Value>): Promise<DriveAnswer<Value>> {
     await this.requireTier(caller, 'drive');
 
@@ -5139,7 +4161,6 @@ export class UserDO extends Agent<Env> {
     return this.driveOp(caller, (drive) => markAsSkill(drive, path));
   }
 
-  /** A skill from the text of one pasted `SKILL.md`. */
   async drive_addSkill(caller: UserCaller, skillFile: string): Promise<DriveAnswer<MarkedSkill>> {
     return this.driveOp(caller, (drive) => {
       const bytes = new TextEncoder().encode(skillFile);
@@ -5152,11 +4173,8 @@ export class UserDO extends Agent<Env> {
     });
   }
 
-  // Bytes cross the Worker↔object boundary as bounded chunks, exactly as the
-  // workspace file route's do (files-routes.ts): one transfer id per HTTP
-  // request, an `offset === 0` chunk (re)starts it, and the target — a file, a
-  // zip to unpack, a skill — is fixed by the first chunk and checked on every
-  // later one. The object is single-threaded, so the map needs no lock.
+  // Chunked transfers as in files-routes.ts: one transfer id per request, an `offset === 0` chunk
+  // (re)starts it, and the first chunk fixes the target, checked on every later chunk.
   private readonly driveUploads = new Map<string, { readonly target: DriveUploadTarget; readonly upload: ChunkedUpload }>();
   private readonly driveDownloads = new Map<string, { readonly path: string; readonly bytes: Uint8Array }>();
 
@@ -5194,8 +4212,7 @@ export class UserDO extends Agent<Env> {
     this.driveUploads.delete(transferId);
   }
 
-  /** Open one download: a file's bytes, or a folder packed as one zip. The
-   *  snapshot is taken here, so later ranges cannot observe a newer write. */
+  /** The snapshot is taken here, so later ranges cannot observe a newer write. */
   async drive_startDownload(caller: UserCaller, path: string, transferId: string): Promise<DriveAnswer<{ size: number; name: string }>> {
     return this.driveOp(caller, async (drive) => {
       if (!transferId) throw new KinuError('bad_input', 'download transfer id required');
@@ -5246,37 +4263,9 @@ export class UserDO extends Agent<Env> {
     this.driveDownloads.delete(transferId);
   }
 
-  // ── Account deletion ───────────────────────────────────────────────
-
   /**
-   * Delete everything under this account, then the object itself.
-   *
-   * THE ORDER IS THE CONTRACT. Each step leaves no row behind once it is done,
-   * so a sweep that fails part-way is retried by the owner asking again and
-   * resumes where it stopped; nothing is caught here, because a step that
-   * could not finish is the one fact the owner must see.
-   *
-   *   1. WORKSPACES, every registry row whatever its flags: archived,
-   *      mid-teardown and mid-fork alike belong to this account and have an
-   *      object to destroy. `tearDownWorkspace` is the authority — the fence,
-   *      the revoke, the destroy, then the row — exactly what one delete does.
-   *   2. DEVICES, through `revokeDevice`, so every live command is asked to
-   *      stop and every socket released before the rows that name them go.
-   *   3. MCP SERVERS, through `userMcp_remove`, so the live manager closes its
-   *      connections and drops its OAuth grants rather than leaving them keyed
-   *      in storage the next step wipes.
-   *   4. THE OBJECT. The SDK's `destroy` disables the alarm, disposes the
-   *      lifecycle and runs `ctx.storage.deleteAll()`, which takes every SQL
-   *      table AND every key — credentials, sessions, consents, the received
-   *      shares, the onboarding stamp — then aborts this isolate on the next
-   *      tick with the `destroyed` sentinel. The next request for this user id
-   *      builds a fresh object over empty storage, which is what makes the next
-   *      sign-in land on onboarding.
-   *
-   * The shares this account GAVE are forgotten on the recipients' objects by
-   * the route before it calls here: their names live in the workspaces step 1
-   * destroys, and this object cannot reach another user's object with the
-   * owner's authority.
+   * Delete everything under this account, then the object itself; the step order is the contract.
+   * Each step leaves no rows, so a failed sweep resumes on retry; errors propagate to the owner.
    */
   async deleteAccount(caller: UserCaller, ownerUserId: string): Promise<{ ok: true; workspaces: number }> {
     await this.requireTier(caller, 'account');
@@ -5302,22 +4291,15 @@ export class UserDO extends Agent<Env> {
     }
 
     await this.destroy();
-    // The abort is a tick away, and a request landing in that tick meets THIS
-    // object over emptied storage. Dropping the activation latch makes it
-    // re-run the idempotent schema init and answer as the empty account the
-    // fresh object will be, instead of failing on a table that is gone —
-    // measured on workerd 2026-09-14: the next RPC arrived before the abort.
+    // The isolate abort is a tick away; a request in that tick meets emptied storage, so reset the
+    // latch to re-run schema init and answer as the empty account.
     this._initialized = false;
 
     return { ok: true, workspaces: workspaces.length };
   }
 
-  // ── MCP servers ────────────────────────────────────────────────────
-
-  /** The manager this user's plane runs on: the SDK's own, whose activation
-   *  restore is retired (see {@link retireActivationRestore}) and whose OAuth
-   *  provider is {@link createMcpOAuthProvider}. Its config is
-   *  `user_mcp_servers`; the SDK rows are derived from it. */
+  /** The SDK's manager, with activation restore retired (see {@link retireActivationRestore}).
+   *  Its config is `user_mcp_servers`; the SDK rows are derived from it. */
   private userMcp(): MCPClientManager {
     this.ensureInit();
 
@@ -5325,47 +4307,10 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * THE ONE HYDRATION AUTHORITY for this user's MCP plane.
-   *
-   * `user_mcp_servers` is the truth. The SDK's `cf_agents_mcp_servers` rows and
-   * its live `mcpConnections` are derived from it, and every read path comes
-   * through here so there is one place that says what "hydrated" means. Three
-   * steps, and the ORDER is the substance:
-   *
-   *  1. An SDK row with no config row is removed. `userMcp_add` rolls back both
-   *     sides, but a rollback that itself throws and a `removeServer` that failed
-   *     during a delete both leave an SDK row behind — and that row keeps
-   *     reconnecting, keeps spending the user's credential and keeps appearing in
-   *     `listServers()` with nothing able to delete it. Two writable truths.
-   *  2. Every row whose transport THIS PLANE must own is re-registered by us:
-   *     one that holds a sealed credential, so the credential travels as a
-   *     `fetch` closure rather than as data (see `mcpCredentialTransport`), and
-   *     one whose SDK row still carries a credential as data, whatever our own
-   *     column now says. `registerServer` builds the connection WITHOUT
-   *     connecting and leaves it in CONNECTING, and
-   *     `restoreConnectionsFromStorage` skips a connection already in that
-   *     state (`agents/dist/client-zqKcsyFa.js:1541-1549`), so the SDK never
-   *     gets to connect one of these from its own persisted options. That is
-   *     what closes the cold-start window: no unauthenticated first request,
-   *     and no reason for a credential to be persisted at all. The same call
-   *     rewrites `server_options`, which is how a plaintext credential leaves
-   *     the SDK's storage.
-   *
-   *     SCRUBBING IS A PROPERTY OF HYDRATION, not a side effect of registering
-   *     a credentialed row. Keyed on the credential column it could not reach
-   *     the row that needs it most: clearing a credential writes NULL, and a
-   *     row with NULL beside a pre-change plaintext `requestInit` was then
-   *     skipped forever and restored FROM that plaintext — the removed
-   *     credential spent on every reconnect. `storedMcpOptionsCarryCredential`
-   *     asks the SDK's own bytes instead, so the reach does not depend on a
-   *     column that can be null.
-   *  3. The SDK restores everything else — OAuth continuations, retry policy,
-   *     resumed sessions — and then the connections registered in step 2 are
-   *     established. They must be: the restore skipped them.
-   *
-   * Idempotent. A credentialed connection already carrying the closure whose
-   * SDK row holds no credential data is left alone, so a warm activation pays
-   * one `listServers()` scan.
+   * The single hydration path for this user's MCP plane; `user_mcp_servers` is the truth.
+   * Order matters: remove orphan SDK rows, re-register rows this plane owns, then let the SDK
+   * restore the rest and connect step-2 connections (restore skips CONNECTING ones,
+   * `agents/dist/client-zqKcsyFa.js:1541-1549`). Idempotent.
    */
   private async hydrateUserMcp(): Promise<void> {
     if (this._hydratingUserMcp) return this._hydratingUserMcp;
@@ -5379,8 +4324,7 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  /** One complete derived-plane reconciliation. Called only through
-   *  {@link hydrateUserMcp}, which coalesces concurrent callers. */
+  /** Called only through {@link hydrateUserMcp}, which coalesces concurrent callers. */
   private async hydrateUserMcpOnce(): Promise<void> {
     const mgr = this.userMcp();
 
@@ -5391,9 +4335,6 @@ export class UserDO extends Agent<Env> {
     );
 
     const configured = new Set(rows.map((row) => row.id));
-    // Read ONCE, and kept: these rows answer both questions this pass asks of
-    // the SDK's storage — which of them no config row owns, and which of them
-    // still hold a credential as data.
     const sdkRows = mgr.listServers();
 
     for (const stored of sdkRows) {
@@ -5415,8 +4356,8 @@ export class UserDO extends Agent<Env> {
     for (const row of rows) {
       const live = mgr.mcpConnections[row.id]?.options.transport;
       const seamLive = live !== undefined && 'fetch' in live && live.fetch !== undefined;
-      // A sealed credential must run on the seam, and a credential the SDK
-      // stored as data must go — whether or not our column still holds one.
+      // A sealed credential must run on the seam; a credential the SDK stored as data must go,
+      // whether or not our column still holds one.
       const needsSeam = row.headers !== null && !seamLive;
 
       const holdsPlaintext = storedMcpOptionsCarryCredential(
@@ -5434,27 +4375,8 @@ export class UserDO extends Agent<Env> {
     this._userMcpHydrated = true;
   }
 
-  /** Register one configured server on a transport THIS plane owns, replacing
-   *  whatever the SDK's row held.
-   *
-   *  A live connection is torn down FIRST. `createConnection` returns an
-   *  existing connection object untouched (`client-zqKcsyFa.js:1719-1720`), so
-   *  registering over one would rewrite the storage row and leave the wire
-   *  running on the old transport — the new transport would silently not be
-   *  installed. Only a transition that must change the transport reaches that
-   *  branch; a cold activation has no connection to close.
-   *
-   *  Any pending OAuth continuation on the SDK's row (callback URL, client id,
-   *  the authorize URL a user has not visited yet) is read before the teardown
-   *  and carried across, because this registration REPLACES that row.
-   *
-   *  The transport is the credential CLOSURE when the row holds a sealed
-   *  credential and a BARE `{type}` when it does not — the same two shapes
-   *  `userMcp_add` registers. A row whose credential was cleared therefore
-   *  leaves the SDK holding nothing, rather than a pass-through closure that
-   *  would read SQL on every request of a server with no secret to spend. Since
-   *  the closure reads the column per request, a credential added later is
-   *  spent by the seam the next hydration installs. */
+  /** Replace the SDK row with a transport this plane owns; tear down any live connection first,
+   *  since `createConnection` returns an existing one untouched (`client-zqKcsyFa.js:1719-1720`). */
   private async registerOwnedMcpTransport(row: McpHydrationRow): Promise<void> {
     const mgr = this.userMcp();
     const stored = mgr.listServers().find((server) => server.id === row.id);
@@ -5480,9 +4402,7 @@ export class UserDO extends Agent<Env> {
             type: row.transport,
           };
 
-    // An `oauth-app` row restores with the registered-app provider, so sign-in
-    // and token refresh keep answering the env's client registration instead of
-    // falling back to a dynamic registration the vendor cannot accept.
+    // `oauth-app` rows use the registered-app provider; the vendor rejects dynamic registration.
     const preset = row.preset_id === null ? undefined : mcpPresetById(row.preset_id);
 
     const appCredentials = preset?.auth === 'oauth-app'
@@ -5513,20 +4433,13 @@ export class UserDO extends Agent<Env> {
       url: row.server_url, name: row.name, callbackUrl, transport,
     };
 
-    // For an oauth-app row the env's client id is the authority even when the
-    // stored id predates an app rotation — a stale stored id on the provider
-    // would key its token rows under a client nothing else uses.
+    // The env's client id wins over a stale stored id, which would key tokens under an unused client.
     options.clientId = appCredentials?.clientId ?? stored?.client_id ?? undefined;
 
     if (stored?.auth_url) options.authUrl = stored.auth_url;
     await mgr.registerServer(row.id, options);
   }
-  /** This server's current custom headers, opened for ONE request.
-   *
-   *  Read from SQL on every call rather than captured: a rotated header is then
-   *  spent by the next request with no reconnect, and no decrypted copy is held
-   *  by the closure, the connection or the SDK. The closure captures the server
-   *  id and its origin — nothing else. */
+  /** Read per request so rotated headers apply without reconnect and no decrypted copy is held. */
   private async openMcpHeaderMap(serverId: string): Promise<Record<string, string> | null> {
     const row = this.sqlx<{ headers: string | null }>(
       `SELECT headers FROM user_mcp_servers WHERE id = ?`, serverId,
@@ -5537,16 +4450,8 @@ export class UserDO extends Agent<Env> {
     return parseMcpHeaders(await this.openMcpHeaders(serverId, row.headers));
   }
 
-  /** Idempotent boot warmup. Called by the routes layer on first hit per
-   *  process so MCP connections can re-establish in parallel with the user's
-   *  first orchestrator turn, not on its critical path. Fire-and-forget.
-   *
-   *  Runs even with no configured server, and that is deliberate: the SDK's own
-   *  rows are what reconciliation removes, and "the user deleted their last
-   *  server while its removal failed" is exactly the case where a row is left
-   *  reconnecting to a third party with their credential. A count-first
-   *  short-circuit would make the one state that needs collecting the one state
-   *  nothing ever looks at. */
+  /** Idempotent, fire-and-forget boot warmup called by routes on first hit per process.
+   *  Runs even with no configured servers so orphan SDK rows are still reconciled. */
   async userMcp_warmConnections(caller: UserCaller): Promise<{ servers: number }> {
     await this.requireTier(caller, 'mcp.manage');
     const rows = this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0];
@@ -5579,11 +4484,8 @@ export class UserDO extends Agent<Env> {
         ORDER BY s.name`,
     );
 
-    // Hydrate so the live view of connection state is real, and unconditionally
-    // — an orphaned SDK row outlives the last config row, and this is the
-    // management surface where that is settled. Idempotent. A failure here is a
-    // storage failure, not a per-server connection failure — those surface as
-    // the row's `status` — so it must not report every server disconnected.
+    // Hydrate unconditionally: an orphaned SDK row can outlive the last config row. Idempotent.
+    // A failure here is a storage failure, not per-server; it must not report every server disconnected.
     await this.hydrateUserMcp();
     const connections = this.mcp.mcpConnections;
 
@@ -5595,9 +4497,7 @@ export class UserDO extends Agent<Env> {
       const tools = conn?.tools ?? [];
       const toolsCount = allowed ? tools.filter((t: { name: string }) => allowed.includes(t.name)).length : tools.length;
 
-      // authUrl is set on the auth provider while AUTHENTICATING. The SDK
-      // also persists it on the storage row; expose only if currently
-      // pending so the UI knows whether to render the "Open authorize" link.
+      // authUrl is exposed only while pending, so the UI knows whether to render the authorize link.
       const authUrl = status === 'authenticating'
         ? (conn?.options?.transport?.authProvider?.authUrl ?? null)
         : null;
@@ -5618,20 +4518,15 @@ export class UserDO extends Agent<Env> {
       };
     });
   }
-  /** The preset catalog's deploy-time availability: which presets can offer a
-   *  sign-in button (their OAuth app is configured) versus their token
-   *  fallback or nothing at all. Read beside `userMcp_list` — this is the
-   *  answer the cards need before the user has added anything. */
+  /** Which presets can offer a sign-in button (OAuth app configured) vs token fallback or nothing. */
   async userMcp_presets(caller: UserCaller): Promise<McpPresetAvailability[]> {
     await this.requireTier(caller, 'mcp.manage');
 
     return listMcpPresetAvailability(this.env);
   }
 
-  /** Add a new MCP server. `publicOrigin` is the user-facing origin the
-   *  server calls back to during OAuth — it determines the callback URL.
-   *  The routes layer derives it from the inbound request's `Origin` /
-   *  `Host` header — UserDO doesn't see the request. */
+  /** `publicOrigin` is the user-facing origin that determines the OAuth callback URL; the routes
+   *  layer derives it from the request's `Origin`/`Host`, since UserDO doesn't see the request. */
   async userMcp_add(
     caller: UserCaller,
     input: JsonValue,
@@ -5646,12 +4541,8 @@ export class UserDO extends Agent<Env> {
 
     const preset = cfg.presetId === undefined ? undefined : mcpPresetById(cfg.presetId);
 
-    // A preset whose OAuth app is not configured has no sign-in to start;
-    // without a token it could only dead-end in the SDK's registration step,
-    // so the add is refused before the name claim — the claim is the row's
-    // identity, and a refused add must leave no row behind. The names come
-    // from the map rather than the catalog so the message can never quote a
-    // secret name the reader cannot satisfy.
+    // A preset with no configured OAuth app and no token would dead-end in SDK registration, so the
+    // add is refused before the name claim; a refused add must leave no row behind.
     if (preset?.auth === 'oauth-app' && !mcpAppCredentials(this.env, preset) && !cfg.headers) {
       const names = mcpAppEnvNames(preset);
 
@@ -5669,10 +4560,7 @@ export class UserDO extends Agent<Env> {
     const now = Date.now();
     const headersJson = cfg.headers ? JSON.stringify(cfg.headers) : null;
     const allowedJson = cfg.allowedTools ? JSON.stringify(cfg.allowedTools) : null;
-    // SEALED BEFORE THE ATOMIC BOUNDARY. Sealing is an await, and an await is
-    // what made the old SELECT-then-INSERT no check at all: two concurrent adds
-    // both passed the SELECT while the other was sealing. Every value the
-    // transaction writes is now in hand before it opens.
+    // Seal before the transaction: sealing awaits, and every written value must be in hand first.
     const sealedHeaders = await this.sealMcpHeaders(id, headersJson);
     this.claimMcpServerName(cfg.name, id, () => {
       this.ctx.storage.sql.exec(
@@ -5683,9 +4571,7 @@ export class UserDO extends Agent<Env> {
         sealedHeaders, allowedJson, now, now,
       );
 
-      // A preset add tags the server one table over — `user_mcp_servers` is
-      // the shipped shape this storage already holds, so the tag has to live
-      // where a row of its own can reach it.
+      // The preset tag lives in its own table; `user_mcp_servers` keeps its shipped shape.
       if (cfg.presetId !== undefined) {
         this.ctx.storage.sql.exec(
           `INSERT INTO user_mcp_server_presets (server_id, preset_id) VALUES (?, ?)`,
@@ -5711,8 +4597,7 @@ export class UserDO extends Agent<Env> {
 
     authProvider.serverId = id;
 
-    // The credential is a CLOSURE, never data the SDK can persist. See
-    // `mcpCredentialTransport`; the row's sealed headers are opened per request.
+    // The credential is a closure, never data the SDK can persist; see `mcpCredentialTransport`.
     const credential = cfg.headers
       ? mcpCredentialTransport(cfg.serverUrl, () => this.openMcpHeaderMap(id))
       : {};
@@ -5725,8 +4610,7 @@ export class UserDO extends Agent<Env> {
         url: cfg.serverUrl,
         name: cfg.name,
         callbackUrl,
-        // The registered app's id lands on the SDK row so a restore after
-        // eviction keeps keying its token storage under the same client.
+        // Persisted on the SDK row so a restore after eviction keys token storage under the same client.
         clientId: appCredentials?.clientId,
         transport: {
           ...credential,
@@ -5743,18 +4627,12 @@ export class UserDO extends Agent<Env> {
       if (result.state === 'authenticating') {
         authUrl = result.authUrl ?? null;
       } else {
-        // Awaited, not detached. This ran under `ctx.waitUntil` with a comment
-        // claiming the promise was "held open"; in a Durable Object waitUntil is
-        // a no-op (`do.wait_until.no_op`) and an in-flight promise is cancelled
-        // silently when the object is reset (`do.background_task.cancelled_on_reset`),
-        // so the tool count could simply never appear and nothing would say why.
-        // `userMcp_add` already awaits registerServer and connectToServer, so one
-        // more round-trip buys a return value that is true when it returns.
+        // Awaited, not detached: waitUntil is a no-op in a DO (`do.wait_until.no_op`) and in-flight
+        // promises are cancelled on reset (`do.background_task.cancelled_on_reset`).
         await mgr.discoverIfConnected(id);
       }
     } catch (err) {
-      // Rollback both our row AND the SDK's storage entry so the user can
-      // retry with a corrected URL rather than have a stuck failed entry.
+      // Roll back both our row and the SDK's storage entry so the user can retry cleanly.
       this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
       await this.userMcp().removeServer(id);
       throw new Error(`MCP connect failed: ${renderThrownChain({ cause: err })}`, { cause: err });
@@ -5780,18 +4658,8 @@ export class UserDO extends Agent<Env> {
     this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
   }
 
-  /** Patch-update editable fields. Nothing here reconnects.
-   *
-   *  `name` and `allowedTools` take effect without one already (a rename
-   *  re-keys the tools on the next descriptor fetch; allowedTools is enforced
-   *  from SQL at descriptor/dispatch time), and a rotated `headers` value is
-   *  now spent by the NEXT REQUEST: the transport reads the sealed column
-   *  through a closure rather than at connect time (`mcpCredentialTransport`).
-   *  Hydration is still called, because a row that had no credential has no
-   *  closure on its live connection yet — that is the only transition that
-   *  needs a registration, and hydration is the one place that decides it.
-   *  `serverUrl` / `transport` changes still require remove + re-add (the SDK
-   *  doesn't support live re-targeting). */
+  /** Patch-update editable fields; nothing reconnects. Rotated `headers` apply on the next request
+   *  via `mcpCredentialTransport`; `serverUrl`/`transport` changes require remove + re-add. */
   async userMcp_update(caller: UserCaller, id: string, patch: JsonValue): Promise<void> {
     await this.requireTier(caller, 'mcp.manage');
 
@@ -5802,8 +4670,7 @@ export class UserDO extends Agent<Env> {
     const p = parsedPatch.output;
     const sets: string[] = [];
     const args: SqlStorageValue[] = [];
-    // ONE name rule, shared with the add path — a rename must not accept a name
-    // an add would refuse, since both claim from the same canonical namespace.
+    // Same name rule as add: both claim from the same canonical namespace.
     const renamed = p.name === undefined ? null : validateMcpServerName(p.name);
 
     if (renamed !== null) { sets.push('name = ?'); args.push(renamed); }
@@ -5832,8 +4699,7 @@ export class UserDO extends Agent<Env> {
       }
     }
 
-    // Everything above is validated and sealed, so nothing below awaits. The
-    // write is the last thing that happens and it happens atomically.
+    // Everything above is validated and sealed; nothing below may await.
     if (sets.length === 0) return;
     const now = Date.now();
     sets.push('updated_at = ?'); args.push(now);
@@ -5858,26 +4724,8 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  /**
-   * Claim `name` for `serverId` and perform `write`, atomically.
-   *
-   * THE TRANSACTION IS THE CHECK, and it is the whole of it. `transactionSync`
-   * runs the read and the write with no await between them, so no second add or
-   * rename can interleave — which is exactly what a bare SELECT-then-INSERT
-   * could not promise here, because sealing a row's headers is an await and both
-   * callers passed the SELECT while the other was sealing.
-   *
-   * It holds WITHOUT the UNIQUE index, which is what lets a database that
-   * already carries duplicate names keep working: the constraint cannot be
-   * BUILT over those rows — it raises — so `schema.ts` reads for a collision
-   * first and skips the build when it finds one, recording that it did. Nothing
-   * about a new write depends on the index; where it exists it refuses the same
-   * thing with the same sentence.
-   *
-   * `write` MUST NOT await. The type says so — a synchronous body is what
-   * `transactionSync` commits atomically; an async one would commit at its first
-   * await and take the check with it.
-   */
+  /** Claim `name` for `serverId` and run `write` atomically; the transaction is the check and holds
+   *  without the UNIQUE index (see `schema.ts`). `write` must not await. */
   private claimMcpServerName(name: string, serverId: string, write: () => void): void {
     this.ensureInit();
 
@@ -5897,32 +4745,8 @@ export class UserDO extends Agent<Env> {
   }
 
 
-  /**
-   * Serializable tool descriptors for every ALREADY-CONNECTED MCP server,
-   * filtered by per-server `allowed_tools`. The orchestrator wraps each into an
-   * AI-SDK Tool whose `execute` closure dispatches back via `userMcp_callTool`.
-   *
-   * THIS READ STARTS NO NETWORK WORK AND WAITS FOR NONE. It is on the turn's
-   * critical path, so hydration stays out of it: `hydrateUserMcp` awaits
-   * `establishConnection`, which awaits `_connectWithRetry` (3 attempts, 500ms
-   * to 5s backoff) plus discovery with no bound at all
-   * (`agents/dist/client-zqKcsyFa.js:2046,2073`). No timeout wraps this read:
-   * the unbounded await runs before any timer starts, so a deadline bounds
-   * nothing. This method reads the CURRENT connection snapshot and returns.
-   *
-   * Establishment belongs to `userMcp_warmConnections`, which runs off the turn
-   * (`user/routes.ts` first hit, under the WORKER's `ctx.waitUntil`), and to
-   * `userMcp_callTool`, which hydrates on explicit use. Neither is this.
-   *
-   * `unavailable` names every configured server whose tools are not on the
-   * surface, and the reason says WHY and WHEN they arrive. Without it the model
-   * plans as if a capability the user gave it does not exist and cannot explain
-   * why. The absence is a DEFERRAL, not a verdict: a tool set is fixed when a
-   * turn opens: the chat driver hands streamText one tool object for the turn.
-   * A connection that completes mid-turn is installed by the next turn's
-   * read of this surface. No state carries it: the live connection is the state,
-   * and the orchestrator's cache invalidates on this surface's content hash.
-   */
+  /** Descriptors for already-connected MCP servers, filtered by `allowed_tools`. On the turn's
+   *  critical path: starts and awaits no network work; `unavailable` lists servers not yet ready. */
   async userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
     await this.requireTier(caller, 'mcp.tools');
 
@@ -5942,9 +4766,7 @@ export class UserDO extends Agent<Env> {
     const out: SerializableToolDescriptor[] = [];
     const connections = this.mcp.mcpConnections;
 
-    // Connection is a property of the SDK connection, NOT of emitted
-    // descriptors. A ready server can expose zero tools or have every tool
-    // filtered by `allowed_tools`; neither fact means it is still connecting.
+    // Readiness comes from the SDK connection, not descriptors: a ready server may expose zero tools.
     const connected = new Set(
       Object.entries(connections)
         .filter(([, conn]) => mapConnectionStatus(conn.connectionState) === 'ready')
@@ -5952,17 +4774,12 @@ export class UserDO extends Agent<Env> {
     );
 
     for (const [id, conn] of Object.entries(connections)) {
-      // The two channels are disjoint by construction: a connection that is
-      // not ready contributes no descriptors, and the `unavailable` list below
-      // names exactly the configured servers outside this set. A converged
-      // connection (a 401 moved it to authenticating, the SDK kept its cached
-      // tools) is therefore disclaimed once and offered nowhere — handing the
-      // model tools that now fail on every call, next to the notice that they
-      // are gone, is the contradiction this gate deletes.
+      // Disjoint with `unavailable` by construction: a non-ready connection contributes no descriptors,
+      // so a server whose SDK kept cached tools after a 401 is disclaimed once and offered nowhere.
       if (!connected.has(id)) continue;
       const allowed = allowedById.get(id);
 
-      if (allowed === undefined) continue; // deleted
+      if (allowed === undefined) continue;
       const meta = rows.find((r) => r.id === id);
 
       if (!meta) continue;
@@ -5982,38 +4799,30 @@ export class UserDO extends Agent<Env> {
           + `when the turn opens.`,
       }));
 
-    // Sorted by the tool key, because this JSON is what the orchestrator's
-    // cache hashes: `Object.entries(connections)` order is whatever the SDK's
-    // map happens to hold, so an unsorted surface re-hashes — and rebuilds every
-    // tool closure — for a reason nobody changed.
+    // Sorted because the orchestrator's cache hashes this JSON; SDK map order is unstable and would
+    // force needless rebuilds of every tool closure.
     out.sort(byToolKey);
 
     return JSON.stringify({ descriptors: out, unavailable } satisfies McpToolSurface);
   }
 
-  /** Execute a single MCP tool call. Called over RPC by the orchestrator's
-   *  per-tool closure. The result must be JSON-serializable; the SDK already
-   *  guarantees this (no closures in CallToolResult). */
+  /** Called over RPC by the orchestrator's per-tool closure; the result must be JSON-serializable. */
   async userMcp_callTool(
     caller: UserCaller,
     serverId: string,
     name: string,
     args: JsonObject,
   ): Promise<string> {
-    // Caller identity is proven by the capability token rather than claimed in
-    // an argument, so there is no agent name left to spoof: a token exists only
-    // for a workspace this user's registry issued one to, and dies with it.
+    // Caller identity comes from the capability token, not an argument, so no agent name can be spoofed.
     await this.requireTier(caller, 'mcp.tools');
     const manager = this.userMcp();
 
     if (!this._userMcpHydrated) {
-      // Cold start: hydrate the manager before dispatching.
       try { await this.hydrateUserMcp(); }
       catch (err) { throw new Error(`MCP not ready: ${renderThrownChain({ cause: err })}`, { cause: err }); }
     }
 
-    // Type-check the server membership inside our SQL so a stale orchestrator
-    // closure can't dispatch to a server the user just deleted.
+    // Check server membership in SQL so a stale orchestrator closure can't dispatch to a deleted server.
     const row = this.sqlx<{ allowed_tools: string | null }>(
       `SELECT allowed_tools FROM user_mcp_servers WHERE id = ?`, serverId,
     )[0];
@@ -6027,10 +4836,8 @@ export class UserDO extends Agent<Env> {
 
     const parsedParams = v.safeParse(JsonObjectSchema, args);
     const params = parsedParams.success ? parsedParams.output : {};
-    // A client that never touched an optional field still sends it as ""; the
-    // tool's admitted inputSchema decides which keys may be omitted, and the
-    // core rule drops exactly those — never a required key, never a key the
-    // server did not declare (KINU-052).
+    // Clients send untouched optional fields as ""; drop only keys the tool's inputSchema marks optional,
+    // never required or undeclared keys (KINU-052).
     const tool = this.mcp.mcpConnections[serverId]?.tools.find((t) => t.name === name);
     const parsedSchema = v.safeParse(JsonObjectSchema, tool?.inputSchema);
 
@@ -6050,26 +4857,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * A dispatch that failed on AUTHORIZATION leaves the connection saying
-   * `ready`. Converge it to the state the UI already knows how to act on.
-   *
-   * A refresh that fails mid-session (an expired refresh token, a revoked
-   * grant) throws out of `callTool` and touches no connection state: the MCP
-   * SDK's own reauthorization path only runs inside connect and discovery. So
-   * the server kept reporting `ready` with a null `authUrl`, its tools stayed on
-   * the surface, and every call kept failing with nothing anywhere offering the
-   * user a way to reconnect.
-   *
-   * `discoverIfConnected` IS that path — it re-probes the live connection, and
-   * an unauthorized probe moves the connection to AUTHENTICATING and persists
-   * the authorize URL (`agents/dist/client-zqKcsyFa.js:763,2003`), which is
-   * exactly what `userMcp_list` renders as the reconnect link. Nothing is
-   * swallowed: the original failure is rethrown by the caller and reaches the
-   * model as the tool's error.
-   *
-   * WHICH failures qualify is `isMcpTransportUnauthorized`'s decision and it is
-   * typed: a tool whose own result or error text mentions a 401 gets nothing
-   * reconnected on its behalf.
+   * A mid-session auth failure leaves the connection `ready`; `discoverIfConnected` re-probes it so it
+   * moves to authenticating with a reconnect URL. Which failures qualify is `isMcpTransportUnauthorized`'s.
    */
   private async convergeMcpAuthState(input: { serverId: string; cause: unknown }): Promise<void> {
     if (!isMcpTransportUnauthorized(input)) return;
@@ -6085,8 +4874,6 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  /** OAuth callback receiver. The routes layer matches the incoming
-   *  `/api/user/mcp/callback` request and forwards it here verbatim. */
   async userMcp_handleOAuthCallback(caller: UserCaller, url: string): Promise<{ ok: boolean; serverId: string | null; error: string | null }> {
     await this.requireTier(caller, 'mcp.manage');
 
@@ -6095,12 +4882,8 @@ export class UserDO extends Agent<Env> {
       const result = await this.userMcp().handleCallbackRequest(req);
 
       if (result.authSuccess) {
-        // Awaited, and in its own try: the tokens ARE saved by this point, so a
-        // connect failure must not be reported as an auth failure. Detaching it
-        // was the same mistake as the two `ctx.waitUntil` calls above — a Durable
-        // Object cannot retain an unawaited promise (`do.wait_until.no_op`), so
-        // the connection could silently never be established after a successful
-        // sign-in.
+        // Awaited in its own try: tokens are already saved, so a connect failure is not an auth failure.
+        // A DO cannot retain an unawaited promise (`do.wait_until.no_op`).
         try { await this.userMcp().establishConnection(result.serverId); }
         catch (err) { return { ok: true, serverId: result.serverId, error: `connected but not established: ${renderThrownChain({ cause: err })}` }; }
 
@@ -6113,17 +4896,12 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  // ── Provider/model surface ─────────────────────────────────────────
-
-  /** Which providers does this user have credentials for? Used by the UI's
-   *  model picker to know which providers are connected. */
   async listConnectedProviders(caller: UserCaller): Promise<ConnectedProvider[]> {
     const creds = this.credentialSummaries(await this.requireTier(caller, 'credentials.model'));
     const byKey = new Map(creds.map((c) => [c.key, c]));
     const out: ConnectedProvider[] = [];
 
-    // Built-in providers without credentials are listed by the server, not
-    // here — UserDO only knows about credential-gated ones.
+    // Built-in providers without credentials are listed by the server; only credential-gated ones here.
     if (byKey.has(CLOUDFLARE_OAUTH_CRED_KEY)) {
       out.push({ id: 'workers-ai', label: 'Cloudflare Workers AI', credentialKeys: [CLOUDFLARE_OAUTH_CRED_KEY] });
 
@@ -6135,8 +4913,7 @@ export class UserDO extends Agent<Env> {
     if (byKey.has(CODEX_CRED_KEY)) out.push({ id: 'codex', label: 'ChatGPT Codex', credentialKeys: [CODEX_CRED_KEY] });
 
     for (const c of creds) {
-      // `<providerId>.bearer` — BYO API keys (bespoke trio + any models.dev
-      // catalog provider). Display names come from the catalog client-side.
+      // BYO API keys; display names come from the catalog client-side.
       const bearer = /^([a-z0-9][a-z0-9._-]*)\.bearer$/.exec(c.key);
 
       if (bearer) {
@@ -6144,7 +4921,6 @@ export class UserDO extends Agent<Env> {
         continue;
       }
 
-      // openai-compat is keyed by user-chosen suffix: 'openai-compat.<name>'
       if (c.key.startsWith('openai-compat.')) {
         const name = c.key.slice('openai-compat.'.length);
         out.push({ id: `openai-compat:${name}`, label: `OpenAI-compatible (${name})`, credentialKeys: [c.key] });
