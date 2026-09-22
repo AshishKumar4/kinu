@@ -1,6 +1,5 @@
-/** A token endpoint's rejection with its OAuth error code, so a caller can
- *  tell a terminal `invalid_grant` (a revoked or expired refresh token) from a
- *  transient failure. One class per distinction, whichever issuer answered. */
+/** Token endpoint rejection carrying its OAuth error code, so a terminal
+ *  `invalid_grant` is distinguishable from a transient failure. */
 export class OAuthTokenError extends Error {
   override readonly name = 'OAuthTokenError';
 

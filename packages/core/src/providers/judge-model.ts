@@ -1,27 +1,9 @@
-// Which model is allowed to grade this agent's own work.
-//
-// An LLM asked to compare two responses inflates the one written in its own
-// family's voice — self-preference, measured at roughly +10..25pp and driven
-// by fluency, so it fires whether or not the judge recognises itself. A
-// deployment that leaves the review model unset therefore judges itself with
-// itself, which is the one configuration where the shadow judge's verdict is
-// least trustworthy. This module states the preference order that avoids it.
+// Which model grades this agent's own work: another vendor family, since judges prefer their own family's voice.
 
 import type { ProviderRegistry } from './registry';
 import { parseModelSpec, type ProviderDeps } from './types';
 
-/**
- * One spec per AVAILABLE statically-registered provider, in the registry's own
- * preference order — the candidate list both selectors below walk, and the one
- * definition of it, so the CF and CLI backends cannot answer "what could judge
- * this" differently.
- *
- * Dynamic models.dev providers are not enumerated: they carry no
- * `defaultModel`, so there is no single model to nominate for them. That only
- * narrows the search — a user connected solely through the catalog still gets
- * the documented same-family fallback, and explicitly named models reach any
- * provider the registry can resolve.
- */
+/** One spec per available statically-registered provider, in registry preference order. */
 export async function availableJudgeSpecs(
   registry: ProviderRegistry,
   deps: ProviderDeps,
@@ -38,9 +20,7 @@ export async function availableJudgeSpecs(
   return specs;
 }
 
-/** Providers that resell another vendor's models under their own id, so a
- *  bare provider id would misreport the family. Only genuine resell
- *  relationships belong here. */
+/** Providers reselling another vendor's models under their own id. */
 interface ProviderVendorIndex {
   readonly [provider: string]: string;
 }
@@ -50,19 +30,7 @@ const PROVIDER_VENDOR: ProviderVendorIndex = {
   codex: 'openai',
 };
 
-/**
- * The vendor family a model spec belongs to — the unit self-preference tracks.
- * Two providers reselling the same build (`workers-ai/@cf/moonshotai/kimi-k3`
- * vs `openrouter/moonshotai/kimi-k3`) are the SAME family and buy no bias
- * relief, so the provider id alone is the wrong key.
- *
- * The rule: the vendor is the path segment immediately BEFORE the model name.
- * That one rule reads every id shape the registry produces —
- * `@cf/moonshotai/kimi-k3`, `moonshotai/kimi-k3`, and the gateway's nested
- * `workers-ai/@cf/moonshotai/kimi-k3` all resolve to `moonshotai`. Ids with no
- * vendor segment at all (`openai/gpt-5.6`, `anthropic/claude-opus-4`) fall
- * back to the provider id.
- */
+/** The vendor family of a model spec: the path segment before the model name, else the provider id. */
 export function modelVendorFamily(spec: string): string {
   const { provider, modelId } = parseModelSpec(spec);
   const segments = modelId.split('/');
@@ -76,9 +44,7 @@ export function modelVendorFamily(spec: string): string {
 export interface JudgeModelSelection {
   /** `<provider>/<modelId>` the judge should run on. */
   spec: string;
-  /** How it was chosen. `same-family-fallback` is reported rather than hidden:
-   *  it is the honest name for a deployment with only one vendor connected,
-   *  not a design preference. */
+  /** How it was chosen; `same-family-fallback` means only one vendor is connected. */
   source: 'configured' | 'cross-family' | 'same-family-fallback';
 }
 
@@ -87,21 +53,13 @@ export interface SelectJudgeModelOpts {
   reviewSpec: string | null | undefined;
   /** The resolved `<provider>/<modelId>` the agent chats with. */
   chatSpec: string;
-  /** Available specs in registry preference order. Lazy — an explicitly
-   *  configured review model short-circuits before any availability query. */
+  /** Available specs in registry preference order; lazy so an explicit review model skips the query. */
   candidates: () => Promise<readonly string[]>;
 }
 
 /**
- * Pick the model that judges this agent's own output.
- *
- *   1. An explicitly configured `review_model` wins outright — the operator's
- *      choice is not second-guessed, cross-family or not.
- *   2. Otherwise the first AVAILABLE model from a different vendor family than
- *      the chat model, in registry preference order.
- *   3. Otherwise the chat model itself. Same-model judging is the documented
- *      fallback for a deployment with a single connected vendor — the only
- *      remaining option, not a defensible default.
+ * Pick the model that judges this agent's own output: the explicit `review_model`, else the first available
+ * model from another family, else the chat model itself.
  */
 export async function selectJudgeModel(opts: SelectJudgeModelOpts): Promise<JudgeModelSelection> {
   const configured = opts.reviewSpec?.trim();
@@ -119,21 +77,11 @@ export async function selectJudgeModel(opts: SelectJudgeModelOpts): Promise<Judg
   return { spec: opts.chatSpec, source: 'same-family-fallback' };
 }
 
-// ── A panel of them ──────────────────────────────────────────────
-
-/** Judges in a calibration ensemble (evolution/ensemble.ts).
- *
- *  Two, because two is the smallest panel that can DISAGREE — and disagreement
- *  is the whole signal: a split is the ensemble admitting it does not know,
- *  which is what makes its unanimous verdicts worth reading. A third judge
- *  would buy majority voting, which converts exactly those admissions back into
- *  confident answers. */
+/** Judges in a calibration ensemble: two is the smallest panel that can disagree; a third would outvote the split. */
 export const ENSEMBLE_JUDGE_COUNT = 2;
 
 export interface EnsembleJudgeSelection {
-  /** `<provider>/<modelId>` per judge, each from a distinct vendor family.
-   *  Shorter than `ENSEMBLE_JUDGE_COUNT` when too few families are connected —
-   *  the caller refuses rather than padding it. */
+  /** One `<provider>/<modelId>` per distinct family; shorter than `ENSEMBLE_JUDGE_COUNT` when too few are connected. */
   specs: string[];
   source: 'configured' | 'cross-family';
 }
@@ -141,11 +89,7 @@ export interface EnsembleJudgeSelection {
 export interface SelectEnsembleJudgesOpts {
   /** Judges the operator named outright. */
   specs: ReadonlyArray<string> | null | undefined;
-  /** The resolved `<provider>/<modelId>` the agent chats with — and therefore
-   *  the family the classifier under test runs on. A thunk, like `candidates`,
-   *  and for the same reason: resolving a spec reaches the signed-in session and
-   *  the stored keys, so an eager argument reports "not authenticated" for a
-   *  panel that was never going to run. Only the cross-family branch needs it. */
+  /** The chat spec, whose family the classifier runs on. A thunk: resolving it can report "not authenticated". */
   chatSpec: () => string;
   /** Available specs in registry preference order. */
   candidates: () => Promise<readonly string[]>;
@@ -153,23 +97,8 @@ export interface SelectEnsembleJudgesOpts {
 }
 
 /**
- * Pick the panel that grades the same turns the owner hand-labeled.
- *
- * Same preference order as `selectJudgeModel`, applied twice, with two extra
- * constraints that follow from what the panel is FOR — standing in for the
- * human who calibrates the classifier:
- *
- *   - No two judges share a vendor family. Self-preference is a family-level
- *     effect, so a panel drawn from one family agrees with itself for reasons
- *     that have nothing to do with the turn, and its unanimity means nothing.
- *   - No judge shares the CLASSIFIER's family either. A panel that inherits the
- *     classifier's blind spots would confirm its verdicts and read as high
- *     agreement, which is precisely the measurement being attempted.
- *
- * There is deliberately no single-vendor fallback here. `selectJudgeModel` has
- * one because judging with the chat model is worse-but-still-something; an
- * ensemble of one is not a weaker ensemble, it is a different thing wearing the
- * name. Too few families connected returns a short list and the caller says so.
+ * Pick the calibration panel in `selectJudgeModel` order, with no two judges nor the classifier sharing a family,
+ * and no single-vendor fallback: too few families returns a short list.
  */
 export async function selectEnsembleJudges(
   opts: SelectEnsembleJudgesOpts,

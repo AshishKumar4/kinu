@@ -1,10 +1,4 @@
-// OpenAI direct — API key (separate billing from ChatGPT subscription).
-//   Base:  https://api.openai.com/v1
-//   Surface: Responses API (default) or Chat Completions
-//
-// For ChatGPT *subscription* credits, use the `codex` provider instead.
-// createModel is sync; customFetch resolves the bearer at request time via
-// the AuthResolver.
+// OpenAI direct via API key; ChatGPT subscription credits use the `codex` provider.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from './types';
@@ -21,9 +15,8 @@ export const OPENAI_DEFAULT_MODEL = 'gpt-5.5';
 /** The small tier the evolution engine's mechanical calls run on. */
 export const OPENAI_FAST_MODEL = 'gpt-5.4-mini';
 
-/** Levels per model from the model pages (read 2026-09-11), for the offline
- *  lists here and in codex.ts; the live lists read models.dev:
- *  https://developers.openai.com/api/docs/models/<id> */
+/** Offline levels per model (from https://developers.openai.com/api/docs/models/<id>),
+ *  shared with codex.ts; live lists read models.dev. */
 export const GPT54_EFFORTS: readonly ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh'];
 
 const FALLBACK_MODELS: ModelInfo[] = [
@@ -35,7 +28,7 @@ const FALLBACK_MODELS: ModelInfo[] = [
 const PREFERRED_MODEL_IDS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.5-pro', 'gpt-5.4-pro', 'gpt-5', 'gpt-5.4-mini'];
 
 export interface OpenAIOptions {
-  /** Use the Responses API (default) vs Chat Completions. */
+  /** Responses API (default) vs Chat Completions. */
   useResponsesAPI?: boolean;
 }
 

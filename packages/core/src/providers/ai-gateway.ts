@@ -1,15 +1,6 @@
-// The PLATFORM's Cloudflare AI Gateway — the deploy-time provider used when no
-// user credential is reachable. A user's OWN gateway is the separate
-// `my-gateway` provider (providers/my-gateway.ts). Proxies to Workers AI /
-// OpenAI / Anthropic upstreams under one URL; pass any modelId understood by
-// the upstream configured in `env.AI_GATEWAY_URL`.
-//
-// Requests ride the Workers AI binding, not HTTPS (core providers/gateway-binding-fetch.ts).
-// The gateway named by `AI_GATEWAY_URL` lives in this Worker's own account, so
-// binding calls are pre-authenticated: no API token to mint, and the bill lands
-// on the same account as before. The USER-billed providers (workers-ai,
-// my-gateway) deliberately do NOT use the binding — their spend must stay on the
-// logged-in user's account, and a binding call would silently move it here.
+// The platform's AI Gateway: the deploy-time provider when no user credential is reachable.
+// Rides the Workers AI binding (pre-authenticated, same account). User-billed providers must not:
+// a binding call would move their spend onto this account.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo, ProviderEnv, WorkersAIBinding } from './types';
@@ -24,10 +15,7 @@ import {
 
 export const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
 
-/** Everything needed to reach the platform gateway, or why it is unreachable.
- *  The ONE predicate: `isAvailable`, the reason text, `createModel` and the
- *  registry's sync default all resolve through it, so the set of environments
- *  reported usable is exactly the set that works. */
+/** How to reach the platform gateway, or why not: the one predicate every availability check uses. */
 export type PlatformGateway =
   | { target: GatewayTarget; binding: WorkersAIBinding }
   | { reason: string };
@@ -76,8 +64,7 @@ export function createAIGatewayProvider(): ModelProvider {
 
       return createOpenAICompatible({
         name: AI_GATEWAY_PROVIDER_ID,
-        // Never fetched. The SDK builds `{baseURL}/chat/completions` and the
-        // transport parses that into the binding's {gateway, provider, endpoint}.
+        // Never fetched: the transport parses the SDK's URL into the binding's {gateway, provider, endpoint}.
         baseURL: String(deps.env.AI_GATEWAY_URL),
         fetch: withRateLimitRetry(createGatewayBindingFetch(resolved), {
           provider: AI_GATEWAY_PROVIDER_ID,

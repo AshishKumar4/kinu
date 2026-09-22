@@ -17,19 +17,12 @@ const CloudflareErrorEnvelopeSchema = v.object({
 
 export const CLOUDFLARE_OAUTH_CRED_KEY = 'cloudflare.oauth';
 
-/** DERIVED credential key — never stored. UserDO serves it from the same
- *  `cloudflare.oauth` row, but the header bundle targets the user's OWN
- *  selected AI Gateway (`cf-aig-gateway-id`). Resolves to null until a
- *  gateway is selected, which is what gates the `my-gateway` provider. */
+/** Derived credential key, never stored: the `cloudflare.oauth` row aimed at the user's selected AI Gateway.
+ *  Null until a gateway is selected, which gates `my-gateway`. */
 export const CLOUDFLARE_AI_GATEWAY_CRED_KEY = 'cloudflare.ai-gateway';
 
-// `offline_access` is what makes dash.cloudflare.com issue a refresh token
-// (the OAuth client must also have the Refresh Token grant enabled). Without
-// it the credential dies at access-token expiry and Workers AI "disconnects".
-// `aig.write` (AI Gateway Write — the owner's OAuth client offers no separate
-// Read scope; Write covers the gateway/provider-config/billing listing APIs
-// the my-gateway provider uses for discovery) and `aig.run` covers inference.
-// Users who connected before a scope was added need one re-login to grant it.
+// `offline_access` makes Cloudflare issue a refresh token; `aig.write` covers the gateway management APIs
+// (no separate Read scope) and `aig.run` covers inference.
 export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.read ai.write aig.write aig.run offline_access';
 
 const DEFAULT_CLOUDFLARE_AI_GATEWAY_ID = 'default';
@@ -133,12 +126,8 @@ export async function cloudflareTokenToCredential(
   if (!accessToken) throw new Error('Cloudflare OAuth did not return an access token.');
 
   const refreshToken = nonEmptyString({ value: token.refresh_token });
-  // Account discovery is not authentication. A token that sees no account — or
-  // an accounts API that is down — must still yield a stored credential with
-  // its refresh token: isCloudflareCredentialUsable already reports a missing
-  // account as "Connect Cloudflare Workers AI", whereas throwing here loses
-  // the whole login. Gating sign-in on this lookup breaks sign-in for everyone
-  // the moment the lookup fails; it must never be able to fail again.
+  // Account discovery is not authentication: a failed lookup must still store the credential
+  // (a missing account already reports "Connect Cloudflare Workers AI").
   let accounts: CloudflareAccount[] = [];
 
   try {
@@ -155,10 +144,7 @@ export async function cloudflareTokenToCredential(
     tokenType: nonEmptyString({ value: token.token_type }) ?? 'bearer',
   };
 
-  // Every visible account is recorded so a multi-account user can switch to the
-  // one that carries their Workers AI entitlement without a second API call —
-  // and without this layer ever handing the token back out. The first is the
-  // initial selection; UserDO rewrites `accountId` when the user picks another.
+  // Record every visible account so a multi-account user can switch without another API call; the first is selected.
   if (accounts.length > 0) {
     metadata.accounts = accounts.map((account) => ({ id: account.id, name: account.name }));
     metadata.accountId = accounts[0].id;
@@ -220,10 +206,7 @@ export function cloudflareWorkersAIBaseURL(accountId: string): string | null {
   return `${CLOUDFLARE_API}/accounts/${encodeURIComponent(accountId)}/ai/v1`;
 }
 
-/** Account-scoped management API root recovered from the `/ai/v1` inference
- *  base URL. Lets the my-gateway provider reach the AI Gateway management
- *  endpoints (gateway config, BYOK provider keys, credit balance) with the
- *  same AuthResolution it already holds — no extra plumbing for account ids. */
+/** Account-scoped management API root recovered from the `/ai/v1` inference base URL. */
 export function cloudflareAccountAPIRoot(workersAIBaseURL: string): string | null {
   const match = /^(https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/[^/]+)\/ai\/v1\/?$/.exec(workersAIBaseURL);
 
@@ -232,8 +215,7 @@ export function cloudflareAccountAPIRoot(workersAIBaseURL: string): string | nul
 
 export interface CloudflareAIGatewaySummary {
   id: string;
-  /** Whether the gateway requires authenticated requests. Informational —
-   *  our requests always carry the user's bearer token either way. */
+  /** Whether the gateway requires authenticated requests; ours always carry the bearer. */
   authenticated: boolean;
   createdAt: string | null;
 }
@@ -242,9 +224,7 @@ export function isCloudflareAIGatewayId(value: string): boolean {
   return /^[a-zA-Z0-9._-]{1,64}$/.test(value);
 }
 
-/** List the account's AI Gateways (GET /accounts/{id}/ai-gateway/gateways).
- *  Requires the `aig.write` OAuth scope — a 401/403 here usually means the
- *  credential predates that scope and the user must reconnect Cloudflare. */
+/** List the account's AI Gateways. Needs the `aig.write` scope; 401/403 usually means reconnect Cloudflare. */
 export async function fetchCloudflareAIGateways(
   accountId: string,
   accessToken: string,
@@ -296,9 +276,7 @@ export function accountIdFromCloudflareCredential(credential: OAuthCredential): 
   return v.is(v.string(), accountId) && isCloudflareAccountId(accountId) ? accountId : null;
 }
 
-/** Every Cloudflare account this login can see, as recorded at connect time.
- *  A token issued before accounts were recorded reports just its selected
- *  account, so the picker always has at least the account in use. */
+/** Every Cloudflare account this login can see; older tokens report just the selected one. */
 export function cloudflareAccountsFromCredential(credential: OAuthCredential): CloudflareAccount[] {
   const stored = v.safeParse(v.array(CloudflareAccountSchema), credential.metadata?.accounts);
 
@@ -317,9 +295,7 @@ export function cloudflareAccountsFromCredential(credential: OAuthCredential): C
   return [{ id: selected, name: v.is(v.string(), name) && name.trim() ? name.trim() : selected }];
 }
 
-/** The same credential pointing at another of its accounts. Rewriting the
- *  selection in metadata keeps one source of truth for "which account serves
- *  this user's Workers AI" — the value `cloudflareWorkersAIBaseURL` reads. */
+/** The same credential pointed at another of its accounts (the metadata `cloudflareWorkersAIBaseURL` reads). */
 export function withCloudflareAccount(credential: OAuthCredential, accountId: string): OAuthCredential {
   const account = cloudflareAccountsFromCredential(credential).find((row) => row.id === accountId);
 
@@ -349,8 +325,7 @@ function cleanEnv(value: string | undefined): string {
   return value?.trim() ?? '';
 }
 
-/** A lifetime the token endpoint states as a number of seconds or as digits in
- *  a string; anything else is not a lifetime. */
+/** A token lifetime, given as seconds or a digit string; anything else is not a lifetime. */
 const ExpiresInSchema = v.union([
   v.number(),
   v.pipe(v.string(), v.trim(), v.nonEmpty(), v.transform(Number)),
@@ -385,8 +360,7 @@ function scopeList(input: { value: unknown }): string[] | undefined {
   return undefined;
 }
 
-/** A field of an unvalidated payload as the non-empty text it holds — a blank
- *  string is a field the endpoint filled with nothing. */
+/** A payload field as non-empty text; blank counts as absent. */
 function stringField(obj: JsonObject, key: string): string | undefined {
   return nonEmptyString({ value: obj[key] });
 }
@@ -403,10 +377,7 @@ function firstCloudflareError(obj: JsonObject): string | null {
   return null;
 }
 
-/** A JSON OBJECT answer, or a named failure carrying the upstream's status and
- *  the parse cause — an OAuth endpoint the caller cannot proceed without gets
- *  a real error, not a silent null to re-diagnose downstream. Shared with the
- *  auth routes, which answer the same endpoints during login. */
+/** A JSON object answer, or a named failure carrying the upstream status and parse cause. */
 export async function readJsonObject(response: Response, label: string): Promise<JsonObject> {
   try {
     return v.parse(JsonObjectSchema, await response.json());

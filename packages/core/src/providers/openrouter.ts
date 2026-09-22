@@ -1,10 +1,4 @@
-// OpenRouter — multi-upstream Chat Completions gateway.
-//   Base: https://openrouter.ai/api/v1
-//   Auth: Bearer <api-key>
-//   Headers: HTTP-Referer + X-Title (attribution / ranking)
-//   Catalog: dynamic via GET /api/v1/models
-// createModel is sync; customFetch injects bearer + attribution headers at
-// request time via the AuthResolver.
+// OpenRouter gateway: bearer plus HTTP-Referer/X-Title attribution headers; dynamic catalog.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
@@ -22,10 +16,8 @@ export interface OpenRouterOptions {
   catalogTtlMs?: number;
 }
 
-/** `GET /models` rows. `reasoning.supported_efforts` is the model's own list
- *  of accepted `reasoning.effort` values, published for exactly this use
- *  ("Use this when building client UIs"):
- *  https://openrouter.ai/docs/use-cases/reasoning-tokens */
+/** `GET /models` rows; `reasoning.supported_efforts` lists accepted `reasoning.effort`
+ *  values (https://openrouter.ai/docs/use-cases/reasoning-tokens). */
 const OpenRouterCatalogSchema = v.object({
   data: v.optional(v.array(v.object({
     id: v.string(),
@@ -38,8 +30,7 @@ const OpenRouterCatalogSchema = v.object({
 
 export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelProvider {
   const ttl = opts.catalogTtlMs ?? 5 * 60_000;
-  // Keyed by the resolved credential so swapping/removing the API key
-  // invalidates the catalog instead of serving the previous key's models.
+  // Keyed by credential so a key change invalidates the catalog.
   let catalogCache: { at: number; authKey: string; models: ModelInfo[] } | null = null;
 
   return {

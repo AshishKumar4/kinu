@@ -1,14 +1,4 @@
-// Dynamic models.dev catalog source — serves every models.dev provider whose
-// auth shape Kinu can satisfy with a stored API key: Chat Completions or
-// Responses, selected by the model's declared SDK. Bespoke providers (anthropic, openai, openrouter,
-// codex, workers-ai, …) are statically registered and always take precedence —
-// the registry never consults this source for their ids.
-//
-// Credential convention: `<modelsDevProviderId>.bearer` (matches the bespoke
-// trio's existing keys: openai.bearer / anthropic.bearer / openrouter.bearer).
-//
-// createModel stays synchronous. SDK operations resolve the cached catalog;
-// each HTTP request reads fresh credentials.
+// Dynamic models.dev source for providers usable with a stored `<id>.bearer` key; bespoke providers take precedence.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
@@ -24,8 +14,7 @@ import {
   modelsDevCompatBaseURL,
 } from './models-dev';
 
-/** Catalog provider ids must look like models.dev ids — this also rejects
- *  malformed specs early in canResolve()/resolve(). */
+/** Must look like a models.dev id; rejects malformed specs early. */
 const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
 export function catalogCredKey(providerId: string): string {
@@ -35,9 +24,7 @@ export function catalogCredKey(providerId: string): string {
 const CRED_KEY_PATTERN = /^([a-z0-9][a-z0-9._-]*)\.bearer$/;
 
 export interface ModelsDevCatalogSourceOptions {
-  /** Provider ids never served dynamically even though the catalog lists
-   *  them (e.g. models.dev aliases of bespoke providers registered under a
-   *  different id, like `cloudflare-workers-ai` → static `workers-ai`). */
+  /** Catalog ids never served dynamically (aliases of bespoke providers, e.g. `cloudflare-workers-ai`). */
   exclude?: readonly string[];
 }
 
@@ -98,8 +85,7 @@ function createCatalogProvider(providerId: string): ModelProvider {
     },
 
     createModel(modelId, deps): LanguageModel {
-      // Keep registry resolution synchronous; select the SDK before it encodes
-      // the request, using the same cached catalog as the model menu.
+      // Keep resolution synchronous: select the SDK from the same cached catalog as the menu.
       async function resolveModel(): Promise<LanguageModelV3> {
         const endpoint = await getModelsDevModelEndpoint(providerId, modelId, deps);
 

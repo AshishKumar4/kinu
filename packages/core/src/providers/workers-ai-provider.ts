@@ -1,6 +1,4 @@
-// Workers AI provider. Production uses the logged-in user's Cloudflare OAuth
-// credential, so billing stays on that account. The eval identity can use
-// a caller-supplied direct AI binding.
+// Workers AI provider, billed to the user's Cloudflare OAuth account; evals may use a direct binding.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import { type ModelProvider, type ModelInfo } from './types';
@@ -63,8 +61,7 @@ export function createWorkersAIProvider(
         onProviderWait: deps.onProviderWait,
         placeholder,
         missingCredentialMessage: 'Cloudflare login is required before using Workers AI models.',
-        // Replica pinning for the server-side prefix cache — without this
-        // header same-agent turns route randomly and the cache never hits.
+        // Without replica pinning the prefix cache never hits.
         requestHeaders,
       });
 

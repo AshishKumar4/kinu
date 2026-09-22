@@ -1,12 +1,4 @@
-// Anthropic direct — Messages API.
-//   Base: https://api.anthropic.com/v1
-//   Auth: x-api-key header (NOT Authorization: Bearer)
-//   Header: anthropic-version: <date>
-//
-// Separate from OpenAI providers because the wire format differs. Uses
-// @ai-sdk/anthropic which wraps the Messages API with the standard
-// LanguageModel interface. createModel is sync; the API key is resolved
-// inside customFetch via the AuthResolver each call.
+// Anthropic Messages API (auth: `x-api-key`, not Bearer); the key is resolved per call in customFetch.
 import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModel } from 'ai';
 import type { CountableRequest, InputTokenCount } from './input-tokens';
@@ -28,9 +20,7 @@ export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-4-7';
 /** The small tier the evolution engine's mechanical calls run on. */
 export const ANTHROPIC_FAST_MODEL = 'claude-haiku-4-5';
 
-/** Levels per model from the effort guide (read 2026-09-11), for the offline
- *  list only; the live list reads models.dev:
- *  https://platform.claude.com/docs/en/build-with-claude/effort */
+/** Offline effort levels per model; the live list reads models.dev. */
 const FIVE: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 const FOUR: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'max'];

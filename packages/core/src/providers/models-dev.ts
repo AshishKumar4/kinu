@@ -43,9 +43,7 @@ interface ModelsDevModel {
   provider?: v.InferOutput<typeof ModelProviderOverrideSchema>;
   tool_call?: boolean;
   reasoning?: boolean;
-  /** How a model's reasoning is steered, per models.dev: an `effort` row names
-   *  the levels the provider accepts; `toggle` and `budget_tokens` rows are not
-   *  levels. Absent or empty means the model takes no effort. */
+  /** How a model's reasoning is steered; only `effort` rows name levels. Absent or empty means no effort. */
   reasoning_options?: ModelsDevReasoningOption[];
   status?: string;
   limit?: {
@@ -159,10 +157,7 @@ export async function listModelsDevProviderModels(
   }
 }
 
-/** Provider-level metadata for one models.dev provider, or null when the id is
- *  not in the catalog. A catalog that cannot be READ throws: "this provider
- *  does not exist" and "models.dev is unreachable" are the same null otherwise,
- *  and the second one silently empties the caller's provider list. */
+/** Provider metadata, or null when not in the catalog; an unreadable catalog throws rather than returning null. */
 export async function getModelsDevProvider(
   providerId: string,
   deps: Pick<ProviderDeps, 'fetch'>,
@@ -202,9 +197,7 @@ export async function getModelsDevModelEndpoint(
   return { baseURL, protocol: npm === '@ai-sdk/openai' ? 'responses' : 'chat-completions' };
 }
 
-/** Provider-level metadata for every models.dev provider. Throws when the
- *  catalog cannot be read — an empty list is what "you have no providers to
- *  connect" looks like, which is not what a fetch failure means. */
+/** Metadata for every provider; throws when the catalog cannot be read rather than returning an empty list. */
 export async function listModelsDevProviders(
   deps: Pick<ProviderDeps, 'fetch'>,
   ttlMs: number = DEFAULT_TTL_MS,
@@ -214,13 +207,8 @@ export async function listModelsDevProviders(
   return Object.entries(data).map(([id, provider]) => providerInfoFromModelsDev(id, provider));
 }
 
-/**
- * models.dev omits `api` for providers whose npm SDK embeds the endpoint
- * (`@ai-sdk/groq`, `@ai-sdk/mistral`, …) — SDKs a Worker cannot load. These
- * providers all publish a stable, documented OpenAI-compatible endpoint, so
- * the major ones are pinned here. Only consulted when the catalog itself
- * offers no usable `api`; keys must exist in models.dev to take effect.
- */
+/** OpenAI-compatible endpoints for providers whose SDK embeds the URL (unloadable in a Worker);
+ *  used only when the catalog offers no usable `api`, and keys must exist in models.dev. */
 interface CompatEndpointIndex {
   [provider: string]: string;
 }
@@ -237,12 +225,7 @@ const COMPAT_ENDPOINT_SUPPLEMENT: CompatEndpointIndex = {
   cohere: 'https://api.cohere.ai/compatibility/v1',
 };
 
-/**
- * The base URL Kinu can drive with a plain API key through the
- * openai-compat path, or null when the provider needs a bespoke SDK
- * (`npm` is not an OpenAI-surface package) or an endpoint Kinu cannot
- * construct (no `api`, or an `api` with `${…}` account placeholders).
- */
+/** The base URL drivable through openai-compat with a plain key, or null when a bespoke SDK or account placeholder is needed. */
 export function modelsDevCompatBaseURL(provider: ModelsDevProviderInfo): string | null {
   const catalogEligible = provider.npm === '@ai-sdk/openai-compatible' || provider.npm === '@ai-sdk/openai';
   const api = catalogEligible ? concreteAPI(provider.api) : null;
@@ -312,9 +295,7 @@ function modelInfoFromModelsDev(
 
   const cost = pricingFromModelsDev(model.cost);
 
-  // The provider's own levels for this model, as models.dev records them.
-  // Unknown spellings drop rather than fail, so a vendor adding a level
-  // tomorrow does not empty today's menu.
+  // Unknown level spellings drop rather than fail, so a new vendor level cannot empty the menu.
   const reasoningEfforts = knownReasoningEfforts(
     model.reasoning_options?.find((option) => option.type === 'effort')?.values ?? [],
   );
@@ -331,8 +312,7 @@ function modelInfoFromModelsDev(
   };
 }
 
-/** models.dev `cost`, kept only when BOTH sides of a token are priced —
- *  half a rate prices nothing, and a partial answer would read as authority. */
+/** models.dev `cost`, kept only when both input and output are priced. */
 function pricingFromModelsDev(cost: ModelsDevModel['cost']): ModelPricing | undefined {
   const input = usdRate(cost?.input);
   const output = usdRate(cost?.output);

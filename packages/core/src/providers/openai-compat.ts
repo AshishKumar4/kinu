@@ -1,15 +1,5 @@
-// Generic OpenAI-compatible — BYO base URL + API key. Covers Groq, Together,
-// Fireworks, DeepInfra, xAI, etc. (all Chat Completions API). For OpenRouter,
-// use the openrouter provider (adds attribution headers + dynamic catalog).
-// For Anthropic direct, a separate Messages-API adapter is required.
-//
-// One openai-compat endpoint per credential key — the user can register
-// multiple keyed `openai-compat.<name>` credentials (e.g. `openai-compat.groq`,
-// `openai-compat.together`) and pick the model spec as
-// `openai-compat:<name>/<modelId>`.
-//
-// createModel is sync; customFetch resolves the apiKey + baseURL at request
-// time via the AuthResolver.
+// Generic OpenAI-compatible Chat Completions endpoint; one per `openai-compat.<name>`
+// credential, model spec `openai-compat:<name>/<modelId>`.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
@@ -27,8 +17,7 @@ const ModelListSchema = v.object({
 
 export const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
 
-/** Extract the credential key for an openai-compat provider id.
- *  `openai-compat:groq` → `openai-compat.groq` */
+/** `openai-compat:groq` → `openai-compat.groq` */
 function credKeyFor(providerId: string): string {
   if (providerId === 'openai-compat') return `${OPENAI_COMPAT_KEY_PREFIX}default`;
 
@@ -54,10 +43,8 @@ export function createOpenAICompatProvider(providerId = 'openai-compat'): ModelP
     },
 
     createModel(modelId, deps): LanguageModel {
-      // baseURL is sourced from the credential, but @ai-sdk needs it at
-      // construction. We pass a placeholder and rewrite the prefix inside
-      // customFetch (which re-reads the credential each call, so a UI-side
-      // change to baseURL takes effect without rebuilding the model).
+      // @ai-sdk needs a baseURL at construction; customFetch rewrites this
+      // placeholder from the credential on every call.
       const placeholder = 'https://openai-compat.invalid';
 
       const customFetch = createAuthedFetch(deps, {
@@ -80,9 +67,8 @@ export function createOpenAICompatProvider(providerId = 'openai-compat'): ModelP
   };
 }
 
-/** The endpoint's own `/models` list. An empty array means the endpoint
- *  answered and offers nothing usable; a fetch or parse failure throws, so a
- *  wrong base URL is not reported as a provider with no models. */
+/** The endpoint's `/models` list; fetch or parse failure throws rather than
+ *  reporting a wrong base URL as a provider with no models. */
 export async function discoverOpenAICompatibleModels(
   auth: AuthResolution | null,
   fetchImpl: typeof fetch = fetch,

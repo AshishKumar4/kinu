@@ -1,29 +1,6 @@
 /**
- * Anthropic's pre-request token count — the one active provider that publishes
- * one (`POST /v1/messages/count_tokens`, the same structured input the Messages
- * API takes, answering `{ "input_tokens": N }`).
- *
- * Anthropic's own documentation calls the result an estimate that "might differ
- * by a small amount" from what creating the message bills, and says counts may
- * include tokens Anthropic adds for system optimisations. That is still the
- * provider's own tokenizer over the provider's own structured input, which is
- * the most authoritative answer obtainable BEFORE submission — and it is a
- * different kind of number from a character heuristic, which knows nothing
- * about the tokenizer at all.
- *
- * The conversion below is this module's own, because the AI SDK's Anthropic
- * package does not export its message converter. It mirrors that converter's
- * decisions where they change what is counted, and the mirroring is deliberate
- * rather than incidental:
- *
- *  • unsigned reasoning parts are DROPPED, exactly as the real request drops
- *    them (the vendor emits a `thinking` block only when the part carries an
- *    anthropic signature, and a `redacted_thinking` block for redacted data) —
- *    counting text the request will not send would over-report;
- *  • tool results ride a USER message, as Anthropic requires;
- *  • a part this cannot represent is never dropped silently: the count comes
- *    back `unsupported` naming it, because a dropped part under-reports by its
- *    whole cost and an under-report is the one error admission cannot survive.
+ * Anthropic's pre-request token count (`POST /v1/messages/count_tokens`), mirroring the SDK's converter.
+ * An unrepresentable part reports `unsupported` rather than drop: an under-count is unsafe for admission.
  */
 
 import type {
@@ -36,9 +13,7 @@ import type { ProviderDeps } from './types';
 import { createAuthedFetch } from './util';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 
-/** The wire version the AI SDK's Anthropic package sends, so a raw POST beside
- *  the SDK — this count, and the cache warm in `anthropic-warm.ts` — travels
- *  under the same API contract as the requests it is about. */
+/** The AI SDK Anthropic package's wire version, so raw POSTs (count, warm) share its API contract. */
 export const ANTHROPIC_VERSION = '2023-06-01';
 
 interface Base64Source { type: 'base64'; media_type: string; data: string }
@@ -65,21 +40,11 @@ interface CountBody {
   tools?: Array<{ name: string; description?: string; input_schema: unknown }>;
 }
 
-/**
- * Either a converted piece of the count body, or the reason no exact count of
- * this request exists.
- *
- * One shape for every step of the conversion, and a DISCRIMINATED one: a bare
- * string failure reason makes the callers read a representation
- * (`typeof x === 'string'`) where they need a contract — and a tool result whose
- * content legitimately IS a string is then read as a failure.
- */
+/** A converted piece of the count body, or why no exact count exists. */
 type Converted<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 const CountResponseSchema = v.looseObject({ input_tokens: v.number() });
 
-/** The anthropic namespace of a part's provider options, as the reasoning
- *  branch reads it — the same two fields the vendor's converter reads. */
 const ReasoningMetadataSchema = v.looseObject({
   anthropic: v.looseObject({
     signature: v.optional(v.string()),
@@ -87,13 +52,8 @@ const ReasoningMetadataSchema = v.looseObject({
   }),
 });
 
-/** An `image`/`file` part as a count-body source, or null when the part cannot
- *  be represented exactly: Anthropic requires a media type beside base64 data,
- *  and a data URL whose payload is percent-encoded rather than base64 would
- *  have to be re-encoded here to say anything true about it. */
+/** A count-body source, or null when not exactly representable (Anthropic needs a media type beside base64). */
 function countSource(data: DataContent | URL, mediaType: string | undefined): Base64Source | UrlSource | null {
-  // `DataContent | URL` is a typed union, so it is discriminated by what each
-  // member IS — a URL, a byte buffer, or the string payload that remains.
   if (data instanceof URL) return { type: 'url', url: data.toString() };
 
   if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
@@ -115,8 +75,7 @@ function countSource(data: DataContent | URL, mediaType: string | undefined): Ba
 
   if (!mediaType) return null;
 
-  // A bare string payload is base64 already — `convertToBase64` returns a
-  // string unchanged, and this is the same reading the wire request takes.
+  // A bare string payload is already base64, as the wire request reads it.
   return { type: 'base64', media_type: mediaType, data };
 }
 
@@ -138,9 +97,7 @@ function toolResultBlock(part: ToolResultPart): Converted<CountBlock> {
       return { ok: true, value: { type: 'tool_result', tool_use_id: part.toolCallId, content: blocks } };
     }
 
-    // `json`, `error-json` and `execution-denied`: the vendor serialises the
-    // value, and so does the wire. No default — a part type the SDK adds later
-    // must fail the build here rather than be counted as something it is not.
+    // No default: a part type the SDK adds later must fail the build, not be miscounted.
     case 'json':
     case 'error-json':
     case 'execution-denied':
@@ -156,8 +113,6 @@ function toolResultBlock(part: ToolResultPart): Converted<CountBlock> {
 }
 
 function userBlocks(content: UserModelMessage['content']): Converted<CountBlock[]> {
-  // A user message's content is a string or an array of parts. Discriminated on
-  // the array, which is the shape the loop below needs anyway.
   if (!Array.isArray(content)) return { ok: true, value: [{ type: 'text', text: content }] };
   const blocks: CountBlock[] = [];
 
@@ -181,8 +136,7 @@ function userBlocks(content: UserModelMessage['content']): Converted<CountBlock[
         blocks.push({ type: 'document', source });
         break;
       }
-      // No default: the user content union is text/image/file, and a part the
-      // SDK adds later must fail the build here rather than be counted as zero.
+      // No default: a new SDK part type must fail the build rather than count as zero.
     }
   }
 
@@ -238,8 +192,7 @@ function assistantBlocks(content: AssistantModelMessage['content']): Converted<C
         break;
       }
 
-      // A pending approval is a control part with nothing to price; refused so
-      // the caller falls back rather than counting a body it did not send.
+      // A pending approval is refused so the caller falls back rather than count a body it did not send.
       case 'tool-approval-request':
         return { ok: false, reason: `an assistant content part of type "${part.type}"` };
     }
@@ -255,10 +208,7 @@ async function toCountBody(modelId: string, request: CountableRequest): Promise<
   for (const message of request.messages) {
     switch (message.role) {
       case 'system': {
-        // Anthropic takes the system prompt out of band. The vendor collects
-        // LEADING system messages and refuses one that follows a conversation
-        // message, so a request holding that is a request the provider itself
-        // will not accept — reported rather than counted.
+        // Anthropic accepts only leading system messages; a later one is reported, not counted.
         if (messages.length > 0) return { ok: false, reason: 'a system message after a conversation message' };
         systemParts.push(message.content);
         break;
@@ -325,12 +275,8 @@ async function toCountBody(modelId: string, request: CountableRequest): Promise<
 }
 
 /**
- * Count the assembled request through Anthropic's own endpoint.
- *
- * Throws when the endpoint cannot answer (no credential, transport failure, a
- * body it refuses): `countRequestInputTokens` records that and reports the
- * request as uncounted, because a preflight must not become a new way for the
- * turn to fail.
+ * Count the assembled request through Anthropic's endpoint. Throws when it cannot answer;
+ * `countRequestInputTokens` then reports the request uncounted.
  */
 export async function countAnthropicInputTokens(input: {
   modelId: string;

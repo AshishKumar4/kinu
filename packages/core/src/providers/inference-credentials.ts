@@ -2,23 +2,11 @@
 import { CODEX_CRED_KEY } from './codex';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
 
-/** The credential-key shapes that resolve to a model provider — the same set
- *  `listConnectedProviders` derives the model picker from: the two OAuth
- *  logins, the Cloudflare AI Gateway view of one of them, BYO `<provider>.bearer`
- *  keys, and user-named `openai-compat.<name>` endpoints.
- *
- *  This is an allowlist on purpose. Model inference survives workspace
- *  tainting; anything else in the credential store (`github`, future admin
- *  keys) must not, so an unrecognized key shape is treated as non-model.
- *
- *  Two constraints ride on this list, and a new entry must respect both.
- *  `cloudflare.oauth` authorizes more than inference — it is the same bearer
- *  the AI Gateway management API takes — so account administration is kept
- *  behind `ai_gateway.admin` at `full`, and these headers must only ever be
- *  attached to a provider-pinned endpoint inside trusted Durable Object code,
- *  never to a fetch target the agent chooses. And `<name>.bearer` matches by
- *  SHAPE: a future non-model credential must not be stored under that suffix,
- *  or it would silently inherit model-tier reach. */
+/**
+ * Credential-key shapes that resolve to a model provider; an allowlist, so other keys do not survive tainting.
+ * `cloudflare.oauth` also administers accounts: attach only to provider-pinned endpoints in trusted DO code.
+ * `<name>.bearer` matches by shape, so no non-model credential may use that suffix.
+ */
 const MODEL_CREDENTIAL_KEY_RE = /^([a-z0-9][a-z0-9._-]*\.bearer|openai-compat\..+)$/;
 
 const MODEL_CREDENTIAL_KEYS: readonly string[] = [

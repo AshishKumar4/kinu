@@ -1,9 +1,4 @@
-// Shared wire path for everything that drives the user's Cloudflare AI
-// endpoint ({account}/ai/v1) with a UserDO-held OAuth credential: the
-// workers-ai and my-gateway providers, and the CLI-facing /api/user/ai/v1
-// proxy. One implementation of resolve-auth → placeholder-URL rewrite →
-// refresh-on-401 retry → error mapping, so the request shape cannot drift
-// between the three consumers.
+// Shared wire path to the user's Cloudflare AI endpoint (workers-ai, my-gateway, /api/user/ai/v1 proxy).
 import type { AuthResolution, AuthResolver, ProviderWaitInfo } from './types';
 import { asFetchFunction } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
@@ -25,41 +20,32 @@ const OpenAIErrorSchema = v.object({
 });
 
 export interface CloudflareAIFetchOptions {
-  /** Credential key resolved through `getAuth` on every request
-   *  (`cloudflare.oauth` for Workers AI, `cloudflare.ai-gateway` for the
-   *  user's own AI Gateway). */
+  /** Credential key resolved through `getAuth` on every request. */
   credKey: string;
   getAuth: AuthResolver;
   fetch?: typeof fetch;
-  /** The provider id the model was resolved under (`workers-ai`,
-   *  `my-gateway`) — the name its wait notices carry. */
+  /** Provider id the model resolved under; named in wait notices. */
   provider: string;
   /** The model the requests are for — carried into the same notices. */
   modelId?: string;
   /** The rate-limit wait listener (ProviderDeps.onProviderWait). */
   onProviderWait?: (info: ProviderWaitInfo) => void;
-  /** Placeholder base URL rewritten to the credential's account-scoped
-   *  baseURL on every request (the credential can rotate mid-session). */
+  /** Placeholder base URL, rewritten per request because the credential can rotate mid-session. */
   placeholder: string;
   /** 401 message when the credential is missing or unusable. */
   missingCredentialMessage: string;
   /** Extra headers attached after auth injection (e.g. x-session-affinity). */
   requestHeaders?: Record<string, string>;
-  /** Rewrites non-ok responses (after the refresh retry) into actionable
-   *  errors. Without it, upstream failures pass through untouched. */
+  /** Maps non-ok responses (after the refresh retry) into actionable errors; without it they pass through. */
   mapError?: (res: Response, resolved: AuthResolution) => Promise<Response> | Response;
 }
 
-/** A Cloudflare credential still rejected after the forced-refresh retry. One
- *  sentence, two decision points: the shared path answers with it when the
- *  consumer has no mapper, and {@link mapGatewayError} answers with it when no
- *  gateway-specific code claimed the failure first. */
+/** A Cloudflare credential still rejected after the forced-refresh retry. */
 const DEAD_CLOUDFLARE_LOGIN =
   'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.';
 
 export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof globalThis.fetch {
-  // Retry the raw provider response before auth/error/stream processing so
-  // usage repair only ever sees the final response selected by this layer.
+  // Retry before auth/error/stream processing so usage repair sees only the final response.
   const baseFetch = withRateLimitRetry(opts.fetch ?? fetch, {
     provider: opts.provider,
     ...(opts.modelId !== undefined && { modelId: opts.modelId }),
@@ -74,10 +60,7 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
     const originalUrl = input instanceof Request ? input.url : input.toString();
 
     const send = async (resolved: AuthResolution) => {
-      // Not `new Headers(init?.headers)`: the DOM HeadersInit union's iterable
-      // arm is wider than what some ambient lib combinations accept, and the
-      // constructor's parameter, not this module, is what narrows. Copying by
-      // shape accepts every arm under every lib.
+      // Copied by shape, not `new Headers(init?.headers)`: some lib combinations reject the iterable HeadersInit arm.
       const headers = new Headers();
       const incoming = init?.headers;
 
@@ -99,9 +82,7 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
       return baseFetch(url, { ...init, headers });
     };
 
-    // Expiry-401 contract shared with the codex provider: UserDO's proactive
-    // refresh covers normal expiry, but a token revoked or expired mid-flight
-    // comes back 401 — force one refresh and retry once.
+    // A token revoked mid-flight comes back 401 despite UserDO's proactive refresh: force one refresh, retry once.
     let resolved = auth;
     let res = await send(resolved);
 
@@ -115,13 +96,8 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
     }
 
     if (!res.ok) {
-      // The upstream refusal, counted before it is mapped into a message. What a
-      // consumer's `mapError` returns is prose for a person, and the prose is
-      // where the cause is currently the ONLY record: a dead Cloudflare login
-      // reached six production runs as the plain text `Unauthorized` and left no
-      // fleet signal at all, which is why status and credential-key NAME are a
-      // row here. Never the credential, never the body — a gateway's error body
-      // can carry an upstream key.
+      // Counted before mapping: status and credential-key name only, never the credential or body
+      // (a gateway error body can carry an upstream key).
       diagnostics.failure('provider.error', toKinuError({
         doing: `a request to the account's AI endpoint (HTTP ${res.status})`,
         cause: new Error(`upstream answered ${res.status}`),
@@ -131,30 +107,17 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
 
     if (!res.ok && opts.mapError) return opts.mapError(res, resolved);
 
-    // A 401 that survived the forced refresh is a dead Cloudflare login, and it
-    // belongs to the SHARED credential rather than to any one consumer — so the
-    // consumers with no mapper of their own are answered here. A consumer that
-    // HAS one keeps first refusal above, because a gateway 401 can carry a more
-    // specific cause (2021 BYOK/credits) that this sentence would bury.
-    //
-    // Without this, `workers-ai.ts` — which passes no mapper, and is the
-    // provider the owner's workspaces run on — let the upstream body through
-    // untouched: Cloudflare answers a rejected credential with the plain text
-    // `Unauthorized`, which is what reached `run_end {reason:'error',
-    // error:'Unauthorized'}` on six runs in `stone-ash-71f2` and
-    // `sunlit-stone-4a20` on 2026-08-17, and the chat's failed-turn card.
+    // A 401 after the forced refresh is a dead shared login, answered here for consumers without a mapper.
+    // A mapper keeps first refusal: a gateway 401 can carry a more specific cause (2021).
     if (res.status === 401) return errorResponse(401, DEAD_CLOUDFLARE_LOGIN);
 
-    // The endpoint's trailing duplicate usage chunk can zero cached_tokens
-    // (see stream-usage-repair.ts) — repair it so cache accounting survives.
+    // Repair the endpoint's trailing duplicate usage chunk, which can zero cached_tokens.
     return repairSseCachedUsage(res);
   });
 }
 
-/** Rewrite gateway/provider failures into actionable messages that name the
- *  gateway and the upstream provider — never raw Cloudflare error envelopes.
- *  Known shapes: 2008 "Invalid provider" (model id the unified surface can't
- *  route) and 2021 "Invalid User Credentials" (no BYOK key + no credits). */
+/** Rewrite gateway failures into messages naming the gateway and upstream provider.
+ *  Known: 2008 "Invalid provider" and 2021 "Invalid User Credentials" (no BYOK key, no credits). */
 export async function mapGatewayError(res: Response, modelId: string, gatewayId: string | undefined): Promise<Response> {
   const body = await res.text();
   const { code, message } = extractGatewayError(body);
@@ -168,7 +131,7 @@ export async function mapGatewayError(res: Response, modelId: string, gatewayId:
   } else if (code === 2021 || /invalid user credentials/i.test(message ?? '') || /insufficient.*(credit|balance)/i.test(message ?? '')) {
     friendly = `${gateway} has no working credentials for "${author}" — add a ${author} key under AI Gateway → Provider Keys (BYOK), or load Unified Billing credits in your Cloudflare account.`;
   } else if (res.status === 401) {
-    // Still 401 AFTER the forced-refresh retry, and no gateway code claimed it.
+    // Still 401 after the forced-refresh retry, and no gateway code claimed it.
     friendly = DEAD_CLOUDFLARE_LOGIN;
   }
 
@@ -186,9 +149,7 @@ export async function mapGatewayError(res: Response, modelId: string, gatewayId:
 }
 
 function extractGatewayError(body: string): GatewayErrorDetail {
-  // A gateway error body is not required to be JSON; plain text is a real
-  // response shape, so the raw text is the answer rather than a fallback for
-  // one we failed to read.
+  // A gateway error body need not be JSON; plain text is a real answer.
   const rawText: GatewayErrorDetail = {
     code: null,
     message: body.trim() ? body.trim().slice(0, 200) : null,

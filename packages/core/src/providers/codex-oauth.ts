@@ -1,13 +1,5 @@
-// Codex OAuth device-code flow shared by web UserDO and local CLI.
-//
-// This mirrors the Codex CLI flow:
-//   1. POST auth.openai.com/api/accounts/deviceauth/usercode
-//   2. User enters the code at auth.openai.com/codex/device
-//   3. Poll auth.openai.com/api/accounts/deviceauth/token
-//   4. Exchange the authorization code at auth.openai.com/oauth/token
-//
-// Provider calls use the Codex CLI-style header bundle. Refresh ownership stays
-// with the credential store that calls createCodexOAuthClient().
+// Codex OAuth device-code flow (mirrors the Codex CLI), shared by web UserDO and local CLI.
+// Refresh ownership stays with the credential store that calls createCodexOAuthClient().
 import * as v from 'valibot';
 import { OAuthTokenError } from './oauth-token-error';
 import type { OAuthCredential } from '../credentials/store';
@@ -56,10 +48,7 @@ function sanitizeErrorBody(body: string): string {
     .slice(0, 512);
 }
 
-/** Read the token endpoint's rejection into its typed shape. The OAuth error
- *  code rides the JSON body's `error` field; a body that is not that shape is
- *  still a failure, but it carries no code — spelled `unknown` so no caller
- *  can mistake a transient outage for a terminal revocation. */
+/** Read the token endpoint's rejection; a body without an `error` code yields `unknown`, never a terminal code. */
 async function codexTokenEndpointError(res: Response): Promise<OAuthTokenError> {
   const body = await res.text();
 
@@ -79,10 +68,7 @@ const DevicePollErrorSchema = v.object({
   error_description: v.optional(v.string()),
 });
 
-/** Read a rejected device-code poll into its answer. An explicit terminal
- *  code in the body wins over the bare status; otherwise the endpoint's own
- *  statuses decide: pending arrives as 403, an expired code as 404. Anything
- *  else is a failure the caller cannot wait out, and it throws as before. */
+/** Read a rejected device-code poll: an explicit terminal code wins; else 403 is pending and 404 expired. */
 async function devicePollRejection(res: Response): Promise<DeviceCodePoll> {
   const body = await res.text();
 
@@ -120,10 +106,7 @@ export interface DeviceCodeTokens {
   idToken?: string;
 }
 
-/** One answer from the device-code poll. `pending` means the code is still
- *  live and nobody has approved it; the caller asks again. Every other
- *  status ends the wait: `expired` and `denied` carry the provider's own
- *  reason, and `granted` carries the exchanged tokens. */
+/** One device-code poll answer; `pending` means ask again, anything else ends the wait. */
 export type DeviceCodePoll =
   | { status: 'pending' }
   | { status: 'expired'; message: string }
@@ -250,15 +233,10 @@ export function tokensToCredential(t: DeviceCodeTokens, metadata?: JsonObject): 
   };
 }
 
-/** A JWT payload segment is unpadded base64url; a length of 4n+1 has no valid
- *  base64 form at all. `atob` throws for either, so both are refused here
- *  rather than caught — the decode below then cannot fail on the encoding. */
+/** Unpadded base64url of length 4n+1 has no valid form; refused here so the decode below cannot throw. */
 const JWT_PAYLOAD_SEGMENT = /^[A-Za-z0-9_-]+$/;
 
-/** Decode a JWT's payload segment (base64url) — null when the token carries no
- *  decodable payload segment. A segment that decodes to something other than a
- *  JSON object propagates: that is a corrupt credential, not an absent claim,
- *  and every request built from it would otherwise fail as an opaque 401. */
+/** Decode a JWT payload segment; null when absent. A non-object payload throws as a corrupt credential. */
 function decodeJwtPayload(token: string): JsonObject | null {
   const segment = token.split('.')[1];
 
@@ -301,23 +279,7 @@ export function codexCredentialToHeaders(cred: OAuthCredential) {
   return { ...headers, 'ChatGPT-Account-ID': accountId };
 }
 
-/**
- * How early a Codex access token counts as expiring, so it is refreshed before a
- * request could be authorised with a token that dies mid-flight.
- *
- * ONE window, because there were two for the same decision: this default was 60 s
- * and `codex-auth-store.ts` passed 300 s beside its own separate
- * `Date.now() + 5*60_000 >= expiresAt` check, so the CLI's two refresh paths
- * disagreed by 5x on when a token is too old to use. 300 s is the window that was
- * actually chosen for a path someone looked at; the 60 s was the one nobody did.
- *
- * NOT derived, and the measurement that would derive it is absent: a streamed
- * completion is one HTTP request and the longest measured turn is 509 s
- * (`LONGEST_MEASURED_TURN_MS`), so a lead of 300 s does not guarantee the token
- * outlives the request it opened. Closing that needs the actual `expires_in`
- * Codex issues, which nothing in this tree records — a lead longer than a short
- * token's whole life would refresh on every call instead.
- */
+/** How early a Codex access token counts as expiring. Not derived: Codex's actual `expires_in` is unrecorded. */
 export const CODEX_REFRESH_LEAD_SEC = 300;
 
 export function codexAccessTokenExpiring(accessToken: string, skewSec = CODEX_REFRESH_LEAD_SEC): boolean {

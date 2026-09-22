@@ -34,14 +34,11 @@ export interface AgentModelEntry {
   provider: string;
   capabilities?: ModelCapability[];
   contextWindow?: number;
-  /** The effort levels the model accepts, in the provider's order; absent
-   *  when the catalog could not say. */
+  /** Effort levels the model accepts, in provider order; absent when unknown. */
   reasoningEfforts?: ReasoningEffort[];
 }
 
-/** The menu both backends return: pickable models, plus the providers that
- *  could not be listed. A provider that fails costs its own models and
- *  nothing else — it is reported here rather than emptying the list. */
+/** Pickable models plus providers that could not be listed; one failure costs only its own models. */
 export interface AgentModelMenu {
   models: AgentModelEntry[];
   failures: ProviderFailure[];
@@ -88,8 +85,7 @@ export function validateModelSpec(models: readonly AgentModelEntry[], spec: stri
   return { status: 'unknown-model', provider, suggestions };
 }
 
-/** Admit each model and failure independently so one malformed row cannot
- *  erase another provider's catalog or its failure reason. */
+/** Admit each model and failure independently so one malformed row cannot erase another. */
 export function normalizeModelMenu(input: { payload: unknown }): AgentModelMenu {
   const parsed = v.safeParse(ModelMenuPayloadSchema, input.payload);
   const source = parsed.success ? parsed.output : { models: [], failures: [] };
@@ -159,10 +155,7 @@ function normalizeModelEntries(input: { rows: unknown[] }): AgentModelEntry[] {
   });
 }
 
-/** Collapse duplicate specs (union capabilities), keep models grouped by
- *  provider in feed order (= the backend's connection-preference order), and
- *  pin the platform default first — used by the cloud catalog, which merges
- *  many provider feeds now that the full models.dev catalog is exposed. */
+/** Dedupe specs (union capabilities), keep provider groups in feed order, and pin the platform default first. */
 function dedupeModelEntries(rows: AgentModelEntry[]): AgentModelEntry[] {
   const bySpec = new Map<string, AgentModelEntry>();
   const providerOrder = new Map<string, number>();

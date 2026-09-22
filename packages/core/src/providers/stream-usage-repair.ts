@@ -1,65 +1,17 @@
-/**
- * Cached-usage repair for Cloudflare AI SSE streams.
- *
- * The {account}/ai/v1 chat-completions stream carries usage TWICE: the model
- * runtime's own final chunk, then a platform-appended duplicate. The duplicate
- * loses the cache report in one of TWO shapes, and both were observed live:
- * it zeroes `prompt_tokens_details.cached_tokens` (2026-07-13,
- * @cf/zai-org/glm-5.2: the model chunk reported cached_tokens:14528 while the
- * trailing duplicate said 0 — and account billing confirmed the discounted
- * cached rate was applied), or it DROPS `prompt_tokens_details` altogether
- * (2026-08-17, @cf/deepseek-ai/deepseek-v4-pro-0813 — see the workspace
- * evidence in unit-stream-usage-repair.ts). @cf/moonshotai/kimi-k2.6's
- * duplicate is faithful. @ai-sdk/openai-compatible keeps the LAST usage chunk
- * it sees, so without repair every streamed step loses its cache read:
- * the zeroing shape reports `cacheRead: 0`, which reads as a total cache miss
- * because a reported zero is evidence, and the dropping shape reports nothing
- * at all, which `normalizeUsage` correctly refuses to guess at. Either way the
- * cache itself works; only the reporting is lost.
- *
- * Usage repair rule: within one response, `cached_tokens` cannot legitimately
- * decrease. Track the largest value seen; rewrite any later usage chunk that
- * reports less, or that dropped the field, to that maximum. Untouched lines
- * pass through byte-exactly and nothing is ever fabricated — until a chunk has
- * reported a real cache read there is no maximum to restore, so a stream that
- * only ever reports 0, or never mentions caching at all, is left exactly as it
- * came.
- *
- * Structure repair rule: a non-error frame carrying `usage` but omitting
- * `choices` gains exactly `choices: []` — the AI SDK's chunk schema requires
- * the field, so the dialect that drops it (a usage-only tail frame) cannot
- * reach the parser at all. Every other frame, error frames included, is
- * forwarded byte-identically.
- *
- * The rule and the byte pass are separate exports because the two paths that
- * need the rule differ in exactly one way: this endpoint's SSE bytes reach the
- * caller unread (cloudflare-ai-fetch.ts), so they have to be split and parsed
- * here, while the direct binding path already parses every `data:` line to
- * translate it (direct-workers-ai-fetch.ts). That path applies the rule inside
- * its own pass rather than splitting, decoding, parsing and re-encoding the
- * same bytes a second time.
- */
+/** Cloudflare AI SSE usage repair: the platform's trailing duplicate usage chunk zeroes or
+ *  drops `cached_tokens`, and the AI SDK keeps the last one. */
 
 import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { tolerate } from '../obs/index';
 
-/** The cache detail a usage report carries, all of it optional: a duplicate
- *  that dropped or nulled the whole object is precisely the shape needing
- *  repair. */
+/** All optional: a dropped or nulled object is the shape needing repair. */
 const UsageSchema = v.looseObject({
   prompt_tokens_details: v.nullish(v.looseObject({ cached_tokens: v.nullish(v.number()) })),
 });
 
-/**
- * The repair rule, as one stateful function over one response.
- *
- * Takes the `usage` a chunk reports and answers with the usage it should report
- * instead, or `undefined` when the chunk needs no repair — so a caller holding
- * the original bytes can forward them untouched. Every usage report of the
- * response must pass through, in arrival order: the maximum is what a later
- * under-reporting duplicate is restored to.
- */
+/** Per-response rule: `cached_tokens` cannot decrease, so restore later under-reports to
+ *  the max seen; `undefined` means forward the original bytes. Feed every usage in order. */
 export function createCachedUsageRepair(): (usage: JsonObject) => JsonObject | undefined {
   let maxCached = 0;
 
@@ -75,13 +27,8 @@ export function createCachedUsageRepair(): (usage: JsonObject) => JsonObject | u
       return undefined;
     }
 
-    // No chunk has reported a real cache read yet, so there is no maximum to
-    // restore — and writing a `cached_tokens: 0` here would fabricate a report
-    // the provider never made, which is the one thing this repair must not do.
+    // No real cache read yet: never fabricate a report.
     if (maxCached === 0) return undefined;
-    // Built in statements rather than spread-when-present: the duplicate we
-    // repair is exactly the chunk that DROPPED or nulled this object, so
-    // "no detail" is the common case and deserves to read as one.
     const details = usage.prompt_tokens_details;
     const repaired: JsonObject = v.is(JsonObjectSchema, details) ? { ...details } : {};
     repaired.cached_tokens = maxCached;
@@ -104,9 +51,7 @@ export function repairSseCachedUsage(res: Response): Response {
   });
 }
 
-/** Byte→byte transform: split the SSE stream into lines, repair `data:` lines
- *  whose usage under-reports or drops the cached-token count, pass everything
- *  else through. */
+/** Byte transform repairing `data:` usage lines; other lines pass through verbatim. */
 function cachedUsageRepairTransform(): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -119,22 +64,16 @@ function cachedUsageRepairTransform(): TransformStream<Uint8Array, Uint8Array> {
     const payload = line.slice(5, crlf ? -1 : undefined).trim();
 
     if (!payload.startsWith('{')) return line; // e.g. "data: [DONE]"
-    // A `data:` line that is not JSON is not a usage chunk, so it passes
-    // through untouched like every other non-usage line. Any other failure is
-    // real and must not become a silent skip of the repair.
+    // Only a JSON parse failure passes through; other failures propagate.
     const decoded = tolerate<unknown>(() => JSON.parse(payload), 'malformed-input');
     const parsed = v.safeParse(JsonObjectSchema, decoded);
 
     if (!parsed.success) return line;
     const chunk = parsed.output;
 
-    // `usage` is what distinguishes a usage chunk from a delta.
     if (!v.is(JsonObjectSchema, chunk.usage)) return line;
     const repaired = repairUsage(chunk.usage);
-    // A usage-only frame that omits `choices` cannot cross the SDK's chunk
-    // schema at all (direct-workers-ai-fetch.ts:517 names the same contract),
-    // so the verbatim proxy path adds exactly an empty array — nothing else.
-    // An error frame is not a chunk and is never given one.
+    // The SDK chunk schema requires `choices`; error frames are never given one.
     const needsChoices = !('choices' in chunk) && !('error' in chunk);
 
     if (!repaired && !needsChoices) return line;

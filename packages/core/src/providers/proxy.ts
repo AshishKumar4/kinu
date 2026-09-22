@@ -1,28 +1,5 @@
-/**
- * The general provider proxy — the wire contract that lets a client with no
- * secret of its own drive a provider whose API key is held somewhere else.
- *
- * The shape of the problem: every provider adapter here reaches its endpoint
- * through `deps.getAuth(credKey)` (headers) and `deps.fetch` (the send). A
- * client that HAS the key resolves real headers and sends directly. A client
- * that does not can resolve a MARKER instead — a header naming the credential
- * key, carrying no secret — and let a fetch wrapper relocate the request to a
- * server that holds the key, attaches it there, and streams the answer back.
- * Nothing else in the provider layer changes, which is why this works for
- * every adapter at once (bespoke and models.dev catalog alike) instead of
- * needing a proxy shim per provider.
- *
- * Two rules make it safe to be general:
- *
- *   1. The client names the credential and the target URL; the SERVER decides
- *      whether that URL is one the credential may be spent on, by resolving
- *      the provider's own base URL from `providerProxyBaseURL` and requiring
- *      the target to sit under it. Without that check the route would be an
- *      open forwarder that attaches the owner's API key to any host a caller
- *      names — key exfiltration in one request.
- *   2. `PROXY_DENIED_CRED_KEYS` — some credentials are not the proxy's to
- *      spend at all. See that list for each one's reason.
- */
+/** General provider proxy: a client without the key sends a secret-free marker and the
+ *  server attaches the key, only for targets under that provider's own base URL. */
 import { ANTHROPIC_BASE_URL, ANTHROPIC_CRED_KEY } from './anthropic';
 import { getModelsDevProvider, modelsDevCompatBaseURL } from './models-dev';
 import { OPENAI_BASE_URL, OPENAI_CRED_KEY } from './openai';
@@ -31,16 +8,13 @@ import { asFetchFunction } from './fetch-shim';
 import type { AuthResolution, ProviderDeps } from './types';
 import { copyHeaders } from './util';
 
-/** Names the credential the server must attach. Present on a request means
- *  "this one is proxied"; absent means the caller resolved real auth and the
- *  request goes out directly. Never carries secret material. */
+/** Names the credential the server must attach; its presence marks a proxied request. */
 export const PROXY_CRED_HEADER = 'x-kinu-proxy-cred';
 
 /** The upstream URL the proxied request was built for. */
 export const PROXY_TARGET_HEADER = 'x-kinu-proxy-target';
 
-/** The route both sides agree on. Owned here so the client that builds the
- *  URL and the server that mounts it cannot drift. */
+/** Shared by client and server so the route cannot drift. */
 export const PROVIDER_PROXY_PATH = '/api/user/ai/proxy';
 
 export function providerProxyForwardURL(origin: string): string {
@@ -51,53 +25,26 @@ export function providerProxyCredentialsURL(origin: string): string {
   return `${origin.replace(/\/+$/, '')}${PROVIDER_PROXY_PATH}/credentials`;
 }
 
-/**
- * The signed-in worker's OpenAI-compatible inference proxy — the sibling route
- * to `PROVIDER_PROXY_PATH` above, and the one the two Cloudflare-backed
- * providers are served on.
- *
- * It is here for the same reason its sibling is: a route shape is an agreement
- * between the server that mounts it and every client that builds a URL for it,
- * so it cannot live on either side. It was stated twice — `USER_AI_PROXY_PREFIX`
- * in cf-backend's `user/ai-proxy.ts` and an inline literal inside cli-backend's
- * `cloudProxyBaseURL` — with nothing relating them, and a third private copy was
- * about to be added in test-utils. Two copies of a route agree until one moves.
- */
+/** The signed-in worker's OpenAI-compatible inference proxy, which serves the
+ *  Cloudflare-backed providers; shared by server and clients. */
 export const USER_AI_PROXY_PATH = '/api/user/ai/v1';
 
 export function cloudProxyBaseURL(origin: string): string {
   return `${origin.replace(/\/+$/, '')}${USER_AI_PROXY_PATH}`;
 }
 
-/** The provider ids that proxy fronts — the native Cloudflare path. It travels
- *  with the route because it only means anything relative to it: this is the set
- *  of specs belonging to the signed-in account rather than to a local BYO
- *  credential, which is what the CLI's endpoint/credential seam and the server's
- *  registry must agree on. */
+/** Provider ids served by that proxy: the signed-in account's, not a local BYO credential. */
 export const CLOUD_PROXY_PROVIDER_IDS = ['workers-ai', 'my-gateway'] as const;
 
 export type CloudProxyProviderId = typeof CLOUD_PROXY_PROVIDER_IDS[number];
 
-/**
- * Credentials the general proxy refuses to front.
- *
- * The two Cloudflare keys authorize more than inference — the same bearer
- * drives the AI Gateway management API — so they must only ever meet an
- * endpoint the server pinned itself, and the `/api/user/ai/v1` proxy is where
- * they are served.
- *
- * `codex.oauth` is refused for a different and entirely practical reason: the
- * Codex endpoint refuses Cloudflare Workers egress as bot traffic (the WAF
- * case codex.ts already handles). Proxying it would turn a local credential
- * that works today into a 403, so a machine that wants Codex keeps its own.
- */
+/** Cloudflare keys also drive the AI Gateway management API, so only pinned endpoints
+ *  get them; Codex rejects Workers egress as bot traffic (403). */
 export const PROXY_DENIED_CRED_KEYS: readonly string[] = [
   'cloudflare.oauth', 'cloudflare.ai-gateway', 'codex.oauth',
 ];
 
-/** Base URLs owned by a statically registered provider. These win over the
- *  models.dev catalog for the same reason the registry's static tier wins:
- *  the adapter, not the catalog, decides where a bespoke provider talks. */
+/** Static provider base URLs; they win over the models.dev catalog. */
 interface StaticProviderBaseUrls {
   readonly [credentialKey: string]: string;
 }
@@ -110,17 +57,8 @@ const STATIC_PROVIDER_BASE_URLS: StaticProviderBaseUrls = {
 
 const CATALOG_CRED_KEY_PATTERN = /^([a-z0-9][a-z0-9._-]*)\.bearer$/;
 
-/**
- * Where a credential is allowed to be spent — the single answer both sides
- * need. The client uses it to know a proxied provider has a reachable
- * endpoint at all; the server uses it as the allowlist a client-named target
- * must fall under.
- *
- * Null means "this key has no base URL derivable from the provider layer".
- * `openai-compat.*` credentials return null here on purpose: their base URL
- * is part of the stored credential, so only the side holding the credential
- * can supply it.
- */
+/** Base URL a credential may be spent under; null for `openai-compat.*`, whose base URL
+ *  lives in the stored credential. */
 export async function providerProxyBaseURL(
   credKey: string,
   deps: Pick<ProviderDeps, 'fetch'>,
@@ -137,20 +75,8 @@ export async function providerProxyBaseURL(
   return info ? modelsDevCompatBaseURL(info) : null;
 }
 
-/**
- * The endpoints a proxied credential may be spent on, relative to its base URL,
- * and the ONE method each admits.
- *
- * Origin and path alone are not enough, in two directions. A provider's API
- * root holds more than inference: `https://openrouter.ai/api/v1/keys` and
- * `https://api.openai.com/v1/organization/admin_api_keys` sit directly under
- * the same base as `/chat/completions`, and a key with provisioning rights
- * would mint a fresh cleartext key through them. And an inference path is not
- * one operation: `/models/{id}` reads a model under GET and DELETES it under
- * DELETE, on providers that support it, with the owner's credential attached
- * either way. `ai.proxy` is the capability for SPENDING inference, so this is
- * the closed (method, path) matrix running models needs and nothing else.
- */
+/** Closed (method, path) matrix for inference: the API root also holds key-provisioning
+ *  routes, and `/models/{id}` deletes under DELETE. */
 const PROXY_ALLOWED_ENDPOINTS: readonly { readonly method: string; readonly path: RegExp }[] = [
   { method: 'POST', path: /^\/chat\/completions$/ },
   { method: 'POST', path: /^\/completions$/ },
@@ -158,26 +84,13 @@ const PROXY_ALLOWED_ENDPOINTS: readonly { readonly method: string; readonly path
   { method: 'POST', path: /^\/responses(\/[^/]+)?$/ },
   { method: 'POST', path: /^\/messages(\/count_tokens)?$/ },
   { method: 'POST', path: /^\/embeddings$/ },
-  // Discovery and retrieval only. A model id under any other verb is model
-  // management, which this scope does not buy.
+  // Discovery only; other verbs on a model id are model management.
   { method: 'GET', path: /^\/models(\/.+)?$/ },
 ];
 
-/**
- * Whether `target` may be reached with `method` and the credential whose base
- * URL is `base`: same https origin, under `base`'s path, and one of the
- * (method, endpoint) pairs above. A base of `https://api.groq.com/openai/v1`
- * therefore admits `POST /openai/v1/chat/completions` and refuses
- * `/openai/v1x`, another host, the provider's own account-management routes,
- * and `DELETE /openai/v1/models/{id}`.
- *
- * The method is compared case-sensitively against the upper-case verbs above,
- * which is what HTTP means by a method: `delete` is not a different, unlisted
- * verb that falls through — `fetch` would send it as `DELETE`.
- */
+/** Same https origin, under `base`'s path, and an allowed (method, endpoint) pair.
+ *  Method match is case-sensitive: fetch upper-cases `delete` to `DELETE`. */
 export function proxyTargetAllowed(target: string, base: string, method: string): boolean {
-  // Asked, not caught: `URL.parse` reports an unparseable URL as null, so a
-  // refusal here is always a refusal this predicate decided.
   const targetURL = URL.parse(target);
   const baseURL = URL.parse(base);
 
@@ -185,8 +98,7 @@ export function proxyTargetAllowed(target: string, base: string, method: string)
 
   if (targetURL.protocol !== 'https:' || baseURL.protocol !== 'https:') return false;
 
-  // A URL carrying credentials cannot be handed to fetch, and its authority is
-  // exactly the shape used to make a target look like somewhere it is not.
+  // Userinfo in a URL disguises its real host.
   if (targetURL.username || targetURL.password) return false;
 
   if (targetURL.origin !== baseURL.origin) return false;
@@ -199,14 +111,8 @@ export function proxyTargetAllowed(target: string, base: string, method: string)
   return PROXY_ALLOWED_ENDPOINTS.some((allowed) => allowed.method === verb && allowed.path.test(endpoint));
 }
 
-/** The secret-free `AuthResolution` a proxied credential resolves to: a marker
- *  naming the key, plus the base URL when the resolver knows it (openai-compat
- *  and the models.dev catalog path both need one to rewrite their placeholder
- *  base). The provider layer treats it like any other resolution.
- *
- *  There is no proxied form of `forceRefresh`. The only provider that asks for
- *  one is codex, whose credential the proxy refuses outright — so a refresh
- *  marker would be a wire feature nothing could ever set. */
+/** Secret-free marker resolution, plus the base URL when known. No proxied
+ *  `forceRefresh`: its only user, codex, is refused by the proxy. */
 export function proxyAuthResolution(credKey: string, baseURL?: string | null): AuthResolution {
   const resolution: AuthResolution = { headers: { [PROXY_CRED_HEADER]: credKey } };
 
@@ -218,21 +124,15 @@ export function proxyAuthResolution(credKey: string, baseURL?: string | null): A
 export interface ProviderProxyFetchOptions {
   /** Absolute URL of the server's forward route. */
   forwardURL: string;
-  /** Value for the `authorization` header identifying the caller to the
-   *  server (a Kinu CLI bearer). Not a provider credential. */
+  /** Caller's `authorization` to the server (a Kinu CLI bearer), not a provider credential. */
   authorization: string;
   /** Extra headers to attach to proxied requests only (e.g. session affinity). */
   headers?: Record<string, string>;
   fetch?: typeof fetch;
 }
 
-/**
- * Wrap a fetch so requests carrying `PROXY_CRED_HEADER` are relocated to the
- * server's forward route and everything else goes out untouched. One wrapper
- * covers a whole registry: the marker travels on the request because it came
- * from that credential's `AuthResolution`, so a provider resolving a local key
- * and a provider resolving a proxied one share this fetch without knowing it.
- */
+/** Relocate requests carrying `PROXY_CRED_HEADER` to the server's forward route;
+ *  everything else goes out untouched. */
 export function createProviderProxyFetch(opts: ProviderProxyFetchOptions): typeof globalThis.fetch {
   const baseFetch = opts.fetch ?? fetch;
 
@@ -252,10 +152,8 @@ export function createProviderProxyFetch(opts: ProviderProxyFetchOptions): typeo
   });
 }
 
-/** Read method/url/headers out of the two call shapes a fetch can take,
- *  preferring `init` exactly as the platform does. The body is not read here:
- *  the provider layer always calls its fetch as `(url, init)` (see
- *  `createAuthedFetch`), so spreading `init` forwards the body untouched. */
+/** Read method/url/headers from either fetch call shape, preferring `init`; the body
+ *  rides along in `init` (callers use `(url, init)`). */
 function describeRequest(input: RequestInfo | URL, init?: RequestInit) {
   const fromRequest = input instanceof Request ? input : null;
 

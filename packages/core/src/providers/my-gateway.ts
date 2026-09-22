@@ -1,18 +1,5 @@
-// my-gateway — the USER'S own Cloudflare AI Gateway, authenticated with the
-// same Cloudflare OAuth credential as workers-ai. One taxonomy, no drift:
-//   workers-ai  — the user's Workers AI quota (`@cf/...` models)
-//   my-gateway  — the user's own AI Gateway: third-party models paid by the
-//                 gateway's stored BYOK provider keys or Unified Billing credits
-//   ai-gateway  — the PLATFORM's env-bound gateway (deploy-time fallback)
-//
-// Wire path (the documented REST API, the recommended successor of the
-// deprecated `/compat` endpoint — developers.cloudflare.com/ai-gateway/usage/rest-api/):
-//   POST {account}/ai/v1/chat/completions
-//   Authorization:     Bearer <user OAuth token>   (aig.run scope)
-//   cf-aig-gateway-id: <the user's selected gateway>
-//
-// Model specs are `my-gateway/{author}/{model}` — the modelId after the first
-// slash is exactly the wire `author/model` id (e.g. `openai/gpt-4.1`).
+// The user's own Cloudflare AI Gateway via their Workers AI OAuth credential (`ai-gateway` is the platform's).
+// Wire: POST {account}/ai/v1/chat/completions with `cf-aig-gateway-id`; specs are `my-gateway/{author}/{model}`.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import { type ModelProvider, type ModelInfo, type ProviderDeps } from './types';
@@ -25,10 +12,7 @@ import * as v from 'valibot';
 
 export const MY_GATEWAY_PROVIDER_ID = 'my-gateway';
 
-/** Gateway BYOK `provider_slug` values the OpenAI-compatible REST surface can
- *  serve, mapped to the models.dev catalog id that carries model metadata AND
- *  doubles as the wire author prefix (`author/model`). `google-ai-studio` is
- *  the one slug whose author differs from the slug itself. */
+/** BYOK slugs the OpenAI-compatible REST surface serves, mapped to their models.dev id (also the wire author). */
 const GATEWAY_SLUG_TO_CATALOG = new Map([
   ['openai', 'openai'],
   ['anthropic', 'anthropic'],
@@ -50,9 +34,7 @@ const CreditBalanceSchema = v.object({
   result: v.optional(v.object({ balance: v.optional(v.number()) })),
 });
 
-/** Providers Unified Billing can pay for without a stored key
- *  (developers.cloudflare.com/ai-gateway/features/unified-billing/). Listed
- *  only when the account actually holds credits. */
+/** Providers Unified Billing pays for without a stored key; listed only when the account holds credits. */
 const UNIFIED_BILLING_SLUGS = ['openai', 'anthropic', 'google-ai-studio', 'xai', 'groq'] as const;
 
 const CATALOG_TTL_MS = 60_000;
@@ -83,11 +65,7 @@ export function createMyGatewayProvider(): ModelProvider {
       const discovered = await servableProviderSlugs(auth.baseURL, auth.headers, deps);
 
       if (!discovered.authoritative) {
-        // A gateway that answered 429/5xx said nothing about which providers it
-        // serves, so neither the menu nor the cache may be narrowed by it. The
-        // last catalog this account was actually shown stands until an
-        // authoritative observation replaces it; with none, the provider fails
-        // loudly rather than advertising "no providers configured".
+        // A 429/5xx said nothing about which providers are served: keep the last catalog shown, else fail loudly.
         if (cached) return cloneModelInfos(cached.models);
         throw toKinuError({
           doing: `reading your AI Gateway's servable providers (${discovered.reason})`,
@@ -137,14 +115,7 @@ export function createMyGatewayProvider(): ModelProvider {
   };
 }
 
-/**
- * What one discovery pass learned about this gateway.
- *
- * `authoritative` is the whole point: a menu narrowed to nothing because the
- * account really has no provider keys, and a menu narrowed to nothing because
- * the management API answered 500, are the same bytes and opposite facts. Only
- * the first may be published and cached as this gateway's catalog.
- */
+/** What one discovery pass learned; only an `authoritative` empty menu may be published and cached. */
 type GatewayDiscovery =
   | { authoritative: true; slugs: string[] }
   | { authoritative: false; reason: string };
@@ -155,15 +126,7 @@ type ManagementRead =
   | { kind: 'denied' }
   | { kind: 'transient'; reason: string };
 
-/**
- * Read one AI Gateway management endpoint and classify the answer.
- *
- * 401/403 is the account speaking: a credential minted before the management
- * scope existed cannot see provider configs, and the honest menu is the
- * narrower one. 429 and 5xx are the platform failing to answer at all, and
- * treating those as "no providers" is what turned a transient upstream blip
- * into a connected provider disappearing for the cache's lifetime.
- */
+/** Read one management endpoint: 401/403 narrows the menu; 429 and 5xx are non-answers, not "no providers". */
 async function readGatewayManagement(
   fetchImpl: typeof fetch,
   url: string,
@@ -178,13 +141,8 @@ async function readGatewayManagement(
   return { kind: 'transient', reason: `AI Gateway management answered HTTP ${String(response.status)}` };
 }
 
-/** Which provider slugs THIS gateway can actually serve: its stored BYOK
- *  provider keys, plus the Unified-Billing set when the account has credits.
- *  A denied management call (e.g. a credential predating the aig.write scope)
- *  just narrows the menu; a call that could not be answered — a transport throw,
- *  a 429, a 5xx — is reported as non-authoritative so the caller keeps the last
- *  catalog the account was shown instead of publishing an empty one that looks
- *  like "no providers configured". */
+/** Provider slugs this gateway can serve: BYOK keys, plus Unified Billing ones with credits.
+ *  Unanswered calls are non-authoritative, so the caller keeps the last catalog shown. */
 async function servableProviderSlugs(
   baseURL: string,
   authHeaders: Record<string, string>,

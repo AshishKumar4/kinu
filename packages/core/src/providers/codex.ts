@@ -1,17 +1,5 @@
-// Codex via ChatGPT subscription — OAuth tokens from device-code flow against
-// the internal Codex backend (chatgpt.com/backend-api/codex/responses).
-//
-// Auth headers come back from the AuthResolver (UserDO in production):
-//   Authorization: Bearer <oauth-access-token>
-//   originator: codex_cli_rs   ← WAF bypass
-//   User-Agent: codex_cli_rs/...
-//   ChatGPT-Account-ID: <decoded from JWT 'chatgpt_account_id'>
-//
-// Token refresh is handled by the resolver — providers never see refresh_token.
-// On 401, we retry once with forceRefresh: true to trigger an explicit refresh.
-//
-// CAVEAT: CF WAF may 403 from non-residential IPs even with originator set.
-// Workers egress is CF data-center IPs — runtime probe needed.
+// Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses); auth headers from the AuthResolver.
+// `originator: codex_cli_rs` is the WAF bypass; Cloudflare may still 403 Workers' data-center IPs.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
 import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
@@ -36,14 +24,11 @@ export const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 /** The small tier the evolution engine's mechanical calls run on. */
 export const CODEX_FAST_MODEL = 'gpt-5.4-mini';
 
-/** One sentence for a ChatGPT login the provider refused even after the
- *  forced-refresh retry: what died, and the two doors to its re-auth — the
- *  web settings page and the CLI's device-code flow. */
+/** The remedy for a ChatGPT login refused after the forced-refresh retry: web settings or CLI device-code. */
 const CODEX_DEAD_LOGIN =
   'Your ChatGPT login is no longer valid. Reconnect ChatGPT in User settings, or run `kinu setup` on this machine.';
 
-/** Offline list. Levels come from the OpenAI model pages (`GPT54_EFFORTS`, openai.ts);
- *  the live `/models` listing carries each model's own `supported_reasoning_levels`. */
+/** Offline list (levels from `GPT54_EFFORTS`); the live `/models` listing carries each model's own levels. */
 const FALLBACK_MODELS: ModelInfo[] = [
   { id: CODEX_DEFAULT_MODEL, label: 'GPT-5.5 (Codex)',    capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000, reasoningEfforts: GPT54_EFFORTS },
   { id: 'gpt-5.4',       label: 'GPT-5.4 (Codex)',       capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000, reasoningEfforts: GPT54_EFFORTS },
@@ -60,8 +45,7 @@ export interface CodexProviderOptions {
 
 export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvider {
   const baseURL = opts.baseURL ?? CODEX_BASE_URL;
-  // Keyed by the resolved credential so swapping the ChatGPT account
-  // invalidates the catalog instead of serving the previous account's models.
+  // Keyed by credential so switching ChatGPT account invalidates the catalog.
   let modelCache: { at: number; authKey: string; models: ModelInfo[] } | null = null;
 
   return {
@@ -119,12 +103,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
       });
 
       const customFetch = asFetchFunction(async (input, init) => {
-        // A dead login presents two ways: the resolver refuses up front (its
-        // own proactive refresh hit invalid_grant — the local store's shape),
-        // or the call goes out and comes back 401 even after one forced
-        // refresh (UserDO serves a credential until it is proven dead).
-        // Both get the same answer: the remedy sentence, on the 401 the AI
-        // SDK already knows how to carry to the chat's failed-turn card.
+        // A dead login (resolver refusal, or 401 after forced refresh) gets the remedy on a 401 the SDK carries.
         const resolveAuth = async (refresh?: { forceRefresh?: boolean }): Promise<AuthResolution | 'revoked' | null> => {
           try {
             return await deps.getAuth(CODEX_CRED_KEY, refresh);
@@ -187,16 +166,10 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         }
 
         if (!res.ok) {
-          // Upstream error body, for WAF detection. Read from a clone so `res`
-          // stays intact for the SDK. No catch: a body this cannot read is a
-          // body the SDK cannot read either, and an empty string here would
-          // silently disable the WAF branch below.
+          // Read from a clone so `res` stays intact for the SDK; no catch, or the WAF branch silently disables.
           const body = await res.clone().text();
 
-          // Cloudflare WAF "Attention Required!" challenge page comes back as
-          // HTML, not the JSON shape the AI SDK expects. The stream crashes
-          // with an opaque parse error. Replace the response body with a
-          // clear, AI-SDK-friendly JSON error that surfaces to the chat UI.
+          // Cloudflare WAF challenge HTML would crash the SDK stream with a parse error; replace it with a JSON error.
           if (res.status === 403 && /Cloudflare|Attention Required/i.test(body)) {
             const userMsg =
               'Codex is blocked by Cloudflare\'s WAF when called from Cloudflare Workers\' ' +
@@ -221,16 +194,14 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         }
 
         if (res.status === 401) {
-          // Still 401 AFTER the forced refresh: the stored login is dead
-          // upstream, whatever the resolver believed.
+          // Still 401 after the forced refresh: the stored login is dead upstream.
           return refusedLoginResponse();
         }
 
         return res;
       });
 
-      // apiKey is unused (customFetch overrides Authorization) but the SDK
-      // requires a non-empty value to construct headers internally.
+      // apiKey is unused (customFetch sets Authorization) but the SDK requires a non-empty value.
       const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: customFetch });
 
       return provider.responses(modelId);
@@ -271,8 +242,7 @@ function parseCodexModels(input: { body: unknown }): ModelInfo[] {
     if (!id) continue;
     const capabilities: NonNullable<ModelInfo['capabilities']> = ['tools', 'streaming'];
 
-    // Each row is a bare level or `{effort, description}`; either way the
-    // level names are the model's own declaration of what it accepts.
+    // Each row is a bare level or `{effort, description}`.
     const reasoningEfforts = knownReasoningEfforts((row.supported_reasoning_levels ?? []).map((level) => {
       const named = v.safeParse(CodexReasoningLevelSchema, level);
 

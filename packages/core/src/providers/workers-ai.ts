@@ -1,5 +1,4 @@
-// Workers AI defaults shared by provider construction, workspace creation,
-// model menus and the branch-worker fallback.
+// Workers AI defaults.
 export const DEFAULT_WORKERS_AI_MODEL_ID = '@cf/zai-org/glm-5.3';
 
 export const DEFAULT_WORKERS_AI_MODEL_SPEC = `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`;
@@ -7,29 +6,17 @@ export const DEFAULT_WORKERS_AI_MODEL_SPEC = `workers-ai/${DEFAULT_WORKERS_AI_MO
 /** The provider id Workers AI models are specced under. */
 export const WORKERS_AI_PROVIDER_ID = 'workers-ai';
 
-/** The id namespace Cloudflare's own catalog uses. A model id beginning with
- *  this is a Workers AI model whatever else is configured, which is why the
- *  qualification below can be unconditional rather than a guess. */
+/** Cloudflare's catalog namespace: such an id is always a Workers AI model. */
 export const WORKERS_AI_MODEL_ID_PREFIX = '@cf/';
 
-/**
- * Qualify a Workers AI model into a `<provider>/<modelId>` spec, idempotently.
- *
- * The rule is core's because the id namespace is core's, and it was living in an
- * adapter — spelled twice in one file, once as a `@cf/` prefix rewrite and once
- * as an already-qualified check. Both are this.
- */
+/** Qualify a Workers AI model into a `<provider>/<modelId>` spec, idempotently. */
 export function workersAiSpec(modelOrSpec: string): string {
   return modelOrSpec.startsWith(`${WORKERS_AI_PROVIDER_ID}/`)
     ? modelOrSpec
     : `${WORKERS_AI_PROVIDER_ID}/${modelOrSpec}`;
 }
 
-/** Stable per-agent Workers AI session-affinity key — pins an agent's turns to
- *  the same replica so the (default-on) prefix cache actually hits across
- *  turns. Same `kinu-<name>` scheme as the sandbox id; one source so the
- *  cf-backend registry call sites and the CLI's signed-in proxy pin don't
- *  drift. */
+/** Per-agent session-affinity key pinning turns to one replica so the prefix cache hits. */
 export function agentAffinityKey(name: string): string {
   return `kinu-${name}`;
 }
