@@ -465,14 +465,14 @@ export function summarizeLatencies(samplesMs: readonly number[]): LatencySummary
   const sum = sorted.reduce((total, value) => total + value, 0);
 
   const percentile = (p: number): number =>
-    sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)]!;
+    sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)];
 
   return {
     n: sorted.length,
-    minMs: sorted[0]!,
+    minMs: sorted[0],
     p50Ms: percentile(0.5),
     p95Ms: percentile(0.95),
-    maxMs: sorted.at(-1)!,
+    maxMs: sorted[sorted.length - 1],
     meanMs: sum / sorted.length,
   };
 }
@@ -1042,9 +1042,9 @@ export function classifyRun(
     });
   }
 
-  const outcome = noGo.length > 0 ? 'no_go' : detections.length > 0 ? 'defect' : 'pass';
+  if (noGo.length > 0) return { outcome: 'no_go', noGo, detections };
 
-  return { outcome, noGo, detections };
+  return { outcome: detections.length > 0 ? 'defect' : 'pass', noGo, detections };
 }
 
 /** A run whose container reports a SANDBOX_VERSION other than the configured

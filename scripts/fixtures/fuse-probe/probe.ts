@@ -680,9 +680,6 @@ function requestName(buffer: Buffer, length: number): string {
   return buffer.toString('utf8', IN_HEADER_SIZE, end === -1 ? length : end);
 }
 
-/** The daemon lives in a separate bun process. No library, helper daemon or
- *  compiled code is required: INIT, LOOKUP, GETATTR, OPEN, READ and READDIR
- *  are the kernel ABI itself. */
 /** The '..' dirent must carry the true parent inode: GETATTR on it is served
  *  from staticNode, so a wrong id would report root metadata for a subtree. */
 function parentIdOf(id: number): number {
@@ -695,6 +692,174 @@ function parentIdOf(id: number): number {
   if (id === DEEP_LEAF) return DEEP_BASE + DEEP_LEVELS - 1;
 
   return ROOT;
+}
+
+/** Chunk `index` of the range file, materialised once and memoised. Map
+ *  iteration answers keys oldest-first, so trimming from the front keeps the
+ *  cache bounded. */
+function cachedChunk(cache: Map<number, Buffer>, index: number): Buffer {
+  const cached = cache.get(index);
+
+  if (cached !== undefined) return cached;
+
+  const chunk = Buffer.from(canonicalChunk(TREE_SEED, index));
+
+  cache.set(index, chunk);
+
+  for (const oldest of cache.keys()) {
+    if (cache.size <= 64) break;
+    cache.delete(oldest);
+  }
+
+  return chunk;
+}
+
+/** The daemon lives in a separate bun process. No library, helper daemon or
+ *  compiled code is required: INIT, LOOKUP, GETATTR, OPEN, READ and READDIR
+ *  are the kernel ABI itself. */
+function serveFuseRequests(fd: number, config: DaemonConfig): never {
+  const cache = new Map<number, Buffer>();
+  const readBuffer = Buffer.alloc(1024 * 1024 + 4096);
+
+  for (;;) {
+    const read = readSync(fd, readBuffer, 0, readBuffer.length, null);
+
+    if (read < IN_HEADER_SIZE) continue;
+    const req = requestHeader(readBuffer);
+    const node = staticNode(req.nodeid, config);
+    const fail = (number: number): void => response(fd, req.unique, Buffer.alloc(0), -number);
+    const attr = (candidate: NodeInfo): void => response(fd, req.unique, packGetattrOut({ ino: candidate.id, size: candidate.size, mode: candidate.mode, nlink: candidate.nlink }));
+
+    switch (req.opcode) {
+      case FUSE_OPCODES.INIT: {
+        const major = readBuffer.readUInt32LE(IN_HEADER_SIZE);
+        const minor = readBuffer.readUInt32LE(IN_HEADER_SIZE + 4);
+        const readahead = readBuffer.readUInt32LE(IN_HEADER_SIZE + 8);
+        const flags = readBuffer.readUInt32LE(IN_HEADER_SIZE + 12);
+
+        if (major !== FUSE_PROTOCOL_MAJOR) { fail(22); break; }
+
+        response(fd, req.unique, packInitOut(minor, flags, readahead));
+        break;
+      }
+
+      case FUSE_OPCODES.LOOKUP: {
+        if (node?.kind !== 'dir') { fail(20); break; }
+
+        const found = childByName(node, requestName(readBuffer, req.length), config);
+
+        if (found === undefined) { fail(2); break; }
+
+        if (found.id === BAD_DIGEST && config.poisonDigest === true) { fail(5); break; }
+
+        response(fd, req.unique, packEntryOut(found.id, { ino: found.id, size: found.size, mode: found.mode, nlink: found.nlink }));
+        break;
+      }
+
+      case FUSE_OPCODES.GETATTR:
+        if (node === undefined) fail(2); else attr(node);
+        break;
+      case FUSE_OPCODES.READLINK:
+        if (node?.kind !== 'link' || node.target === undefined) fail(22); else response(fd, req.unique, Buffer.from(node.target));
+        break;
+      case FUSE_OPCODES.OPEN:
+      case FUSE_OPCODES.OPENDIR:
+        if (node === undefined) fail(2); else if (req.opcode === FUSE_OPCODES.OPENDIR && node.kind !== 'dir') fail(20); else response(fd, req.unique, packOpenOut(BigInt(node.id)));
+        break;
+      case FUSE_OPCODES.READ: {
+        if (node === undefined || node.kind !== 'file') { fail(2); break; }
+
+        if (node.id === BAD_DIGEST && config.poisonDigest === true) { fail(5); break; }
+
+        const offset = Number(readBuffer.readBigUInt64LE(IN_HEADER_SIZE + 8));
+        const size = readBuffer.readUInt32LE(IN_HEADER_SIZE + 16);
+
+        if (node.id !== RANGE) {
+          response(fd, req.unique, nodeContent(node).subarray(offset, offset + size));
+          break;
+        }
+
+        const end = Math.min(BIG_FILE_BYTES, offset + size);
+        const out = Buffer.alloc(Math.max(0, end - offset));
+        let written = 0;
+
+        for (let index = Math.floor(offset / CHUNK_BYTES); index <= Math.floor((end - 1) / CHUNK_BYTES); index++) {
+          const chunk = cachedChunk(cache, index);
+          const verification = verifyChunk(TREE_SEED, index, chunk, config.poisonChunk === index);
+
+          if (!verification.ok) { fail(5); written = -1; break; }
+
+          const from = Math.max(offset, index * CHUNK_BYTES) - index * CHUNK_BYTES;
+          const to = Math.min(end, (index + 1) * CHUNK_BYTES) - index * CHUNK_BYTES;
+          chunk.copy(out, written, from, to);
+          written += to - from;
+        }
+
+        if (written >= 0) response(fd, req.unique, out);
+        break;
+      }
+
+      case FUSE_OPCODES.READDIR: {
+        if (node?.kind !== 'dir') { fail(20); break; }
+
+        const offset = Number(readBuffer.readBigUInt64LE(IN_HEADER_SIZE + 8));
+        const size = readBuffer.readUInt32LE(IN_HEADER_SIZE + 16);
+
+        const entries = [
+          { name: '.', id: node.id, type: DT.DIR },
+          { name: '..', id: parentIdOf(node.id), type: DT.DIR },
+          ...children(node, config),
+        ];
+
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+
+        for (let index = offset; index < entries.length; index++) {
+          const entry = entries[index];
+          const encoded = packDirent(entry.id, index + 1, entry.type, entry.name);
+
+          if (bytes + encoded.length > size) break;
+          chunks.push(encoded); bytes += encoded.length;
+        }
+
+        response(fd, req.unique, Buffer.concat(chunks));
+        break;
+      }
+
+      case FUSE_OPCODES.STATFS:
+        response(fd, req.unique, packStatfs(config.wideEntries + BIG_FILE_CHUNKS));
+        break;
+      case FUSE_OPCODES.ACCESS:
+      case FUSE_OPCODES.FLUSH:
+      case FUSE_OPCODES.RELEASE:
+      case FUSE_OPCODES.RELEASEDIR:
+      case FUSE_OPCODES.FSYNC:
+      case FUSE_OPCODES.FSYNCDIR:
+        response(fd, req.unique);
+        break;
+      case FUSE_OPCODES.FORGET:
+      case FUSE_OPCODES.BATCH_FORGET:
+      case FUSE_OPCODES.INTERRUPT:
+        break; // These requests deliberately have no reply.
+      case FUSE_OPCODES.DESTROY:
+        response(fd, req.unique);
+        process.exit(0);
+      case FUSE_OPCODES.SETATTR:
+      case FUSE_OPCODES.WRITE:
+      case FUSE_OPCODES.MKNOD:
+      case FUSE_OPCODES.MKDIR:
+      case FUSE_OPCODES.UNLINK:
+      case FUSE_OPCODES.RMDIR:
+      case FUSE_OPCODES.RENAME:
+      case FUSE_OPCODES.SYMLINK:
+      case FUSE_OPCODES.LINK:
+      case FUSE_OPCODES.CREATE:
+        fail(30); // EROFS: custom reference is read-only by construction.
+        break;
+      default:
+        fail(38); // ENOSYS lets the kernel disable an optional operation.
+    }
+  }
 }
 
 function runDaemon(config: DaemonConfig): never {
@@ -736,156 +901,7 @@ function runDaemon(config: DaemonConfig): never {
 
     if (!mounted) process.exit(0);
 
-    const cache = new Map<number, Buffer>();
-    const readBuffer = Buffer.alloc(1024 * 1024 + 4096);
-
-    for (;;) {
-      const read = readSync(fd, readBuffer, 0, readBuffer.length, null);
-
-      if (read < IN_HEADER_SIZE) continue;
-      const req = requestHeader(readBuffer);
-      const node = staticNode(req.nodeid, config);
-      const fail = (number: number): void => response(fd!, req.unique, Buffer.alloc(0), -number);
-      const attr = (candidate: NodeInfo): void => response(fd!, req.unique, packGetattrOut({ ino: candidate.id, size: candidate.size, mode: candidate.mode, nlink: candidate.nlink }));
-
-      switch (req.opcode) {
-        case FUSE_OPCODES.INIT: {
-          const major = readBuffer.readUInt32LE(IN_HEADER_SIZE);
-          const minor = readBuffer.readUInt32LE(IN_HEADER_SIZE + 4);
-          const readahead = readBuffer.readUInt32LE(IN_HEADER_SIZE + 8);
-          const flags = readBuffer.readUInt32LE(IN_HEADER_SIZE + 12);
-
-          if (major !== FUSE_PROTOCOL_MAJOR) { fail(22); break; }
-
-          response(fd, req.unique, packInitOut(minor, flags, readahead));
-          break;
-        }
-
-        case FUSE_OPCODES.LOOKUP: {
-          if (node?.kind !== 'dir') { fail(20); break; }
-
-          const found = childByName(node, requestName(readBuffer, req.length), config);
-
-          if (found === undefined) { fail(2); break; }
-
-          if (found.id === BAD_DIGEST && config.poisonDigest === true) { fail(5); break; }
-
-          response(fd, req.unique, packEntryOut(found.id, { ino: found.id, size: found.size, mode: found.mode, nlink: found.nlink }));
-          break;
-        }
-
-        case FUSE_OPCODES.GETATTR:
-          if (node === undefined) fail(2); else attr(node);
-          break;
-        case FUSE_OPCODES.READLINK:
-          if (node?.kind !== 'link' || node.target === undefined) fail(22); else response(fd, req.unique, Buffer.from(node.target));
-          break;
-        case FUSE_OPCODES.OPEN:
-        case FUSE_OPCODES.OPENDIR:
-          if (node === undefined) fail(2); else if (req.opcode === FUSE_OPCODES.OPENDIR && node.kind !== 'dir') fail(20); else response(fd, req.unique, packOpenOut(BigInt(node.id)));
-          break;
-        case FUSE_OPCODES.READ: {
-          if (node === undefined || node.kind !== 'file') { fail(2); break; }
-
-          if (node.id === BAD_DIGEST && config.poisonDigest === true) { fail(5); break; }
-
-          const offset = Number(readBuffer.readBigUInt64LE(IN_HEADER_SIZE + 8));
-          const size = readBuffer.readUInt32LE(IN_HEADER_SIZE + 16);
-
-          if (node.id !== RANGE) {
-            response(fd, req.unique, nodeContent(node).subarray(offset, offset + size));
-            break;
-          }
-
-          const end = Math.min(BIG_FILE_BYTES, offset + size);
-          const out = Buffer.alloc(Math.max(0, end - offset));
-          let written = 0;
-
-          for (let index = Math.floor(offset / CHUNK_BYTES); index <= Math.floor((end - 1) / CHUNK_BYTES); index++) {
-            let chunk = cache.get(index);
-
-            if (chunk === undefined) {
-              chunk = Buffer.from(canonicalChunk(TREE_SEED, index));
-              cache.set(index, chunk);
-
-              if (cache.size > 64) cache.delete(cache.keys().next().value!);
-            }
-
-            const verification = verifyChunk(TREE_SEED, index, chunk, config.poisonChunk === index);
-
-            if (!verification.ok) { fail(5); written = -1; break; }
-
-            const from = Math.max(offset, index * CHUNK_BYTES) - index * CHUNK_BYTES;
-            const to = Math.min(end, (index + 1) * CHUNK_BYTES) - index * CHUNK_BYTES;
-            chunk.copy(out, written, from, to);
-            written += to - from;
-          }
-
-          if (written >= 0) response(fd, req.unique, out);
-          break;
-        }
-
-        case FUSE_OPCODES.READDIR: {
-          if (node?.kind !== 'dir') { fail(20); break; }
-
-          const offset = Number(readBuffer.readBigUInt64LE(IN_HEADER_SIZE + 8));
-          const size = readBuffer.readUInt32LE(IN_HEADER_SIZE + 16);
-
-          const entries = [
-            { name: '.', id: node.id, type: DT.DIR },
-            { name: '..', id: parentIdOf(node.id), type: DT.DIR },
-            ...children(node, config),
-          ];
-
-          const chunks: Buffer[] = [];
-          let bytes = 0;
-
-          for (let index = offset; index < entries.length; index++) {
-            const entry = entries[index]!;
-            const encoded = packDirent(entry.id, index + 1, entry.type, entry.name);
-
-            if (bytes + encoded.length > size) break;
-            chunks.push(encoded); bytes += encoded.length;
-          }
-
-          response(fd, req.unique, Buffer.concat(chunks));
-          break;
-        }
-
-        case FUSE_OPCODES.STATFS:
-          response(fd, req.unique, packStatfs(config.wideEntries + BIG_FILE_CHUNKS));
-          break;
-        case FUSE_OPCODES.ACCESS:
-        case FUSE_OPCODES.FLUSH:
-        case FUSE_OPCODES.RELEASE:
-        case FUSE_OPCODES.RELEASEDIR:
-        case FUSE_OPCODES.FSYNC:
-        case FUSE_OPCODES.FSYNCDIR:
-          response(fd, req.unique);
-          break;
-        case FUSE_OPCODES.FORGET:
-        case FUSE_OPCODES.BATCH_FORGET:
-        case FUSE_OPCODES.INTERRUPT:
-          break; // These requests deliberately have no reply.
-        case FUSE_OPCODES.DESTROY:
-          response(fd, req.unique);
-          process.exit(0);
-        case FUSE_OPCODES.SETATTR:
-        case FUSE_OPCODES.WRITE:
-        case FUSE_OPCODES.MKNOD:
-        case FUSE_OPCODES.MKDIR:
-        case FUSE_OPCODES.UNLINK:
-        case FUSE_OPCODES.RMDIR:
-        case FUSE_OPCODES.RENAME:
-        case FUSE_OPCODES.SYMLINK:
-        case FUSE_OPCODES.LINK:
-        case FUSE_OPCODES.CREATE:
-          fail(30); // EROFS: custom reference is read-only by construction.
-          break;
-        default:
-          fail(38); // ENOSYS lets the kernel disable an optional operation.
-      }
-    }
+    serveFuseRequests(fd, config);
   } catch (error) {
     writeFileSync(join(config.root, 'daemon-start.json'), JSON.stringify({
       mounted: false,
@@ -984,11 +1000,13 @@ function unmount(session: MountSession, forced = false): UnmountOutcome {
 
   if (result.ok) return { ok: true, detail: forced ? 'umount2(MNT_FORCE|MNT_DETACH)' : 'umount2' };
   const helper = pathBinary('fusermount3') ?? pathBinary('fusermount');
-  const fallback = helper === null ? undefined : spawnSync(helper, [forced ? '-uz' : '-u', session.mountpoint], { encoding: 'utf8' });
+
+  if (helper === null) return { ok: false, detail: `umount2 ${result.errnoName ?? 'failed'}; helper absent` };
+  const fallback = spawnSync(helper, [forced ? '-uz' : '-u', session.mountpoint], { encoding: 'utf8' });
 
   return {
-    ok: fallback?.status === 0,
-    detail: fallback === undefined ? `umount2 ${result.errnoName ?? 'failed'}; helper absent` : `${basename(helper!)} ${fallback.status ?? 'signal'}`,
+    ok: fallback.status === 0,
+    detail: `${basename(helper)} ${fallback.status ?? 'signal'}`,
   };
 }
 
@@ -1239,6 +1257,9 @@ function stage1(): Stage1Report {
       nativeSamples.push(timed(() => { statSync(join(native, 'wide', name)); readFileSync(join(native, 'wide', name)); }).ms);
     }
 
+    const workingFuse = summarizeLatencies(workingSamples);
+    const workingNative = summarizeLatencies(nativeSamples);
+
     const fuseWalk = timed(() => recursiveWalk(base.mountpoint));
     const nativeWalk = timed(() => recursiveWalk(native));
 
@@ -1256,6 +1277,15 @@ function stage1(): Stage1Report {
     const hits: number[] = [];
 
     for (let pass = 0; pass < 20; pass++) for (const { offset, length } of hot) hits.push(timed(() => rangeRead(join(base.mountpoint, 'range-file.bin'), offset, length)).ms);
+
+    const missSummary = summarizeLatencies(miss);
+    const hitSummary = summarizeLatencies(hits);
+
+    // No first read and no repeat of it is no hit/miss pair to compare, so the
+    // report carries no cache cell rather than a number standing in for one.
+    const cache = missSummary === undefined || hitSummary === undefined
+      ? undefined
+      : { reps: hits.length, missP50Ms: missSummary.p50Ms, hitP50Ms: hitSummary.p50Ms };
 
     const linkPath = join(base.mountpoint, 'link-to-hello');
     const hardA = statSync(join(base.mountpoint, 'hard-a')); const hardB = statSync(join(base.mountpoint, 'hard-b'));
@@ -1301,9 +1331,15 @@ function stage1(): Stage1Report {
     return {
       stage: 'stage1', attemptId, startedAt, finishedAt: new Date().toISOString(), census: censusResult, openat2: openat2Result,
       mountAttempts, mounted: true, mountpoint: base.mountpoint, bootstrapSamples, coldRootChallengeMs, firstStatRead,
-      workingSet: { files: workingFiles, iterations: workingIterations, fuse: { ...summarizeLatencies(workingSamples)! }, native: { ...summarizeLatencies(nativeSamples)! } },
+      workingSet: {
+        files: workingFiles, iterations: workingIterations,
+        // A measurement loop that sampled nothing has no summary to report, and
+        // the loose report schema takes each summary as a plain object.
+        fuse: workingFuse === undefined ? undefined : { ...workingFuse },
+        native: workingNative === undefined ? undefined : { ...workingNative },
+      },
       fullWalk: { fuseFiles: fuseWalk.value, fuseMs: fuseWalk.ms, nativeFiles: nativeWalk.value, nativeMs: nativeWalk.ms },
-      rangeReads, cache: { reps: hits.length, missP50Ms: summarizeLatencies(miss)!.p50Ms, hitP50Ms: summarizeLatencies(hits)!.p50Ms },
+      rangeReads, cache,
       integrity: { poisonChunk: 3, refused, servedWrongBytes, errnoName: poisonErrno, digestRefusal: { refused: digestRefused, errnoName: digestErrno } },
       links: { symlinkResolvedContentOk: readFileSync(linkPath, 'utf8') === 'fuse probe\n', lstatIsLink: lstatSync(linkPath).isSymbolicLink(), hardlinkSameInoAndNlink2: hardA.ino === hardB.ino && hardA.nlink === 2 },
       execMetadata: { mode0755Preserved: (execStat.mode & 0o777) === 0o755, execAttempted: true, execOk: execAttempt.status === 0, note: 'exec result is supplementary: a privileged uid can bypass some DAC checks; mode is the metadata proof.' },
@@ -1361,11 +1397,11 @@ function print(report: Stage1Report | Stage2Report): void {
 
 const [mode, ...args] = process.argv.slice(2);
 
-if (mode === 'unprivileged-mount') runUnprivilegedMount(args[0]!);
+if (mode === 'unprivileged-mount') runUnprivilegedMount(args[0]);
 
-if (mode === 'daemon') runDaemon(v.parse(DaemonConfigSchema, JSON.parse(Buffer.from(args[1]!, 'base64').toString('utf8'))));
+if (mode === 'daemon') runDaemon(v.parse(DaemonConfigSchema, JSON.parse(Buffer.from(args[1], 'base64').toString('utf8'))));
 
-if (mode === 'race') runRace(args[0]!, args[1]!, Number(args[2]));
+if (mode === 'race') runRace(args[0], args[1], Number(args[2]));
 
 if (mode === 'stage1') print(stage1());
 else if (mode === 'stage2') print(stage2());

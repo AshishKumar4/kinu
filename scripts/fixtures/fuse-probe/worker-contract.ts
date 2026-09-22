@@ -20,15 +20,15 @@
 
 import * as v from "valibot";
 
+/** The SANDBOX_VERSION the configured image must report. The image tag below
+ *  is composed from it, so the two cannot drift apart silently. */
+export const SANDBOX_IMAGE_VERSION = "0.12.8";
+
 /** The image this probe is defined against. One source of truth: the fixture
  *  config must carry exactly this tag (pinned by the test suite), and the
  *  fixture Durable Object refuses to serve unless the running container
  *  reports a matching SANDBOX_VERSION. */
-export const SANDBOX_IMAGE = "docker.io/cloudflare/sandbox:0.12.8";
-
-/** The SANDBOX_VERSION the configured image must report, derived from the tag
- *  so the two cannot drift apart silently. */
-export const SANDBOX_IMAGE_VERSION = SANDBOX_IMAGE.split(":").pop()!;
+export const SANDBOX_IMAGE = `docker.io/cloudflare/sandbox:${SANDBOX_IMAGE_VERSION}`;
 
 /** What a fresh boot proved about its own runtime. Captured by the fixture
  *  DO's onStart on every container start and held process-locally: identity is
