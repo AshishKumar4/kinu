@@ -128,8 +128,10 @@ export interface TerminalTurnParts {
   /** Whether this actor runs the memory-compression lane at all. The lane
    *  reads its evidence from the transcript, so the row carries no input. */
   readonly sleepTime?: boolean;
-  /** What this actor should name itself from, when it is unnamed. */
-  readonly autoTitle?: { readonly subject: string };
+  /** What this actor should name itself from, when it is unnamed. `standIn`
+   *  says the title it shows is one a NEW workspace was created with, which
+   *  this turn's naming replaces with a model's name (identity/naming.ts). */
+  readonly autoTitle?: { readonly subject: string; readonly standIn?: boolean };
   /** Whether this actor runs the cadence optimisation lanes at all. */
   readonly autoGepa?: boolean;
   /**
@@ -307,11 +309,24 @@ export function declareTerminalRoster(
     });
   }
 
+  const title = parts.autoTitle;
+
+  const naming: OwedEffect | null = title === undefined ? null : {
+    name: 'auto_title', scope: messageId, lane: 'detached',
+    input: title.standIn === true ? { subject: title.subject, standIn: true } : { subject: title.subject },
+  };
+
   // Everything below is completed-Build only, and the gate is here rather than at
   // each caller because it is one rule: a turn the improvement lanes are closed
   // for earned none of the work these lanes do, and a candidate scored against an
-  // aborted or Plan turn is evidence about nothing.
-  if (!completed || facts.workMode === 'plan') return owed;
+  // aborted or Plan turn is evidence about nothing. A new workspace's naming is
+  // the exception: it is owed however its first turn ended, because no later
+  // turn replaces the stand-in the workspace was created with.
+  if (!completed || facts.workMode === 'plan') {
+    if (naming !== null && title?.standIn === true) owed.push(naming);
+
+    return owed;
+  }
 
   if (parts.shadowTrial) {
     owed.push({
@@ -325,18 +340,14 @@ export function declareTerminalRoster(
   }
 
   // The between-turn lanes. Each is durably gated at its own boundary — a
-  // transcript-derived cadence, a `name_origin` stamp, a turn-count cadence —
-  // which is what makes each replayable from its recorded input.
+  // transcript-derived cadence, a title that is no longer a placeholder, a
+  // turn-count cadence — which is what makes each replayable from its recorded
+  // input.
   if (parts.sleepTime) {
     owed.push({ name: 'sleep_time', scope: messageId, lane: 'detached', input: {} });
   }
 
-  if (parts.autoTitle) {
-    owed.push({
-      name: 'auto_title', scope: messageId, lane: 'detached',
-      input: { subject: parts.autoTitle.subject },
-    });
-  }
+  if (naming !== null) owed.push(naming);
 
   if (parts.autoGepa) {
     owed.push({ name: 'auto_gepa', scope: messageId, lane: 'detached', input: {} });

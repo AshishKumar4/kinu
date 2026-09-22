@@ -1,9 +1,11 @@
 import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { asFetchFunction, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, type ProfileCatalogEnvelope } from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { testOwner } from './helpers/user-do';
 import { handleUserRequest } from '../src/user/routes';
+import { handleCreateWorkspaceRequest } from '../src/user/workspace-access';
 import { createCloudWorkspaceForUser, type CloudWorkspaceRegistry } from '../src/user/workspace-create';
 import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
 import { halfBornOrchestratorHarness, HarnessOrchestratorAgent, orchestratorHarness } from './helpers/actor-harness';
@@ -113,7 +115,7 @@ function registryStub(): CloudWorkspaceRegistry {
 afterEach(() => { setDiagnosticsSink(createRecordingLogger()); });
 
 describe('cloud agent ownership safety', () => {
-  test('a mission-only create stores a PROVISIONAL title and leaves naming to the genesis turn', async () => {
+  test('a mission-only create stores its stand-in title as the system\'s and leaves naming to the genesis turn', async () => {
     const calls: string[] = [];
     const background: Promise<unknown>[] = [];
 
@@ -191,13 +193,12 @@ describe('cloud agent ownership safety', () => {
       expect(entry.displayName).toBe('Build a hello world app in react');
       expect(calls).toContain(`claim:${USER_ID}`);
       // THE #18 CONTRACT at this boundary. The title this create stores is the
-      // mission's first line, and it is recorded as the stand-in it is — in the
-      // registry row AND in the actor's activation cache — so the genesis turn's
-      // durable `auto_title` effect is still allowed to replace it. Recorded as
-      // 'user' (which is what an empty-check on the display name produced) it
-      // was the workspace's permanent name.
-      expect(calls).toContain('register:' + entry.name + ':Build a hello world app in react:provisional');
-      expect(calls).toContain('initial-title:Build a hello world app in react:provisional');
+      // mission's first line, recorded as the system's ('auto') in the registry
+      // row AND in the actor's activation cache, so the genesis turn's durable
+      // `auto_title` effect is allowed to replace it. Recorded as 'user' it was
+      // the workspace's permanent name.
+      expect(calls).toContain('register:' + entry.name + ':Build a hello world app in react:auto');
+      expect(calls).toContain('initial-title:Build a hello world app in react:auto');
       expect(calls).toContain('soul');
       // The agent takes the first turn itself — after the soul, model and
       // effort are durable, and without the owner having to reprompt.
@@ -934,5 +935,84 @@ describe('cloud agent ownership safety', () => {
     expect(response?.status).toBe(400);
     // Fail-closed: the row stays, and the workspace's storage is untouched.
     expect(healthy.tableNames()).toContain('workspace_identity');
+  });
+});
+
+/**
+ * `user_workspaces` exactly as every account created before 2026-09-22's
+ * deploy holds it. `CREATE TABLE IF NOT EXISTS` never touches a table that
+ * exists, so this CHECK is the one live storage enforces whatever the current
+ * DDL says, and every write the registry makes has to fit it.
+ */
+const GENESIS_USER_WORKSPACES_DDL = `
+  CREATE TABLE user_workspaces (
+    name          TEXT PRIMARY KEY,
+    display_name  TEXT NOT NULL,
+    name_origin   TEXT NOT NULL DEFAULT 'user' CHECK (name_origin IN ('auto', 'user')),
+    created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    last_visited  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    archived_at   INTEGER,
+    delete_pending INTEGER NOT NULL DEFAULT 0,
+    create_pending INTEGER NOT NULL DEFAULT 0,
+    fork_lease_expires_at INTEGER
+  )`;
+
+describe('a create on an account whose registry predates the current build', () => {
+  test('a mission-only create lands, and its stand-in title is the system\'s', async () => {
+    // The live P0 of 2026-09-22: the web home page creates from a mission with
+    // no display name, and every such create on an older account answered
+    // `CHECK constraint failed: name_origin IN ('auto', 'user')`.
+    const storage = new Database(':memory:');
+    storage.exec(GENESIS_USER_WORKSPACES_DDL);
+    const user = createTestUserDO({ durableObjectId: USER_ID, storage });
+
+    // The registry is the real one over that storage; only the credential
+    // reads the model menu makes are stood in, as everywhere in this file.
+    const registry: CloudWorkspaceRegistry = {
+      ...registryStub(),
+      registerWorkspace: (caller, name, displayName, from) => user.userDO.registerWorkspace(caller, name, displayName, from),
+      ensureWorkspaceCapability: (name, presented) => user.userDO.ensureWorkspaceCapability(name, presented),
+    };
+
+    const orchestrator = workspaceObject({
+      async claimOwner(userId: string) { return { owner: userId, capabilityHash: null }; },
+      async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) { return { displayName, nameOrigin }; },
+      async setSoul(soul: string) { return { soul, purpose: '' }; },
+      async resetWorkspaceBaseline() { return { ok: true as const, files: 0 }; },
+      async setModel(spec: string) { return { ok: true, spec }; },
+      async beginGenesisTurn() { return { started: true }; },
+    });
+
+    const env = {
+      UserDO: { idFromName: (name: string) => name, get: () => registry },
+      OrchestratorAgent: { idFromName: (name: string) => name, get: () => orchestrator },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    };
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+
+    try {
+      const response = await handleCreateWorkspaceRequest({
+        request: new Request('https://kinu.run/api/user/workspaces', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ purpose: 'Build a hello world app in react' }),
+        }),
+        env,
+        userId: USER_ID,
+        userDO: registry,
+      });
+
+      expect({ status: response.status, body: await response.text() })
+        .toMatchObject({ status: 201 });
+      expect(storage.query('SELECT display_name, name_origin FROM user_workspaces').all()).toEqual([
+        { display_name: 'Build a hello world app in react', name_origin: 'auto' },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      user.close();
+      storage.close();
+    }
   });
 });
