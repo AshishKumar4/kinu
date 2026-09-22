@@ -17,6 +17,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
+import { workerContext } from './helpers/bindings';
 import type { PresentedCaller } from '@kinu.run/core/control-plane';
 import type { UserCaller } from '@kinu.run/core';
 
@@ -67,7 +68,6 @@ interface IndexWrites {
  */
 function harness(owned: readonly string[]) {
   const index: IndexWrites = { users: [], workspaces: [] };
-  const retained: Promise<unknown>[] = [];
 
   const controlPlane = {
     idFromName: (name: string) => name,
@@ -123,23 +123,16 @@ function harness(owned: readonly string[]) {
   // ASSETS for the SPA fallback an owned request falls through to.
   const env = partialEnv as Env;
 
-  const partialCtx: Partial<ExecutionContext> = {};
-  Object.assign(partialCtx, {
-    // Retained rather than dropped: the index feed writes inside `waitUntil`, so
-    // a fixture that discarded the promise would report "no row written" for
-    // every request and pass whatever the ordering was.
-    waitUntil(promise: Promise<unknown>) { retained.push(promise); },
-    passThroughOnException() {},
-  });
-  // SAFETY: constructs both ExecutionContext methods, which is the whole surface
-  // this path uses.
-  const ctx = partialCtx as ExecutionContext;
+  // Retained rather than dropped: the index feed writes inside `waitUntil`, so
+  // a fixture that discarded the promise would report "no row written" for
+  // every request and pass whatever the ordering was.
+  const ctx = workerContext();
 
   return {
     env,
     ctx,
     index,
-    async settle(): Promise<void> { await Promise.allSettled(retained); },
+    async settle(): Promise<void> { await Promise.allSettled(ctx.retained); },
   };
 }
 

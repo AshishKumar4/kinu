@@ -35,6 +35,7 @@ import {
   type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { makeKv } from './helpers/kv';
+import { workerContext } from './helpers/bindings';
 // Type-only, so it is erased and cannot load the entry ahead of the SDK stub.
 import type { RecentEventRow } from '../src/orchestrator';
 
@@ -133,8 +134,6 @@ function workspace(): Workspace {
       }),
     },
   });
-  const partialCtx: Partial<ExecutionContext> = {};
-  Object.assign(partialCtx, { waitUntil() {}, passThroughOnException() {} });
 
   return {
     harness,
@@ -144,8 +143,7 @@ function workspace(): Workspace {
     // and the Orchestrator namespace both entries resolve the workspace through.
     // Nothing unassigned is reachable through this cast.
     env: view as Env,
-    // SAFETY: both members of the entry's ExecutionContext contract.
-    ctx: partialCtx as ExecutionContext,
+    ctx: workerContext(),
     activations,
     async events(variant) {
       return await harness.agent.listRecentEvents({ variant });

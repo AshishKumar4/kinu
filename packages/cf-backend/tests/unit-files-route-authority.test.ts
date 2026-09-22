@@ -39,6 +39,7 @@ import {
 import { CAPABLE_HELLO } from './helpers/device-harness';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { makeKv } from './helpers/kv';
+import { workerContext } from './helpers/bindings';
 import type { UserCaller } from '@kinu.run/core';
 import type { JsonValue } from '@kinu.run/core';
 
@@ -233,12 +234,7 @@ async function seam(options: {
   // above — session KV, the owner capability secret, the SPA fallback, and the
   // two namespaces the auth, ownership and files steps resolve through.
   const env = partial as Env;
-  const partialCtx: Partial<ExecutionContext> = {};
-  Object.assign(partialCtx, { waitUntil: () => {}, passThroughOnException: () => {} });
-  // SAFETY: the constructed context provides `waitUntil`, the only member this
-  // route reaches; nothing else on the generated ExecutionContext contract is
-  // touched by the auth, ownership or files steps under test.
-  const ctx = partialCtx as ExecutionContext;
+  const ctx = workerContext();
 
   const signIn = async (email: string, sub: string): Promise<string> => (await createSession(env, {
     provider: 'cloudflare', providerSub: sub, email, emailVerified: true, displayName: null,
