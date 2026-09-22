@@ -398,9 +398,8 @@ export function typedRuntime(name: string): string | undefined {
  * that happens to spell an import: on 2026-09-10 a text match held `react` and
  * `commander` alive at the root on a comment in this file and a synthetic source
  * inside a wired-gate fixture. An import that names the installed path counts,
- * which is how cf-backend's suites reach
- * `node_modules/@nimbus-sh/worker/dist/session/rpc.js`, a package that publishes
- * no subpath for it. A SPAWN of the package's installed binary counts, which is
+ * for a package whose published subpaths do not cover what a caller needs. A
+ * SPAWN of the package's installed binary counts, which is
  * the only reference `knip` has: `scripts/dead-code.ts` runs
  * `node_modules/.bin/knip` and imports nothing. A `.json` counts a quoted value
  * (a plugin named in `.oxlintrc.json`, a binding in `wrangler.jsonc`), a `.sh`
