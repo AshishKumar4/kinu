@@ -686,7 +686,7 @@ describe('sealRpcSurface', () => {
   test('sealed members stay invisible to enumeration', () => {
     const leaf = new Leaf();
     expect(Object.keys(leaf)).toEqual([]);
-    expect(Object.keys({ ...leaf })).toEqual([]);
+    expect(Object.keys(Object.assign({}, leaf))).toEqual([]);
   });
 
   test('a surface entry the class does not have is ignored, not trusted', async () => {

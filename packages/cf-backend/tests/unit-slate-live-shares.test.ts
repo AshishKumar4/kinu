@@ -9,7 +9,7 @@ import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   LiveShareRecordSchema, SlateCapabilityGraphSchema, ViewerRequestRecordSchema,
-  type AgentRuntime, type SlateAnswer,
+  type AgentRuntime, type JsonValue, type SlateAnswer,
 } from '@kinu.run/core';
 import { orchestratorHarness, hostedSubordinateHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
@@ -151,9 +151,8 @@ test('a public share admits read members, refuses mutating ones, and audits ever
     if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
     const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
 
-    const call = (binding: string, member: string, args: unknown[] = []) =>
-      // SAFETY: `JsonValue[]` is the request's args field; `unknown[]` narrows to it through the schema the call is parsed under.
-      world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', binding, { member, args: args as never[], invocation: admission.invocation });
+    const call = (binding: string, member: string, args: JsonValue[] = []) =>
+      world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', binding, { member, args, invocation: admission.invocation });
 
     expect(await call('FILES', 'readFile', ['/home/user/slates/issues/package.json'])).toMatchObject({ ok: true });
     const refused = await call('FILES', 'writeFile', ['/tmp/x', 'y']);

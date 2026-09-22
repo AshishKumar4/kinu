@@ -137,8 +137,8 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
 
       return { ok: true, effort };
     },
-    async createTimerTrigger(opts: JsonObject) {
-      calls.push(`triggers:create:${JSON.stringify(opts)}`);
+    async createTimerTrigger(trigger: JsonObject) {
+      calls.push(`triggers:create:${JSON.stringify(trigger)}`);
 
       return { id: 'trg_1', kind: 'timer_oneshot', nextFireAt: 123 };
     },
@@ -167,8 +167,8 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
 
       return { stdout: 'ok', exitCode: 0 };
     },
-    async createDurableWebhook(opts: JsonObject) {
-      calls.push(`triggers:webhook:${JSON.stringify(opts)}`);
+    async createDurableWebhook(webhook: JsonObject) {
+      calls.push(`triggers:webhook:${JSON.stringify(webhook)}`);
 
       return {
         trigger_id: '01HZY6QK9N4T7M2P8V3XABCDEF',
@@ -207,13 +207,11 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
 }
 
 function cliRequest(path: string, init: RequestInit = {}) {
-  return new Request(`https://kinu.example.com${path}`, {
-    ...init,
-    headers: {
-      authorization: `Bearer ${TOKEN}`,
-      ...init.headers,
-    },
-  });
+  const headers = new Headers(init.headers);
+
+  headers.set('authorization', `Bearer ${TOKEN}`);
+
+  return new Request(`https://kinu.example.com${path}`, { ...init, headers });
 }
 
 function rpcRequest(method: string, args: JsonValue[] = [], agent = 'jarvis') {

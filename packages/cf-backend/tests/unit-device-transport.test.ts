@@ -26,8 +26,8 @@ function fakeHub(status: () => DeviceStatus): DeviceHubClient & { rpcCalls: RpcC
   return {
     rpcCalls,
     deviceRuntimeStatus: async () => status(),
-    deviceRpc: async (caller, method, params, opts) => {
-      rpcCalls.push([method, params, opts, caller]);
+    deviceRpc: async (rpcCaller, method, params, opts) => {
+      rpcCalls.push([method, params, opts, rpcCaller]);
 
       return JSON.stringify({ stdout: 'ok', stderr: '', exitCode: 0 });
     },

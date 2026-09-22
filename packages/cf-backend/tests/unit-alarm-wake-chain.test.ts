@@ -19,6 +19,7 @@ import type { Database } from 'bun:sqlite';
 import { openWorkspaceMainActor } from '@kinu.run/core';
 import { makeSql } from '../../core/tests/helpers';
 import { hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { present } from '@kinu.run/test-utils';
 
 /**
  * The actor these rows belong to.
@@ -32,6 +33,11 @@ import { hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, type H
  */
 function harnessActorId(db: Database): string {
   return openWorkspaceMainActor(makeSql(db)).actorId;
+}
+
+/** The single cell a `SELECT COUNT(*) AS held` answers. */
+function held(db: Database, counting: string): number {
+  return present(db.query<{ held: number }, []>(counting).get(), `the count from ${counting}`).held;
 }
 
 const KINU_TIMER_CALLBACK = '_kinuTimerTick';
@@ -149,19 +155,16 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
-    // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
-    const staleLeft = (): number => db
-      .prepare(`SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '_chatRecovery'`)
-      .values()[0]?.[0] as number;
+    const staleRecoveries = `SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '_chatRecovery'`;
 
     // One budget spent, and the continuation armed durably.
-    expect(staleLeft()).toBe(50);
+    expect(held(db, staleRecoveries)).toBe(50);
     const armed = (await agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
     expect(armed.length).toBe(1);
 
     // The wake finishes the job and, with nothing left over, does not re-arm.
     await agent.terminalRetryPass();
-    expect(staleLeft()).toBe(0);
+    expect(held(db, staleRecoveries)).toBe(0);
   });
 
   test('a beyond-budget FIBER backlog also arms the wake, and the wake drains it', async () => {
@@ -181,15 +184,13 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
-    // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
-    const fibersLeft = (): number => db
-      .prepare(`SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'fiber-%'`).values()[0]?.[0] as number;
+    const seededFibers = `SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'fiber-%'`;
 
-    expect(fibersLeft()).toBe(40);
+    expect(held(db, seededFibers)).toBe(40);
     expect((await agent.listSchedules()).some((row) => row.callback === '_kinuTerminalRetryTick')).toBe(true);
 
     await agent.terminalRetryPass();
-    expect(fibersLeft()).toBe(0);
+    expect(held(db, seededFibers)).toBe(0);
   });
 
   test('a hired child shares the workspace wake, and its backlog drains through it', async () => {
@@ -224,16 +225,14 @@ describe('the workspace keeps exactly one wake row', () => {
 
     // Seeded rows only: the activation's own terminal-lane fiber writes its
     // carrier row here, fresh and correctly spared.
-    // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
-    const left = (): number => workspace.db
-      .prepare(`SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'sub-fiber-%'`).values()[0]?.[0] as number;
+    const seededChildFibers = `SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'sub-fiber-%'`;
 
-    expect(left()).toBe(12);
+    expect(held(workspace.db, seededChildFibers)).toBe(12);
     const wakes = (await workspace.agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
     expect(wakes).toHaveLength(1);
 
     await workspace.agent.terminalRetryPass();
-    expect(left()).toBe(0);
+    expect(held(workspace.db, seededChildFibers)).toBe(0);
   });
 
   test('a hired child deferred job is restored by the workspace wake', async () => {
@@ -373,10 +372,9 @@ describe('the workspace keeps exactly one wake row', () => {
       ).run(actorId, id, `branch-${id}`, spawnedAt);
     };
 
-    // SAFETY: the SELECT answers one text cell by the schema's NOT NULL.
-    const status = (id: string): string => db
-      .prepare(`SELECT status FROM head_journal WHERE actor_id = ? AND id = ?`)
-      .values(actorId, id)[0]?.[0] as string;
+    const status = (id: string): string => present(db
+      .query<{ status: string }, [string, string]>(`SELECT status FROM head_journal WHERE actor_id = ? AND id = ?`)
+      .get(actorId, id), `the head_journal row of ${id}`).status;
 
     insertBranch('stale-head', Date.now() - 60_000);
     insertBranch('live-head', Date.now() + 5);
@@ -413,10 +411,9 @@ describe('the workspace keeps exactly one wake row', () => {
       ).run(actorId, root, `msg-${root}`, createdAt, createdAt);
     };
 
-    // SAFETY: the SELECT answers one text cell by the schema's NOT NULL.
-    const status = (root: string): string => db
-      .prepare(`SELECT status FROM mcts_search_runs WHERE actor_id = ? AND root_id = ?`)
-      .values(actorId, root)[0]?.[0] as string;
+    const status = (root: string): string => present(db
+      .query<{ status: string }, [string, string]>(`SELECT status FROM mcts_search_runs WHERE actor_id = ? AND root_id = ?`)
+      .get(actorId, root), `the mcts_search_runs row of ${root}`).status;
 
     insertRun('stale-swarm', Date.now() - 60_000);
     insertRun('live-swarm', Date.now() + 5);
@@ -445,10 +442,9 @@ describe('the workspace keeps exactly one wake row', () => {
       ).run(actorId, run, stamped, JSON.stringify({ type: 'run_start', agentId: 'a', eventIndex: 1, runId: run, timestamp: stamped }));
     };
 
-    // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
-    const ended = (run: string): boolean => (db
-      .prepare('SELECT COUNT(*) AS held FROM run_events WHERE actor_id = ? AND run_id = ? AND type = \'run_end\'')
-      .values(actorId, run)[0]?.[0] as number) > 0;
+    const ended = (run: string): boolean => present(db
+      .query<{ held: number }, [string, string]>('SELECT COUNT(*) AS held FROM run_events WHERE actor_id = ? AND run_id = ? AND type = \'run_end\'')
+      .get(actorId, run), `the run_end count of ${run}`).held > 0;
 
     start('stale-run', Date.now() - 60_000);
     start('live-run', Date.now() + 5);

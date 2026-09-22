@@ -257,7 +257,14 @@ describe('labels', () => {
   // that the clip is decided by the ROOM; measuring a proportional face here
   // would make every expected string an assertion about Chrome's metrics.
   const perChar = (text: string) => text.length * 10;
-  const wide = (text: string) => [...text].reduce((sum, ch) => sum + (ch === 'W' ? 20 : 5), 0);
+
+  const wide = (text: string): number => {
+    let width = 0;
+
+    for (const ch of text) width += ch === 'W' ? 20 : 5;
+
+    return width;
+  };
 
   test('a label that fits its room is not touched', () => {
     expect(clipToWidth('abcd', 40, perChar)).toBe('abcd');

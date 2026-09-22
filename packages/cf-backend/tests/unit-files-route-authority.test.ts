@@ -260,14 +260,14 @@ async function seam(options: {
       return actor.agent;
     },
     fileFrames: () => user.deviceFrames.filter((frame) => Object.hasOwn(FILE_METHODS, frame.method)),
-    fetch: (url, session, init) => worker.fetch(new Request(url, {
-      ...init,
-      headers: {
-        ...init?.headers,
-        cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(session)}`,
-        origin: ORIGIN,
-      },
-    }), env, ctx),
+    fetch: (url, session, init) => {
+      const headers = new Headers(init?.headers);
+
+      headers.set('cookie', `${SESSION_COOKIE_NAME}=${encodeURIComponent(session)}`);
+      headers.set('origin', ORIGIN);
+
+      return worker.fetch(new Request(url, { ...init, headers }), env, ctx);
+    },
     files: (input) => {
       const url = new URL(`${ORIGIN}/api/workspaces/${input.workspace}/files`);
       url.searchParams.set('executor', input.executor ?? 'workspace');

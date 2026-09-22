@@ -48,7 +48,7 @@ function be32(value: number): number[] {
 }
 
 function chunk(type: string, data: readonly number[]): number[] {
-  const typed = [...type].map((ch) => ch.charCodeAt(0));
+  const typed = [...new TextEncoder().encode(type)];
 
   return [...be32(data.length), ...typed, ...data, ...be32(crc32(new Uint8Array([...typed, ...data])))];
 }
@@ -229,7 +229,7 @@ interface BodySource {
 }
 
 /**
- * A body that ARRIVES in `chunk`-sized pieces, with the producer's own pulls and
+ * A body that ARRIVES in `sliceSize`-sized pieces, with the producer's own pulls and
  * cancellation observable. A request built over this declares no length, which
  * is the shape a chunked or HTTP/2 upload actually has.
  *
@@ -237,7 +237,7 @@ interface BodySource {
  * strategy pre-fills one chunk the moment the stream is constructed, which reads
  * as the handler having touched a body it never opened.
  */
-function chunked(bytes: Uint8Array, chunk: number) {
+function chunked(bytes: Uint8Array, sliceSize: number) {
   const source: BodySource = { pulls: 0, delivered: 0, reachedEnd: false, cancelled: false };
   let at = 0;
 
@@ -252,7 +252,7 @@ function chunked(bytes: Uint8Array, chunk: number) {
         return;
       }
 
-      const slice = bytes.slice(at, Math.min(at + chunk, bytes.length));
+      const slice = bytes.slice(at, Math.min(at + sliceSize, bytes.length));
       at += slice.length;
       source.delivered += slice.length;
       controller.enqueue(slice);
@@ -451,9 +451,9 @@ describe('how much of a body it will read', () => {
 
   test('a chunked oversize body is abandoned mid-upload: cancelled, never read to EOF, nothing written', async () => {
     const rec = recorder();
-    const chunk = 64 * 1024;
-    const { contentType, bytes } = rawMultipart(FEEDBACK_MAX_REQUEST_BYTES + chunk * 8);
-    const { body, source } = chunked(bytes, chunk);
+    const sliceSize = 64 * 1024;
+    const { contentType, bytes } = rawMultipart(FEEDBACK_MAX_REQUEST_BYTES + sliceSize * 8);
+    const { body, source } = chunked(bytes, sliceSize);
 
     const response = await routeFeedback(
       new Request(URL_, { method: 'POST', headers: { 'content-type': contentType }, body }), ME, rec.deps);
@@ -466,7 +466,7 @@ describe('how much of a body it will read', () => {
     expect(source.reachedEnd).toBe(false);
     expect(source.delivered).toBeLessThan(bytes.length);
     // At most the chunk carrying the first excess byte, and no more.
-    expect(source.delivered).toBeLessThanOrEqual(FEEDBACK_MAX_REQUEST_BYTES + chunk);
+    expect(source.delivered).toBeLessThanOrEqual(FEEDBACK_MAX_REQUEST_BYTES + sliceSize);
     // And nothing downstream ran: no object, no row, exactly one marker.
     expect(rec.objects.size).toBe(0);
     expect(rec.rows).toEqual([]);
@@ -579,7 +579,7 @@ describe('what the endpoint stores', () => {
 
   test('metadata chunks are gone from the bytes that reach storage', async () => {
     const rec = recorder();
-    const secret = [...'lat 51.5 lon -0.1'].map((ch) => ch.charCodeAt(0));
+    const secret = [...new TextEncoder().encode('lat 51.5 lon -0.1')];
     const withExif = realPng([chunk('eXIf', secret), chunk('tEXt', secret)]);
     // Present going in, so the assertion below is about the strip and not about
     // a fixture that never carried anything.

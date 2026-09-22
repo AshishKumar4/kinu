@@ -124,17 +124,14 @@ function actorObject(): ActorObject {
  * unchanged through `programmaticHost`.
  */
 function kvBackedStorage(kv: Map<string, JsonValue>) {
-  const listRows = async <T,>(options: { prefix: string }): Promise<Map<string, T>> => {
-    const entries = new Map<string, unknown>();
+  const listRows = async (options: { prefix: string }): Promise<Map<string, JsonValue>> => {
+    const entries = new Map<string, JsonValue>();
 
     for (const [key, value] of kv) {
       if (key.startsWith(options.prefix)) entries.set(key, value);
     }
 
-    // SAFETY: the storage list contract types each row by the caller's T,
-    // which the untyped stand-in rows cannot name; `never` keeps the Map
-    // assignable to every T.
-    return entries as Map<string, never>;
+    return entries;
   };
 
   return {
@@ -146,7 +143,7 @@ function kvBackedStorage(kv: Map<string, JsonValue>) {
       get(key: string): Promise<JsonValue | undefined>;
       put(key: string, value: JsonValue): Promise<void>;
       delete(key: string): Promise<boolean>;
-      list<T2 = unknown>(options: { prefix: string }): Promise<Map<string, T2>>;
+      list(options: { prefix: string }): Promise<Map<string, JsonValue>>;
     }) => Promise<T>): Promise<T> => body({
       get: async (key) => kv.get(key),
       put: async (key, value) => { kv.set(key, value); },

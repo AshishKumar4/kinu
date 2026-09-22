@@ -224,7 +224,7 @@ describe('a chat request through the production gate', () => {
     // Resuming first — the tab replays the stream it is still owed — then
     // the transcript as it is NOW, the live turn's opening row included.
     expect(frames[0]?.type).toBe('cf_agent_stream_resuming');
-    const seed = frames.find((frame) => frame.type === 'cf_agent_chat_messages');
+    const seed = frames.find((sentFrame) => sentFrame.type === 'cf_agent_chat_messages');
     expect(seed?.messages?.map((m) => m.id)).toContain(liveRow);
 
     // And the close half of the same wiring: a resuming socket that goes

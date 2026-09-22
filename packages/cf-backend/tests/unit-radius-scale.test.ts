@@ -116,14 +116,14 @@ describe('radius scale', () => {
   });
 
   test('every `border-radius: var(…)` in the stylesheet resolves', () => {
-    const unresolved: string[] = [];
+    const unresolvedRules: string[] = [];
 
     for (const [, token] of NO_COMMENTS.matchAll(/border-radius:\s*var\(\s*(--[a-z0-9-]+)/gi)) {
       const res = resolve(token);
 
-      if (!res.ok) unresolved.push(`${token}: unresolved at ${res.at}`);
+      if (!res.ok) unresolvedRules.push(`${token}: unresolved at ${res.at}`);
     }
 
-    expect(unresolved).toEqual([]);
+    expect(unresolvedRules).toEqual([]);
   });
 });

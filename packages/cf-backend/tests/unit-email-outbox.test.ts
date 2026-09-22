@@ -55,10 +55,10 @@ const OutboxTestRowSchema = v.object({
  *  or throw to simulate a transport failure / crash. */
 function fakeBinding(onSend?: (m: Sent) => void) {
   const sent: Sent[] = [];
-  function send(message: EmailMessage): Promise<EmailSendResult>;
-  function send(message: SendEmailBuilder): Promise<EmailSendResult>;
-  async function send(message: EmailMessage | SendEmailBuilder): Promise<EmailSendResult> {
-    const parsed = v.parse(SentSchema, message);
+  function send(outgoing: EmailMessage): Promise<EmailSendResult>;
+  function send(outgoing: SendEmailBuilder): Promise<EmailSendResult>;
+  async function send(outgoing: EmailMessage | SendEmailBuilder): Promise<EmailSendResult> {
+    const parsed = v.parse(SentSchema, outgoing);
     onSend?.(parsed);
     sent.push(parsed);
 

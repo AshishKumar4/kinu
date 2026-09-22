@@ -23,7 +23,7 @@
  */
 
 import { afterAll, describe, expect, test } from 'bun:test';
-import { CRAFT_NEUTRAL_PRIOR, agentHome, agentTmpRoot, headAgentName, parseActorKey } from '@kinu.run/core';
+import { CRAFT_NEUTRAL_PRIOR, agentHome, agentTmpRoot, headAgentName, parseActorKey, type AgentRuntime } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
 import type { CFRuntime } from '../src/runtime';
@@ -90,6 +90,14 @@ afterAll(() => { setSandboxSdk(null); });
 // the orchestrator at module scope and that graph reaches the sandbox SDK.
 const { hostedExplorationHarness, orchestratorHarness } = await import('./helpers/actor-harness');
 
+/** This backend CONSTRUCTS every hosted runtime with `createCFRuntime` —
+ *  `ActorHostDeps.runtimeFor` IS that function. Core's `AgentRuntime` narrows
+ *  the declared return type and never the value, so the concrete type is
+ *  recovered by reading the two members only the CF runtime carries. */
+function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
+  return 'localVfs' in runtime && 'sandboxHandle' in runtime;
+}
+
 /**
  * A REAL hosted head over a REAL workspace, with the parent's files already in
  * the canonical tree and the container binding declared.
@@ -100,6 +108,7 @@ const { hostedExplorationHarness, orchestratorHarness } = await import('./helper
  * binding declared afterwards arrives too late for the runtime under test to
  * read it.
  */
+
 async function hostedHead(files: Record<string, string> = {}, id = 'head-1') {
   const workspace = orchestratorHarness();
   workspace.agent.declareContainerBinding();
@@ -111,13 +120,10 @@ async function hostedHead(files: Record<string, string> = {}, id = 'head-1') {
   }
 
   const head = await hostedExplorationHarness(workspace, 'head', id);
-  /* SAFETY: this backend CONSTRUCTS every hosted runtime with `createCFRuntime`
-   * — `ActorHostDeps.runtimeFor` here IS that function, so the value is a
-   * CFRuntime at the construction site. Core's `AgentRuntime` narrows the
-   * declared return type and never the value, which is why the concrete type
-   * has to be recovered rather than inferred. `exploration-hosting.ts`'s
-   * `hostHead` and `subordinate-hosting.ts`'s `runHostedTask` state the same. */
-  const rt = head.actor.runtime as CFRuntime;
+  const rt = head.actor.runtime;
+
+  if (!isCFRuntime(rt)) throw new Error('the hosted head did not receive a CF runtime');
+
   const home = agentHome(headAgentName(parseActorKey(head.actor.record.storageKey).id));
 
   return { workspace, head, rt, home };

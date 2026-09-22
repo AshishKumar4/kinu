@@ -374,8 +374,8 @@ describe('the card lifecycle', () => {
   });
 
   const apply = (events: JsonValue[]): readonly SignalCard[] =>
-    events.reduce<readonly SignalCard[]>((cards, event) => {
-      const parsed = parseSignalCardEvent(event);
+    events.reduce<readonly SignalCard[]>((cards, row) => {
+      const parsed = parseSignalCardEvent(row);
 
       return parsed ? applySignalCard(cards, parsed) : cards;
     }, []);

@@ -49,7 +49,15 @@ function cut(transferId: string, seq: number): ForkFrame {
   });
 }
 
-function range(transferId: string, seq: number, offset: number, end: number, last: boolean): ForkFrame {
+interface RangeFrame {
+  readonly transferId: string;
+  readonly seq: number;
+  readonly offset: number;
+  readonly end: number;
+  readonly last: boolean;
+}
+
+function range({ transferId, seq, offset, end, last }: RangeFrame): ForkFrame {
   return sealForkFrame({
     version: FORK_TRANSFER_VERSION, transferId, seq, kind: 'file',
     path: 'memory/replaced.md', offset, bytes: CONTENT.subarray(offset, end), last,
@@ -71,13 +79,13 @@ describe('a replacement transfer stages under its OWN suffix', () => {
     // T1 begins and stages half a file, then its source gives up.
     expect((await first.agent.rawCopyFromFork(FORK, begin('tx-one'), OWNER)).ok).toBe(true);
     expect((await first.agent.rawCopyFromFork(FORK, cut('tx-one', 1), OWNER)).ok).toBe(true);
-    expect((await first.agent.rawCopyFromFork(FORK, range('tx-one', 2, 0, 10, false), OWNER)).ok).toBe(true);
+    expect((await first.agent.rawCopyFromFork(FORK, range({ transferId: 'tx-one', seq: 2, offset: 0, end: 10, last: false }), OWNER)).ok).toBe(true);
 
     // The retry: a FRESH transfer id through the SAME activation. The begin
     // resets the durable staging row to tx-two; the receiver must follow it.
     const beginTwo = begin('tx-two');
     const cutTwo = cut('tx-two', 1);
-    const rangeTwo = range('tx-two', 2, 0, 10, false);
+    const rangeTwo = range({ transferId: 'tx-two', seq: 2, offset: 0, end: 10, last: false });
     expect((await first.agent.rawCopyFromFork(FORK, beginTwo, OWNER)).ok).toBe(true);
     expect((await first.agent.rawCopyFromFork(FORK, cutTwo, OWNER)).ok).toBe(true);
     expect((await first.agent.rawCopyFromFork(FORK, rangeTwo, OWNER)).ok).toBe(true);
@@ -87,7 +95,7 @@ describe('a replacement transfer stages under its OWN suffix', () => {
       world: { workspace: FORK },
     });
 
-    const rangeEnd = range('tx-two', 3, 10, CONTENT.byteLength, true);
+    const rangeEnd = range({ transferId: 'tx-two', seq: 3, offset: 10, end: CONTENT.byteLength, last: true });
     expect((await second.agent.rawCopyFromFork(FORK, rangeEnd, OWNER)).ok).toBe(true);
 
     const stream = [beginTwo, cutTwo, rangeTwo, rangeEnd]
