@@ -48,9 +48,11 @@ declare global {
 
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light' | null = 'dark', frozen = false): Promise<Page> {
   const page = await gallery.browser.newPage();
+  // Before the document: a resize after it also switches touch emulation off,
+  // which drops the launch's mouse and remounts the picture without a pointer.
+  await page.setViewport({ width: 1440, height: 900 });
 
   if (frozen) {
-    await page.setViewport({ width: 1440, height: 900 });
     await page.evaluateOnNewDocument(() => { window.__kinuGalleryFrozen = true; });
   }
 
@@ -83,12 +85,17 @@ function idleBody(): JsonValue {
   return { observedAt: Date.now(), activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, primarySlate: null };
 }
 
-/** The mode the tissue reports, with the read model's poll behind it. */
-async function waitForMode(page: Page, mode: string, timeoutMs = 20_000): Promise<void> {
+/** The mode the tissue reports, with the read model's poll behind it. A frozen
+ *  picture ages only by the `step` of tissue seconds each poll advances it. */
+async function waitForMode(page: Page, mode: string, step = 0): Promise<void> {
   await page.waitForFunction(
-    (wanted) => window.__kinuAppBackground?.mode() === wanted,
-    { timeout: timeoutMs, polling: 100 },
-    mode,
+    (wanted: string, dt: number) => {
+      if (dt > 0) window.__kinuAppBackground?.advance?.(dt);
+
+      return window.__kinuAppBackground?.mode() === wanted;
+    },
+    { timeout: 20_000, polling: 100 },
+    mode, step,
   );
 }
 
@@ -131,7 +138,6 @@ describe('the living background', () => {
       const page = await freshPage(gallery, '&path=/');
 
       try {
-        await page.setViewport({ width: 1440, height: 900 });
         await liveBackground(page);
 
         const host = await page.evaluate(() => {
@@ -211,7 +217,6 @@ describe('the living background', () => {
       const page = await freshPage(gallery, '&path=/');
 
       try {
-        await page.setViewport({ width: 1440, height: 900 });
         await liveBackground(page);
 
         const before = await page.evaluate(() => window.__kinuAppBackground?.time() ?? -1);
@@ -289,7 +294,6 @@ describe('the living background', () => {
       const page = await freshPage(gallery, '&path=/workspace/checkout-fixes');
 
       try {
-        await page.setViewport({ width: 1440, height: 900 });
         // Let the frame settle: the route's blank element is its content.
         await page.waitForSelector('[data-gallery-blank]', { timeout: 20_000 });
         await pause(300);
@@ -309,10 +313,11 @@ describe('the living background', () => {
 
   test('follows the overview read model through idle, working and attention', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, '&path=/');
+      // Frozen: the flash ages by the steps below, never by the frames a loaded
+      // machine delivers late (each frame advances at most 0.05 s of tissue time).
+      const page = await freshPage(gallery, '&path=/', 'dark', true);
 
       try {
-        await page.setViewport({ width: 1440, height: 900 });
         await liveBackground(page);
 
         // Quiet every workspace; the 5s poll cadence carries it to the tissue.
@@ -332,9 +337,17 @@ describe('the living background', () => {
         await setOverview(page, 'checkout-fixes', {
           observedAt: Date.now(), activity: 'working', decisionsWaiting: 1, hasUpdates: false, latestRun: null, primarySlate: null,
         });
-        await waitForMode(page, 'attention');
-        await waitForMode(page, 'working', 3_000);
+        await waitForMode(page, 'attention', 1 / 60);
 
+        const afterFlash = await page.evaluate(() => {
+          const handle = window.__kinuAppBackground;
+
+          for (let i = 0; i < 120; i += 1) handle?.advance?.(1 / 60);
+
+          return handle?.mode();
+        });
+
+        expect(afterFlash).toBe('working');
         await page.screenshot({ path: join(SHOTS, 'following.png'), fullPage: false });
       } finally {
         await page.close();
@@ -370,22 +383,20 @@ describe('the living background', () => {
   });
 
   test('a hoverless visitor sees the undisturbed picture', async () => {
-    // Touch input must not arm mouse interaction.
+    // Touch input must not arm mouse interaction. Measured 2026-09-22 on Chrome
+    // 151.0.7922.173: `Emulation.setEmulatedMedia` answers `{}` for `hover`, as
+    // for an unknown name, and moves no `matchMedia` answer. Touch emulation
+    // gives `(hover: none)` before the first script, but under the launch's mouse
+    // a settings-portal `color-scheme` answer landing after it turned it false
+    // for good (the deploy red at b4b2790c8). So this browser declares no mouse.
     await withGallery(async (gallery) => {
       const page = await gallery.browser.newPage();
       await page.evaluateOnNewDocument(() => localStorage.setItem('theme', 'light'));
 
       try {
-        // A hoverless visitor is `(hover: none)`, which the browser derives from
-        // the emulated touch profile `hasTouch` installs. Puppeteer's media
-        // feature allowlist does not carry `hover`, and the profile reaches the
-        // page's media state after navigation, not before it: read at once on a
-        // loaded machine it answered `false` (measured 2026-09-21 in the
-        // deploy's parallel gate batch, green alone). So the read waits for the
-        // state the emulation is contracted to produce.
         await page.setViewport({ width: 1440, height: 900, hasTouch: true, isMobile: false });
         await page.goto(`${gallery.origin}/gallery.html?frame=app&path=/`, { waitUntil: 'networkidle0' });
-        await page.waitForFunction(() => matchMedia('(hover: none)').matches);
+        expect(await page.evaluate(() => matchMedia('(hover: none)').matches)).toBe(true);
         await liveBackground(page);
 
         for (const name of DISPLAYED) await setOverview(page, name, idleBody());
@@ -399,6 +410,6 @@ describe('the living background', () => {
       } finally {
         await page.close();
       }
-    });
+    }, { mouse: false });
   }, 120_000);
 });

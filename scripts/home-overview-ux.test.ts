@@ -20,7 +20,7 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Page } from 'puppeteer';
+import type { Page, Viewport } from 'puppeteer';
 import type { JsonValue } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from './gallery-harness';
@@ -108,8 +108,10 @@ async function setOutcome(page: Page, name: string, outcome: Outcome): Promise<v
   }, name, outcome);
 }
 
-async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light' | null = 'dark'): Promise<Page> {
+async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light' | null = 'dark', viewport?: Viewport): Promise<Page> {
   const page = await gallery.newPage();
+
+  if (viewport !== undefined) await page.setViewport(viewport);
 
   if (theme !== null) {
     await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
@@ -271,8 +273,7 @@ describe('the home workspace cards', () => {
 
   test('a narrow viewport keeps the degraded line whole — chip, task and retry visible, nothing sideways', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, '');
-      await page.setViewport({ width: 390, height: 844 });
+      const page = await freshPage(gallery, '', 'dark', { width: 390, height: 844 });
 
       try {
         for (const name of DISPLAYED) await waitForRequests(page, name, 1);
