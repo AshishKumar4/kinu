@@ -3972,7 +3972,7 @@ export class UserDO extends Agent<Env> {
    * only ever publish under its own name, and an owner session (which is not
    * any workspace) cannot publish at all.
    */
-  async publishExperience(caller: UserCaller, candidate: PublishableCandidate): Promise<ExperienceEntry> {
+  private async publishExperience(caller: UserCaller, candidate: PublishableCandidate): Promise<ExperienceEntry> {
     const resolved = await this.requireTier(caller, 'experience.write');
 
     if (resolved.kind !== 'workspace') {
@@ -3984,7 +3984,7 @@ export class UserDO extends Agent<Env> {
 
   /** Search the owner's library. The calling workspace's own entries are
    *  excluded — re-importing what you already have is noise, not transfer. */
-  async searchExperience(
+  private async searchExperience(
     caller: UserCaller,
     options: { query?: string; kind?: ExperienceKind; limit?: number } = {},
   ): Promise<ExperienceEntry[]> {
@@ -3996,7 +3996,7 @@ export class UserDO extends Agent<Env> {
     return this.experienceLibrary().search(searchOptions);
   }
 
-  async getExperienceEntry(caller: UserCaller, id: string): Promise<ExperienceEntry | null> {
+  private async getExperienceEntry(caller: UserCaller, id: string): Promise<ExperienceEntry | null> {
     await this.requireTier(caller, 'experience.read');
 
     return this.experienceLibrary().get(id);
@@ -4112,7 +4112,7 @@ export class UserDO extends Agent<Env> {
 
     // Parsed outside the catch above on purpose: a JSON error message quotes
     // the input it choked on, and that input is the decrypted secret.
-    try { return validateCredential(JSON.parse(plaintext)); }
+    try { return validateCredential({ value: JSON.parse(plaintext) }); }
     catch {
       diagnostics.failure(
         'credential.malformed',
