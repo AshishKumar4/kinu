@@ -3347,7 +3347,7 @@ function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
 const MCTS_NOTICE: readonly ComposerNotice[] = [{
   id: "mcts",
   tone: "danger",
-  text: "Couldn't refresh MCTS.",
+  text: "Could not refresh MCTS.",
   action: { label: "Retry", onClick: () => {} },
 }];
 
