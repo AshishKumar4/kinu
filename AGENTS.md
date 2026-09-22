@@ -47,7 +47,7 @@ The owner is a Cloudflare employee; Workers, DOs, R2, Containers, Sandboxes, Wor
 `docs/research/REQUESTS-LEDGER.md` (primary checkout only; gitignored) holds every request with its verifying command. A row is DONE only when its command passes; no command means UNVERIFIED and open. Read it before claiming a request closed; add a row when one arrives. Two copies with different contents is a fork; say so.
 
 ## Delegation
-Default is solo + sidekick (if available). Delegation beyond that must beat the single-agent effort curve (measured: an orchestrator over 25 workers scored 10–12 points below solo + sidekick at higher cost on dependent work). Do coupled, dependent, or single-context work yourself. Delegate only a whole coherent problem independent of your own work. `scout` for research, `task`/`sonic` for mechanical writes to a fixed spec, `expert` only for load-bearing judgement; at most 2–3 experts at once; never split one dependent chain across lanes. Every lane gets full context, an output contract, its own worktree; its result is a claim to verify.
+The main agent orchestrates; Opus 5.5 lanes build. Main plans each change in a loop with an `expert`, splits it into lanes, and briefs each with full context, an output contract and its own worktree. `expert` and `task` lanes implement and fix; `scout` researches; `sidekick` pairs. One dependent chain stays in one lane; independent problems run in parallel. A lane's result is a claim: main reads the diff and reruns the proof before merging, and only main deploys.
 
 ## Owner Preferences
 - Short commit subjects; no comment that restates code or narrates an edit.
