@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 
 import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
+import { deviceConsentCanApprove } from '../src/tui/overlays';
 import type { ShellApprovalRequest, ShellApprovalOutcome } from '@kinu.run/core';
 
 afterEach(cleanupChats);
@@ -182,5 +183,11 @@ describe('ChatApp consent ownership', () => {
     expect(decisions).toEqual(['deny']);
   });
 
-
+  test('a wide glyph is budgeted two columns, not four', () => {
+    // 24 half-width columns: "Command: " plus 39 emoji is 48 code points, two
+    // rows, and the 9-row terminal holds those two with the dialog's seven.
+    // Counted in UTF-16 units the same command reads as four rows and refuses.
+    expect(deviceConsentCanApprove({ command: '😀'.repeat(39) }, { width: 100, height: 11 })).toBe(true);
+    expect(deviceConsentCanApprove({ command: '😀'.repeat(40) }, { width: 100, height: 11 })).toBe(false);
+  });
 });

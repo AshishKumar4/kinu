@@ -719,7 +719,7 @@ function deviceConsentLayout(
   const commandText = `Command: ${consent.command || '(command)'}`;
 
   const commandRows = commandText.split('\n')
-    .reduce((rows, line) => rows + Math.max(1, Math.ceil(line.length / commandColumns)), 0);
+    .reduce((rows, line) => rows + Math.max(1, Math.ceil(Array.from(line).length / commandColumns)), 0);
 
   const preferredHeight = commandRows + 7;
   const maxHeight = Math.max(3, terminal.height - 2);

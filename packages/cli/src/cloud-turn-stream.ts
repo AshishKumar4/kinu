@@ -167,12 +167,10 @@ function stringifyToolOutput(output: JsonValue): string {
 
 /** Exported because the client reads RPC rejections with it too. */
 export function jsonErrorMessage(value: JsonValue | undefined, fallback: string): string {
-  if (value === undefined) return fallback;
+  if (value === undefined || value === null || value === '') return fallback;
   const text = v.safeParse(v.string(), value);
 
-  if (text.success && text.output !== '') return text.output;
-
-  return JSON.stringify(value);
+  return text.success ? text.output : JSON.stringify(value);
 }
 
 function jsonString(value: JsonValue | undefined, fallback: string): string {

@@ -4,8 +4,8 @@ import type { ChatEvent } from '../chat';
 import { SessionHistory } from '../session/history';
 import type { MessageReference, StoredPart, StreamPartInput, PreparedContent } from '../session/messages';
 import type { SessionPayload } from '../session/payload';
-import { JsonObjectSchema, projectJsonValue, type JsonObject } from '../utils/json';
-import { encodeModelMessages } from '../session/message-codec';
+import { isParsedJsonObject, jsonObjectElements, projectJsonValue, type JsonObject } from '../utils/json';
+import { encodeModelMessage } from '../session/message-codec';
 import { diagnostics, renderThrownChain, KinuError } from '../obs/index';
 
 interface StreamPart {
@@ -40,6 +40,16 @@ function toolOutput(output: { readonly value: unknown }): JsonObject {
   if (v.is(v.string(), output.value)) return { type: 'text', value: output.value };
 
   return { type: 'json', value: projectJsonValue(output) };
+}
+
+/** Provider metadata as the part records it: projected to JSON once, and the
+ *  projection of a record is an object. */
+function metadataObject(metadata: ProviderMetadata): JsonObject {
+  const projected = projectJsonValue({ value: metadata });
+
+  if (!isParsedJsonObject(projected)) throw new KinuError('bad_input', 'provider metadata is not an object');
+
+  return projected;
 }
 
 /**
@@ -205,7 +215,7 @@ export class SessionStream {
       case 'text-start': {
         const pending = this.reserve(this.assistant, `text:${part.id}`, 'text');
 
-        if (part.providerMetadata !== undefined) pending.startMetadata = v.parse(JsonObjectSchema, projectJsonValue({ value: part.providerMetadata }));
+        if (part.providerMetadata !== undefined) pending.startMetadata = metadataObject(part.providerMetadata);
 
         return;
       }
@@ -340,7 +350,7 @@ export class SessionStream {
     if (text === null && providerMetadata === undefined && !end && part.opened) return;
 
     const callId = v.safeParse(v.string(), descriptor.toolCallId);
-    const metadata = providerMetadata === undefined ? undefined : v.parse(JsonObjectSchema, projectJsonValue({ value: providerMetadata }));
+    const metadata = providerMetadata === undefined ? undefined : metadataObject(providerMetadata);
     let opening: StreamPartInput | null = null;
     let replaced: SessionPayload | null = null;
 
@@ -460,11 +470,10 @@ export class SessionStream {
     for (const message of produced) {
       if (message.role !== 'assistant' && message.role !== 'tool') throw new KinuError('bad_input', 'a model response contains an input role');
       const container = message.role === 'assistant' ? this.assistant : this.tool;
-      const encoded = v.parse(v.array(JsonObjectSchema), JSON.parse(encodeModelMessages([message])))[0];
+      const { role: _role, content, ...envelope } = encodeModelMessage(message);
+      const finalParts = jsonObjectElements(content);
 
-      if (encoded === undefined) throw new KinuError('io', 'missing final native message');
-      const { role: _role, content, ...envelope } = encoded;
-      const finalParts = v.parse(v.array(JsonObjectSchema), content);
+      if (finalParts === null) throw new KinuError('io', 'a final native message holds no list of parts');
 
       if (container.reference === null && finalParts.length === 0) continue;
 
