@@ -725,6 +725,41 @@ describe('a recovery reads the record, not the session that finds it', () => {
   });
 });
 
+describe('an owed follow-up turn waits for its own row', () => {
+  test('an overflow retry stays owed until its turn is on disk, and the next pass closes it', async () => {
+    const { db, rt } = workspace();
+    let overflowed = false;
+
+    const { model } = scriptedModel('recovered', {
+      onStream: async () => {
+        if (overflowed) return;
+        overflowed = true;
+        throw new Error('context_length_exceeded: prompt is too long');
+      },
+    });
+
+    const events: SessionEvent[] = [];
+    const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
+    const retries = () => events.filter((e) => e.type === 'turn-start' && e.event === 'overflow_retry').length;
+    const owed = () => stillOwed(rt).map((row) => row.effect_name);
+
+    await session.send('build the thing');
+    await session.settleBackgroundWork();
+
+    // The retry turn ran behind the settle; the row saw it only queued.
+    expect(retries()).toBe(1);
+    expect(owed()).toContain('overflow_retry');
+
+    session.skipBackoff();
+    await session.recoverTerminalTransitions();
+
+    expect(owed()).not.toContain('overflow_retry');
+    expect(retries()).toBe(1);
+    await session.end();
+    db.close();
+  });
+});
+
 const assistantRows = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM conversation_entries WHERE actor_id = ${rt.actor.actorId} AND role = 'assistant'`[0]?.n ?? 0;
 

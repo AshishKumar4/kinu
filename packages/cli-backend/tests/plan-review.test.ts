@@ -142,9 +142,8 @@ describe('LocalAgentSession — plan review', () => {
       if (planId === undefined) throw new Error('the submitted plan has no id');
       const decided = await agent.decidePlanReview(planId, 1, 'approve');
       expect(decided).toMatchObject({ ok: true, queued: true, plan: { status: 'approved', handoffAccepted: true } });
-      // The decision admits the handoff turn and returns; it runs on this
-      // session's own pump, which is what a surface joins here.
-      await agent.settleBackgroundWork();
+      // The decision answers once the loop has run the handoff turn it
+      // admitted, so the write is already on the event stream.
       expect(fileResults(events)).toMatchObject([{ success: false, reason: 'denied' }, { success: true }]);
       expect(turnModes(agent)).toEqual(['plan', 'plan', 'build']);
     } finally {
@@ -235,6 +234,67 @@ describe('LocalAgentSession — plan review', () => {
       expect(events.find((event) => event.type === 'tool-result' && event.toolName === 'submit_plan'))
         .toMatchObject({ success: false });
       expect(await agent.getActivePlanReview()).toBeNull();
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+
+  test('an approval whose handoff turn the loop refuses stays owed, never accepted', async () => {
+    const { db, agent, taken } = session([
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
+      { answer: 'Plan submitted for review.' },
+    ]);
+
+    try {
+      await agent.send('Draft the ledger migration.', { mode: 'plan' });
+      const plan = await agent.getActivePlanReview();
+
+      if (!plan) throw new Error('the submitted plan was not stored');
+      // The decision is taken by the driving session; by the time its handoff
+      // turn is dequeued another process holds the driver lease.
+      let asked = 0;
+      agent.setDriverGate(() => (asked++ === 0 ? null : { reason: 'unavailable', error: 'another process is driving' }));
+
+      expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
+        ok: true, queued: false, plan: { status: 'approved', handoffAccepted: false },
+      });
+      expect(await agent.getActivePlanReview()).toMatchObject({ status: 'approved', handoffAccepted: false });
+      expect(taken).toHaveLength(2);
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+
+  test('an acceptance lost after the handoff was admitted is recovered by the next decision, with one turn', async () => {
+    const { db, agent } = session([
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
+      { answer: 'Plan submitted for review.' },
+      { answer: 'Implemented the approved plan.' },
+    ]);
+
+    try {
+      await agent.send('Draft the ledger migration.', { mode: 'plan' });
+      const plan = await agent.getActivePlanReview();
+
+      if (!plan) throw new Error('the submitted plan was not stored');
+      // The acceptance write fails once, after the loop admitted the turn.
+      db.run(`CREATE TRIGGER lose_acceptance BEFORE UPDATE OF handoff_accepted ON plan_reviews
+        WHEN NEW.handoff_accepted = 1 BEGIN SELECT RAISE(ABORT, 'interrupted after durable acceptance'); END`);
+
+      expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
+        ok: true, queued: false, queueError: expect.stringContaining('interrupted after durable acceptance'),
+        plan: { status: 'approved', handoffAccepted: false },
+      });
+      db.run('DROP TRIGGER lose_acceptance');
+      await agent.settleBackgroundWork();
+
+      expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
+        ok: true, queued: true, plan: { status: 'approved', handoffAccepted: true },
+      });
+      await agent.settleBackgroundWork();
+      expect(turnModes(agent)).toEqual(['plan', 'build']);
     } finally {
       await agent.end();
       db.close();

@@ -34,7 +34,7 @@ export {
 } from './provider-catalog';
 
 export {
-  changeActiveRole, roleChangeOutcomeText,
+  changeRoleAsOwner,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
   type RoleChangeRefusal, type RoleStateStore,
 } from './role-change';

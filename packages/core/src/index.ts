@@ -1541,12 +1541,11 @@ export {
   formatPlanWithLineNumbers,
   initPlanReviewTable,
   listPendingPlanReviews,
-  planHandoffKey,
-  planHandoffTurn,
   planReviewAwaitingDecision,
   workModeUnderReview,
   planTitle,
   validatePlanEdits,
+  type PlanDecisionOutcome,
   type PlanEdit,
   type PlanAnnotationMathTarget,
   type PlanAnnotationTextPosition,
@@ -1923,7 +1922,7 @@ export {
 export { createDurableMctsSession } from './orchestrator/mcts-session';
 
 export {
-  skillsVfsOver, resolveTurnSkills, steerSkillsBlock, filterToolNamesBySkills, filterToolSetBySkills,
+  resolveTurnSkills, steerSkillsBlock, filterToolNamesBySkills, filterToolSetBySkills,
   renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface';
 
@@ -1998,10 +1997,9 @@ export {
   type SettleRefinementPatch,
 } from './evolution/refinement';
 
-export {
-  advanceRefinementLane, refinementDebt, refinementDebtRequest, requestRefinement,
-  type RefinementLaneStep, type RequestRefinementInput,
-} from './evolution/refinement-lane';
+export { type RefinementLaneStep } from './evolution/refinement-lane';
+
+export { listRefinements, refinementPass, requestOwnerRefinement } from './evolution/refinement-host';
 
 export {
   REFINEMENT_DECISIONS, decideRefinementRoute, showRefinementRoute,
@@ -2200,6 +2198,8 @@ export {
   previewInstruction, gatherApprovableInstructions,
 } from './read-models/instruction-approvals';
 
+export { InstructionApprovalDesk } from './read-models/instruction-desk';
+
 export type {
   InstructionSourceKind, InstructionSourceMeta, InstructionSourceRow,
   InstructionSourceView,
@@ -2264,7 +2264,7 @@ export {
   ADVISOR_DEDUPE_WINDOW,
   ADVISOR_HEADER,
   advisorSignalText,
-  ADVISOR_LANE_FIBER, advisorLaneStarted, markAdvisorLaneStarted,
+  ADVISOR_LANE_FIBER,
   reviewRecordedTurn,
   AdvisorRecoverySnapshotSchema,
   buildAdvisorPrompt,
@@ -2317,7 +2317,7 @@ export {
   DEFAULT_ROLE_ID,
   buildProviderCatalogSnapshot, ProviderListingCache,
   type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead,
-  changeActiveRole, roleChangeOutcomeText,
+  changeRoleAsOwner,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
   type RoleChangeRefusal, type RoleStateStore,
 } from './profiles';
