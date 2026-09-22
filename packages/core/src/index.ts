@@ -1881,6 +1881,7 @@ export {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery, creditedTurnId,
   classifyRunEnd, RUN_END_REASONS, TOOL_CALLS_PENDING, OUTPUT_LIMIT_REACHED, TURN_ENDED_MID_WORK,
+  PROVIDER_NAMED_NO_END, STREAM_ENDED_UNNAMED,
   owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT,
   type CompactionTriggerState, type SettledTurn, type OutputContinuationFacts,
   type RunEndReason, type RunEndFacts, type RunEndClassification,

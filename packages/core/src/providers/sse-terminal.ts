@@ -1,4 +1,41 @@
 import { asFetchFunction } from './fetch-shim';
+import { REAL_CLOCK, type Clock } from '../types/clock';
+import { KinuError } from '../obs/index';
+
+/**
+ * How long a model stream may hold a read open while sending no content
+ * before the pipe is read as broken.
+ *
+ * THIS IS NOT A DEADLINE ON WORK. Work here ends on completion, definitive
+ * failure, or cancellation, never on elapsed time, and this bound keeps that
+ * rule rather than carving an exception out of it. What is measured is only
+ * the stretch in which a read is outstanding and the producer has sent no
+ * content frame, and every content frame restarts it: a model that streams
+ * for six hours is never cut, however slowly it produces, because each frame
+ * is fresh evidence that the far side is alive. What expires is the EVIDENCE,
+ * not the work. A socket with nothing behind it is a definitive failure, and
+ * the only alternative to naming it is a turn parked until a human presses
+ * Stop — which is what this stream layer did until now.
+ *
+ * TEN MINUTES, and the basis. The longest legitimate silence inside one of
+ * these streams is a reasoning model's thinking phase on the OpenAI dialect,
+ * where reasoning is not streamed and the first content frame arrives only
+ * once it is over. That phase's ceiling is UNMEASURED here. What this tree
+ * has recorded is the shorter number either side of it: a whole streamed step
+ * is silent for "tens of seconds" (heads/head-inference.ts, heads/head-stream.ts),
+ * and five minutes is already treated as an ordinary gap BETWEEN requests
+ * (providers/cache-warming.ts, Anthropic's short cache entry). Ten minutes is
+ * an order of magnitude past the longest silence measured inside a stream and
+ * twice the longest gap treated as ordinary outside one. Measured instead is
+ * the discrimination the number rests on, in unit-sse-terminal.test.ts:
+ * keepalive framing does not restart it and content does.
+ */
+export const SSE_CONTENT_IDLE_MS = 10 * 60_000;
+
+/** The race's non-read arm. A symbol rather than a flag so the read result and
+ *  the stall cannot be confused by a producer sending a value that looks like
+ *  one. */
+const STALLED: unique symbol = Symbol('sse-terminal: no content');
 
 /**
  * End an SSE stream at its `data: [DONE]` terminator instead of at producer
@@ -25,12 +62,24 @@ import { asFetchFunction } from './fetch-shim';
  * Non-SSE responses never enter: callers gate on the event-stream
  * content-type, so JSON bodies that happen to contain the marker pass
  * through untouched. Upstream close without a terminator closes cleanly
- * with the lock released; downstream cancel propagates to the upstream
+ * with the lock released — the dialect's terminator is not universal among
+ * the gateways that speak it, so the absence of one is named a turn later,
+ * where the provider's own finish reason is in hand (orchestrator/turn-lifecycle.ts,
+ * PROVIDER_NAMED_NO_END); downstream cancel propagates to the upstream
  * reader, preserving backpressure and abort semantics. A cancel rejection
  * still releases the lock before propagating — turning it into success
  * would hide a broken pipe behind a clean close.
+ *
+ * A producer that sends NOTHING is the case none of the above reaches: no
+ * terminator, no close, no error, just a held socket. {@link SSE_CONTENT_IDLE_MS}
+ * bounds it, keyed on content rather than on bytes — `messageLine` already
+ * separates a `data:` payload from framing, and only a payload with length
+ * restarts the window, so the comment lines and empty data frames every
+ * gateway sends as keepalives buy no time. The window is armed only while a
+ * read is outstanding and is measured from the last content frame, so a
+ * consumer that pauses does not spend it and a producer that pauses does.
  */
-function watchSseTerminal(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+function watchSseTerminal(body: ReadableStream<Uint8Array>, clock: Clock): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const chunks: Uint8Array[] = [];
@@ -43,11 +92,24 @@ function watchSseTerminal(body: ReadableStream<Uint8Array>): ReadableStream<Uint
   // which still releases before propagating.
   let settled = false;
   let released = false;
+  // When the producer last sent a data line carrying a payload, and the timer
+  // watching for the next one. The stream's start counts as content: a body
+  // that never sends a first frame is the same silence as one that stops.
+  let lastContentAt = clock.now();
+  let disarm: () => void = () => {};
+
+  const stall = Promise.withResolvers<typeof STALLED>();
+
+  const armStall = (): void => {
+    disarm();
+    disarm = clock.after(lastContentAt + SSE_CONTENT_IDLE_MS - clock.now(), () => { stall.resolve(STALLED); });
+  };
 
   const release = (): void => {
     if (released) return;
 
     released = true;
+    disarm();
     reader.releaseLock();
   };
 
@@ -118,8 +180,11 @@ function watchSseTerminal(body: ReadableStream<Uint8Array>): ReadableStream<Uint
 
     if (text.startsWith('data:')) {
       const payload = text.slice('data:'.length);
+      const value = payload.startsWith(' ') ? payload.slice(1) : payload;
 
-      data.push(payload.startsWith(' ') ? payload.slice(1) : payload);
+      if (value.length > 0) lastContentAt = clock.now();
+
+      data.push(value);
     }
 
     return false;
@@ -132,14 +197,16 @@ function watchSseTerminal(body: ReadableStream<Uint8Array>): ReadableStream<Uint
       let newline = indexOfNewline();
 
       while (newline < 0) {
+        armStall();
+
         // The union the DOM lib's `read()` answers differs from the workers
         // types' only in the done-arm's optional `value`, so this is a
         // handled read: on failure the lock releases and the same cause
         // rethrows, never widening what the consumer sees.
-        let next: Awaited<ReturnType<typeof reader.read>>;
+        let next: Awaited<ReturnType<typeof reader.read>> | typeof STALLED;
 
         try {
-          next = await reader.read();
+          next = await Promise.race([reader.read(), stall.promise]);
         } catch (cause) {
           // A failed upstream read propagates, but not before the lock is
           // released — the body this reader holds must not stay locked
@@ -150,7 +217,22 @@ function watchSseTerminal(body: ReadableStream<Uint8Array>): ReadableStream<Uint
           throw cause;
         }
 
+        disarm();
+
         if (settled) return;
+
+        if (next === STALLED) {
+          // Cancel before throwing, for the reason the terminator arm gives:
+          // the consumer's error path is the only place this can be acted on,
+          // and it must not find the upstream still held. The instant is
+          // carried because it is the one fact a reader of the run cannot
+          // recover — how long the socket was open with nothing behind it.
+          await cancelUpstream();
+
+          throw new KinuError('timeout', 'the model stream sent no content for '
+            + `${clock.now() - lastContentAt} ms; the last content frame arrived at `
+            + `${new Date(lastContentAt).toISOString()}`);
+        }
 
         if (next.done) {
           if (buffered > 0) controller.enqueue(takeBytes(buffered));
@@ -198,18 +280,21 @@ function watchSseTerminal(body: ReadableStream<Uint8Array>): ReadableStream<Uint
 
 /**
  * The fetch-level application of the terminal rule: streamed answers end at
- * `data: [DONE]` with the upstream reader cancelled, everything else passes
+ * `data: [DONE]` with the upstream reader cancelled, at a producer that has
+ * gone quiet past {@link SSE_CONTENT_IDLE_MS}, and everything else passes
  * through untouched. The content-type gate is what keeps JSON answers (and
- * non-SSE providers sharing a fetch chain) out of the watcher.
+ * non-SSE providers sharing a fetch chain) out of the watcher. The clock is a
+ * parameter because the quiet window is time inside a subject: production
+ * hands the real one, a suite hands a clock it advances.
  */
-export function withSseTerminal(fetchImpl: typeof fetch): typeof fetch {
+export function withSseTerminal(fetchImpl: typeof fetch, clock: Clock = REAL_CLOCK): typeof fetch {
   return asFetchFunction(async (input, init) => {
     const response = await fetchImpl(input, init);
     const contentType = response.headers.get('content-type') ?? '';
 
     if (!contentType.includes('text/event-stream') || !response.body) return response;
 
-    return new Response(watchSseTerminal(response.body), {
+    return new Response(watchSseTerminal(response.body, clock), {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
