@@ -100,7 +100,7 @@ export function evaluateCleanup(evidence: readonly CleanupEvidence[]): CleanupVe
     const failures = rows.filter((row) => !row.ok);
 
     if (failures.length > 0) {
-      return { gate: gate.name, ok: false, detail: `${failures.length}/${rows.length} check(s) failed; last: ${failures[failures.length - 1]!.detail}` };
+      return { gate: gate.name, ok: false, detail: `${failures.length}/${rows.length} check(s) failed; last: ${failures[failures.length - 1].detail}` };
     }
 
     return { gate: gate.name, ok: true, detail: `${rows.length} check(s) passed` };

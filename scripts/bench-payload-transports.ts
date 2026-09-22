@@ -181,13 +181,20 @@ type WireValue = string | number | boolean;
 type FixtureRequest = Readonly<Record<string, WireValue>>;
 
 
+/** One POST to the deployed fixture, decoded by the schema the caller expects. */
+interface FixtureCall<TSchema extends v.GenericSchema> {
+  readonly origin: string;
+  readonly token: string;
+  readonly route: string;
+  readonly schema: TSchema;
+  readonly body?: FixtureRequest;
+}
+
 async function call<TSchema extends v.GenericSchema>(
-  origin: string,
-  token: string,
-  route: string,
-  schema: TSchema,
-  body: FixtureRequest = {},
+  request: FixtureCall<TSchema>,
 ): Promise<v.InferOutput<TSchema>> {
+  const { origin, token, route, schema, body = {} } = request;
+
   const response = await fetch(`${origin}${route}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -264,7 +271,7 @@ async function awaitDeploymentSettled(origin: string, token: string): Promise<st
     let reported: string | null;
 
     try {
-      reported = (await call(origin, token, '/version', VersionReplySchema)).version;
+      reported = (await call({ origin, token, route: '/version', schema: VersionReplySchema })).version;
     } catch (error) {
       // A reset in flight IS the disturbance being waited out, so it restarts
       // the count rather than failing the run.
@@ -312,7 +319,7 @@ async function setupFixture(origin: string, token: string): Promise<SetupReply> 
 
   for (let attempt = 1; attempt <= 4; attempt += 1) {
     try {
-      return await call(origin, token, '/setup', SetupReplySchema);
+      return await call({ origin, token, route: '/setup', schema: SetupReplySchema });
     } catch (error) {
       lastFailure = renderThrownChain({ cause: error });
 
@@ -327,30 +334,35 @@ async function setupFixture(origin: string, token: string): Promise<SetupReply> 
 }
 
 
+/** One supervised in-container operation, started and then polled to its end. */
+interface OperationRun {
+  readonly origin: string;
+  readonly token: string;
+  readonly operationId: string;
+  readonly kind: 'seed' | 'transfer';
+  readonly spec: FixtureRequest;
+}
+
 /** Start a supervised operation and POLL it to completion. No request is held open server-side. */
-async function runOperation(
-  origin: string,
-  token: string,
-  operationId: string,
-  kind: 'seed' | 'transfer',
-  spec: FixtureRequest,
-): Promise<readonly HarnessResult[]> {
-  await call(
+async function runOperation(run: OperationRun): Promise<readonly HarnessResult[]> {
+  const { origin, token, operationId, kind, spec } = run;
+
+  await call({
     origin,
     token,
-    '/op/start',
-    OperationStartReplySchema,
-    { operationId, kind, ...spec },
-  );
+    route: '/op/start',
+    schema: OperationStartReplySchema,
+    body: { operationId, kind, ...spec },
+  });
 
   for (;;) {
-    const poll = await call(
+    const poll = await call({
       origin,
       token,
-      '/op/poll',
-      OperationPollReplySchema,
-      { operationId },
-    );
+      route: '/op/poll',
+      schema: OperationPollReplySchema,
+      body: { operationId },
+    });
 
     if (poll.exitCode === null) {
       const settle = Promise.withResolvers<void>();
@@ -405,6 +417,25 @@ interface SeedEvidence {
 interface MeasuredEvidence {
   readonly wallMs: number;
   readonly sha256: string;
+}
+
+/** One timed transfer of one seeded file: which arm, which direction, which repetition. */
+interface CellRun {
+  readonly arm: PayloadArmId;
+  readonly op: 'put' | 'get';
+  readonly file: SeededFile;
+  readonly rep: number;
+  readonly keySuffix: string;
+}
+
+/** What a completed transfer offers for judgement against the seeded source. */
+interface CellJudgement {
+  readonly cellBase: { arm: PayloadArmId; op: 'put' | 'get'; sizeMiB: PayloadSizeMiB; rep: number };
+  readonly seededFile: SeededFile;
+  readonly objectKey: string;
+  readonly measured: MeasuredEvidence;
+  readonly timedBy: 'container' | 'owner-do';
+  readonly grantFingerprint?: string;
 }
 
 function seedEvidence(result: HarnessResult, sizeMiB: PayloadSizeMiB): SeedEvidence {
@@ -541,8 +572,8 @@ async function main(): Promise<number> {
 
     if (origin !== null) {
       try {
-        await call(origin, token, '/purge', PurgeReplySchema);
-        inventoryProof = await call(origin, token, '/inventory', InventoryReplySchema);
+        await call({ origin, token, route: '/purge', schema: PurgeReplySchema });
+        inventoryProof = await call({ origin, token, route: '/inventory', schema: InventoryReplySchema });
       } catch (error) {
         inventoryFailure = renderThrownChain({ cause: error });
       }
@@ -556,7 +587,7 @@ async function main(): Promise<number> {
     if (origin !== null) {
       for (const attempt of [1, 2] as const) {
         try {
-          await call(origin, token, '/destroy', OkReplySchema);
+          await call({ origin, token, route: '/destroy', schema: OkReplySchema });
         } catch (error) {
           destroyFailures.push(
             `destroy attempt ${attempt}: ${renderThrownChain({ cause: error })}`,
@@ -711,9 +742,12 @@ async function main(): Promise<number> {
       sizeMiB,
     }));
 
-    const seededResults = await runOperation(origin, token, `seed-${identity.runId}`, 'seed', {
-      files: JSON.stringify(seedFiles),
-      seed: opts.seed,
+    const seededResults = await runOperation({
+      origin,
+      token,
+      operationId: `seed-${identity.runId}`,
+      kind: 'seed',
+      spec: { files: JSON.stringify(seedFiles), seed: opts.seed },
     });
 
     if (seededResults.length !== PAYLOAD_SIZES_MIB.length) {
@@ -750,13 +784,7 @@ async function main(): Promise<number> {
 
     const independentChecks: { cell: Cell; key: string; file: SeededFile }[] = [];
 
-    const runCell = async (
-      arm: PayloadArmId,
-      op: 'put' | 'get',
-      file: SeededFile,
-      rep: number,
-      keySuffix: string,
-    ): Promise<Cell> => {
+    const runCell = async ({ arm, op, file, rep, keySuffix }: CellRun): Promise<Cell> => {
       const base = { arm, op, sizeMiB: file.sizeMiB, rep };
       const available = availabilityFor(availabilityRows, arm);
 
@@ -775,17 +803,17 @@ async function main(): Promise<number> {
 
       try {
         if (arm === 'do-base64') {
-          const result = await call(
-            liveOrigin,
+          const result = await call({
+            origin: liveOrigin,
             token,
-            '/arm/do-base64',
-            HarnessResultSchema,
-            { file: file.path, key, op },
-          );
+            route: '/arm/do-base64',
+            schema: HarnessResultSchema,
+            body: { file: file.path, key, op },
+          });
 
           const measured = measuredEvidence(result, operationId);
 
-          return judge(base, file, key, measured, 'owner-do');
+          return judge({ cellBase: base, seededFile: file, objectKey: key, measured, timedBy: 'owner-do' });
         }
 
         if (arm === 'loopback-entrypoint') {
@@ -794,23 +822,27 @@ async function main(): Promise<number> {
           const url = `http://r2.internal/BACKUP_BUCKET/${key}`;
 
           const result = singleResult(
-            await runOperation(liveOrigin, token, operationId, 'transfer', {
-              mode: 'loopback', file: file.path, url, op,
+            await runOperation({
+              origin: liveOrigin,
+              token,
+              operationId,
+              kind: 'transfer',
+              spec: { mode: 'loopback', file: file.path, url, op },
             }),
             operationId,
           );
 
-          return judge(base, file, key, measuredEvidence(result, operationId), 'container');
+          return judge({ cellBase: base, seededFile: file, objectKey: key, measured: measuredEvidence(result, operationId), timedBy: 'container' });
         }
 
         if (arm === 'presigned-r2') {
-          const grant = await call(
-            liveOrigin,
+          const grant = await call({
+            origin: liveOrigin,
             token,
-            '/grant/presign',
-            PresignReplySchema,
-            { key, op },
-          );
+            route: '/grant/presign',
+            schema: PresignReplySchema,
+            body: { key, op },
+          });
 
           if (!grant.available) {
             return {
@@ -823,29 +855,33 @@ async function main(): Promise<number> {
           }
 
           const result = singleResult(
-            await runOperation(liveOrigin, token, operationId, 'transfer', {
-              mode: 'direct', file: file.path, url: grant.opaque, op,
+            await runOperation({
+              origin: liveOrigin,
+              token,
+              operationId,
+              kind: 'transfer',
+              spec: { mode: 'direct', file: file.path, url: grant.opaque, op },
             }),
             operationId,
           );
 
-          return judge(
-            base,
-            file,
-            key,
-            measuredEvidence(result, operationId),
-            'container',
-            grant.fingerprint,
-          );
+          return judge({
+            cellBase: base,
+            seededFile: file,
+            objectKey: key,
+            measured: measuredEvidence(result, operationId),
+            timedBy: 'container',
+            grantFingerprint: grant.fingerprint,
+          });
         }
 
-        const credentials = await call(
-          liveOrigin,
+        const credentials = await call({
+          origin: liveOrigin,
           token,
-          '/temp-credentials',
-          TemporaryCredentialsReplySchema,
-          { prefix: 'payload/' },
-        );
+          route: '/temp-credentials',
+          schema: TemporaryCredentialsReplySchema,
+          body: { prefix: 'payload/' },
+        });
 
         if (!credentials.available) {
           return {
@@ -858,27 +894,33 @@ async function main(): Promise<number> {
         }
 
         const result = singleResult(
-          await runOperation(liveOrigin, token, operationId, 'transfer', {
-            mode: 'sigv4',
-            file: file.path,
-            key,
-            op,
-            endpoint: credentials.endpoint,
-            accessKeyId: credentials.accessKeyId,
-            secretAccessKey: credentials.secretAccessKey,
-            sessionToken: credentials.sessionToken,
+          await runOperation({
+            origin: liveOrigin,
+            token,
+            operationId,
+            kind: 'transfer',
+            spec: {
+              mode: 'sigv4',
+              file: file.path,
+              key,
+              op,
+              endpoint: credentials.endpoint,
+              accessKeyId: credentials.accessKeyId,
+              secretAccessKey: credentials.secretAccessKey,
+              sessionToken: credentials.sessionToken,
+            },
           }),
           operationId,
         );
 
-        return judge(
-          base,
-          file,
-          key,
-          measuredEvidence(result, operationId),
-          'container',
-          credentials.fingerprint,
-        );
+        return judge({
+          cellBase: base,
+          seededFile: file,
+          objectKey: key,
+          measured: measuredEvidence(result, operationId),
+          timedBy: 'container',
+          grantFingerprint: credentials.fingerprint,
+        });
       } catch (error) {
         return {
           ...base,
@@ -889,14 +931,7 @@ async function main(): Promise<number> {
         };
       }
 
-      function judge(
-        cellBase: { arm: PayloadArmId; op: 'put' | 'get'; sizeMiB: PayloadSizeMiB; rep: number },
-        seededFile: SeededFile,
-        objectKey: string,
-        measured: MeasuredEvidence,
-        timedBy: 'container' | 'owner-do',
-        grantFingerprint?: string,
-      ): Cell {
+      function judge({ cellBase, seededFile, objectKey, measured, timedBy, grantFingerprint }: CellJudgement): Cell {
         const cell: Cell = measured.sha256 === seededFile.sha256
           ? { ...cellBase, phase: 'published', status: 'ok', wallMs: measured.wallMs, timedBy }
           : {
@@ -927,14 +962,14 @@ async function main(): Promise<number> {
         // object key, is retained under `warmups`, and never enters `cells`.
         const warmupKey = `warmup/${arm}/${sizeMiB}`;
         const warmupRep = opts.reps;
-        const warmupPut = await runCell(arm, 'put', file, warmupRep, warmupKey);
+        const warmupPut = await runCell({ arm, op: 'put', file, rep: warmupRep, keySuffix: warmupKey });
         warmups.push(warmupPut);
 
         if (warmupPut.status !== 'ok') {
           throw new Error(`warm-up PUT ${arm}/${sizeMiB}MiB failed: ${warmupPut.reason ?? warmupPut.status}`);
         }
 
-        const warmupGet = await runCell(arm, 'get', file, warmupRep, warmupKey);
+        const warmupGet = await runCell({ arm, op: 'get', file, rep: warmupRep, keySuffix: warmupKey });
         warmups.push(warmupGet);
 
         if (warmupGet.status !== 'ok') {
@@ -944,8 +979,8 @@ async function main(): Promise<number> {
         log(`arm ${arm} ${sizeMiB} MiB warm-up done; excluded from rank samples`);
 
         for (let rep = 0; rep < opts.reps; rep += 1) {
-          cells.push(await runCell(arm, 'put', file, rep, `put/${arm}/${sizeMiB}/${rep}`));
-          cells.push(await runCell(arm, 'get', file, rep, `put/${arm}/${sizeMiB}/${rep}`));
+          cells.push(await runCell({ arm, op: 'put', file, rep, keySuffix: `put/${arm}/${sizeMiB}/${rep}` }));
+          cells.push(await runCell({ arm, op: 'get', file, rep, keySuffix: `put/${arm}/${sizeMiB}/${rep}` }));
           log(`arm ${arm} ${sizeMiB} MiB rep ${rep + 1}/${opts.reps} done`);
         }
       }
@@ -954,13 +989,13 @@ async function main(): Promise<number> {
     // INDEPENDENT verification of every stored object, server-side.
     for (const check of independentChecks) {
       try {
-        const verified = await call(
-          liveOrigin,
+        const verified = await call({
+          origin: liveOrigin,
           token,
-          '/verify-object',
-          ObjectVerificationReplySchema,
-          { key: check.key },
-        );
+          route: '/verify-object',
+          schema: ObjectVerificationReplySchema,
+          body: { key: check.key },
+        });
 
         if (verified.sha256 !== check.file.sha256 || verified.size !== check.file.sizeBytes) {
           check.cell.status = 'corrupt';
@@ -1011,7 +1046,7 @@ async function main(): Promise<number> {
 
       const results = await Promise.all(
         Array.from({ length: opts.concurrency }, (_, slot) =>
-          runCell(arm, 'put', contended, 1000 + slot, `concurrent/${arm}/${slot}`)),
+          runCell({ arm, op: 'put', file: contended, rep: 1000 + slot, keySuffix: `concurrent/${arm}/${slot}` })),
       );
 
       const wallMs = Date.now() - startedAt;

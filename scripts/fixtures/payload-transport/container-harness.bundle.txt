@@ -25,10 +25,10 @@
 import { createHash, createHmac } from 'node:crypto';
 import { statSync } from 'node:fs';
 
-/** Byte-identical twin of r2-bench/stats.ts `mulberry32`: this file ships alone
+/** Twin of r2-bench/stats.ts `mulberry32`, step for step: this file ships alone
  *  into the container, so it cannot import it. */
-export function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
+export function mulberry32(seedValue: number): () => number {
+  let a = seedValue >>> 0;
 
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;
@@ -74,25 +74,29 @@ interface TransferArgs {
   readonly key?: string;
 }
 
+export interface SigV4Request {
+  readonly method: 'PUT' | 'GET';
+  readonly url: URL;
+  readonly payloadHash: string;
+  readonly accessKeyId: string;
+  readonly secretAccessKey: string;
+  readonly sessionToken: string;
+}
+
 /**
  * Minimal AWS SigV4 signer for one S3 request using the temporary scoped
  * credentials minted by the owning DO. Signs host, x-amz-content-sha256,
  * x-amz-date, and x-amz-security-token; region 'auto' per R2 convention.
  */
-export function sigv4Headers(
-  method: 'PUT' | 'GET',
-  url: URL,
-  payloadHash: string,
-  accessKeyId: string,
-  secretAccessKey: string,
-  sessionToken: string,
-): Headers {
+export function sigv4Headers(request: SigV4Request): Headers {
+  const { method, url, payloadHash, accessKeyId, secretAccessKey, sessionToken } = request;
   const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
   const dateStamp = amzDate.slice(0, 8);
   const headers = new Headers({ host: url.host, 'x-amz-content-sha256': payloadHash, 'x-amz-date': amzDate, 'x-amz-security-token': sessionToken });
-  const names = [...headers.keys()].sort();
-  const signedHeaders = names.join(';');
-  const canonicalHeaders = names.map((name) => `${name}:${headers.get(name)!}\n`).join('');
+  // Signed in ascending name order, each name carrying its own value.
+  const signed = [...headers.entries()].sort(([left], [right]) => (left < right ? -1 : 1));
+  const signedHeaders = signed.map(([name]) => name).join(';');
+  const canonicalHeaders = signed.map(([name, value]) => `${name}:${value}\n`).join('');
   const canonicalRequest = [method, url.pathname, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
   const scope = `${dateStamp}/auto/s3/aws4_request`;
 
@@ -131,9 +135,9 @@ export async function transfer(args: TransferArgs): Promise<void> {
 
     if (args.op === 'put') {
       const body = await Bun.file(args.path).arrayBuffer();
-      init = { method: 'PUT', body, headers: sigv4Headers('PUT', url, sha256Hex(body), accessKeyId, secretAccessKey, sessionToken) };
+      init = { method: 'PUT', body, headers: sigv4Headers({ method: 'PUT', url, payloadHash: sha256Hex(body), accessKeyId, secretAccessKey, sessionToken }) };
     } else {
-      init = { method: 'GET', headers: sigv4Headers('GET', url, sha256Hex(new Uint8Array(0)), accessKeyId, secretAccessKey, sessionToken) };
+      init = { method: 'GET', headers: sigv4Headers({ method: 'GET', url, payloadHash: sha256Hex(new Uint8Array(0)), accessKeyId, secretAccessKey, sessionToken }) };
     }
 
     targetUrl = url.toString();
@@ -169,21 +173,36 @@ function flag(name: string): string | undefined {
   return index < 0 ? undefined : process.argv[index + 1];
 }
 
+function transferMode(requested: string | undefined): TransferArgs['mode'] {
+  if (requested === 'loopback') return 'loopback';
+
+  if (requested === 'direct') return 'direct';
+
+  return 'sigv4';
+}
+
 if (import.meta.main) {
   const command = process.argv[2];
 
+  if (command !== 'seed' && command !== 'transfer') {
+    throw new Error(`unknown harness command: ${String(command)}`);
+  }
+
+  // The file under test is the whole job: neither command has a default for it.
+  const path = flag('--path');
+
+  if (path === undefined) throw new Error(`${command} needs --path`);
+
   if (command === 'seed') {
-    await seed(flag('--path')!, Number(flag('--size-mib')), Number(flag('--seed')));
-  } else if (command === 'transfer') {
+    await seed(path, Number(flag('--size-mib')), Number(flag('--seed')));
+  } else {
     await transfer({
       op: flag('--op') === 'put' ? 'put' : 'get',
-      mode: flag('--mode') === 'loopback' ? 'loopback' : flag('--mode') === 'direct' ? 'direct' : 'sigv4',
-      path: flag('--path')!,
+      mode: transferMode(flag('--mode')),
+      path,
       url: flag('--url'),
       endpoint: flag('--endpoint'),
       key: flag('--key'),
     });
-  } else {
-    throw new Error(`unknown harness command: ${String(command)}`);
   }
 }

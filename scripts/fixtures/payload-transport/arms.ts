@@ -54,8 +54,8 @@ export interface ArmSpec {
   readonly base64AtBoundary: boolean;
 }
 
-export const ARM_SPECS: readonly ArmSpec[] = [
-  {
+const ARM_SPEC_BY_ID: Record<PayloadArmId, ArmSpec> = {
+  'do-base64': {
     id: 'do-base64',
     label: 'owning DO, base64 boundary',
     question: 'What does the current owning-DO base64 path cost per byte?',
@@ -63,7 +63,7 @@ export const ARM_SPECS: readonly ArmSpec[] = [
     crossesProxyEntrypoint: false,
     base64AtBoundary: true,
   },
-  {
+  'loopback-entrypoint': {
     id: 'loopback-entrypoint',
     label: 'loopback WorkerEntrypoint',
     question: 'What does the proxy entrypoint hop add over a direct storage write?',
@@ -71,7 +71,7 @@ export const ARM_SPECS: readonly ArmSpec[] = [
     crossesProxyEntrypoint: true,
     base64AtBoundary: false,
   },
-  {
+  'presigned-r2': {
     id: 'presigned-r2',
     label: 'presigned direct R2',
     question: 'What is the floor when no Kinu code sits on the byte path?',
@@ -79,7 +79,7 @@ export const ARM_SPECS: readonly ArmSpec[] = [
     crossesProxyEntrypoint: false,
     base64AtBoundary: false,
   },
-  {
+  'temp-s3-creds': {
     id: 'temp-s3-creds',
     label: 'temporary S3 credentials',
     question: 'Does a scoped temporary credential change anything over a presigned URL?',
@@ -87,10 +87,11 @@ export const ARM_SPECS: readonly ArmSpec[] = [
     crossesProxyEntrypoint: false,
     base64AtBoundary: false,
   },
-];
+};
 
-export const armSpec = (id: PayloadArmId): ArmSpec =>
-  ARM_SPECS.find((spec) => spec.id === id)!;
+export const ARM_SPECS: readonly ArmSpec[] = PAYLOAD_ARMS.map((id) => ARM_SPEC_BY_ID[id]);
+
+export const armSpec = (id: PayloadArmId): ArmSpec => ARM_SPEC_BY_ID[id];
 
 /**
  * The payload tiers, in MiB.

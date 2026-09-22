@@ -1,4 +1,5 @@
 import { scratchDir } from '../packages/test-utils/src/scratch';
+import { present } from '@kinu.run/test-utils';
 import { describe, expect, test } from 'bun:test';
 import { readdirSync, writeFileSync } from 'node:fs';
 
@@ -74,7 +75,7 @@ describe('durable teardown manifest', () => {
     expect(first.failures).toHaveLength(1);
     expect(loadManifest(root, 'recover')?.entries.map((entry) => entry.done)).toEqual([true, false]);
 
-    const resumed = loadManifest(root, 'recover')!;
+    const resumed = present(loadManifest(root, 'recover'), 'the resumed teardown manifest');
     const second = await replayTeardown(root, resumed, async () => ({ ok: true }));
     expect(second.failures).toEqual([]);
     expect(second.manifest.entries.every((entry) => entry.done)).toBe(true);
@@ -303,7 +304,7 @@ describe('cleanup C1-C7', () => {
 
   test('C7 rejects a manifest whose first replay left work pending', async () => {
     await expectFailure('C7', {}, (manifest) => {
-      manifest.entries[0]!.done = false;
+      manifest.entries[0].done = false;
     });
   });
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { present } from '@kinu.run/test-utils';
 import {
   evaluateRun, expectedCells, refusalText, requireAdmitted,
   type AdmissionVerdict, type ArmEvidence, type CleanupEvidence, type GateId,
@@ -253,7 +254,7 @@ describe('G0-G9 storage run admission', () => {
       witnessChecks: controlWitnessChecks('snapshot-chain', {
         ...WITNESSED_FACTS,
         mutableDelta: {
-          ...WITNESSED_FACTS.mutableDelta!,
+          ...present(WITNESSED_FACTS.mutableDelta, 'the witnessed mutable-delta facts'),
           key: 'backups/chain-7/delta.sqsh',
           etagBefore: 'e1',
           etagAfter: 'e1',
