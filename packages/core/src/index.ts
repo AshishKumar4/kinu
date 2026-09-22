@@ -1329,11 +1329,15 @@ export {
 
 // File checkpoints — the shadow-git snapshot seam (backends implement it)
 export {
-  DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT, summarizeRestorePlan,
-  type FileCheckpoints, type CheckpointTurnMeta, type CheckpointAvailability,
+  DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT, CHECKPOINTS_UNCONFIGURED, summarizeRestorePlan,
+  checkpointAvailability, fileCheckpointListing,
+  CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema, FileRestoreResultSchema,
+  type FileCheckpoints, type FileCheckpointReads, type CheckpointTurnMeta, type CheckpointAvailability,
   type FileCheckpointEntry, type FileCheckpointListing, type FileRestoreChange, type FileRestoreKind,
   type FileRestorePlan, type FileRestoreResult, type DeviceCheckpointHint,
 } from './checkpoints/types';
+
+export { deviceFileCheckpoints, type DeviceRpcHub, type DeviceCheckpointsInput } from './checkpoints/device';
 
 // Shadow-git store format — the cross-engine contract (cli-backend imports
 // it; the zero-dep pc-agent daemon pins it, enforced by the parity test).

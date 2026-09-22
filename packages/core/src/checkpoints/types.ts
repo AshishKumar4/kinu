@@ -1,3 +1,4 @@
+import * as v from 'valibot';
 /**
  * File checkpoints — the shadow-git snapshot seam (Hermes checkpoint_manager
  * pattern). Invisible infrastructure: backends snapshot a real working
@@ -45,17 +46,15 @@ export interface CheckpointTurnMeta {
   sessionId: string;
 }
 
-export interface FileCheckpointEntry {
-  /** Commit sha in the shadow store (content-addressed snapshot id). */
-  id: string;
-  /** Absolute path of the snapshotted working directory. */
-  dir: string;
-  /** Snapshot time (ms epoch). */
-  at: number;
-  turnId: string | null;
-  sessionId: string | null;
-  reason: string;
-}
+/** `id` is the commit sha in the shadow store (a content-addressed snapshot
+ *  id), `dir` the absolute path of the snapshotted working directory, `at` the
+ *  snapshot time in ms epoch. */
+export const FileCheckpointEntrySchema = v.object({
+  id: v.string(), dir: v.string(), at: v.number(), turnId: v.nullable(v.string()),
+  sessionId: v.nullable(v.string()), reason: v.string(),
+});
+
+export type FileCheckpointEntry = v.InferOutput<typeof FileCheckpointEntrySchema>;
 
 /**
  * What the operator's client needs in one round trip: whether the checkpoint
@@ -75,34 +74,32 @@ export interface FileCheckpointListing {
   entries: FileCheckpointEntry[];
 }
 
-export type FileRestoreKind = 'modify' | 'create' | 'delete';
+const FILE_RESTORE_KINDS = ['modify', 'create', 'delete'] as const;
+
+export type FileRestoreKind = (typeof FILE_RESTORE_KINDS)[number];
 
 /** One file the restore will touch, in restore direction: `create` re-creates
  *  a file deleted since the checkpoint, `delete` removes a file created since,
  *  `modify` rewrites changed content. */
-export interface FileRestoreChange {
-  path: string;
-  kind: FileRestoreKind;
-}
+const FileRestoreChangeSchema = v.object({ path: v.string(), kind: v.picklist(FILE_RESTORE_KINDS) });
 
-export interface FileRestorePlan {
-  dir: string;
-  id: string;
-  files: FileRestoreChange[];
-}
+export type FileRestoreChange = v.InferOutput<typeof FileRestoreChangeSchema>;
 
-export interface FileRestoreResult {
-  dir: string;
-  id: string;
-  files: FileRestoreChange[];
-  /** Safety snapshot taken just before restoring — undo-the-undo handle. */
-  preRestoreId: string | null;
-}
+export const FileRestorePlanSchema = v.object({ dir: v.string(), id: v.string(), files: v.array(FileRestoreChangeSchema) });
 
-export interface CheckpointAvailability {
-  available: boolean;
-  reason?: string;
-}
+export type FileRestorePlan = v.InferOutput<typeof FileRestorePlanSchema>;
+
+/** `preRestoreId` is the safety snapshot taken just before restoring: the
+ *  undo-the-undo handle. */
+export const FileRestoreResultSchema = v.object({
+  dir: v.string(), id: v.string(), files: v.array(FileRestoreChangeSchema), preRestoreId: v.nullable(v.string()),
+});
+
+export type FileRestoreResult = v.InferOutput<typeof FileRestoreResultSchema>;
+
+export const CheckpointAvailabilitySchema = v.object({ available: v.boolean(), reason: v.optional(v.string()) });
+
+export type CheckpointAvailability = v.InferOutput<typeof CheckpointAvailabilitySchema>;
 
 /**
  * The checkpoint engine seam. `beginTurn` resets the per-turn dedup;
@@ -110,11 +107,11 @@ export interface CheckpointAvailability {
  * throws (missing git or an un-snapshottable directory degrade to a no-op so
  * the mutation it precedes is never blocked).
  */
-export interface FileCheckpoints {
-  beginTurn(meta: CheckpointTurnMeta): void;
-  /** Snapshot `dir` if not already done this turn. Resolves the checkpoint id,
-   *  or null when skipped (already snapshotted, unchanged, or unavailable). */
-  ensureCheckpoint(dir: string, reason?: string): Promise<string | null>;
+/** What a checkpoint store answers about itself: the reads every surface
+ *  makes, on a cloud workspace over the owner's device and on a local session
+ *  over its own git engine. */
+export interface FileCheckpointReads {
+  status(): Promise<CheckpointAvailability>;
   /**
    * Checkpoints for this agent across working directories, newest first.
    *
@@ -134,7 +131,32 @@ export interface FileCheckpoints {
   /** Restore `dir` exactly to the checkpoint (content, deletions, additions).
    *  Takes a pre-restore safety snapshot first. */
   restore(dir: string, id: string): Promise<FileRestoreResult>;
-  status(): Promise<CheckpointAvailability>;
+}
+
+/** The reason a session with no checkpoint store answers every read with. */
+export const CHECKPOINTS_UNCONFIGURED = 'checkpoints are not configured for this session';
+
+export function checkpointAvailability(reads: FileCheckpointReads | null): Promise<CheckpointAvailability> {
+  return reads === null ? Promise.resolve({ available: false, reason: CHECKPOINTS_UNCONFIGURED }) : reads.status();
+}
+
+/** The store's reachability and what it holds, in one answer (see
+ *  {@link FileCheckpointListing} for why the two are never collapsed). */
+export async function fileCheckpointListing(
+  reads: FileCheckpointReads | null, query: { limit?: number; turnId?: string },
+): Promise<FileCheckpointListing> {
+  const availability = await checkpointAvailability(reads);
+
+  if (reads === null || !availability.available) return { availability, entries: [] };
+
+  return { availability, entries: await reads.list(query) };
+}
+
+export interface FileCheckpoints extends FileCheckpointReads {
+  beginTurn(meta: CheckpointTurnMeta): void;
+  /** Snapshot `dir` if not already done this turn. Resolves the checkpoint id,
+   *  or null when skipped (already snapshotted, unchanged, or unavailable). */
+  ensureCheckpoint(dir: string, reason?: string): Promise<string | null>;
   /** Project root a file path belongs to (nearest marker dir), for snapshot
    *  targeting of direct file writes. */
   workdirForPath(path: string): string;

@@ -182,7 +182,7 @@ import { TierIdSchema,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   // The ONE turn loop, and the transcript store the local backend keeps it over.
-  ChatSession, CHAT_SESSION_ID,
+  ChatSession, CHAT_SESSION_ID, CHECKPOINTS_UNCONFIGURED, checkpointAvailability, fileCheckpointListing,
   type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
@@ -1188,11 +1188,7 @@ export class LocalAgentSession implements BackendHost {
    * checkpoints still exist. See FileCheckpoints.list.
    */
   async listFileCheckpoints(limit?: number, turnId?: string): Promise<FileCheckpointListing> {
-    const availability = await this.checkpointStatus();
-
-    if (!availability.available || !this.rt.checkpoints) return { availability, entries: [] };
-
-    return { availability, entries: await this.rt.checkpoints.list({ limit, turnId }) };
+    return fileCheckpointListing(this.rt.checkpoints ?? null, { limit, turnId });
   }
 
   async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
@@ -1204,12 +1200,11 @@ export class LocalAgentSession implements BackendHost {
   }
 
   checkpointStatus(): Promise<CheckpointAvailability> {
-    return this.rt.checkpoints?.status()
-      ?? Promise.resolve({ available: false, reason: 'checkpoints are not configured for this session' });
+    return checkpointAvailability(this.rt.checkpoints ?? null);
   }
 
   private requireCheckpoints(): FileCheckpoints {
-    if (!this.rt.checkpoints) throw new Error('checkpoints are not configured for this session');
+    if (!this.rt.checkpoints) throw new Error(CHECKPOINTS_UNCONFIGURED);
 
     return this.rt.checkpoints;
   }

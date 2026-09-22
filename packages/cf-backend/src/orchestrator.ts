@@ -176,10 +176,9 @@ import {
   // called before anything names it.
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
-  isDeviceNotConnectedError,
-  isWorkspaceUnattachedError, WORKSPACE_HAS_NO_OWNER, isDeviceAmbiguityError,
+  checkpointAvailability, fileCheckpointListing, deviceFileCheckpoints,
   CommandResultSchema,
-  type CheckpointAvailability, type FileCheckpointListing,
+  type CheckpointAvailability, type FileCheckpointListing, type FileCheckpointReads,
   type FileRestorePlan, type FileRestoreResult,
   runSleepTimeCompute, applySleepTimeUpdate,
   SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
@@ -414,29 +413,6 @@ interface ExecutorOutputRow {
   stderr: string; stderr_len: number;
   exit_code: number; created_at: number;
 }
-
-const FileRestoreChangeSchema = v.object({
-  path: v.string(),
-  kind: v.picklist(['modify', 'create', 'delete']),
-});
-
-const FileCheckpointEntrySchema = v.object({
-  id: v.string(), dir: v.string(), at: v.number(), turnId: v.nullable(v.string()),
-  sessionId: v.nullable(v.string()), reason: v.string(),
-});
-
-const FileRestorePlanSchema = v.object({
-  dir: v.string(), id: v.string(), files: v.array(FileRestoreChangeSchema),
-});
-
-const FileRestoreResultSchema = v.object({
-  dir: v.string(), id: v.string(), files: v.array(FileRestoreChangeSchema),
-  preRestoreId: v.nullable(v.string()),
-});
-
-const CheckpointAvailabilitySchema = v.object({
-  available: v.boolean(), reason: v.optional(v.string()),
-});
 
 /** The route validator for `?variant=`, built FROM core's array rather than
  *  beside it. Hand-list the literals here and a new variant compiles in core and
@@ -4665,89 +4641,31 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // the user hub. Restore is owner-invoked (web turn card / CLI /undo), so
   // it bypasses the per-agent consent gate — pure added reversibility.
 
-  @callable()
-  async checkpointStatus(): Promise<CheckpointAvailability> {
-    if (!this.getOwnerUserDO()) return { available: false, reason: 'agent has no owner user yet' };
-
-    try {
-      const { stub, caller } = await this.userHub();
-      const result = await stub.deviceRpc(caller, 'checkpointStatus', []);
-
-      return v.parse(CheckpointAvailabilitySchema, result === undefined ? undefined : JSON.parse(result));
-    } catch (err) {
-      // The unattached case FIRST, because its remedy is not the owner's: a
-      // workspace with no owner account reached no hub, and advising `kinu
-      // connect` there sends a person to re-link a machine that was never the
-      // problem.
-      if (isWorkspaceUnattachedError({ cause: err })) {
-        return { available: false, reason: WORKSPACE_HAS_NO_OWNER };
-      }
-
-      if (isDeviceNotConnectedError({ cause: err })) {
-        return { available: false, reason: 'no device connected — connect one with `kinu connect`' };
-      }
-
-      // Several machines are live and the checkpoint plane does not yet name
-      // one: an availability answer, in the hub's own words (it names the
-      // machines), never a silent pick of whichever came first.
-      if (isDeviceAmbiguityError({ cause: err })) {
-        return { available: false, reason: renderThrownChain({ cause: err }) };
-      }
-
-      throw err;
-    }
+  private get deviceCheckpoints(): FileCheckpointReads {
+    return this._deviceCheckpoints ??= deviceFileCheckpoints({
+      hub: () => this.userHub(), hasOwner: () => this.getOwnerUserDO() !== null, workspace: this.name,
+    });
   }
 
-  /**
-   * The checkpoint store's reachability and what it holds, in one round trip.
-   *
-   * Reachability is not optional here. A bare array answers `[]` for "no owner",
-   * "no device connected" and "the store is empty" alike, and the web client
-   * turns that into
-   * `No file checkpoint for this turn. It changed no device files.` — a claim
-   * about the operator's turn built from the absence of a device. Checkpoints
-   * cover the device plane only, so a turn that ran on the workspace plane or on
-   * `@sandbox` legitimately has none; the client has to be able to say which of
-   * those it is looking at.
-   */
+  private _deviceCheckpoints: FileCheckpointReads | null = null;
+
+  async checkpointStatus(): Promise<CheckpointAvailability> {
+    return checkpointAvailability(this.deviceCheckpoints);
+  }
+
   @callable()
-  async listFileCheckpoints(limit = 50, turnId?: string): Promise<FileCheckpointListing> {
-    const availability = await this.checkpointStatus();
-
-    if (!availability.available) return { availability, entries: [] };
-    const { stub, caller } = await this.userHub();
-
-    // `turnId` reaches the DEVICE, so the store filters before it truncates. A
-    // caller that filtered a window here instead would lose any turn buried
-    // under `limit` other directories' checkpoints — retention is per directory,
-    // this limit is global. See FileCheckpoints.list.
-    const result = await stub.deviceRpc(
-      caller, 'checkpointList', [this.name, Math.max(1, Math.min(500, limit)), turnId ?? null],
-    );
-
-    return {
-      availability,
-      entries: v.parse(
-        v.array(FileCheckpointEntrySchema),
-        result === undefined ? undefined : JSON.parse(result),
-      ),
-    };
+  async listFileCheckpoints(limit?: number, turnId?: string): Promise<FileCheckpointListing> {
+    return fileCheckpointListing(this.deviceCheckpoints, { limit, turnId });
   }
 
   @callable()
   async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
-    const { stub, caller } = await this.userHub();
-    const result = await stub.deviceRpc(caller, 'checkpointPlan', [this.name, dir, id]);
-
-    return v.parse(FileRestorePlanSchema, result === undefined ? undefined : JSON.parse(result));
+    return this.deviceCheckpoints.plan(dir, id);
   }
 
   @callable()
   async restoreFileCheckpoint(dir: string, id: string): Promise<FileRestoreResult> {
-    const { stub, caller } = await this.userHub();
-    const result = await stub.deviceRpc(caller, 'checkpointRestore', [this.name, dir, id]);
-
-    return v.parse(FileRestoreResultSchema, result === undefined ? undefined : JSON.parse(result));
+    return this.deviceCheckpoints.restore(dir, id);
   }
 
   /**

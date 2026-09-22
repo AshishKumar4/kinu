@@ -88,17 +88,6 @@ const KNOWN_TWINS: readonly string[] = [
   // the process lifetime on the CLI. Core decides WHEN the transition may close;
   // this decides what is still running when it does.
   'holdTerminalClose',
-  // The file-checkpoint quartet: two transports to two DIFFERENT stores — a
-  // device tunnel to the user's machine on cf, a local git engine on the CLI —
-  // not two implementations of one. Their shared vocabulary
-  // (FileCheckpointEntry, FileRestorePlan, CheckpointAvailability) is already
-  // core, which is why neither body carries logic; what does not move is cf's
-  // owner check, its device-RPC method names and its not-connected mapping,
-  // which is exactly the platform dependency. Not expected to shrink.
-  'checkpointStatus',
-  'listFileCheckpoints',
-  'planFileRestore',
-  'restoreFileCheckpoint',
   // Both build core's default key-less provider, but from different platform
   // material: cf's owned model services (env + the owner's auth) vs node fetch
   // + the local auth store. Only the memoisation is common, and memoisation is
@@ -159,6 +148,10 @@ const SHARED_TRANSPORTS = {
   readInheritedContext: 'inheritedContextFromTranscript',
   applyAutoTitle: 'applyWorkspaceTitle',
   applyScaffoldDecision: 'applyScaffoldDecision',
+  checkpointStatus: 'checkpointAvailability',
+  listFileCheckpoints: 'fileCheckpointListing',
+  planFileRestore: '.plan',
+  restoreFileCheckpoint: '.restore',
   // Three lines each over ONE core store (CompactionStateStore). No duplicated
   // logic — only the session key differs, which is what a backend knows and
   // core does not.
