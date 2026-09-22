@@ -78,6 +78,13 @@
       "decision": "html"
     },
     {
+      "file": "packages/cf-backend/src/events/routes.ts",
+      "kind": "hand-parser",
+      "owner": "extractHeaders",
+      "sourceSha256": "3fd5e7ae5d75d2cd60c892dc6bd0cd4173577bb50481c08680b3bf729e552c56",
+      "decision": "framing"
+    },
+    {
       "file": "packages/cf-backend/src/slates/resident.ts",
       "kind": "regexp-constructor",
       "owner": "STATIC_SPECIFIER",
@@ -218,13 +225,6 @@
       "decision": "lexical"
     },
     {
-      "file": "packages/cf-backend/tests/unit-fork-runs-revalidation.test.ts",
-      "kind": "regex-literal",
-      "owner": "<module>",
-      "sourceSha256": "9707067389dcc05fd66fa535dc6504f30e1e514615e8c8ed7c6bc8b55eacacf1",
-      "decision": "lexical"
-    },
-    {
       "file": "packages/cf-backend/tests/unit-kumo-token-coverage.test.ts",
       "kind": "regex-literal",
       "owner": "importChain",
@@ -305,7 +305,7 @@
       "file": "packages/cli/src/attachments.ts",
       "kind": "hand-parser",
       "owner": "extractPathTokens",
-      "sourceSha256": "4034690fd1e2fa81cf76ccf1bd1c4427e12d9dad0e18f6a7ed9f8fe2e64c1779",
+      "sourceSha256": "da712f6b36c92a3e61639dc08877c51a283efc7e56586b1729b0473b316f1f28",
       "decision": "cli"
     },
     {
@@ -333,14 +333,14 @@
       "file": "packages/core/src/bench/longhorizon.ts",
       "kind": "hand-parser",
       "owner": "parseLongHorizonAnswerFile",
-      "sourceSha256": "26fe75beb217245e5a8e58374ef68e8c2cd3e460ddd35254364b758f606389b8",
+      "sourceSha256": "e5237780787cad298a952d06e9284b62671124b6ab5ef395f3e0a112f31394f4",
       "decision": "framing"
     },
     {
       "file": "packages/core/src/craft/in-episode.ts",
       "kind": "hand-parser",
       "owner": "stripNonCode",
-      "sourceSha256": "2dadd1672e13e94f3bfcd778b9041b08f4b818401dfda564f38cf62c0fc0c305",
+      "sourceSha256": "dc51e9dfa12f6baa3261f93a4c1cf0a12f37deab5b64fb1ee7dc108438cc3b7b",
       "decision": "sourceGate"
     },
     {
@@ -379,6 +379,13 @@
       "decision": "lexical"
     },
     {
+      "file": "packages/core/src/evolution/calibration.ts",
+      "kind": "hand-parser",
+      "owner": "parseLabelingFile",
+      "sourceSha256": "212b87c7ef2fda72542c03cbbee5ab2759c4f8a760ab6f689365d1f4cb7f667d",
+      "decision": "framing"
+    },
+    {
       "file": "packages/core/src/evolution/scaffold-handbook.ts",
       "kind": "regex-literal",
       "owner": "DECLARATION",
@@ -389,14 +396,14 @@
       "file": "packages/core/src/evolution/scaffold-handbook.ts",
       "kind": "hand-parser",
       "owner": "stripComments",
-      "sourceSha256": "d9aec34bd7477e2466ec41e404a3c708ccc0b723ddce4734d4db82c5ee9b4759",
+      "sourceSha256": "e71fa7a92f10fe4e09c7f765005dcf35bf76acb54ab0ce1ba47ee52911356140",
       "decision": "handbook"
     },
     {
       "file": "packages/core/src/evolution/scaffold-handbook.ts",
       "kind": "hand-parser",
       "owner": "stripComments",
-      "sourceSha256": "fa08f103afe6532b88dc13d2c06d510a2eac5e9153067e7a6b9175279bbf3985",
+      "sourceSha256": "e522cb32868c190d45bdcefd5629e0ed1ea8ee0ee5526860c26dfa442c989043",
       "decision": "handbook"
     },
     {
@@ -428,13 +435,6 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/core/src/session/message-codec.ts",
-      "kind": "hand-parser",
-      "owner": "decodeValue",
-      "sourceSha256": "13324d5e6a078c0df508d29c24050e32b02bb05de375c41fc4622b7b8c1fb35e",
-      "decision": "traversal"
-    },
-    {
       "file": "packages/core/src/prompts/structured.ts",
       "kind": "hand-parser",
       "owner": "extractBalancedJson",
@@ -452,7 +452,7 @@
       "file": "packages/core/src/safety/approval-gate.ts",
       "kind": "hand-parser",
       "owner": "scanCommand",
-      "sourceSha256": "8f1a60ef0c6c834a7736d3e8b1b5de9adce00fc37848d455e557e98b39b6e484",
+      "sourceSha256": "a9bc3396a308b95a35276efd8388557fbb02dd201817d41bc6a5ff781cdf3374",
       "decision": "safety"
     },
     {
@@ -480,14 +480,7 @@
       "file": "packages/core/src/safety/secret-patterns.ts",
       "kind": "hand-parser",
       "owner": "scanText",
-      "sourceSha256": "e08801bf3a414945fbc0c16a9d62ea068bd3503501daa5c5e6e6eef305a46d4c",
-      "decision": "safety"
-    },
-    {
-      "file": "packages/core/src/safety/secret-patterns.ts",
-      "kind": "hand-parser",
-      "owner": "scanText",
-      "sourceSha256": "d0fb3a06bb482d520a53e77f0bc702113b46cad2eea1bffd5e5944f86fe1210a",
+      "sourceSha256": "0e4fd061e95680821ae2abc1552ba65faf22814ec76877ae9f7abb67f7998750",
       "decision": "safety"
     },
     {
@@ -496,6 +489,13 @@
       "owner": "SCAFFOLD_REQUIRED_SIGNATURE",
       "sourceSha256": "989e25441503494b041762fedf341be235c7eff85da259af32f0c5287c33a5b4",
       "decision": "safety"
+    },
+    {
+      "file": "packages/core/src/session/message-codec.ts",
+      "kind": "hand-parser",
+      "owner": "decodeValue",
+      "sourceSha256": "13324d5e6a078c0df508d29c24050e32b02bb05de375c41fc4622b7b8c1fb35e",
+      "decision": "traversal"
     },
     {
       "file": "packages/core/src/skills/loader.ts",
@@ -508,7 +508,7 @@
       "file": "packages/core/src/skills/parse.ts",
       "kind": "hand-parser",
       "owner": "parseSkillFile",
-      "sourceSha256": "498fa2fa64788c4409fe4fd0160a54208c34456f2ede6b56999ed245ee9a84c8",
+      "sourceSha256": "dbbc66ac6e08bb2dff60f653226c1cdee7b520a6815102fe88a9bf508edd6cf4",
       "decision": "lexical"
     },
     {
@@ -543,7 +543,7 @@
       "file": "packages/core/src/vfs/diff.ts",
       "kind": "hand-parser",
       "owner": "parseGitDiff",
-      "sourceSha256": "ddfad774f7d3843fa8531365121d84430bc6a1ac402f3d485d454cb936c7336e",
+      "sourceSha256": "56354b4561e6764bb2898003a9656db8b0d52e84458eedcf44aaf40428c02da8",
       "decision": "framing"
     },
     {
@@ -715,6 +715,13 @@
       "decision": "protected"
     },
     {
+      "file": "packages/core/tests/unit-release-engine.test.ts",
+      "kind": "regex-literal",
+      "owner": "reset",
+      "sourceSha256": "14dc5f92c09b35388294d1380626edaafdbe1e4faf8b76e9f7d2fd965838fb5c",
+      "decision": "lexical"
+    },
+    {
       "file": "packages/core/tests/unit-volatile-context.test.ts",
       "kind": "regex-literal",
       "owner": "BLOCK_OPEN",
@@ -733,6 +740,13 @@
       "kind": "regex-literal",
       "owner": "<module>",
       "sourceSha256": "fe9344e37b1186ef060516de4ba141f58e056c3c1c79c08b4d895d5947b028d4",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/tests/unit-volatile-context.test.ts",
+      "kind": "regex-literal",
+      "owner": "fingerprint",
+      "sourceSha256": "cb4ac86aac7652de4e5dbc190e91ace1eb4d2d1c8f4f6459d6bc60c3504261da",
       "decision": "lexical"
     },
     {
@@ -762,6 +776,13 @@
       "owner": "parseDeltaBlockHashes",
       "sourceSha256": "4bc144dcd1e460bbdef089ca2d5470e47236a9ff859526d63daf337e64bdceab",
       "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/src/chunked-delta.ts",
+      "kind": "hand-parser",
+      "owner": "parseDeltaBaseStat",
+      "sourceSha256": "e4099f7529d00fcf5308f83abdb52f458d44788de6761d008591ee50e12f5161",
+      "decision": "framing"
     },
     {
       "file": "packages/devbox/src/lifecycle.ts",
@@ -1054,7 +1075,7 @@
       "file": "scripts/coverage-lcov.ts",
       "kind": "hand-parser",
       "owner": "parseLcov",
-      "sourceSha256": "6ccee1f85c595f2e760c52ca805b5f522713e024ba2878cdce84d8ccbb949a39",
+      "sourceSha256": "0764d1958d9d460b111a7c065fb86baad08d4cff082ffdf22bdbd44eeb9c13ce",
       "decision": "framing"
     },
     {
@@ -1201,7 +1222,7 @@
       "file": "scripts/syntax.ts",
       "kind": "hand-parser",
       "owner": "parse",
-      "sourceSha256": "61e51c466e10bd0c85c2d8fa307f9a6a1304c8c52c680a4d45a1ff5cc7420593",
+      "sourceSha256": "2d672ba9b500d507ec45ca4bcee0f9ec0f927288855e757cda4ca4b51ab19a41",
       "decision": "traversal"
     },
     {

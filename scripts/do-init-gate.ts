@@ -5,9 +5,11 @@
  */
 
 import { readFileSync } from 'node:fs';
+import * as v from 'valibot';
 
 import { readContainerInputBlockSources, readSources } from './sources';
 import { sandboxLineage } from './egress-interception';
+import { parseJsonc } from './jsonc';
 import {
   blockBodyOf, classMembers, declaredName, functionOf, identifierCalleeName, identifierText,
   isAsync, isFunctionLike, memberCalleeName, parse, returnTypeOf, superClassName,
@@ -101,19 +103,18 @@ const root = new URL('..', import.meta.url).pathname;
  *  to every governed hook in the backend; which of the three rules applies is
  *  decided by the member name and the base class the hook belongs to. */
 function declaredDurableObjects(): string[] {
-  const text = readFileSync(`${root}packages/cf-backend/wrangler.jsonc`, 'utf8');
-  const names: string[] = [];
+  const config = parseJsonc(
+    readFileSync(`${root}packages/cf-backend/wrangler.jsonc`, 'utf8'), WranglerDurableObjects, 'wrangler.jsonc',
+  );
 
-  for (const match of text.matchAll(/"class_name"\s*:\s*"(?<className>\w+)"/g)) {
-    const className = match.groups?.className;
-
-    // A match that captured no name names no class, so it proves nothing here.
-    if (className !== undefined) names.push(className);
-  }
-
-  // Deduped: the `migrations` block names every class a second time.
-  return [...new Set(names)].sort();
+  return [...new Set(config.durable_objects.bindings.map((binding) => binding.class_name))].sort();
 }
+
+/** `durable_objects.bindings[].class_name`: the one place a class is bound, so
+ *  the `migrations` block that names each class again is not read. */
+const WranglerDurableObjects = v.object({
+  durable_objects: v.object({ bindings: v.array(v.object({ class_name: v.string() })) }),
+});
 
 export interface Violation {
   readonly file: string;
@@ -926,7 +927,7 @@ if (import.meta.main) {
 
   console.error(`do-init-gate: ${violations.length} violation(s) in the DO init gate\n`);
 
-  for (const v of violations) console.error(`  ${v.file}:${v.line} ${v.owner}.${v.member} — ${v.reason}`);
+  for (const violation of violations) console.error(`  ${violation.file}:${violation.line} ${violation.owner}.${violation.member} — ${violation.reason}`);
   console.error(
     '\nAnything the init chain awaits stalls every request on the object, and at 30s'
     + '\nthe runtime cancels blockConcurrencyWhile and RESETS the Durable Object.'
