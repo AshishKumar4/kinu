@@ -43,7 +43,7 @@ function entryNameProblem(name: string): string | null {
 
   if (segments.some((segment) => segment === '..')) return 'climbs out of the archive';
 
-  if (segments.some((segment) => [...segment].some((ch) => ch.charCodeAt(0) < 0x20))) return 'holds a control character';
+  if (segments.some((segment) => /\p{Cc}/u.test(segment))) return 'holds a control character';
 
   return null;
 }
@@ -127,7 +127,7 @@ const CRC_TABLE = new Uint32Array(256).map((_, n) => {
 function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
 
-  for (const byte of bytes) crc = CRC_TABLE[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
+  for (const byte of bytes) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
 
   return (crc ^ 0xffffffff) >>> 0;
 }

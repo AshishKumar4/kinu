@@ -242,7 +242,7 @@ function intersectTools(available: readonly string[], allowed: readonly string[]
 
 
 export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurnProfile {
-  const envelope = validateProfileCatalogEnvelope(input.envelope);
+  const envelope = validateProfileCatalogEnvelope({ value: input.envelope });
   const catalogDigest = profileCatalogDigest(envelope.catalog);
 
   if (catalogDigest !== input.envelope.digest) {

@@ -51,6 +51,12 @@ export interface DeployRunAddress {
   readonly runKey: string;
 }
 
+/** A provider key as the run receives it; only the name comes back. */
+export interface DeployProviderKey {
+  readonly name: string;
+  readonly value: string;
+}
+
 export interface DeployTokenPair {
   readonly accessToken: string;
   readonly refreshToken: string;
@@ -102,10 +108,10 @@ export function deployDoor(run: DeployRunAddress, fetchImpl: typeof fetch = fetc
     return read(schema, at(tail), { headers: bearer }, fetchImpl);
   }
 
-  function post<Schema extends v.GenericSchema, Body>(
+  function post<Schema extends v.GenericSchema>(
     schema: Schema,
     tail: string,
-    body?: Body,
+    body?: DeployTokenPair | DeployProviderKey | DeployInputs,
   ): Promise<v.InferOutput<Schema>> {
     return read(schema, at(tail), {
       method: 'POST',

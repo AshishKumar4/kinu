@@ -48,6 +48,8 @@ export interface BroadcastEvent {
   /** `steer_status`: the step index a landed steer was spliced into. */
   readonly atStep?: number;
   readonly jobId?: string;
+  /** `head_activity` / `head_stream`: which exploration head is speaking. */
+  readonly headId?: string;
 }
 
 /** A programmatic turn injected into the SAME serialized loop the user drives —
@@ -96,7 +98,7 @@ export interface EnqueueTurnResult {
 export interface BackendHost {
   /** Fan-out to connected clients. CF: DurableObject.broadcast(JSON). CLI: push
    *  to the TUI store / print to stdout. Never throws. */
-  broadcast<Event extends BroadcastEvent>(event: Event): void;
+  broadcast(event: BroadcastEvent): void;
 
   /** Inject a programmatic turn through the backend's core ChatSession queue.
    *  The core Inbox (orchestrator/inbox.ts) is its only caller — producers

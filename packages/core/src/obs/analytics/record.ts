@@ -75,7 +75,8 @@ type OpsRow = AnalyticsRow<typeof CONTROL_PLANE_OPS_SCHEMA>;
  * whose `steps` read 1 would be indistinguishable from a one-step turn under an
  * aggregate that forgot to filter on `kind`.
  */
-function agentRow(input: {
+/** The fields a call site actually has for one agent-plane row. */
+interface AgentRowInput {
   kind: AgentRowKind;
   event: string;
   workspace: string;
@@ -93,7 +94,9 @@ function agentRow(input: {
   attempts?: number;
   usage?: Usage;
   usd?: number;
-}): AgentRow {
+}
+
+function agentRow(input: AgentRowInput): AgentRow {
   const usage = input.usage ?? {};
 
   return {
@@ -149,6 +152,12 @@ function emit<S extends AnalyticsSchema>(writer: AnalyticsWriter<S>, row: Analyt
   }
 }
 
+/** One row onto the agent plane. Every recorder below is its own named row
+ *  shape over this one write. */
+function recordAgentRow(env: AnalyticsEnv, row: AgentRowInput): void {
+  emit(analyticsPlane(env).agent, agentRow(row));
+}
+
 /** A settled turn: what it cost, how long it took, and how it ended. */
 export interface TurnRowInput {
   readonly workspace: string;
@@ -166,7 +175,7 @@ export interface TurnRowInput {
 }
 
 export function recordTurnRow(env: AnalyticsEnv, input: TurnRowInput): void {
-  emit(analyticsPlane(env).agent, agentRow({ kind: 'turn', event: 'turn.settled', ...input }));
+  recordAgentRow(env, { kind: 'turn', event: 'turn.settled', ...input });
 }
 
 /**
@@ -186,7 +195,7 @@ export interface TtftRowInput {
 }
 
 export function recordTtftRow(env: AnalyticsEnv, input: TtftRowInput): void {
-  emit(analyticsPlane(env).agent, agentRow({ kind: 'ttft', event: 'turn.first_token', ...input }));
+  recordAgentRow(env, { kind: 'ttft', event: 'turn.first_token', ...input });
 }
 
 /** One model request: the turn loop's steps and every producer outside it. */
@@ -202,7 +211,7 @@ export interface ModelRowInput {
 }
 
 export function recordModelRow(env: AnalyticsEnv, input: ModelRowInput): void {
-  emit(analyticsPlane(env).agent, agentRow({ kind: 'model', event: 'model.call', ...input }));
+  recordAgentRow(env, { kind: 'model', event: 'model.call', ...input });
 }
 
 /**

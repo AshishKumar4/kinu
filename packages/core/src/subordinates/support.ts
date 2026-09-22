@@ -15,7 +15,7 @@ import * as v from 'valibot';
 import type { EventLog, PublishResult } from '../events/hub/log';
 import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
 import type { SerializedMessage } from '../heads/types';
-import type { SqlExec } from '../types/primitives';
+import type { SqlExec, SqlExecRow } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import {
   DELEGATION_MAX_DEPTH,
@@ -76,10 +76,12 @@ export function readSubordinateLiveStatus(
 
     if (!parsed.success) return [];
     const { event, detail, elapsed_ms: elapsedMs, created_at: createdAt } = parsed.output;
+    const summary = detail?.trim();
 
     return [{
       event,
-      summary: detail?.trim() || event,
+      // A step with no detail of its own is named by the event it was.
+      summary: summary === undefined || summary === '' ? event : summary,
       elapsedMs,
       createdAt,
     }];
@@ -152,7 +154,7 @@ const IdentityRowSchema = v.object({
   gid: v.nullable(v.number()),
 });
 
-function parseIdentityRow<Input>(row: Input): IdentityRow | null {
+function parseIdentityRow(row: SqlExecRow): IdentityRow | null {
   const parsed = v.safeParse(IdentityRowSchema, row);
 
   return parsed.success ? parsed.output : null;
@@ -337,7 +339,7 @@ function requiredText(value: string, field: string): string {
 function optionalText(value: string | undefined): string | undefined {
   const text = value?.trim();
 
-  return text ? text : undefined;
+  return text === undefined || text === '' ? undefined : text;
 }
 
 /** Only the birth assignment carries a fork; later tasks have no new prefix. */
@@ -408,9 +410,7 @@ export function describeSubordinateHandoff(input: {
 }): SubordinateHandoff {
   return {
     eventId: input.admission.id,
-    delivery: !input.admission.admitted
-      ? 'queued'
-      : input.turnInFlight ? 'queued' : 'starts_now',
+    delivery: input.admission.admitted && !input.turnInFlight ? 'starts_now' : 'queued',
     phase: {
       busy: input.turnInFlight,
       lastActivityAt: input.live.lastActivity,
@@ -569,18 +569,18 @@ function displayNameForRole(role: string): string {
     .join(' ');
 }
 
-function rollback<T>(error: T, action: () => void, operation: string): never {
+function rollback(input: { cause: unknown }, action: () => void, operation: string): never {
   try {
     action();
   } catch (rollbackError) {
     throw new AggregateError(
-      [error, rollbackError],
+      [input.cause, rollbackError],
       `${operation} failed and its roster rollback also failed`,
-      { cause: error },
+      { cause: input.cause },
     );
   }
 
-  throw error;
+  throw input.cause;
 }
 
 
@@ -697,7 +697,8 @@ export function createTeamToolDeps(deps: {
       ? requiredText(optionalText(input.mission) ?? deps.ownMission(), 'mission')
       : requiredText(input.mission ?? '', 'mission');
 
-    const name = input.name?.trim() || deps.createName(roleLabel);
+    const typedName = input.name?.trim();
+    const name = typedName === undefined || typedName === '' ? deps.createName(roleLabel) : typedName;
     requireSubordinateActorName(name);
 
     if (deps.roster.get(name)) throw new Error(`subordinate "${name}" already exists`);
@@ -827,7 +828,7 @@ export function createTeamToolDeps(deps: {
         // otherwise the row stays assigned with nothing its report can cite.
         deps.roster.recordAssignmentEvent(input.name, handoff.eventId);
       } catch (error) {
-        rollback(error, () => deps.roster.restore(before), 'subordinate assignment');
+        rollback({ cause: error }, () => deps.roster.restore(before), 'subordinate assignment');
       }
 
       changed();
@@ -853,7 +854,7 @@ export function createTeamToolDeps(deps: {
       try {
         handoff = await deps.runtime.message(input.name, content, input.mode);
       } catch (error) {
-        rollback(error, () => deps.roster.restore(before), 'subordinate message');
+        rollback({ cause: error }, () => deps.roster.restore(before), 'subordinate message');
       }
 
       changed();
@@ -883,7 +884,7 @@ export function createTeamToolDeps(deps: {
 
       if (keepHistory) {
         try { await deps.runtime.dismiss(input.name, true, reference); }
-        catch (cause) { rollback(cause, () => deps.roster.restore(before), 'retained subordinate dismissal'); }
+        catch (cause) { rollback({ cause }, () => deps.roster.restore(before), 'retained subordinate dismissal'); }
       } else {
         await deps.runtime.dismiss(input.name, false, reference);
         deps.roster.removeActor(input.name, reference);

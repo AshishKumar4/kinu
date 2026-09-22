@@ -613,7 +613,12 @@ export class ReleaseEngine {
     }
 
     const workdir = this.workdirFor(changeId);
-    const command = opts.command?.trim() || deployTargetAsCommand(binding?.deployTarget ?? null);
+    // A blank command is no command: the binding's deploy target answers for it.
+    const requested = opts.command?.trim();
+
+    const command = requested === undefined || requested === ''
+      ? deployTargetAsCommand(binding?.deployTarget ?? null)
+      : requested;
 
     // Preview promotion is local-only: staging/production deploys run a real
     // deploy command, so without one there is nothing to record — fail before
@@ -747,7 +752,8 @@ export class ReleaseEngine {
 
     const target = latest.rollbackTarget;
     const isCommitTarget = /^[0-9a-f]{7,40}$/.test(target);
-    const explicitCommand = opts?.command?.trim() || null;
+    const requestedCommand = opts?.command?.trim();
+    const explicitCommand = requestedCommand === undefined || requestedCommand === '' ? null : requestedCommand;
     const platformCommand = isCommitTarget ? null : explicitCommand;
 
     if (!isCommitTarget && !platformCommand) {

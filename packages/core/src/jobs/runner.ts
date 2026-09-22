@@ -136,6 +136,27 @@ type JobRecoveryOutcome =
  */
 export const MAX_CONCURRENT_DETACHED_JOBS = 8;
 
+/** One replacement for a settled job: the row it retires, the call to re-run,
+ *  and the cancel handle the replacement registers. */
+export interface BackgroundRetryRequest {
+  readonly sourceId: string;
+  readonly kind: string;
+  readonly input: JsonValue;
+  readonly mode: WorkMode;
+  readonly controller: AbortController;
+}
+
+/** One call that crossed its foreground window: what it is, what it was called
+ *  with, and the live promise a job would take over. */
+interface DetachRequest {
+  readonly kind: string;
+  readonly input: JsonValue;
+  readonly mode: WorkMode;
+  readonly controller: AbortController;
+  readonly promise: Promise<unknown>;
+  readonly ownership?: DeviceRequestOwnership;
+}
+
 export interface BackgroundJobRunnerDeps {
   store: BackgroundJobStore;
   /** How long work may run before it detaches, and how long teardown waits on
@@ -165,7 +186,7 @@ export interface BackgroundJobRunnerDeps {
    * with a promise nobody keeps.
    */
   eventLog?: EventLog;
-  scheduleDrain?(): void;
+  scheduleDrain?: () => void;
   /** Activity-log sink (optional). */
   logActivity?(event: string, detail?: string): void;
   /** Fires once per job settle (completed/failed), before the wake turn —
@@ -234,7 +255,7 @@ const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.
 
 const ExecuteJobInputSchema = v.object({ code: v.string() });
 
-function describeJobInput<T>(kind: string, input: T): string | undefined {
+function describeJobInput(kind: string, input: JsonValue): string | undefined {
   if (kind === 'agents') {
     const parsed = v.safeParse(SearchJobInputSchema, input);
 
@@ -263,6 +284,54 @@ function describeJobInput<T>(kind: string, input: T): string | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * What a settled job's wake SAYS, which differs by outcome because what the
+ * agent must DO next differs by outcome.
+ *
+ * The generation count leads where there is more than one: it was durable all
+ * along and appeared nowhere a reader could see it, and the owner watched a job
+ * sit `running` through three generations and asked why it would not give up
+ * its turn, with nothing in the conversation able to answer him.
+ */
+function wakeText(job: BackgroundJob): string {
+  const generation = job.resumeAttempts > 0
+    ? ` (generation ${String(job.resumeAttempts + 1)} — it was interrupted and re-driven)`
+    : '';
+
+  if (job.status === 'completed') {
+    return `Background ${job.kind} job ${job.id} completed${generation}. Read the full result with `
+      + `agent.jobResult('${job.id}'), then synthesize it / continue the work you backgrounded. `
+      + `The result says whether it is COMPLETE or PARTIAL — say which when you report it.`;
+  }
+
+  // A cancel is neither a success nor a crash: the work is GONE, no result
+  // will arrive, and the agent had been told to wait for one. Saying so is
+  // the only thing that stops it reasoning from its own transcript.
+  if (job.status === 'cancelled') {
+    return `Background ${job.kind} job ${job.id} was CANCELLED by the operator and is no longer `
+      + `running. There is no result to collect. Re-run that work if you still need it, or `
+      + `continue without it and say what is missing.`;
+  }
+
+  // A job that failed with nothing to say adds no empty parenthesis.
+  const detail = job.error === null || job.error === '' ? '' : ` (${job.error})`;
+
+  // A failed COMMAND is the agent's to fix: read the error, change what it
+  // names, run it again. A failed SEARCH is different, and "decide whether to
+  // retry" is how the duplicate-root defect happened: the model retried by
+  // calling the tool again over a search still running and got a second tree.
+  // The engine refuses that now, so a search is continued, never re-spawned.
+  if (job.kind === 'agents') {
+    return `Background ${job.kind} job ${job.id} failed${generation}${detail}. Report the failure `
+      + `and what it cost. Do not re-spawn the same work: a search keeps its tree, so a genuine `
+      + `retry continues that one rather than starting another, and an identical spawn is refused.`;
+  }
+
+  return `Background ${job.kind} job ${job.id} failed${generation}${detail}. This is yours to fix: `
+    + `read the error, change what it names, and run the command again. Report what was wrong and `
+    + `what you changed.`;
 }
 
 export class BackgroundJobRunner {
@@ -304,10 +373,10 @@ export class BackgroundJobRunner {
   /** Mint a job row (carrying the tool input for retry) + register its cancel
    *  handle. Returns the job id. Pure — callers log their own lifecycle event
    *  (threshold-detach logs 'bg_job_started'; retry logs 'bg_job_retry'). */
-  create<T>(kind: string, input: T, mode: WorkMode, controller: AbortController): string {
+  create(kind: string, input: JsonValue, mode: WorkMode, controller: AbortController): string {
     const id = `bgjob-${nanoid()}`;
     this.deps.store.create({
-      id, kind, workMode: mode, input: serializeJobResult(input), now: Date.now(),
+      id, kind, workMode: mode, input: serializeJobResult({ value: input }), now: Date.now(),
       label: describeJobInput(kind, input),
     });
     this.controllers.set(id, controller);
@@ -317,27 +386,21 @@ export class BackgroundJobRunner {
 
   /** Atomically reserve one replacement for a settled job, then register its
    *  cancel handle. Null means another retry already owns the source row. */
-  createRetry<T>(
-    sourceId: string,
-    kind: string,
-    input: T,
-    mode: WorkMode,
-    controller: AbortController,
-  ): string | null {
+  createRetry(request: BackgroundRetryRequest): string | null {
     const id = `bgjob-${nanoid()}`;
 
     const created = this.deps.store.createRetry({
-      sourceId,
+      sourceId: request.sourceId,
       id,
-      kind,
-      workMode: mode,
-      input: serializeJobResult(input),
+      kind: request.kind,
+      workMode: request.mode,
+      input: serializeJobResult({ value: request.input }),
       now: Date.now(),
-      label: describeJobInput(kind, input),
+      label: describeJobInput(request.kind, request.input),
     });
 
     if (!created) return null;
-    this.controllers.set(id, controller);
+    this.controllers.set(id, request.controller);
 
     return id;
   }
@@ -376,8 +439,8 @@ export class BackgroundJobRunner {
    *  — claiming the invocation for the job and taking the ids issued so far in
    *  one step — so every request the call issues afterwards is registered under
    *  the job directly, with no second transfer to race. */
-  thresholdDeps<T>(
-    input: T,
+  thresholdDeps(
+    input: JsonValue,
     mode: WorkMode,
     controller: AbortController,
     ownership?: DeviceRequestOwnership,
@@ -385,15 +448,13 @@ export class BackgroundJobRunner {
     return {
       thresholdMs: this.policy.detachAfterMs,
       clock: REAL_CLOCK,
-      onThreshold: async (k, promise) =>
-        await this.onThreshold(k, input, mode, controller, promise, ownership),
+      onThreshold: async (kind, promise) =>
+        await this.onThreshold({ kind, input, mode, controller, promise, ownership }),
     };
   }
 
-  private async onThreshold<T>(
-    kind: string, input: T, mode: WorkMode, controller: AbortController, promise: Promise<T>,
-    ownership?: DeviceRequestOwnership,
-  ): Promise<DetachOutcome> {
+  private async onThreshold(request: DetachRequest): Promise<DetachOutcome> {
+    const { kind, input, mode, controller, promise, ownership } = request;
     const running = this.liveDetachedCount();
 
     if (running >= MAX_CONCURRENT_DETACHED_JOBS) {
@@ -514,7 +575,7 @@ export class BackgroundJobRunner {
               toKinuError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
               { jobId },
             );
-            settled = this.failUnsettled(jobId, err);
+            settled = this.failUnsettled(jobId, { cause: err });
           }
 
           // Only a job that actually reached a terminal status is 'settled'; if even
@@ -542,7 +603,7 @@ export class BackgroundJobRunner {
             toKinuError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
             { jobId },
           );
-          this.failUnsettled(jobId, err);
+          this.failUnsettled(jobId, { cause: err });
         }
       } finally {
         if (driver && this.fiberDrivers.get(jobId) === driver) this.fiberDrivers.delete(jobId);
@@ -596,7 +657,7 @@ export class BackgroundJobRunner {
         return;
       }
 
-      if (outcome.kind === 'settled') this.deps.store.settle(jobId, epoch, serializeJobResult(outcome.result), Date.now());
+      if (outcome.kind === 'settled') this.deps.store.settle(jobId, epoch, serializeJobResult({ value: outcome.result }), Date.now());
       else this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
       // The lifecycle's OTHER end: start/refuse/cancel/resume already reach
       // logActivity (console.log + the queryable activity_log table), but the
@@ -644,13 +705,13 @@ export class BackgroundJobRunner {
         + 'produced no partial result to hand back', now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} failed empty — ${why}`);
     } else {
-      this.deps.store.settle(jobId, epoch, serializeJobResult({
+      this.deps.store.settle(jobId, epoch, serializeJobResult({ value: {
         partial: true,
         why: `This result is PARTIAL: ${why}. It is what the work had completed, not a `
           + 'finished answer — say so if you use it.',
         generation: (job?.resumeAttempts ?? 0) + 1,
         result: harvested.value,
-      }), now);
+      } }), now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} settled partial — ${why}`);
     }
 
@@ -690,7 +751,7 @@ export class BackgroundJobRunner {
    *  result stays readable via agent.jobResult. No wake is attempted: the wake
    *  is what usually failed, and the settle notification (which never throws)
    *  already surfaces the job in the Tasks view. */
-  private failUnsettled<T>(jobId: string, err: T): boolean {
+  private failUnsettled(jobId: string, thrown: { cause: unknown }): boolean {
     // A cancel in flight decides this job's terminal row; a force-fail written
     // under it would be exactly the write the fence exists to stop.
     if (this.cancelling.has(jobId)) return false;
@@ -699,7 +760,7 @@ export class BackgroundJobRunner {
       const job = this.deps.store.get(jobId);
 
       if (!job || job.status !== 'running') return true;
-      this.deps.store.fail(jobId, job.epoch, renderThrownChain({ cause: err }), Date.now());
+      this.deps.store.fail(jobId, job.epoch, renderThrownChain(thrown), Date.now());
       this.notifySettled(jobId);
 
       return true;
@@ -729,39 +790,7 @@ export class BackgroundJobRunner {
     const job = this.deps.store.get(jobId);
 
     if (!job) return;
-
-    // HOW MANY GENERATIONS IT TOOK, where that is more than one. The count was
-    // durable all along and appeared nowhere a reader could see it: the owner watched
-    // a job sit `running` through three generations and asked why it would not give up
-    // its turn, with nothing in the conversation able to answer him.
-    const generation = job.resumeAttempts > 0
-      ? ` (generation ${String(job.resumeAttempts + 1)} — it was interrupted and re-driven)`
-      : '';
-
-    const text = job.status === 'completed'
-      ? `Background ${job.kind} job ${jobId} completed${generation}. Read the full result with ` +
-        `agent.jobResult('${jobId}'), then synthesize it / continue the work you backgrounded. ` +
-        `The result says whether it is COMPLETE or PARTIAL — say which when you report it.`
-      // A cancel is neither a success nor a crash: the work is GONE, no result
-      // will arrive, and the agent had been told to wait for one. Saying so is
-      // the only thing that stops it reasoning from its own transcript.
-      : job.status === 'cancelled'
-        ? `Background ${job.kind} job ${jobId} was CANCELLED by the operator and is no longer ` +
-          `running. There is no result to collect. Re-run that work if you still need it, or ` +
-          `continue without it and say what is missing.`
-        // A failed COMMAND is the agent's to fix: read the error, change what it
-        // names, run it again. A failed SEARCH is different, and "decide whether to
-        // retry" is how the duplicate-root defect happened: the model retried by
-        // calling the tool again over a search still running and got a second tree.
-        // The engine refuses that now, so a search is continued, never re-spawned.
-        : job.kind === 'agents'
-          ? `Background ${job.kind} job ${jobId} failed${generation}` +
-            `${job.error ? ` (${job.error})` : ''}. Report the failure and what it cost. Do not ` +
-            `re-spawn the same work: a search keeps its tree, so a genuine retry continues that ` +
-            `one rather than starting another, and an identical spawn is refused.`
-          : `Background ${job.kind} job ${jobId} failed${generation}` +
-            `${job.error ? ` (${job.error})` : ''}. This is yours to fix: read the error, change ` +
-            `what it names, and run the command again. Report what was wrong and what you changed.`;
+    const text = wakeText(job);
 
     const base = {
       kind: 'background_job',
@@ -951,7 +980,7 @@ export class BackgroundJobRunner {
    *  Returns the job if this call RE-DROVE it, so a caller can tell what durable
    *  work is now in flight. Null covers every other outcome: already driven here,
    *  already settled, cancelled, refused, or waiting for its next attempt. */
-  async recover<T>(snapshot: T): Promise<BackgroundJob | null> {
+  async recover(snapshot: JsonValue): Promise<BackgroundJob | null> {
     const parsed = v.safeParse(v.object({ jobId: v.string(), phase: v.literal('running') }), snapshot);
 
     if (!parsed.success) return null;

@@ -29,13 +29,13 @@ const OpenAICompatCredentialSchema = v.object({
   extraHeaders: v.optional(v.record(v.string(), JsonValueSchema)),
 });
 
-export function validateCredential<Input>(input: Input): Credential {
-  const kind = v.parse(CredentialKindSchema, input).kind;
+export function validateCredential(input: { value: unknown }): Credential {
+  const kind = v.parse(CredentialKindSchema, input.value).kind;
 
-  if (kind === 'bearer') return v.parse(BearerCredentialSchema, input);
+  if (kind === 'bearer') return v.parse(BearerCredentialSchema, input.value);
 
   if (kind === 'oauth') {
-    const parsed = v.parse(OAuthCredentialSchema, input);
+    const parsed = v.parse(OAuthCredentialSchema, input.value);
     const credential: Credential = { kind: 'oauth', accessToken: parsed.accessToken };
 
     if (parsed.refreshToken) credential.refreshToken = parsed.refreshToken;
@@ -47,7 +47,7 @@ export function validateCredential<Input>(input: Input): Credential {
     return credential;
   }
 
-  const parsed = v.parse(OpenAICompatCredentialSchema, input);
+  const parsed = v.parse(OpenAICompatCredentialSchema, input.value);
 
   const extraHeaders = parsed.extraHeaders === undefined
     ? undefined

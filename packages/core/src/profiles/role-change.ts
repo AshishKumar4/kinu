@@ -105,18 +105,22 @@ function roleOf(envelope: ProfileCatalogEnvelope, id: RoleId): RoleDefinition | 
   return roles[id] ?? null;
 }
 
-function applyRole(
-  config: RoleStateStore,
-  envelope: ProfileCatalogEnvelope,
-  from: RoleId,
-  to: RoleId,
-  actor: RoleChangeActor,
-): void {
-  config.set(AGENT_CONFIG_KEYS.roleSelection, to);
-  config.set('role_changed_from', from);
-  config.set('role_changed_by', actor);
-  config.set('role_changed_at', String(Date.now()));
-  config.set('role_changed_catalog_version', String(envelope.version));
+/** One applied role change: who is moving, from where to where, and the
+ *  envelope version that ruling was made against. */
+interface AppliedRoleChange {
+  readonly config: RoleStateStore;
+  readonly envelope: ProfileCatalogEnvelope;
+  readonly from: RoleId;
+  readonly to: RoleId;
+  readonly actor: RoleChangeActor;
+}
+
+function applyRole(change: AppliedRoleChange): void {
+  change.config.set(AGENT_CONFIG_KEYS.roleSelection, change.to);
+  change.config.set('role_changed_from', change.from);
+  change.config.set('role_changed_by', change.actor);
+  change.config.set('role_changed_at', String(Date.now()));
+  change.config.set('role_changed_catalog_version', String(change.envelope.version));
 }
 
 /** Apply one role change under the owner's policy. Validates the target
@@ -128,7 +132,7 @@ export function changeActiveRole(input: {
   to: RoleId;
   actor: RoleChangeActor;
 }): RoleChangeOutcome {
-  const envelope = validateProfileCatalogEnvelope(input.envelope);
+  const envelope = validateProfileCatalogEnvelope({ value: input.envelope });
   const stored = input.config.get(AGENT_CONFIG_KEYS.roleSelection);
   const from = stored !== null && isValidRoleId(stored) ? stored : DEFAULT_ROLE_ID;
 
@@ -156,7 +160,7 @@ export function changeActiveRole(input: {
     return { kind: 'refused', reason: 'approval-required' };
   }
 
-  applyRole(input.config, envelope, from, input.to, input.actor);
+  applyRole({ config: input.config, envelope, from, to: input.to, actor: input.actor });
 
   return { kind: 'applied', from, to: input.to, catalogVersion: envelope.version };
 }

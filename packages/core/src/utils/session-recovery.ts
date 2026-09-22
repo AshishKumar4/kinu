@@ -39,8 +39,8 @@ import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
  *  must not feed the corpse detector. */
 const RPC_TIMEOUT_PATTERN = /^RPC call to .+ timed out after \d+ms$/;
 
-function isRpcTimeoutError<ErrorValue>(error: ErrorValue): boolean {
-  const parsed = v.safeParse(v.instance(Error), error);
+function isRpcTimeoutError(input: { cause: unknown }): boolean {
+  const parsed = v.safeParse(v.instance(Error), input.cause);
 
   return parsed.success
     && RPC_TIMEOUT_PATTERN.test(renderThrownChain({ cause: parsed.output }));
@@ -83,7 +83,7 @@ export interface SessionRecovery {
    *  a reconnect the UI never saw as "disconnected" still missed pushes. */
   socketOpened(isFirstForSession: boolean): void;
   /** An RPC rejected. `socketOpen` is the transport's own readyState belief. */
-  rpcFailed<ErrorValue>(error: ErrorValue, socketOpen: boolean): void;
+  rpcFailed(thrown: { cause: unknown }, socketOpen: boolean): void;
   /** An RPC succeeded — the transport is alive. */
   rpcSucceeded(): void;
   /** The user pressed Retry. */
@@ -122,13 +122,13 @@ export function createSessionRecovery(
       if (!isFirstForSession) callbacks.refetch();
     },
 
-    rpcFailed(error, socketOpen) {
+    rpcFailed(thrown, socketOpen) {
       // Closing a corpse rejects every other in-flight RPC with
       // `Connection closed`. That is not peer evidence and must not erase the
       // redial spacing this outage already earned.
       if (!socketOpen) return;
 
-      if (!isRpcTimeoutError(error)) {
+      if (!isRpcTimeoutError(thrown)) {
         restoreTrust();
 
         return;
@@ -183,10 +183,10 @@ const HealthBodySchema = v.object({ build: v.nullable(HealthBuildSchema) });
  *  out (AbortError travels as DOMException), never left the process
  *  (TypeError), or the answer was not JSON (SyntaxError). Anything else
  *  propagates — silence must not eat real breakage. */
-function isTolerableHealthFailure<ErrorValue>(cause: ErrorValue): boolean {
-  return cause instanceof TypeError
-    || cause instanceof DOMException
-    || cause instanceof SyntaxError;
+function isTolerableHealthFailure(input: { cause: unknown }): boolean {
+  return input.cause instanceof TypeError
+    || input.cause instanceof DOMException
+    || input.cause instanceof SyntaxError;
 }
 
 /** The deployed build's sha from the public health endpoint, or null when this
@@ -202,7 +202,7 @@ export async function fetchDeployedBuildSha(): Promise<string | null> {
 
     return parsed.success ? parsed.output.build?.sha ?? null : null;
   } catch (cause) {
-    if (!isTolerableHealthFailure(cause)) throw cause;
+    if (!isTolerableHealthFailure({ cause })) throw cause;
 
     return null;
   }

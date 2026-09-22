@@ -289,12 +289,12 @@ export async function settleImportsForTurn(
       void rt.storage.sql`UPDATE imported_experience
           SET status = 'corroborated', corroborated_at = ${now}
           WHERE actor_id = ${rt.actor.actorId} AND id = ${row.id}`;
-      recordEffectDone(rt.storage.sql, rt.actor, IMPORT_SETTLED_SCOPE, row.id);
+      recordEffectDone(rt.storage.sql, rt.actor, { scope: IMPORT_SETTLED_SCOPE, key: row.id });
       settlement.corroborated.push({ ...row, status: 'corroborated', corroboratedAt: now });
     } else {
       void rt.storage.sql`DELETE FROM imported_experience
         WHERE actor_id = ${rt.actor.actorId} AND id = ${row.id}`;
-      recordEffectDone(rt.storage.sql, rt.actor, IMPORT_SETTLED_SCOPE, row.id);
+      recordEffectDone(rt.storage.sql, rt.actor, { scope: IMPORT_SETTLED_SCOPE, key: row.id });
       settlement.discarded.push(row);
     }
   }

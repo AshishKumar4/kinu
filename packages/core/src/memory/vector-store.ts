@@ -12,6 +12,7 @@
  * it to the actual Vectorize/AI bindings.
  */
 
+import * as v from 'valibot';
 import type { IndexedChunk } from '@kinu.run/agent-utils/memory';
 import type { JsonObject } from '../utils/json';
 import type { ModelCallSink } from '../events/model-call';
@@ -105,14 +106,13 @@ export interface VectorStore {
  */
 export function reciprocalRankFusion<T extends { id: string }>(
   lists: readonly (readonly T[])[],
-  k: number = 60,
+  k = 60,
 ): Array<{ id: string; rrfScore: number; sources: T[] }> {
   const byId = new Map<string, { id: string; rrfScore: number; sources: T[] }>();
 
   for (const list of lists) {
-    list.forEach((item, idx) => {
-      const rank = idx + 1;
-      const inc = 1 / (k + rank);
+    for (const [index, item] of list.entries()) {
+      const inc = 1 / (k + index + 1);
       const existing = byId.get(item.id);
 
       if (existing) {
@@ -121,7 +121,7 @@ export function reciprocalRankFusion<T extends { id: string }>(
       } else {
         byId.set(item.id, { id: item.id, rrfScore: inc, sources: [item] });
       }
-    });
+    }
   }
 
   return Array.from(byId.values()).sort((a, b) => b.rrfScore - a.rrfScore);
@@ -134,6 +134,17 @@ export function reciprocalRankFusion<T extends { id: string }>(
  * lifetime — while a hard-down backend is still not retried per operation.
  */
 export const VECTOR_BACKEND_COOLDOWN_MS = 30_000;
+
+/** The metadata convention as a READER must treat it: every field optional,
+ *  because a hit is still a hit when the record predates a field. */
+const ChunkMetadataSchema = v.object({
+  chunkId: v.optional(v.string()),
+  path: v.optional(v.string()),
+  startLine: v.optional(v.number()),
+  endLine: v.optional(v.number()),
+});
+
+type ChunkMetadata = v.InferOutput<typeof ChunkMetadataSchema>;
 
 /**
  * Build a CloudflareVectorStore — pairs an Embedder with a Vectorize index.
@@ -226,15 +237,20 @@ export function createCloudflareVectorStore(opts: {
         namespace,
       });
 
-      return (res.matches ?? []).map((m) => ({
-        // The verbatim chunk id (from metadata) — matches the FTS5 hit id so RRF
-        // fuses the two sources. Falls back to the raw id for un-namespaced stores.
-        id: String(m.metadata?.chunkId ?? m.id),
-        path: String(m.metadata?.path ?? ''),
-        startLine: Number(m.metadata?.startLine ?? 0),
-        endLine: Number(m.metadata?.endLine ?? 0),
-        score: m.score,
-      }));
+      return (res.matches ?? []).map((m) => {
+        const located = v.safeParse(ChunkMetadataSchema, m.metadata ?? {});
+        const fields: ChunkMetadata = located.success ? located.output : {};
+
+        return {
+          // The verbatim chunk id (from metadata) — matches the FTS5 hit id so RRF
+          // fuses the two sources. Falls back to the raw id for un-namespaced stores.
+          id: fields.chunkId ?? m.id,
+          path: fields.path ?? '',
+          startLine: fields.startLine ?? 0,
+          endLine: fields.endLine ?? 0,
+          score: m.score,
+        };
+      });
     } catch (err) {
       // Reads degrade to lexical-only rather than failing the turn.
       trip('query', { error: err });
@@ -266,7 +282,7 @@ export function createCloudflareVectorStore(opts: {
       }
     },
 
-    async search(query: string, topK: number = 10) {
+    async search(query: string, topK = 10) {
       return safeQuery(query, topK);
     },
   };

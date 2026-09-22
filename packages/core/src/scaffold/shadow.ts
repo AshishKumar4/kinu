@@ -303,9 +303,8 @@ export function trimTrialContext(messages: readonly ModelMessage[]): ModelMessag
     // exception. Keeping it was the reason this bound could still be exceeded:
     // one pasted file in the last user turn made the row that carries this
     // context fail its insert, part-way through a claimed sequence.
-    if (spent + size > SHADOW_TRIAL_CONTEXT_CHARS) {
-      if (kept.length > 0 || size > SHADOW_TRIAL_CONTEXT_CHARS) break;
-    }
+    if (spent + size > SHADOW_TRIAL_CONTEXT_CHARS
+      && (kept.length > 0 || size > SHADOW_TRIAL_CONTEXT_CHARS)) break;
 
     spent += size;
     kept.unshift(messages[i]);
@@ -421,7 +420,7 @@ export function countQueuedShadowTrials(
  *  scored twice. */
 export function dropQueuedShadowTrial(sql: SqlExecutor, actor: ActorHandle, id: string): void {
   actor.assertCurrent();
-  recordEffectDone(sql, actor, TRIAL_SCOPE, id);
+  recordEffectDone(sql, actor, { scope: TRIAL_SCOPE, key: id });
   void sql`DELETE FROM scaffold_trial_queue WHERE actor_id = ${actor.actorId} AND id = ${id}`;
 }
 

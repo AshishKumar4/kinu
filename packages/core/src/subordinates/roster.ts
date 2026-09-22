@@ -14,7 +14,7 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExec } from '../types/primitives';
+import type { SqlExec, SqlExecRow } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { seekPage, StaleCursorError, type Page, type PageRequest } from '../session/page';
 import { boundedInt } from '../utils/bounds';
@@ -34,6 +34,19 @@ const ROSTER_PROJECTION =
   'name, created_by AS createdBy, status, current_task AS currentTask, '
   + 'created_at AS createdAt, dismissed_at AS dismissedAt, '
   + 'lifetime, task_event_id AS taskEventId, actor_reference AS actorReference, birth_request AS birth, delete_requested AS deleteRequested';
+
+/** What a compensating restore overwrites: every column the row carries apart
+ *  from the key it conflicts on. */
+const ROSTER_RESTORE_CONFLICT = `
+       ON CONFLICT(actor_id, name) DO UPDATE SET
+         created_by = excluded.created_by,
+         status = excluded.status,
+         current_task = excluded.current_task,
+         created_at = excluded.created_at,
+         dismissed_at = excluded.dismissed_at,
+         lifetime = excluded.lifetime,
+         task_event_id = excluded.task_event_id,
+         actor_reference = excluded.actor_reference, birth_request = excluded.birth_request, delete_requested = excluded.delete_requested`;
 
 /** The two roster columns nothing else can derive.
  *
@@ -69,7 +82,7 @@ const StoredRosterEntrySchema = v.object({
   deleteRequested: v.pipe(v.union([v.literal(0), v.literal(1)]), v.transform((value) => value === 1)),
 });
 
-function parseStoredRosterRow<T>(row: T): SubordinateRosterEntry {
+function parseStoredRosterRow(row: SqlExecRow): SubordinateRosterEntry {
   try {
     const stored = v.parse(StoredRosterEntrySchema, row);
 
@@ -80,6 +93,16 @@ function parseStoredRosterRow<T>(row: T): SubordinateRosterEntry {
   } catch (cause) {
     throw new KinuError('io', 'Stored subordinate roster data is malformed.', { cause });
   }
+}
+
+/** Where a row lands on its child's own word: an answer idles it, a block waits
+ *  on the operator, and anything else keeps the open assignment it still has. */
+function reportedRosterStatus(status: SubordinateReportStatus, currentTask: string | null): SubordinateStatus {
+  if (status === 'completed') return 'idle';
+
+  if (status === 'blocked') return 'awaiting_input';
+
+  return currentTask === null || currentTask === '' ? 'idle' : 'working';
 }
 
 /** Parent-DO product roster. All status policy lives here so tools, report
@@ -115,10 +138,12 @@ export class SubordinateRosterStore {
       ON actor_subordinates(actor_id, created_at, name)`);
   }
 
-  create(entry: SubordinateRosterEntry): void {
+  /** The one write of a roster row. `onConflict` is empty for a first
+   *  insert and the exact-upsert clause for a compensating restore. */
+  private writeRow(entry: SubordinateRosterEntry, onConflict: string): void {
     this.actor.assertCurrent();
     this.sql.exec(
-      `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)${onConflict}`,
       this.actorId,
       entry.name,
       entry.createdBy,
@@ -133,32 +158,13 @@ export class SubordinateRosterStore {
     );
   }
 
+  create(entry: SubordinateRosterEntry): void {
+    this.writeRow(entry, '');
+  }
+
   /** Exact upsert used only for compensating a failed facet operation. */
   restore(entry: SubordinateRosterEntry): void {
-    this.actor.assertCurrent();
-    this.sql.exec(
-      `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(actor_id, name) DO UPDATE SET
-         created_by = excluded.created_by,
-         status = excluded.status,
-         current_task = excluded.current_task,
-         created_at = excluded.created_at,
-         dismissed_at = excluded.dismissed_at,
-         lifetime = excluded.lifetime,
-         task_event_id = excluded.task_event_id,
-         actor_reference = excluded.actor_reference, birth_request = excluded.birth_request, delete_requested = excluded.delete_requested`,
-      this.actorId,
-      entry.name,
-      entry.createdBy,
-      entry.status,
-      entry.currentTask,
-      entry.createdAt,
-      entry.dismissedAt,
-      entry.lifetime,
-      entry.taskEventId,
-      entry.actorReference === null ? null : JSON.stringify(entry.actorReference),
-      entry.birth === null ? null : JSON.stringify(entry.birth), entry.deleteRequested ? 1 : 0,
-    );
+    this.writeRow(entry, ROSTER_RESTORE_CONFLICT);
   }
 
   attachActor(name: string, creationId: string, reference: ActorReference): void {
@@ -180,16 +186,35 @@ export class SubordinateRosterStore {
       this.actorId, name);
   }
 
-  pendingBirths(): SubordinateRosterEntry[] {
+  /** Every row of this parent in roster order, narrowed by one extra
+   *  condition on top of the actor scope (empty for all of them). */
+  private orderedRows(condition: string): SubordinateRosterEntry[] {
     this.actor.assertCurrent();
 
-    return this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? AND birth_request IS NOT NULL ORDER BY created_at, name`, this.actorId).toArray().map(parseStoredRosterRow);
+    return this.sql.exec(
+      `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
+       WHERE actor_id = ? ${condition} ORDER BY created_at, name`,
+      this.actorId,
+    ).toArray().map(parseStoredRosterRow);
+  }
+
+  /** Whether any row of this parent meets `condition` — one name, not a page:
+   *  the callers only branch on presence. */
+  private anyRow(condition: string): boolean {
+    this.actor.assertCurrent();
+
+    return this.sql.exec(
+      `SELECT name FROM actor_subordinates WHERE actor_id = ? ${condition} LIMIT 1`,
+      this.actorId,
+    ).toArray().length > 0;
+  }
+
+  pendingBirths(): SubordinateRosterEntry[] {
+    return this.orderedRows('AND birth_request IS NOT NULL');
   }
 
   hasPendingBirths(): boolean {
-    this.actor.assertCurrent();
-
-    return this.sql.exec('SELECT name FROM actor_subordinates WHERE actor_id = ? AND birth_request IS NOT NULL LIMIT 1', this.actorId).toArray().length > 0;
+    return this.anyRow('AND birth_request IS NOT NULL');
   }
 
   requestDeletion(name: string, reference: ActorReference, now: number): void {
@@ -218,15 +243,11 @@ export class SubordinateRosterStore {
   }
 
   pendingDeletions(): SubordinateRosterEntry[] {
-    this.actor.assertCurrent();
-
-    return this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? AND delete_requested = 1 ORDER BY created_at, name`, this.actorId).toArray().map(parseStoredRosterRow);
+    return this.orderedRows('AND delete_requested = 1');
   }
 
   hasPendingDeletions(): boolean {
-    this.actor.assertCurrent();
-
-    return this.sql.exec('SELECT name FROM actor_subordinates WHERE actor_id = ? AND delete_requested = 1 LIMIT 1', this.actorId).toArray().length > 0;
+    return this.anyRow('AND delete_requested = 1');
   }
   remove(name: string): void {
     this.actor.assertCurrent();
@@ -261,22 +282,11 @@ export class SubordinateRosterStore {
   }
 
   list(): SubordinateRosterEntry[] {
-    this.actor.assertCurrent();
-
-    return this.sql.exec(
-      `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
-       WHERE actor_id = ? AND status != 'dismissed' ORDER BY created_at, name`,
-      this.actorId,
-    ).toArray().map(parseStoredRosterRow);
+    return this.orderedRows(`AND status != 'dismissed'`);
   }
 
   listAll(): SubordinateRosterEntry[] {
-    this.actor.assertCurrent();
-
-    return this.sql.exec(
-      `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? ORDER BY created_at, name`,
-      this.actorId,
-    ).toArray().map(parseStoredRosterRow);
+    return this.orderedRows('');
   }
 
   /** Owner history includes archived children without reopening them. */
@@ -364,21 +374,13 @@ export class SubordinateRosterStore {
       return;
     }
 
-    const rosterStatus: SubordinateStatus = status === 'completed'
-      ? 'idle'
-      : status === 'blocked'
-        ? 'awaiting_input'
-        : entry.currentTask
-          ? 'working'
-          : 'idle';
-
     this.sql.exec(
       `UPDATE actor_subordinates
        SET status = ?,
            current_task = CASE WHEN ? = 'completed' THEN NULL ELSE current_task END,
            task_event_id = CASE WHEN ? = 'completed' THEN NULL ELSE task_event_id END
        WHERE actor_id = ? AND name = ?`,
-      rosterStatus,
+      reportedRosterStatus(status, entry.currentTask),
       status,
       status,
       this.actorId,

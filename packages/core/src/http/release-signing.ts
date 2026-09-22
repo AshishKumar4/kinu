@@ -56,9 +56,17 @@ export type SignedRelease = v.InferOutput<typeof SignedReleaseSchema>;
 
 /** The canonical bytes a release signature covers: the prefix, the version,
  *  then every artifact path with its checksum, sorted by path, one per line. */
+/** Codepoint order, never locale order: this order is part of the bytes the
+ *  signature covers, so it must be the same on every machine. */
+function comparePaths(a: string, b: string): number {
+  if (a < b) return -1;
+
+  return a > b ? 1 : 0;
+}
+
 function releaseMessage(version: string, checksums: ReleaseChecksums): Uint8Array<ArrayBuffer> {
   const lines = Object.entries(checksums)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .sort(([a], [b]) => comparePaths(a, b))
     .map(([path, sha256]) => `${path} ${sha256.toLowerCase()}`);
 
   return new TextEncoder().encode([MESSAGE_PREFIX, version, ...lines, ''].join('\n'));

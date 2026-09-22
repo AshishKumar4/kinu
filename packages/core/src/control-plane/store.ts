@@ -337,23 +337,36 @@ export function observeUser(sql: ControlPlaneSql, observation: UserObservation, 
     observation.userId, observation.email, observation.displayName ?? null, at, at);
 }
 
+/** What every workspace observation records: it was seen just now, and it is
+ *  not gone. */
+const WORKSPACE_SEEN = `
+       last_seen_at = MAX(cp_workspaces.last_seen_at, excluded.last_seen_at),
+       removed_at = NULL`;
+
+/** What an observation that KNOWS the workspace's title records on top. */
+const WORKSPACE_TITLED = `
+       display_name = excluded.display_name,
+       created_at = MIN(cp_workspaces.created_at, excluded.created_at),${WORKSPACE_SEEN}`;
+
+function writeWorkspaceRow(
+  sql: ControlPlaneSql, observation: WorkspaceObservation, now: number, onConflict: string,
+): void {
+  const at = observation.at ?? now;
+  run(sql,
+    `INSERT INTO cp_workspaces (user_id, name, display_name, created_at, last_seen_at, removed_at)
+     VALUES (?, ?, ?, ?, ?, NULL)
+     ON CONFLICT(user_id, name) DO UPDATE SET${onConflict}`,
+    observation.userId, observation.name, observation.displayName,
+    observation.createdAt ?? at, at);
+}
+
 /** Record that a workspace exists under an account. Resurrects a row the index
  *  had tombstoned, because a same-name recreate is a live workspace and the
  *  registry treats it as one. */
 export function observeWorkspace(
   sql: ControlPlaneSql, observation: WorkspaceObservation, now = Date.now(),
 ): void {
-  const at = observation.at ?? now;
-  run(sql,
-    `INSERT INTO cp_workspaces (user_id, name, display_name, created_at, last_seen_at, removed_at)
-     VALUES (?, ?, ?, ?, ?, NULL)
-     ON CONFLICT(user_id, name) DO UPDATE SET
-       display_name = excluded.display_name,
-       created_at = MIN(cp_workspaces.created_at, excluded.created_at),
-       last_seen_at = MAX(cp_workspaces.last_seen_at, excluded.last_seen_at),
-       removed_at = NULL`,
-    observation.userId, observation.name, observation.displayName,
-    observation.createdAt ?? at, at);
+  writeWorkspaceRow(sql, observation, now, WORKSPACE_TITLED);
 }
 
 /** Record that a workspace was used, without claiming its title.
@@ -365,15 +378,7 @@ export function observeWorkspace(
 export function touchWorkspace(
   sql: ControlPlaneSql, observation: WorkspaceObservation, now = Date.now(),
 ): void {
-  const at = observation.at ?? now;
-  run(sql,
-    `INSERT INTO cp_workspaces (user_id, name, display_name, created_at, last_seen_at, removed_at)
-     VALUES (?, ?, ?, ?, ?, NULL)
-     ON CONFLICT(user_id, name) DO UPDATE SET
-       last_seen_at = MAX(cp_workspaces.last_seen_at, excluded.last_seen_at),
-       removed_at = NULL`,
-    observation.userId, observation.name, observation.displayName,
-    observation.createdAt ?? at, at);
+  writeWorkspaceRow(sql, observation, now, WORKSPACE_SEEN);
 }
 
 /**

@@ -62,8 +62,10 @@ export function buildEvalReport(results: EvalResult[], meta: EvalReportMeta): Ev
     rationale: r.verdict.rationale,
     durationMsA: r.runA.durationMs,
     durationMsB: r.runB.durationMs,
-    errorA: r.runA.error || undefined,
-    errorB: r.runB.error || undefined,
+    // A run that failed with nothing to say carries no error at all: the field
+    // is read as "did this side fail", and an empty string answers yes.
+    errorA: r.runA.error === '' ? undefined : r.runA.error,
+    errorB: r.runB.error === '' ? undefined : r.runB.error,
   }));
 
   return {

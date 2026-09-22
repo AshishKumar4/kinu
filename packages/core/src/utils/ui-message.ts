@@ -85,7 +85,7 @@ export function stampTurnAuthor(metadata?: JsonObject): JsonObject {
  * but not metadata. The id resolves to `harness`, the direction that cannot
  * put the harness's words in the owner's mouth.
  */
-export function turnAuthor<Metadata>(row: { id?: string; metadata?: Metadata }): TurnAuthor {
+export function turnAuthor(row: { id?: string; metadata?: unknown }): TurnAuthor {
   const parsed = v.safeParse(TurnAuthorSchema, row.metadata ?? {});
 
   if (parsed.success) {
@@ -109,12 +109,10 @@ export function turnAuthor<Metadata>(row: { id?: string; metadata?: Metadata }):
  * the model's history still reads it as the user turn it has to be — so this
  * changes what we claim about a row, never what the model is sent.
  */
-export function transcriptRole<Metadata>(
-  id: string,
-  role: 'user' | 'assistant' | 'system',
-  metadata?: Metadata,
+export function transcriptRole(
+  row: { id: string; role: 'user' | 'assistant' | 'system'; metadata?: unknown },
 ): 'user' | 'assistant' | 'system' {
-  return role === 'user' && turnAuthor({ id, metadata }) === 'harness' ? 'system' : role;
+  return row.role === 'user' && turnAuthor(row) === 'harness' ? 'system' : row.role;
 }
 
 /**

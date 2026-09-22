@@ -626,11 +626,13 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const first = await s.composePrepareStep({ cache: { strategy: { kind: 'anthropic' } }, dynamic }, { stepNumber: 0, messages: shortHistory(), steps: [] });
           const second = await s.composePrepareStep({ cache: { strategy: { kind: 'anthropic' } }, dynamic }, { stepNumber: 1, messages: [...shortHistory(), { role: 'assistant', content: 'ok' }], steps: [] });
 
+          const tail = v.safeParse(v.string(), second?.messages.at(-1)?.content);
+
           return {
             firstLength: first?.messages.length,
             secondLength: second?.messages.length,
             tailMarked: JSON.stringify(second?.messages.at(-1)?.providerOptions ?? {}),
-            blockIsTail: String(second?.messages.at(-1)?.content).startsWith('<dynamic_context'),
+            blockIsTail: tail.success && tail.output.startsWith('<dynamic_context'),
           };
         },
       },
@@ -1018,13 +1020,13 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             const inbox = new s.Inbox({
               // Card ids are minted per delivery, so the observation records
               // IDENTITY (first-appearance index) rather than the id itself.
-              broadcast: (event) => {
-                const id = String(event.id);
+              broadcast: (cardEvent) => {
+                const id = String(cardEvent.id);
 
                 if (!ids.includes(id)) ids.push(id);
-                const text = v.safeParse(v.string(), event.text);
+                const text = v.safeParse(v.string(), cardEvent.text);
                 cards.push({
-                  card: ids.indexOf(id), state: String(event.state),
+                  card: ids.indexOf(id), state: String(cardEvent.state),
                   text: text.success ? text.output : undefined,
                 });
               },
@@ -1064,9 +1066,9 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
           for (let i = 0; i < 5; i++) scheduler.schedule();
           const armedAfterBurst = timers.length;
-          await timers[0]!.fn();
+          await timers[0].fn();
           scheduler.schedule();
-          await timers[1]!.fn();
+          await timers[1].fn();
 
           return { armedAfterBurst, windows: timers.map((t) => t.ms), drains };
         },
@@ -1134,7 +1136,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             },
             (error) => `denied:${error.message}`,
             'device',
-            { mode: () => 'strict', requestApproval: async () => 'allow' },
+            { policy: { mode: () => 'strict', requestApproval: async () => 'allow' } },
           );
 
           const result = String(await gated('rm -rf /'));
@@ -1175,12 +1177,14 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             (error) => `denied:${error.message}`,
             executor,
             {
-              mode: () => 'strict',
-              granted: (grant) => grant.rule === 'rm-recursive' && grant.executor === 'device',
-              requestApproval: async (req) => {
-                asked.push(req.executor);
+              policy: {
+                mode: () => 'strict',
+                granted: (grant) => grant.rule === 'rm-recursive' && grant.executor === 'device',
+                requestApproval: async (req) => {
+                  asked.push(req.executor);
 
-                return 'deny';
+                  return 'deny';
+                },
               },
             },
           );
