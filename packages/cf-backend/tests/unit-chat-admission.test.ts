@@ -284,7 +284,7 @@ describe('a chat request through the production gate', () => {
     const { agent } = await reactivateOrchestratorHarness(dead.db, undefined, { env });
     await agent.activateActor();
     agent.harnessOpenFleetWindow();
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
 
     expect(agent.harnessEventRecorder.unterminatedRuns()).toEqual([]);
     expect(fleetRowKinds(agent)).not.toContain('turn');

@@ -413,7 +413,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     // string, and this is the one place that string becomes a call.
     const frames = [
       ['_kinuTimerTick', () => this._kinuTimerTick()],
-      ['_kinuTerminalRetryTick', () => this._kinuTerminalRetryTick()],
+      ['_kinuTerminalRetryTick', () => this.terminalRetryPass()],
     ] as const;
 
     const armed = await this.armedWakeRows();

@@ -58,7 +58,7 @@ describe('request-owned chat inputs', () => {
       return acquire(reference);
     };
 
-    await harness.agent._kinuTerminalRetryTick();
+    await harness.agent.terminalRetryPass();
     expect(acquired).toBeGreaterThan(0);
     expect(claims(harness).read(turn.turnId)?.status).toBe('admitted');
     await settle(harness, 'answer', 'complete answer');
@@ -90,7 +90,7 @@ describe('request-owned chat inputs', () => {
     warm.db.query('DELETE FROM pending_steers').run();
     warm.agent.harnessEventRecorder.emit(turn.runId, { type: 'run_end', reason: 'error', error: 'the process died before the claim settled' });
     const cold = await reactivateOrchestratorHarness(warm.db);
-    await cold.agent._kinuTerminalRetryTick();
+    await cold.agent.terminalRetryPass();
     expect(claims(cold).read(turn.turnId)).toMatchObject({ status: 'settled', outcome: 'indeterminate' });
   });
 });

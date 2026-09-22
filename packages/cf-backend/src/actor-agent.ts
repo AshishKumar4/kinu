@@ -14,7 +14,7 @@ import {
   Agent, callable,
   type AgentContext, type Connection, type ConnectionContext,
   type FiberRecoveryContext, type FiberRecoveryResult,
-  type WSMessage,
+  type Schedule, type WSMessage,
 } from "agents";
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
@@ -1867,7 +1867,27 @@ export abstract class ActorAgent extends Agent<Env> {
    * excludes protected members. Idempotent: it reads the owed roster from
    * storage and re-arms from what is left, so a duplicate wake costs one read.
    */
-  async _kinuTerminalRetryTick(): Promise<void> {
+  /**
+   * The scheduler's entry. `armWakeRow` collapses FUTURE rows only, so an
+   * object that dies inside the tick, frame after frame, leaves one overdue
+   * row per frame, and the SDK then runs every one of them in the next alarm
+   * it completes (production 2026-09-21: sixteen ticks in one alarm cycle,
+   * each re-running the interrupted delegated turn). One pass answers them
+   * all, so every other due row retires before the pass; the SDK hands a
+   * callback its own row, which is the one that stays.
+   */
+  async _kinuTerminalRetryTick(_payload: undefined, own: Schedule<undefined>): Promise<void> {
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    for (const row of await this.listSchedules()) {
+      if (row.callback === TERMINAL_RETRY_CALLBACK && row.time <= nowSec && row.id !== own.id) await this.cancelSchedule(row.id);
+    }
+
+    await this.terminalRetryPass();
+  }
+
+  /** One pass over every post-activation obligation: what a wake does. */
+  async terminalRetryPass(): Promise<void> {
     // ARM FIRST, drain second: the pessimistic next-lap wake is durable before
     // any pass runs, so a kill anywhere inside this frame leaves a future row
     // rather than relying on the platform's preservation of the executing one.

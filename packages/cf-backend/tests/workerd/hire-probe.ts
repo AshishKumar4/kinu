@@ -235,7 +235,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
    * DEBOUNCED drain, whose 250 ms timer no request can wait for.
    */
   async driveOwedWork(): Promise<void> {
-    await this._kinuTerminalRetryTick();
+    await this.terminalRetryPass();
     await this.orch.drainPendingEvents({ rethrow: true });
   }
 }

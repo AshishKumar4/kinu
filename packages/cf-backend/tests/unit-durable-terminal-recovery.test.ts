@@ -156,7 +156,7 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     // the alarm frame is what pays for the reply.
     expect(harness.agent.harnessOwedWorkExists()).toBe(true);
     expect(lease(harness, 'ev-owed')).toEqual({ turn_id: 'evt-owed', consumed_at: 5 });
-    await harness.agent._kinuTerminalRetryTick();
+    await harness.agent.terminalRetryPass();
 
     // The delivery is settled: lease closed, BINDING kept, so no later drain can
     // select it and no sweep can re-ask the question.
@@ -190,7 +190,7 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     // exactly as it is — the replay because no answer exists to send, the sweep
     // because `RECENT` is inside its grace — so the assertion below is "nothing
     // moved" against the whole frame instead of one half of it.
-    await harness.agent._kinuTerminalRetryTick();
+    await harness.agent.terminalRetryPass();
 
     expect(lease(harness, 'ev-silent')).toEqual({ turn_id: 'evt-silent', consumed_at: RECENT });
   });
@@ -205,7 +205,7 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     expect(harness.agent.harnessOwedWorkExists()).toBe(true);
 
     // The same public wake frame as above.
-    await harness.agent._kinuTerminalRetryTick();
+    await harness.agent.terminalRetryPass();
 
     expect(lease(harness, 'ev-blank')).toEqual({ turn_id: 'evt-blank', consumed_at: RECENT });
   });
@@ -244,7 +244,7 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     // unanswered lease back to pending, and dispatches the owed reply.
     expect(lease(harness, 'ev-answered')).toEqual({ turn_id: 'evt-answered', consumed_at: 5 });
     expect(lease(harness, 'ev-unanswered')).toEqual({ turn_id: 'evt-unanswered', consumed_at: 5 });
-    await harness.agent._kinuTerminalRetryTick();
+    await harness.agent.terminalRetryPass();
 
     // Answered: finished, binding kept.
     expect(lease(harness, 'ev-answered').turn_id).toBe('evt-answered');
@@ -309,7 +309,7 @@ describe('an interrupted terminal fiber arms the durable wake rather than replay
     // Idempotent, and this is the entry the module documents as free to await
     // everything: it acquires each sequence under the claim join, so the wake and
     // this activation's own detached reconcile cannot both replay one row.
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
 
     expect(agent.harnessBeginTerminalTransition('u-owed')).toBe('done');
   });

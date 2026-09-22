@@ -105,6 +105,32 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(rows.some((row) => row.id === 'live-future')).toBe(true);
   });
 
+  test('due duplicates of the tick retire when one of them runs', async () => {
+    // An object that dies inside the tick frame after frame leaves one overdue
+    // row per frame, and the SDK runs every one of them in the next alarm it
+    // completes (production 2026-09-21: sixteen in one cycle). The row the
+    // scheduler hands the callback is the one that stays; the other due rows
+    // are the same work and retire before the pass.
+    const { agent, db } = orchestratorHarness();
+    await agent.listSchedules();
+    const overdueSec = Math.floor((Date.now() - 60_000) / 1000);
+
+    const insert = db.prepare(
+      `INSERT INTO cf_agents_schedules (id, callback, payload, type, time) VALUES (?, ?, NULL, ?, ?)`,
+    );
+
+    for (const id of ['due-1', 'due-2', 'due-3', 'due-4']) insert.run(id, '_kinuTerminalRetryTick', 'scheduled', overdueSec);
+
+    await agent.activateActor();
+    await agent._kinuTerminalRetryTick(undefined, { id: 'due-2', callback: '_kinuTerminalRetryTick', payload: undefined, type: 'scheduled', time: overdueSec });
+
+    // due-2 stays for the SDK to retire on return; the three duplicates are
+    // gone. What the pass armed for the future is the collapse's business,
+    // pinned above.
+    const due = (await agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick' && row.time <= Math.floor(Date.now() / 1000));
+    expect(due.map((row) => row.id)).toEqual(['due-2']);
+  });
+
   test('a beyond-budget stale backlog drains across maintenance wakes, not the gate', async () => {
     // The sweep carries a 4096-row budget because it runs in the init gate;
     // deletion is the cursor, and a truncated pass arms the maintenance tick
@@ -134,7 +160,7 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(armed.length).toBe(1);
 
     // The wake finishes the job and, with nothing left over, does not re-arm.
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
     expect(staleLeft()).toBe(0);
   });
 
@@ -162,7 +188,7 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(fibersLeft()).toBe(40);
     expect((await agent.listSchedules()).some((row) => row.callback === '_kinuTerminalRetryTick')).toBe(true);
 
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
     expect(fibersLeft()).toBe(0);
   });
 
@@ -206,7 +232,7 @@ describe('the workspace keeps exactly one wake row', () => {
     const wakes = (await workspace.agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
     expect(wakes).toHaveLength(1);
 
-    await workspace.agent._kinuTerminalRetryTick();
+    await workspace.agent.terminalRetryPass();
     expect(left()).toBe(0);
   });
 
@@ -271,7 +297,7 @@ describe('the workspace keeps exactly one wake row', () => {
     // the row bookkeeping around it is what this file drives.
     await workspace.agent.cancelSchedule(wake.id);
     const nowSec = Math.floor(Date.now() / 1000);
-    await workspace.agent._kinuTerminalRetryTick();
+    await workspace.agent.terminalRetryPass();
 
     // The immediate wake is spent, the drain found the job not-yet-due, and
     // the registry holds exactly the instant that job owes — one row at its
@@ -300,7 +326,7 @@ describe('the workspace keeps exactly one wake row', () => {
        VALUES (?, 'job-deferred', 'agents', 'build', 'running', '{}', ?, ?)`,
     ).run(harnessActorId(db), resumeAt, now);
 
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
 
     const armed = (await agent.listSchedules())
       .filter((row) => row.callback === '_kinuTerminalRetryTick')
@@ -355,7 +381,7 @@ describe('the workspace keeps exactly one wake row', () => {
     insertBranch('stale-head', Date.now() - 60_000);
     insertBranch('live-head', Date.now() + 5);
 
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
     expect(status('stale-head')).toBe('errored');
     expect(status('live-head')).toBe('running');
 
@@ -365,7 +391,7 @@ describe('the workspace keeps exactly one wake row', () => {
     // Only a backdated INSERT can manufacture this; production heads are
     // stamped at spawn and land after the cutoff.
     insertBranch('late-stale-head', Date.now() - 60_000);
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
     expect(status('late-stale-head')).toBe('errored');
   });
 
@@ -395,7 +421,7 @@ describe('the workspace keeps exactly one wake row', () => {
     insertRun('stale-swarm', Date.now() - 60_000);
     insertRun('live-swarm', Date.now() + 5);
 
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
     expect(status('stale-swarm')).toBe('failed');
     expect(status('live-swarm')).toBe('running');
   });
@@ -427,7 +453,7 @@ describe('the workspace keeps exactly one wake row', () => {
     start('stale-run', Date.now() - 60_000);
     start('live-run', Date.now() + 5);
 
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
     expect(ended('stale-run')).toBe(true);
     expect(ended('live-run')).toBe(false);
   });
@@ -468,7 +494,7 @@ describe('the workspace keeps exactly one wake row', () => {
 
       for (const row of before) await agent.cancelSchedule(row.id);
       const firedAtSec = Math.floor(Date.now() / 1000);
-      await agent._kinuTerminalRetryTick();
+      await agent.terminalRetryPass();
 
       const armed = (await agent.listSchedules())
         .filter((row) => row.callback === '_kinuTerminalRetryTick');
@@ -510,7 +536,7 @@ describe('the workspace keeps exactly one wake row', () => {
        VALUES (?, 'poisoned-birth', 'orchestrator', 'idle', NULL, ?, NULL, 'durable', NULL, NULL, '{malformed', 0)`,
     ).run(harnessActorId(db), Date.now());
 
-    await expect(agent._kinuTerminalRetryTick()).rejects.toThrow('malformed');
+    await expect(agent.terminalRetryPass()).rejects.toThrow('malformed');
 
     const armed = (await agent.listSchedules())
       .filter((row) => row.callback === '_kinuTerminalRetryTick' && row.time > Math.floor(Date.now() / 1000));
@@ -527,7 +553,7 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     expect(await agent.listSchedules()).toEqual([]);
 
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
 
     expect(await agent.listSchedules()).toEqual([]);
   });
@@ -692,7 +718,7 @@ describe('the workspace keeps exactly one wake row', () => {
     // when it fires, then the callback runs.
     for (const row of await agent.listSchedules()) await agent.cancelSchedule(row.id);
     const firedAtSec = Math.floor(Date.now() / 1000);
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
 
     // A row remains, in the future, while the turn is still owed.
     const kept = await wakes();

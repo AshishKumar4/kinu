@@ -22,7 +22,7 @@ for (const context of ['inherit', 'fresh', undefined] as const) {
     await chatSessionTurns(agent).run(HIRE_FORK_PARENT);
     await chatSessionTurns(agent).run(HIRE_FORK_REQUEST);
     expect(model.doStreamCalls.flatMap(hireConversation)).toContainEqual(HIRE_FORK_PREFIX[2]);
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
     expect(childRequests).toHaveLength(1);
     const first = childRequests[0];
 
@@ -59,7 +59,7 @@ for (const cold of [false, true]) {
     configure(initial.agent);
     await chatSessionTurns(initial.agent).run(HIRE_FORK_PARENT);
     await chatSessionTurns(initial.agent).run(HIRE_FORK_REQUEST);
-    await initial.agent._kinuTerminalRetryTick();
+    await initial.agent.terminalRetryPass();
     expect(childRequests).toHaveLength(2);
     const first = childRequests[1];
 
@@ -77,7 +77,7 @@ for (const cold of [false, true]) {
 
     if (cold) await agent.onStart();
     await chatSessionTurns(agent).run(HIRE_FORK_FOLLOWUP_REQUEST);
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
     const followup = childRequests[2];
 
     if (!followup) throw new Error('The second assignment never reached the child provider.');
@@ -89,7 +89,7 @@ for (const cold of [false, true]) {
     const next = conversation.findIndex((message) => message.content.includes(HIRE_FORK_FOLLOWUP));
     expect(next).toBeGreaterThan(conversation.findIndex((message) => message.content === HIRE_CHILD_CONTEXT));
     expect(conversation.filter((message) => message.content.includes(HIRE_FORK_FOLLOWUP))).toHaveLength(1);
-    await agent._kinuTerminalRetryTick();
+    await agent.terminalRetryPass();
     expect(childRequests).toHaveLength(3);
   });
 }

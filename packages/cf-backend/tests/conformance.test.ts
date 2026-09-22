@@ -20,13 +20,13 @@ import type { ActorHarness, HarnessOrchestratorAgent } from './helpers/actor-har
 interface RawToolsAgent {
   observeRawTools(): ToolSet;
   observeRuntime(): AgentRuntime;
-  _kinuTerminalRetryTick(): Promise<void>;
+  terminalRetryPass(): Promise<void>;
 }
 
 async function observe(workspace: ActorHarness<RawToolsAgent>): Promise<ObservedSurface> {
   const tools = workspace.agent.observeRawTools();
   await workspace.agent.observeRuntime().storage.vfs.exists('SOUL.md');
-  await workspace.agent._kinuTerminalRetryTick();
+  await workspace.agent.terminalRetryPass();
 
   return {
     root: 'cf-orchestrator',
@@ -57,7 +57,7 @@ async function observeSubordinate(
   });
 
   const { tools } = await workspace.agent.observeHostedTaskProfile(child.actor, 'prove the subordinate surface');
-  await workspace.agent._kinuTerminalRetryTick();
+  await workspace.agent.terminalRetryPass();
 
   return {
     root: 'cf-subordinate',
