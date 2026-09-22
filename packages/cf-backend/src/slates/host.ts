@@ -16,7 +16,7 @@ import {
   escapeHtml, publicPage, UsageSchema, usageTotal,
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel, VIEWER_EXCHANGE_PATH,
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
-  type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
+  type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
   type SlateBindingCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim, type WorkspaceOverviewSlate,
   type MissionGovernor,
 } from '@kinu.run/core';
@@ -76,11 +76,32 @@ interface ViewerAdmission {
  */
 const SLATE_REFUSAL_MESSAGE = new RegExp(`^(${ERROR_CODES.join('|')}): ([\\s\\S]*)$`);
 
+/** How a forwarded share response settles the viewer's audit row: the guest
+ *  answered, declined, or failed. A 5xx is the slate's own failure; anything
+ *  else below it is a refusal the viewer was given. */
+function shareOutcome(response: Response): 'ok' | 'refused' | 'error' {
+  if (response.ok) return 'ok';
+
+  return response.status < 500 ? 'refused' : 'error';
+}
+
 function refusalFromThrown(input: { cause: unknown }): Refusal | null {
   const match = input.cause instanceof Error ? SLATE_REFUSAL_MESSAGE.exec(input.cause.message) : null;
   const reason = match === null ? undefined : v.safeParse(v.picklist(ERROR_CODES), match[1]);
 
   return reason?.success === true && match !== null ? { reason: reason.output, error: match[2] } : null;
+}
+
+/** One app call: who is calling, which slate method with which arguments, the
+ *  bindings already crossed to reach it, and the viewer it is granted for when
+ *  a live share carried it. */
+export interface SlateAppCall {
+  readonly caller: SlateCaller;
+  readonly id: string;
+  readonly method: string;
+  readonly args: JsonValue[];
+  readonly chain?: readonly string[];
+  readonly viewer?: SlateViewer;
 }
 
 interface RunningSlate {
@@ -386,7 +407,7 @@ export class SlateHost {
         });
       } else {
         this.invocations.delete(admission.invocation);
-        admission.settle(response.ok ? 'ok' : response.status < 500 ? 'refused' : 'error');
+        admission.settle(shareOutcome(response));
       }
 
       return response;
@@ -499,7 +520,29 @@ export class SlateHost {
     return runtime;
   }
 
-  async operation<Input>(caller: SlateCaller, input: Input): Promise<SlateCallResult> {
+  /** Revoke one share. A live share is revoked on its own row and every process
+   *  still running under it is stopped; a blueprint share has no process. */
+  private async unshare(share: string, blueprints: WorkspaceBlueprints): Promise<SlateCallResult> {
+    if (this.live.get(share) === undefined) {
+      return { ok: true, value: projectJsonValue({ value: blueprints.unshare(share) }) };
+    }
+
+    const revoked = this.live.revoke(share);
+
+    // The invocations stay until the process carrying them stops: a viewer call
+    // on a revoked share must still find its own invocation, so the refusal
+    // names the share — 'no longer shared' — instead of the caller's dead
+    // process.
+    for (const [key, running] of this.running) {
+      if (running.caller.share !== revoked.id) continue;
+      this.running.delete(key);
+      await running.process.stop();
+    }
+
+    return { ok: true, value: projectJsonValue({ value: revoked }) };
+  }
+
+  async operation(caller: SlateCaller, input: SlateOperation): Promise<SlateCallResult> {
     try {
       const parsed = v.safeParse(SlateOperationSchema, input);
 
@@ -515,7 +558,7 @@ export class SlateHost {
         }
 
         case 'preview': return await this.preview(caller, operation.id);
-        case 'call': return await this.call(caller, operation.id, operation.method, operation.args ?? []);
+        case 'call': return await this.call({ caller, id: operation.id, method: operation.method, args: operation.args ?? [] });
         case 'remove': return await this.remove(caller, operation.id);
         case 'history': {
           await this.deps.session();
@@ -548,25 +591,7 @@ export class SlateHost {
           switch (operation.op) {
             case 'inspect': return { ok: true, value: projectJsonValue({ value: blueprints.inspect(operation.id, operation.version, operation.include) }) };
             case 'publish': return { ok: true, value: projectJsonValue({ value: await blueprints.publish(operation.id, operation.version, operation.include) }) };
-            case 'unshare': {
-              if (this.live.get(operation.share) !== undefined) {
-                const revoked = this.live.revoke(operation.share);
-
-                // The invocations stay until the process carrying them stops:
-                // a viewer call on a revoked share must still find its own
-                // invocation, so the refusal names the share — 'no longer
-                // shared' — instead of the caller's dead process.
-                for (const [key, running] of this.running) {
-                  if (running.caller.share !== revoked.id) continue;
-                  this.running.delete(key);
-                  await running.process.stop();
-                }
-
-                return { ok: true, value: projectJsonValue({ value: revoked }) };
-              }
-
-              return { ok: true, value: projectJsonValue({ value: blueprints.unshare(operation.share) }) };
-            }
+            case 'unshare': return await this.unshare(operation.share, blueprints);
 
             case 'shares': return { ok: true, value: projectJsonValue({ value: blueprints.list() }) };
             case 'share': {
@@ -888,7 +913,7 @@ export class SlateHost {
       // The hop keeps the CALLER's authority: the callee runs for whoever asked,
       // never as its author — and the viewer follows the chain, so a binding the
       // callee calls is granted exactly as the root's own are.
-      case 'app': return this.call(caller, route.id, route.method, [...route.args], route.chain, viewer);
+      case 'app': return this.call({ caller, id: route.id, method: route.method, args: [...route.args], chain: route.chain, viewer });
     }
   }
 
@@ -899,7 +924,8 @@ export class SlateHost {
    * and retired when it settles, so the callee names a live call and nothing
    * else.
    */
-  async call(caller: SlateCaller, id: string, method: string, args: JsonValue[], chain: readonly string[] = [], viewer?: SlateViewer): Promise<SlateCallResult> {
+  async call(request: SlateAppCall): Promise<SlateCallResult> {
+    const { caller, id, method, args, chain = [], viewer } = request;
     const invocation = crypto.randomUUID();
     this.invocations.set(invocation, viewer === undefined ? { id, chain } : { id, chain, viewer });
 
@@ -930,10 +956,7 @@ export class SlateHost {
         // aborts the read-loop, and doing it here — not at transport end — is
         // the difference between a rejection capnweb observes and one workerd
         // reports as unhandled.
-        // SAFETY: `RpcStub` always carries a `Symbol.dispose` hook for its
-        // session (capnweb's RpcStub constructor sets it) — the interface
-        // merely doesn't declare it.
-        (stub as { [Symbol.dispose](): void })[Symbol.dispose]();
+        stub[Symbol.dispose]();
       }
     } catch (cause) {
       const refusal = refusalFromThrown({ cause });

@@ -93,18 +93,18 @@ type NativeEnterSpan = typeof tracing.enterSpan;
  *
  * THE WHOLE RUNTIME QUESTION LIVES HERE, once. The module's declaration says
  * `enterSpan` is always a callable member and fact 3 above says workerd is what
- * decides, so the local annotation states the honest shape and the narrowing
- * hands back a VALUE instead of a verdict — which is what keeps `span` below a
- * plain null check, with nothing to re-derive and nothing to cast.
+ * decides, so the guard asks the member itself and hands back a VALUE instead
+ * of a verdict — which is what keeps `span` below a plain null check, with
+ * nothing to re-derive and nothing to cast.
  *
  * Bound rather than returned bare: `enterSpan` is inherited from
  * `Tracing.prototype` and reads `this`, so an unbound reference would call
  * against the wrong receiver.
  */
 function nativeEnterSpan(): NativeEnterSpan | null {
-  const entry: NativeEnterSpan | undefined = tracing.enterSpan;
+  if (!(tracing.enterSpan instanceof Function)) return null;
 
-  return entry instanceof Function ? entry.bind(tracing) : null;
+  return tracing.enterSpan.bind(tracing);
 }
 
 export function createWorkersTracer(): Tracer {

@@ -182,23 +182,21 @@ KinuSandbox.outboundHandlers = {
   // unconfigured container therefore cannot egress: `enableInternet = false`
   // with no handler bound means the platform denies everything.
   //
-  // SAFETY: the runtime object IS this Worker's env. The SDK declares the
-  // parameter by the generated `Cloudflare.Env` contract, which this project
-  // leaves empty and populates as `Env` in env.d.ts instead, and `Env` is
-  // assignable to it, so nothing is narrowed that the wrangler binding block
-  // does not already guarantee.
+  // The runtime object IS this Worker's env, so the parameter is declared as
+  // `Env`. The SDK types it by the generated `Cloudflare.Env` contract, which
+  // this project leaves empty and populates as `Env` in env.d.ts instead; the
+  // handler type is bivariant in it, so the wrangler binding block is what
+  // names these members and nothing here narrows anything else.
   //
   // COMPOSITION: upstream assigns handler maps wholesale when it configures an
   // R2-binding or credential-proxy bucket mount — which Devbox's chain storage
   // does on every attach. The committed patch
   // (patches/@cloudflare%2Fsandbox@0.12.8.patch) makes those sites MERGE, so a
   // bucket mount can never unbind the two handlers below.
-  [EGRESS_HANDLER]: (request, env, ctx) => handleContainerEgress(
-    request, env as Env, parseEgressParams(ctx),
+  [EGRESS_HANDLER]: (request, env: Env, ctx) => handleContainerEgress(
+    request, env, parseEgressParams(ctx),
   ),
-  // SAFETY: as above — the same generated `Cloudflare.Env` contract names the
-  // object this Worker declares as `Env`.
-  [EVENT_HANDLER]: (request, env, ctx) => handleContainerEvent(
-    request, env as Env, parseEgressParams(ctx),
+  [EVENT_HANDLER]: (request, env: Env, ctx) => handleContainerEvent(
+    request, env, parseEgressParams(ctx),
   ),
 };

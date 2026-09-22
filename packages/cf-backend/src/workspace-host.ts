@@ -252,8 +252,8 @@ export interface HostedWorkspaceDeps {
    * is signed with a key derived from the user-plane secret, neither of which
    * the workspace itself has any business holding.
    */
-  previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
-  onFilesChanged?(paths: readonly string[]): void;
+  previewUrl: (port: number, capability: string) => Promise<WorkspacePreviewUrl>;
+  onFilesChanged?: (paths: readonly string[]) => void;
   /**
    * Bring the slate that owns a durable application to life: the process a
    * reset took is re-driven, a process whose source changed is replaced, a
@@ -376,23 +376,27 @@ function previewUnavailable(refusal: Refusal): Response {
  * null. An interpreter resident (`recipe.resident`) is the session's own
  * launch and never an embedder's; the guard keeps that true here.
  */
-/** A thrown re-drive inside `waitUntil` would otherwise vanish: the refusal
- *  value is the slate's own answer, this is the host failing to ask. Named so
- *  the rejection arm has a typed parameter. */
-const redriveFailed = (owner: string) => <Failure>(cause: Failure): void => {
-  diagnostics.failure('workspace.facet.redrive_failed', toKinuError({
-    doing: 're-driving a slate launch a hibernation interrupted', cause, otherwise: 'io',
-  }), { owner });
-};
+/** Account for both answers a re-drive can give: a refusal is the slate's own,
+ *  while a throw inside `waitUntil` would otherwise vanish — that one is the
+ *  host failing to ask. */
+async function redriveSlate(ensuring: Promise<Refusal | null>, owner: string): Promise<void> {
+  try {
+    const refusal = await ensuring;
+
+    if (refusal !== null) {
+      diagnostics.event('workspace.facet.redrive_refused', { owner, reason: refusal.reason, error: refusal.error });
+    }
+  } catch (cause) {
+    diagnostics.failure('workspace.facet.redrive_failed', toKinuError({
+      doing: 're-driving a slate launch a hibernation interrupted', cause, otherwise: 'io',
+    }), { owner });
+  }
+}
 
 function resolveSlateLaunch(deps: HostedWorkspaceDeps, recipe: WorkerRecipe): Promise<null> {
   if (recipe.resident !== undefined || deps.ensureSlate === undefined) return Promise.resolve(null);
 
-  deps.ctx.waitUntil(deps.ensureSlate(recipe.owner).then((refusal) => {
-    if (refusal !== null) {
-      diagnostics.event('workspace.facet.redrive_refused', { owner: recipe.owner, reason: refusal.reason, error: refusal.error });
-    }
-  }, redriveFailed(recipe.owner)));
+  deps.ctx.waitUntil(redriveSlate(deps.ensureSlate(recipe.owner), recipe.owner));
 
   return Promise.resolve(null);
 }

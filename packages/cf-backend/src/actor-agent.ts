@@ -21,7 +21,6 @@ import {
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute,
   type SubordinateInspectionAuthority,
 } from '@kinu.run/core';
-import type { AgentRuntime } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
@@ -221,7 +220,7 @@ import {
   type NimbusSandboxHandle, childContextResolver,
 } from "@kinu.run/core";
 import {
-  bindAgentSql, createCFRuntime,
+  bindAgentSql, createCFRuntime, isCFRuntime,
   type CFRuntime, type CFRuntimeHooks,
 } from "./runtime";
 import {
@@ -605,13 +604,6 @@ const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable'
  * Web uses the same provider the hosted turn receives. Delegation and the MCP
  * descriptor cache are not lent to a slate.
  */
-/** Every runtime this backend builds carries a vector store (a noop one when
- *  the Vectorize bindings are absent); a runtime without one did not come from
- *  `createCFRuntime`. */
-function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
-  return 'vectorStore' in runtime;
-}
-
 function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
   // This runtime came from `ActorHostDeps.runtimeFor`, which on this backend IS
   // `createCFRuntime` — the core seam narrows the RETURN type to `AgentRuntime`,
@@ -4976,13 +4968,9 @@ export abstract class ActorAgent extends Agent<Env> {
     const userId = this.getOwnerUserId();
 
     if (!userId) return null;
-    const stub: Pick<Fetcher, 'fetch'> = this.env.UserDO.get(this.env.UserDO.idFromName(userId));
+    const stub: UserHubClient = this.env.UserDO.get(this.env.UserDO.idFromName(userId));
 
-    // SAFETY: the stub carries every method on the declared UserDO RPC surface
-    // plus fetch. `DurableObjectStub<UserDO>` is the platform's own type for it,
-    // and its RPC mapping over the JSON-carrying experience methods exceeds
-    // TypeScript's instantiation depth (TS2589 at the publish call, 2026-09-05).
-    return stub as UserHubClient;
+    return stub;
   }
 
   protected requireOwnerUserDO(): UserHubClient {

@@ -13,7 +13,6 @@ import {
   type AgentProviderRegistry,
 } from './providers/agent-registry';
 import { resolveReviewingModelSelection } from './providers/judge-model';
-import type { UserDO } from './user/user-do';
 import type { UserCaller } from '@kinu.run/core';
 
 export interface OwnedModelServicesOptions {
@@ -87,9 +86,8 @@ export class OwnedModelServices {
       throw new Error('Agent has no owner_user_id yet — Worker must call claimOwner before any model use.');
     }
 
-    // SAFETY: The UserDO namespace binding declares UserDO as its stub contract.
     const userDOStub = userId
-      ? this.options.env.UserDO.get(this.options.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>
+      ? this.options.env.UserDO.get(this.options.env.UserDO.idFromName(userId))
       : null;
 
     this.providerRegistryCache = createAgentProviderRegistry({

@@ -120,15 +120,20 @@ const STAGE_CONSEQUENCE = {
     + 'Re-expose it if you still need it, and do not hand out the old URL.',
 } satisfies Record<IncidentStage, string>;
 
+/** A key of the consequence table is a stage by construction: the table is
+ *  compiler-checked exhaustive over `IncidentStage` and a literal, so it
+ *  carries no other key. */
+function isIncidentStage(name: string): name is IncidentStage {
+  return name in STAGE_CONSEQUENCE;
+}
+
 /**
  * Where the container's persistence path can fail. Closed, and closed on the
  * consequence table above: a stage nobody has decided a consequence for must
  * not be admitted with a generic one, and a stage the container can emit must
  * not be refused. Derived from the table so neither can happen.
  */
-// SAFETY: STAGE_CONSEQUENCE is compiler-checked exhaustive over IncidentStage
-// above, so its own keys are exactly the incident stages.
-const STAGE_KEYS = Object.keys(STAGE_CONSEQUENCE) as readonly IncidentStage[];
+const STAGE_KEYS: readonly IncidentStage[] = Object.keys(STAGE_CONSEQUENCE).filter(isIncidentStage);
 
 const SANDBOX_LIFECYCLE_STAGES = STAGE_KEYS;
 
@@ -435,12 +440,19 @@ export async function acceptSandboxLifecycleFailure(
   };
 }
 
+/** Which process or port the failure names, when it names one. */
+function incidentWhere(incident: SandboxLifecycleFailure): string {
+  if (incident.processId !== undefined) return ` (process ${incident.processId})`;
+
+  if (incident.port !== undefined) return ` (port ${String(incident.port)})`;
+
+  return '';
+}
+
 /** What the agent reads. The stage's consequence first, because that is what
  *  it has to act on; the caller's reason after it, because that is evidence. */
 function incidentText(incident: SandboxLifecycleFailure): string {
-  const where = incident.processId !== undefined
-    ? ` (process ${incident.processId})`
-    : incident.port !== undefined ? ` (port ${String(incident.port)})` : '';
+  const where = incidentWhere(incident);
 
   return `The workspace container failed at the ${incident.stage} stage${where}. `
     + `${STAGE_CONSEQUENCE[incident.stage]}\n\n`
