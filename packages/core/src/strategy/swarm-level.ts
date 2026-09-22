@@ -1,28 +1,7 @@
 /**
- * THE LEVEL a swarm iteration runs: who assigned it, which slots it fills, and what
- * each slot is asked.
- *
- * Specified by docs/EXPLORATION.md — "Arbitration", "Budget conservation" and
- * "Inherited context".
- *
- * ── WHY THIS IS ITS OWN MODULE ────────────────────────────────────────────────
- *
- * There are now THREE things that can decide what a level's children are asked, and
- * the run loop had all three inline as `??` chains reaching into a grant, a pending
- * row and the resolved call at once:
- *
- *   - A NODE proposed the level (`propose_branch` → `BranchGrant`), so each child has
- *     its own sub-question and its own brief.
- *   - THE CALLER assigned the first level (`SwarmInput.nodes`), which is the same
- *     thing one level up: the root is the workspace as found, no model wrote it, so it
- *     proposes nothing and the caller writes its proposal instead.
- *   - NOBODY assigned it, and the engine varies the angle itself.
- *
- * …and a RE-ENTRY crosses all three, because it re-runs nodes an earlier attempt
- * created and must ask them what they were originally asked. Composed in the loop,
- * that was four sources read through three fallback chains per child, in the middle of
- * the busiest function in the engine. {@link planLevel} is the one place that decides
- * it, and the loop's job shrinks to expanding what it returns.
+ * Decides a swarm level's slots and what each is asked: a node's grant, the caller's
+ * `SwarmInput.nodes`, generated angles, or a re-entry's journalled briefs.
+ * Spec: docs/EXPLORATION.md "Arbitration", "Budget conservation", "Inherited context".
  */
 
 import type { BranchContext, ResolvedSwarm } from './swarm';
@@ -31,22 +10,13 @@ import type { PendingSwarmNode, SwarmReentry } from './swarm-resume';
 import { nanoid } from '../utils/nanoid';
 import { diversityAngle } from '../mcts/diversity';
 
-/** The node's brief and its siblings' briefs. The caller, parent, or diversity
- * policy supplies them. The journal preserves the chosen text for re-entry. */
+/** The journal preserves the chosen text for re-entry. */
 export interface BranchAssignment {
   readonly brief: string;
-  /** The briefs this node's siblings were given, in level order minus its own. */
   readonly siblings: readonly string[];
 }
 
-/**
- * One parent's unfinished level, as a re-entry owes it.
- *
- * `siblings` is the width the level was ORIGINALLY told about, which is not the number
- * of members re-run here: scoring is sequential after the expansion barrier, so three
- * of five may already be recorded, and re-asking the other two as "1 of 2" would hand
- * them the first two's angles.
- */
+/** `siblings` is the level's original width, not the count re-run here; some members may already be recorded. */
 export interface ResumedWave {
   readonly parentId: string;
   readonly siblings: number;
@@ -54,17 +24,8 @@ export interface ResumedWave {
 }
 
 /**
- * THE WORK A RE-ENTRY OWES, one wave per parent, in the order the dead attempt spawned
- * them.
- *
- * A node that was spawned and never recorded a tree row is an expansion this search
- * ALREADY PAID FOR and holds no answer for. It is re-run under its OWN id: not
- * retired, and not replaced by a fresh sibling. That is the whole of the defect that
- * made a five-node search report five failures and five new nodes on every eviction.
- *
- * GROUPED BY PARENT because a wave is what the expansion barrier is: the members of
- * one parent's level were asked as a set and told each other's angles. A `Map` for its
- * insertion order, which IS level order here because the rows arrive in it.
+ * Pending nodes grouped per parent, in spawn order. A spawned node with no tree row
+ * was already paid for and is re-run under its own id, never replaced.
  */
 export function resumedWaves(reentry: SwarmReentry | null): ResumedWave[] {
   const byParent = new Map<string, { parentId: string; siblings: number; members: PendingSwarmNode[] }>();
@@ -82,26 +43,9 @@ export function resumedWaves(reentry: SwarmReentry | null): ResumedWave[] {
 }
 
 /**
- * THE CALLER'S OWN FIRST LEVEL, as the grant the expansion path already expands from
- * — or null where the caller assigned nothing and the engine varies the angle itself.
- *
- * NOT A SECOND EXPANSION PATH, and that is the whole design. The run loop has always
- * expanded a granted level by reading `task`, `rationale` and `context` per branch off
- * `BranchGrant.proposal.branches[i]`; the only reason the first level never had one is
- * that its parent is the ROOT, which no model wrote and which therefore proposes
- * nothing. So the caller's assignments become the root's proposal and nothing
- * downstream changes: the same slots, the same ids, the same two journal columns, the
- * same re-entry.
- *
- * DEBITED THROUGH THE BUDGET, exactly as an arbitrated grant is. A grant is expanded
- * without charge because arbitration already charged it, so a grant manufactured here
- * without `take` would hand the run a free level and leave the whole budget for a
- * second one — one node per assignment, and then `branches` more.
- *
- * ONLY ON A FIRST ATTEMPT. A re-entry's first level already EXISTS: each of its nodes
- * is either recorded in the tree or pending, both of which the resume accounting owns,
- * and re-granting it here would create that level a second time under fresh ids — the
- * defect this engine just closed, re-opened from another direction.
+ * The caller's first level as the root's grant, so it expands through the normal grant
+ * path. Debited via `take` since grants are expanded uncharged. First attempt only: a
+ * re-entry's first level already exists and re-granting would duplicate it.
  */
 export function assignedRootGrant(input: {
   readonly resolved: ResolvedSwarm;
@@ -120,29 +64,19 @@ export function assignedRootGrant(input: {
     width,
     nodeIds: Array.from({ length: width }, () => nanoid()),
     proposal: {
-      // The run's own name for what it is doing. The per-node briefs are on the
-      // branches; this is the level's, and it is what the journal's run header already
-      // carries.
       rationale: input.resolved.name ?? input.resolved.label ?? input.resolved.preset,
       branches: assignments.slice(0, width).map((node) => ({
         task: node.task,
-        // `prompt` IS the brief. It travels in the field the expansion path already
-        // reads and the journal already stores, so there is no new column, no new
-        // `HeadInput` field and no snapshot state anywhere in its path.
+        // `prompt` is the brief.
         rationale: node.prompt,
-        // RUN-LEVEL, never per node: `context` is what makes siblings comparable, so a
-        // caller assigning tasks does not get to vary it per node.
+        // Run-level, never per node: shared `context` keeps siblings comparable.
         context: input.resolved.config.context,
       })),
     },
   };
 }
 
-/** One child this iteration expands, fully decided: nothing below this is a fallback
- *  the run loop has to remember. */
 export interface LevelSlot {
-  /** Its slot in the level — what its diversity angle and sibling disclosure are
-   *  derived from. */
   readonly index: number;
   readonly id: string;
   readonly task: string;
@@ -151,9 +85,6 @@ export interface LevelSlot {
   readonly assignment: BranchAssignment | null;
 }
 
-/** What each member of the level is told to pursue: a grant's own rationales
- *  where the branch proposal supplied them, the journalled briefs on a re-entry,
- *  and otherwise the generated diversity angles. */
 function levelBriefs(grant: BranchGrant | null, resumed: ResumedWave | null, width: number): readonly string[] {
   if (grant) return grant.proposal.branches.map((branch) => branch.rationale);
 
@@ -162,22 +93,17 @@ function levelBriefs(grant: BranchGrant | null, resumed: ResumedWave | null, wid
   return Array.from({ length: width }, (_unused, index) => diversityAngle(index, width));
 }
 
-/** Plan fresh slots or reopen unfinished slots under their durable ids.
- * A re-entry reads briefs from all journalled siblings, including settled ones. */
+/** A re-entry reads briefs from all journalled siblings, including settled ones. */
 export function planLevel(input: {
   readonly resolved: ResolvedSwarm;
   readonly resumed: ResumedWave | null;
   readonly grant: BranchGrant | null;
-  /** The level's width — what every member is told about its siblings. */
   readonly width: number;
 }): readonly LevelSlot[] {
   const { resolved, resumed, grant, width } = input;
 
   const briefs = levelBriefs(grant, resumed, width);
 
-  /** The slots this call fills, and the pending row behind each where there is one.
-   *  Annotated so both arms are checked against one shape rather than widened by a
-   *  cast at the point where they meet. */
   const filled: readonly { readonly index: number; readonly pending: PendingSwarmNode | null }[] =
     resumed
       ? resumed.members.map((node) => ({ index: node.index, pending: node }))
@@ -190,9 +116,7 @@ export function planLevel(input: {
     return {
       index,
       id: pending?.id ?? grant?.nodeIds[index] ?? nanoid(),
-      // What this node was ASKED, and a resumed one is asked again in the same words:
-      // its row recorded them, so the re-run is the same assignment rather than a new
-      // one that happens to share an id.
+      // A resumed node is re-asked in its recorded words.
       task: pending?.task ?? branch?.task ?? resolved.task,
       rationale: pending?.rationale ?? brief ?? '',
       context: branch?.context ?? resolved.config.context,

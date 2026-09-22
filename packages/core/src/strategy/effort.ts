@@ -1,39 +1,27 @@
 // Adaptive reasoning-effort budgets per inference stage.
 //
-// All Workers AI model constructors use @ai-sdk/openai-compatible, including
-// the CF binding path (whose fetch adapter forwards the resulting HTTP body
-// to Ai.run). Configure the SDK with reasoningEffort; it serializes the wire
-// field reasoning_effort. Supplying the wire spelling here is overwritten by
-// the SDK and never reaches either transport.
-//
-// The defaults here encode the policy: cheap on fan-out (MCTS rollouts),
-// medium for user-visible work, high for rare-but-important turns (scaffold
-// mutation). Callers can override.
+// Workers AI constructors use @ai-sdk/openai-compatible: pass reasoningEffort and
+// the SDK serializes reasoning_effort; a wire-spelled option is overwritten.
 
 import type { streamText } from 'ai';
 import type { ReasoningEffort } from '../providers/reasoning-effort';
 
-// The vocabulary itself is a provider fact and lives at the platform layer;
-// this module owns the per-stage POLICY over it.
 export {
   REASONING_EFFORTS, isReasoningEffort, knownReasoningEfforts,
   type ReasoningEffort,
 } from '../providers/reasoning-effort';
 
-/** Provider-namespaced request options, as the AI SDK declares them. Named here
- *  because this file is where an effort BECOMES one, and every caller that
- *  carries a derived set across a seam needs to say so in a type. */
 export type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
 
 export type InferenceStage =
-  | 'chat'              // User-facing chat turn
-  | 'judge'             // Judge / review / quality scoring
-  | 'reflection'        // Lesson extraction after a turn
-  | 'mcts_rollout'      // Inside MCTS — many cheap samples
-  | 'mcts_judge'        // MCTS final-rollout scoring
-  | 'scaffold_mutation' // Rare; agent rewrites its own controller — be careful
-  | 'head_merge'        // LLM-driven merge of parallel heads
-  | 'memory_compress';  // Background sleep-time compute (compress memory)
+  | 'chat'
+  | 'judge'
+  | 'reflection'
+  | 'mcts_rollout'
+  | 'mcts_judge'
+  | 'scaffold_mutation' // Agent rewrites its own controller
+  | 'head_merge'
+  | 'memory_compress';
 
 export const REASONING_EFFORT_FOR_STAGE = {
   chat: 'medium',
@@ -46,9 +34,6 @@ export const REASONING_EFFORT_FOR_STAGE = {
   memory_compress: 'low',
 } satisfies Record<InferenceStage, ReasoningEffort>;
 
-/** SDK options for the Workers AI transport. The SDK owns conversion to the
- *  native reasoning_effort request field; no duplicate wire-format option is
- *  carried here. Missing effort leaves provider defaults untouched. */
 export function workersAIEffortOption(
   effort?: ReasoningEffort,
 ) {
@@ -57,13 +42,9 @@ export function workersAIEffortOption(
   return { providerOptions: { 'workers-ai': { reasoningEffort: effort } } };
 }
 
-/** The levels Anthropic's `effort` parameter takes, as @ai-sdk/anthropic
- *  declares them. `none` and `minimal` are not among them, so an assignment
- *  carrying one leaves the model on its own default rather than sending a
- *  value the API refuses. https://platform.claude.com/docs/en/build-with-claude/effort */
+/** Levels Anthropic's `effort` accepts; others leave the model on its default rather than being refused. */
 const ANTHROPIC_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
-/** Provider-native reasoning options for a resolved model-spec prefix. */
 export function reasoningEffortOptions(
   effort: ReasoningEffort | undefined,
   providerFamily: string,
@@ -88,8 +69,7 @@ export function reasoningEffortOptions(
   }
 }
 
-/** Merge request-level options by provider namespace so cache and reasoning
- *  settings can coexist on the same model request. */
+/** Merges per provider namespace so cache and reasoning settings coexist. */
 export function mergeProviderOptions(
   base: ProviderOptions | undefined,
   override: ProviderOptions | undefined,
@@ -106,7 +86,6 @@ export function mergeProviderOptions(
   return merged;
 }
 
-/** Shortcut: `effortFor('judge')` → `{ providerOptions: ... }`. */
 export function effortFor(stage: InferenceStage) {
   return workersAIEffortOption(REASONING_EFFORT_FOR_STAGE[stage]);
 }

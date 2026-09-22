@@ -1,28 +1,8 @@
 /**
- * The shape of a configured search: the axes, six presets, one escape hatch —
- * and what a call resolves to, whether that resolution is legal, and what a run
- * reports.
- *
- * Specified by docs/EXPLORATION.md — "The six axes", "One spelling per axis",
- * "Presets", "Validity over the resolved configuration", "Settle is derived" and
- * "Arbitration".
- *
- * The axes are derived from a 27-technique coverage matrix rather than chosen; the
- * matrix, not this file, is the argument for how many there are.
- *
- * WHAT A PRESET IS. A preset fixes the search. The caller supplies the objective.
- * Those are the two halves of a call and they never mix: `config` is axes only,
- * and a named preset does not accept it at all, which is the rule *Presets* states.
- *
- * WHY THE TABLE, THE RESOLVER AND THE PREDICATE ARE ONE MODULE. Legality is checked
- * over the RESOLVED configuration — *Validity over the resolved configuration* — so
- * the predicate is meaningless without the resolution and the resolution is
- * meaningless without the preset table of *Presets*. Written apart, the table became
- * prose nothing read: a preset was called a "named point" for four
- * revisions with no point written down, and the predicate had no input for a NAMED
- * preset at all. {@link SWARM_PRESET_POINTS} is therefore the fixture and the
- * resolver at once, which is deliberate — two spellings of the preset points would
- * drift exactly as *One spelling per axis* describes.
+ * Swarm search configuration: axes, presets, resolution, legality, and run reports.
+ * Spec: docs/EXPLORATION.md "The six axes", "One spelling per axis", "Presets",
+ * "Validity over the resolved configuration", "Settle is derived", "Arbitration".
+ * {@link SWARM_PRESET_POINTS} is both fixture and resolver; a second spelling would drift.
  */
 
 import { KinuError, refusalOf } from '../obs/error';
@@ -66,31 +46,12 @@ import type { SwarmProfileSnapshot } from '../profiles/snapshot';
 import type { ExplorationRecordsReport } from './records';
 
 /**
- * The rule the types above instantiate, and its ONE honest exception.
- *
- * **Where a parameter belongs to exactly one axis value, it lives ON that value.**
- * Applied exhaustively: `samples` to `score:'judge'` and the admission thresholds to
- * `carry:'reflections'`/`'artifacts'`. `unit` carries none, for the reason recorded on
- * {@link SwarmUnitSetting}: a parameter belonging to a whole SURFACE rather than to one
- * value is an axis, and {@link SWARM_CONTEXTS} is it.
- *
- * **Where a parameter belongs to a REGION of values it cannot be tagged, and then its
- * applicability condition must be CHECKED rather than assumed.** `pruneThreshold` and
- * `minVisitsForPrune` span every tree selector; `explorationWeight` is `uct`-only but
- * sits beside them so the pruning region reads as one group. Stating the exception is
- * the point — a rule applied to one axis and quietly dropped for another is the
- * "predicate stated but not exhaustively applied" defect *Exhaustive over an axis*
- * exists to close.
+ * A parameter belonging to one axis value lives on that value. Region-spanning
+ * parameters (`pruneThreshold`, `minVisitsForPrune`, `explorationWeight`) cannot be
+ * tagged, so their applicability is checked (*Exhaustive over an axis*).
  */
 
-/**
- * How a run of this shape reports its answer.
- *
- * Total over (`score`, `advance`) by construction, which is the property that
- * makes `settle` derived rather than an axis. Written as a function so the
- * exhaustiveness is a compile-time fact and a new `advance` value cannot silently
- * fall through to `'best'`.
- */
+/** Total over (`score`, `advance`), which is why `settle` is derived rather than an axis. */
 export function settleOf(config: SwarmConfig): SwarmSettle {
   if (config.advance.kind === 'archive') return 'archive';
 
@@ -101,149 +62,53 @@ export function settleOf(config: SwarmConfig): SwarmSettle {
   return 'best';
 }
 
-/* ── Resolution: the preset table IS the resolver ─────────────────────────── */
-
-/**
- * One preset's declared point: its seven axes, plus the two caps it DEFAULTS.
- *
- * `depth` and `branches` sit here rather than inside {@link SwarmConfig} because
- * they are defaults for caps a caller may override rather than axis values — *The
- * six axes* is the enumeration and neither is in it — and because with them in
- * `config` no named preset could have set either one.
- */
+/** `depth` and `branches` are overridable cap defaults, not axes. */
 export interface SwarmPresetPoint {
   readonly config: SwarmConfig;
   readonly depth: number;
   readonly branches: number;
   /**
-   * What this preset is FOR, in one clause — the only half of its doctrine a
-   * renderer cannot derive.
-   *
-   * It sits ON THE ROW because the alternative is what this table already paid for
-   * once: doctrine written beside the table drifted from it, `prove` became
-   * selectable while being named in none of the four hand-written copies, and three
-   * rows went on being described as working after they had stopped resolving. The
-   * MECHANICAL half of every sentence — the width, the depth, the selector, where
-   * survivors go, and what naming an `objective` changes — is derived from the axes
-   * beside it by {@link SWARM_PRESET_DOCTRINE}, so a row that changes shape changes
-   * its own description in the same edit.
-   *
-   * Written WITHOUT the preset's own name, which the renderer prefixes: a row that
-   * spelled its name in prose could be renamed in the vocabulary and go on
-   * introducing itself as the old one.
+   * The non-derivable clause of the doctrine, without the preset's name;
+   * {@link SWARM_PRESET_DOCTRINE} derives the mechanical half from the axes.
    */
   readonly doctrine: string;
 }
 
-/**
- * A row of the preset table. Every row is a POINT, and there is no second arm.
- *
- * AN `{undeclared}` ROW — a preset naming a tagged axis value whose parameter the table
- * declines to state — would be refused by {@link resolveSwarm} quoting the missing
- * declaration, and that refusal would be honest. It is forbidden anyway: *Presets*
- * requires a named preset to be UNREFUSABLE, and a preset that cannot be constructed is
- * not a preset. Such an arm also poisons the one escape hatch its own refusal text
- * recommends — `custom` with `from` naming an undeclared row inherits the refusal, so
- * the way out named by the error does not work.
- *
- * Every parameter is declared, each converted or adopted from a number this repository
- * already holds rather than chosen here — see the rows. With the arm absent rather than
- * empty and guarded, an unconstructible row cannot be written down at all, which is
- * strictly stronger than refusing one.
- */
+/** Every row is fully declared: *Presets* requires a named preset to be unrefusable. */
 export type SwarmPresetRow = SwarmPresetPoint;
 
 /**
- * The tuple table *Presets* requires, normatively `resolve(preset) → SwarmConfig`
- * and the ONLY definition of it. A named preset resolves to exactly its row; `custom`
- * resolves to `config`, optionally seeded from `from`'s row. There is deliberately
- * no `custom` row: `config` IS the override and `from` names the base, and a second
- * row would be the second spelling *One spelling per axis* exists to prevent.
- *
- * EVERY ROW IS DECLARED, `research`, `audit` and `redteam` included: each names a
- * tagged arm, and a row that did not state that arm's parameter would be refused —
- * accurately, and to no purpose, since the shapes all three describe are reachable
- * through `custom` on the same axes. Declining to name a tuple the engine already runs
- * buys nothing; naming it is not inventing it.
- *
- * NEITHER NUMBER IS CHOSEN HERE, and that is the whole reason they may be written:
- *
- *  - `novelty: 0.4` is Rainbow Teaming's τ=0.6 CONVERTED. τ is a similarity ceiling
- *    and this axis is a distance floor, and {@link archiveRegionRefusal} already
- *    states the conversion in the text it refuses with — "a filter quoted as a
- *    similarity ceiling is one MINUS that number here". 0.6 written into this column
- *    unconverted would be a stricter archive than the evidence describes, which is the
- *    error that text exists to catch.
- *  - `threshold: 0.8` is `craftExtractionThreshold`, and that number is itself DERIVED
- *    rather than picked: it is the pass band's midpoint, PASS_FLOOR 0.60 + ½·PASS_SPAN
- *    0.40, reachable only by executed code carrying an at-or-above-median judge and
- *    unreachable by any prose branch, which caps at 0.75. It is already this
- *    repository's bar for publishing an artifact derived from a search winner, and a
- *    coverage finding is the same kind of object answering the same question. Two bars
- *    for one question is how they come to disagree.
- *
- * `prove`'s own threshold stays 1 and stays derived from its own instrument: its
- * checker accepts or it does not, so an artifact is kept exactly when it accepted.
+ * `resolve(preset) → SwarmConfig` (*Presets*). No `custom` row: `config` is the override.
+ * `novelty: 0.4` is Rainbow Teaming's τ=0.6 similarity ceiling converted to a distance floor.
+ * `threshold: 0.8` is `craftExtractionThreshold`, the existing publication bar.
  */
 export const SWARM_PRESET_POINTS = {
   ideate: {
     config: {
-      // The row states `fresh`. A flat ideation wave has no parent conversation to
-      // inherit — the root's parent is the caller, and `context` binds the branch
-      // edge, of which this preset has none.
       unit: { kind: 'answer' }, context: 'fresh',
       expand: 'sample',
       score: { kind: 'none' }, advance: { kind: 'none' }, carry: { kind: 'none' },
     },
-    // Depth is one BY CONSTRUCTION rather than by choice: `advance:'none'` means there is no
-    // selection step, so there is no second level to reach.
+    // Depth 1: `advance:'none'` has no selection step.
     depth: 1,
     branches: 5,
     doctrine: 'returns a set of distinct approaches, unranked. Reach for it when the thing you '
       + 'want is not measurable: it has no value signal by design and refuses an `objective`.',
   },
   /**
-   * The three COVERAGE rows. They are archive runs and they differ on two things
-   * only: what their `key` means to a caller — an information-gathering dimension, a
-   * finding class, a tactic — and where their survivors go.
-   *
-   * `fresh` rather than `fork`: a probe of a new coverage cell wants the parent's
-   * RESULTS, not its transcript.
-   *
-   * `verify` rather than `judge`, and the engine's own behaviour is what settles it. A
-   * cell is keyed by the objective's identity and its population ordered by the
-   * objective's direction, so a judged archive has nothing to bin under and nothing to
-   * rank by — {@link archiveRegionRefusal} refuses the pair, and `swarm-run.ts`
-   * confirms it end to end: a judged candidate carries no measurement, so the writer
-   * skips it and the run reports `records: null`. A COVERAGE GRID therefore needs a
-   * measurable objective.
-   *
-   * WHAT IT DOES NOT MEAN is that the preset needs one to be CALLABLE. A row scoring
-   * by `verify` resolves to {@link unmeasuredPoint} when the call named no `objective`,
-   * which drops the archive along with the instrument and leaves a judged sweep — so
-   * `{preset, task}` runs, and naming an objective is what buys the grid rather than
-   * what buys a non-refusal. That split is deliberate: the shape these rows describe
-   * requires an instrument, and the CALL does not.
-   *
-   * Depth 1 BY CONSTRUCTION, the same way `ideate`'s is: an archive bins at the settle
-   * barrier, so within one run there is nothing to select a second level from. The
-   * illumination loop runs ACROSS runs, and `carry` is what makes the next one start
-   * from this one's occupants.
+   * Coverage rows. `verify` because an archive cell is keyed and ranked by the objective;
+   * without one they resolve to {@link unmeasuredPoint}. Depth 1: archives bin at settle.
    */
   research: {
     config: {
       unit: { kind: 'answer' }, context: 'fresh',
       expand: 'sample',
       score: { kind: 'verify' }, advance: { kind: 'archive', novelty: 0.4 },
-      // `artifacts` and not `elites`, which is the one axis separating these rows from
-      // `redteam`: a research finding is FOR publication, and that is what this arm
-      // buys — a cross-workspace write the elites arm does not make.
+      // `artifacts` publishes cross-workspace; the only axis separating this from `redteam`.
       carry: { kind: 'artifacts', threshold: 0.8 },
     },
     depth: 1,
     branches: 4,
-    // Where survivors GO is derived from `carry` below, so it is deliberately not said
-    // here as well: the two halves overlapping is how a row comes to contradict itself.
     doctrine: 'covers a space instead of climbing it, over a subject dimension you choose.',
   },
   audit: {
@@ -263,10 +128,7 @@ export const SWARM_PRESET_POINTS = {
       unit: { kind: 'answer' }, context: 'fresh',
       expand: 'sample',
       score: { kind: 'verify' }, advance: { kind: 'archive', novelty: 0.4 },
-      // `elites`, DELIBERATELY not `artifacts`. The artifacts arm publishes
-      // cross-workspace, and an exploit corpus is the one search output that must not
-      // leave the workspace that asked for it. What this run produces is the best
-      // member of each tactic cell, which is what `elites` keeps.
+      // `elites`, not `artifacts`: an exploit corpus must not leave its workspace.
       carry: { kind: 'elites' },
     },
     depth: 1,
@@ -275,42 +137,25 @@ export const SWARM_PRESET_POINTS = {
   },
   optimise: {
     config: {
-      // `inherit`: an inheriting child carries the ancestor chain's measurements
-      // transitively, which is what a run climbing a value needs its children to
-      // have seen.
       unit: { kind: 'answer' }, context: 'inherit',
       expand: 'sample',
       score: { kind: 'verify' }, advance: { kind: 'uct' }, carry: { kind: 'elites' },
     },
-    // Verifier-backed optimisation follows five levels unless the caller overrides depth.
     depth: 5,
     branches: 3,
     doctrine: 'climbs one number you can measure — a cost, a runtime, a count.',
   },
   prove: {
     config: {
-      // `answer`: an agent node, so a proof candidate is produced by something
-      // that can run its own checker between steps. {@link SWARM_UNITS} holds two
-      // words and neither is `generator`: a node that generates and checks IS an
-      // `answer` node, and a second word for it would say nothing more.
       unit: { kind: 'answer' }, context: 'inherit',
       expand: 'sample',
-      // The checker IS the score. `verify` requires an `objective`, which is where
-      // the caller names the checker — a `prove` call without one is refused by the
-      // same rule every other verifier composition is.
+      // The checker is the score; the `objective` names it.
       score: { kind: 'verify' },
-      // Best-first rather than `uct`: an exact signal has no noise to re-widen
-      // against, so the exploration term buys nothing and re-selection would spend
-      // budget re-deriving a step the checker already accepted.
+      // Best-first: an exact signal has no noise for UCT exploration to hedge.
       advance: { kind: 'best-first' },
-      // 1 because the checker accepted it. See the table note: this is the derived
-      // threshold, not a chosen one.
       carry: { kind: 'artifacts', threshold: 1 },
     },
-    // The top of the same 3-7 band `optimise` sits inside. A proof is the one
-    // search whose value signal is exact rather than noisy, so depth costs less
-    // here than anywhere else in the table: a wrong branch is refuted by the
-    // checker instead of being carried down by a plausible score.
+    // Deepest row: an exact checker refutes a wrong branch instead of carrying it down.
     depth: 7,
     branches: 3,
     doctrine: 'drives a checker that accepts a candidate or does not.',
@@ -318,57 +163,15 @@ export const SWARM_PRESET_POINTS = {
 } as const satisfies Record<NamedSwarmPreset, SwarmPresetRow>;
 
 /**
- * The judge ensemble an unmeasured sweep runs at.
- *
- * `DEFAULT_CONFIG.mcts.judgeSamples`, READ rather than transcribed: it is already
- * this repository's judged-ensemble size, and a second number answering the same
- * question is how two of them come to disagree.
- *
- * The marginalisation floor of 20 is not being dodged here.
- * {@link judgeMarginalisationRefusal} is stated over TREE selectors because what the
- * measurement is about is a tree AMPLIFYING scorer noise; an unmeasured sweep has no
- * selection step, so there is no amplification to marginalise against, and
- * `swarm-run.ts` holds a flat judged run to an ensemble of 1 for that same reason.
+ * Read from `DEFAULT_CONFIG.mcts.judgeSamples`, not transcribed. The marginalisation floor
+ * applies to tree selectors only; a flat sweep has no selection to amplify noise.
  */
 export const UNMEASURED_JUDGE_SAMPLES = DEFAULT_CONFIG.mcts.judgeSamples;
 
 /**
- * The point a NAMED preset resolves to when the call named no `objective`.
- *
- * WHY A SECOND POINT EXISTS. Five of the six rows score by `verify`, `verify` means
- * an instrument, and {@link swarmValidity} refuses a verifying composition that named
- * none — so `{preset, task}`, the call this surface exists to make trivial, was a
- * refusal on every row but `ideate`. A live incident measured what that costs: a model
- * spent five of its ten steps learning, one refusal per round trip, that its first call
- * was never going to run.
- *
- * WHY NOT A DEFAULT OBJECTIVE. An objective cannot be defaulted. `metric`, `unit`,
- * `direction` and `target` are facts about the caller's task, and `verify` needs a
- * `spec` whose fields ARE that task's data. What can be defaulted is the SCORER, so a
- * call that named no instrument gets the one scorer that needs none.
- *
- * THREE AXES MOVE, AND EVERY ONE OF THEM READS A MEASUREMENT:
- *  - `score` → `judge`, the only scorer that runs without an instrument.
- *  - `advance` → `none`. An archive bins each candidate into the cell its INSTRUMENT
- *    witnessed, and a judged candidate carries no measurement at all, so a judged
- *    archive writes zero rows and would report coverage over a store it never wrote —
- *    {@link archiveRegionRefusal} refuses that exact pair. The tree selectors go for a
- *    different reason: a judged tree is legal only at an ensemble of 20, and that is a
- *    scorer nobody asked for on a bare call.
- *  - `carry` → `none`. A record is keyed by the objective's identity, so a run that
- *    measured none has nothing to key one by and `elites`/`artifacts` would be accepted
- *    and ignored — the one thing *Accepted and ignored* refuses.
- * `depth` follows `advance` to 1, because `advance:'none'` has no selection step and a
- * deeper cap is refused rather than silently flattened.
- *
- * The six axes are named EXPLICITLY rather than spread over the row, which drops the
- * tree-only parameters (`explorationWeight`, `pruneThreshold`, `minVisitsForPrune`) by
- * construction — under `advance:'none'` each of them is a refusal — and makes a new
- * axis a compile error here rather than a silently inherited one.
- *
- * DERIVED FROM THE ROW, not declared per preset, so a preset added to the table cannot
- * forget its unmeasured shape. A row that does not score by `verify` needs no fallback
- * and is returned unchanged.
+ * A named preset's point when the call named no `objective`: `score` becomes `judge`,
+ * `advance` and `carry` become `none` (each reads a measurement), depth follows to 1.
+ * Axes are named explicitly so tree-only parameters drop and a new axis is a compile error.
  */
 export function unmeasuredPoint(row: SwarmPresetPoint): SwarmPresetPoint {
   if (row.config.score.kind !== 'verify') return row;
@@ -387,9 +190,7 @@ export function unmeasuredPoint(row: SwarmPresetPoint): SwarmPresetPoint {
   };
 }
 
-/** How a MEASURED run of each `advance` reads, in one clause. Annotated `Record` over
- *  the axis rather than inferred, so a new `advance` value must state its phrase
- *  instead of rendering as another value's. */
+/** A `Record` over the axis so a new `advance` value must state its phrase. */
 const ADVANCE_DOCTRINE = {
   none: (row) => `a flat measured wave of ${String(row.branches)}`,
   uct: (row) => `a depth-${String(row.depth)} UCT tree`,
@@ -398,7 +199,6 @@ const ADVANCE_DOCTRINE = {
   pareto: () => 'a Pareto front over an `instanced` or `vector` objective',
 } satisfies Record<SwarmAdvance, (row: SwarmPresetPoint) => string>;
 
-/** What each `carry` leaves for the next run, in one clause. */
 const CARRY_DOCTRINE = {
   none: '',
   reflections: ', reflections seeding the next run',
@@ -407,27 +207,10 @@ const CARRY_DOCTRINE = {
 } satisfies Record<SwarmCarry, string>;
 
 /**
- * What each preset IS, what `{preset, task}` alone runs, and what naming an
- * `objective` upgrades it to.
- *
- * ONE enumeration, rendered by every surface a model can learn the preset set from —
- * the `preset` property, the missing-`preset` refusal, and the `agents.swarm` codemode
- * declaration. Four hand-written copies of it is how `prove` came to be reachable in
- * the enum and named in none of them, while three presets that had stopped resolving
- * went on being described as working.
- *
- * IT LIVES BESIDE THE TABLE, and that is the whole point. Prose an import-free module
- * away from the rows it describes — in tools/registry.ts, say — drifts from them: the
- * prose says `optimise` "requires `objective`" while the table decides whether it does,
- * so the two can disagree. Only the clause a renderer cannot derive is written by hand,
- * on the row itself ({@link SwarmPresetPoint.doctrine}); every number and every shape
- * word below is read from the axes.
+ * The one preset enumeration every model-facing surface renders; only
+ * {@link SwarmPresetPoint.doctrine} is hand-written.
  */
 export const SWARM_PRESET_DOCTRINE: readonly string[] = [
-  // THE RULE, STATED ONCE. Five copies — one per verifying row — of the same sentence
-  // about what a bare call does is 550 characters of boilerplate in text that renders
-  // into three model-facing surfaces. Saying it here and letting each row print only
-  // `Sweep N` costs one line and says strictly more.
   'Every preset is callable as `preset` + `task` alone, and nothing else is required. '
     + 'With no `objective` a preset runs a JUDGED SWEEP at its own width: N candidates in '
     + 'parallel, ranked by a judge ensemble, none selected down a tree and none published. '
@@ -435,8 +218,6 @@ export const SWARM_PRESET_DOCTRINE: readonly string[] = [
   ...NAMED_SWARM_PRESETS.map((preset) => {
     const row = SWARM_PRESET_POINTS[preset];
 
-    // A row that does not score by `verify` has no measured/unmeasured split to
-    // explain, and `ideate`'s own clause already says it refuses an objective.
     if (row.config.score.kind !== 'verify') return `${preset} ${row.doctrine}`;
 
     const measured = ADVANCE_DOCTRINE[row.config.advance.kind](row)
@@ -452,14 +233,7 @@ export const SWARM_PRESET_DOCTRINE: readonly string[] = [
     + 'Reach for it when no preset names the shape you want.',
 ];
 
-/**
- * The `advance` values that select down a TREE, i.e. the region the tree refusals
- * under *Validity over the resolved configuration* are stated over and the region
- * `pruneThreshold` applies to.
- *
- * Derived by exclusion from {@link SWARM_ADVANCES} rather than listed, so a new
- * `advance` value cannot join the axis and quietly fall outside every tree rule.
- */
+/** Derived by exclusion so a new `advance` value cannot fall outside every tree rule. */
 export const SWARM_TREE_ADVANCES = SWARM_ADVANCES.filter(
   (advance) => advance !== 'archive' && advance !== 'none',
 );
@@ -469,45 +243,19 @@ export function isTreeAdvance(advance: SwarmAdvance): boolean {
 }
 
 /**
- * The smallest judge ensemble a tree may be scored by.
- *
  * Koh Table 4 at fixed node expansions: an unmarginalised strong judge (28.5%) is
  * beaten by a marginalised weaker one (30.0%), and SC(1)→SC(20) is worth +8.5.
- * Marginalisation buys more than judge strength does, and the shipped default of 3
- * sits below the smallest arm the paper measured.
  */
 export const JUDGE_MARGINALISATION_MIN = 20;
 
 /**
- * The per-evaluation LLM-call pool a swarm funds so an ensemble of `samples` is the
- * ensemble that actually runs.
- *
- * WHY THIS EXISTS AT ALL. `judgeCallBudget` splits ONE pool between the generated
- * check suite and the ensemble, so an ensemble is bounded by what the pool leaves:
- * `min(samples, pool − 1)` on a code-bearing candidate. Funding the judged path from
- * `DEFAULT_CONFIG.mcts.maxEvalLLMCalls` — 4, the MCTS ENGINE's dial, sized for that
- * engine's own `judgeSamples: 3` default — caps every judged swarm at 3 however many
- * {@link JUDGE_MARGINALISATION_MIN} demands. A run admitted at 20 and executed at 3
- * is the accepted-and-ignored shape in its purest form, and DISCLOSING it is not
- * fixing it: `swarm.judge_ensemble_clamped` would only say so on the way past.
- *
- * So the pool is DERIVED from the request the validity table already admitted, and
- * the two numbers cannot disagree. The floor does not bend to meet a borrowed dial:
- * it is a claim about ensemble size, measured, and lowering it is the one move
- * forbidden here.
- *
- * `samples + 1` and not a larger figure: the one extra call is exactly the check
- * suite `judgeCallBudget` documents, bought on a code-bearing candidate and left
- * unspent on a prose one. Nothing here is a spend ceiling — the mission budget is,
- * and it is checked where spend is checked.
+ * Derived from admitted `samples` so the ensemble that runs is the one admitted;
+ * the extra call funds the check suite `judgeCallBudget` splits from the same pool.
  */
 export function judgeCallPool(samples: number): number {
   return samples + 1;
 }
 
-/** Where a resolved cap's number came from. A cap the CALLER set and a cap
- *  INHERITED from a preset row are different facts about a run, and no record can
- *  say which unless the resolution does. */
 export type SwarmCapOrigin = 'call' | 'preset';
 
 export interface ResolvedCap {
@@ -515,108 +263,47 @@ export interface ResolvedCap {
   readonly origin: SwarmCapOrigin;
 }
 
-/**
- * The two caps, resolved.
- *
- * `null` means NEITHER the call nor a preset row stated one, which is reachable
- * only through `custom` with no `from` — the table declares rows for the named
- * presets and nothing for a composition that named no base. Null rather than a
- * number, because an invented default is a shape the record cannot report
- * honestly, and `SwarmInput.depth` has no stated default of its own.
- */
+/** `null` only via `custom` with no `from`: no default is invented. */
 export interface ResolvedSwarmCaps {
   readonly branches: ResolvedCap | null;
   readonly depth: ResolvedCap | null;
 }
 
-/**
- * A call, resolved: the configuration validity is checked over, the caps in force,
- * and the objective's arguments carried alongside.
- *
- * The arguments are HERE rather than left on the input because the refusals under
- * *Validity over the resolved configuration* are stated over them — `pareto` reads
- * the objective's kind, the archive rules read `key`, C1 reads the floor — and a
- * predicate that cannot see its own input is the defect this specification exists to
- * refuse, the same one *The closed verifier registry* closes by requiring a `spec` to
- * carry every field the floor needs.
- */
+/** Carries the objective's arguments because validity refusals are stated over them. */
 export interface ResolvedSwarm {
   readonly preset: SwarmPreset;
-  /** The base a composition was seeded from, or null. Provenance: `from` does not
-   *  make this a preset run and the record still says `custom`. */
+  /** Provenance only; the record still says `custom`. */
   readonly from: NamedSwarmPreset | null;
   readonly label: string | null;
-  /** The caller's name for the run, or null — the display half of {@link SwarmInput.name}. */
   readonly name: string | null;
   readonly config: SwarmConfig;
-  /** Derived, never supplied — {@link settleOf} over the resolved axes. */
   readonly settle: SwarmSettle;
   readonly caps: ResolvedSwarmCaps;
   readonly task: string;
   readonly objective: Objective | null;
   readonly key: string | null;
-  /**
-   * The caller's explicit first-level assignments, or null for the count-based mode
-   * where the engine hands out diversity angles. `caps.branches` is `nodes.length`
-   * when this is present, so the two can never disagree about width.
-   */
+  /** Null in count-based mode. When present, `caps.branches` is `nodes.length`. */
   readonly nodes: readonly SwarmNodeAssignment[] | null;
-  /**
-   * The caller's per-node model specs, or null for the unrouted default where every
-   * node runs the one model the call resolved to. Round-robin over the expansion
-   * children by slot — see {@link SwarmInput.models} for the assignment rule — and
-   * digested into the record's `configDigest` so two runs that differ only in their
-   * routing never collide.
-   */
+  /** Round-robin by slot ({@link SwarmInput.models}); digested into `configDigest`. */
   readonly models: readonly string[] | null;
 }
 
-/** A validity refusal, built through the one projection every other refusal in the
- *  tree is rendered by, so a cause chain reads the same here as anywhere else. See
- *  *Refusals*. */
 function badInput(error: string): SwarmRefusal {
   return { reason: 'bad_input', error: refusalOf(new KinuError('bad_input', error)).error };
 }
 
 /**
- * The axes a resolved configuration must name.
- *
- * `satisfies` holds every member to a real key of {@link SwarmConfig}, so a typo cannot
- * enter the list — but the compiler cannot force the converse, that a NEW required axis
- * joins it. What holds that direction is behavioural and lives in the fixture: the
- * refusal below names every axis a composition is missing, and a `custom` call with an
- * empty `config` therefore has to come back naming all of them. An axis added to the
- * interface and forgotten here makes that assertion fail rather than making the
- * resolver quietly accept an incomplete tuple.
- *
- * THE COUNT IS SIX, and it agrees with *The six axes* now. `context` joined because
- * inherited context needs one spelling for the caller-to-root edge and the branch
- * edge together — *One spelling per axis*; `observe` and `decorrelate` left in the same
- * change, and neither is a deferral. `observe` collapsed value by value onto things
- * that already exist — `none` is what a `thought` node IS, `own` is what holding tools
- * MEANS now that every other unit is a real agent, and `ancestors` is what
- * `context:'inherit'` supplies by construction. `decorrelate` shipped with all three of
- * its values behaving identically: sibling angles were handed out under every one of
- * them INCLUDING `blind`, which names the opposite, so no caller was ever choosing
- * anything. Diversification is now unconditional, which removes the ability to turn
- * angles OFF and keeps the ability that was working.
- *
- * What is genuinely missing is a convergence DETECTOR at the level barrier — the
- * thing `decorrelate` was reached for and never did. It is a separate obligation
- * and it is deliberately not smuggled in here as a fourth value of a dead axis.
+ * The compiler cannot force a new axis into this list; the fixture does, since a
+ * `custom` call with empty `config` must be refused naming every axis.
  */
 const AXES = [
   'unit', 'context', 'expand', 'score', 'advance', 'carry',
 ] as const satisfies readonly (keyof SwarmConfig)[];
 
-/** Whether a merged override names every axis. A type guard rather than a check
- *  plus an assertion: the narrowing IS the result, so nothing downstream has to be
- *  told what was just proved. */
 function namesEveryAxis(merged: Partial<SwarmConfig>): merged is SwarmConfig {
   return AXES.every((axis) => merged[axis] !== undefined);
 }
 
-/** The two caps, optional on every preset, resolved call-first then row. */
 function resolveCap(
   supplied: number | undefined, row: number | undefined,
 ): ResolvedCap | null {
@@ -628,23 +315,13 @@ function resolveCap(
 }
 
 /**
- * The requiredness rules from *Accepted and ignored* and *Presets* that are
- * properties of the CALL rather than of the resolved shape, so they run before there
- * is a resolution to check.
- *
- * Split from {@link swarmValidity} on purpose: `config` on a named preset cannot be
- * stated over the resolved configuration at all, because accepting it is what would
- * have produced the resolution. The rules stated over resolved values — objective
- * required iff resolved `score` is `verify`, key iff resolved `advance` is
- * `archive` — live in the predicate, where their input exists.
+ * Call-level rules (*Accepted and ignored*, *Presets*) that run before resolution exists;
+ * rules over resolved values live in {@link swarmValidity}.
  */
 function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
   const composed = input.preset === 'custom';
 
-  // THE TWO WIDTH MODES ARE EXCLUSIVE, and this is refused rather than resolved by
-  // precedence: `nodes.length` IS the width, so a call that also states `branches`
-  // has named the same number twice and one of the two is going to be ignored. The
-  // caller is told which mode they are in instead.
+  // The two width modes are exclusive: `nodes.length` is the width.
   if (input.nodes && input.branches !== undefined) {
     return badInput('`nodes` assigns the first level node by node, so its length is the branch count — '
       + `you named ${String(input.nodes.length)} node(s) and \`branches: ${String(input.branches)}\` as `
@@ -652,10 +329,6 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
       + 'drop `nodes` to let the engine hand out that many diversity angles.');
   }
 
-  // EVERY ASSIGNED TASK DISTINCT. The count-based mode differentiates its siblings
-  // with angles; this mode differentiates them by what the caller wrote, so two
-  // nodes carrying one question is N answers bought for one question — the exact
-  // duplication the field exists to remove, restated by the caller.
   const assigned = input.nodes;
 
   if (assigned) {
@@ -674,11 +347,7 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
     }
   }
 
-  // A SPEC LIST, WHERE ONE WAS SUPPLIED, IS NON-EMPTY AND EVERY ENTRY IS. The
-  // wire schema holds the shape (length and string-ness); THIS holds the semantics
-  // the resolution depends on, because an empty spec routes nowhere and a blank one
-  // names no model — both are routing decisions the run would have to silently
-  // substitute a default for, which is the *Accepted and ignored* lie.
+  // An empty or blank model spec would silently route to a default (*Accepted and ignored*).
   for (const [index, spec] of (input.models ?? []).entries()) {
     if (spec.trim().length === 0) {
       return badInput(`\`models\` entry ${String(index + 1)} is empty, and an empty string names no `
@@ -722,27 +391,13 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
         + 'measured and then ignored, which is a silent lie about what the run did. Use '
         + 'preset:"optimise" to measure something, or drop `objective`.');
     }
-    // NEITHER `key` NOR `objective` IS CHECKED HERE, and for one reason. Both are
-    // rules about the RESOLVED configuration — `key` about `advance:'archive'`,
-    // `objective` about `score:'verify'` — and both live in {@link swarmValidity},
-    // where `custom` gets the same verdict for the same reason. Requiring `objective`
-    // here by preset NAME would take five names — `prove` and the three coverage rows
-    // all score by `verify` too — to spell a rule the validity table already states
-    // once.
+    // `key` and `objective` rules are over the resolved config: see {@link swarmValidity}.
   }
 
   return null;
 }
 
-/**
- * `resolve(preset) → SwarmConfig`, and the refusals that stop a call before there
- * is anything to resolve.
- *
- * Validity is stated over the RESOLVED configuration — *Validity over the resolved
- * configuration* — so this is the function that gives the predicate an input at all.
- * It is deliberately total over `SwarmPreset`: every row is a point, so a named preset
- * always resolves and a composition seeded with `from` always has a base to inherit.
- */
+/** Total over `SwarmPreset`: every row is a point, so a named preset always resolves. */
 export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
   const required = requiredFieldRefusal(input);
 
@@ -752,22 +407,10 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
     ? input.from ?? null
     : input.preset;
 
-  // Every row is a point, so this is a lookup and not a decision. A decision here would
-  // have a REFUSING arm, and that arm reaches `custom` too: a composition seeded from an
-  // undeclared row would be refused for its base's gap rather than judged on the axes
-  // the caller stated. See {@link SwarmPresetRow}.
   const row: SwarmPresetPoint | null = baseName ? SWARM_PRESET_POINTS[baseName] : null;
 
-  // A NAMED preset that was handed no `objective` resolves to its UNMEASURED point:
-  // `verify` needs an instrument and the call named none, so the row's judged fallback
-  // is what it actually gets. See {@link unmeasuredPoint} for why this is a scorer
-  // substitution and not a defaulted objective.
-  //
-  // `custom` is excluded DELIBERATELY and not by oversight. A composition states its
-  // own axes — `config` is required on it — so a caller who composed `score:'verify'`
-  // asked for an instrument in as many words, and substituting a judge under them
-  // would be the surface deciding something they had already decided. `from` names a
-  // base to inherit, not a preset to be treated as one.
+  // A named preset without `objective` resolves to {@link unmeasuredPoint}. `custom` is
+  // excluded: its caller stated `score` explicitly.
   const base: SwarmPresetPoint | null = row !== null
     && input.preset !== 'custom' && input.objective === undefined
     ? unmeasuredPoint(row)
@@ -787,8 +430,7 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
   }
 
   const config = merged;
-  // A name trimmed to nothing is no name: it must not reach the ledger as an
-  // empty label a reader cannot tell from an absent one.
+  // A blank name is no name.
   const name = input.name?.trim() ?? '';
 
   return {
@@ -799,10 +441,7 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
     config,
     settle: settleOf(config),
     caps: {
-      // `nodes.length` IS the width when the caller assigned the level itself, and it
-      // arrives here as a `call` cap for the same reason an explicit `branches` does:
-      // the caller stated it. Stating both is already refused above, so there is no
-      // precedence rule here to get backwards.
+      // `nodes.length` is a `call` cap, like `branches`.
       branches: resolveCap(input.nodes?.length ?? input.branches, base?.branches),
       depth: resolveCap(input.depth, base?.depth),
     },
@@ -815,27 +454,8 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
 }
 
 /**
- * The digest a record carries in place of a column per axis — {@link
- * ExplorationRecord}'s `configDigest`, and the one definition of it.
- *
- * ONE column rather than one per field, so it cannot go stale as axes are added; and
- * computed HERE, beside the resolution, because the thing being digested is what the
- * resolution produced. Its reason for existing is the absent-default defect: an
- * un-parameterised run otherwise leaves no record of the shape it got, and an ABSENT
- * default is worse than a wrong one — a wrong default is visible in the record and
- * arguable, whereas an absent one means the shape was decided by whatever the
- * implementation happened to do and the record cannot report a number the
- * specification never named.
- *
- * EVERY TAGGED PARAMETER IS IN IT, spelled out per arm rather than spread. A digest
- * over the axis names alone would make a judged run at 3 samples and one at 20
- * indistinguishable in the record, which is precisely the shape those parameters were
- * tagged onto their values to prevent. The optional region parameters are digested as
- * `null` when unset, because absent and zero are different configurations.
- *
- * The caps are digested by VALUE and not by origin: a cap the caller set and a cap
- * inherited from a preset row are the same shape in force, and folding the provenance
- * in would make two identically-shaped runs incomparable.
+ * {@link ExplorationRecord}'s `configDigest`. Every tagged parameter is spelled per arm;
+ * unset optional parameters digest as `null` (absent differs from zero). Caps by value, not origin.
  */
 export function configDigestOf(resolved: ResolvedSwarm): string {
   const { config, caps } = resolved;
@@ -859,21 +479,12 @@ export function configDigestOf(resolved: ResolvedSwarm): string {
     settle: resolved.settle,
     depth: caps.depth?.value ?? null,
     branches: caps.branches?.value ?? null,
-    // THE ROUTING, beside the caps it sits with on the input: two runs that differ
-    // only in which model each node ran on are different runs in every way a record
-    // can be asked about — spend, provenance, comparability — and a digest that
-    // folded it out would make them one. `null` for the unrouted default, because
-    // an absent list and a list naming the run's own model are different facts about
-    // what the caller asked for, even where both run the same model.
+    // `null` for unrouted: an absent list differs from one naming the run's own model.
     models: resolved.models === null ? null : [...resolved.models],
   });
 }
 
-/* ── Validity, over the resolved configuration ────────────────────────────── */
-
-/** Every floor a resolved objective declares, with the direction it is stated
- *  against — a `vector` objective carries one per component and a `witness` carries
- *  its proxy's, so C1 cannot be written over a single field. */
+/** One floor per `vector` component and a `witness` proxy's, so C1 is not over a single field. */
 function floorsOf(objective: Objective): readonly { floor: Floor; direction: ObjectiveDirection }[] {
   if (objective.kind === 'vector') return objective.components.flatMap(floorsOf);
 
@@ -882,17 +493,7 @@ function floorsOf(objective: Objective): readonly { floor: Floor; direction: Obj
   return objective.floor ? [{ floor: objective.floor, direction: objective.direction }] : [];
 }
 
-/**
- * Every instrument a resolved objective NAMES, written as data.
- *
- * Walks the same three composite shapes {@link floorsOf} does, and for the same
- * reason: a `vector` declares one per component and a `witness` declares its own check
- * plus its proxy's, so a membership rule cannot be written over a single field.
- *
- * The CLOSURE arm is skipped rather than refused. A closure cannot fail to resolve, so
- * there is no registry question to ask of it — and it is unauthorable from the tool
- * surface anyway, which is where a fabricated name would come from.
- */
+/** Closures are skipped: they cannot fail to resolve. */
 function verifierSpecsOf(objective: Objective): readonly VerifierSpec[] {
   if (objective.kind === 'vector') return objective.components.flatMap(verifierSpecsOf);
 
@@ -900,25 +501,10 @@ function verifierSpecsOf(objective: Objective): readonly VerifierSpec[] {
     ? [objective.check, ...(objective.proxy ? [objective.proxy.verify] : [])]
     : [objective.verify];
 
-  // Narrowed on the DOMAIN and not on the representation: a `VerifierSpec` is the arm
-  // that declares a `kind`, and the closure arm declares nothing.
   return named.filter((source): source is VerifierSpec => 'kind' in source);
 }
 
-/**
- * The keys a kind's `spec` must carry and this one did not.
- *
- * A PRESENCE check and deliberately not a second copy of the kind's schema:
- * `verifier-registry.ts` owns the types, the ranges and the cross-field rules, and
- * duplicating them here would be the two-spellings defect this file argues against
- * everywhere else. What this catches is the shape the incident actually produced — a
- * `spec` sent partial, or sent as `{}` because the wire schema only asks for JSON —
- * which would otherwise pass validity, start a run, and come back as a bound
- * instrument's complaint one round trip later.
- *
- * A non-object `spec` is reported as missing EVERY field rather than as a type error,
- * because the correction is the same either way and one message beats two.
- */
+/** Presence only; `verifier-registry.ts` owns types, ranges and cross-field rules. */
 function missingSpecFields(kind: VerifierKind, spec: JsonValue): readonly string[] {
   const fields = VERIFIER_KIND_DOC[kind].specFields;
 
@@ -927,17 +513,7 @@ function missingSpecFields(kind: VerifierKind, spec: JsonValue): readonly string
   return fields.filter((field) => !Object.hasOwn(spec, field));
 }
 
-/**
- * The complete call that needs no instrument, named in a refusal that just rejected
- * one.
- *
- * Every arm that refuses a verifier ends with this, because a refusal that names only
- * the field it rejected teaches one field per round trip — and the transcript that
- * motivated it spent five steps that way before learning the instrument could not have
- * run in that workspace at all. A NAMED preset has a working call one deletion away, so
- * the sentence prints it; `custom` composed its own axes and has to change the one it
- * composed.
- */
+/** Appended to verifier refusals so the caller learns the working call in one round trip. */
 function instrumentFreeAlternative(resolved: ResolvedSwarm): string {
   if (resolved.preset === 'custom') {
     return 'If nothing here can be measured by running code, set score:{kind:"none"} in `config` '
@@ -951,21 +527,7 @@ function instrumentFreeAlternative(resolved: ResolvedSwarm): string {
     + `sweep of ${String(row.branches)}, ranked, with no instrument and no other field required.`;
 }
 
-/**
- * The marginalisation floor under *Validity over the resolved configuration*, as ONE
- * refusal two entry points share.
- *
- * It was stated only inside {@link swarmValidity}, which the tool surface calls and
- * `runSwarm` does not — `swarm-run.ts`'s own region check is *"also the in-process
- * entry point"*. So an in-process caller could run a judged tree below the floor and
- * get a search whose scorer the measurement says is not worth building: at fixed node
- * expansions a marginalised weaker judge beats an unmarginalised stronger one, 30.0%
- * against 28.5%. Extracted rather than copied, because a refusal written twice is a
- * refusal that will be raised in one place and relaxed in the other.
- *
- * Stated over the CONFIG rather than the resolution, which is all it reads — the two
- * callers hold different shapes and neither has to build the other's.
- */
+/** Shared by {@link swarmValidity} and `runSwarm` so an in-process caller cannot bypass it. */
 export function judgeMarginalisationRefusal(config: SwarmConfig): SwarmRefusal | null {
   if (!isTreeAdvance(config.advance.kind)) return null;
 
@@ -981,28 +543,13 @@ export function judgeMarginalisationRefusal(config: SwarmConfig): SwarmRefusal |
     + 'min(samples, maxEvalLLMCalls − 1), so raising this alone silently does nothing.');
 }
 
-/**
- * The `advance:'archive'` region rules, as ONE refusal both entry points share.
- *
- * Extracted for {@link judgeMarginalisationRefusal}'s reason and not by analogy with it:
- * `swarm-run.ts`'s own region check is *"also the in-process entry point"*, so a rule
- * stated only here would let an in-process caller run a shape the tool surface refuses,
- * and a rule written twice is a rule that gets raised in one place and relaxed in the
- * other.
- *
- * Each arm names the one thing the composition lacks and the one move that supplies it.
- */
+/** Shared by both entry points for the same reason as {@link judgeMarginalisationRefusal}. */
 export function archiveRegionRefusal(
   config: SwarmConfig, caps: ResolvedSwarmCaps,
 ): SwarmRefusal | null {
   if (config.advance.kind !== 'archive') return null;
 
   if (config.score.kind !== 'verify') {
-    // A cell is keyed by the objective's IDENTITY — the metric and the instrument — and
-    // a cell's population is ordered by the objective's own direction. A judged or
-    // unscored run measures neither, so its candidates have nothing to be binned under
-    // and nothing to be ranked by: the archive would have no store at all rather than
-    // an empty one.
     return badInput(`an archive keys every cell by the objective's identity and orders each cell by the `
       + `objective's own direction, and score:"${config.score.kind}" measures neither — so nothing this `
       + 'run produced could be binned or ranked, and the coverage it reported would be over a store it '
@@ -1012,11 +559,7 @@ export function archiveRegionRefusal(
   const { novelty } = config.advance;
 
   if (!(novelty >= 0 && novelty <= 1)) {
-    // The unit, made unambiguous where getting it wrong is invisible. This parameter is a
-    // DISTANCE floor a candidate must clear, and every published filter this axis was
-    // argued from is stated as a SIMILARITY ceiling — so a threshold transcribed from one
-    // of those, unconverted, is a stricter archive than the evidence describes, and a
-    // similarity above 1 is an archive no candidate can ever enter.
+    // A distance floor; published filters are similarity ceilings (convert as 1 − x).
     return badInput(`\`novelty\` is the DISTANCE a candidate must put between itself and every occupant of `
       + `its cell, in [0,1] where 0 admits everything and 1 admits only an answer sharing no vocabulary `
       + `at all — and this composition states ${String(novelty)}, which no distance can satisfy or fail. `
@@ -1025,12 +568,7 @@ export function archiveRegionRefusal(
   }
 
   if (caps.depth && caps.depth.value > 1) {
-    // An archive selects by CELL, and its cells are written at the settle barrier — so
-    // within one run there is nothing to select from, and a second level would be
-    // expanded by whatever frontier order happened to be substituted for the one the
-    // caller asked for. Refused rather than silently flattened, exactly as
-    // advance:"none" is: the illumination loop runs ACROSS runs, where `carry:'elites'`
-    // seeds the next run from this one's occupants.
+    // Cells are written at settle, so there is no second level to select from within a run.
     return badInput(`advance:"archive" bins its candidates into cells at the settle barrier, so during the `
       + `run there is no archive to select a second level FROM and depth ${String(caps.depth.value)} `
       + 'cannot be run — it is refused rather than silently flattened, because a cap accepted and ignored '
@@ -1042,14 +580,8 @@ export function archiveRegionRefusal(
 }
 
 /**
- * The validity table of *Validity over the resolved configuration*, executable.
- * Returns the FIRST refusal in table order, or null.
- *
- * One refusal rather than a list, and one imperative per refusal, which is the
- * measured result *Refusals* states: a refusal naming two ways out was corrected to
- * the wrong one.
- * Stated over the resolved configuration and never over the preset name, so a
- * composition and a preset run through one definition of legal.
+ * *Validity over the resolved configuration*: returns the first refusal in table order.
+ * One imperative per refusal (*Refusals*); stated over the resolution, never the preset name.
  */
 export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
   const { config, objective, caps } = resolved;
@@ -1068,8 +600,6 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
 
   if (marginalisation) return marginalisation;
 
-  // A witness with no proxy scores 1 for a solution and 0 for everything else, so
-  // until the first success the value signal is constant.
   if (tree && objective?.kind === 'witness' && objective.proxy === undefined) {
     return badInput('a disproof or a certificate is a binary signal and a tree cannot climb one: until the '
       + 'first success every candidate scores the same and the search is a breadth-first enumerator. Add '
@@ -1099,12 +629,7 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
   }
 
   if (config.score.kind === 'verify' && !objective) {
-    // ONLY `custom` REACHES THIS NOW. A named preset handed no `objective` resolves to
-    // its unmeasured point and scores by judge, so the composition that arrives here is
-    // one a caller SPELLED — which is why the way out named below is `config`, a field
-    // this caller has already used, and not the `score:"none"` the old text offered
-    // every preset. That offer was unreachable on five of the six: a named preset takes
-    // no `config`, so the one move its refusal recommended was refused by the next rule.
+    // Only `custom` reaches this: named presets without `objective` resolve to a judged sweep.
     return badInput('score:"verify" measures something and this composition did not say what. Supply '
       + '`objective` with a `metric`, a `unit`, a `direction`, a `target`, and `verify` as '
       + `{kind, spec} naming one of the registered instruments: ${VERIFIER_KINDS.join(', ')}. `
@@ -1112,17 +637,7 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
       + 'that a NAMED preset needs neither: it falls back to a judged sweep on its own.');
   }
 
-  // THE CHECKER IS NAMED AT CALL TIME, which is what `VerifierSpec.kind` already claims
-  // ("an unregistered kind is a CALL-TIME `bad_input` naming the registered kinds") and
-  // what nothing enforced: the registry was consulted at the top of `runSwarm`, so a
-  // fabricated kind was a refusal a caller only met once the run had begun.
-  //
-  // BOTH ARMS BELOW NAME A COMPLETE CALL rather than the field they rejected, and that
-  // is the whole lesson of the incident. A refusal naming a field teaches one field per
-  // round trip; the caller in that transcript spent five steps collecting them and the
-  // fifth told it the instrument could never have run there at all. So each arm ends
-  // with a call that WORKS — which for a named preset is the same call minus
-  // `objective`, because the row's judged sweep needs nothing.
+  // The verifier kind is checked at call time. Each refusal ends with a complete working call.
   if (objective) {
     for (const spec of verifierSpecsOf(objective)) {
       const registered = VERIFIER_KINDS.find((kind) => kind === spec.kind);
@@ -1138,9 +653,6 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
       if (missing.length > 0) {
         const doc = VERIFIER_KIND_DOC[registered];
 
-        // "sent none of them" rather than re-listing every field it needs: the two lists
-        // are identical when the spec is empty, and printing one twice reads as two
-        // different requirements.
         const shortfall = missing.length === doc.specFields.length
           ? 'this one sent none of them'
           : `this one is missing ${missing.join(', ')}`;
@@ -1154,12 +666,7 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
   }
 
   if (advance === 'archive' && !resolved.key) {
-    // WHAT THE KEY HAS TO NAME MOVED when the archive started running: the cell is
-    // witnessed by the instrument that measured the candidate, so the key names one of the
-    // quantities that instrument reports. The old text asked for something a
-    // `ToolCallRecord` could witness, which was a constraint on the caller with no
-    // mechanism behind it — *The archive* says *How a descriptor is produced is
-    // unspecified*.
+    // The key names a quantity the objective's instrument reports.
     return badInput('an archive needs a descriptor to bin elites into, and the descriptor is WITNESSED '
       + 'by the objective\'s own instrument rather than claimed by a node: supply `key`, naming one of '
       + 'the quantities that verifier reports beside its value. A key that can only say "distinct idea" '
@@ -1211,32 +718,12 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
 }
 
 /**
- * A node's request to expand at itself.
- *
- * A node does NOT spawn children. It PROPOSES, and `advance` arbitrates, because
- * a node cannot see the three policies its spawn would fight: where the next unit
- * of budget was going, how much budget is left, and the depth cap. A proposal is
- * therefore an INPUT to selection and never a bypass of it.
- *
- * This is a BRANCH INSIDE THE SEARCH — same budget, same objective, same records
- * store. A caller who wants a new budget and a new objective wants a nested
- * `swarm`, which is a different call with its own depth cap. The two read alike
- * in English ("explore this further") and must not read alike in the docstring.
+ * A node proposes and `advance` arbitrates; it never spawns. A branch inside this search
+ * (same budget and objective), unlike a nested `swarm`.
  */
 export interface BranchProposal {
-  /** Why this thread deserves the budget. Prose, and it is the only thing the
-   *  node knows that the engine does not. */
   readonly rationale: string;
-  /**
-   * 2-4 narrower sub-questions, each naming what it starts from.
-   *
-   * `context` is PER BRANCH (the proposal shape *Arbitration* names) and defensible
-   * precisely because the NODE knows which of its threads is worth inheriting a whole
-   * conversation for while the engine does not. It is validated against the search's
-   * own `context` rather than overriding it: a run resolved `fresh` refuses a `fork`
-   * child and says so, instead of quietly honouring one of two conflicting policies. A
-   * node may NARROW, never widen.
-   */
+  /** Per-branch `context` may narrow the search's own `context`, never widen it. */
   readonly branches: readonly {
     readonly task: string;
     readonly rationale: string;
@@ -1245,30 +732,14 @@ export interface BranchProposal {
 }
 
 /**
- * The width band a proposal is arbitrated against — *Arbitration*. A proposal names
- * 2-4 narrower sub-questions.
- *
- * Enforced by the arbiter rather than by the type, so an out-of-range request
- * produces a reason-coded refusal instead of being unrepresentable and therefore
- * unexplainable — `Arbitration.lean:65-69` states exactly this choice, and it is
- * the difference between a node that learns its width was wrong and one that
- * silently gets something else.
- *
- * A band on the PROPOSAL and never on the search's own `branches`: width is a cap
- * the caller sets (`ideate` runs 5), so applying this to an engine-driven
- * expansion would refuse a legal preset.
+ * Enforced by the arbiter, not the type, so a bad width gets a reason-coded refusal
+ * (`Arbitration.lean:65-69`). Applies to proposals only, never the search's own `branches`.
  */
 export const BRANCH_PROPOSAL_WIDTH = { min: 2, max: 4 } as const;
 
 /**
- * The five reasons arbitration can refuse, as stable tokens.
- *
- * Exactly `Arbitration.lean`'s `Refusal` constructors, in that file's order, so
- * the executable arbiter and the proven one can be read against each other. They
- * are TOKENS as well as prose because the prose is for the node and the token is
- * for the log: `every_refusal_is_reachable` proves none of the five is a reason
- * the arbiter can never give, and a query over the event stream is how that stays
- * true of the shipped engine.
+ * Exactly `Arbitration.lean`'s `Refusal` constructors, in order. Logged as tokens so
+ * `every_refusal_is_reachable` stays checkable on the shipped engine.
  */
 export const BRANCH_REFUSAL_POLICIES = [
   'does-not-expand-at-node', 'width-out-of-range', 'depth-exhausted',
@@ -1277,14 +748,7 @@ export const BRANCH_REFUSAL_POLICIES = [
 
 export type BranchRefusalPolicy = (typeof BRANCH_REFUSAL_POLICIES)[number];
 
-/**
- * What the arbiter decided, before the engine has created anything.
- *
- * Distinct from {@link BranchVerdict}, which is what the NODE is handed: a verdict
- * carries the ids of children that now exist, and only the engine that recorded
- * them can say what those are. Keeping the decision separate is what keeps this
- * function total, pure and free of identity — it decides, it does not mint.
- */
+/** Pure decision without ids; {@link BranchVerdict} carries the minted ids. */
 export type BranchArbitration =
   | { readonly kind: 'accepted'; readonly width: number }
   | {
@@ -1293,52 +757,20 @@ export type BranchArbitration =
     readonly error: string;
   };
 
-/** What a proposal is arbitrated against: the caps in force, the search's own
- *  policies, and the state of the budget at the moment the request is answered. */
 export interface BranchArbitrationInput {
   readonly config: SwarmConfig;
   readonly caps: ResolvedSwarmCaps;
-  /**
-   * The depth of the proposing node, READ FROM THE ENGINE'S OWN ROW.
-   *
-   * Deliberately not a field of {@link BranchProposal}: a node never states its
-   * own depth, so the number it would have to lie about is one it never supplies
-   * (`subordinates/depth.ts`, and the same move as {@link SwarmScoreSetting}
-   * having no untagged parameters).
-   */
+  /** Read from the engine's row; a node never states its own depth. */
   readonly atDepth: number;
-  /** Budget still available to the search, in units of one child. */
   readonly remainingChildren: number;
   readonly proposal: BranchProposal;
 }
 
 /**
- * **The arbiter.** A total function of the caps, the search's own policies and the
- * proposal — the single scheduler *Arbitration* names, which a proposal is an input to.
- *
- * A faithful port of `lean/Kinu/Exploration/Arbitration.lean`'s `arbitrate`,
- * including its ORDER: the theorems there are projections of one acceptance
- * region (`accepted_iff`), so a reordering here would leave the proven arbiter and
- * the shipped one agreeing on which proposals pass while disagreeing on what the
- * node is TOLD, which is the half *Refusals* records as load-bearing. The five arms
- * discharge, in order, `archive_refuses_at_node`, `accepted_width_in_range`,
- * `accepted_children_within_depth` (S3), `accepted_within_budget` (S8) and
- * `accepted_respects_context` (*Inherited context*).
- *
- * Every refusal names the POLICY and the STATE that made it refuse, because a node
- * that cannot tell refusal from being ignored will simply propose again. Absent
- * caps are refused rather than defaulted: a search whose depth nothing states
- * cannot grant depth, and saying so is not the same as saying the budget ran out.
- *
- * THE FIFTH ARM IS ABOUT CONTEXT, and Lean is stated over the same axis. What a
- * sibling is SHOWN and what a child STARTS FROM are two questions and not one, and
- * only the second is an axis — the one doing the work: {@link SWARM_CONTEXTS} decides
- * what a child starts from. *The six axes* states the rule over it — *"a search
- * resolved to the non-inheriting value refuses an inheriting child"* — so the arm
- * compares `context` with `context`, and the theorem is `accepted_respects_context` in
- * `lean/Kinu/Exploration/Arbitration.lean`. The theorem points at the field the arm
- * reads, because a proven theorem about a field nothing declares is worse than no
- * theorem.
+ * Total, pure port of `lean/Kinu/Exploration/Arbitration.lean`'s `arbitrate`, order included.
+ * Arms discharge, in order: `archive_refuses_at_node`, `accepted_width_in_range`,
+ * `accepted_children_within_depth` (S3), `accepted_within_budget` (S8), `accepted_respects_context`.
+ * Absent caps are refused, not defaulted.
  */
 export function arbitrateBranch(input: BranchArbitrationInput): BranchArbitration {
   const { config, caps, atDepth, remainingChildren, proposal } = input;
@@ -1401,308 +833,113 @@ export function arbitrateBranch(input: BranchArbitrationInput): BranchArbitratio
   return { kind: 'accepted', width };
 }
 
-/**
- * What arbitration returned.
- *
- * A refused proposal names the policy that refused it and the state that made it
- * refuse ("budget exhausted at depth 3", "advance:'archive' does not expand at a
- * node"). Never dropped silently: silence is the failure mode this codebase spent
- * the night removing, and a node that cannot tell refusal from being ignored will
- * simply propose again.
- */
+/** Refusals name the policy and state; never dropped silently. */
 export type BranchVerdict =
   | { readonly kind: 'accepted'; readonly nodeIds: readonly string[] }
   | { readonly kind: 'refused'; readonly reason: 'denied'; readonly error: string };
 
-/* ── The result half: what a settled run reports ──────────────────────────── */
-
 /**
- * Whether the run's own ANSWER may be published, and under what.
- *
- * The seal is stated over the STORE — *The publication seal*, where
- * {@link PublicationState} plus `admitsPublication` govern the six enumerated
- * surfaces — and it deliberately does NOT seal the settle report,
- * because the calling turn is the search's primary consumer and the verifier still
- * works. That left the marker itself uncarryable: a run under a suspended floor
- * still hands back an answer, and nothing on that answer said so. This is the field
- * that says it.
- *
- * The state is CARRIED rather than reduced to a boolean, so the consumer that has to
- * disclose the breach has the breach, and `admitsPublication` stays the one place a
- * seal is interpreted. A `sealed` state with a recorded re-derivation publishes
- * again — that edge belongs to the gate, not to a second copy of it here.
+ * *The publication seal* governs the store, not the settle report; this marker says
+ * whether the answer is publishable. Interpret the state only via `admitsPublication`.
  */
 export interface SwarmPublicationMarker {
   readonly state: PublicationState;
-  /** Why the answer is not publishable, in one sentence, for a reader who has the
-   *  answer in front of them and not the specification. Null when it is. */
+  /** Null when publishable. */
   readonly caveat: string | null;
 }
 
-/**
- * One candidate as the settle report carries it.
- *
- * `value` is the RAW measurement in the objective's own unit and `score` is the
- * normalised number the search climbed — both, because they are different numbers
- * and a report that carried only the second could not be compared with yesterday's
- * run. Absent rather than zero when the candidate produced no usable answer: an
- * unexplained zero is indistinguishable from a broken instrument.
- */
+/** `value` is raw in the objective's unit; `score` is normalised. Absent, not zero, when unusable. */
 export interface SwarmCandidate {
   readonly id: string;
   readonly artifact: string;
   readonly measured: MeasuredValue | null;
-  /** Complete raw evidence over the declared Pareto axes. Null outside a Pareto run
-   * and when the instrument could not supply comparable evidence. */
+  /** Null outside a Pareto run or without comparable evidence. */
   readonly pareto: ParetoEvidence | null;
-  /** Why the INSTRUMENT produced no number for an answer this node did produce. */
   readonly unmeasurable: string | null;
   /**
-   * Why this node produced no answer at all — its status, its step count and its wall
-   * clock — and null when it ran to completion.
-   *
-   * SEPARATE FROM {@link unmeasurable} because they are opposite facts and a ranking
-   * that confuses them ranks on the clock. An unmeasurable candidate is an answer the
-   * instrument could not turn into a number; an incomplete one is a node that was
-   * aborted, ran out of steps or errored, so the string the instrument would have been
-   * handed is a status line rather than an answer. Both leave `score` null and both are
-   * out of selection; only this one says the run was cut short, and without it a swarm
-   * whose whole wave was stopped by its caller's deadline reports the verifier's
-   * complaint about the status line and nothing about the deadline.
+   * Why the node never finished (status, steps, clock); distinct from
+   * {@link unmeasurable} so a deadline cut is not reported as a verifier complaint.
    */
   readonly incomplete: string | null;
   readonly score: number | null;
-  /** Whether this candidate satisfied the witness side-condition. Null when
-   * this run has no witness predicate or the candidate was not measured. */
+  /** Null without a witness predicate or measurement. */
   readonly witnessFound: boolean | null;
 }
 
-/**
- * The ensemble a judged run REQUESTED and the one it ran.
- *
- * Two numbers because they differ on shipped defaults and the difference is the whole
- * point: `maxEvalLLMCalls` is the WHOLE per-evaluation call budget and a code-bearing
- * branch spends one of those calls on its generated check suite, so the ensemble is
- * `min(samples, maxEvalLLMCalls − 1)` and a caller asking for 20 is answered by 3.
- * With one number instead of two, nothing anywhere would carry the 3.
- */
+/** Realised ensemble is `min(samples, maxEvalLLMCalls − 1)` on code-bearing branches. */
 export interface JudgeEnsembleReport {
-  /** What `score:'judge'` asked for. Never a default: `samples` is tagged onto the
-   *  judge arm, so a judged run always states it. */
   readonly requested: number;
-  /**
-   * The BINDING realisation — the smallest ensemble any candidate of this run
-   * actually sampled.
-   *
-   * The smallest rather than the largest, and rather than a recomputation of the
-   * clamp. Every code-bearing candidate in one run shares one call budget and so
-   * realises the same number, while a prose candidate spends no call on a check suite
-   * and realises one more; the smaller is therefore the clamp as it bound, which is
-   * the quantity a reader asking "did I get what I asked for" wants. Recomputing it
-   * from the knobs is what `read-models/fork-params.ts` must do for a persisted run it
-   * cannot observe — this run can observe it, and an observation beats a re-derivation.
-   *
-   * NULL when no candidate reached the ensemble at all: an evaluation that
-   * short-circuited on source that never parsed spent zero judge calls, and "never
-   * asked" is not the same fact as "asked for fewer than requested".
-   */
+  /** Smallest ensemble any candidate actually sampled; null when none reached the ensemble. */
   readonly realised: number | null;
 }
 
-/**
- * What `expand:'aggregate'` DID — the fan-in disclosure, as data.
- *
- * Here rather than in an event stream because every one of these fields answers a
- * question the axis makes it possible to get wrong quietly. A fan-in that consumed
- * three of four parents, or one whose merge landed a dependent before its dependency,
- * or one that dropped a level because a parent produced nothing, all still return an
- * answer — and a reader with only that answer cannot tell which of them happened.
- *
- * Null on an `expand:'sample'` run, which fans in nothing. Null is "this run has no
- * fan-in", not "a fan-in that did nothing".
- */
+/** Null on an `expand:'sample'` run, meaning no fan-in (not an empty one). */
 export interface SwarmFanInReport {
-  /** How many level barriers fanned in. A level with fewer than two consumable
-   *  parents is not one of them: a fan-in over one parent is `sample` under another
-   *  name and the engine will not relabel it. */
+  /** Levels with fewer than two consumable parents do not count. */
   readonly levels: number;
-  /** The merge order the DAG's edges produced, across every fan-in, in the order the
-   *  merges were attempted. A dependency-respecting order is exactly the claim this
-   *  field makes checkable. */
+  /** In attempt order, so dependency order is checkable. */
   readonly order: readonly string[];
-  /** How many of those merges landed. */
   readonly merged: number;
-  /** The aggregate vertices the fan-ins produced: one per disagreement between two
-   *  parents, spawned through the merge-node policy *Merge-back* names and graded like
-   *  any other candidate. Empty where every fan-in's parents agreed — there is nothing
-   *  to aggregate about two identical answers, and burning a graded node on one would
-   *  decide nothing. */
+  /** One per disagreement between two parents (*Merge-back*). */
   readonly vertices: readonly string[];
-  /** Level members a fan-in could not consume because they produced no usable answer.
-   *  Counted rather than silently skipped: an aggregate vertex's claim is that it
-   *  consumed its parents, and a missing one makes that claim false. */
   readonly unusableParents: number;
-  /** Parents a fan-in consumed AFTER the tree had retired them from selection.
-   *
-   *  The other half of the pruned-parent decision, and the half that would otherwise be
-   *  invisible: pruning says where the next unit of budget goes, not whether measured
-   *  work reaches the origin, so a retired parent keeps its edge and its dependent
-   *  proceeds from that parent's last good state. Stating the count is what makes that a
-   *  decision rather than an omission. */
+  /** Pruning steers budget only; a retired parent's edge still reaches the origin. */
   readonly prunedParents: number;
-  // NO "DEPENDENTS REFUSED" COUNT, and the absence is the design rather than a gap.
-  // *Dependency order* refuses a member whose dependency has not merged, and a fan-in
-  // offers a member set closed over exactly those, against a ledger of the ones that
-  // already landed — so a dependent is held behind its dependency by the ORDER instead
-  // of being refused for want of one. A field that can never be non-zero would report a
-  // mechanism this engine does not use. `order.length` against `merged` is what a reader
-  // compares.
+  // No "dependents refused" count: order holds a dependent behind its dependency.
 }
 
-/**
- * What a run RE-ENTERED, or null when it started its own search.
- *
- * DISCLOSED RATHER THAN INVISIBLE, and that is the whole reason the field exists: a
- * resumed run that reports exactly like a fresh one hides the eviction from the
- * operator — the incident that produced this machinery settled a job `completed — took
- * 18m` with nothing anywhere saying the search had died and been restarted twice. An
- * 18-minute wall clock over four expansions is a question a reader has to be able to
- * ask.
- */
+/** Null on a first attempt. Disclosed so a resumed run does not read like a fresh one. */
 export interface SwarmResumeReport {
-  /** The root this run adopted. The same id its first attempt wrote, which is the
-   *  property the whole path is for: one request, one tree. */
+  /** The first attempt's root id: one request, one tree. */
   readonly rootId: string;
-  /**
-   * Nodes an earlier attempt settled and this one did not re-pay for.
-   *
-   * `expansions` on the report above counts the WHOLE search; this is the part of it
-   * that predates this attempt, so `expansions - inheritedExpansions` is what this
-   * activation actually bought.
-   */
+  /** `expansions - inheritedExpansions` is what this activation bought. */
   readonly inheritedExpansions: number;
-  /** Expansion budget left when this run re-entered — derived from the tree, so it
-   *  never re-pays for a settled node. */
   readonly remainingBudget: number;
-  /** Tokens the earlier attempts reported, as their per-node records hold them. Null
-   *  where none of them reported any. `tokens` above is THIS attempt's spend and
-   *  deliberately not the sum: it is what this activation's ledger was charged, and
-   *  adding a figure nobody charged here to it would make the two disagree. */
+  /** Excluded from `tokens`, which is only what this activation was charged. */
   readonly inheritedTokens: number | null;
-  /** Nodes this attempt RE-RAN under their own ids: spawned by an earlier attempt,
-   *  never recorded in the tree, and re-entered rather than retired or replaced. Zero
-   *  on a re-entry that lost nothing mid-level. They are inside
-   *  `inheritedExpansions` — the search paid for them once — so a re-run costs no
-   *  budget and creates no node. */
+  /** Re-run under their own ids; counted in `inheritedExpansions`, so free. */
   readonly resumedNodes: number;
-  /** Ledger rows for the same task this re-entry superseded — empty unless two
-   *  identical-task attempts were both left `running`. */
   readonly superseded: readonly string[];
-  /** How many times this search has now been re-driven, counting this one. Reads
-   *  straight off the lease the re-entry claimed, which `reclaim` bumps once per
-   *  attempt, so it cannot drift from the fencing it is derived from. */
+  /** From the lease `reclaim` bumps; includes this attempt. */
   readonly attempt: number;
 }
 
-/**
- * The settle report: what the run REACHED, what it spent, and what it
- * did not find — with the last one stated as a fact about the search rather than
- * about the world.
- *
- * The whole point of it is the distinction a report is most tempted to
- * collapse: *"did not find"* is not *"does not exist"*, and a search that conflates
- * them is the same defect as a floor nobody proved. So `witnessFound` is a verdict
- * about this run, `stop` says why the run ended, and neither field can be rendered
- * as an existence claim because neither carries one.
- */
+/** "Did not find" is never "does not exist": no field carries an existence claim. */
 export interface SwarmSettleReport {
-  /** Derived from the resolved axes, never chosen. */
   readonly settle: SwarmSettle;
-  /** *Floor margin* C3: computed and surfaced at declaration, never thresholded,
-   *  because the failure being designed against was a thin margin nobody had looked at.
-   *  NULL when the objective declared no floor — not zero, which claims a floor sitting
-   *  exactly at the best known honest cost. */
+  /** *Floor margin* C3: surfaced, never thresholded. Null when no floor was declared. */
   readonly floorMargin: number | null;
-  /** The measured baseline, in the objective's unit. *Measured baseline*: measured
-   *  before any candidate exists, never supplied by a caller. NULL when the run
-   *  measured nothing (no objective, or the shape does not measure). */
+  /** *Measured baseline*: measured before any candidate, never caller-supplied. */
   readonly baseline: number | null;
-  /**
-   * Whether the witness was FOUND by this run. Null when the objective is not a
-   * witness hunt.
-   *
-   * `false` means this search did not find one under this budget. It does not mean
-   * none exists, and the report carries no field that could say so.
-   */
+  /** `false` means not found under this budget, not that none exists. */
   readonly witnessFound: boolean | null;
-  /**
-   * The carry disclosure *The publication seal* requires, as DATA rather than prose, or
-   * null when the carry was not suppressed. Null is "not suppressed" and is a different
-   * claim from a suppression of zero cells.
-   */
+  /** *The publication seal* carry disclosure; null means not suppressed. */
   readonly carrySuppressed: CarrySuppression | null;
-  /**
-   * *The records store*, as this run touched it, or null when the run had no
-   * OBJECTIVE IDENTITY to key a record by.
-   *
-   * Null is a claim about comparability and not about the store: a record is keyed by
-   * {@link ObjectiveIdentity} together with the floor digest, and a run that measured
-   * no objective — `score:'judge'`, `score:'none'` — has no identity, so there is
-   * nothing it could have written and nothing it could have read. That is a different
-   * fact from a measured run that wrote zero rows, which reports zeroes.
-   */
+  /** Null when the run had no objective identity to key a record by. */
   readonly records: ExplorationRecordsReport | null;
-  /**
-   * What the judge ensemble was ASKED for and what it actually ran, or null for a run
-   * that scored by anything other than a judge.
-   *
-   * On the surface's own defaults the request is answered by three, and this field
-   * exists so that stays SAID. `judgeSamples` and `maxEvalLLMCalls` are not
-   * independent knobs — a code-bearing branch realises min(samples, maxEvalLLMCalls −
-   * 1) — and the clamp binding in silence is the defect `judgeCallBudget` was
-   * extracted to end.
-   */
+  /** Null unless judged. */
   readonly judgeEnsemble: JudgeEnsembleReport | null;
-  /** Why the run ended. `budget` is the honest answer where a marginal-gain
-   *  threshold trips early — the report says the gain decayed rather than implying
-   *  the space is exhausted. */
   readonly stop: 'settled' | 'budget' | 'aborted';
-  /** What it cost, absent rather than zero when nothing was reported: an unmeasured
-   *  run is not a free one. */
+  /** Absent, not zero, when unreported: unmeasured is not free. */
   readonly expansions: number;
   readonly tokens: number | null;
   readonly durationMs: number;
-  /** What `expand:'aggregate'` fanned in, or null on a run that fans in nothing. */
   readonly fanIn: SwarmFanInReport | null;
-  /** What this run re-entered, or null when it is the search's first attempt. */
   readonly resumed: SwarmResumeReport | null;
 }
 
-/**
- * What `agents.swarm` returns for a run that started.
- *
- * A run that did not start returns a refusal instead, and the two are different
- * shapes on purpose: a caller branching on `reason` is asking a different question
- * from one reading a report.
- */
+/** A run that did not start returns a refusal instead. */
 export interface SwarmResult {
   readonly preset: SwarmPreset;
-  /** The composition's provenance label, or null for a preset run — which under
-   *  *Presets* means exactly "a tested path". */
   readonly label: string | null;
-  /** The axes actually in force, so a reader need not re-derive them from the
-   *  preset name — and so a record can digest what ran rather than what was asked
-   *  for. */
   readonly config: SwarmConfig;
   readonly caps: ResolvedSwarmCaps;
   readonly report: SwarmSettleReport;
   readonly publication: SwarmPublicationMarker;
-  /** The answer, under whatever `settle` the axes derived. Null when every
-   *  candidate was unmeasurable — refusing to read a winner out of no signal. */
+  /** Null when every candidate was unmeasurable. */
   readonly best: SwarmCandidate | null;
   readonly candidates: readonly SwarmCandidate[];
-  /** The nondominated candidates, in deterministic candidate order. Null when this
-   * run did not use `advance:"pareto"`. */
+  /** Null outside `advance:"pareto"`. */
   readonly frontier: readonly SwarmCandidate[] | null;
   readonly profile?: SwarmProfileSnapshot;
 }
