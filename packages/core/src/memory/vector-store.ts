@@ -91,8 +91,9 @@ export interface VectorStore {
   upsertChunks(chunks: readonly IndexedChunk[]): Promise<void>;
   /** Delete chunks by id. Rejects when the delete did not land. */
   deleteChunks(ids: readonly string[]): Promise<void>;
-  /** Semantic search — returns top-K hits with their scores. Degrades to [] on
-   *  a backend failure: a search must never fail the turn, only return less. */
+  /** Semantic search — returns top-K hits with their scores. Rejects when the
+   *  backend failed: an empty list would read as "no matches", and `hybridSearch`
+   *  is the one place that decides whether another arm covers for this one. */
   search(query: string, topK?: number): Promise<VectorSearchHit[]>;
 }
 
@@ -175,20 +176,11 @@ export function createCloudflareVectorStore(opts: {
 }): VectorStore {
   const { index, embedder, namespace } = opts;
 
-  // A cooldown, not a latch. Writes always attempt the backend and throw on
-  // failure, so a failed write never reads as indexed. Reads degrade to an
-  // empty list. `available` tells the search arm to skip the backend while
-  // the cooldown holds; the next use after it re-probes the backend.
+  // A cooldown, not a latch. Every call attempts the backend and throws on
+  // failure, so a failed write never reads as indexed and a failed query never
+  // reads as an empty corpus. `available` tells the search arm to skip the
+  // backend while the cooldown holds; the next use after it re-probes.
   let unavailableUntil = 0;
-
-  const trip = (op: string, input: { error: unknown }): void => {
-    diagnostics.failure(
-      'vector.backend_tripped',
-      toKinuError({ doing: 'reach the vector backend', cause: input.error, otherwise: 'unavailable' }),
-      { operation: op },
-    );
-    unavailableUntil = Date.now() + VECTOR_BACKEND_COOLDOWN_MS;
-  };
 
   // Namespace-scoped, collision-free, ≤64-byte storage id for a chunk. SHA-256
   // of `${namespace}\0${chunkId}`, truncated to 40 hex chars (160 bits — a
@@ -215,47 +207,19 @@ export function createCloudflareVectorStore(opts: {
     })));
   }
 
-  async function upsertRecords(chunks: readonly IndexedChunk[], op: string): Promise<void> {
+  /** Trips the cooldown and rethrows: a caller that reads a failed call as an
+   *  empty one records a completeness the index does not have. */
+  async function tripping<T>(operation: string, call: () => Promise<T>): Promise<T> {
     try {
-      await index.upsert(await toRecords(chunks));
+      return await call();
     } catch (err) {
-      // Rethrown, never swallowed: a caller that treats a failed embed as an
-      // indexed chunk (the backfill cursor, the write-path sync) records a
-      // completeness the index does not have.
-      trip(op, { error: err });
+      diagnostics.failure(
+        'vector.backend_tripped',
+        toKinuError({ doing: 'reach the vector backend', cause: err, otherwise: 'unavailable' }),
+        { operation },
+      );
+      unavailableUntil = Date.now() + VECTOR_BACKEND_COOLDOWN_MS;
       throw err;
-    }
-  }
-
-  async function safeQuery(text: string, topK: number): Promise<VectorSearchHit[]> {
-    try {
-      const vec = await embedder.embed(text);
-
-      const res = await index.query(vec, {
-        topK,
-        returnMetadata: true,
-        namespace,
-      });
-
-      return (res.matches ?? []).map((m) => {
-        const located = v.safeParse(ChunkMetadataSchema, m.metadata ?? {});
-        const fields: ChunkMetadata = located.success ? located.output : {};
-
-        return {
-          // The verbatim chunk id (from metadata) — matches the FTS5 hit id so RRF
-          // fuses the two sources. Falls back to the raw id for un-namespaced stores.
-          id: fields.chunkId ?? m.id,
-          path: fields.path ?? '',
-          startLine: fields.startLine ?? 0,
-          endLine: fields.endLine ?? 0,
-          score: m.score,
-        };
-      });
-    } catch (err) {
-      // Reads degrade to lexical-only rather than failing the turn.
-      trip('query', { error: err });
-
-      return [];
     }
   }
 
@@ -263,27 +227,42 @@ export function createCloudflareVectorStore(opts: {
     get available() { return Date.now() >= unavailableUntil; },
 
     async upsertChunk(chunk: IndexedChunk) {
-      await upsertRecords([chunk], 'upsert');
+      await tripping('upsert', async () => index.upsert(await toRecords([chunk])));
     },
 
     async upsertChunks(chunks: readonly IndexedChunk[]) {
       if (chunks.length === 0) return;
-      await upsertRecords(chunks, 'batch upsert');
+      await tripping('batch upsert', async () => index.upsert(await toRecords(chunks)));
     },
 
     async deleteChunks(ids: readonly string[]) {
       if (ids.length === 0) return;
-
-      try {
-        await index.deleteByIds(await Promise.all(ids.map(storageId)));
-      } catch (err) {
-        trip('delete', { error: err });
-        throw err;
-      }
+      await tripping('delete', async () => index.deleteByIds(await Promise.all(ids.map(storageId))));
     },
 
-    async search(query: string, topK = 10) {
-      return safeQuery(query, topK);
+    search(text: string, topK = 10) {
+      return tripping('query', async () => {
+        const res = await index.query(await embedder.embed(text), {
+          topK,
+          returnMetadata: true,
+          namespace,
+        });
+
+        return (res.matches ?? []).map((m) => {
+          const located = v.safeParse(ChunkMetadataSchema, m.metadata ?? {});
+          const fields: ChunkMetadata = located.success ? located.output : {};
+
+          return {
+            // The verbatim chunk id (from metadata) — matches the FTS5 hit id so RRF
+            // fuses the two sources. Falls back to the raw id for un-namespaced stores.
+            id: fields.chunkId ?? m.id,
+            path: fields.path ?? '',
+            startLine: fields.startLine ?? 0,
+            endLine: fields.endLine ?? 0,
+            score: m.score,
+          };
+        });
+      });
     },
   };
 }

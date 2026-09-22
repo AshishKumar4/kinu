@@ -123,7 +123,9 @@ export interface ReceiverDeps {
   openPeerBackChannel?(event_id: string, msg: PeerMessage): void;
 }
 
-/** Receiver API: accept a peer message off the transport. Admitted/dropped. */
+/** Receiver API: accept a peer message off the transport. Resolves admitted, or
+ *  refused for a reason the next attempt would meet again; rejects when the
+ *  receiver could not decide or record it, which the sender retries. */
 export async function receivePeerMessage(
   deps: ReceiverDeps,
   msg: PeerMessage,
@@ -166,8 +168,10 @@ export async function receivePeerMessage(
 
   if (bodyPath) Object.assign(payload, { body_path: bodyPath });
 
+  let published: { id: string; admitted: boolean };
+
   try {
-    const { id, admitted } = deps.log.publish({
+    published = deps.log.publish({
       descriptor: {
         ingress: 'peer_async',
         variant: 'peer_agent',
@@ -177,17 +181,18 @@ export async function receivePeerMessage(
       },
       now,
     });
-
-    counted(admitted);
-
-    if (admitted && msg.reply_expected) deps.openPeerBackChannel?.(id, msg);
-
-    return { admitted, event_id: id };
   } catch (err) {
+    // Arrival is still counted, and the failure goes back to the sender as a
+    // hop failure: answered as a refusal, it would dead-letter for good.
     counted(false);
-
-    return { admitted: false, reason: renderThrownChain({ cause: err }) };
+    throw err;
   }
+
+  counted(published.admitted);
+
+  if (published.admitted && msg.reply_expected) deps.openPeerBackChannel?.(published.id, msg);
+
+  return { admitted: published.admitted, event_id: published.id };
 }
 
 // ── PeerHub — sender/receiver endpoint over one agent's hub ─────

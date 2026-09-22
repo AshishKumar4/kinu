@@ -227,6 +227,28 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
     expect(listReplayEvals(rt.storage.sql, rt.actor)).toHaveLength(1);
   });
 
+  test('a failed pass reaches its caller instead of reading as nothing to measure', async () => {
+    const { rt, stores } = createTestRuntime({
+      llmResponses: {
+        'Accepted response': '{"score": 0.8, "note": "ok"}',
+        "User's correction": '{"score": 0.8, "note": "ok"}',
+      },
+    });
+
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
+
+    const engine = new EvolutionEngine(rt, stores.history, {
+      replayTaskRunner: async (task) => `current-config answer: ${task}`,
+    });
+
+    seedOutcomes(rt.storage.sql, rt.actor);
+    // The loss row the pass ends on cannot be written.
+    rt.storage.execRaw('DROP TABLE replay_evals');
+
+    await expect(engine.runReplayEval()).rejects.toThrow('no such table: replay_evals');
+  });
+
   test('no runner configured → replay skipped, returns null', async () => {
     const { rt, stores } = createTestRuntime();
     const engine = new EvolutionEngine(rt, stores.history);

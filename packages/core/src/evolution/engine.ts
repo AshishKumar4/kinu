@@ -1325,46 +1325,42 @@ export class EvolutionEngine {
    * Replay eval — re-run a sample of outcome-labeled turns against the
    * CURRENT config (the backend's replayTaskRunner: scaffold + prompt +
    * tools) and score against the recorded outcome. The system's loss curve,
-   * persisted to replay_evals. No-op when the backend supplies no runner or
-   * no labeled turns exist yet.
+   * persisted to replay_evals. Null when the backend supplies no runner or
+   * no labeled turns exist yet. A failed re-run or verdict scores its
+   * instance 0 inside the pass; any other failure rejects to the caller that
+   * asked for the pass.
    *
-   * ON DEMAND ONLY — the CLI and DO RPCs. It is deliberately off the lifetime
-   * cadence: twenty full re-executions of the same `turn_outcomes` sample that
-   * GEPA's seed scoring already re-executes, for a series read by inspection
-   * surfaces and by no decision in the system.
+   * ON DEMAND ONLY, and no product surface asks for it today (`getReplayEvals`
+   * only lists past passes). It is deliberately off the lifetime cadence:
+   * twenty full re-executions of the same `turn_outcomes` sample that GEPA's
+   * seed scoring already re-executes, for a series read by inspection surfaces
+   * and by no decision in the system.
    */
   async runReplayEval(sampleSize?: number): Promise<ReplayEvalSummary | null> {
     const runTask = this.config.replayTaskRunner;
 
     if (!runTask) return null;
 
-    try {
-      const summary = await runReplayEval({
-        sql: this.rt.storage.sql,
-        actor: this.rt.actor,
-        judge: this.rt.judgeModel ?? this.rt.llm,
-        runTask,
-        sampleSize,
-        scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
+    const summary = await runReplayEval({
+      sql: this.rt.storage.sql,
+      actor: this.rt.actor,
+      judge: this.rt.judgeModel ?? this.rt.llm,
+      runTask,
+      sampleSize,
+      scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
+    });
+
+    if (summary) {
+      this.emit({
+        type: 'replay_eval',
+        message: `Replay eval: loss ${formatScoreInterval(lossInterval(summary.interval))} ` +
+          `over ${summary.sampleSize} labeled turns ` +
+          `(${summary.acceptedCount} accepted / ${summary.negativeCount} corrected)`,
+        data: summary,
       });
-
-      if (summary) {
-        this.emit({
-          type: 'replay_eval',
-          message: `Replay eval: loss ${formatScoreInterval(lossInterval(summary.interval))} ` +
-            `over ${summary.sampleSize} labeled turns ` +
-            `(${summary.acceptedCount} accepted / ${summary.negativeCount} corrected)`,
-          data: summary,
-        });
-      }
-
-      return summary;
-    } catch (err) {
-      const message = renderThrownChain({ cause: err });
-      this.emit({ type: 'replay_eval', message: `Replay eval failed: ${message}` });
-
-      return null;
     }
+
+    return summary;
   }
 
   // ── Internal helpers ────────────────────────────────────────────
