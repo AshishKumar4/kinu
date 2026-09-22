@@ -12,9 +12,7 @@ import * as v from 'valibot';
 import { applyFileEdits, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
 import { scanFileWindow } from '../src/tools/file-scan';
 import { TurnFileLedger } from '../src/tools/file-ledger';
-import {
-  createFileTool, FILE_LIST_MAX_ENTRIES, FILE_SEARCH_MAX_BYTES, type FileToolInput,
-} from '../src/tools/file-tool';
+import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
 import { SPILL_DIRS, TurnContextBudget } from '../src/context-budget';
 import { JsonObjectSchema } from '../src/utils/json';
 import { makeVfsError } from '../src/vfs/errno';
@@ -1083,11 +1081,17 @@ describe('a bulk read is bounded where it is produced', () => {
     return v.parse(JsonObjectSchema, JSON.parse(spilled[1]));
   };
 
-  test('a directory the agent does not control is cut at the entry ceiling', async () => {
-    const body = await listed(Array.from({ length: FILE_LIST_MAX_ENTRIES * 3 }, (_, at) => `f${String(at)}`));
+  /** The most names one listing answers with. Stated here rather than imported:
+   *  the ceiling is the bulk-read answer size this tree gives a model (the same
+   *  1000 `db-codemode.ts` pages a SELECT at), and a test that imports the
+   *  number agrees with whatever the source says instead of pinning it. */
+  const LIST_CEILING = 1_000;
 
-    expect(v.parse(v.array(v.string()), body.entries)).toHaveLength(FILE_LIST_MAX_ENTRIES);
-    expect(body.truncated).toEqual({ shown: FILE_LIST_MAX_ENTRIES, total: FILE_LIST_MAX_ENTRIES * 3 });
+  test('a directory the agent does not control is cut at the entry ceiling', async () => {
+    const body = await listed(Array.from({ length: LIST_CEILING * 3 }, (_, at) => `f${String(at)}`));
+
+    expect(v.parse(v.array(v.string()), body.entries)).toHaveLength(LIST_CEILING);
+    expect(body.truncated).toEqual({ shown: LIST_CEILING, total: LIST_CEILING * 3 });
   });
 
   test('the byte ceiling bites on its own — few entries, enormous names', async () => {
@@ -1098,7 +1102,7 @@ describe('a bulk read is bounded where it is produced', () => {
     // Well inside the entry ceiling and well past the byte one, so the entry
     // count cannot be what stopped it.
     expect(shown.length).toBeLessThan(wide.length);
-    expect(shown.length).toBeLessThan(FILE_LIST_MAX_ENTRIES);
+    expect(shown.length).toBeLessThan(LIST_CEILING);
     expect(body.truncated).toEqual({ shown: shown.length, total: wide.length });
   });
   test('a listing that fits is whole, and says nothing about truncation', async () => {
@@ -1118,7 +1122,8 @@ describe('a bulk read is bounded where it is produced', () => {
     const body = v.parse(JsonObjectSchema, await call({ action: 'search', path: 'big.log', query: 'NEEDLE' }));
 
     expect(body.matches).toEqual([{ line: 1, text: 'NEEDLE' }]);
-    expect(body.truncated).toEqual({ shown: FILE_SEARCH_MAX_BYTES, total: (head + hit).length });
+    // The budget the search shares with every other bounded resident read.
+    expect(body.truncated).toEqual({ shown: RESIDENT_TEXT_MAX_BYTES, total: (head + hit).length });
   });
 
   test('a file that fits is searched whole, and says nothing about truncation', async () => {

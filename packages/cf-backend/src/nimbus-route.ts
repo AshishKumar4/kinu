@@ -45,7 +45,7 @@ import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from '@kinu.run
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { labelSigner } from '@kinu.run/core';
 import { reoriginateRequest } from '@kinu.run/core';
-import type { LabelSignerEnv, PreviewHostEnv, WorkspacePreviewUrl } from '@kinu.run/core';
+import type { LabelSignerEnv, PreviewSuffixEnv, WorkspacePreviewUrl } from '@kinu.run/core';
 import type { ObjectNamespace } from './bindings';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from './workspace-host';
 
@@ -65,11 +65,11 @@ export interface WorkspacePreviewHost {
 /** Every binding a workspace preview reads: the suffix its hostname is built
  *  and parsed against, the secrets its label is signed and verified under, and
  *  the workspace object it is served from. */
-export interface NimbusPreviewEnv<Id> extends PreviewHostEnv, LabelSignerEnv {
+export interface NimbusPreviewEnv<Id> extends PreviewSuffixEnv, LabelSignerEnv {
   OrchestratorAgent: ObjectNamespace<Id, WorkspacePreviewHost>;
 }
 
-export function nimbusPreviewConfigured(env: PreviewHostEnv & LabelSignerEnv): boolean {
+export function nimbusPreviewConfigured(env: PreviewSuffixEnv & LabelSignerEnv): boolean {
   return previewHostSuffix(env) !== null && previewSigner.secrets(env).length > 0;
 }
 
@@ -101,7 +101,7 @@ function previewMessage(workspace: string, port: number, handle: string): string
  * report exactly that.
  */
 export async function nimbusPreviewUrl(
-  env: PreviewHostEnv & LabelSignerEnv,
+  env: PreviewSuffixEnv & LabelSignerEnv,
   workspaceName: string,
   port: number,
   capability: string,

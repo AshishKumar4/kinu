@@ -56,8 +56,15 @@ const PREVIEW_SANDBOX_TOKENS = [
  */
 export const PREVIEW_SANDBOX = [...PREVIEW_SANDBOX_TOKENS, 'allow-same-origin'].join(' ');
 
-export interface PreviewHostEnv {
+/** The one var every preview reader needs: the zone previews are served under. */
+export interface PreviewSuffixEnv {
   PREVIEW_HOST_SUFFIX?: string;
+}
+
+/** The suffix plus the app's own origin — the one host under the suffix that is
+ *  never preview territory. Both are deployment vars, so the reader below takes
+ *  the deployment's own Env; nothing in this tree builds one by hand. */
+export interface PreviewHostEnv extends PreviewSuffixEnv {
   CLI_PUBLIC_ORIGIN?: string;
 }
 
@@ -75,7 +82,7 @@ export function hostOf(origin: string | undefined): string | null {
  * configured. Requires a dot: a single-label suffix would claim a whole TLD
  * and take the app down with it.
  */
-export function previewHostSuffix(env: PreviewHostEnv): string | null {
+export function previewHostSuffix(env: PreviewSuffixEnv): string | null {
   const suffix = env.PREVIEW_HOST_SUFFIX?.trim().toLowerCase().replace(/^\.+|\.+$/g, '');
 
   if (!suffix || !suffix.includes('.')
@@ -220,7 +227,7 @@ export interface SandboxPreviewLabel {
   readonly token: string;
 }
 
-export function sandboxPreviewLabelOf(url: URL, env: PreviewHostEnv): SandboxPreviewLabel | null {
+export function sandboxPreviewLabelOf(url: URL, env: PreviewSuffixEnv): SandboxPreviewLabel | null {
   const suffix = previewHostSuffix(env);
 
   if (!suffix) return null;

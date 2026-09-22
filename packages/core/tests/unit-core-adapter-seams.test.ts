@@ -14,7 +14,7 @@ import {
   EVENT_VARIANTS, type EventVariant,
   buildModelCallEvent, type ModelCallReport,
   classifyRunEnd, RUN_END_REASONS, type RunEndReason,
-  TOOL_CALLS_PENDING, TURN_ENDED_MID_WORK, PROVIDER_NAMED_NO_END,
+  TOOL_CALLS_PENDING, TURN_ENDED_MID_WORK,
   declareTerminalRoster,
   AgentOrchestrator, type AgentOrchestratorDeps,
   buildProviderCatalogSnapshot, ProviderListingCache, type ProviderListing,
@@ -278,43 +278,41 @@ describe('the mid-work invariant is loud when it breaks', () => {
 
 // ── R5: an upstream that closed without saying why did not finish ────────────
 //
-// The mirror of R4, and the mode R4 does not reach. A stream cut mid-TOOL-CALL
-// leaves `tool-calls` standing and trips the tripwire above; a stream cut
-// mid-PROSE leaves the provider's end unnamed, and the driver — which saw a
-// stream that stopped producing and a loop that ran out of work — reports a
-// clean end. The answer the user reads is then whatever arrived before the
-// socket died, sealed 'completed' and indistinguishable in the ledger from a
-// model that stopped because it was done.
+// The counterpart of R4, and the mode R4 does not reach. A stream cut
+// mid-TOOL-CALL leaves `tool-calls` standing and trips the tripwire above; a
+// stream cut mid-PROSE leaves the provider's end unnamed, and the driver —
+// which saw a stream that stopped producing and a loop that ran out of work —
+// reports a clean end. The answer the user reads is then whatever arrived
+// before the socket died, sealed 'completed' and indistinguishable in the
+// ledger from a model that stopped because it was done.
 
 describe('a turn whose provider never named an end is not completed', () => {
+  // The SDK's own default: every mapper in the families this tree uses —
+  // openai, openai-compatible, anthropic — falls through to this one string
+  // when `finish_reason` never arrived, and `ai` folds its own 'unknown' onto
+  // it. The annotation is the pin — a renamed word stops compiling here, and
+  // the arms below would otherwise go quiet.
+  const unnamedEnd: FinishReason = 'other';
+
   test('an unnamed end seals error with text, not completed', () => {
     const classified = classifyRunEnd({
-      completed: true, interrupted: false, lastFinishReason: PROVIDER_NAMED_NO_END,
+      completed: true, interrupted: false, lastFinishReason: unnamedEnd,
     });
 
     expect(classified.reason).toBe('error');
     expect(classified.error).toContain('without naming');
   });
 
-  test('the word is the SDK\'s own default, not a Kinu spelling', () => {
-    // Every mapper in the SDK families this tree uses — openai, openai-compatible,
-    // anthropic — falls through to this one string when `finish_reason` never
-    // arrived, and `ai` folds its own 'unknown' onto it. If that changed, the arm
-    // above would silently stop firing.
-    const sdkReason: FinishReason = PROVIDER_NAMED_NO_END;
-    expect(sdkReason).toBe('other');
-  });
-
   test('a user Stop outranks it — a cut the user made is not a broken pipe', () => {
     expect(classifyRunEnd({
-      completed: true, interrupted: true, lastFinishReason: PROVIDER_NAMED_NO_END,
+      completed: true, interrupted: true, lastFinishReason: unnamedEnd,
     })).toEqual({ reason: 'aborted' });
   });
 
   test('a thrown failure keeps its own text — the throw is the better cause', () => {
     expect(classifyRunEnd({
       completed: false, interrupted: false,
-      errorText: 'provider 500', lastFinishReason: PROVIDER_NAMED_NO_END,
+      errorText: 'provider 500', lastFinishReason: unnamedEnd,
     })).toEqual({ reason: 'error', error: 'provider 500' });
   });
 

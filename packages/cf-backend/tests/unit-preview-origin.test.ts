@@ -347,7 +347,7 @@ describe('preview host resolution', () => {
   });
 
   test('unconfigured or unusable means no preview host at all', () => {
-    expect(previewHostSuffix({ CLI_PUBLIC_ORIGIN: APP })).toBeNull();
+    expect(previewHostSuffix({})).toBeNull();
     expect(previewHostSuffix({ ...ENV, PREVIEW_HOST_SUFFIX: '  ' })).toBeNull();
     // A single label would claim a whole TLD, the app's host included.
     expect(previewHostSuffix({ ...ENV, PREVIEW_HOST_SUFFIX: 'example' })).toBeNull();
@@ -355,10 +355,10 @@ describe('preview host resolution', () => {
   });
 
   test('the app host can be the preview suffix without making the app a preview', () => {
-    const env = testEnv({
+    const env = {
       CLI_PUBLIC_ORIGIN: 'https://kinu.example.com',
       PREVIEW_HOST_SUFFIX: 'kinu.example.com',
-    });
+    };
 
     expect(previewHostSuffix(env)).toBe('kinu.example.com');
     expect(isPreviewHostRequest(new URL('https://kinu.example.com/'), env)).toBe(false);

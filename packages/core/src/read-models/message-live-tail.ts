@@ -38,7 +38,7 @@ export type LiveTail =
  * than finished. A part with no `state` is one the stream never closed, which
  * on a live message is the thing currently being written.
  */
-export function liveTail(parts: readonly Part[]): LiveTail {
+function liveTail(parts: readonly Part[]): LiveTail {
   for (let i = parts.length - 1; i >= 0; i--) {
     const part = parts[i];
 

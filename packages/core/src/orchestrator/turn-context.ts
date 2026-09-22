@@ -41,6 +41,7 @@ import { stepContextLimit, type ResolvedModelWindow } from '../prompting/step-pr
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
 import type { ExtensionHost } from '../extension';
 import { KinuError, diagnostics } from '../obs/index';
+import { ADMISSION_REFUSAL_MARK } from '../turn-failure';
 import { estimateTokens } from '../llm';
 
 export interface TurnContextInput {
@@ -102,16 +103,15 @@ export interface TurnAdmission {
  * turn — which is the right answer to a REMOTE refusal, and the wrong answer
  * here: this request was already compacted and re-measured, so a retry turn
  * would be a second forced compaction of history that just proved it cannot
- * shrink enough. `ADMISSION_REFUSAL_MARK` is what that policy matches, so the
- * refusal carries its own class — `admission_refused`, neither retried nor
- * reported as a transient blip — and `unit-turn-admission.test.ts` pins it.
+ * shrink enough. The refusal therefore leads with {@link ADMISSION_REFUSAL_MARK},
+ * the sentence that policy matches, and carries its own class —
+ * `admission_refused`, neither retried nor reported as a transient blip, which
+ * `unit-turn-admission.test.ts` pins.
  *
  * The remedy sentence is part of the message because it is the only one that
  * exists: the history cannot shrink further, so the person has to start a new
  * conversation or drop what this one is carrying.
  */
-export const ADMISSION_REFUSAL_MARK = 'Request refused before submission';
-
 function refuseOversizedRequest(tokens: number, limit: number): KinuError {
   return new KinuError(
     'bad_input',

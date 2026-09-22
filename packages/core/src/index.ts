@@ -1883,7 +1883,6 @@ export {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery, creditedTurnId,
   classifyRunEnd, RUN_END_REASONS, TOOL_CALLS_PENDING, OUTPUT_LIMIT_REACHED, TURN_ENDED_MID_WORK,
-  PROVIDER_NAMED_NO_END, STREAM_ENDED_UNNAMED,
   owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT,
   type CompactionTriggerState, type SettledTurn, type OutputContinuationFacts,
   type RunEndReason, type RunEndFacts, type RunEndClassification,
@@ -2368,7 +2367,7 @@ export {
 export {
   PREVIEW_SANDBOX, containPreviewResponse, extractPreviewUrl, hostOf, isPreviewHostRequest,
   isPreviewUrl, previewHostSuffix, previewSuffixMetaName, sandboxPreviewLabelOf,
-  type PreviewHostEnv, type SandboxPreviewLabel,
+  type PreviewHostEnv, type PreviewSuffixEnv, type SandboxPreviewLabel,
 } from './preview/preview-origin';
 
 export {
@@ -2437,7 +2436,7 @@ export {
   type HeadDelta, type HeadDeltaKind, type HeadDeltas,
 } from './read-models/head-chat';
 
-export { liveTail, threadLiveTail, type LiveTail } from './read-models/message-live-tail';
+export { threadLiveTail, type LiveTail } from './read-models/message-live-tail';
 
 export { turnLiveness, type TurnClaimState, type TurnLiveness } from './read-models/turn-liveness';
 

@@ -25,7 +25,7 @@ const STATUS_META = {
 } satisfies Record<TaskStatus, { icon: typeof CircleIcon; tone: string; label: string; weight: "fill" | "regular"; text: string }>;
 
 /** Settled items stay legible but stop competing with the work in hand. */
-export function isSettled(status: TaskStatus): boolean {
+function isSettled(status: TaskStatus): boolean {
   return status === "done" || status === "dropped";
 }
 

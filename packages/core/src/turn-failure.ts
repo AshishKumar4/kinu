@@ -64,12 +64,11 @@ const RATE_LIMIT_PATTERNS: readonly RegExp[] = [
   /quota exceeded/i,
 ];
 
-/** Our own pre-submission refusal, verbatim from `refuseOversizedRequest`. It
- *  is matched FIRST: the sentence names both a context window and a token
- *  count, so every context-length pattern below would claim it and arm a
- *  recovery that cannot help. */
-const ADMISSION_REFUSAL_PATTERN = /Request refused before submission/;
-
+/** The sentence a pre-submission refusal leads with, verbatim in the message
+ *  `refuseOversizedRequest` (orchestrator/turn-context.ts) raises. Declared
+ *  beside the policy that answers it so the refusal and its classification
+ *  cannot drift into two spellings of one sentence. */
+export const ADMISSION_REFUSAL_MARK = 'Request refused before submission';
 
 /** A credential the provider refused: the HTTP status, the OAuth rejection
  *  code, the upstream plain text, or the remedy sentence our own wire layer
@@ -94,7 +93,10 @@ export interface TurnFailureSignals {
 
 /** Classify a failed turn's provider error text. */
 export function classifyTurnFailure(error: string, signals: TurnFailureSignals = {}): TurnFailureClass {
-  if (ADMISSION_REFUSAL_PATTERN.test(error)) return 'admission_refused';
+  // Matched FIRST: the refusal names both a context window and a token count,
+  // so every context-length pattern below would claim it and arm a recovery
+  // that cannot help.
+  if (error.includes(ADMISSION_REFUSAL_MARK)) return 'admission_refused';
 
   if (CONTEXT_LENGTH_PATTERNS.some((re) => re.test(error))) return 'context_length';
 
