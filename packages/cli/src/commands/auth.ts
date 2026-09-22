@@ -168,12 +168,15 @@ export async function sessionsCommand(
   console.log(DIM('Revoke one: kinu sessions revoke <hash>   All: kinu sessions revoke --all'));
 }
 
+/** The command each platform opens a URL with. */
+function browserOpener(os: string): string {
+  if (os === 'darwin') return 'open';
+
+  return os === 'win32' ? 'cmd' : 'xdg-open';
+}
+
 export function openBrowser(url: string): void {
-  const command = platform() === 'darwin'
-    ? 'open'
-    : platform() === 'win32'
-      ? 'cmd'
-      : 'xdg-open';
+  const command = browserOpener(platform());
 
   const args = platform() === 'win32' ? ['/c', 'start', '', url] : [url];
   const child = spawn(command, args, { detached: true, stdio: 'ignore' });

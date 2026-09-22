@@ -21,6 +21,14 @@ export interface UpdateOptions {
  * this build is the served one. The launcher is rewritten only here, and only
  * when the served script differs from the installed one.
  */
+/** How the deployment's build reads beside this one: unreachable, current, or
+ *  newer than the CLI in hand. */
+function servedVersionLabel(served: { version: string } | null): string {
+  if (served === null) return WARN('unreachable');
+
+  return isSameBuild(VERSION, served.version) ? OK(`${served.version} (current)`) : WARN(`${served.version}. Run: kinu update`);
+}
+
 export async function updateCommand(target: string | undefined, opts: UpdateOptions): Promise<void> {
   const what = target ?? 'self';
 
@@ -110,10 +118,7 @@ export async function doctorCommand(): Promise<void> {
 
   const served = await fetchServedVersion(origin);
 
-  const servedLabel = !served
-    ? WARN('unreachable')
-    : isSameBuild(VERSION, served.version) ? OK(`${served.version} (current)`)
-    : WARN(`${served.version}. Run: kinu update`);
+  const servedLabel = servedVersionLabel(served);
 
   console.log(`${DIM('Version:')} ${VERSION} ${DIM('· served:')} ${servedLabel}`);
 }

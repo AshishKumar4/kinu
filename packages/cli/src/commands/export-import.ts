@@ -81,6 +81,15 @@ export async function exportCommand(name: string, opts: { output?: string }): Pr
   );
 }
 
+/** What a directory entry is, in the words the export manifest uses. */
+function entryType(entry: { isDirectory: () => boolean; isFile: () => boolean; isSymbolicLink: () => boolean }): string {
+  if (entry.isDirectory()) return 'directory';
+
+  if (entry.isFile()) return 'file';
+
+  return entry.isSymbolicLink() ? 'symlink' : 'special';
+}
+
 export async function importCommand(file: string, opts: { name?: string }): Promise<void> {
   if (!existsSync(file)) {
     printError(`File not found: ${file}`);
@@ -182,7 +191,7 @@ async function* localArchivePages(name: string, output: string): AsyncGenerator<
       .filter((entry) => resolve(local.cwd, path, entry.name) !== outputPath)
       .map((entry) => ({
         name: entry.name,
-        type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : entry.isSymbolicLink() ? 'symlink' : 'special',
+        type: entryType(entry),
       })),
     readFile: (path) => fs.readFile(resolve(local.cwd, path)),
   });
