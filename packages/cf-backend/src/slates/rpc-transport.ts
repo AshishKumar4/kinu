@@ -9,7 +9,7 @@ import type { ResidentSlateProcess } from './resident';
  * `x-slate-call` so the guest's bindings resolve to this call's lineage.
  */
 class FacetBatchTransport implements RpcTransport {
-  #promise: Promise<void>;
+  readonly #promise: Promise<void>;
   #aborted: unknown;
   #batchToSend: string[] | null = [];
   #batchToReceive: string[] | null = null;

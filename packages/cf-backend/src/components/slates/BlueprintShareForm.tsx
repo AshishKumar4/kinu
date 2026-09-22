@@ -56,7 +56,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fix
   useEffect(() => {
     if (fixture !== undefined) return;
     let live = true;
-    const failed = <Thrown,>(cause: Thrown): void => { if (live) setErr(renderThrownChain({ cause })); };
+    const failed = (...rejection: [unknown]): void => { if (live) setErr(renderThrownChain({ cause: rejection[0] })); };
 
     Promise.all([rpc<SlateAnswer<unknown>>("slate", [{ op: "history", id: slate }]), rpc<SlateAnswer<unknown>>("slate", [{ op: "shares" }])]).then(([history, rows]) => {
       if (!live) return;
@@ -74,7 +74,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fix
   useEffect(() => {
     if (fixture !== undefined || version === null) return;
     let live = true;
-    const failed = <Thrown,>(cause: Thrown): void => { if (live) setErr(renderThrownChain({ cause })); };
+    const failed = (...rejection: [unknown]): void => { if (live) setErr(renderThrownChain({ cause: rejection[0] })); };
 
     rpc<SlateAnswer<unknown>>("slate", [{ op: "inspect", id: slate, version, include: include === null ? undefined : [...include] }])
       .then((result) => { if (live) setInspection(answered(result, BlueprintInspectionSchema)); })

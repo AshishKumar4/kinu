@@ -5,7 +5,7 @@
  * ledger (the preference signal) and, on a changed answer, the agent
  * continues with the chosen approach as its next turn.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
@@ -59,7 +59,7 @@ function TakesComparison({ set, onPick, onClose }: {
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const count = set.candidates.length;
-  const candidate = set.candidates[Math.min(index, count - 1)]!;
+  const candidate = set.candidates[Math.min(index, count - 1)];
   const isCurrent = candidate.nodeId === (set.chosenNodeId ?? set.winnerNodeId);
 
   const step = useCallback((delta: number) => {
@@ -99,6 +99,8 @@ function TakesComparison({ set, onPick, onClose }: {
     }
   }, [busy, candidate.nodeId, isCurrent, onClose, onPick, set.id]);
 
+  const pickWord = isCurrent ? "Current answer" : "Use this take";
+
   return (
     <Modal
       title="Alternate takes"
@@ -108,7 +110,7 @@ function TakesComparison({ set, onPick, onClose }: {
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Keep current</Button>
         <FilledButton onClick={useTake} disabled={busy || isCurrent}>
-          {busy ? <><Loader size="sm" /><span className="ml-1">Recording…</span></> : isCurrent ? "Current answer" : "Use this take"}
+          {busy ? <><Loader size="sm" /><span className="ml-1">Recording…</span></> : pickWord}
         </FilledButton>
       </>}
     >
@@ -215,6 +217,25 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
     running: run.status === "running",
   });
 
+  let branchBody: ReactNode = (
+    // The run id IS the journal's root id and the head id is derived from it,
+    // so "nothing recorded" here means the branch died before its first
+    // write — not that the chip looked in the wrong place.
+    <div className="px-4 py-6 text-center p-meta p-text-3">
+      Nothing is recorded for this branch yet.
+    </div>
+  );
+
+  if (view) {
+    branchBody = <TranscriptBody view={view} pending={pending} />;
+  } else if (resource.status === "loading") {
+    branchBody = (
+      <div className="flex items-center justify-center gap-2 py-6 p-t-status p-text-2">
+        <Loader size="sm" />Reading the branch…
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col items-start gap-1 animate-fade-in py-0.5">
       <div className="inline-flex items-center gap-2 max-w-full px-3 py-1.5 rounded-full p-elevated border p-border p-row-text p-text-2">
@@ -258,19 +279,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
           )}
           {/* No `onSelect`: a branch run is one head deep, so its search path has
               no ancestor to leave for. */}
-          {view ? <TranscriptBody view={view} pending={pending} />
-            : resource.status === "loading" ? (
-              <div className="flex items-center justify-center gap-2 py-6 p-t-status p-text-2">
-                <Loader size="sm" />Reading the branch…
-              </div>
-            ) : (
-              // The run id IS the journal's root id and the head id is derived
-              // from it, so "nothing recorded" here means the branch died before
-              // its first write — not that the chip looked in the wrong place.
-              <div className="px-4 py-6 text-center p-meta p-text-3">
-                Nothing is recorded for this branch yet.
-              </div>
-            )}
+          {branchBody}
         </div>
       )}
     </div>

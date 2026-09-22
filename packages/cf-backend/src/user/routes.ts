@@ -144,16 +144,20 @@ export async function handleUserRequest(
     warmedMcpUsers.add(identity.userId);
     const caller = await ownerCaller(env);
 
-    const reportBootstrapFailure = (step: string) => <Thrown,>(thrown: Thrown): void => {
-      warmedMcpUsers.delete(identity.userId);
-      diagnostics.failure('user.bootstrap_failed', toKinuError({
-        doing: 'bootstrapping the user on first hit in this isolate',
-        cause: thrown,
-        otherwise: 'unavailable',
-      }), { step, userId: identity.userId });
+    const warmMcp = async (): Promise<void> => {
+      try {
+        await stub.userMcp_warmConnections(caller);
+      } catch (cause) {
+        warmedMcpUsers.delete(identity.userId);
+        diagnostics.failure('user.bootstrap_failed', toKinuError({
+          doing: 'bootstrapping the user on first hit in this isolate',
+          cause,
+          otherwise: 'unavailable',
+        }), { step: 'mcp_warm', userId: identity.userId });
+      }
     };
 
-    ctx.waitUntil(stub.userMcp_warmConnections(caller).catch(reportBootstrapFailure('mcp_warm')));
+    ctx.waitUntil(warmMcp());
   }
 
   // ── Profile ────────────────────────────────────────────────────────
@@ -205,7 +209,8 @@ export async function handleUserRequest(
   }
 
   if (path === '/cli' && method === 'GET') {
-    const cliOrigin = normalizeCliOrigin(env.CLI_PUBLIC_ORIGIN || url.origin);
+    const configuredOrigin = env.CLI_PUBLIC_ORIGIN ?? '';
+    const cliOrigin = normalizeCliOrigin(configuredOrigin === '' ? url.origin : configuredOrigin);
 
     return json({
       publicOrigin: cliOrigin,
@@ -221,7 +226,7 @@ export async function handleUserRequest(
   }
 
   if (path === '/workspaces' && method === 'POST') {
-    return handleCreateWorkspaceRequest(request, env, identity.userId, stub, ctx);
+    return handleCreateWorkspaceRequest({ request, env, userId: identity.userId, userDO: stub, ctx });
   }
 
   const agentTouchMatch = path.match(/^\/workspaces\/([^/]+)\/touch$/);
@@ -253,7 +258,8 @@ export async function handleUserRequest(
 
   if (path === '/devices' && method === 'POST') {
     const body = await safeJson(request, OptionalLabelSchema);
-    const cliOrigin = normalizeCliOrigin(env.CLI_PUBLIC_ORIGIN || url.origin);
+    const configuredOrigin = env.CLI_PUBLIC_ORIGIN ?? '';
+    const cliOrigin = normalizeCliOrigin(configuredOrigin === '' ? url.origin : configuredOrigin);
 
     const installCommand = buildCliInstallCommand({
       origin: cliOrigin,

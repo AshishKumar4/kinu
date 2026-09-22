@@ -52,6 +52,13 @@ const SkillNamesSchema = v.object({ names: v.array(v.string()) });
 
 type ApprovalMode = "strict" | "allow_all" | "deny_all";
 
+/** What each mode does, in the words the buttons say. */
+const APPROVAL_LABEL: Record<ApprovalMode, string> = {
+  strict: "Strict (review)",
+  allow_all: "Allow all",
+  deny_all: "Deny all",
+};
+
 interface MctsConfig {
   explorationConstant: number;
   maxIterations: number;
@@ -80,7 +87,7 @@ interface SettingField<T> {
   dirty: boolean;
   edit: (value: T) => void;
   hydrate: (value: T) => void;
-  fail: <Failure>(error: Failure) => void;
+  fail: (thrown: { cause: unknown }) => void;
   /** Commit a written value: it is now both the stored value and clean. */
   markSaved: (value: T) => void;
 }
@@ -94,7 +101,7 @@ function useSettingField<T>(): SettingField<T> {
   // A later refresh updates the stored value without disturbing the edit in
   // progress — the form keeps showing what the user typed.
   const hydrate = useCallback((next: T) => setResource(loadSucceeded(next)), []);
-  const fail = useCallback(<Failure,>(error: Failure) => setResource((prev) => loadFailed(prev, error)), []);
+  const fail = useCallback((thrown: { cause: unknown }) => setResource((prev) => loadFailed(prev, thrown)), []);
 
   const markSaved = useCallback((saved: T) => {
     setResource(loadSucceeded(saved));
@@ -128,6 +135,15 @@ function FieldState<T>({ field, what, onRetry, children }: {
   return <p className="text-xs p-text-3">Loading {what}…</p>;
 }
 
+/** What Save says: the write in flight, the write that landed, or the offer. */
+function saveLabel(saving: boolean, saved: boolean): string {
+  if (saving) return "Saving…";
+
+  if (saved) return "Saved";
+
+  return "Save";
+}
+
 export default function SettingsPage() {
   const { agentId } = useParams();
   const state = useKinu(agentId);
@@ -154,8 +170,8 @@ export default function SettingsPage() {
       hydrateDisplayName(agentStatus.displayName || "");
       hydrateSoul(agentStatus.soul || "");
     } else if (snapshotError) {
-      failDisplayName(snapshotError);
-      failSoul(snapshotError);
+      failDisplayName({ cause: snapshotError });
+      failSoul({ cause: snapshotError });
     }
   }, [agentStatus, snapshotError, hydrateDisplayName, hydrateSoul, failDisplayName, failSoul]);
 
@@ -179,20 +195,20 @@ export default function SettingsPage() {
           rpc<EvolutionConfigView>("getEvolutionConfig", []),
         ]);
 
-        if (mode.status === "rejected") failApproval(mode.reason);
+        if (mode.status === "rejected") failApproval({ cause: mode.reason });
         else hydrateApproval(mode.value?.mode ?? "strict");
 
-        if (config.status === "rejected") failMcts(config.reason);
+        if (config.status === "rejected") failMcts({ cause: config.reason });
         else if (config.value) hydrateMcts(config.value);
-        else failMcts("the agent returned no MCTS config");
+        else failMcts({ cause: "the agent returned no MCTS config" });
 
-        if (evolution.status === "rejected") failAdvisor(evolution.reason);
+        if (evolution.status === "rejected") failAdvisor({ cause: evolution.reason });
         else hydrateAdvisor({
           advisorEnabled: evolution.value?.advisorEnabled ?? false,
           advisorMinSeverity: evolution.value?.advisorMinSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
         });
       } catch (cause) {
-        failApproval(cause); failMcts(cause); failAdvisor(cause);
+        failApproval({ cause }); failMcts({ cause }); failAdvisor({ cause });
       }
     });
   }, [
@@ -225,11 +241,11 @@ export default function SettingsPage() {
       commits.push(() => field.markSaved(value));
     };
 
-    write(displayName, (v) => rpc("setDisplayName", [v]));
-    write(soul, (v) => rpc("setSoul", [v]));
-    write(approval, (v) => rpc("setShellApprovalMode", [v]));
-    write(mcts, (v) => rpc("setMctsConfig", [v]));
-    write(advisor, (v) => rpc("setEvolutionConfig", [v]));
+    write(displayName, (name) => rpc("setDisplayName", [name]));
+    write(soul, (text) => rpc("setSoul", [text]));
+    write(approval, (mode) => rpc("setShellApprovalMode", [mode]));
+    write(mcts, (config) => rpc("setMctsConfig", [config]));
+    write(advisor, (config) => rpc("setEvolutionConfig", [config]));
 
     if (writes.length === 0) return;
 
@@ -296,7 +312,7 @@ export default function SettingsPage() {
             className="px-3"
           >
             {saved ? <CheckIcon size={14} /> : <FloppyDiskIcon size={14} />}
-            <span>{saving ? "Saving…" : saved ? "Saved" : "Save"}</span>
+            <span>{saveLabel(saving, saved)}</span>
           </FilledButton>
         </header>
 
@@ -374,7 +390,7 @@ export default function SettingsPage() {
                     key={m}
                     onClick={() => approval.edit(m)}
                     className={`p-2 rounded-md text-xs ${value === m ? 'p-accent-bg p-accent' : 'p-card p-card-hover'}`}
-                  >{m === 'strict' ? 'Strict (review)' : m === 'allow_all' ? 'Allow all' : 'Deny all'}</button>
+                  >{APPROVAL_LABEL[m]}</button>
                 ))}
               </div>
             )}
@@ -388,12 +404,12 @@ export default function SettingsPage() {
           <FieldState field={mcts} what="the MCTS tunables" onRetry={loadRpcFields}>
             {(value) => (
               <div className="grid grid-cols-2 gap-3">
-                <NumField label="Exploration constant" value={value.explorationConstant} step={0.1} onChange={(v) => mcts.edit({ ...value, explorationConstant: v })} />
-                <NumField label="Max iterations" value={value.maxIterations} step={1} onChange={(v) => mcts.edit({ ...value, maxIterations: v })} />
+                <NumField label="Exploration constant" value={value.explorationConstant} step={0.1} onChange={(next) => mcts.edit({ ...value, explorationConstant: next })} />
+                <NumField label="Max iterations" value={value.maxIterations} step={1} onChange={(next) => mcts.edit({ ...value, maxIterations: next })} />
                 {/* No depth field. It sat here beside "Max iterations" offering a
                     second spelling of one limit, which is the reading the owner
                     gave it; the engine's own cap owns depth now. */}
-                <NumField label="Branch budget" value={value.branchBudget} step={1} onChange={(v) => mcts.edit({ ...value, branchBudget: v })} />
+                <NumField label="Branch budget" value={value.branchBudget} step={1} onChange={(next) => mcts.edit({ ...value, branchBudget: next })} />
               </div>
             )}
           </FieldState>
@@ -466,11 +482,11 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
       <p className="p-meta p-text-3">
         “Always” stops Kinu asking about this check in this environment. It does not grant more access.
       </p>
-      {resource.status === "error" && grants === null ? (
+      {resource.status === "error" && grants === null && (
         <LoadFailure what="your standing approvals" message={resource.message} onRetry={reload} />
-      ) : grants === null ? (
-        <p className="text-xs p-text-3">Loading…</p>
-      ) : (
+      )}
+      {resource.status !== "error" && grants === null && <p className="text-xs p-text-3">Loading…</p>}
+      {grants !== null && (
         <div className="space-y-1">
           {grants.map((grant) => (
             <div key={`${grant.rule}@${grant.executor}`}
@@ -495,6 +511,14 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
 }
 
 // ── Workspace instruction files ──────────────────────────────────
+
+/** What a row says has been decided about it. */
+const DECISION_WORD: Record<InstructionSourceRow["decision"], string> = {
+  grandfathered: "carried over",
+  approved: "approved",
+  revoked: "refused",
+  none: "not decided",
+};
 
 /**
  * Which instruction files in this workspace may speak as system instructions
@@ -590,22 +614,17 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
         Your agent can write these files. Kinu follows only the contents you approve as instructions.
         Edits return them to reference material until you approve them again.
       </p>
-      {resource.status === "error" && rows === null ? (
+      {resource.status === "error" && rows === null && (
         <LoadFailure what="this workspace's instruction files" message={resource.message} onRetry={reload} />
-      ) : rows === null ? (
-        <p className="text-xs p-text-3">Loading…</p>
-      ) : (
+      )}
+      {resource.status !== "error" && rows === null && <p className="text-xs p-text-3">Loading…</p>}
+      {rows !== null && (
         <div className="space-y-1">
           {rows.map((row) => {
             const opened = open?.path === row.path ? open : null;
-
-            const state = row.reason !== undefined
-              ? `not readable: ${row.reason}`
-              : row.decision === "grandfathered"
-                ? "carried over"
-                : row.decision === "approved"
-                  ? "approved"
-                  : row.decision === "revoked" ? "refused" : "not decided";
+            const state = row.reason === undefined ? DECISION_WORD[row.decision] : `not readable: ${row.reason}`;
+            const followed = row.decision === "approved" || row.decision === "grandfathered";
+            const readWord = opened === null ? "Read" : "Hide";
 
             return (
               <div key={row.path} className="rounded-md px-2 py-1.5 p-card space-y-1">
@@ -621,9 +640,9 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                       onClick={async () => { await read(row); }}
                       disabled={busy !== null}
                       className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0"
-                    >{busy === row.path ? "…" : opened ? "Hide" : "Read"}</button>
+                    >{busy === row.path ? "…" : readWord}</button>
                   )}
-                  {row.decision === "approved" || row.decision === "grandfathered" ? (
+                  {followed && (
                     <button
                       type="button"
                       onClick={async () => { await decide(row, "revoke"); }}
@@ -631,7 +650,8 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                       className={`${row.reason === undefined ? "" : "ml-auto "}px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0`}
                       title="Stop following this file as instructions"
                     >Revoke</button>
-                  ) : row.reason === undefined ? (
+                  )}
+                  {!followed && row.reason === undefined && (
                     <button
                       type="button"
                       onClick={async () => { await decide(row, "approve"); }}
@@ -639,7 +659,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                       className="px-2 py-0.5 rounded-sm p-card-hover p-text-2 hover:p-text disabled:opacity-50 shrink-0"
                       title="Follow these exact contents as instructions"
                     >Approve</button>
-                  ) : null}
+                  )}
                 </div>
                 {opened && (
                   <>
@@ -746,6 +766,11 @@ function WorkspaceBackupCard({
 
 // ── GEPA offline optimisation ────────────────────────────────────
 
+/** Where an optimisation run got to, in one dot. */
+const GEPA_DOT = {
+  completed: 'p-dot-success', running: 'p-dot-warning', aborted: 'p-dot-neutral',
+} satisfies Record<v.InferOutput<typeof GepaRunSchema>['status'], string>;
+
 function GepaOptimizationCard({
   rpc,
 }: {
@@ -819,7 +844,7 @@ function GepaOptimizationCard({
         <div className="mt-2 space-y-1">
           {runs.slice(0, 5).map(r => (
             <div key={r.runId} className="p-meta p-text-3 flex items-center gap-2">
-              <span className={`size-1.5 rounded-full ${r.status === 'completed' ? 'p-dot-success' : r.status === 'running' ? 'p-dot-warning' : 'p-dot-neutral'}`} />
+              <span className={`size-1.5 rounded-full ${GEPA_DOT[r.status]}`} />
               <span className="font-mono">{r.iterations} iters</span>
               <span>· {r.metricCalls} evals</span>
               <span className="ml-auto">{r.stopReason ?? r.status}</span>

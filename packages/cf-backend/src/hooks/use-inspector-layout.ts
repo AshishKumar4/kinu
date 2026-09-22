@@ -301,11 +301,11 @@ export function useInspectorLayout(input: {
       )),
     };
 
-    const input = inputRef.current;
+    const mark = inputRef.current;
     inputRef.current = null;
 
     apply(commitInspectorLayout(machineRef.current, {
-      now, marked: input !== null, workspace: identity, panelPresent: panelRef.current !== null,
+      now, marked: mark !== null, workspace: identity, panelPresent: panelRef.current !== null,
     }));
   }, [desktopPanels, inspectorPanelId, panelRef, identity, apply]);
 

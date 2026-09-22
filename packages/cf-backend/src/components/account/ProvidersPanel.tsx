@@ -34,23 +34,7 @@ import { CardSlot } from "@/components/ui/CardSlot";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { useAsyncResource } from "@/hooks/use-async-resource";
-import * as v from "valibot";
 import { renderThrownChain } from '@kinu.run/core/obs';
-
-const ProviderCatalogEntrySchema = v.object({
-  id: v.string(),
-  credKey: v.string(),
-  name: v.string(),
-  doc: v.optional(v.string()),
-  envVar: v.optional(v.string()),
-  connected: v.boolean(),
-});
-
-function providerCatalogEntry<Input>(input: Input): ProviderCatalogEntry | null {
-  const parsed = v.safeParse(ProviderCatalogEntrySchema, input);
-
-  return parsed.success ? parsed.output : null;
-}
 
 /** The one spelling of "this provider is connected", so Cloudflare and ChatGPT
  *  say it the same way. A detail is the account or gateway it is connected as. */
@@ -398,6 +382,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
   }, [compatName, compatBaseURL, compatApiKey, onChanged]);
 
   const compatKeys = creds.filter((c) => c.key.startsWith('openai-compat.'));
+  const saveWord = selected?.connected === true ? 'Replace' : 'Save';
 
   return (
     <div className="space-y-5">
@@ -427,9 +412,9 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
         <Combobox
           items={catalog}
           value={selected}
-          onValueChange={<Next,>(next: Next) => setSelected(providerCatalogEntry(next))}
-          itemToStringLabel={<Item,>(item: Item) => providerCatalogEntry(item)?.name ?? ''}
-          itemToStringValue={<Item,>(item: Item) => providerCatalogEntry(item)?.id ?? ''}
+          onValueChange={(next: ProviderCatalogEntry | null) => setSelected(next)}
+          itemToStringLabel={(item: ProviderCatalogEntry) => item.name}
+          itemToStringValue={(item: ProviderCatalogEntry) => item.id}
         >
           <Combobox.TriggerInput placeholder="Search providers (Groq, DeepSeek, Fireworks, …)" />
           <Combobox.Content>
@@ -460,7 +445,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
                 onClick={saveSelected}
                 disabled={savingKey !== null || !apiKey.trim()}
                 className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs"
-              >{savingKey === selected.credKey ? '...' : (selected.connected ? 'Replace' : 'Save')}</button>
+              >{savingKey === selected.credKey ? '...' : saveWord}</button>
             </div>
           </div>
         )}

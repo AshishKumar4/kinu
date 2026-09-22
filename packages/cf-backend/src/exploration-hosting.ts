@@ -59,7 +59,7 @@ import {
   type SpawnedHead, type WebSearchProvider, type WorkMode, type WriteObserver,
 } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
-import type { CFRuntime } from './runtime';
+import { isCFRuntime, type CFRuntime } from './runtime';
 import { actorRetirementFor, type ActorRetirementRequest } from './actor-hosting';
 
 /** One creation an exploration runner asks the root to register. A swarm node's
@@ -298,11 +298,16 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
 
       try {
         return await seams.host.run(reference, async (actor) => {
-          // SAFETY: this runtime is the one `ActorHostDeps.runtimeFor` built,
-          // which on this backend IS `createCFRuntime`. The core seam declares
-          // its RETURN type as `AgentRuntime` and does not narrow the value, so
-          // the cf members a head's surface reaches are present by construction.
-          const runtime = actor.runtime as CFRuntime;
+          // This runtime is the one `ActorHostDeps.runtimeFor` built, which on
+          // this backend IS `createCFRuntime`. The core seam declares its
+          // RETURN type as `AgentRuntime` and does not narrow the value, so the
+          // cf members a head's surface reaches are asked for here.
+          const runtime = actor.runtime;
+
+          if (!isCFRuntime(runtime)) {
+            throw new KinuError('unsupported', 'a hosted head must run on the cf runtime');
+          }
+
           const webSearch = seams.webSearch();
           const spec = await explorationModelSpec(seams, actor, 'head', input.model);
 
@@ -486,7 +491,8 @@ export async function hostBranch(
   let trace = '';
 
   return {
-    explore: (priorHistory, craftedTools, languages, mode, siblings) => seams.host.run(reference, async (actor) => {
+    explore: (request) => seams.host.run(reference, async (actor) => {
+      const { priorHistory, craftedTools, languages, mode, siblings } = request;
       const { profile } = await seams.profile({ actor, availableTools: [], workMode: mode });
       const route = resolveModelRoute('mcts', profile);
 

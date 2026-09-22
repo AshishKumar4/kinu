@@ -140,6 +140,17 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
 ] as const;
 
 /**
+ * The subject of a surface walk. Named by the one member the walk itself names
+ * — `constructor`, the single prototype entry it skips — because nothing else
+ * about the subject is known statically: what a stub can reach is whatever the
+ * prototype chain carries at runtime, which is also why the mechanism suite
+ * can state the same rule on a plain class as on a Durable Object.
+ */
+interface RpcSurfaceSubject {
+  readonly constructor: Function;
+}
+
+/**
  * The names Cloudflare will resolve on a stub for `target` — every member on
  * the prototype chain below `Object.prototype`, minus anything an own instance
  * property shadows. This is the rule workerd implements, and `sealRpcSurface`
@@ -147,7 +158,7 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
  * (unit-rpc-surface.test.ts). The mechanism tests pin the two against each
  * other. A change here that the model does not share goes red there.
  */
-function rpcReachableNames<Target extends object>(target: Target): string[] {
+function rpcReachableNames(target: RpcSurfaceSubject): string[] {
   const own = new Set(Object.getOwnPropertyNames(target));
   const reachable = new Set<string>();
 
@@ -174,7 +185,7 @@ function rpcReachableNames<Target extends object>(target: Target): string[] {
  * stub. Names in `surface` that the class does not have are ignored: a surface
  * is a ceiling, and the runtime already denies what does not exist.
  */
-export function sealRpcSurface<Instance extends object>(instance: Instance, surface: readonly string[]): void {
+export function sealRpcSurface(instance: RpcSurfaceSubject, surface: readonly string[]): void {
   const allowed = new Set(surface);
 
   for (const name of rpcReachableNames(instance)) {
@@ -186,7 +197,7 @@ export function sealRpcSurface<Instance extends object>(instance: Instance, surf
 }
 
 /** The descriptor the prototype chain resolves `name` to. */
-function inheritedDescriptor<Instance extends object>(instance: Instance, name: string): PropertyDescriptor | undefined {
+function inheritedDescriptor(instance: RpcSurfaceSubject, name: string): PropertyDescriptor | undefined {
   for (let proto: object | null = Object.getPrototypeOf(instance);
        proto !== null && proto !== Object.prototype;
        proto = Object.getPrototypeOf(proto)) {
@@ -239,7 +250,7 @@ const USER_DO_METHODS = [
   'getCredentialBaseURL',
   'getDeviceFileView',
   'getWorkspaceTitle',
-  'getExperienceEntry',
+  'getExperienceEntryWire',
   'getReleaseBoard',
   'getReleaseDetail',
   'getProfile',
@@ -265,7 +276,7 @@ const USER_DO_METHODS = [
   'mintCliToken',
   'openDeviceTerminal',
   'pollCodexDeviceFlow',
-  'publishExperience',
+  'publishExperienceWire',
   'publishWorkspaceReservation',
   'putEgressSecret',
   'putProfileCatalog',
@@ -291,7 +302,7 @@ const USER_DO_METHODS = [
   'cancelDeviceRequestsForTurn',
   'revokeDeviceConsent',
   'revokeEgressSecret',
-  'searchExperience',
+  'searchExperienceWire',
   'selectAIGateway',
   'selectCloudflareAccount',
   'setConfig',

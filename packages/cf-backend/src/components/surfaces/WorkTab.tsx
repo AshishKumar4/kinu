@@ -38,7 +38,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import { Section } from "./shared";
-import { isClosedTree, isSettled, PlanProgress, TaskTree } from "./work-tasks";
+import { isClosedTree, PlanProgress, TaskTree } from "./work-tasks";
 import { JobCard } from "./work-jobs";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog, type ChangelogView } from "./changelog-entries";
 import type { SurfaceKind } from "./WorkSurface";
@@ -154,8 +154,8 @@ export function WorkTab({
   const revalidate = useCallback((work: WorkspaceWork | null) => {
     if (isStreaming) return 4000;
 
-    const open = (work?.plans ?? []).some((owned) => owned.tasks.some((t) => !isSettled(t.status) || t.subtasks.some((s) => !isSettled(s.status))))
-      || (work?.tasks ?? []).some((owned) => owned.tasks.some((t) => !isSettled(t.status) || t.subtasks.some((s) => !isSettled(s.status))));
+    const stillOpen = (owned: { tasks: AgentTaskTree[] }) => owned.tasks.some((task) => !isClosedTree(task));
+    const open = (work?.plans ?? []).some(stillOpen) || (work?.tasks ?? []).some(stillOpen);
 
     return open ? 4000 : null;
   }, [isStreaming]);
@@ -172,10 +172,10 @@ export function WorkTab({
   // or not, a task's owner is the actor whose list it came from, and a
   // subordinate's open item is the workspace's open item.
   const taskRows = useMemo(() => {
-    const linked = (work?.plans ?? []).flatMap((owned) => owned.tasks.map((task) => ({ task, owner: owned.owner.name })));
-    const unlinked = (work?.tasks ?? []).flatMap((owned) => owned.tasks.map((task) => ({ task, owner: owned.owner.name })));
+    const rows = (groups: readonly { owner: { name: string }; tasks: AgentTaskTree[] }[]) =>
+      groups.flatMap((owned) => owned.tasks.map((task) => ({ task, owner: owned.owner.name })));
 
-    return [...unlinked, ...linked];
+    return [...rows(work?.tasks ?? []), ...rows(work?.plans ?? [])];
   }, [work]);
 
   const openTasks = taskRows.filter(({ task }) => !isClosedTree(task));
@@ -654,6 +654,15 @@ export class ParkedDecisionFlow {
   }
 }
 
+/** What a landed decision says. Permission is not an effect: the command still
+ *  has not run, and the agent is the only thing that runs it. Saying "done"
+ *  here would be the same lie the queued tool result is worded to avoid. */
+const DECIDED_LINE: Record<ParkedDecision, string> = {
+  denied: "Denied. The agent will be told, and nothing runs.",
+  always: "Approved. Kinu will stop asking about these checks in this environment.",
+  approved: "Approved. It runs when the agent picks the decision up.",
+};
+
 export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { actions: PendingAction[]; rpc: Rpc; onDecided?: () => void; flow?: ParkedDecisionFlow }) {
   const [fresh] = useState(() => new ParkedDecisionFlow({
     decide: (ids, decision) => rpc("decideDeferredApprovals", [ids, decision]),
@@ -668,16 +677,7 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
   // rule lives in the flow, beside the untick that must never become it.
   const chosen = flow.chosen(allIds);
 
-  const decidedLine = state.decided === "denied"
-    ? "Denied. The agent will be told, and nothing runs."
-    : state.decided === "always"
-      // Permission is not an effect: the command still has not run, and the
-      // agent is the only thing that runs it. Saying "done" here would be the
-      // same lie the queued tool result is worded to avoid.
-      ? "Approved. Kinu will stop asking about these checks in this environment."
-      : state.decided === "approved"
-        ? "Approved. It runs when the agent picks the decision up."
-        : null;
+  const decidedLine = state.decided === null ? null : DECIDED_LINE[state.decided];
 
   return (
     <div className="py-1 space-y-2">
@@ -761,15 +761,17 @@ function PendingRow(
   );
 
   const icon = <Icon size={14} className="mt-0.5 shrink-0 p-warning" />;
+  const surface = home.surface;
+  const open = onOpen ?? (surface === null ? null : () => onOpenSurface(surface));
 
-  if (onOpen === undefined && home.surface === null) {
+  if (open === null) {
     return <div className="grid grid-cols-[14px_minmax(0,1fr)] items-start gap-2 py-2">{icon}{content}</div>;
   }
 
   return (
     <button
       type="button"
-      onClick={onOpen ?? (() => onOpenSurface(home.surface!))}
+      onClick={open}
       className="grid w-full grid-cols-[14px_minmax(0,1fr)_16px] items-start gap-2 rounded-md py-2 text-left transition-colors hover:p-elevated"
     >
       {icon}

@@ -31,6 +31,34 @@ import { useElementSize } from "@/hooks/use-element-size";
 import { runLiveness } from "@kinu.run/core";
 import type { ForkRunParams, ForkRunSummary } from "@kinu.run/core";
 
+/** What the canvas says while it has no tree to draw: why the read failed,
+ *  what it is waiting for, or what it found nothing of. */
+function CanvasNotice({ failure, loading, what, waiting, empty, onRetry }: {
+  /** The read's failure message, or null while it has not failed. */
+  failure: string | null;
+  loading: boolean;
+  what: string;
+  waiting: string;
+  empty: string;
+  onRetry: () => void;
+}) {
+  if (failure !== null) return <LoadFailure what={what} message={failure} onRetry={onRetry} />;
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />{waiting}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full flex items-center justify-center">
+      <EmptyState icon={<GitForkIcon size={28} />} title={empty} />
+    </div>
+  );
+}
+
 export default function MCTSExplorer() {
   const { agentId } = useParams();
   const [params] = useSearchParams();
@@ -94,21 +122,12 @@ export default function MCTSExplorer() {
           hasActiveWork={hasActiveWork} params={entry?.params ?? undefined} frontier={entry?.frontier ?? null} />
       ) : (
         <div ref={attach} className="flex-1 relative overflow-hidden p-surface">
-          {selectionResource.status === "error" ? (
-            <LoadFailure what="the fork runs" message={selectionResource.message} onRetry={reloadSelection} />
-          ) : selectionResource.status === "loading" ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Loading forks…</div>
-            </div>
-          ) : requestedRunMissing ? (
-            <div className="h-full flex items-center justify-center">
-              <EmptyState icon={<GitForkIcon size={28} />} title="Fork not found" />
-            </div>
-          ) : (
-            <div className="h-full flex items-center justify-center">
-              <EmptyState icon={<GitForkIcon size={28} />} title="No swarms" />
-            </div>
-          )}
+          <CanvasNotice
+            failure={selectionResource.status === "error" ? selectionResource.message : null}
+            loading={selectionResource.status === "loading"}
+            what="the fork runs" waiting="Loading forks…"
+            empty={requestedRunMissing ? "Fork not found" : "No swarms"}
+            onRetry={reloadSelection} />
         </div>
       )}
     </div>
@@ -199,19 +218,14 @@ function ExplorerBody({
             <LoadFailure what="the latest fork tree" message={resource.message} onRetry={reload}
               className="absolute z-10 left-4 right-4 top-4 p-surface border p-border rounded-md px-3 py-2" />
           )}
-          {!tree ? (
-            resource.status === "error" ? (
-              <LoadFailure what="this search" message={resource.message} onRetry={reload} />
-            ) : resource.status === "loading" ? (
-              <div className="flex items-center justify-center h-full">
-                <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Loading tree…</div>
-              </div>
-            ) : (
-              <div className="h-full flex items-center justify-center">
-                <EmptyState icon={<GitForkIcon size={28} />} title="Nothing recorded" />
-              </div>
-            )
-          ) : dims.w > 0 && dims.h > 0 ? (
+          {!tree && (
+            <CanvasNotice
+              failure={resource.status === "error" ? resource.message : null}
+              loading={resource.status === "loading"}
+              what="this search" waiting="Loading tree…" empty="Nothing recorded"
+              onRetry={reload} />
+          )}
+          {tree && (dims.w > 0 && dims.h > 0 ? (
             <SwarmTree
               regions={regions} width={dims.w} height={dims.h}
               selectedRunId={run.id} selection={selection}
@@ -224,7 +238,7 @@ function ExplorerBody({
             <div className="h-full flex items-center justify-center">
               <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Sizing canvas…</div>
             </div>
-          )}
+          ))}
         </div>
         <div className={`${selectedId === null ? "hidden md:flex" : "flex"} w-full max-h-[55%] shrink-0 flex-col min-h-0 border-t p-border p-2 md:h-auto md:max-h-none md:w-[28rem] md:border-t-0 md:border-l`}>
           <NodeTranscript

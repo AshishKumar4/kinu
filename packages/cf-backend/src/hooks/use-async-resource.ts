@@ -34,8 +34,8 @@ export function loadSucceeded<T>(value: T): AsyncResource<T> {
   return { status: "ready", value };
 }
 
-export function loadFailed<T, ErrorValue>(previous: AsyncResource<T>, error: ErrorValue): AsyncResource<T> {
-  return { status: "error", message: describeError(error), last: lastValue(previous) };
+export function loadFailed<T>(previous: AsyncResource<T>, thrown: { cause: unknown }): AsyncResource<T> {
+  return { status: "error", message: describeError(thrown), last: lastValue(previous) };
 }
 
 /** The most recent successfully-loaded value, carried across a failure. */
@@ -62,10 +62,13 @@ export function mapResource<T, U>(resource: AsyncResource<T>, map: (value: T) =>
   return resource;
 }
 
-export function describeError<ErrorValue>(error: ErrorValue): string {
-  if (error instanceof Error && error.message) return error.message;
+/** A caught value as one sentence. Wrapped rather than bare so the value
+ *  crosses this boundary as the thrown thing it is, the shape core's own
+ *  `renderThrownChain` and `toKinuError` already take. */
+export function describeError({ cause }: { cause: unknown }): string {
+  if (cause instanceof Error && cause.message) return cause.message;
 
-  if (v.is(v.string(), error) && error.trim()) return error;
+  if (v.is(v.string(), cause) && cause.trim()) return cause;
 
   return "request failed";
 }
@@ -84,7 +87,7 @@ export interface AsyncResourceControl<T> {
   /** Publish a value the caller already holds — a mutation whose response IS
    *  the new state — so a dependent read never sees a stale copy while the
    *  follow-up reload is still in flight. */
-  set(value: T): void;
+  set: (value: T) => void;
 }
 
 /**
@@ -142,10 +145,10 @@ export function useAsyncResource<T>(
       }
 
       if (thrown === null || id !== runId.current) return;
-      const { cause } = thrown;
+      const failure = thrown;
       setState((previous) => ({
         identity,
-        resource: loadFailed(previous.identity === identity ? previous.resource : { status: "loading" }, cause),
+        resource: loadFailed(previous.identity === identity ? previous.resource : { status: "loading" }, failure),
       }));
     })();
     activeRuns.current.set(id, task);

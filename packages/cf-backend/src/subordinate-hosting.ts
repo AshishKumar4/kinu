@@ -62,7 +62,7 @@ import {
   type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory,
 } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
-import type { CFRuntime } from './runtime';
+import { isCFRuntime, type CFRuntime } from './runtime';
 import { actorRetirementFor, type ActorRetirementRequest } from './actor-hosting';
 import type { ExplorationProfile } from './exploration-hosting';
 
@@ -395,6 +395,16 @@ export interface HostedTaskResult {
   readonly canonicalCompletion: HeadReport['canonicalCompletion'];
 }
 
+/** How the runner's report status reads as an ending to the hiring parent.
+ *  Only a completed turn answered; an abort is an interruption the caller may
+ *  resume; a spent budget and a thrown turn are both a turn that failed. */
+const TASK_TURN_ENDING: Readonly<Record<HeadReport['status'], TaskTurnEnding>> = {
+  completed: 'answered',
+  aborted: 'interrupted',
+  budget_exceeded: 'errored',
+  errored: 'errored',
+};
+
 export async function runHostedTask(
   seams: SubordinateHostSeams,
   reference: ActorReference,
@@ -407,12 +417,17 @@ export async function runHostedTask(
   observeStream?: (chunks: ReadableStream<UIMessageChunk>) => Promise<void>,
 ): Promise<HostedTaskResult> {
   return await seams.host.run(reference, async (actor) => {
-    // SAFETY: this runtime is the one `ActorHostDeps.runtimeFor` built, which on
-    // this backend IS `createCFRuntime`. The core seam declares the RETURN type
-    // as `AgentRuntime` and does not narrow the value, so the cf members this
-    // delegated turn reaches are present by construction. Teaching core the
-    // backend's own runtime shape to satisfy a cf read is the wrong direction.
-    const runtime = actor.runtime as CFRuntime;
+    // This runtime is the one `ActorHostDeps.runtimeFor` built, which on this
+    // backend IS `createCFRuntime`. The core seam declares the RETURN type as
+    // `AgentRuntime` and does not narrow the value, so the cf members this
+    // delegated turn reaches are asked for here. Teaching core the backend's
+    // own runtime shape to satisfy a cf read is the wrong direction.
+    const runtime = actor.runtime;
+
+    if (!isCFRuntime(runtime)) {
+      throw new KinuError('unsupported', 'a hosted subordinate must run on the cf runtime');
+    }
+
     const reports: HostedReportLedger = { spoke: false, settled: false };
     const resolved = await seams.profile({ actor, availableTools: [], workMode: task.mode });
     const mission = seams.mission(actor);
@@ -476,7 +491,7 @@ export async function runHostedTask(
       // turn leaves its claim unsettled, which is the record that work is owed.
       isAborted: () => false,
       profile: (request) => seams.profile({ actor, ...request }),
-      dynamic: (profile, tools) => seams.dynamic(actor, profile, tools),
+      dynamic: (resolvedProfile, tools) => seams.dynamic(actor, resolvedProfile, tools),
     };
 
     if (mission !== null) inference.mission = mission;
@@ -521,9 +536,7 @@ export async function runHostedTask(
       }),
     });
 
-    const ending: TaskTurnEnding = report.status === 'completed'
-      ? 'answered'
-      : report.status === 'aborted' ? 'interrupted' : 'errored';
+    const ending: TaskTurnEnding = TASK_TURN_ENDING[report.status];
 
     const owed = reports.settled
       ? null

@@ -26,10 +26,10 @@ import type { UserDO } from './user-do';
 import { forgetSharesGiven } from './shares-given';
 import {
   confirmsAccountDelete,
+  decodeJsonWire,
   displayNameProblem,
   EXPERIENCE_KINDS,
   err, json, safeJson, ownerCaller, OwnerCapabilityUnavailableError,
-  type ExperienceEntry,
   type UserCaller,
 } from '@kinu.run/core';
 
@@ -78,16 +78,7 @@ export async function handleAccountRequest(request: Request, env: Env, identity:
 
     if (!query.success) return err(400, `kind must be one of ${EXPERIENCE_KINDS.join(', ')} and limit an integer from 1 to 100.`);
 
-    const library: Pick<Fetcher, 'fetch'> = stub;
-
-    // SAFETY: the stub carries every method on the declared UserDO RPC surface,
-    // `searchExperience` among them. `DurableObjectStub<UserDO>`'s own RPC
-    // mapping over the JSON-carrying experience methods exceeds TypeScript's
-    // instantiation depth (TS2589 here, 2026-09-14, as at the orchestrator's
-    // publish call on 2026-09-05), so the one method is picked through fetch.
-    const entries: ExperienceEntry[] = await (library as Pick<UserDO, 'searchExperience'> & Pick<Fetcher, 'fetch'>).searchExperience(owner, query.output);
-
-    return json(entries);
+    return json(decodeJsonWire(await stub.searchExperienceWire(owner, query.output)));
   }
 
   // DELETE /api/user/account — the one that cannot be undone. The typed

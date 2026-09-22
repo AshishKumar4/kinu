@@ -32,6 +32,7 @@ import { sharesGiven } from '../user/shares-given';
 import type { SharedBlueprintReceipt } from '../user/user-do';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { ROOT_SLATE_CALLER } from '../slates/bindings';
+import type { ErrorCode } from '@kinu.run/core/obs';
 
 /** The blueprint signer: its own salt and info, so a preview token and a
  *  blueprint token never verify each other. */
@@ -264,6 +265,16 @@ async function publicRow(env: Env, entry: PublicShareRow): Promise<SharedRow | n
   };
 }
 
+/** A slate refusal as a status: bad input and a slate that is not there are the
+ *  caller's to fix, and everything else is a conflict with the slate's state. */
+function slateRefusalStatus(reason: ErrorCode): number {
+  if (reason === 'bad_input') return 400;
+
+  if (reason === 'missing') return 404;
+
+  return 409;
+}
+
 async function publish(request: Request, env: Env, identity: AuthIdentity, owner: UserCaller): Promise<Response> {
   const body = await safeJson(request, PublishBody);
 
@@ -274,7 +285,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity, owner
   const owned = workspaceOwner(env, body.workspace);
   const published = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'publish', id: body.slate, version: body.version, include: body.include });
 
-  if (!published.ok) return err(published.reason === 'bad_input' ? 400 : published.reason === 'missing' ? 404 : 409, published.error);
+  if (!published.ok) return err(slateRefusalStatus(published.reason), published.error);
 
   const { share, inspection } = v.parse(PublishedBlueprintSchema, published.value);
 
@@ -371,7 +382,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity, own
     op: 'share', id: body.slate, visibility: body.visibility, approved: body.approved ?? [], fork: body.fork,
   });
 
-  if (!created.ok) return err(created.reason === 'bad_input' ? 400 : created.reason === 'missing' ? 404 : 409, created.error);
+  if (!created.ok) return err(slateRefusalStatus(created.reason), created.error);
 
   const { share, url } = v.parse(LiveShareCreatedSchema, created.value);
   const emails = [...new Set((body.emails ?? []).map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];

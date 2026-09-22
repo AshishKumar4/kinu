@@ -31,11 +31,11 @@ interface SubordinateTabsProps {
   /** One-click create — identity only, no form. WorkspacePage owns the action
    *  and its failure banner because the sidebar can invoke it while this strip
    *  is not mounted. */
-  onCreate(): Promise<void>;
+  onCreate: () => Promise<void>;
   creating: boolean;
-  onDismiss(name: string, keepHistory?: boolean): Promise<void>;
+  onDismiss: (name: string, keepHistory?: boolean) => Promise<void>;
   /** Retitle the open agent from its own tab; resolves to the saved title. */
-  onRename(name: string, displayName: string): Promise<string>;
+  onRename: (name: string, displayName: string) => Promise<string>;
   /** Controls for the conversation this strip has open, pinned to its right
    *  edge — the chat column has no other chrome row to hang them on. */
   trailing?: ReactNode;

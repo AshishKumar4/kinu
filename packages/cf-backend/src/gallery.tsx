@@ -189,7 +189,7 @@ import {
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
-  type ProfileCatalogEnvelope,
+  type ProfileCatalogEnvelope, type SubordinateInspectionRequest,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc, ToolInfo } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -875,7 +875,7 @@ function workspaceOverviewFixture(path: string): Response | null {
 
   if (match === null) return null;
 
-  const name = decodeURIComponent(match[1]!);
+  const name = decodeURIComponent(match[1]);
   // Which names the page actually asked for, in order — the evidence that only
   // the displayed cards are fetched. On the document, where a gate already
   // reads `galleryRosterReads`.
@@ -920,14 +920,25 @@ const ANONYMOUS_WORKSPACE = frame === 'workspacepage'
 
 if (ANONYMOUS_WORKSPACE) STUB.set('/api/user/profile', null);
 
-const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<typeof window.fetch>[1]) => {
+const requestUrl = (input: RequestInfo | URL): string => {
   const parsedInput = v.safeParse(v.string(), input);
+
+  if (parsedInput.success) return parsedInput.output;
+
   const parsedUrl = v.safeParse(v.instance(URL), input);
+
+  if (parsedUrl.success) return parsedUrl.output.href;
+
   const parsedRequest = v.safeParse(v.instance(Request), input);
 
-  const url = parsedInput.success ? parsedInput.output
-    : parsedUrl.success ? parsedUrl.output.href
-    : parsedRequest.success ? parsedRequest.output.url : location.href;
+  if (parsedRequest.success) return parsedRequest.output.url;
+
+  return location.href;
+};
+
+const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<typeof window.fetch>[1]) => {
+  const parsedRequest = v.safeParse(v.instance(Request), input);
+  const url = requestUrl(input);
 
   const path = url.startsWith("/") ? url : new URL(url, location.origin).pathname;
   const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : "GET")).toUpperCase();
@@ -1098,8 +1109,8 @@ class GalleryShellSocket extends EventTarget {
     this.emit({ type: "output", data: `\r\nran: ${command}\r\n${PROMPT}` });
   }
 
-  private emit(frame: { type: "output"; data: string } | { type: "ready" }): void {
-    this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(frame) }));
+  private emit(message: { type: "output"; data: string } | { type: "ready" }): void {
+    this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(message) }));
   }
 }
 
@@ -1178,18 +1189,44 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
     created_at: NOW - 36e5,
   });
 
+  // A pruned branch was expanded before it was cut, so it keeps the children
+  // it had — the dense low-value clusters a real tree carries at the bottom.
+  const fanoutOf = (node: MctsRow): number => {
+    if (node.status === "pruned") return 2;
+
+    if (node.depth === 0) return 4;
+
+    return 2 + Math.floor(rnd() * 3);
+  };
+
+  const visitsOf = (onWinningLine: boolean, depth: number): number => {
+    if (onWinningLine) return Math.max(2, 9 - depth);
+
+    return rnd() < 0.35 ? 0 : 1 + Math.floor(rnd() * 2);
+  };
+
+  const statusOf = (onWinningLine: boolean, value: number): MctsRow["status"] => {
+    if (onWinningLine) return "open";
+
+    if (rnd() < 0.08) return "failed";
+
+    if (value < 0.22) return "pruned";
+
+    return "open";
+  };
+
   // `winner` walks one line down the tree — the branch the search kept paying
   // for — so the render has a real principal variation to find.
   let winner = root;
   const frontier: MctsRow[] = [root];
 
-  while (frontier.length > 0 && rows.length < target) {
-    const parent = frontier.shift()!;
+  while (rows.length < target) {
+    const parent = frontier.shift();
+
+    if (parent === undefined) break;
 
     if (parent.depth >= maxDepth || parent.status === "failed") continue;
-    // A pruned branch was expanded before it was cut, so it keeps the children
-    // it had — the dense low-value clusters a real tree carries at the bottom.
-    const fanout = parent.status === "pruned" ? 2 : parent.depth === 0 ? 4 : 2 + Math.floor(rnd() * 3);
+    const fanout = fanoutOf(parent);
 
     for (let i = 0; i < fanout && rows.length < target; i++) {
       const onWinningLine = parent.id === winner.id && i === 0 && parent.status !== "pruned";
@@ -1198,12 +1235,8 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
         ? Math.min(0.97, 0.42 + parent.depth * 0.09 + rnd() * 0.06)
         : Math.max(0, (parent.value * 0.4 + rnd() * 0.5) - parent.depth * 0.06);
 
-      const visits = onWinningLine ? Math.max(2, 9 - parent.depth) : rnd() < 0.35 ? 0 : 1 + Math.floor(rnd() * 2);
-
-      const status = onWinningLine ? "open"
-        : rnd() < 0.08 ? "failed"
-        : value < 0.22 ? "pruned"
-        : "open";
+      const visits = visitsOf(onWinningLine, parent.depth);
+      const status = statusOf(onWinningLine, value);
 
       // The engine scores a failed branch 0 and backpropagates that; a mock
       // that hands one a mid score photographs a state production cannot reach.
@@ -1212,7 +1245,7 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
       const child = push({
         id: `n${String(rows.length).padStart(3, "0")}`,
         parent_id: parent.id, depth: parent.depth + 1, visits, value: score, status,
-        action: MCTS_ACTIONS[(rows.length * 7 + parent.depth) % MCTS_ACTIONS.length]!,
+        action: MCTS_ACTIONS[(rows.length * 7 + parent.depth) % MCTS_ACTIONS.length],
         observation: status === "failed"
           ? "Branch errored: the staging DB refused the ALTER while checkout held the lock."
           : `Scored ${score.toFixed(2)} — ${status === "pruned" ? "below the prune floor, dropped" : "kept for the next round"}.`,
@@ -1338,7 +1371,7 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
   }
 
   accept(): void {}
-  serializeAttachment<Attachment>(_attachment: Attachment): void {}
+  serializeAttachment(_attachment: JsonValue): void {}
   deserializeAttachment(): JsonValue | null { return null; }
 
   send(raw: string): void {
@@ -1352,13 +1385,14 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
     }), json);
 
     if (!parsed.success) return;
-    const frame = parsed.output;
+    const request = parsed.output;
 
-    if (frame.type !== "rpc" || !frame.method) return;
-    const method = frame.method;
+    if (request.type !== "rpc" || !request.method) return;
+    const method = request.method;
 
-    const result = AGENT_RPC.has(method)
-      ? AGENT_RPC.get(method)
+    const answerRpc = () => {
+      if (AGENT_RPC.has(method)) return AGENT_RPC.get(method);
+
       // The exploration reads are ANSWERED here rather than falling through, and the
       // fall-through is why: a blanket `[]` for every `get*` is a lie for any read
       // whose answer is not an array, and `getHeadRun` answering `[]` reached
@@ -1366,12 +1400,18 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
       // injects an `Rpc` directly while the full-screen explorer reads through this
       // socket, so both transports resolve the same fixture stores or neither is
       // trustworthy.
-      : EXPLORATION_READS.has(method) ? explorationRead(method, frame.args ?? [])
-      : method.startsWith("list") || method.startsWith("get") ? [] : {};
+      if (EXPLORATION_READS.has(method)) return explorationRead(method, request.args ?? []);
+
+      if (method.startsWith("list") || method.startsWith("get")) return [];
+
+      return {};
+    };
+
+    const result = answerRpc();
 
     queueMicrotask(() => {
       const message = new MessageEvent("message", {
-        data: JSON.stringify({ type: "rpc", id: frame.id, success: true, result }),
+        data: JSON.stringify({ type: "rpc", id: request.id, success: true, result }),
       });
 
       this.onmessage?.(message);
@@ -1429,10 +1469,8 @@ interface GalleryMessage extends UIMessage { createdAt?: number }
 
 function msg(message: GalleryMessage): GalleryMessage { return message; }
 
-function rpcResult<Value>(value: Value): Response {
-  const serializable = v.parse(JsonValueSchema, value);
-
-  return new Response(JSON.stringify(serializable));
+function rpcResult(value: JsonValue): Response {
+  return new Response(JSON.stringify(value));
 }
 
 const MESSAGES: UIMessage[] = [
@@ -1547,9 +1585,7 @@ const MESSAGES: UIMessage[] = [
 ];
 
 
-function galleryPlanInspection<Input>(input: Input, plans: readonly PlanReview[]) {
-  const request = v.parse(SubordinateInspectionRequestSchema, input);
-
+function galleryPlanInspection(request: SubordinateInspectionRequest, plans: readonly PlanReview[]) {
   if (request.view === 'plans') return { view: 'plans', path: request.path, page: { status: 'end', items: plans } };
 
   if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [] } };
@@ -1572,7 +1608,11 @@ function galleryPlanInspection<Input>(input: Input, plans: readonly PlanReview[]
 }
 
 const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === 'inspectSubordinate') return rpcResult(galleryPlanInspection(args?.[0], [])).json<T>();
+  if (method === 'inspectSubordinate') {
+    const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
+
+    return rpcResult(v.parse(JsonValueSchema, galleryPlanInspection(request, []))).json<T>();
+  }
 
   // A read whose answer is a RECORD, where the blanket `[]` below is not a
   // smaller version of the right answer but a shape the caller dereferences.
@@ -1786,7 +1826,7 @@ type GalleryAnswer = { readonly value: unknown } | null;
  *  plans, and its decision on the one in front of it. */
 function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
   if (method === "inspectSubordinate") {
-    return { value: galleryPlanInspection(args?.[0], [galleryAgentPlan]) };
+    return { value: galleryPlanInspection(v.parse(SubordinateInspectionRequestSchema, args?.[0]), [galleryAgentPlan]) };
   }
 
   if (method !== "decidePlanReview") return null;
@@ -1893,7 +1933,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   const plan = galleryPlanRpc(method, args);
 
-  if (plan) return rpcResult(plan.value).json<T>();
+  if (plan) return rpcResult(v.parse(JsonValueSchema, plan.value)).json<T>();
 
   if (new URLSearchParams(location.search).has("workspaceFault")) {
     const state = document.documentElement.dataset;
@@ -1913,7 +1953,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     if (method === "getWorkspaceSnapshot") {
       const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
 
-      return rpcResult({ ...snapshot, memoryContent: `Memory ${revision}`, activePlan: galleryAgentPlan }).json<T>();
+      return rpcResult(v.parse(JsonValueSchema, { ...snapshot, memoryContent: `Memory ${revision}`, activePlan: galleryAgentPlan })).json<T>();
     }
   }
 
@@ -1923,7 +1963,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
 
   const roster = galleryRosterRpc(method, args);
 
-  if (roster) return rpcResult(roster.value).json<T>();
+  if (roster) return rpcResult(v.parse(JsonValueSchema, roster.value)).json<T>();
 
   // A preview that arrives after first paint: the gate sets the dataset flag
   // once the page has settled, and the next live refresh lists a port the
@@ -1932,11 +1972,14 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return rpcResult({ ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] }).json<T>();
   }
 
-  return WORKSPACE_PAGE_RPC.has(method)
-    ? rpcResult(WORKSPACE_PAGE_RPC.get(method)!()).json<T>()
-    : AGENT_RPC.has(method)
-      ? rpcResult(AGENT_RPC.get(method)).json<T>()
-      : stubRpc<T>(method, args);
+  const page = WORKSPACE_PAGE_RPC.get(method);
+
+  if (page !== undefined) return rpcResult(v.parse(JsonValueSchema, page())).json<T>();
+  const agent = AGENT_RPC.get(method);
+
+  if (agent !== undefined) return rpcResult(agent).json<T>();
+
+  return stubRpc<T>(method, args);
 };
 
 /* ── swarm searches: the shipped model's own states ─────────────── */
@@ -2381,7 +2424,7 @@ function olderForks(): ForkRunSummary[] {
       id: searched ? `n${String(100 + i).padStart(3, "0")}` : `root-merge-${100 + i}`,
       // The derived name, as the read model derives it: the task's first clause.
       name: (tasks[i % tasks.length] ?? "").split(" ").slice(0, 4).join(" "),
-      task: `${tasks[i % tasks.length]!}${i >= tasks.length ? ` (attempt ${Math.floor(i / tasks.length) + 1})` : ""}`,
+      task: `${tasks[i % tasks.length]}${i >= tasks.length ? ` (attempt ${Math.floor(i / tasks.length) + 1})` : ""}`,
       startedAt: NOW - (10 + i) * 36e5,
       status: i % 7 === 5 ? "partial" as const : "completed" as const,
       hasSearchTree: searched,
@@ -2985,7 +3028,7 @@ function explorationRead(
 }
 
 const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (EXPLORATION_READS.has(method)) return rpcResult(explorationRead(method, args ?? [])).json<T>();
+  if (EXPLORATION_READS.has(method)) return rpcResult(v.parse(JsonValueSchema, explorationRead(method, args ?? []))).json<T>();
 
   return stubRpc<T>(method, args);
 };
@@ -3001,7 +3044,7 @@ const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 function forkRpcOver(rows: readonly ExplorationCanvasRun[]): Rpc {
   return async <T,>(method: string, args?: unknown[]): Promise<T> =>
     EXPLORATION_READS.has(method)
-      ? rpcResult(explorationRead(method, args ?? [], rows)).json<T>()
+      ? rpcResult(v.parse(JsonValueSchema, explorationRead(method, args ?? [], rows))).json<T>()
       : stubRpc<T>(method, args);
 }
 
@@ -3143,10 +3186,10 @@ function liveRpcOver(stageRef: { readonly current: number }): Rpc {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const rows = liveCanvasRows(stageRef.current);
 
-    if (method === "getSearchTree") return rpcResult(rows[0]?.tree ?? []).json<T>();
+    if (method === "getSearchTree") return rpcResult(v.parse(JsonValueSchema, rows[0]?.tree ?? [])).json<T>();
 
     return EXPLORATION_READS.has(method)
-      ? rpcResult(explorationRead(method, args ?? [], rows)).json<T>()
+      ? rpcResult(v.parse(JsonValueSchema, explorationRead(method, args ?? [], rows))).json<T>()
       : stubRpc<T>(method, args);
   };
 }
@@ -3741,14 +3784,14 @@ function ChatHistoryFrame() {
       const start = Math.max(0, from - HISTORY_PAGE);
       const items = STORED_HISTORY.slice(start, from);
 
-      return start === 0 ? { status: "end", items } : { status: "more", items, next: { after: items[0]!.id } };
+      return start === 0 ? { status: "end", items } : { status: "more", items, next: { after: items[0].id } };
     }, []),
     startFrom: useCallback(() => live[0] ? { after: live[0].id } : null, [live]),
   });
 
   const transcript = useMemo(() => mergeTranscript(history.fetched, live), [history.fetched, live]);
 
-  const messagesRef = useGrowingScroll<HTMLDivElement>({
+  const messagesRef = useGrowingScroll({
     grows: "up", content: transcript, fetched: history.fetched, loading: history.loading,
     onReachEdge: history.loadMore,
   });
@@ -4103,7 +4146,7 @@ function AgentChatsPane({ conversation, transcript, onSend }: {
 }) {
   const ui = useConversationUiState(conversation);
 
-  const scrollRef = useGrowingScroll<HTMLDivElement>({
+  const scrollRef = useGrowingScroll({
     grows: "up",
     content: transcript,
     fetched: false,
@@ -4376,8 +4419,8 @@ function Palette() {
       <div>
         <div className="p-eyebrow mb-2">Surfaces — six steps</div>
         <div className="flex rounded-lg overflow-hidden border p-border">
-          {SURFACE_STEPS.map(([name, v]) => (
-            <div key={name} className="flex-1 h-24 flex items-end p-2" style={{ background: `var(${v})` }}>
+          {SURFACE_STEPS.map(([name, variable]) => (
+            <div key={name} className="flex-1 h-24 flex items-end p-2" style={{ background: `var(${variable})` }}>
               <span className="p-meta p-text-3">{name}</span>
             </div>
           ))}
@@ -4386,8 +4429,8 @@ function Palette() {
       <div>
         <div className="p-eyebrow mb-2">Text roles</div>
         <div className="space-y-1.5">
-          {TEXT_STEPS.map(([name, v]) => (
-            <div key={name} className="p-body" style={{ color: `var(${v})` }}>The agent resumed turn 41 from step 3 — {name}</div>
+          {TEXT_STEPS.map(([name, variable]) => (
+            <div key={name} className="p-body" style={{ color: `var(${variable})` }}>The agent resumed turn 41 from step 3 — {name}</div>
           ))}
         </div>
       </div>
@@ -4621,7 +4664,13 @@ function CouponBoardSlate() {
     { code: "FREESHIP", kind: "shipping", state: "active", used: 12 },
     { code: "LEGACY5", kind: null, state: "500s on apply", used: 3 },
     { code: "WELCOME", kind: "fixed", state: "paused", used: 88 },
-  ];
+  ] as const;
+
+  const tone: Record<(typeof coupons)[number]["state"], string> = {
+    "active": "p-success",
+    "paused": "p-text-3",
+    "500s on apply": "p-danger",
+  };
 
   return (
     <div className="p-bg min-h-screen p-8 font-sans">
@@ -4639,7 +4688,7 @@ function CouponBoardSlate() {
               </div>
               <div className="flex items-center gap-3">
                 <span className="p-meta p-text-3">{coupon.used} uses</span>
-                <span className={`p-meta ${coupon.state === "500s on apply" ? "p-danger" : coupon.state === "active" ? "p-success" : "p-text-3"}`}>{coupon.state}</span>
+                <span className={`p-meta ${tone[coupon.state]}`}>{coupon.state}</span>
               </div>
             </div>
           ))}
@@ -5044,7 +5093,7 @@ function BlueprintFrame() {
 const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listWorkspaceWork") return rpcResult(WORKSPACE_WORK).json<T>();
 
-  if (method === "getEvolutionChangelog") return rpcResult(CHANGELOG).json<T>();
+  if (method === "getEvolutionChangelog") return rpcResult(v.parse(JsonValueSchema, CHANGELOG)).json<T>();
 
   // The live tool list the journal joins tool entries to: the crafted rows
   // the CHANGELOG digest names, with the EMA scores their cards show.
@@ -5350,12 +5399,8 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
       : exec)
     : ENVIRONMENT_EXECUTORS, [offlineDevice]);
 
-  const tree = useRef<Map<string, DirEntry[]> | null>(null);
-
-  if (tree.current === null) tree.current = seedCompositeTree(offlineDevice);
-  const text = useRef<Map<string, string> | null>(null);
-
-  if (text.current === null) text.current = new Map(Object.entries(FILES_TEXT));
+  const [store] = useState(() => seedCompositeTree(offlineDevice));
+  const [contents] = useState(() => new Map(Object.entries(FILES_TEXT)));
   const heldPreview = useRef<PreviewDeferred | null>(null);
   const heldPreviewContent = useRef("");
   const previewReads = useRef(0);
@@ -5369,12 +5414,10 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
   ];
 
   const filesRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    const store = tree.current!;
-    const contents = text.current!;
     const dirOf = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
     const nameOf = (p: string) => p.slice(p.lastIndexOf("/") + 1);
 
-    if (method === "listMounts") return rpcResult(mounts).json<T>();
+    if (method === "listMounts") return rpcResult(v.parse(JsonValueSchema, mounts)).json<T>();
 
     if (method === "getExecutorFiles") {
       const [execName, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
@@ -5387,7 +5430,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
       const dir = asked === PC_MOUNT ? PC_CONSENTED_ROOT : asked;
       const entries = store.get(dir);
 
-      if (entries !== undefined) return rpcResult({ path: dir, entries }).json<T>();
+      if (entries !== undefined) return rpcResult(v.parse(JsonValueSchema, { path: dir, entries })).json<T>();
 
       // Inside the machine's mount but outside the consented root: the
       // device's own refusal, in the words `deviceFiles`' path guard uses.
@@ -5435,9 +5478,9 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
       // visits them (spec), and a rename-into-own-subtree shape would loop.
       const moved = new Map<string, DirEntry[]>();
 
-      for (const key of store.keys()) {
+      for (const [key, held] of store) {
         if (key === from || key.startsWith(`${from}/`)) {
-          moved.set(to + key.slice(from.length), store.get(key)!);
+          moved.set(to + key.slice(from.length), held);
         }
       }
 
@@ -5503,8 +5546,8 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
           <div className="absolute z-20 flex gap-2 p-2">
             <button data-files-fixture-mutate type="button" onClick={() => {
               const path = "/home/user/notes.md";
-              text.current!.set(path, "# Fresh after refresh\n\nThe older reply must not reclaim this preview.\n");
-              tree.current!.set("/home/user", (tree.current!.get("/home/user") ?? []).map((entry) => (
+              contents.set(path, "# Fresh after refresh\n\nThe older reply must not reclaim this preview.\n");
+              store.set("/home/user", (store.get("/home/user") ?? []).map((entry) => (
                 entry.name === "notes.md" ? { ...entry, mtimeMs: Date.now() } : entry
               )));
             }}>Mutate preview source</button>
@@ -5683,9 +5726,8 @@ const superviseRpc =
 
       const request = v.parse(SuperviseChangelogArgsSchema, args?.[0] ?? {});
 
-      const changelog = evolvedAtStart
-        ? SUPERVISE_CHANGELOG
-        : state.current.evolved ? SUPERVISE_EVOLVED_CHANGELOG : SUPERVISE_EMPTY_CHANGELOG;
+      const evolved = state.current.evolved ? SUPERVISE_EVOLVED_CHANGELOG : SUPERVISE_EMPTY_CHANGELOG;
+      const changelog = evolvedAtStart ? SUPERVISE_CHANGELOG : evolved;
 
       const entries = request.changesOnly === true
         ? changelog.entries.filter((entry) => entry.kind !== "outcomes" && entry.kind !== "replay")
@@ -5700,17 +5742,17 @@ const superviseRpc =
       const after = request.cursor?.after;
       const start = after === undefined ? 0 : SUPERVISE_RUNS.findIndex((run) => run.runId === after) + 1;
 
-      return rpcResult(seekPage(
+      return rpcResult(v.parse(JsonValueSchema, seekPage(
         SUPERVISE_RUNS.slice(start, start + limit + 1), limit, (run) => run.runId,
-      )).json<T>();
+      ))).json<T>();
     }
 
-    if (method === "listTriggers") return rpcResult({ triggers: SUPERVISE_TRIGGERS }).json<T>();
+    if (method === "listTriggers") return rpcResult(v.parse(JsonValueSchema, { triggers: SUPERVISE_TRIGGERS })).json<T>();
 
     if (method === "listBackgroundJobs") {
       if (!state.current.jobsHealthy) throw new Error("jobs fixture failed");
 
-      return rpcResult(SUPERVISE_JOBS).json<T>();
+      return rpcResult(v.parse(JsonValueSchema, SUPERVISE_JOBS)).json<T>();
     }
 
     return stubRpc<T>(method, args);
@@ -5990,7 +6032,7 @@ const ACTIVITY_FRESH: ActivitySnapshot = {
 
 const activityRpc = (snapshot: ActivitySnapshot): Rpc =>
   async <T,>(method: string, args?: unknown[]): Promise<T> => (
-    method === "getActivitySnapshot" ? rpcResult(snapshot).json<T>() : stubRpc<T>(method, args)
+    method === "getActivitySnapshot" ? rpcResult(v.parse(JsonValueSchema, snapshot)).json<T>() : stubRpc<T>(method, args)
   );
 
 /* ── Tool-call rendering states ─────────────────────────────────── */
@@ -6136,9 +6178,9 @@ const SECRET_TOOL_RUN_MESSAGE: UIMessage = msg({
 function useAutoExpandToolCalls(): void {
   useEffect(() => {
     const clickAll = () => {
-      document.querySelectorAll('button[aria-expanded="false"]').forEach((element) => {
+      for (const element of document.querySelectorAll('button[aria-expanded="false"]')) {
         if (element instanceof HTMLButtonElement) element.click();
-      });
+      }
     };
 
     const id = setTimeout(() => {
@@ -6215,18 +6257,22 @@ function StreamingFrame() {
   );
 }
 
-function ToolCallsFrame() {
-  useAutoExpandToolCalls();
-
+function MessageColumn({ messages }: { messages: UIMessage[] }) {
   return (
     <div className="flex justify-center p-bg p-text min-h-screen">
       <div className="@container flex w-full max-w-[640px] flex-col gap-6 border-x p-border px-6 py-6">
-        {TOOLCALL_MESSAGES.map((m) => (
+        {messages.map((m) => (
           <MessageView key={m.id} message={m} isLast={false} isStreaming={false} onFork={() => {}} />
         ))}
       </div>
     </div>
   );
+}
+
+function ToolCallsFrame() {
+  useAutoExpandToolCalls();
+
+  return <MessageColumn messages={TOOLCALL_MESSAGES} />;
 }
 
 function ToolRunScaleFrame({ secrets = false }: { secrets?: boolean }) {
@@ -6267,15 +6313,7 @@ const ADVISOR_MESSAGES: UIMessage[] = ADVISOR_SEVERITIES.map((severity) => msg({
 }));
 
 function AdvisorFrame() {
-  return (
-    <div className="flex justify-center p-bg p-text min-h-screen">
-      <div className="@container flex w-full max-w-[640px] flex-col gap-6 border-x p-border px-6 py-6">
-        {ADVISOR_MESSAGES.map((m) => (
-          <MessageView key={m.id} message={m} isLast={false} isStreaming={false} onFork={() => {}} />
-        ))}
-      </div>
-    </div>
-  );
+  return <MessageColumn messages={ADVISOR_MESSAGES} />;
 }
 
 const BRAIN_MEMORY = "## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n"
@@ -6375,7 +6413,7 @@ function TranscriptFrame() {
           <div className="text-[11px] uppercase tracking-wider p-text-3">{label}</div>
           <div className="h-[34rem] w-[44rem] flex flex-col">
             <NodeTranscript
-              selection={{ runId: nodeId!.startsWith("n") ? "n000" : "root-merge-1", nodeId: nodeId! }}
+              selection={{ runId: nodeId.startsWith("n") ? "n000" : "root-merge-1", nodeId }}
               trees={MCTS_TREES} rpc={forkRpc} headActivity={NO_HEAD_ACTIVITY}
               onSelect={() => {}} />
           </div>
@@ -6476,16 +6514,16 @@ function FeedbackFrame({ noise }: { noise: boolean }) {
     if (context === null) return;
     // Random pixels do not compress, so the PNG lands near its raw size and
     // crosses the 8 MiB limit the endpoint and the client both enforce.
-    const frame = context.createImageData(canvas.width, canvas.height);
+    const pixels = context.createImageData(canvas.width, canvas.height);
 
-    for (let i = 0; i < frame.data.length; i += 4) {
-      frame.data[i] = Math.random() * 256;
-      frame.data[i + 1] = Math.random() * 256;
-      frame.data[i + 2] = Math.random() * 256;
-      frame.data[i + 3] = 255;
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      pixels.data[i] = Math.random() * 256;
+      pixels.data[i + 1] = Math.random() * 256;
+      pixels.data[i + 2] = Math.random() * 256;
+      pixels.data[i + 3] = 255;
     }
 
-    context.putImageData(frame, 0, 0);
+    context.putImageData(pixels, 0, 0);
   }, []);
 
   return (
@@ -6906,8 +6944,8 @@ async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string
 /** The exploration frames photograph a swarm card under the workspace route,
  *  the way a reviewer lands on it; every other frame keeps the node and the
  *  entries its branch already chose. */
-function explore(node: React.ReactNode, entries: string[], frame: string) {
-  if (frame in EXPLORATION_FRAMES) {
+function explore(node: React.ReactNode, entries: string[], frameName: string) {
+  if (frameName in EXPLORATION_FRAMES) {
     return {
       entries: [`/workspace/${GALLERY_WORKSPACE}`],
       node: <Routes><Route path="/workspace/:agentId" element={node} /></Routes>,
@@ -6922,19 +6960,20 @@ function explore(node: React.ReactNode, entries: string[], frame: string) {
  *  mounted `workspacepage` frame: the socket push is the only way the row
  *  exists, and the page's connection is the stub's, so the server-side half
  *  is a pushed frame delivered on a delay the page mounts inside. */
-function scheduleDeviceNotice(devices: string | null): void {
-  const offline = devices === "offline"
-    ? [{ id: "dev-1", label: "ashish@studio", lastSeenAt: 1_769_000_000_000 }]
-    : devices === "offline-many"
-      ? [
-          { id: "dev-1", label: "ashish@studio", lastSeenAt: 1_769_000_000_000 },
-          { id: "dev-2", label: "ashish@tower", lastSeenAt: 1_768_999_000_000 },
-        ]
-      : devices === "none"
-        ? []
-        : null;
+const NOTICE_DEVICES = new Map([
+  ["offline", [{ id: "dev-1", label: "ashish@studio", lastSeenAt: 1_769_000_000_000 }]],
+  ["offline-many", [
+    { id: "dev-1", label: "ashish@studio", lastSeenAt: 1_769_000_000_000 },
+    { id: "dev-2", label: "ashish@tower", lastSeenAt: 1_768_999_000_000 },
+  ]],
+  ["none", []],
+]);
 
-  if (offline === null) return;
+function scheduleDeviceNotice(devices: string | null): void {
+  if (devices === null) return;
+  const offline = NOTICE_DEVICES.get(devices);
+
+  if (offline === undefined) return;
 
   setTimeout(() => {
     galleryServerPush(JSON.stringify({ type: "device_unavailable", devices: offline }));
@@ -7023,8 +7062,9 @@ async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[
 /** What a gallery frame mounts, and the routed location the MemoryRouter opens on. */
 interface MountedFrame { node: React.ReactNode; entries: string[] }
 
-function driveFrame(frame: "environment" | "files"): MountedFrame {
+function driveFrame(frameName: "environment" | "files"): MountedFrame {
   const params = new URLSearchParams(location.search);
+  const column = frameName === "files" ? "w-[860px]" : "w-[720px]";
 
   return {
     entries: ["/workspace/checkout-fixes"],
@@ -7032,9 +7072,9 @@ function driveFrame(frame: "environment" | "files"): MountedFrame {
       <Routes>
         <Route path="/workspace/:agentId"
           element={<DriveFrame
-            initialSurface={frame === "files" ? "Files" : "Environment"}
+            initialSurface={frameName === "files" ? "Files" : "Environment"}
             offlineDevice={params.get("offline") === "device"}
-            width={params.get("wide") === null ? (frame === "files" ? "w-[860px]" : "w-[720px]") : "w-[1240px]"}
+            width={params.get("wide") === null ? column : "w-[1240px]"}
             deferPreview={params.get("deferpreview") === "1"}
           />} />
       </Routes>
@@ -7337,7 +7377,11 @@ async function mount() {
   ({ node, entries } = explore(node, entries, frame));
 
 
-  createRoot(document.getElementById("root")!).render(
+  const root = document.getElementById("root");
+
+  if (root === null) throw new Error("gallery root is missing");
+
+  createRoot(root).render(
     // Every frame is mounted under the shell's three stores — account, roster,
     // overviews — so a page photographed alone reads the same way it does
     // behind `Layout`; a frame that mounts `Layout` itself gets Layout's own

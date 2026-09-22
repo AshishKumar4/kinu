@@ -123,6 +123,16 @@ function htmlToText(html: string): string {
     .trim();
 }
 
+/** The turn input: the plain part when it carries anything, else the HTML part
+ *  rendered down to text. */
+function inboundBody(text: string | undefined, html: string | undefined): string {
+  if (text !== undefined && text.trim() !== '') return text;
+
+  if (html !== undefined) return htmlToText(html);
+
+  return '';
+}
+
 function attachmentSize(content: ArrayBuffer | Uint8Array | string): number {
   return content instanceof ArrayBuffer || content instanceof Uint8Array
     ? content.byteLength
@@ -133,11 +143,7 @@ function attachmentSize(content: ArrayBuffer | Uint8Array | string): number {
 export async function parseInboundMime(raw: ArrayBuffer): Promise<ParsedInboundEmail> {
   const parsed = await PostalMime.parse(raw);
 
-  const text = parsed.text?.trim()
-    ? parsed.text
-    : parsed.html
-      ? htmlToText(parsed.html)
-      : '';
+  const text = inboundBody(parsed.text, parsed.html);
 
   return {
     subject: parsed.subject?.trim() ?? '(no subject)',

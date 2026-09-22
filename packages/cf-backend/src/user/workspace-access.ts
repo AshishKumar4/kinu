@@ -12,14 +12,18 @@ import { ownerCaller } from '@kinu.run/core';
 import { diagnostics, toKinuError, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
+export interface CreateWorkspaceRequest {
+  request: Request;
+  env: Env;
+  userId: string;
+  userDO: DurableObjectStub<UserDO>;
+  ctx?: ExecutionContext;
+}
+
 /** POST /workspaces body → created WorkspaceEntry (201) | mapped error response. */
-export async function handleCreateWorkspaceRequest(
-  request: Request,
-  env: Env,
-  userId: string,
-  userDO: DurableObjectStub<UserDO>,
-  ctx?: ExecutionContext,
-): Promise<Response> {
+export async function handleCreateWorkspaceRequest(call: CreateWorkspaceRequest): Promise<Response> {
+  const { request, env, userId, userDO, ctx } = call;
+
   const body = await safeJson(request, v.object({
     name: v.optional(v.string()),
     displayName: v.optional(v.string()),
@@ -53,9 +57,9 @@ export async function handleCreateWorkspaceRequest(
       ? {}
       : { waitUntil: (promise: Promise<unknown>) => ctx.waitUntil(promise) };
 
-    const entry = await createCloudWorkspaceForUser(
-      env, userId, userDO, await ownerCaller(env), input, createOptions,
-    );
+    const entry = await createCloudWorkspaceForUser({
+      env, userId, userDO, caller: await ownerCaller(env), input, options: createOptions,
+    });
 
     return json(entry, { status: 201 });
   } catch (e) {

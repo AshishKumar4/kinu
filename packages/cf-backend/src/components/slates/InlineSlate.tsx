@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Loader } from "@cloudflare/kumo/components/loader";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
@@ -82,8 +82,8 @@ export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
     setRefusal(null);
     setHeight(null);
 
-    const previewUnreachable = <Thrown,>(thrown: Thrown): void => {
-      if (live) setRefusal(renderThrownChain({ cause: thrown }));
+    const previewUnreachable = (...rejection: [unknown]): void => {
+      if (live) setRefusal(renderThrownChain({ cause: rejection[0] }));
     };
 
     void rpc<SlateCallResult>("previewSlate", [id]).then((result) => {
@@ -157,24 +157,28 @@ export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
   const pane = display === 'pane';
   const previewUrl = preview?.url;
 
-  const content = src === null ? null : !isPreviewUrl(previewUrl ?? '') ? (
+  let content: ReactNode = null;
+
+  if (src !== null) {
     // The only gate on what this frame renders, same as PreviewFrame's.
-    <div className="flex-1 flex items-center justify-center p-4 text-center">
-      <span className="p-annotation p-text-3 break-all">
-        Refused to preview a URL that is not a Kinu preview: {previewUrl}
-      </span>
-    </div>
-  ) : (
-    <iframe
-      ref={frame}
-      src={src}
-      title={id}
-      onLoad={() => setLoaded(true)}
-      className={pane ? 'p-bg flex-1 min-h-0 w-full border-0' : 'p-bg w-full border-0'}
-      style={pane ? undefined : { height: height ?? 320, transition: 'height 160ms ease-out' }}
-      sandbox={PREVIEW_SANDBOX}
-    />
-  );
+    content = isPreviewUrl(previewUrl ?? '') ? (
+      <iframe
+        ref={frame}
+        src={src}
+        title={id}
+        onLoad={() => setLoaded(true)}
+        className={pane ? 'p-bg flex-1 min-h-0 w-full border-0' : 'p-bg w-full border-0'}
+        style={pane ? undefined : { height: height ?? 320, transition: 'height 160ms ease-out' }}
+        sandbox={PREVIEW_SANDBOX}
+      />
+    ) : (
+      <div className="flex-1 flex items-center justify-center p-4 text-center">
+        <span className="p-annotation p-text-3 break-all">
+          Refused to preview a URL that is not a Kinu preview: {previewUrl}
+        </span>
+      </div>
+    );
+  }
 
   if (pane) {
     return (

@@ -268,7 +268,15 @@ export function adminDenialMessage(denial: AdminDenial): string {
       return 'The control plane is not configured on this deployment.';
     case 'stale_auth':
       return 'This action needs a fresh sign-in. Sign in again, then retry within five minutes.';
-    default:
+    case 'access_unconfigured':
+    case 'access_missing':
+    case 'access_invalid':
+    case 'access_no_email':
+    case 'access_mismatch':
+    case 'no_admins_configured':
+    case 'not_admin':
+    case 'dev_identity':
+    case 'token_identity':
       return 'Not found';
   }
 }

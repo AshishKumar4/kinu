@@ -437,8 +437,7 @@ function sessionKey(tokenHash: string): string {
 /** The user's own Durable Object, which is the one authority on which of their
  *  sessions are live and the durable half of their identity. */
 function sessionAuthority(env: AuthStoreEnv, userId: string): DurableObjectStub<UserDO> {
-  // SAFETY: The UserDO namespace binding declares UserDO as its stub contract.
-  return env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+  return env.UserDO.get(env.UserDO.idFromName(userId));
 }
 
 async function resolveIdentity(env: AuthStoreEnv, profile: OAuthProfile, now: number): Promise<AuthIdentity> {

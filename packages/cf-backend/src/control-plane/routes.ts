@@ -124,7 +124,7 @@ export async function handleControlRequest(
   try {
     const caller = await adminCaller(env, admin);
 
-    return await dispatch(request, env, url, admin, caller);
+    return await dispatch(request, url, { env, admin, caller });
   } catch (cause) {
     diagnostics.failure('control_plane.request_failed', toKinuError({
       doing: 'serving an admin control-plane request',
@@ -136,13 +136,17 @@ export async function handleControlRequest(
   }
 }
 
-async function dispatch(
-  request: Request,
-  env: ControlEnv,
-  url: URL,
-  admin: AuthorizedAdmin,
-  caller: ControlCaller,
-): Promise<Response> {
+/** The three things every control-plane handler needs: the bindings, who is
+ *  asking, and the capability their answer is read with. */
+interface ControlContext {
+  env: ControlEnv;
+  admin: AuthorizedAdmin;
+  caller: ControlCaller;
+}
+
+async function dispatch(request: Request, url: URL, control: ControlContext): Promise<Response> {
+  const { env, admin, caller } = control;
+
   const segments = url.pathname.replace(/^\/api\/control\/?/, '').split('/').filter(Boolean);
   const head = segments[0] ?? '';
   const stub = controlPlaneStub(env);
@@ -164,7 +168,7 @@ async function dispatch(
 
       if (userId === undefined) return json(await stub.listUsers(caller, pageQuery(url)));
 
-      return await handleUserDetail(env, admin, caller, userId, url);
+      return await handleUserDetail(control, userId, url);
     }
 
     case 'workspaces': {
@@ -258,7 +262,7 @@ async function handleAction(
   const body = await safeJson(request, ControlActionSchema);
 
   if (body === null) {
-    return await refuse(env, admin, caller, {
+    return await refuse({ env, admin, caller }, {
       operation: 'action_rejected', targetKind: 'request', target: '',
     }, {
       status: 400,
@@ -271,7 +275,7 @@ async function handleAction(
   const described = describeAction(body);
 
   if (!admin.fresh) {
-    return await refuse(env, admin, caller, described, {
+    return await refuse({ env, admin, caller }, described, {
       status: 403,
       message: adminDenialMessage('stale_auth'),
       detail: 'refused: the sign-in was not fresh',
@@ -317,12 +321,14 @@ async function handleAction(
     return err(500, `${AUDIT_UNSETTLED} (audit row ${intent.id})`);
   }
 
-  // A refusal by the owning object is a 409, not a 500: the request was
-  // well-formed and authorized, and the state said no.
-  const status = outcome.outcome === 'ok' ? 200 : outcome.outcome === 'denied' ? 409 : 502;
+  const status = ACTION_STATUS[outcome.outcome];
 
   return json({ outcome: outcome.outcome, detail: outcome.detail }, { status });
 }
+
+/** A refusal by the owning object is a 409, not a 500: the request was
+ *  well-formed and authorized, and the state said no. */
+const ACTION_STATUS: Readonly<Record<AuditSettlement, number>> = { ok: 200, denied: 409, failed: 502 };
 
 /** What a pending row says while its action is in flight. Read by an operator,
  *  so it states the fact rather than leaving the column empty. */
@@ -343,12 +349,12 @@ const AUDIT_UNSETTLED =
  * been told half the truth.
  */
 async function refuse(
-  env: ControlEnv,
-  admin: AuthorizedAdmin,
-  caller: ControlCaller,
+  control: ControlContext,
   identity: ActionIdentity,
   refusal: { status: number; message: string; detail: string; reason: string },
 ): Promise<Response> {
+  const { env, admin, caller } = control;
+
   try {
     await appendAudit(env, admin, caller, {
       ...identity, outcome: 'denied', detail: refusal.detail, reason: refusal.reason,
@@ -425,13 +431,9 @@ function reportAuditFailure(
  * workspaces leaves every row past 200 unreachable while the page's own copy
  * says the table was reconciled.
  */
-async function handleUserDetail(
-  env: ControlEnv,
-  admin: AuthorizedAdmin,
-  caller: ControlCaller,
-  userId: string,
-  url: URL,
-): Promise<Response> {
+async function handleUserDetail(control: ControlContext, userId: string, url: URL): Promise<Response> {
+  const { env, admin, caller } = control;
+
   // A UserDO name. The action schema demands the same shape, so the drilldown
   // and the actions cannot disagree about what a userId is.
   if (!v.is(UserIdSchema, userId)) return err(400, 'not a user id');

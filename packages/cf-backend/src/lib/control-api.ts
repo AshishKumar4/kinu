@@ -258,14 +258,22 @@ export type ControlAnswer<Value> =
   | { status: 'unconfigured'; reason: string }
   | { status: 'failed'; reason: string };
 
+/** What a control call sets beyond its path. The content type is this client's
+ *  own — every route here speaks JSON both ways — so a caller names only the
+ *  method and the serialized body. */
+interface ControlRequest {
+  method?: string;
+  body?: string;
+}
+
 async function control<Schema extends v.GenericSchema>(
   schema: Schema,
   path: string,
-  init: RequestInit = {},
+  init: ControlRequest = {},
 ): Promise<ControlAnswer<v.InferOutput<Schema>>> {
   const response = await fetch(`/api/control${path}`, {
     ...init,
-    headers: { 'content-type': 'application/json', ...init.headers },
+    headers: { 'content-type': 'application/json' },
   });
 
   const body = await tolerateAsync(() => response.json(), 'malformed-input');

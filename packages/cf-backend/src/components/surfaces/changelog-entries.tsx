@@ -185,7 +185,10 @@ function EntryFacts({ entry }: { entry: ChangelogEntryView }) {
     // A fact row in the digest is live: the builder lists agent_facts, and a
     // forgotten fact is gone rather than marked. `revert` present therefore
     // reads applied; a staged decision reads proposed.
-    const status = entry.decision ? 'proposed' : entry.revert ? 'applied' : null;
+    let status: string | null = null;
+
+    if (entry.decision) status = 'proposed';
+    else if (entry.revert) status = 'applied';
 
     return (
       <div className="space-y-1">
@@ -222,6 +225,31 @@ function EntryFacts({ entry }: { entry: ChangelogEntryView }) {
   return null;
 }
 
+/** The revert control an entry carries, on the card and on a grouped member
+ *  alike: the RPC, what it reported, and the wait while it runs. */
+function useEntryRevert(entryId: string, rpc: Rpc, onReverted: () => void) {
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const revert = useCallback(async () => {
+    setBusy(true);
+    setNotice(null);
+
+    try {
+      const r = await rpc<{ ok: boolean; detail?: string; error?: string }>("revertChangelogEntry", [entryId]);
+      setNotice({ text: r.ok ? `Reverted: ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
+
+      if (r.ok) onReverted();
+    } catch (e) {
+      setNotice({ text: renderThrownChain({ cause: e }), ok: false });
+    } finally {
+      setBusy(false);
+    }
+  }, [rpc, entryId, onReverted]);
+
+  return { busy, notice, revert };
+}
+
 export interface ChangelogEntryCardProps {
   entry: ChangelogEntryView;
   /** Render inside the journal's shared grouped-row container. */
@@ -234,26 +262,9 @@ export interface ChangelogEntryCardProps {
 
 export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReverted }: ChangelogEntryCardProps) {
   const [kept, setKept] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
+  const { busy, notice, revert } = useEntryRevert(entry.id, rpc, onReverted);
   const [diff, setDiff] = useState<AsyncResource<ScaffoldDiff> | null>(null);
   const [expanded, setExpanded] = useState(false);
-
-  const revert = useCallback(async () => {
-    setBusy(true);
-    setNotice(null);
-
-    try {
-      const r = await rpc<{ ok: boolean; detail?: string; error?: string }>("revertChangelogEntry", [entry.id]);
-      setNotice({ text: r.ok ? `Reverted: ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
-
-      if (r.ok) onReverted();
-    } catch (e) {
-      setNotice({ text: renderThrownChain({ cause: e }), ok: false });
-    } finally {
-      setBusy(false);
-    }
-  }, [rpc, entry.id, onReverted]);
 
   const toggleDiff = useCallback(async () => {
     if (diff !== null) {
@@ -270,7 +281,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
       setDiff(loadSucceeded(d));
     } catch (cause) {
       // Collapsing the panel made the click look like it did nothing.
-      setDiff(loadFailed({ status: "loading" }, cause));
+      setDiff(loadFailed({ status: "loading" }, { cause }));
     }
   }, [rpc, entry.scaffoldVersion, diff]);
 
@@ -286,7 +297,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
 
   const Icon = KIND_ICON[entry.kind];
   const fresh = entry.at > seenAt;
-  const hasDetails = Boolean(entry.evidence || entry.items?.length || entry.kind === 'fact' || entry.kind === 'tool');
+  const hasDetails = Boolean(entry.evidence) || (entry.items?.length ?? 0) > 0 || entry.kind === 'fact' || entry.kind === 'tool';
   const detailsId = `changelog-details-${encodeURIComponent(entry.id)}`;
 
   const headline = (
@@ -345,29 +356,30 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
             </div>
           )}
           {entry.items && entry.items.length > 0 && (
-            <ul className={`${entry.evidence && entry.kind !== 'fact' && entry.kind !== 'tool' ? "mt-2" : ""} space-y-1.5`}>
-              {entry.items.map((item) => (
-                <SubEntry key={item.id} entry={item} rpc={rpc} onReverted={onReverted} />
-              ))}
-            </ul>
+            <SubEntryList
+              items={entry.items}
+              className={`${entry.evidence && entry.kind !== 'fact' && entry.kind !== 'tool' ? "mt-2" : ""} space-y-1.5`}
+              rpc={rpc}
+              onReverted={onReverted}
+            />
           )}
         </div>
       )}
 
-      {diff !== null && (
-        diff.status === "ready" ? (
-          <div className="mt-2 rounded-md border p-border overflow-hidden">
-            <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border p-annotation p-text-3">
-              <span>v{diff.value.previousVersion ?? "∅"} → v{diff.value.version}</span>
-              <span className="p-success">+{diff.value.added}</span>
-              <span className="p-danger">−{diff.value.removed}</span>
-            </div>
-            <DiffLines lines={diff.value.lines} />
+      {diff?.status === "ready" && (
+        <div className="mt-2 rounded-md border p-border overflow-hidden">
+          <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border p-annotation p-text-3">
+            <span>v{diff.value.previousVersion ?? "∅"} → v{diff.value.version}</span>
+            <span className="p-success">+{diff.value.added}</span>
+            <span className="p-danger">−{diff.value.removed}</span>
           </div>
-        ) : diff.status === "error" ? (
-          <LoadFailure className="mt-2" what="this diff" message={diff.message} onRetry={toggleDiff} />
-        ) : <div className="flex justify-center py-3"><Loader size="sm" /></div>
+          <DiffLines lines={diff.value.lines} />
+        </div>
       )}
+      {diff?.status === "error" && (
+        <LoadFailure className="mt-2" what="this diff" message={diff.message} onRetry={toggleDiff} />
+      )}
+      {diff?.status === "loading" && <div className="flex justify-center py-3"><Loader size="sm" /></div>}
     </div>
   );
 }
@@ -413,9 +425,9 @@ function StagedSkillDecision(
       const result = await rpc<StagedSkillResult>("showRefinement", [decision.requestId, decision.routeIndex]);
       setStaged((previous) => result.ok
         ? loadSucceeded(result.view)
-        : loadFailed(previous ?? { status: "loading" }, new Error(result.error)));
+        : loadFailed(previous ?? { status: "loading" }, { cause: new Error(result.error) }));
     } catch (cause) {
-      setStaged((previous) => loadFailed(previous ?? { status: "loading" }, cause));
+      setStaged((previous) => loadFailed(previous ?? { status: "loading" }, { cause }));
     }
   }, [rpc, decision.requestId, decision.routeIndex, staged]);
 
@@ -490,24 +502,7 @@ function StagedSkillDecision(
 /** A grouped entry's members — same actions, no icon or diff of their own. */
 function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntryView; rpc: Rpc; onReverted: () => void }) {
   const [kept, setKept] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
-
-  const revert = useCallback(async () => {
-    setBusy(true);
-    setNotice(null);
-
-    try {
-      const r = await rpc<{ ok: boolean; detail?: string; error?: string }>("revertChangelogEntry", [entry.id]);
-      setNotice({ text: r.ok ? `Reverted: ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
-
-      if (r.ok) onReverted();
-    } catch (e) {
-      setNotice({ text: renderThrownChain({ cause: e }), ok: false });
-    } finally {
-      setBusy(false);
-    }
-  }, [rpc, entry.id, onReverted]);
+  const { busy, notice, revert } = useEntryRevert(entry.id, rpc, onReverted);
 
   return (
     <li className={`rounded-md border p-border px-2.5 py-2 ${kept ? "opacity-70" : ""}`}>
@@ -541,12 +536,22 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntryView; rpc: 
         </div>
       </div>
       {entry.items && entry.items.length > 0 && (
-        <ul className="mt-2 space-y-1.5 pl-2 border-l p-border">
-          {entry.items.map((item) => (
-            <SubEntry key={item.id} entry={item} rpc={rpc} onReverted={onReverted} />
-          ))}
-        </ul>
+        <SubEntryList items={entry.items} className="mt-2 space-y-1.5 pl-2 border-l p-border" rpc={rpc} onReverted={onReverted} />
       )}
     </li>
+  );
+}
+
+/** The members of a grouped entry, wherever they hang. */
+function SubEntryList({ items, className, rpc, onReverted }: {
+  items: readonly ChangelogEntryView[];
+  className: string;
+  rpc: Rpc;
+  onReverted: () => void;
+}) {
+  return (
+    <ul className={className}>
+      {items.map((item) => <SubEntry key={item.id} entry={item} rpc={rpc} onReverted={onReverted} />)}
+    </ul>
   );
 }

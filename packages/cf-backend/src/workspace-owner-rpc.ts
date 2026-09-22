@@ -42,7 +42,7 @@ export interface WorkspaceOwnerRpc {
   liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>>;
 }
 
-interface WorkspaceOwnerNamespace {
+export interface WorkspaceOwnerNamespace {
   idFromName(name: string): DurableObjectId;
   get(id: DurableObjectId): WorkspaceOwnerRpc;
 }
@@ -55,19 +55,9 @@ interface WorkspaceOwnerNamespace {
  * says what a caller may reach, which is exactly this.
  */
 export function workspaceOwner(
-  env: { OrchestratorAgent: Pick<DurableObjectNamespace, 'idFromName' | 'get'> },
+  env: { OrchestratorAgent: WorkspaceOwnerNamespace },
   workspaceName: string,
 ): WorkspaceOwnerRpc {
-  const view: Partial<WorkspaceOwnerNamespace> = {};
-  Object.assign(view, {
-    idFromName: (name: string) => env.OrchestratorAgent.idFromName(name),
-    get: (id: DurableObjectId) => env.OrchestratorAgent.get(id),
-  });
-  // SAFETY: the view above is constructed with exactly the two members
-  // WorkspaceOwnerNamespace declares, and orchestrator.ts declares every
-  // method of WorkspaceOwnerRpc with these signatures, delegating to SlateHost.
-  const namespace = view as WorkspaceOwnerNamespace;
-
-  return namespace.get(namespace.idFromName(workspaceName));
+  return env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspaceName));
 }
 

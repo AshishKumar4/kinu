@@ -9,7 +9,7 @@
  * file, and the object lands the whole set or none of it.
  */
 import {
-  DriveListingSchema, MarkedSkillSchema, packZip, type DriveListing, type MarkedSkill,
+  DriveListingSchema, MarkedSkillSchema, packZip, type DriveListing, type JsonValue, type MarkedSkill,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
@@ -43,7 +43,7 @@ async function api<Schema extends v.GenericSchema>(schema: Schema, method: strin
   return v.parse(schema, await res.json());
 }
 
-function jsonBody<Body>(body: Body): RequestInit {
+function jsonBody(body: JsonValue): RequestInit {
   return { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
 }
 

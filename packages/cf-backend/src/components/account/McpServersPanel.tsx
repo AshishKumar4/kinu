@@ -43,8 +43,8 @@ function statusBadge(status: McpServerSummary['status']) {
       return { label: status, classes: 'p-badge-info', Icon: ClockClockwiseIcon };
     case 'failed':
       return { label: 'failed', classes: 'p-badge-danger', Icon: WarningIcon };
-    default:
-      return { label: status, classes: 'p-card p-text-3', Icon: ClockClockwiseIcon };
+    case 'unknown':
+      return { label: 'unknown', classes: 'p-card p-text-3', Icon: ClockClockwiseIcon };
   }
 }
 
@@ -120,7 +120,7 @@ export function McpServersPanel() {
 
       <div className="flex justify-end">
         <Button size="sm" variant="secondary" icon={<PlusIcon size={12} />}
-          onClick={() => setShowAdd((v) => !v)}>
+          onClick={() => setShowAdd((shown) => !shown)}>
           Add custom server
         </Button>
       </div>
@@ -144,9 +144,9 @@ export function McpServersPanel() {
         />
       )}
 
-      {loading ? (
-        <div className="flex items-center justify-center py-12"><Loader size="base" /></div>
-      ) : servers.length === 0 ? (
+      {loading && <div className="flex items-center justify-center py-12"><Loader size="base" /></div>}
+
+      {!loading && (servers.length === 0 ? (
         <section className="p-card p-8 text-center space-y-2">
           <PlugIcon size={28} className="p-text-3 mx-auto" />
           <div className="text-sm font-medium">No MCP servers yet</div>
@@ -202,7 +202,7 @@ export function McpServersPanel() {
             })}
           </div>
         </section>
-      )}
+      ))}
     </div>
   );
 }

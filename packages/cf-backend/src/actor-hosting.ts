@@ -68,6 +68,7 @@ import {
   type ModelOperationSink, type ModelPricing, type NimbusSandboxHandle, type NodeHomeHost,
   type NodeWorkspace,
   type ProfileAuthorityInputs, type ProgrammaticTurn, type ResolvedTurnProfile,
+  type RunEventInput,
   type SlateCallResult, type SlateOperation, type SqlExec, type SqlExecutor,
   type SqlValue, type WorkMode,
   type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver,
@@ -559,7 +560,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         governor: budget,
       });
 
-      const host: BackendHost = {
+      const backendHost: BackendHost = {
         broadcast: (event) => { seams.broadcast(handle.actorId, event); },
         enqueueTurn: (input) => seams.enqueueTurn(bound, input),
         turnInFlight: () => seams.turnInFlight(bound),
@@ -571,40 +572,32 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         get headRuntime() { return seams.headRuntimeFor(bound); },
       };
 
+      // A recording that fails is reported and never thrown: an event is a
+      // record OF the turn, and losing one must not end the turn it observed.
+      const recordRunEvent = (input: HostedRunEvent): void => {
+        const runId = activeRunOf(stores);
+
+        if (runId === null) return;
+
+        try {
+          stores.eventRecorder.emit(runId, input);
+        } catch (cause) {
+          diagnostics.failure(RUN_EVENT_EMIT_FAILED[input.type], toKinuError({
+            doing: `recording a hosted actor ${input.type} run event`, cause, otherwise: 'io',
+          }), { actor: handle.name });
+        }
+      };
+
       return {
-        host,
+        host: backendHost,
         engine,
         eventLog: new EventLog(seams.exec, handle),
         budget,
         refinementLane: seams.refinementLane(bound),
         sinks: {
           logActivity: (event, detail) => { seams.logActivity(handle.actorId, event, detail); },
-          onToolCallEvent: (event) => {
-            const runId = activeRunOf(stores);
-
-            if (runId === null) return;
-
-            try {
-              stores.eventRecorder.emit(runId, { type: 'tool_call_end', ...event });
-            } catch (cause) {
-              diagnostics.failure('event.tool_call_end_emit_failed', toKinuError({
-                doing: 'recording a hosted actor tool_call_end run event', cause, otherwise: 'io',
-              }), { actor: handle.name });
-            }
-          },
-          onStepEvent: (event) => {
-            const runId = activeRunOf(stores);
-
-            if (runId === null) return;
-
-            try {
-              stores.eventRecorder.emit(runId, { type: 'step_finish', ...event });
-            } catch (cause) {
-              diagnostics.failure('event.step_finish_emit_failed', toKinuError({
-                doing: 'recording a hosted actor step_finish run event', cause, otherwise: 'io',
-              }), { actor: handle.name });
-            }
-          },
+          onToolCallEvent: (event) => { recordRunEvent({ type: 'tool_call_end', ...event }); },
+          onStepEvent: (event) => { recordRunEvent({ type: 'step_finish', ...event }); },
         },
       };
     },
@@ -681,6 +674,16 @@ function contextEventsFor(_actor: BoundActor): ContextEventRecorder | null {
 function activeRunOf(stores: BoundActor['stores']): string | null {
   return stores.claims.unsettled(1)[0]?.runId ?? null;
 }
+
+/** The two run events a hosted actor's turn sinks record. */
+type HostedRunEvent = Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>;
+
+/** One log name per event, written out so a lost recording stays greppable by
+ *  the event it lost. */
+const RUN_EVENT_EMIT_FAILED = {
+  tool_call_end: 'event.tool_call_end_emit_failed',
+  step_finish: 'event.step_finish_emit_failed',
+} as const;
 
 /**
  * What a dismissal asks for, as a NAMED type rather than an inline literal.

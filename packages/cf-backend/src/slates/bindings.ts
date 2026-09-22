@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { workspaceOwner } from '../workspace-owner-rpc';
+import { workspaceOwner, type WorkspaceOwnerNamespace } from '../workspace-owner-rpc';
 import type { JsonValue, SlateCallResult, WorkMode } from '@kinu.run/core';
 
 /** One hop of an actor's root-relative path, as the workspace directory records
@@ -58,7 +58,7 @@ export interface SlateBindingProps {
 }
 
 interface SlateBindingEnv {
-  OrchestratorAgent: DurableObjectNamespace;
+  OrchestratorAgent: WorkspaceOwnerNamespace;
 }
 
 /** All four capability planes return through the owner's one route decision, as the caller. */

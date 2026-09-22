@@ -70,7 +70,7 @@ export const FORK_IDLE_REVALIDATE_MS = 15_000;
 /** A fork is still being written until it leaves `running` — branches, scores,
  *  token counts and the merge all land while it is. */
 export function hasLiveForkRun(runs: readonly ForkRunSummary[] | null): boolean {
-  return !!runs?.some((run) => run.status === "running");
+  return runs?.some((run) => run.status === "running") === true;
 }
 
 /** All workspace activity that can create or continue a fork. Detached jobs
@@ -179,6 +179,17 @@ export function useLiveForkRuns(
   return { resource, reload, runs: lastValue(resource)?.items ?? null, hasActiveWork };
 }
 
+export interface ExplorationCanvasInput {
+  rpc: Rpc;
+  isStreaming: boolean;
+  backgroundJobs: readonly BackgroundJob[];
+  liveTrees: ReadonlyMap<string, ForkNode>;
+  /** Per-branch write counters from the `head_activity` broadcast. Read here
+   *  only as a SIGNAL that some search moved — the rows come from the read
+   *  below, never from the wire. */
+  headActivity?: ReadonlyMap<string, number>;
+}
+
 /**
  * Every tree the workspace has grown, on one canvas — one read per page.
  *
@@ -194,16 +205,9 @@ export function useLiveForkRuns(
  * polled projections for the searches they cover: a running search pushes a tree
  * per iteration, which no poll can match.
  */
-export function useExplorationCanvas(
-  rpc: Rpc,
-  isStreaming: boolean,
-  backgroundJobs: readonly BackgroundJob[],
-  liveTrees: ReadonlyMap<string, ForkNode>,
-  /** Per-branch write counters from the `head_activity` broadcast. Read here
-   *  only as a SIGNAL that some search moved — the rows come from the read
-   *  below, never from the wire. */
-  headActivity: ReadonlyMap<string, number> = EMPTY_ACTIVITY,
-) {
+export function useExplorationCanvas({
+  rpc, isStreaming, backgroundJobs, liveTrees, headActivity = EMPTY_ACTIVITY,
+}: ExplorationCanvasInput) {
   const hasActiveWork = hasActiveForkWork(isStreaming, backgroundJobs);
 
   // One read per page, both halves of every fork on it. The canvas draws EVERY

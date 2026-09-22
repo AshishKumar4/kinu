@@ -5,7 +5,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import {
   ArrowsClockwiseIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
   ClockIcon, WarningCircleIcon, DesktopTowerIcon, PaperclipIcon,
-  ClockCounterClockwiseIcon, UserPlusIcon,
+  ClockCounterClockwiseIcon, UserPlusIcon, type Icon,
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
@@ -259,15 +259,32 @@ function TerminalCloseBoundary({ close, onRetry }: {
   );
 }
 
+/** What a mirrored event reports about the work: finished, broken, or moving. */
+type EventOutcome = "done" | "failed" | "progress";
+
+function eventOutcome(status: string | undefined): EventOutcome {
+  if (status === "completed") return "done";
+
+  if (status === "failed" || status === "error") return "failed";
+
+  return "progress";
+}
+
+const OUTCOME_MARK: Record<EventOutcome, { Icon: Icon; verb: string; tone: string }> = {
+  done: { Icon: CheckCircleIcon, verb: "reported done", tone: "p-success" },
+  failed: { Icon: WarningCircleIcon, verb: "hit an error", tone: "p-danger" },
+  progress: { Icon: ClockIcon, verb: "reported progress", tone: "p-text-3" },
+};
+
 /** A subordinate's task assignment or progress report, mirrored into the main
  *  chat as a centered marker that links to that subordinate's tab. */
 function SubordinateEventCard({ event, workspace }: { event: SubordinateActivityEvent; workspace: string }) {
-  const done = event.status === "completed";
-  const failed = event.status === "failed" || event.status === "error";
-  const Icon = event.kind === "task" ? UserPlusIcon : done ? CheckCircleIcon : failed ? WarningCircleIcon : ClockIcon;
-  const tone = done ? "p-success" : failed ? "p-danger" : "p-text-3";
-  const verb = event.kind === "task" ? "assigned" : done ? "reported done" : failed ? "hit an error" : "reported progress";
-  const detail = event.task || event.content;
+  const { Icon: outcomeIcon, verb: outcomeVerb, tone } = OUTCOME_MARK[eventOutcome(event.status)];
+  const assigned = event.kind === "task";
+  const Icon = assigned ? UserPlusIcon : outcomeIcon;
+  const verb = assigned ? "assigned" : outcomeVerb;
+  // An event carrying no task of its own is a report, and its text is the line.
+  const detail = event.task === undefined || event.task === "" ? event.content : event.task;
 
   return (
     <div className="flex justify-center animate-fade-in py-1">
@@ -394,10 +411,12 @@ function SubordinateChatColumn({
   // actor the request names and the workspace's own chat is the default. A
   // subordinate keeps its own conversation, and a helper that worked for an
   // hour has more of one than the SDK's hydration window holds.
-  const { history, transcript, thread } = useChatThread(
-    state.rpc, state.messages, state.transcriptSeeded, state.steerRuns, state.paneActorId);
+  const { history, transcript, thread } = useChatThread({
+    rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded,
+    steerRuns: state.steerRuns, actor: state.paneActorId,
+  });
 
-  const messagesRef = useGrowingScroll<HTMLDivElement>({
+  const messagesRef = useGrowingScroll({
     grows: "up",
     content: transcript,
     fetched: history.fetched,
@@ -667,10 +686,11 @@ export default function WorkspacePage() {
   // than not starting it: the store is asked, and "there is nothing here" is
   // then something the store said instead of something the socket failed to
   // say. That is the report — a workspace whose conversation was gone.
-  const { history, transcript, thread } = useChatThread(
-    state.rpc, state.messages, state.transcriptSeeded, state.steerRuns);
+  const { history, transcript, thread } = useChatThread({
+    rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, steerRuns: state.steerRuns,
+  });
 
-  const messagesRef = useGrowingScroll<HTMLDivElement>({
+  const messagesRef = useGrowingScroll({
     grows: "up",
     content: transcript,
     fetched: history.fetched,
@@ -730,7 +750,7 @@ export default function WorkspacePage() {
         await touchWorkspace(agentId);
         reportSide("visit", null);
       } catch (cause) {
-        reportSide("visit", describeError(cause));
+        reportSide("visit", describeError({ cause }));
       }
     });
   }, [agentId, reportSide]);
@@ -829,7 +849,7 @@ export default function WorkspacePage() {
         setFeedbackByMessage(loaded);
         reportSide("feedback", null);
       } catch (cause) {
-        reportSide("feedback", describeError(cause));
+        reportSide("feedback", describeError({ cause }));
       }
     });
   }, [state.connectionStatus, state.rpc, reportSide]);
@@ -847,23 +867,17 @@ export default function WorkspacePage() {
     [state.signalCards]);
 
   const messageCardIds = useMemo(() => new Set(state.messages.flatMap((msg) => {
-    const id = messageSignalId(msg.metadata);
+    const id = messageSignalId({ metadata: msg.metadata });
 
     return id ? [id] : [];
   })), [state.messages]);
 
   const looseCards = useMemo(() => state.signalCards.flatMap((card) => {
     if (messageCardIds.has(card.id)) return [];
-    const turn = classifyProgrammaticTurn(card.metadata);
+    const turn = classifyProgrammaticTurn({ metadata: card.metadata });
 
     return turn ? [{ card, turn }] : [];
   }), [state.signalCards, messageCardIds]);
-
-  const cardStateOf = <Metadata,>(metadata: Metadata) => {
-    const id = messageSignalId(metadata);
-
-    return id ? cardStates.get(id) : undefined;
-  };
 
   const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
   useEffect(() => {
@@ -874,7 +888,7 @@ export default function WorkspacePage() {
         setTakesByTurn(loaded);
         reportSide("takes", null);
       } catch (cause) {
-        reportSide("takes", describeError(cause));
+        reportSide("takes", describeError({ cause }));
       }
     });
     // settledBranchCount: a branch settling after the turn ended persists a
@@ -1016,7 +1030,8 @@ export default function WorkspacePage() {
   // NOT `|| agentId`. `agentId` is the slug in the address bar, and falling
   // back to it is what titled a new workspace `handwrought-walnut-4166c321`.
   // The URL still carries the id for anyone who needs one.
-  const storedTitle = as?.displayName || rosterTitle;
+  const statusTitle = as?.displayName;
+  const storedTitle = statusTitle === undefined || statusTitle === "" ? rosterTitle : statusTitle;
   const shownTitle = workspaceDisplayTitle({ name: agentId, displayName: storedTitle });
 
 
@@ -1164,6 +1179,7 @@ export default function WorkspacePage() {
               )}
               {thread.entries.map(({ message: msg, steers }, i) => {
                 const takes = takesByTurn[msg.id];
+                const signalId = messageSignalId({ metadata: msg.metadata });
 
                 return (
                   <MessageView
@@ -1179,7 +1195,7 @@ export default function WorkspacePage() {
                     takesChip={hasComparableTakes(takes)
                       ? <TakesChip set={takes} onPick={onPickTake} />
                       : undefined}
-                    signalState={cardStateOf(msg.metadata)}
+                    signalState={signalId === null ? undefined : cardStates.get(signalId)}
                   />
                 );
               })}
@@ -1393,7 +1409,11 @@ interface RestorePlan {
 
 const RESTORE_PREVIEW_LIMIT = 12;
 
-const RESTORE_MARK = { modify: "~", create: "+", delete: "-" } satisfies Record<FileRestoreChange["kind"], string>;
+const RESTORE_MARK = {
+  modify: { mark: "~", tone: "p-warning" },
+  create: { mark: "+", tone: "p-success" },
+  delete: { mark: "-", tone: "p-danger" },
+} satisfies Record<FileRestoreChange["kind"], { mark: string; tone: string }>;
 
 function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
   plan: RestorePlan; busy: boolean; onCancel: () => void; onConfirm: () => void;
@@ -1427,12 +1447,16 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
           device: {counts}. Kinu creates a safety snapshot first. Restore again to undo this change.
         </p>
         <ul className="rounded-md border p-border p-elevated max-h-52 overflow-y-auto p-annotation">
-          {shown.map((f) => (
-            <li key={`${f.kind}:${f.path}`} className="flex gap-2 px-2.5 py-1 border-b p-border last:border-0">
-              <span className={`shrink-0 ${f.kind === "create" ? "p-success" : f.kind === "delete" ? "p-danger" : "p-warning"}`}>{RESTORE_MARK[f.kind]}</span>
-              <span className="p-text-2 truncate" title={f.path}>{f.path}</span>
-            </li>
-          ))}
+          {shown.map((f) => {
+            const { mark, tone } = RESTORE_MARK[f.kind];
+
+            return (
+              <li key={`${f.kind}:${f.path}`} className="flex gap-2 px-2.5 py-1 border-b p-border last:border-0">
+                <span className={`shrink-0 ${tone}`}>{mark}</span>
+                <span className="p-text-2 truncate" title={f.path}>{f.path}</span>
+              </li>
+            );
+          })}
           {plan.files.length > shown.length && (
             <li className="px-2.5 py-1 p-text-3">… {plan.files.length - shown.length} more</li>
           )}

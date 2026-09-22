@@ -101,7 +101,16 @@ function canvasRenderer(canvas: HTMLCanvasElement, palette: ArtPalette): ArtRend
  * Chrome without flags, most headless runs) never fetches the chunk. vgpu's
  * own unsupported verdict is the second gate, after the chunk is here.
  */
-async function pickRenderer(canvas: HTMLCanvasElement, palette: ArtPalette, box: Box, resolution: number, failed: LogEventName): Promise<ArtRenderer> {
+interface RendererChoice {
+  readonly canvas: HTMLCanvasElement;
+  readonly palette: ArtPalette;
+  readonly box: Box;
+  readonly resolution: number;
+  /** The obs event a failed start is said through. */
+  readonly failed: LogEventName;
+}
+
+async function pickRenderer({ canvas, palette, box, resolution, failed }: RendererChoice): Promise<ArtRenderer> {
   if (!('gpu' in navigator)) return canvasRenderer(canvas, palette);
   const adapter = await navigator.gpu.requestAdapter();
 
@@ -110,7 +119,10 @@ async function pickRenderer(canvas: HTMLCanvasElement, palette: ArtPalette, box:
   // A dynamic import on purpose: the module carries vgpu, a lazy chunk that
   // only a browser with an adapter should ever download.
   const { createWebGpuRenderer } = await import('./renderer-webgpu');
-  const outcome = await createWebGpuRenderer(canvas, palette, box.width, box.height, box.ratio * resolution);
+
+  const outcome = await createWebGpuRenderer({
+    canvas, initialPalette: palette, width: box.width, height: box.height, ratio: box.ratio * resolution,
+  });
 
   if (outcome.kind === 'renderer') return outcome.renderer;
 
@@ -219,8 +231,8 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
     }
   };
 
-  const startFailed = <Thrown,>(cause: Thrown): never => {
-    throw new Error('the art renderer did not start', { cause });
+  const startFailed = (...rejection: [unknown]): never => {
+    throw new Error('the art renderer did not start', { cause: rejection[0] });
   };
 
   /** The picture is made once the renderer is known, since a picture may
@@ -242,7 +254,7 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
       return;
     }
 
-    pickRenderer(next, palette, box, spec.resolution, spec.events.failed).then((picked) => {
+    pickRenderer({ canvas: next, palette, box, resolution: spec.resolution, failed: spec.events.failed }).then((picked) => {
       if (disposed || canvas !== next) {
         picked.dispose();
 
@@ -293,7 +305,11 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
 
   return {
     art: () => art,
-    renderer: () => (renderer === null ? 'pending' : still ? 'static' : renderer.kind),
+    renderer: () => {
+      if (renderer === null) return 'pending';
+
+      return still ? 'static' : renderer.kind;
+    },
     frameTimes: () => playback.frameTimes(),
     time: () => art.time,
     freeze: () => {

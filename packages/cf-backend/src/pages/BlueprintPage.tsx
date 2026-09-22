@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
-import { FileIcon, FolderIcon, GitBranchIcon, LinkIcon, WarningIcon } from "@phosphor-icons/react";
+import { FileIcon, FolderIcon, GitBranchIcon, LinkIcon, WarningIcon, type Icon } from "@phosphor-icons/react";
 import type { BlueprintView, SlateBindingDeclaration, SlateBindingKind } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { KinuLogo } from "@/components/ui/KinuLogo";
@@ -61,6 +61,12 @@ export function SecretWarning({ warnings }: { warnings: BlueprintView["warnings"
   );
 }
 
+const ENTRY_ICON: Record<BlueprintView["entries"][number]["kind"], Icon> = {
+  file: FileIcon,
+  directory: FolderIcon,
+  symlink: LinkIcon,
+};
+
 function BlueprintBody({ view }: { view: BlueprintView }) {
   return (
     <>
@@ -89,10 +95,11 @@ function BlueprintBody({ view }: { view: BlueprintView }) {
         <ul className="p-card px-4 py-3 font-mono text-xs">
           {view.entries.map((entry) => {
             const depth = entry.path.split("/").length - 1;
+            const EntryIcon = ENTRY_ICON[entry.kind];
 
             return (
               <li key={entry.path} className="flex items-center gap-1.5 py-0.5 p-text-2" style={{ paddingLeft: `${depth * 14}px` }}>
-                {entry.kind === "directory" ? <FolderIcon size={12} className="p-text-3" /> : entry.kind === "symlink" ? <LinkIcon size={12} className="p-text-3" /> : <FileIcon size={12} className="p-text-3" />}
+                <EntryIcon size={12} className="p-text-3" />
                 {entry.path.split("/").at(-1)}
               </li>
             );
@@ -118,7 +125,7 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
   useEffect(() => {
     if (fixture !== undefined) return;
     let live = true;
-    const failed = <Thrown,>(cause: Thrown): void => { if (live) setErr(renderThrownChain({ cause })); };
+    const failed = (...rejection: [unknown]): void => { if (live) setErr(renderThrownChain({ cause: rejection[0] })); };
 
     getBlueprint(id).then((loaded) => { if (live) setView(loaded); }).catch(failed);
     signedInEmail().then((who) => { if (live) setEmail(who); }).catch(failed);

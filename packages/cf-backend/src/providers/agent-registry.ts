@@ -51,6 +51,17 @@ export interface UserCredentialSource {
   caller: UserCaller | (() => Promise<UserCaller>);
 }
 
+/** What the DIRECT Workers AI transport runs on, taken from the provider that
+ *  consumes it so the two cannot drift. `ProviderEnv` declares the gateway seam
+ *  only; the eval identity's direct path calls `run`, which the platform `Ai`
+ *  binding has and a gateway-only env does not. */
+type DirectAiBinding =
+  NonNullable<ProviderEnv['AI']> & NonNullable<Parameters<typeof createWorkersAIProvider>[1]>;
+
+function isDirectAiBinding(binding: NonNullable<ProviderEnv['AI']>): binding is DirectAiBinding {
+  return 'run' in binding;
+}
+
 export interface AgentProviderDeps {
   env: ProviderEnv;
   /** Null/absent is allowed for short-lived "env-bound providers only" contexts
@@ -118,12 +129,10 @@ export function createUserDOAuthResolver(source: UserCredentialSource | null): A
 export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProviderRegistry {
   const registry = createProviderRegistry();
 
-  let developmentBinding: Ai | undefined;
+  let developmentBinding: DirectAiBinding | undefined;
 
-  if (opts.env.DEV_USER_EMAIL && opts.env.AI) {
-    // SAFETY: production callers pass the wrangler-generated `Env`, whose `AI`
-    // binding is Cloudflare's `Ai`. `ProviderEnv` exposes only its gateway seam.
-    developmentBinding = opts.env.AI as Ai;
+  if (opts.env.DEV_USER_EMAIL && opts.env.AI && isDirectAiBinding(opts.env.AI)) {
+    developmentBinding = opts.env.AI;
   }
 
   registry.register(createWorkersAIProvider({ sessionAffinity: opts.sessionAffinity }, developmentBinding));

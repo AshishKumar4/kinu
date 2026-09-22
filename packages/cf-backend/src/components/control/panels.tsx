@@ -46,7 +46,9 @@ export function useControlRead<Value>(
     // `control()` names HTTP-level failures in its answer, so a rejection is
     // the transport itself refusing. Settled as `failed` rather than left as
     // an unhandled rejection with the panel spinning on `loading` forever.
-    const readFailed = <Thrown,>(thrown: Thrown): void => {
+    const readFailed = (...rejection: [unknown]): void => {
+      const [thrown] = rejection;
+
       diagnostics.failure('control.read_failed', toKinuError({
         doing: 'run a control-plane read', cause: thrown, otherwise: 'io',
       }));
@@ -111,20 +113,22 @@ export function Panel<Value>(
   }
 }
 
+const NOTICE_TONE = {
+  muted: 'p-text-3',
+  warn: 'p-accent',
+  danger: 'p-danger',
+  ok: 'p-success',
+} as const;
+
 export function Notice(
   { tone, icon, children }: {
-    tone: 'muted' | 'warn' | 'danger' | 'ok';
+    tone: keyof typeof NOTICE_TONE;
     icon?: ReactNode;
     children: ReactNode;
   },
 ): ReactNode {
-  const toneClass = tone === 'danger' ? 'p-danger'
-    : tone === 'warn' ? 'p-accent'
-    : tone === 'ok' ? 'p-success'
-    : 'p-text-3';
-
   return (
-    <div className={`p-card p-3 text-xs flex items-start gap-2 ${toneClass}`}>
+    <div className={`p-card p-3 text-xs flex items-start gap-2 ${NOTICE_TONE[tone]}`}>
       {icon}<div className="min-w-0">{children}</div>
     </div>
   );

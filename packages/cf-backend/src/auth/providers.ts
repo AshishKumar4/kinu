@@ -136,7 +136,10 @@ function providerFromEnv(
 }
 
 function cleanEnv(value: string | undefined): string | null {
-  return value?.trim() || null;
+  const trimmed = value?.trim() ?? '';
+
+  // An env var set to whitespace is a provider nobody configured, not a secret.
+  return trimmed === '' ? null : trimmed;
 }
 
 function cleanScopes(value: string | undefined, fallback: string): string {

@@ -167,6 +167,8 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
     ? input / contextWindow
     : null;
 
+  const measure = contextWindow !== null ? `of ${fmtTokens(contextWindow)} tokens` : "tokens";
+
   return (
     <section>
       <BlockHeader
@@ -179,9 +181,7 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
         {/* Hero stat numeral: sized to its block, not the type scale. */}
         <Num className="text-[22px] leading-none p-text">{input === undefined ? "—" : input.toLocaleString()}</Num>
         <span className="p-meta p-text-2 pb-px">
-          {input === undefined
-            ? "input tokens not reported"
-            : contextWindow !== null ? `of ${fmtTokens(contextWindow)} tokens` : "tokens"}
+          {input === undefined ? "input tokens not reported" : measure}
         </span>
         <span className="ml-auto pb-px"><Source kind="API" /></span>
       </div>
@@ -210,7 +210,8 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
 
 function Meter({ value }: { value: number }) {
   const pct = Math.min(Math.max(value, 0), 1) * 100;
-  const tone = value >= 0.9 ? "var(--c-danger)" : value >= 0.7 ? "var(--c-warning)" : "var(--c-accent)";
+  const belowDanger = value >= 0.7 ? "var(--c-warning)" : "var(--c-accent)";
+  const tone = value >= 0.9 ? "var(--c-danger)" : belowDanger;
 
   return (
     <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--c-neutral-tint)" }}>
@@ -824,7 +825,8 @@ export function LogBlock({ log }: { log: readonly ActivityLogEntry[] }) {
   const rows: React.ReactNode[] = [];
 
   for (let i = log.length - 1; i >= 0; i -= 1) {
-    const row = log[i]!;
+    const row = log[i];
+
     rows.push(<LogRow key={`${String(row.createdAt)}:${String(i)}`} row={row} />);
   }
 

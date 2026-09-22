@@ -15,7 +15,7 @@ import { startTransition, useCallback, useEffect, useMemo, useState } from "reac
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import { ArrowSquareOutIcon, GitBranchIcon, GlobeIcon, LinkIcon, LockIcon } from "@phosphor-icons/react";
-import { blueprintPagePath, seededRandom, type SharedLibrary, type SharedRow } from "@kinu.run/core";
+import { blueprintPagePath, seededRandom, type LiveShareVisibility, type SharedLibrary, type SharedRow } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { getSharedLibrary, openLiveShare } from "@/lib/shared-api";
 import { ForkDialog } from "@/components/shared/ForkDialog";
@@ -31,13 +31,22 @@ function when(ms: number): string {
  *  deduped by kind:id — a public row you were also named on shows once. */
 type SegmentId = "all" | "mine" | "received" | "public" | "known";
 
-const SEGMENTS: readonly { id: SegmentId; label: string; empty: string }[] = [
-  { id: "all", label: "All", empty: "Nothing shared yet" },
-  { id: "mine", label: "Mine", empty: "Nothing shared yet" },
-  { id: "received", label: "With me", empty: "Nothing shared with you" },
-  { id: "public", label: "Public", empty: "Nothing public" },
-  { id: "known", label: "People I know", empty: "Nothing from people you know" },
+const SEGMENTS: readonly { id: SegmentId; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "mine", label: "Mine" },
+  { id: "received", label: "With me" },
+  { id: "public", label: "Public" },
+  { id: "known", label: "People I know" },
 ];
+
+/** What a list says when it holds nothing, per list. */
+const EMPTY_COPY: Record<SegmentId, string> = {
+  all: "Nothing shared yet",
+  mine: "Nothing shared yet",
+  received: "Nothing shared with you",
+  public: "Nothing public",
+  known: "Nothing from people you know",
+};
 
 function rowsFor(library: SharedLibrary, segment: SegmentId): SharedRow[] {
   if (segment !== "all") return [...library[segment]];
@@ -95,9 +104,18 @@ function OpenLive({ row }: { row: SharedRow }) {
   );
 }
 
+/** What a live row adds about who it answers. A row that carries no visibility
+ *  says nothing about reach. */
+const VISIBILITY_SUFFIX: Record<LiveShareVisibility, string> = {
+  public: " · public",
+  users: " · people",
+};
+
 function KindBadge({ row }: { row: SharedRow }) {
   if (row.kind === "live") {
-    return <span className="p-badge-info rounded px-1.5 py-0.5 text-[10px]">live{row.visibility === "public" ? " · public" : row.visibility === "users" ? " · people" : ""}</span>;
+    const reach = row.visibility === undefined ? "" : VISIBILITY_SUFFIX[row.visibility];
+
+    return <span className="p-badge-info rounded px-1.5 py-0.5 text-[10px]">live{reach}</span>;
   }
 
   return <span className="p-badge-neutral rounded px-1.5 py-0.5 text-[10px]">blueprint</span>;
@@ -107,8 +125,9 @@ function KindBadge({ row }: { row: SharedRow }) {
 function shareSeed(id: string): number {
   let hash = 2166136261;
 
+  // `for…of` walks whole code points, so every character here has one.
   for (const character of id) {
-    hash = Math.imul(hash ^ character.codePointAt(0)!, 16777619);
+    hash = Math.imul(hash ^ (character.codePointAt(0) ?? 0), 16777619);
   }
 
   return hash >>> 0;
@@ -147,7 +166,7 @@ function ShareTile({ id }: { id: string }) {
       if (distance < best) { best = distance; nearest = otherIndex; }
     }
 
-    return nearest < 0 ? null : { from: point, to: points[nearest]! };
+    return nearest < 0 ? null : { from: point, to: points[nearest] };
   }), [points]);
 
   const accent = Math.floor(seededRandom(shareSeed(id))() * points.length);
@@ -274,8 +293,6 @@ export function SharedLibraryView({ fixture, workspaces }: SharedLibraryProps = 
     return sort === "used" ? [...rows].sort((a, b) => b.bindings - a.bindings) : rows;
   }, [library, segment, needle, sort]);
 
-  const empty = SEGMENTS.find(({ id }) => id === segment)!;
-
   return (
     <div data-shared-library className="space-y-6">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
@@ -306,7 +323,7 @@ export function SharedLibraryView({ fixture, workspaces }: SharedLibraryProps = 
       ) : library !== null && (
         shown.length === 0 ? (
           <p className="py-12 text-center p-text-3">
-            {needle === "" ? empty.empty : `Nothing matches “${query.trim()}”`}
+            {needle === "" ? EMPTY_COPY[segment] : `Nothing matches “${query.trim()}”`}
           </p>
         ) : (
           <ul data-share-grid className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

@@ -12,7 +12,7 @@
  * Binds to wired RPCs: listScaffoldVersions, getScaffoldDiff, getShadowVerdict,
  * applyScaffoldDecision, previewScaffoldLive.
  */
-import { useState, useCallback } from "react";
+import { useState, useCallback, type ReactNode } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { ScalesIcon, PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
@@ -29,6 +29,13 @@ interface ScaffoldDiff { version: number; previousVersion: number | null; added:
 interface ShadowTrial { id: string; task: string; currentScore: number | null; pendingScore: number | null; winner: "current" | "pending" | "tie" | null; rationale: string | null; evaluatedAt: number }
 
 interface ShadowVerdict { version: number | null; trials: ShadowTrial[]; summary: { trials: number; pendingWins: number; currentWins: number; ties: number; winRate: number } }
+
+/** A judged trial's dot. An unjudged one takes the neutral mark below. */
+const WINNER_DOT: Record<"current" | "pending" | "tie", string> = {
+  pending: "p-dot-success",
+  current: "p-dot-danger",
+  tie: "p-dot-neutral",
+};
 
 function statusTone(status: string): string {
   switch (status) {
@@ -68,7 +75,7 @@ function VerdictGrid({ verdict }: { verdict: ShadowVerdict }) {
       <div className="rounded-md border p-border overflow-hidden p-row-text">
         {verdict.trials.map((t) => (
           <div key={t.id} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-            <span className={`shrink-0 size-1.5 rounded-full ${t.winner === "pending" ? "p-dot-success" : t.winner === "current" ? "p-dot-danger" : "p-dot-neutral"}`} />
+            <span className={`shrink-0 size-1.5 rounded-full ${t.winner === null ? "p-dot-neutral" : WINNER_DOT[t.winner]}`} />
             <span className="p-text-2 truncate flex-1" title={t.task}>{t.task}</span>
             <span className="font-mono p-text-3 tabular-nums">{t.currentScore?.toFixed(2) ?? "—"}</span>
             <span className="p-text-3">vs</span>
@@ -78,6 +85,21 @@ function VerdictGrid({ verdict }: { verdict: ShadowVerdict }) {
       </div>
     </div>
   );
+}
+
+/** The selected version's diff, or what stands between the reader and it. */
+function VersionDiff({ detail, version, onRetry }: {
+  detail: AsyncResource<{ diff: ScaffoldDiff; verdict: ShadowVerdict }>;
+  version: number;
+  onRetry: () => void;
+}) {
+  if (detail.status === "ready") return <DiffView diff={detail.value.diff} />;
+
+  if (detail.status === "error") {
+    return <LoadFailure what={`the v${version} diff`} message={detail.message} onRetry={onRetry} />;
+  }
+
+  return <div className="flex justify-center py-4"><Loader size="sm" /></div>;
 }
 
 export interface ScaffoldLineageProps {
@@ -112,7 +134,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
 
       setDetail(loadSucceeded({ diff, verdict }));
     } catch (cause) {
-      setDetail((prev) => loadFailed(prev, cause));
+      setDetail((prev) => loadFailed(prev, { cause }));
     }
   }, [rpc]);
 
@@ -151,6 +173,17 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
 
   const selectedV = versions.find((v) => v.version === selected);
   const isPending = selectedV?.status === "pending";
+  // What stands in for the lineage: a first read that failed, one in flight, or
+  // a workspace whose scaffold has never been rewritten.
+  let notice: ReactNode = null;
+
+  if (lineage.status === "error" && versions.length === 0) {
+    notice = <LoadFailure what="the scaffold lineage" message={lineage.message} onRetry={reload} />;
+  } else if (lineage.status === "loading") {
+    notice = <div className="flex justify-center py-4"><Loader size="sm" /></div>;
+  } else if (versions.length === 0) {
+    notice = <p className="text-xs p-text-3">Only the bootstrap scaffold (v0) so far.</p>;
+  }
 
   return (
     <section className="space-y-1.5">
@@ -158,13 +191,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
         <span className="p-eyebrow">Versions</span>
         <Badge variant="secondary">live v{currentVersion}</Badge>
       </div>
-      {lineage.status === "error" && versions.length === 0 ? (
-        <LoadFailure what="the scaffold lineage" message={lineage.message} onRetry={reload} />
-      ) : lineage.status === "loading" ? (
-        <div className="flex justify-center py-4"><Loader size="sm" /></div>
-      ) : versions.length === 0 ? (
-        <p className="text-xs p-text-3">Only the bootstrap scaffold (v0) so far.</p>
-      ) : (
+      {notice ?? (
         <div className="space-y-2">
           {/* Version lineage */}
           <div className="space-y-1">
@@ -185,13 +212,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
               {detail.status === "ready" && detail.value.verdict.trials.length > 0 && (
                 <VerdictGrid verdict={detail.value.verdict} />
               )}
-              {detail.status === "ready" ? (
-                <DiffView diff={detail.value.diff} />
-              ) : detail.status === "error" ? (
-                <LoadFailure what={`the v${selected} diff`} message={detail.message} onRetry={() => loadDetail(selected)} />
-              ) : (
-                <div className="flex justify-center py-4"><Loader size="sm" /></div>
-              )}
+              <VersionDiff detail={detail} version={selected} onRetry={() => loadDetail(selected)} />
 
               {/* Preview-live a candidate before promoting */}
               <div className="space-y-1.5">
@@ -212,11 +233,11 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
               {/* Promote / Rollback — only meaningful while this version is pending */}
               {isPending && (
                 <div className="flex items-center gap-2">
-                  <FilledButton disabled={!!busy} onClick={() => decide("promote")}>
+                  <FilledButton disabled={busy !== null} onClick={() => decide("promote")}>
                     {busy === "promote" ? <Loader size="sm" /> : <CheckCircleIcon size={13} />}
                     Promote v{selected}
                   </FilledButton>
-                  <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => decide("rollback")}
+                  <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => decide("rollback")}
                     icon={busy === "rollback" ? <Loader size="sm" /> : <ArrowUUpLeftIcon size={13} />}>
                     Roll back
                   </Button>

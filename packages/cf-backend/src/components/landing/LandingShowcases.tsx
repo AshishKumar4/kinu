@@ -2,7 +2,7 @@ import { Button, Tabs } from '@cloudflare/kumo';
 import { TUI_ADVERTISED_HINTS, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS } from '@kinu.run/core';
 import { useRef, useState, type ReactElement, type ReactNode } from 'react';
 
-import { useCopy } from '@/hooks/use-copy';
+import { useCopy, type CopyStatus } from '@/hooks/use-copy';
 
 /**
  * The one way a section opens: a rule label, the heading, and the one lead
@@ -209,6 +209,10 @@ function TuiPreview(): ReactElement {
   );
 }
 
+/** The command button's own words. A failure here asks for the click again
+ *  rather than reporting itself, because the command is on screen either way. */
+const COPY_LABEL: Record<CopyStatus, string> = { idle: 'Copy', copied: 'Copied', failed: 'Retry copy' };
+
 function CliPreview(): ReactElement {
   const { status, copy } = useCopy();
   const [mode, setMode] = useState('run');
@@ -225,7 +229,7 @@ function CliPreview(): ReactElement {
       </div>
       <div className="grid gap-8 p-6 sm:p-8 lg:grid-cols-[1.15fr_1fr]">
         <div className="min-w-0">
-          <div className="mb-4 flex items-center justify-between gap-3"><span className="font-mono text-[11px] uppercase tracking-[.1em] p-accent">{mode === 'run' ? 'One task' : 'Non-interactive runner'}</span><Button type="button" variant="ghost" size="sm" aria-label="Copy task command" onClick={() => copy(command)}>{status === 'copied' ? 'Copied' : status === 'failed' ? 'Retry copy' : 'Copy'}</Button></div>
+          <div className="mb-4 flex items-center justify-between gap-3"><span className="font-mono text-[11px] uppercase tracking-[.1em] p-accent">{mode === 'run' ? 'One task' : 'Non-interactive runner'}</span><Button type="button" variant="ghost" size="sm" aria-label="Copy task command" onClick={() => copy(command)}>{COPY_LABEL[status]}</Button></div>
           <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.9] p-text"><code>{command}</code></pre>
           <p className="mt-5 text-xs leading-[1.7] p-text-4">Needs a configured workspace, a checkout its executor can reach, and provider credentials.</p>
         </div>

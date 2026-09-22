@@ -31,6 +31,7 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
 import { useDeviceRoster } from "@/hooks/use-device-roster";
+import { lastValue } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 
 /** Where the panel is in the one sequence it runs. */
@@ -249,7 +250,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
  */
 export function ConnectDeviceDialog({ onClose }: { onClose: () => void }) {
   const { resource, reload } = useDeviceRoster();
-  const devices = resource.status === "ready" ? resource.value : resource.status === "error" ? resource.last : null;
+  const devices = lastValue(resource);
 
   const [flow] = useState(() => new DeviceConnectFlow({
     register: registerDevice,

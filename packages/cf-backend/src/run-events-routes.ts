@@ -113,8 +113,8 @@ export async function handleRunEventsRequest(request: Request, env: Env, clock: 
       const stub = await resolveAgent(env, agentName);
 
       return Response.json(await stub.listRuns({ limit, cursor: after ? { after } : undefined }));
-    } catch (err) {
-      return reportRouteFailure({ surface: 'runs', cause: err });
+    } catch (cause) {
+      return reportRouteFailure({ surface: 'runs', cause });
     }
   }
 
@@ -139,8 +139,8 @@ export async function handleRunEventsRequest(request: Request, env: Env, clock: 
       const events = decodeRunEventWire(await stub.getRunEventsWire(runId, opts));
 
       return Response.json(events);
-    } catch (err) {
-      return reportRouteFailure({ surface: 'events', cause: err });
+    } catch (cause) {
+      return reportRouteFailure({ surface: 'events', cause });
     }
   }
 
@@ -151,25 +151,32 @@ export async function handleRunEventsRequest(request: Request, env: Env, clock: 
     const [, agentName, runId] = streamMatch;
     const lastEventId = request.headers.get('Last-Event-ID') ?? request.headers.get('last-event-id');
 
-    return streamRunEvents(
-      env, agentName, runId, resumeIndexFromLastEventId(lastEventId), request.signal, clock,
-    );
+    return streamRunEvents({
+      env, agentName, runId,
+      sinceIndex: resumeIndexFromLastEventId(lastEventId),
+      signal: request.signal,
+      clock,
+    });
   }
 
   return null;
 }
 
 
-function streamRunEvents(
-  env: Env,
-  agentName: string,
-  runId: string,
-  sinceIndex: number,
-  signal: AbortSignal,
-  // The stream's clock (D19): a test hands one it drives, so a poll
-  // iteration is a step the test takes rather than 500 ms it sleeps through.
-  clock: Clock,
-): Response {
+/** One SSE subscription to a run's durable event log. */
+export interface RunEventStreamOptions {
+  readonly env: Env;
+  readonly agentName: string;
+  readonly runId: string;
+  readonly sinceIndex: number;
+  readonly signal: AbortSignal;
+  /** The stream's clock (D19): a test hands one it drives, so a poll
+   *  iteration is a step the test takes rather than 500 ms it sleeps through. */
+  readonly clock: Clock;
+}
+
+function streamRunEvents(options: RunEventStreamOptions): Response {
+  const { env, agentName, runId, sinceIndex, signal, clock } = options;
   const encoder = new TextEncoder();
   // Stop polling the DO the moment the client goes away — via stream
   // cancel() (reader released) or the request abort signal — instead of
@@ -267,10 +274,10 @@ function streamRunEvents(
         }
 
         if (!cancelled) controller.close();
-      } catch (err) {
+      } catch (cause) {
         if (!cancelled) {
           controller.enqueue(encoder.encode(
-            `event: error\ndata: ${JSON.stringify({ error: renderThrownChain({ cause: err }) })}\n\n`,
+            `event: error\ndata: ${JSON.stringify({ error: renderThrownChain({ cause }) })}\n\n`,
           ));
           controller.close();
         }

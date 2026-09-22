@@ -81,7 +81,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
     if (!live) return;
     let mounted = true;
 
-    const failed = <Thrown,>(cause: Thrown): void => { if (mounted) setErr(renderThrownChain({ cause })); };
+    const failed = (...rejection: [unknown]): void => { if (mounted) setErr(renderThrownChain({ cause: rejection[0] })); };
 
     read(UpdateOfferSchema, "/api/updates")
       .then((held) => { if (mounted) setOffer(held); })
@@ -108,8 +108,8 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
     // is held as the reason the rows are late, beside the restart notice, and
     // never dropped: a poll that stopped answering for any other reason then
     // says so on the page instead of nowhere.
-    const late = <Thrown,>(cause: Thrown): void => {
-      if (mounted) setRestarting(renderThrownChain({ cause }));
+    const late = (...rejection: [unknown]): void => {
+      if (mounted) setRestarting(renderThrownChain({ cause: rejection[0] }));
     };
 
     const timer = setInterval(() => {
@@ -132,7 +132,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
     setBusy(true);
     setErr(null);
 
-    const failed = <Thrown,>(cause: Thrown): void => setErr(renderThrownChain({ cause }));
+    const failed = (...rejection: [unknown]): void => setErr(renderThrownChain({ cause: rejection[0] }));
 
     read(DeploySnapshotSchema, "/api/updates/apply", { method: "POST" })
       .then(setRun)

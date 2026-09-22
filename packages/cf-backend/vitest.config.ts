@@ -45,7 +45,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
-import { buildSync, transform } from 'esbuild';
+import { buildSync, transform, type OutputFile } from 'esbuild';
 import { buildSlateVendor, slateVendor } from './slate-vendor';
 import { defineConfig, type Plugin } from 'vitest/config';
 import { probeOutbound } from './tests/workerd/http-model-fake';
@@ -55,7 +55,7 @@ import {
   DEPLOY_FAKE_CHANNEL, DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_RECORD, DEPLOY_FAKE_REFRESH_TOKEN,
   assetsOutbound, deployOutbound,
 } from './tests/workerd/deploy-fake';
-import { kCurrentWorker } from 'miniflare';
+import { kCurrentWorker, type V4ModuleDefinition } from 'miniflare';
 import { builtinModules } from 'node:module';
 import { promptText } from './vite-prompt-text';
 
@@ -120,6 +120,15 @@ mkdirSync(dirname(slateVendorModulePath), { recursive: true });
 writeFileSync(slateVendorModulePath, `export default ${JSON.stringify(buildSlateVendor())};\n`);
 
 const workerCompatibility = { compatibilityDate: '2025-12-01', compatibilityFlags: ['nodejs_compat'] };
+
+/** Every probe bundle reaches miniflare the same way: the JS entry as an ES
+ *  module, a `.wasm` output as the compiled bytes. */
+function probeModules(bundle: OutputFile[]): V4ModuleDefinition[] {
+  return bundle.map((file) => ({
+    type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+    path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+  }));
+}
 
 const hostedPreviewProbe = buildSync({
   entryPoints: [fileURLToPath(new URL('./tests/workerd/preview-port-probe.ts', import.meta.url))],
@@ -242,10 +251,7 @@ export default defineConfig({
         // The privileged Vitest runner permits eval and would mask the hosted Node refusal.
         workers: [{
           name: 'hosted-preview-probe', ...workerCompatibility,
-          modules: hostedPreviewProbe.map((file) => ({
-            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
-            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
-          })),
+          modules: probeModules(hostedPreviewProbe),
           durableObjects: { PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true } },
         }, {
           // The seal target is the production root itself, bound here under
@@ -256,10 +262,7 @@ export default defineConfig({
           // the two fixture methods the tests drive.
           workerLoaders: { LOADER: {} },
           name: 'slate-actor-probe', ...workerCompatibility,
-          modules: slateActorProbe.map((file) => ({
-            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
-            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
-          })),
+          modules: probeModules(slateActorProbe),
           durableObjects: {
             SLATE_ACTOR_ROOT: { className: 'SlateActorProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
@@ -271,10 +274,7 @@ export default defineConfig({
           // `workspaceOwner()` reads off `env`. Same class, same script as the
           // outer `PLAN_ANNOUNCE_ROOT`, so both address one object.
           name: 'plan-announce-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: planAnnounceProbe.map((file) => ({
-            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
-            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
-          })),
+          modules: probeModules(planAnnounceProbe),
           durableObjects: {
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             // The owner's plane the root's runtime reaches once an owner is
@@ -285,10 +285,7 @@ export default defineConfig({
           },
         }, {
           name: 'slate-egress-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: slateEgressProbe.map((file) => ({
-            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
-            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
-          })),
+          modules: probeModules(slateEgressProbe),
           durableObjects: { SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', useSQLite: true } },
           // Final transport only: the actual CodemodeEgress policy and resident
           // global fetch run above this mock. No unmatched request reaches a network.
@@ -325,10 +322,7 @@ export default defineConfig({
           // serialization is not enabled" without it).
           compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
           workerLoaders: { LOADER: {} },
-          modules: twoTurnProbe.map((file) => ({
-            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
-            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
-          })),
+          modules: probeModules(twoTurnProbe),
           // The owner-capability secret — `ownerCaller` derives the probe's
           // root caller from it, exactly as the Worker routes do.
           bindings: { DEV_USER_EMAIL: 'probe@local', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
@@ -357,10 +351,7 @@ export default defineConfig({
           compatibilityDate: workerCompatibility.compatibilityDate,
           compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
           workerLoaders: { LOADER: {} },
-          modules: hireProbe.map((file) => ({
-            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
-            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
-          })),
+          modules: probeModules(hireProbe),
           bindings: { DEV_USER_EMAIL: 'probe@local', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'HireAI' } },
           outboundService: hireOutbound,
@@ -379,10 +370,7 @@ export default defineConfig({
           // plus the `portReservations` fixture read, bound under the
           // production name as in two-turn-probe.
           name: 'slate-durability-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: slateDurabilityProbe.map((file) => ({
-            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
-            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
-          })),
+          modules: probeModules(slateDurabilityProbe),
           bindings: {
             PREVIEW_HOST_SUFFIX: 'preview.test',
             DEV_USER_EMAIL: 'probe@local',
@@ -403,10 +391,7 @@ export default defineConfig({
           // probe class is bound under that name too: same className, same
           // scriptName, one object per name.
           name: 'slate-share-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: slateShareProbe.map((file) => ({
-            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
-            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
-          })),
+          modules: probeModules(slateShareProbe),
           durableObjects: {
             SLATE_SHARE_PROBE: { className: 'SlateShareProbeDO', useSQLite: true },
             OrchestratorAgent: { className: 'SlateShareProbeDO', useSQLite: true },
@@ -417,10 +402,7 @@ export default defineConfig({
           // production OrchestratorAgent objects it registered, then itself.
           // No model plane and no network: nothing here runs a turn.
           name: 'account-reset-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: accountResetProbe.map((file) => ({
-            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
-            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
-          })),
+          modules: probeModules(accountResetProbe),
           bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           outboundService: async (request) => {
             throw new Error('Unmatched test egress is disabled: ' + request.url);
@@ -445,10 +427,7 @@ export default defineConfig({
           compatibilityDate: workerCompatibility.compatibilityDate,
           compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
           workerLoaders: { LOADER: {} },
-          modules: publicSurfaceProbe.map((file) => ({
-            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
-            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
-          })),
+          modules: probeModules(publicSurfaceProbe),
           // `DEV_USER_EMAIL` is what makes `env.AI` the development inference
           // plane AND what the loopback identity is synthesized from; the
           // encryption key is the owner capability `ownerCaller` derives.
@@ -473,10 +452,7 @@ export default defineConfig({
           // own `/api/health`. An unmatched host throws there, so a run that
           // reached a real network is a failure rather than a slow pass.
           name: 'deploy-probe', ...workerCompatibility,
-          modules: deployRunProbe.map((file) => ({
-            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
-            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
-          })),
+          modules: probeModules(deployRunProbe),
           // The channel the run reads its release from, which is the one var
           // `DeployRunDO` uses to find it, and the state a DEPLOYED Kinu holds
           // about itself: the record its first run wrote and the refresh token

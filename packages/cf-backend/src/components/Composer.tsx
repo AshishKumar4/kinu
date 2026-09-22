@@ -151,6 +151,16 @@ export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void
   return mapped;
 }
 
+/** Why the mode button is what it is: the lock that holds it, or what the mode
+ *  itself does. */
+function modeTitle(mode: ChatMode, locked: boolean): string {
+  if (mode !== "build") return "Plan. Review a plan before anything changes.";
+
+  if (locked) return "Approve the active plan before starting an Auto turn.";
+
+  return "Auto. The agent makes the change and shows what it ran.";
+}
+
 /**
  * Auto ⇄ Plan. Kept as a two-item segment rather than the single toggle the
  * owner's own composer uses, because Plan here is a mechanical trust boundary
@@ -172,12 +182,7 @@ function ModeSegment({ value, onChange, locked, disabled }: {
       {CHAT_MODES.map((mode) => {
         const build = mode === "build";
         const selected = value === mode;
-
-        const title = build && locked
-          ? "Approve the active plan before starting an Auto turn."
-          : build
-            ? "Auto. The agent makes the change and shows what it ran."
-            : "Plan. Review a plan before anything changes.";
+        const title = modeTitle(mode, locked);
 
         return (
           <button

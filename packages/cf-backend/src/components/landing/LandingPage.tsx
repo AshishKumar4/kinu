@@ -4,7 +4,7 @@ import { useState, type ReactElement, type ReactNode } from 'react';
 
 import { KinuLogo } from '@/components/ui/KinuLogo';
 import { toggleMode, useTheme } from '@/hooks/use-theme';
-import { useCopy } from '@/hooks/use-copy';
+import { useCopy, type CopyStatus } from '@/hooks/use-copy';
 
 import { LandingActionLink } from './LandingActionLink';
 import { LandingFrame } from './LandingFrame';
@@ -22,6 +22,10 @@ const CARD = 'min-w-0 rounded-[14px] border p-border p-surface';
 const NOTE = 'px-1 pt-3 text-[11px] leading-relaxed p-text-4';
 
 const TRAILING_LINK = 'mt-6 inline-block text-sm font-semibold p-accent';
+
+/** The setup button's own words. A failure here asks for the click again
+ *  rather than reporting itself, because the commands are on screen either way. */
+const COPY_LABEL: Record<CopyStatus, string> = { idle: 'Copy', copied: 'Copied', failed: 'Retry copy' };
 
 function Accent({ children }: { children: ReactNode }): ReactElement {
   return <span className="p-accent">{children}</span>;
@@ -62,7 +66,7 @@ function PlatformSection({ install }: { install: string }): ReactElement {
           <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Your terminal or editor.</h3>
           <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Runs on your own machine, against the provider you configured. The snippet below installs it and opens a full-screen TUI.</p>
           <div className="rounded-xl border p-border p-recessed p-4">
-            <div className="mb-3 flex items-center justify-between gap-3"><span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Install · Linux</span><Button type="button" variant="ghost" size="sm" aria-label="Copy local setup commands" onClick={() => copy(install + '\n' + localStart)}>{status === 'copied' ? 'Copied' : status === 'failed' ? 'Retry copy' : 'Copy'}</Button></div>
+            <div className="mb-3 flex items-center justify-between gap-3"><span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Install · Linux</span><Button type="button" variant="ghost" size="sm" aria-label="Copy local setup commands" onClick={() => copy(install + '\n' + localStart)}>{COPY_LABEL[status]}</Button></div>
             <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-[1.9] p-text-2"><code>{install + '\n' + localStart}</code></pre>
           </div>
           <dl className="mt-6 space-y-3 text-sm p-text-3">
@@ -220,12 +224,14 @@ function SwarmSection(): ReactElement {
 }
 
 function OpenSourceSection(): ReactElement {
+  const rows: readonly (readonly [string, ReactNode])[] = [['Licence', <span key="mit">MIT</span>], ['Source', <a key="source" href={REPOSITORY} target="_blank" rel="noreferrer" className="p-accent">github.com/AshishKumar4/kinu</a>], ['Backends', <span key="backends">Cloudflare Workers · POSIX</span>], ['Docs', <span key="docs" className="flex flex-wrap gap-3.5">{['ARCHITECTURE', 'EXPLORATION', 'EVOLUTION', 'DEPLOYMENT'].map((doc) => <a key={doc} href={`${REPOSITORY}/blob/main/docs/${doc}.md`} target="_blank" rel="noreferrer" className="p-accent">{doc.toLowerCase()}</a>)}</span>]];
+
   return (
     <section id="cta" className="border-t p-border bg-[linear-gradient(180deg,var(--c-surface)_0%,var(--c-bg)_100%)]">
       <div className={`${SHELL} grid items-center gap-10 py-20 lg:grid-cols-[1.2fr_1fr] lg:gap-14 lg:py-24`}>
         <div><SectionHead label="07 · Open source" lead="MIT-licensed: the agent, both backends, and the CLI." tight>Open source, <Accent>end to end.</Accent></SectionHead><div className="flex flex-wrap gap-3"><LandingActionLink external primary href={REPOSITORY}>Read the source →</LandingActionLink><LandingActionLink href="/login">Try cloud agents</LandingActionLink></div></div>
         <div className={`${CARD} px-[26px] py-1.5`}>
-          {[['Licence', <span key="mit">MIT</span>], ['Source', <a key="source" href={REPOSITORY} target="_blank" rel="noreferrer" className="p-accent">github.com/AshishKumar4/kinu</a>], ['Backends', <span key="backends">Cloudflare Workers · POSIX</span>], ['Docs', <span key="docs" className="flex flex-wrap gap-3.5">{['ARCHITECTURE', 'EXPLORATION', 'EVOLUTION', 'DEPLOYMENT'].map((doc) => <a key={doc} href={`${REPOSITORY}/blob/main/docs/${doc}.md`} target="_blank" rel="noreferrer" className="p-accent">{doc.toLowerCase()}</a>)}</span>]].map(([label, value], index) => <div key={String(label)} className={`grid gap-2 py-[15px] sm:grid-cols-[96px_1fr] sm:gap-4 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-xs p-text-4">{label}</span><div className="min-w-0 [overflow-wrap:anywhere] font-mono text-[12.5px] p-text-2">{value}</div></div>)}
+          {rows.map(([label, value], index) => <div key={label} className={`grid gap-2 py-[15px] sm:grid-cols-[96px_1fr] sm:gap-4 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-xs p-text-4">{label}</span><div className="min-w-0 [overflow-wrap:anywhere] font-mono text-[12.5px] p-text-2">{value}</div></div>)}
         </div>
       </div>
     </section>

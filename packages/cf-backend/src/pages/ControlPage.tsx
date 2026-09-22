@@ -24,7 +24,7 @@ import {
   type ReconcileReport,
 } from '../lib/control-api';
 import { METRICS_WINDOWS } from '@kinu.run/core/control-plane';
-import { workspaceDisplayTitle } from '@kinu.run/core';
+import { workspaceDisplayTitle, type SeekCursor } from '@kinu.run/core';
 import {
   bytes, Notice, PageWalker, Panel, SectionHeader, Stat, useControlRead, when,
 } from '../components/control/panels';
@@ -101,7 +101,7 @@ export default function ControlPage(): ReactNode {
           ))}
         </nav>
 
-        {workspace !== null ? (
+        {workspace !== null && (
           <div className="space-y-3">
             <button
               onClick={() => go({ workspace: null })}
@@ -121,12 +121,12 @@ export default function ControlPage(): ReactNode {
               <WorkspaceDrilldown workspace={workspace} ownerUserId={user} />
             )}
           </div>
-        ) : user !== null ? (
+        )}
+        {workspace === null && user !== null && (
           <UserDetailView userId={user} onOpenWorkspace={(name) => go({ workspace: name })}
             onBack={() => go({ user: null })} />
-        ) : (
-          <TabBody tab={tab} go={go} />
         )}
+        {workspace === null && user === null && <TabBody tab={tab} go={go} />}
       </div>
     </div>
   );
@@ -175,11 +175,32 @@ function OverviewView(): ReactNode {
   );
 }
 
+/** What the walk reads off a page: whether another one exists and where it
+ *  starts. */
+type WalkedPage = { readonly status: 'end' } | { readonly status: 'more'; readonly next: SeekCursor };
+
+/** The walk every list here keeps: the page it is showing and the cursor that
+ *  opens the next one. */
+function usePageWalk() {
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+
+  const next = (answer: WalkedPage): void => {
+    if (answer.status === 'end') return;
+
+    setCursor(answer.next.after);
+    setPage((shown) => shown + 1);
+  };
+
+  const first = (): void => { setCursor(null); setPage(0); };
+
+  return { cursor, page, next, first };
+}
+
 /* ── Users ───────────────────────────────────────────────────────────────── */
 
 function UsersView({ onOpen }: { onOpen: (userId: string) => void }): ReactNode {
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
+  const { cursor, page, next, first } = usePageWalk();
   const { load, reload } = useControlRead(() => fetchUsers(cursor), [cursor]);
 
   return (
@@ -203,10 +224,8 @@ function UsersView({ onOpen }: { onOpen: (userId: string) => void }): ReactNode 
             />
             <PageWalker
               status={answer.status} page={page}
-              onNext={() => {
-                if (answer.status === 'more') { setCursor(answer.next.after); setPage((p) => p + 1); }
-              }}
-              onFirst={() => { setCursor(null); setPage(0); }}
+              onNext={() => next(answer)}
+              onFirst={first}
             />
           </div>
         )}
@@ -232,8 +251,7 @@ function UserDetailView(
   // Walked like every other list here. Without the walk an account with more
   // than one page of workspaces has every row past the ceiling unreachable,
   // under copy that says the table is the registry's.
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
+  const { cursor, page, next, first } = usePageWalk();
   const { load, reload } = useControlRead(() => fetchUserDetail(userId, cursor), [userId, cursor]);
 
   return (
@@ -270,13 +288,8 @@ function UserDetailView(
             />
             <PageWalker
               status={detail.workspaces.status} page={page}
-              onNext={() => {
-                if (detail.workspaces.status === 'more') {
-                  setCursor(detail.workspaces.next.after);
-                  setPage((p) => p + 1);
-                }
-              }}
-              onFirst={() => { setCursor(null); setPage(0); }}
+              onNext={() => next(detail.workspaces)}
+              onFirst={first}
             />
           </div>
         )}
@@ -290,8 +303,7 @@ function UserDetailView(
 function WorkspacesView(
   { onOpen }: { onOpen: (name: string, userId: string) => void },
 ): ReactNode {
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
+  const { cursor, page, next, first } = usePageWalk();
   const [includeRemoved, setIncludeRemoved] = useState(false);
 
   const { load, reload } = useControlRead(
@@ -307,7 +319,7 @@ function WorkspacesView(
           <label className="flex items-center gap-1.5 text-xs p-text-3">
             <input
               type="checkbox" checked={includeRemoved}
-              onChange={(e) => { setIncludeRemoved(e.target.checked); setCursor(null); setPage(0); }}
+              onChange={(e) => { setIncludeRemoved(e.target.checked); first(); }}
             />
             Show removed
           </label>
@@ -333,10 +345,8 @@ function WorkspacesView(
             />
             <PageWalker
               status={answer.status} page={page}
-              onNext={() => {
-                if (answer.status === 'more') { setCursor(answer.next.after); setPage((p) => p + 1); }
-              }}
-              onFirst={() => { setCursor(null); setPage(0); }}
+              onNext={() => next(answer)}
+              onFirst={first}
             />
           </div>
         )}
@@ -384,8 +394,7 @@ function IncidentsView(): ReactNode {
 /* ── Feedback ────────────────────────────────────────────────────────────── */
 
 function FeedbackView(): ReactNode {
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
+  const { cursor, page, next, first } = usePageWalk();
   const { load, reload } = useControlRead(() => fetchFeedback(cursor), [cursor]);
 
   return (
@@ -416,10 +425,8 @@ function FeedbackView(): ReactNode {
             />
             <PageWalker
               status={answer.status} page={page}
-              onNext={() => {
-                if (answer.status === 'more') { setCursor(answer.next.after); setPage((p) => p + 1); }
-              }}
-              onFirst={() => { setCursor(null); setPage(0); }}
+              onNext={() => next(answer)}
+              onFirst={first}
             />
           </div>
         )}
@@ -470,13 +477,7 @@ function MetricsView(): ReactNode {
             {Object.entries(metrics.panels).map(([name, panel]) => (
               <section key={name} className="p-card p-4 space-y-2">
                 <div className="p-eyebrow">{name}</div>
-                {panel.status === 'ok' ? (
-                  <MetricTable rows={panel.rows} />
-                ) : panel.status === 'unconfigured' ? (
-                  <div className="text-xs p-text-3">{panel.missing.join(', ')} not set</div>
-                ) : (
-                  <div className="text-xs p-danger">{panel.reason}</div>
-                )}
+                <PanelBody panel={panel} />
               </section>
             ))}
           </div>
@@ -484,6 +485,15 @@ function MetricsView(): ReactNode {
       </Panel>
     </div>
   );
+}
+
+/** One panel of the metrics grid: its rows, or why it has none. */
+function PanelBody({ panel }: { panel: AnalyticsPanel }): ReactNode {
+  if (panel.status === 'ok') return <MetricTable rows={panel.rows} />;
+
+  if (panel.status === 'unconfigured') return <div className="text-xs p-text-3">{panel.missing.join(', ')} not set</div>;
+
+  return <div className="text-xs p-danger">{panel.reason}</div>;
 }
 
 /** A metric answer, rendered from whatever columns the query aliased. The
@@ -516,9 +526,17 @@ function MetricTable({ rows }: { rows: Extract<AnalyticsPanel, { status: 'ok' }>
 
 /* ── Audit ───────────────────────────────────────────────────────────────── */
 
+/** An attempt's outcome, in tone. A `pending` row is a settlement that was
+ *  never recorded, which reads the same as a failure. */
+const AUDIT_TONE: Record<ControlAuditRow['outcome'], string> = {
+  ok: 'p-success p-t-status',
+  denied: 'p-accent p-t-status',
+  failed: 'p-danger p-t-status',
+  pending: 'p-danger p-t-status',
+};
+
 function AuditView(): ReactNode {
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
+  const { cursor, page, next, first } = usePageWalk();
   const { load, reload } = useControlRead(() => fetchAudit(cursor), [cursor]);
 
   return (
@@ -539,8 +557,7 @@ function AuditView(): ReactNode {
                   when(a.at), a.actorEmail,
                   <span className="font-mono text-xs">{a.operation}</span>,
                   <span className="font-mono text-xs">{a.target}</span>,
-                  <span className={a.outcome === 'ok' ? 'p-success p-t-status'
-                    : a.outcome === 'denied' ? 'p-accent p-t-status' : 'p-danger p-t-status'}>
+                  <span className={AUDIT_TONE[a.outcome]}>
                     {a.outcome}
                   </span>,
                   <span className="p-text-2 text-xs">{a.detail}</span>,
@@ -550,10 +567,8 @@ function AuditView(): ReactNode {
             />
             <PageWalker
               status={answer.status} page={page}
-              onNext={() => {
-                if (answer.status === 'more') { setCursor(answer.next.after); setPage((p) => p + 1); }
-              }}
-              onFirst={() => { setCursor(null); setPage(0); }}
+              onNext={() => next(answer)}
+              onFirst={first}
             />
           </div>
         )}

@@ -1,7 +1,7 @@
 import { Button } from '@cloudflare/kumo';
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 
-import { useCopy } from '@/hooks/use-copy';
+import { useCopy, type CopyStatus } from '@/hooks/use-copy';
 import { LandingActionLink } from './LandingActionLink';
 import { LandingFrame } from './LandingFrame';
 import { HeroDust } from './hero-dust/HeroDust';
@@ -10,6 +10,10 @@ import { SearchTreeHero } from './search-tree/SearchTreeHero';
 import { useWideHero } from './search-tree/stage';
 
 const PHRASES = ['get better with use.', 'build their own tools.', 'run in the cloud or on your machine.', 'connect to multiple devices.', 'work while your device is closed.'] as const;
+
+/** The install button's own words. A failure here asks for the click again
+ *  rather than reporting itself, because the command is on screen either way. */
+const COPY_LABEL: Record<CopyStatus, string> = { idle: 'Copy', copied: 'Copied', failed: 'Retry copy' };
 
 /**
  * The heading a screen reader gets, DERIVED rather than restated.
@@ -40,7 +44,7 @@ function Typewriter(): ReactElement {
     let timer = 0;
 
     const step = (): void => {
-      const current = PHRASES[index]!;
+      const current = PHRASES[index];
       length += deleting ? -1 : 1;
       setPhrase(current.slice(0, length));
       let delay = deleting ? 24 : 65;
@@ -134,7 +138,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
                 <div className="flex max-w-[540px] items-center justify-between gap-4 rounded-xl border p-border p-recessed px-4 py-3.5">
                   <code className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-[12.5px] leading-relaxed p-text-2"><span aria-hidden="true" className="p-accent">$</span> <span data-install-command>{install}</span></code>
                   <Button type="button" variant="ghost" size="sm" onClick={() => copy(install)} aria-label="Copy install command">
-                    {status === 'copied' ? 'Copied' : status === 'failed' ? 'Retry copy' : 'Copy'}
+                    {COPY_LABEL[status]}
                   </Button>
                 </div>
                 <div className="mt-[22px] flex flex-wrap items-center gap-3">

@@ -1,5 +1,5 @@
 /** Cumulative changes on the selected execution environment. */
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { GitDiffIcon, CheckIcon, CaretDownIcon, CaretRightIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@kinu.run/core";
@@ -73,7 +73,7 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
 
     if (!selected) throw new Error("The selected change-set executor is unavailable");
 
-    return { ...selected, hasChanges: rows.some(row => row.result.files.length > 0 || !!row.result.error) };
+    return { ...selected, hasChanges: rows.some(row => row.result.files.length > 0 || Boolean(row.result.error)) };
   }, [rpc, exec, executorKey]);
 
   const revalidate = useCallback(() => 2_000, []);
@@ -89,13 +89,28 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
     setActionErr(null);
 
     try { await rpc("resetWorkspaceBaseline", []); clearExpanded(); reload(); }
-    catch (e) { setActionErr(`Could not mark reviewed: ${describeError(e)}`); }
+    catch (e) { setActionErr(`Could not mark reviewed: ${describeError({ cause: e })}`); }
     finally { setBusy(false); }
   }, [rpc, reload, clearExpanded]);
 
 
   const files = result?.files ?? [];
-  useEffect(() => { onPresence(loaded?.hasChanges === true || resource.status === "error" || !!result?.error); }, [loaded?.hasChanges, resource.status, result?.error, onPresence]);
+  useEffect(() => { onPresence(loaded?.hasChanges === true || resource.status === "error" || Boolean(result?.error)); }, [loaded?.hasChanges, resource.status, result?.error, onPresence]);
+  // What stands in for the file list: a read that has not landed, the
+  // executor's own refusal, or a tree with nothing in it.
+  let notice: ReactNode = null;
+
+  if (result === null && resource.status === "error") {
+    notice = <LoadFailure what="the change-set" message={resource.message} onRetry={reload} />;
+  } else if (result === null) {
+    notice = <div className="flex justify-center py-8"><Loader size="sm" /></div>;
+  } else if (result.error) {
+    notice = <div className="text-xs p-notice-danger rounded-md px-3 py-2">{result.error}</div>;
+  } else if (result.notGitRepo === true) {
+    notice = <EmptyState icon={<GitDiffIcon size={28} />} title="Not a git repository" />;
+  } else if (files.length === 0) {
+    notice = <EmptyState icon={<GitDiffIcon size={28} />} title="No diffs yet" />;
+  }
 
   return (
     <div className="h-full overflow-y-auto p-5">
@@ -111,18 +126,16 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
 
       {options.length > 1 && (
         <div className="flex items-center gap-1 mb-3">
-          {options.map((name) => (
-            <button key={name} onClick={() => { userSelected.current = true; setExec(name); }}
-              className={`px-2 py-0.5 p-t-control rounded-md transition-colors ${
-                exec === name
-                  ? "p-fill p-text"
-                  : name === "workspace"
-                    ? "p-text-3 hover:p-text-2 opacity-80"
-                    : "p-text-3 hover:p-text-2"
-              }`}>
-              {executorLabel(name)}
-            </button>
-          ))}
+          {options.map((name) => {
+            const unselected = name === "workspace" ? "p-text-3 hover:p-text-2 opacity-80" : "p-text-3 hover:p-text-2";
+
+            return (
+              <button key={name} onClick={() => { userSelected.current = true; setExec(name); }}
+                className={`px-2 py-0.5 p-t-control rounded-md transition-colors ${exec === name ? "p-fill p-text" : unselected}`}>
+                {executorLabel(name)}
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -131,17 +144,7 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
         <LoadFailure what="the latest change-set" message={resource.message} onRetry={reload} className="mb-3" />
       )}
 
-      {result === null ? (
-        resource.status === "error"
-          ? <LoadFailure what="the change-set" message={resource.message} onRetry={reload} />
-          : <div className="flex justify-center py-8"><Loader size="sm" /></div>
-      ) : result.error ? (
-        <div className="text-xs p-notice-danger rounded-md px-3 py-2">{result.error}</div>
-      ) : result.notGitRepo ? (
-        <EmptyState icon={<GitDiffIcon size={28} />} title="Not a git repository" />
-      ) : files.length === 0 ? (
-        <EmptyState icon={<GitDiffIcon size={28} />} title="No diffs yet" />
-      ) : (
+      {notice ?? (
         <div className="space-y-1.5">
           {files.map((f) => {
             const open = expanded.has(f.path);

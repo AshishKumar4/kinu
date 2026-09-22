@@ -1,9 +1,22 @@
 import { buildSync, type Metafile } from 'esbuild';
 import * as reactNs from 'react';
 import type { Plugin } from 'vite';
-import type { SlateVendor } from 'virtual:kinu-slate-vendor';
 
-export type { SlateVendor } from 'virtual:kinu-slate-vendor';
+/** The vendored react/capnweb byte strings the slate runner hands the dynamic
+ *  worker. `src/slate-vendor.d.ts` gives `virtual:kinu-slate-vendor` this same
+ *  shape, so the served module and the factory cannot drift. */
+export interface SlateVendor {
+  readonly react: string;
+  readonly reactStub: string;
+  readonly capnweb: string;
+  readonly capnwebWorkers: string;
+  /** External specifiers each bundle still imports — from the metafile, so
+   *  a test asserts the real edges, not a substring guess. */
+  readonly imports: { readonly react: readonly string[]; readonly capnweb: readonly string[]; readonly capnwebWorkers: readonly string[] };
+  /** The export names `react` publishes, parsed from the bundle's metafile:
+   *  the stub and the test assert against the real set, not a hand list. */
+  readonly reactExports: readonly string[];
+}
 
 /**
  * The bytes a slate's two halves run on: the browser React bundle the import

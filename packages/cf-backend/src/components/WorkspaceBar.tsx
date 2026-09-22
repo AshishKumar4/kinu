@@ -74,14 +74,16 @@ function modelChipLabel(spec: string): string {
   return idPart.startsWith("@cf/") ? idPart.slice(4) : idPart;
 }
 
+const CONNECTION_TONE: Record<ConnectionStatus, { dot: string; word: string }> = {
+  connected: { dot: "p-dot-success", word: "Connected" },
+  connecting: { dot: "p-dot-neutral p-dot-pulse", word: "Connecting" },
+  disconnected: { dot: "p-dot-danger", word: "Offline" },
+  error: { dot: "p-dot-danger", word: "Offline" },
+};
+
 /** The socket, dot plus word at every state — a dot alone is hue alone. */
 function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
-  const tone =
-    status === "connected"
-      ? { dot: "p-dot-success", word: "Connected" }
-      : status === "connecting"
-        ? { dot: "p-dot-neutral p-dot-pulse", word: "Connecting" }
-        : { dot: "p-dot-danger", word: "Offline" };
+  const tone = CONNECTION_TONE[status];
 
   return (
     <span className="inline-flex shrink-0 items-center gap-1.5 p-text-3">
@@ -93,13 +95,15 @@ function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
 
 // No stopped state: the runtime sends no stopped event, so not-working is only idle.
 function TaskIndicator({ working, providerWait, waitingOnYou }: { working: boolean; providerWait: { provider: string; waitMs: number } | null; waitingOnYou: boolean }) {
-  const tone = waitingOnYou
-    ? { cls: "p-warning border p-border p-fill", dot: "p-dot-warning", word: "waiting on you" }
-    : providerWait
-      ? { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: `waiting on ${providerWait.provider} · ${Math.ceil(providerWait.waitMs / 1000)}s` }
-      : working
-        ? { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: "working" }
-        : { cls: "p-text-3 p-border p-fill", dot: "p-dot-neutral", word: "idle" };
+  let tone = { cls: "p-text-3 p-border p-fill", dot: "p-dot-neutral", word: "idle" };
+
+  if (waitingOnYou) {
+    tone = { cls: "p-warning border p-border p-fill", dot: "p-dot-warning", word: "waiting on you" };
+  } else if (providerWait) {
+    tone = { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: `waiting on ${providerWait.provider} · ${Math.ceil(providerWait.waitMs / 1000)}s` };
+  } else if (working) {
+    tone = { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: "working" };
+  }
 
   return (
     <span
@@ -232,7 +236,7 @@ export function InlineRenameTitle({ title, editValue, onRename, subject, textCla
           onKeyDown={(event) => { if (event.key === "Escape") setEditing(false); }}
           onBlur={() => { if (!saving) setEditing(false); }}
           className={`w-48 rounded-md border border-[var(--c-accent)] p-elevated px-2 py-1 ${textClass} p-text outline-none`}
-          aria-label={`${subject[0]!.toUpperCase()}${subject.slice(1)} name`}
+          aria-label={`${subject[0].toUpperCase()}${subject.slice(1)} name`}
         />
         <button
           type="submit"

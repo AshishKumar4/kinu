@@ -75,27 +75,32 @@ const NO_IDS: ReadonlySet<string> = new Set();
  *  staging this whole file exists for would be undone by the parameter list. */
 const NO_STEER_RUNS: readonly InlineSteer[] = [];
 
-/**
- * @param live the pane's live message list, oldest first.
- * @param seeded whether the server has stated that list's contents at all. A
- *   DELIVERED empty list is not a finished conversation — it is a live view that
- *   came up with nothing, and only the store can say which. That distinction is
- *   `walkStart`'s, and it is why an empty seed still starts the walk.
- * @param steerRuns the server's account of this session's mid-turn steers
- *   (`useKinu().steerRuns`); ones whose durable row has arrived are dropped
- *   here, so the thread shows each steer once — never both copies.
- * @param actor whose chat to page. Three answers for three states, the same
- *   shape `startFrom` has: OMITTED is the workspace pane, which reads the
- *   root's own conversation; a STRING is an actor pane naming the actor its
- *   snapshot resolved (`useKinu().paneActorId`); NULL is an actor pane that
- *   does not know its actor yet, and asking anyway would page the workspace's
- *   rows into a helper's chat — so the walk waits instead.
- */
-export function useChatThread(
-  rpc: Rpc, live: readonly UIMessage[], seeded: boolean,
-  steerRuns: readonly InlineSteer[] = NO_STEER_RUNS,
-  actor?: string | null,
-): ChatThread {
+/** What one pane's thread is derived from. */
+export interface ChatThreadInput {
+  readonly rpc: Rpc;
+  /** The pane's live message list, oldest first. */
+  readonly live: readonly UIMessage[];
+  /** Whether the server has stated that list's contents at all. A DELIVERED
+   *  empty list is not a finished conversation — it is a live view that came
+   *  up with nothing, and only the store can say which. That distinction is
+   *  `walkStart`'s, and it is why an empty seed still starts the walk. */
+  readonly seeded: boolean;
+  /** The server's account of this session's mid-turn steers
+   *  (`useKinu().steerRuns`); ones whose durable row has arrived are dropped
+   *  here, so the thread shows each steer once — never both copies. */
+  readonly steerRuns?: readonly InlineSteer[];
+  /** Whose chat to page. Three answers for three states, the same shape
+   *  `startFrom` has: OMITTED is the workspace pane, which reads the root's own
+   *  conversation; a STRING is an actor pane naming the actor its snapshot
+   *  resolved (`useKinu().paneActorId`); NULL is an actor pane that does not
+   *  know its actor yet, and asking anyway would page the workspace's rows into
+   *  a helper's chat — so the walk waits instead. */
+  readonly actor?: string | null;
+}
+
+export function useChatThread({
+  rpc, live, seeded, steerRuns = NO_STEER_RUNS, actor,
+}: ChatThreadInput): ChatThread {
   const oldest = live[0]?.id;
 
   const history = usePagedScroll<ChatHistoryEntry>({

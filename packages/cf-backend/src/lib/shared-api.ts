@@ -5,7 +5,7 @@
  */
 import {
   BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema, LiveShareRecordSchema,
-  type BlueprintFork, type BlueprintView, type SharedLibrary, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility,
+  type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
@@ -19,7 +19,7 @@ async function errorDetail(res: Response): Promise<string> {
   return parsed.success ? parsed.output.error : '';
 }
 
-async function api<Schema extends v.GenericSchema, Body>(schema: Schema, method: string, path: string, body?: Body): Promise<v.InferOutput<Schema>> {
+async function api<Schema extends v.GenericSchema>(schema: Schema, method: string, path: string, body?: JsonValue): Promise<v.InferOutput<Schema>> {
   const res = await fetch(path, {
     method,
     headers: { 'content-type': 'application/json' },

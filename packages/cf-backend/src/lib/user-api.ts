@@ -10,6 +10,7 @@ import {
   type DeviceSandboxStatus,
   type DeviceTier,
   type DeviceUpdateState,
+  type JsonValue,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
@@ -153,8 +154,18 @@ async function errorDetail(res: Response): Promise<string> {
   return parsed.success ? parsed.output.error ?? '' : '';
 }
 
-async function api<Schema extends v.GenericSchema, Body>(
-  schema: Schema, method: string, path: string, body?: Body,
+/** What a mutation sends. Most routes take a field map; the four whose payload
+ *  has a declared shape are named here, because a TypeScript interface never
+ *  satisfies an index signature however JSON-shaped its fields are. */
+type RequestBody =
+  | Record<string, JsonValue | undefined>
+  | Credential
+  | CreateWebhookOpts
+  | McpServerInput
+  | { catalog: ProfileCatalog; expectedVersion: number };
+
+async function api<Schema extends v.GenericSchema>(
+  schema: Schema, method: string, path: string, body?: RequestBody,
 ): Promise<v.InferOutput<Schema>> {
   const res = await fetch(`/api/user${path}`, {
     method,
@@ -248,7 +259,7 @@ const DeviceSandboxSchema = v.object({
   capability: v.picklist(DEVICE_SANDBOX_CAPABILITIES),
   reason: v.nullable(v.picklist(DEVICE_SANDBOX_REASONS)),
   detail: v.optional(v.nullable(v.string()), null),
-  gpu: v.array(v.string()),
+  gpu: v.pipe(v.array(v.string()), v.readonly()),
 });
 
 /** A row written before the registry recorded a sandbox: the switch is on by
@@ -367,9 +378,14 @@ export const updateProfileCatalog = (
 let _modelsCache: Promise<ModelMenu> | null = null;
 
 export function listAvailableModels(): Promise<ModelMenu> {
-  if (!_modelsCache) {
-    _modelsCache = api(ModelMenuSchema, 'GET', '/models').catch((...rejection: [unknown]) => { _modelsCache = null; throw rejection[0]; });
-  }
+  _modelsCache ??= (async () => {
+    try {
+      return await api(ModelMenuSchema, 'GET', '/models');
+    } catch (cause) {
+      _modelsCache = null;
+      throw cause;
+    }
+  })();
 
   return _modelsCache;
 }
@@ -410,11 +426,15 @@ export const listCloudflareAccounts = () =>
     accounts: v.array(v.object({ id: v.string(), name: v.string() })),
   }), 'GET', '/cloudflare/accounts');
 
-export const selectCloudflareAccount = (id: string) =>
-  api(OkSchema, 'PUT', '/cloudflare/account', { id })
+/** Either Cloudflare choice, stored and then dropped from the model menu the
+ *  account and the gateway both feed. */
+const putCloudflareSelection = (path: string, id: string | null) =>
+  api(OkSchema, 'PUT', path, { id })
     .then((r) => { invalidateModelsCache();
 
  return r; });
+
+export const selectCloudflareAccount = (id: string) => putCloudflareSelection('/cloudflare/account', id);
 
 // ── Cloudflare AI Gateway (the user's own gateway) ─────────────────
 export interface CloudflareGatewaySummary {
@@ -437,11 +457,7 @@ export const listCloudflareGateways = () =>
     error: v.nullable(v.string()),
   }), 'GET', '/cloudflare/gateways');
 
-export const selectCloudflareGateway = (id: string | null) =>
-  api(OkSchema, 'PUT', '/cloudflare/gateway', { id })
-    .then((r) => { invalidateModelsCache();
-
- return r; });
+export const selectCloudflareGateway = (id: string | null) => putCloudflareSelection('/cloudflare/gateway', id);
 
 export function cloudflareReconnectPath(returnTo: string): string {
   const params = new URLSearchParams({
@@ -529,9 +545,19 @@ export interface CreateWebhookResult {
   secret: string | null;       // returned once at creation; never again
 }
 
+/** One agent-scoped call: the workspace it names, the route under it, and the
+ *  schema its answer is read through. */
+interface AgentRequest<Schema extends v.GenericSchema> {
+  schema: Schema;
+  method: string;
+  agentName: string;
+  path: string;
+  body?: RequestBody;
+}
+
 /** Agent-scoped HTTP fetch; same auth as the user routes. */
-async function agentApi<Schema extends v.GenericSchema, Body>(
-  schema: Schema, method: string, agentName: string, path: string, body?: Body,
+async function agentApi<Schema extends v.GenericSchema>(
+  { schema, method, agentName, path, body }: AgentRequest<Schema>,
 ): Promise<v.InferOutput<Schema>> {
   const res = await fetch(`/api/workspaces/${encodeURIComponent(agentName)}${path}`, {
     method,
@@ -552,13 +578,18 @@ const CreateWebhookResultSchema = v.object({
 });
 
 export const createDurableWebhook = (agentName: string, opts: CreateWebhookOpts) =>
-  agentApi(CreateWebhookResultSchema, 'POST', agentName, '/triggers', opts);
+  agentApi({ schema: CreateWebhookResultSchema, method: 'POST', agentName, path: '/triggers', body: opts });
 
 export const cancelTrigger = (agentName: string, trigger_id: string) =>
-  agentApi(v.object({ ok: v.boolean(), changed: v.boolean() }), 'DELETE', agentName, `/triggers/${encodeURIComponent(trigger_id)}`);
+  agentApi({
+    schema: v.object({ ok: v.boolean(), changed: v.boolean() }),
+    method: 'DELETE',
+    agentName,
+    path: `/triggers/${encodeURIComponent(trigger_id)}`,
+  });
 
 // ── Workspace overview (the home card's one read) ─────────────────
 // Agent-scoped like the triggers above: the route re-proves ownership against
 // the stamped session id before answering.
 export const getWorkspaceOverview = (agentName: string) =>
-  agentApi(WorkspaceOverviewSchema, 'GET', agentName, '/overview');
+  agentApi({ schema: WorkspaceOverviewSchema, method: 'GET', agentName, path: '/overview' });

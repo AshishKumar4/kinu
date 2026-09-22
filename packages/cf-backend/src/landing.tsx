@@ -16,15 +16,26 @@ import './index.css';
 
 const realFetch = window.fetch.bind(window);
 
+const requestUrl = (input: RequestInfo | URL): string => {
+  const parsedInput = v.safeParse(v.string(), input);
+
+  if (parsedInput.success) return parsedInput.output;
+
+  const parsedUrl = v.safeParse(v.instance(URL), input);
+
+  if (parsedUrl.success) return parsedUrl.output.href;
+
+  const parsedRequest = v.safeParse(v.instance(Request), input);
+
+  if (parsedRequest.success) return parsedRequest.output.url;
+
+  return location.href;
+};
+
 window.fetch = Object.assign(
   (input: RequestInfo | URL, init?: Parameters<typeof window.fetch>[1]): Promise<Response> => {
-    const parsedInput = v.safeParse(v.string(), input);
-    const parsedUrl = v.safeParse(v.instance(URL), input);
     const parsedRequest = v.safeParse(v.instance(Request), input);
-
-    const url = parsedInput.success ? parsedInput.output
-      : parsedUrl.success ? parsedUrl.output.href
-      : parsedRequest.success ? parsedRequest.output.url : location.href;
+    const url = requestUrl(input);
 
     const path = url.startsWith('/') ? url : new URL(url, window.location.origin).pathname;
     const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : 'GET')).toUpperCase();

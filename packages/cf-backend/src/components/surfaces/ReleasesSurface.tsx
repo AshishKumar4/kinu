@@ -210,6 +210,8 @@ function ApprovalRow({ approval, binding, rpc, onRefresh }: {
   // displayed nowhere. Approving a shell string you were never shown is not an
   // approval, however well the digest pins it afterwards.
   const command = deployTargetAsCommand(binding?.deployTarget ?? null);
+  // A target declared as nothing is no target, and the sentence says so.
+  const target = binding?.deployTarget ?? "";
 
   return (
     <div className="py-2 border-b p-border last:border-0 space-y-1.5">
@@ -221,8 +223,8 @@ function ApprovalRow({ approval, binding, rpc, onRefresh }: {
         </div>
         {approval.decision === "pending" && (
           <div className="flex items-center gap-1">
-            <Button size="sm" variant="secondary" disabled={!!busy} onClick={() => decide("approved")} icon={busy === "approved" ? <Loader size="sm" /> : <CheckIcon size={12} />}>Approve</Button>
-            <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => decide("rejected")} icon={busy === "rejected" ? <Loader size="sm" /> : <XIcon size={12} />}>Reject</Button>
+            <Button size="sm" variant="secondary" disabled={busy !== null} onClick={() => decide("approved")} icon={busy === "approved" ? <Loader size="sm" /> : <CheckIcon size={12} />}>Approve</Button>
+            <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => decide("rejected")} icon={busy === "rejected" ? <Loader size="sm" /> : <XIcon size={12} />}>Reject</Button>
           </div>
         )}
       </div>
@@ -234,7 +236,7 @@ function ApprovalRow({ approval, binding, rpc, onRefresh }: {
             : (
               <span className="p-row-text p-text-3">
                 Nothing. This approval promotes the reviewed patch; the source declares
-                {" "}<span className="font-mono">{binding?.deployTarget || "no deploy target"}</span>, which is an
+                {" "}<span className="font-mono">{target === "" ? "no deploy target" : target}</span>, which is an
                 environment label rather than a command.
               </span>
             )}
@@ -245,7 +247,19 @@ function ApprovalRow({ approval, binding, rpc, onRefresh }: {
   );
 }
 
+/** The rows of one approval section, each against the source it was signed on. */
+function ApprovalList({ approvals, binding, rpc, onRefresh }: {
+  approvals: readonly ReleaseApproval[];
+  binding: ReleaseSource | undefined;
+  rpc: Rpc;
+  onRefresh: () => void;
+}) {
+  return <>{approvals.map((approval) => <ApprovalRow key={approval.id} approval={approval} binding={binding} rpc={rpc} onRefresh={onRefresh} />)}</>;
+}
+
 function CheckRow({ check }: { check: ReleaseCheck }) {
+  const output = [check.stdout, check.stderr].filter(Boolean).join("\n");
+
   return (
     <div className="py-2 border-b p-border last:border-0">
       <div className="flex items-center gap-2">
@@ -253,9 +267,9 @@ function CheckRow({ check }: { check: ReleaseCheck }) {
         <span className={`rounded-sm px-1.5 py-0.5 p-t-status ${CHECK_TONE[check.status]}`}>{check.status}</span>
         {check.durationMs != null && <span className="ml-auto p-meta p-text-3">{check.durationMs}ms</span>}
       </div>
-      {(check.stdout || check.stderr) && (
+      {output !== "" && (
         <pre className="mt-1 p-t-code p-text-3 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
-          {[check.stdout, check.stderr].filter(Boolean).join("\n")}
+          {output}
         </pre>
       )}
     </div>
@@ -318,9 +332,7 @@ function ChangeDetail({
       {pending.length > 0 && (
         <section className="rounded-lg border p-border p-3">
           <SectionTitle icon={<ShieldCheckIcon size={14} className="p-accent" />} title="Needs you" count={pending.length} />
-          {pending.map((approval) => (
-            <ApprovalRow key={approval.id} approval={approval} binding={binding} rpc={rpc} onRefresh={onRefresh} />
-          ))}
+          <ApprovalList approvals={pending} binding={binding} rpc={rpc} onRefresh={onRefresh} />
         </section>
       )}
 
@@ -366,9 +378,7 @@ function ChangeDetail({
       {decided.length > 0 && (
         <section>
           <SectionTitle icon={<ShieldCheckIcon size={14} />} title="Approvals" count={decided.length} />
-          {decided.map((approval) => (
-            <ApprovalRow key={approval.id} approval={approval} binding={binding} rpc={rpc} onRefresh={onRefresh} />
-          ))}
+          <ApprovalList approvals={decided} binding={binding} rpc={rpc} onRefresh={onRefresh} />
         </section>
       )}
 

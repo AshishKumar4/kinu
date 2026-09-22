@@ -193,7 +193,7 @@ function canonicalMcpUrl(serverUrl: string): string {
  * different endpoint in under a preset's name. `serverUrl` is optional on
  * that path — the preset supplies it.
  */
-export function validateMcpServerInput<Input>(input: Input): McpServerInput {
+export function validateMcpServerInput(input: JsonValue): McpServerInput {
   const parsedInput = v.safeParse(RawMcpServerInputSchema, input);
 
   if (!parsedInput.success) {
@@ -322,7 +322,7 @@ function validateMcpPresetId(presetId: JsonValue | undefined): McpPreset | undef
  * bound is on the TRIMMED value, which is what gets stored and what `lower(name)`
  * indexes.
  */
-export function validateMcpServerName<Name>(name: Name): string {
+export function validateMcpServerName(name: JsonValue): string {
   const parsed = v.safeParse(v.string(), name);
 
   if (!parsed.success || !parsed.output.trim()) throw new Error('`name` is required.');
@@ -517,6 +517,7 @@ export function mapConnectionStatus(state: string | undefined): McpConnectionSta
     case 'discovering':    return 'discovering';
     case 'ready':          return 'ready';
     case 'failed':         return 'failed';
+    case undefined:
     default:               return 'unknown';
   }
 }

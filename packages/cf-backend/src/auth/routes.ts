@@ -20,8 +20,8 @@ import {
   readJsonObject,
   type CloudflareTokenPayload,
 } from '@kinu.run/core';
-import { JsonObjectSchema, JsonValueSchema } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
 import { ownerCaller } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -230,7 +230,7 @@ async function completeOAuth(request: Request, env: Env, ctx: ExecutionContext |
     );
 
     stage = 'token_response';
-    const tokens = await processOAuthTokenResponse(provider, as, client, tokenResponse, savedState.nonce ?? null);
+    const tokens = await processOAuthTokenResponse({ provider, as, client, response: tokenResponse, nonce: savedState.nonce ?? null });
     stage = 'profile';
     const profile = await fetchOAuthProfile(provider, as, client, tokens);
     stage = 'session';
@@ -248,7 +248,7 @@ async function completeOAuth(request: Request, env: Env, ctx: ExecutionContext |
       headers,
     });
   } catch (e) {
-    const failure = summarizeOAuthFailure(e);
+    const failure = summarizeOAuthFailure({ cause: e });
     diagnostics.failure('auth.oauth_callback_failed', toKinuError({
       doing: 'completing the OAuth callback',
       cause: e,
@@ -287,7 +287,7 @@ async function attachCloudflareWorkersAI(
     // names the native Workers AI model, and a new workspace reads that tier.
     notifyWorkspacesCredentialsChanged(env, userDO, ctx);
   } catch (e) {
-    const failure = summarizeOAuthFailure(e);
+    const failure = summarizeOAuthFailure({ cause: e });
     diagnostics.failure('auth.workers_ai_credential_unavailable', toKinuError({
       doing: 'attaching the Workers AI credential to a Cloudflare sign-in',
       cause: e,
@@ -296,13 +296,19 @@ async function attachCloudflareWorkersAI(
   }
 }
 
+interface OAuthTokenExchange {
+  provider: OAuthProviderConfig;
+  as: oauth.AuthorizationServer;
+  client: oauth.Client;
+  response: Response;
+  nonce: string | null;
+}
+
 async function processOAuthTokenResponse(
-  provider: OAuthProviderConfig,
-  as: oauth.AuthorizationServer,
-  client: oauth.Client,
-  response: Response,
-  nonce: string | null,
+  exchange: OAuthTokenExchange,
 ): Promise<oauth.TokenEndpointResponse> {
+  const { provider, as, client, response, nonce } = exchange;
+
   if (provider.kind === 'oidc') {
     return oauth.processAuthorizationCodeResponse(as, client, response, {
       expectedNonce: nonce ?? oauth.expectNoNonce,
@@ -404,7 +410,7 @@ class OAuthProviderTokenError extends Error {
     public readonly status?: number,
     public readonly providerDescription?: string,
   ) {
-    super(providerDescription || providerError);
+    super(providerDescription ?? providerError);
     this.name = 'OAuthProviderTokenError';
   }
 }
@@ -428,8 +434,7 @@ async function processCloudflareTokenResponse(response: Response): Promise<oauth
   return cloudflareTokenJsonToResponse(body);
 }
 
-function cloudflareTokenJsonToResponse<Input>(input: Input): oauth.TokenEndpointResponse {
-  const body = v.parse(JsonObjectSchema, input);
+function cloudflareTokenJsonToResponse(body: JsonObject): oauth.TokenEndpointResponse {
   const accessToken = stringClaim(body.access_token);
 
   if (!accessToken) throw new Error('Cloudflare token endpoint did not return an access token.');
@@ -480,8 +485,8 @@ async function fetchCloudflareProfile(accessToken: string | undefined): Promise<
   return cloudflareUserResultToProfile(body.result);
 }
 
-function cloudflareUserResultToProfile<Input>(input: Input): OAuthProfile {
-  const user = v.parse(CloudflareUserSchema, input);
+function cloudflareUserResultToProfile(result: JsonValue | undefined): OAuthProfile {
+  const user = v.parse(CloudflareUserSchema, result);
   const id = String(user.id);
   const email = user.email.trim();
 
@@ -499,7 +504,7 @@ function cloudflareUserResultToProfile<Input>(input: Input): OAuthProfile {
     providerSub: id,
     email,
     emailVerified: true,
-    displayName: fullName || username || null,
+    displayName: fullName === '' ? username : fullName,
   };
 }
 
@@ -523,7 +528,7 @@ async function fetchGitHubProfile(accessToken: string): Promise<OAuthProfile> {
   const verified = emails.filter((e) => e.email && e.verified);
   const primary = verified.find((e) => e.primary) ?? verified[0];
   const email = primary?.email ?? user.email ?? null;
-  const emailVerified = !!primary?.email || verified.some((e) => e.email === user.email);
+  const emailVerified = Boolean(primary?.email) || verified.some((e) => e.email === user.email);
 
   if (!user.id) throw new Error('GitHub did not return a stable user id.');
 
@@ -534,7 +539,7 @@ async function fetchGitHubProfile(accessToken: string): Promise<OAuthProfile> {
     providerSub: String(user.id),
     email,
     emailVerified,
-    displayName: user.name || user.login || null,
+    displayName: stringClaim(user.name) ?? stringClaim(user.login),
   };
 }
 
@@ -568,15 +573,15 @@ function addProviderPrompt(url: URL, provider: OAuthProviderConfig): void {
   }
 }
 
-function stringClaim<Value>(value: Value): string | null {
+function stringClaim(value: oauth.JsonValue | undefined): string | null {
   return v.is(v.string(), value) && value.trim() ? value.trim() : null;
 }
 
-function boolClaim<Value>(value: Value): boolean | null {
+function boolClaim(value: oauth.JsonValue | undefined): boolean | null {
   return v.is(v.boolean(), value) ? value : null;
 }
 
-function numberClaim<Value>(value: Value): number | null {
+function numberClaim(value: oauth.JsonValue | undefined): number | null {
   if (v.is(v.number(), value) && Number.isFinite(value)) return value;
 
   if (v.is(v.string(), value) && value.trim()) {
@@ -588,7 +593,7 @@ function numberClaim<Value>(value: Value): number | null {
   return null;
 }
 
-function scopeClaim<Value>(value: Value): string | null {
+function scopeClaim(value: oauth.JsonValue | undefined): string | null {
   if (v.is(v.string(), value)) return value.trim() || null;
 
   if (Array.isArray(value)) {
@@ -604,7 +609,9 @@ function scopeClaim<Value>(value: Value): string | null {
 
 interface OAuthFailureSummary { reason: string; log: string }
 
-function summarizeOAuthFailure<Failure>(error: Failure): OAuthFailureSummary {
+function summarizeOAuthFailure(thrown: { cause: unknown }): OAuthFailureSummary {
+  const error = thrown.cause;
+
   if (error instanceof OAuthProviderTokenError) {
     const reason = `provider_${sanitizeReason(error.providerError)}`;
 
@@ -646,7 +653,7 @@ function summarizeOAuthFailure<Failure>(error: Failure): OAuthFailureSummary {
     return { reason: sanitizeReason(message), log: message };
   }
 
-  return { reason: 'unknown_error', log: String(error) };
+  return { reason: 'unknown_error', log: renderThrownChain({ cause: error }) };
 }
 
 function sanitizeReason(value: string | undefined): string {

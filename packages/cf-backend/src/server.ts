@@ -44,7 +44,7 @@
 
 import { routeAgentRequest } from "agents";
 import { ORCHESTRATOR_AGENT_SLUG, REAL_CLOCK } from "@kinu.run/core";
-import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
@@ -313,12 +313,12 @@ async function authenticateCliAgentTicketRequest(
       identity,
       request: new Request(url.toString(), request),
     };
-  } catch (err) {
+  } catch (cause) {
     // Ticket problems answer above through `verified.ok`. A throw past that
     // point is infrastructure (the UserDO call, the owner capability), so it
     // answers 500. A 401 would send the owner to mint a fresh ticket for an
     // outage.
-    return new Response(JSON.stringify({ error: renderThrownChain({ cause: err }) }), {
+    return new Response(JSON.stringify({ error: renderThrownChain({ cause }) }), {
       status: 500,
       headers: { 'content-type': 'application/json' },
     });
@@ -520,6 +520,14 @@ async function routePreviewHost(request: Request, env: Env): Promise<Response> {
 
   return servePreviewRequest(request, env);
 }
+
+/** The two refusals a hosted actor's chat path answers with a status of their
+ *  own. Every other code is this workspace failing to answer rather than the
+ *  client asking wrong, which is the 500 below. */
+const HOSTED_ACTOR_ROUTE_STATUS: Partial<Readonly<Record<ErrorCode, number>>> = {
+  missing: 404,
+  denied: 403,
+};
 
 /** The host-aware route table. Transport security is settled by the caller. */
 async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response> {
@@ -799,7 +807,9 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
       const root = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(agentName));
       const target = await root.resolveHostedActorRoute(hosted.name);
 
-      if ('reason' in target) return Response.json(target, { status: target.reason === 'missing' ? 404 : target.reason === 'denied' ? 403 : 500 });
+      if ('reason' in target) {
+        return Response.json(target, { status: HOSTED_ACTOR_ROUTE_STATUS[target.reason] ?? 500 });
+      }
     }
 
     const agentResp = await routeAgentRequest(reqWithId, env);

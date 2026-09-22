@@ -85,7 +85,7 @@ if (!response.ok) process.exit(1);
 function cleanEnv(name: string): string | null {
   const value = process.env[name]?.trim();
 
-  return value ? value : null;
+  return value === undefined || value === '' ? null : value;
 }
 
 function summarize(value: JsonValue): JsonValue {

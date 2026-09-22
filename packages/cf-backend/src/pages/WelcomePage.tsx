@@ -45,6 +45,15 @@ const SHOWCASE: { Icon: PhosphorIcon; title: string; copy: string }[] = [
   },
 ];
 
+/** A step dot: the one you are on is wide, the ones behind are dimmed. */
+function stepDotCls(index: number, step: number): string {
+  if (index === step) return 'w-8 bg-[var(--c-accent-fg)]';
+
+  if (index < step) return 'w-4 bg-[var(--c-accent-fg)] opacity-40';
+
+  return 'w-4 p-fill';
+}
+
 function ShowcaseStep({ revealed }: { revealed: boolean }) {
   return (
     <div className="space-y-3">
@@ -105,7 +114,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
   // The onboarding mark is the SAME mark the sidebar shows: first letter of
   // the name being typed, then of the stored name, then of the email.
-  const letter = (displayName.trim() || profile?.email || '?')[0].toUpperCase();
+  const named = displayName.trim() || (profile?.email ?? '');
+  const letter = (named === '' ? '?' : named)[0].toUpperCase();
 
   const finish = useCallback(async () => {
     setBusy(true);
@@ -156,13 +166,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
         <ol aria-label="Setup steps" className="mt-6 mb-5 flex items-center justify-center gap-1.5">
           {ONBOARDING_STEPS.map((s, i) => (
             <li key={s.id} aria-current={i === step ? 'step' : undefined}>
-              <span
-                className={`block h-1.5 rounded-full transition-all ${
-                  i === step ? 'w-8 bg-[var(--c-accent-fg)]'
-                    : i < step ? 'w-4 bg-[var(--c-accent-fg)] opacity-40'
-                      : 'w-4 p-fill'
-                }`}
-              />
+              <span className={`block h-1.5 rounded-full transition-all ${stepDotCls(i, step)}`} />
             </li>
           ))}
         </ol>

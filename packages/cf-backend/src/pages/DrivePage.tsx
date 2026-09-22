@@ -116,9 +116,18 @@ function NameDialog({ title, icon, initial, label, action, onCommit, onClose }: 
   );
 }
 
+/** What a delete is about, per kind: the noun in the title and what goes with
+ *  the entry. */
+const DELETE_COPY: Record<DriveEntry["kind"], { noun: string; also: string }> = {
+  file: { noun: "file", also: "" },
+  folder: { noun: "folder", also: " and everything inside it" },
+  symlink: { noun: "link", also: " (the folder it points at stays)" },
+};
+
 function DeleteDialog({ entry, onConfirm, onClose }: { entry: DriveEntry; onConfirm: () => Promise<void>; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { noun, also } = DELETE_COPY[entry.kind];
 
   const confirm = (): void => {
     setBusy(true);
@@ -135,7 +144,7 @@ function DeleteDialog({ entry, onConfirm, onClose }: { entry: DriveEntry; onConf
   };
 
   return (
-    <Modal title={`Delete ${entry.kind === "folder" ? "folder" : entry.kind === "symlink" ? "link" : "file"}`}
+    <Modal title={`Delete ${noun}`}
       icon={<TrashIcon size={18} className="p-danger" />} onClose={onClose} busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
@@ -143,7 +152,7 @@ function DeleteDialog({ entry, onConfirm, onClose }: { entry: DriveEntry; onConf
       </>}>
       <p className="text-xs p-text-2 leading-relaxed">
         Delete <span className="font-medium p-text">{entry.name}</span>
-        {entry.kind === "folder" ? " and everything inside it" : entry.kind === "symlink" ? " (the folder it points at stays)" : ""}?
+        {also}?
         This cannot be undone.
       </p>
       {error !== null && <div role="alert" className="p-notice-danger rounded-md px-3 py-2 text-xs">{error}</div>}
@@ -231,6 +240,15 @@ function EntryIcon({ entry }: { entry: DriveEntry }) {
   return <FileIcon size={18} className="shrink-0 p-text-3" />;
 }
 
+/** The line under a name: a file's size, a link's target, or the word folder. */
+function entryMeta(entry: DriveEntry): string {
+  if (entry.kind === "file") return formatBytes(entry.size);
+
+  if (entry.kind === "symlink") return `→ ${entry.target ?? ""}`;
+
+  return "folder";
+}
+
 function DriveRow({ folder, entry, first, onRename, onDelete, onMark }: {
   folder: string; entry: DriveEntry; first: boolean;
   onRename: () => void; onDelete: () => void; onMark: () => void;
@@ -240,7 +258,7 @@ function DriveRow({ folder, entry, first, onRename, onDelete, onMark }: {
   const isFolder = entry.kind !== "file";
   const inSkills = path.startsWith(`${DRIVE_SKILLS_DIR}/`);
   const age = entry.mtimeMs > 0 ? shortAge(entry.mtimeMs) : null;
-  const meta = entry.kind === "file" ? formatBytes(entry.size) : entry.kind === "symlink" ? `→ ${entry.target ?? ""}` : "folder";
+  const meta = entryMeta(entry);
 
   return (
     <div data-drive-entry={entry.name} data-drive-kind={entry.kind} data-drive-skill={entry.skill ? "true" : "false"}

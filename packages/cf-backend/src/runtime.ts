@@ -24,7 +24,7 @@
 import type {
   AgentRuntime, ActorHandle, BranchHandle,
   VFS as CoreVFS, Executor, LLM, Schedule, Identity,
-  SqlExecutor, RawSqlExec,
+  SqlExecutor, SqlValue, RawSqlExec,
   ExecuteResult, ResolvedProvider,
   CraftStore as CoreCraftStore, CraftedTool as CoreCraftedTool,
   FiberCtx, ExecutionRouter,
@@ -139,16 +139,22 @@ export interface CFRuntimeAccess {
 }
 
 /**
- * The one bridge between the Agents SDK's `Agent.sql` and the SqlExecutor
- * primitive. The SDK types its bound values as scalars only, so it does not
- * nominally satisfy a primitive that admits ArrayBuffer — an assertion is
- * unavoidable, and this is the single place it is made.
+ * What this bridge takes: the tagged-template runner an Agents-SDK agent
+ * carries, asked for with the value type the primitive uses. Declared as a
+ * METHOD, which is what lets the SDK's own `sql` — same protocol, bound values
+ * typed as scalars only — satisfy it, while `SqlExecutor` additionally admits
+ * the ArrayBuffer that Durable Object SQLite accepts at runtime.
  */
-export function bindAgentSql(agent: Pick<Agent<Env>, 'sql'>): SqlExecutor {
-  // SAFETY: this is the repository's sole Agents-SDK SQL adapter. The SDK and
-  // SqlExecutor are the same tagged-template protocol; SqlExecutor additionally
-  // admits ArrayBuffer, which Durable Object SQLite accepts at runtime.
-  return agent.sql.bind(agent) as SqlExecutor;
+interface AgentSqlSource {
+  sql<T = unknown>(query: TemplateStringsArray, ...values: SqlValue[]): T[];
+}
+
+/**
+ * The one bridge between the Agents SDK's `Agent.sql` and the SqlExecutor
+ * primitive, and the single place the two protocols are joined.
+ */
+export function bindAgentSql(agent: AgentSqlSource): SqlExecutor {
+  return agent.sql.bind(agent);
 }
 
 /**
@@ -323,6 +329,15 @@ export type CFRuntime = AgentRuntime & {
    *  when no Sandbox binding / preview host. Single source for the orchestrator. */
   sandboxHandle: SandboxHandle | null;
 };
+
+/** Every runtime this backend builds carries a vector store (a noop one when
+ *  the Vectorize bindings are absent); a runtime without one did not come from
+ *  `createCFRuntime`. Asked wherever `ActorHostDeps.runtimeFor` hands a value
+ *  back through core's seam, which declares `AgentRuntime` and narrows nothing.
+ */
+export function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
+  return 'vectorStore' in runtime;
+}
 
 /** Optional hooks the orchestrator can inject into the CF runtime. */
 export interface CFRuntimeHooks {
@@ -520,9 +535,9 @@ export function createCFRuntime(
   // Every non-turn model lane this runtime carries, off ONE binding of the
   // three inputs they all resolve from (see `createProfileLaneLLM`), so no
   // call site repeats that binding.
-  const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM(
-    agent, env, actor, hooks.resolveProfile, source, hooks.reportModelCall,
-  );
+  const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM({
+    agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall,
+  });
 
   // The one REQUIRED lane. `judgeModel`/`fastLlm`/`advisorLlm` may be absent —
   // a caller that finds one missing skips that lane — but `AgentRuntime.llm` is
@@ -1085,6 +1100,18 @@ function reportCall(
     : { source, spec, usage });
 }
 
+/** The three inputs every lane resolves from, the lane's own tier, and where a
+ *  completed call reports. `resolveProfile` absent means this runtime was built
+ *  with no profile hooks and has no lane to build. */
+export interface ProfileLaneOptions {
+  readonly agent: AgentHost;
+  readonly env: Env;
+  readonly actor: ActorRuntimeIdentity;
+  readonly resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined;
+  readonly source: FixedTierSource;
+  readonly report?: ModelCallSink;
+}
+
 /** Build one fixed-tier lane from the active immutable profile — every non-turn
  *  model seam this runtime has, including the reflection lane.
  *
@@ -1096,14 +1123,9 @@ function reportCall(
  *  far as anything here can see, was not billed — counting it as an unmeasured
  *  call would depress the workspace's coverage fraction with requests that
  *  genuinely cost nothing. */
-function createProfileLaneLLM(
-  agent: AgentHost,
-  env: Env,
-  actor: ActorRuntimeIdentity,
-  resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined,
-  source: FixedTierSource,
-  report?: ModelCallSink,
-): LLM | undefined {
+function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
+  const { agent, env, actor, resolveProfile, source, report } = options;
+
   if (!resolveProfile) return undefined;
 
   return createRoutedModelLane(actor.actor, source, {
@@ -1145,7 +1167,7 @@ function createRealSchedule(agent: AgentHost): Schedule {
           ? null
           : decodeJsonValue({ value: sdkCtx.snapshot });
 
-        return fn({ stash: sdkCtx.stash, snapshot });
+        return fn({ stash: sdkCtx.stash.bind(sdkCtx), snapshot });
       });
     },
   };

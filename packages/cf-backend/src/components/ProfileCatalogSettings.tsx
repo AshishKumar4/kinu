@@ -223,6 +223,8 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
     setDraft({ ...draft, tiers });
   };
 
+  const saveWhat = tiersOnly ? 'Save tiers' : 'Save roles and tiers';
+
   return (
     <>
       <Card title="Model tiers" icon={BrainIcon}
@@ -425,7 +427,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
             {dirty && <span className="p-meta p-warning">Unsaved changes</span>}
             <div className="ml-auto flex gap-2">
               <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={() => setDraft(envelope.catalog)}>Discard</Button>
-              <FilledButton disabled={!dirty || busy} onClick={save}>{busy ? 'Saving…' : (tiersOnly ? 'Save tiers' : 'Save roles and tiers')}</FilledButton>
+              <FilledButton disabled={!dirty || busy} onClick={save}>{busy ? 'Saving…' : saveWhat}</FilledButton>
             </div>
           </div>
         </div>
@@ -442,8 +444,8 @@ function RoleEditor(props: {
   /** Every role the catalog holds, for the hire list. */
   roleIds: readonly RoleId[];
   customized: boolean;
-  onChange(role: RoleDefinition): void;
-  onReset(): void;
+  onChange: (role: RoleDefinition) => void;
+  onReset: () => void;
 }) {
   const set = <Key extends keyof RoleDefinition>(key: Key, value: RoleDefinition[Key]) =>
     props.onChange({ ...props.role, [key]: value });

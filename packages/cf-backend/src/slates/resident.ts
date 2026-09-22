@@ -30,14 +30,14 @@ export interface ResidentSlateProcess extends SlateProcess {
 }
 
 export interface ResidentSlateDeps {
-  session(): Promise<Pick<WorkspaceSession, 'vfs' | 'processes'>>;
+  session: () => Promise<Pick<WorkspaceSession, 'vfs' | 'processes'>>;
   /**
    * The workspace's one facet manager: every resident spawn goes through its
    * `spawnWorker`, which journals a durable application's launch, binds its
    * reserved port and re-adopts the port's capability, and every end of life
    * goes through its `kill`, the one owner of a resident's teardown.
    */
-  facetManager(): Promise<ComposedFacetManager>;
+  facetManager: () => Promise<ComposedFacetManager>;
 }
 
 export interface ResidentSlateBoot {
@@ -398,15 +398,28 @@ const STATIC_SPECIFIER = new RegExp(`^(\\s*(?:import|export)\\s[^'"]*?\\bfrom\\s
 
 const DYNAMIC_SPECIFIER = new RegExp(`\\bimport\\(\\s*(["'])(${SPECIFIERS})\\1\\s*\\)`, 'g');
 
+function isMappedSpecifier(specifier: string): specifier is keyof typeof SERVER_MODULE_PATHS {
+  return specifier in SERVER_MODULE_PATHS;
+}
+
+/** Where a captured specifier lands. Both patterns are built from the map's own
+ *  keys, so a capture the map cannot answer means the two have been edited
+ *  apart — a rewrite that guessed a path would emit an import of nothing. */
+function mappedModulePath(specifier: string): string {
+  if (!isMappedSpecifier(specifier)) {
+    throw new KinuError('unsupported', `Slate bundle imports ${specifier}, which the module map does not name`);
+  }
+
+  return SERVER_MODULE_PATHS[specifier];
+}
+
 /** Point the application bundle's surviving bare imports at the module-map
  *  paths above. Anchored to statement position so a quoted `kinu:slate` inside
  *  authored data is never rewritten. */
 function rewriteModuleSpecifiers(source: string): string {
-  // SAFETY: SPECIFIERS is constructed from `Object.keys(SERVER_MODULE_PATHS)`,
-  // so the captured group returns only a key of the map.
   return source
-    .replace(STATIC_SPECIFIER, (_match, head: string, quote: string, specifier: string) => `${head}${quote}${SERVER_MODULE_PATHS[specifier as keyof typeof SERVER_MODULE_PATHS]}${quote}`)
-    .replace(DYNAMIC_SPECIFIER, (_match, quote: string, specifier: string) => `import(${quote}${SERVER_MODULE_PATHS[specifier as keyof typeof SERVER_MODULE_PATHS]}${quote})`);
+    .replace(STATIC_SPECIFIER, (_match, head: string, quote: string, specifier: string) => `${head}${quote}${mappedModulePath(specifier)}${quote}`)
+    .replace(DYNAMIC_SPECIFIER, (_match, quote: string, specifier: string) => `import(${quote}${mappedModulePath(specifier)}${quote})`);
 }
 
 export class ResidentSlateProcesses {
@@ -554,13 +567,13 @@ export class ResidentSlateProcesses {
       // The two images a durable launch is journalled by: a slate without its
       // runner or its application module has nothing to re-drive from.
       const runner = images[MAIN_MODULE];
-      const application = images[APPLICATION_MODULE];
+      const applicationImage = images[APPLICATION_MODULE];
 
       if (runner === undefined) throw new KinuError('io', `Slate boot produced no ${MAIN_MODULE} image`);
 
-      if (application === undefined) throw new KinuError('io', `Slate boot produced no ${APPLICATION_MODULE} image`);
+      if (applicationImage === undefined) throw new KinuError('io', `Slate boot produced no ${APPLICATION_MODULE} image`);
       launch.port = input.app.port;
-      launch.durable = { owner: input.owner, image: { runner, application } };
+      launch.durable = { owner: input.owner, image: { runner, application: applicationImage } };
     }
 
     const spawned = await manager.spawnWorker(modules[MAIN_MODULE], `slate ${slateId}`, input.root, launch);
