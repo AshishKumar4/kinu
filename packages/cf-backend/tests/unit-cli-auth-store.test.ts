@@ -83,6 +83,12 @@ function setupEnv() {
   };
 }
 
+/** Every case here starts an auth on the origin it also approves from, so the
+ *  two origins move together and only the device and client vary. */
+function startAuth(env: Env, origin: string, deviceName: string, clientKey = '127.0.0.1') {
+  return startCliAuth(env, { origin, approvalOrigin: origin, deviceName, clientKey });
+}
+
 /** A namespace whose writes fail, so a store outage stays a store outage all
  *  the way to the response instead of being read as a code collision. */
 function brokenKv(): KvStore {
@@ -98,12 +104,7 @@ describe('KV-backed CLI auth store', () => {
     const { env, kv, minted, claimed } = setupEnv();
     const userId = '0123456789abcdef0123456789abcdef';
 
-    const started = await startCliAuth(env, {
-      origin: 'https://kinu.example.com',
-      approvalOrigin: 'https://kinu.example.com',
-      deviceName: 'Ashish terminal',
-      clientKey: '127.0.0.1',
-    });
+    const started = await startAuth(env, 'https://kinu.example.com', 'Ashish terminal');
     expect(started.userCode).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
     expect(started.verificationUrl).toContain(`/cli/auth?code=${encodeURIComponent(started.userCode)}`);
 
@@ -159,12 +160,7 @@ describe('KV-backed CLI auth store', () => {
 
   test('the advertised polling cadence remains permitted for the full auth lifetime', async () => {
     const { env } = setupEnv();
-    const started = await startCliAuth(env, {
-      origin: 'https://kinu.example.com',
-      approvalOrigin: 'https://kinu.example.com',
-      deviceName: 'Ashish terminal',
-      clientKey: '127.0.0.1',
-    });
+    const started = await startAuth(env, 'https://kinu.example.com', 'Ashish terminal');
     const remainingMs = Date.parse(started.expiresAt) - Date.now();
     const requiredPolls = Math.ceil(remainingMs / (started.intervalSeconds * 1_000));
 
@@ -176,12 +172,7 @@ describe('KV-backed CLI auth store', () => {
 
   test('an unapproved request goes away on its own deadline, with nothing left behind', async () => {
     const { env, kv } = setupEnv();
-    const started = await startCliAuth(env, {
-      origin: 'https://o.example',
-      approvalOrigin: 'https://o.example',
-      deviceName: 't',
-      clientKey: '127.0.0.1',
-    });
+    const started = await startAuth(env, 'https://o.example', 't');
     expect(await inspectCliAuth(kv, started.userCode)).toMatchObject({ status: 'pending' });
     const deadline = Date.parse(started.expiresAt);
 
@@ -213,12 +204,7 @@ describe('CLI auth approval replay', () => {
 
   test('replay by the original approver stays idempotent', async () => {
     const { env } = setupEnv();
-    const started = await startCliAuth(env, {
-      origin: 'https://o.example',
-      approvalOrigin: 'https://o.example',
-      deviceName: 't',
-      clientKey: '127.0.0.1',
-    });
+    const started = await startAuth(env, 'https://o.example', 't');
     await approveCliAuth(env, started.userCode, approver, '127.0.0.1');
 
     const replay = await approveCliAuth(env, started.userCode, approver, '127.0.0.1');
@@ -227,12 +213,7 @@ describe('CLI auth approval replay', () => {
 
   test('an already-approved code is rejected for any other user (no identity disclosure)', async () => {
     const { env } = setupEnv();
-    const started = await startCliAuth(env, {
-      origin: 'https://o.example',
-      approvalOrigin: 'https://o.example',
-      deviceName: 't',
-      clientKey: '127.0.0.1',
-    });
+    const started = await startAuth(env, 'https://o.example', 't');
     await approveCliAuth(env, started.userCode, approver, '127.0.0.1');
 
     const stranger = { ...approver, userId: 'feedfacefeedfacefeedfacefeedface', email: 'mallory@example.com' };
@@ -249,12 +230,7 @@ describe('CLI auth error propagation', () => {
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     });
 
-    await expect(startCliAuth(env, {
-      origin: 'https://o.example',
-      approvalOrigin: 'https://o.example',
-      deviceName: 't',
-      clientKey: '127.0.0.1',
-    }))
+    await expect(startAuth(env, 'https://o.example', 't'))
       .rejects.toThrow(/namespace unavailable/i);
   });
 
@@ -262,20 +238,10 @@ describe('CLI auth error propagation', () => {
     const { env } = setupEnv();
 
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      await startCliAuth(env, {
-        origin: 'https://o.example',
-        approvalOrigin: 'https://o.example',
-        deviceName: 't',
-        clientKey: '127.0.0.1',
-      });
+      await startAuth(env, 'https://o.example', 't');
     }
 
-    await expect(startCliAuth(env, {
-      origin: 'https://o.example',
-      approvalOrigin: 'https://o.example',
-      deviceName: 't',
-      clientKey: '127.0.0.1',
-    }))
+    await expect(startAuth(env, 'https://o.example', 't'))
       .rejects.toBeInstanceOf(RateLimitError);
   });
 
@@ -283,20 +249,10 @@ describe('CLI auth error propagation', () => {
     const { env } = setupEnv();
 
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      await startCliAuth(env, {
-        origin: 'https://o.example',
-        approvalOrigin: 'https://o.example',
-        deviceName: 't',
-        clientKey: '127.0.0.1',
-      });
+      await startAuth(env, 'https://o.example', 't');
     }
 
-    const other = await startCliAuth(env, {
-      origin: 'https://o.example',
-      approvalOrigin: 'https://o.example',
-      deviceName: 't',
-      clientKey: '10.0.0.9',
-    });
+    const other = await startAuth(env, 'https://o.example', 't', '10.0.0.9');
     expect(other.userCode).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
   });
 });
@@ -314,12 +270,7 @@ describe('CLI auth route status mapping', () => {
     const { env } = setupEnv();
 
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      await startCliAuth(env, {
-        origin: 'https://o.example',
-        approvalOrigin: 'https://o.example',
-        deviceName: 't',
-        clientKey: '127.0.0.1',
-      });
+      await startAuth(env, 'https://o.example', 't');
     }
 
     const res = await handleCliRequest(startRequest(), env);
