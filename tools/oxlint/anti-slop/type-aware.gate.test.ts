@@ -48,6 +48,8 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+
+import { TEST_FILE } from "./rules/no-ambient-git-in-tests.ts";
 import * as v from "valibot";
 import { describeDiagnostic, lintJson } from "./shared/oxlint-json.ts";
 
@@ -182,7 +184,43 @@ assert.deepEqual(
 assert.deepEqual(
   config.rules["typescript/consistent-type-assertions"],
   ["error", { assertionStyle: "never" }],
-  "assertionStyle never: a type assertion is a claim the compiler cannot check, so the tree carries none",
+  "assertionStyle never: a type assertion is a claim the compiler cannot check, so product source carries none",
+);
+
+/**
+ * Where a test drives the Worker entry or constructs a Durable Object class, the value it hands over
+ * is typed by the vendor as a whole stub (`DurableObjectStub<UserDO>` has 249 required members,
+ * `DurableObjectStub<KinuSandbox>` 112, `AgentContext` the platform state plus the SDK's; measured
+ * 2026-09-22 with @cloudflare/workers-types and agents 0.3), and a recording double cannot satisfy
+ * it without lying. Sixteen such sites remained after every narrowable parameter was narrowed
+ * (`Pick<Env, …>`, `ObjectNamespace<Id, Pick<Class, …>>`, injected resolvers). So in TEST code the
+ * governing rule is `require-safety-comment-for-type-assertion`: an assertion must state concrete
+ * evidence, and the unverifiable classes (`any`, a caller-selected generic, raw JSON) stay refused
+ * outright. The override's file set is the tree's one definition of a test file, asserted here so
+ * the two cannot drift.
+ */
+const testOverride = config.overrides.find((entry: { rules: Record<string, unknown> }) =>
+  "typescript/consistent-type-assertions" in entry.rules);
+assert.deepEqual(
+  testOverride?.rules,
+  { "typescript/consistent-type-assertions": "off" },
+  "the test override relaxes exactly the assertion-style rule and nothing else",
+);
+assert.deepEqual(
+  testOverride?.files,
+  ["**/tests/**", "**/test/**", "**/__tests__/**", "**/*.test.*", "**/*.eval.*", "**/*.spec.*"],
+  "the override's file set is the directory arm and the suffix arm of TEST_FILE, spelled as globs",
+);
+for (const sample of ["packages/x/tests/helpers/a.ts", "packages/x/test/a.ts", "a/__tests__/b.ts", "src/a.test.ts", "tests/evals/a.eval.ts", "src/a.spec.tsx"]) {
+  assert.ok(TEST_FILE.test(sample), `TEST_FILE must match the override's sample ${sample}`);
+}
+for (const sample of ["packages/x/src/contests/run.ts", "packages/x/src/latest/x.ts", "src/testing.ts"]) {
+  assert.ok(!TEST_FILE.test(sample), `TEST_FILE must not match ${sample}, and neither does the override`);
+}
+assert.equal(
+  config.rules["anti-slop/require-safety-comment-for-type-assertion"],
+  "error",
+  "the safety-comment rule is what governs an assertion in test code, so it must stay on",
 );
 assert.deepEqual(
   config.rules["typescript/no-floating-promises"],

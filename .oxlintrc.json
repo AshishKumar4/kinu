@@ -90,6 +90,14 @@
     "anti-slop/require-runtime-import-extension": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error"
   },
+  "overrides": [
+    {
+      "files": ["**/tests/**", "**/test/**", "**/__tests__/**", "**/*.test.*", "**/*.eval.*", "**/*.spec.*"],
+      "rules": {
+        "typescript/consistent-type-assertions": "off"
+      }
+    }
+  ],
   "ignorePatterns": [
     "node_modules",
     "dist",

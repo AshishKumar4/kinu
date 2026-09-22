@@ -186,7 +186,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
       return {
         trigger_id: 'trg_webhook',
         url: 'https://kinu.example.com/hooks/trg_webhook',
-        auth_mode: opts.auth_mode,
+        auth_mode: webhook.auth_mode,
         secret: 'webhook-secret',
       };
     },
