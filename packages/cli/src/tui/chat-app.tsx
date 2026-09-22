@@ -17,7 +17,7 @@ import {
   type TextareaRenderable,
 } from '@opentui/core';
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } from 'react';
 
 import { tierIdsOf,
   DEFAULT_ROLE_ID, TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, nextReasoningEffort, offeredReasoningEfforts,
@@ -78,8 +78,9 @@ import {
   type TuiSettingChoice,
   WalkbackOverlay,
 } from './overlays';
-import { useDeviceConnectPrompt } from './use-device-connect';
+import { useDeviceConnectPrompt, type DeviceConnectPromptState } from './use-device-connect';
 import { useShellApproval } from './use-shell-approval';
+import type { ShellApprovalRequest } from '@kinu.run/core';
 import { useComposerPaste } from './use-composer-paste';
 import { useDraftEditing } from './use-draft-editing';
 import { composerHelp } from './help-view';
@@ -185,13 +186,16 @@ function anyOverlayOpen(input: {
   activeSurface: ActiveSurface;
   navigationOpen: boolean;
   walkbackOpen: boolean;
-  pendingConsent: unknown;
-  shellApproval: unknown;
-  deviceConnect: unknown;
+  pendingConsent: PendingDeviceConsent | null;
+  shellApproval: ShellApprovalRequest | null;
+  deviceConnect: DeviceConnectPromptState | null;
 }): boolean {
-  return Boolean(
-    input.activeSurface || input.navigationOpen || input.walkbackOpen || input.pendingConsent || input.shellApproval || input.deviceConnect,
-  );
+  return input.activeSurface !== null
+    || input.navigationOpen
+    || input.walkbackOpen
+    || input.pendingConsent !== null
+    || input.shellApproval !== null
+    || input.deviceConnect !== null;
 }
 
 
@@ -472,9 +476,11 @@ function ChatScene({
     stream.clear();
 
     if (!id) return;
-    setMessages((prev) =>
-      prev.flatMap((m) => (m.id === id ? (m.content.trim() ? [{ ...m, live: false }] : []) : [m])),
-    );
+    setMessages((prev) => prev.flatMap((m) => {
+      if (m.id !== id) return [m];
+
+      return m.content.trim() ? [{ ...m, live: false }] : [];
+    }));
   }, [stream]);
 
   /** All input transitions flow through the one reducer; effects come back to
@@ -924,10 +930,10 @@ function ChatScene({
     }
   }, [addError, addMessage, client]);
 
-  const selectReasoningEffort = useCallback(async (effort: ReasoningEffort) => {
+  const selectReasoningEffort = useCallback(async (chosen: ReasoningEffort) => {
     try {
-      await profileMutations.setReasoningEffort(effort);
-      setStatus((value) => value === null ? value : { ...value, reasoningEffort: effort });
+      await profileMutations.setReasoningEffort(chosen);
+      setStatus((value) => value === null ? value : { ...value, reasoningEffort: chosen });
     } catch (cause) {
       addError({ cause });
     }
@@ -991,6 +997,7 @@ function ChatScene({
 
         return;
       case 'queue':
+      case 'branch':
       case 'fork':
       case 'undo':
         // Surface-owned outcomes — handleSubmit intercepts them before this.
@@ -1292,19 +1299,19 @@ function ChatScene({
 
       case 'broadcast': {
         if (!isBranchStatusEvent(event.event)) return;
-        const status = event.event;
+        const branchStatus = event.event;
         setBranchTasks((prev) => {
           const next = { ...prev };
 
-          if (status.status === 'running') next[status.branchId] = status.task;
-          else delete next[status.branchId];
+          if (branchStatus.status === 'running') next[branchStatus.branchId] = branchStatus.task;
+          else delete next[branchStatus.branchId];
 
           return next;
         });
 
         // The settle/error line IS the takes affordance (the running state
         // lives in the status bar).
-        if (status.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(status) });
+        if (branchStatus.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(branchStatus) });
 
         return;
       }
@@ -1696,11 +1703,7 @@ function ChatScene({
 
   // The placeholder is the one line a person reads before typing. While a
   // turn runs, what typing does is the one thing worth saying.
-  const composerPlaceholder = !ready
-    ? 'Connecting…'
-    : isProcessing
-      ? TUI_COMPOSER_STEERING_PLACEHOLDER
-      : TUI_COMPOSER_PLACEHOLDER;
+  const composerPlaceholder = composerPlaceholderFor(ready, isProcessing);
 
   useEffect(() => {
     if (inputFocused) inputRef.current?.focus();
@@ -1709,6 +1712,129 @@ function ChatScene({
   // but no edit announces. The terminal's own dimensions are the trigger.
   useEffect(syncComposerRows, [width, syncComposerRows]);
   inputShouldFocusRef.current = inputFocused;
+
+  /** Exactly one overlay is on screen, first match wins. */
+  function activeOverlay(): ReactNode {
+    if (activeSurface?.kind === 'history') {
+      return (
+        <PromptHistoryOverlay entries={promptHistory} terminal={{ width: sceneWidth, height }} onSelect={(text) => {
+          setActiveSurface(null);
+          setInputText(text);
+          inputRef.current?.gotoBufferEnd();
+        }} />
+      );
+    }
+
+    if (themePickerOpen) {
+      return (
+        <ThemePickerOverlay
+          terminal={{ width: sceneWidth, height }}
+          selection={preferences.theme ?? DEFAULT_TUI_THEME_SELECTION}
+          onSelect={(selection: ThemeSelection) => {
+            setActiveSurface(null);
+            updatePreferences((current) => ({ ...current, theme: selection }));
+          }}
+        />
+      );
+    }
+
+    if (settingsOpen) {
+      return (
+        <SettingsOverlay
+          settings={settings}
+          terminal={{ width: sceneWidth, height }}
+          onSelect={(setting) => {
+            setActiveSurface(null);
+
+            if (setting.command === '/model') return openModelPicker();
+
+            if (setting.command.endsWith(' ')) {
+              setInputText(setting.command);
+
+              return;
+            }
+
+            return handleSubmit(setting.command);
+          }}
+        />
+      );
+    }
+
+    if (hubView !== null && hubLive !== undefined) {
+      return (
+        <HubOverlay
+          view={hubView}
+          data={hubLive}
+          width={sceneWidth}
+          height={height}
+          {...(onNewAgent !== undefined ? { newAgentHint: keybindings.hint('hub.new-agent') } : {})}
+        />
+      );
+    }
+
+    if (commandPalette) {
+      return (
+        <CommandPaletteOverlay
+          commands={commands}
+          terminal={{ width: sceneWidth, height }}
+          onSelect={(command) => {
+            setActiveSurface(null);
+            setInputText(`${command.name}${command.usage ? ' ' : ''}`);
+          }}
+        />
+      );
+    }
+
+    if (modelPicker) {
+      return (
+        <ModelPickerOverlay
+          models={modelPicker.menu.models}
+          failures={modelPicker.menu.failures}
+          currentSpec={modelSpec}
+          terminal={{ width: sceneWidth, height }}
+          loading={modelPicker.loading}
+          error={modelPicker.error}
+          onSelect={selectModel}
+        />
+      );
+    }
+
+    if (changelogView) {
+      return (
+        <ChangelogOverlay
+          view={changelogView}
+          terminal={{ width: sceneWidth, height }}
+          onSelect={revertChangelogEntry}
+        />
+      );
+    }
+
+    if (takesView) {
+      return (
+        <TakesOverlay
+          set={takesView}
+          terminal={{ width: sceneWidth, height }}
+          onSelect={(candidate) => pickTake(takesView, candidate)}
+        />
+      );
+    }
+
+    if (inputState.walkbackOpen && walkbackList.length > 0) {
+      return (
+        <WalkbackOverlay
+          candidates={walkbackList}
+          terminal={{ width: sceneWidth, height }}
+          onSelect={performWalkback}
+        />
+      );
+    }
+
+    return (
+
+      <CommandHintOverlay commands={commandHints} terminal={{ width: sceneWidth, height }} />
+
+    );
+  }
 
   return (
     <TuiShell
@@ -1756,7 +1882,7 @@ function ChatScene({
         }}
       >
         <MessageList messages={messages} toolDetailsExpanded={toolDetailsExpanded} />
-        <PhaseLine label={isProcessing ? (turnPhase ?? 'thinking') : nextTier ? `next turn · ${nextTier}` : null} />
+        <PhaseLine label={phaseLineLabel(isProcessing, turnPhase, nextTier)} />
       </scrollbox>
 
       {inputState.queue.length > 0 && (
@@ -1817,87 +1943,7 @@ function ChatScene({
         />
       </box>
 
-      {activeSurface?.kind === 'history' ? (
-        <PromptHistoryOverlay entries={promptHistory} terminal={{ width: sceneWidth, height }} onSelect={(text) => {
-          setActiveSurface(null);
-          setInputText(text);
-          inputRef.current?.gotoBufferEnd();
-        }} />
-      ) : themePickerOpen ? (
-        <ThemePickerOverlay
-          terminal={{ width: sceneWidth, height }}
-          selection={preferences.theme ?? DEFAULT_TUI_THEME_SELECTION}
-          onSelect={(selection: ThemeSelection) => {
-            setActiveSurface(null);
-            updatePreferences((current) => ({ ...current, theme: selection }));
-          }}
-        />
-      ) : settingsOpen ? (
-        <SettingsOverlay
-          settings={settings}
-          terminal={{ width: sceneWidth, height }}
-          onSelect={(setting) => {
-            setActiveSurface(null);
-
-            if (setting.command === '/model') return openModelPicker();
-
-            if (setting.command.endsWith(' ')) {
-              setInputText(setting.command);
-
-              return;
-            }
-
-            return handleSubmit(setting.command);
-          }}
-        />
-      ) : hubView !== null && hubLive !== undefined ? (
-        <HubOverlay
-          view={hubView}
-          data={hubLive}
-          width={sceneWidth}
-          height={height}
-          {...(onNewAgent !== undefined ? { newAgentHint: keybindings.hint('hub.new-agent') } : {})}
-        />
-      ) : commandPalette ? (
-        <CommandPaletteOverlay
-          commands={commands}
-          terminal={{ width: sceneWidth, height }}
-          onSelect={(command) => {
-            setActiveSurface(null);
-            setInputText(`${command.name}${command.usage ? ' ' : ''}`);
-          }}
-        />
-      ) : modelPicker ? (
-        <ModelPickerOverlay
-          models={modelPicker.menu.models}
-          failures={modelPicker.menu.failures}
-          currentSpec={modelSpec}
-          terminal={{ width: sceneWidth, height }}
-          loading={modelPicker.loading}
-          error={modelPicker.error}
-          onSelect={selectModel}
-        />
-      ) : changelogView ? (
-        <ChangelogOverlay
-          view={changelogView}
-          terminal={{ width: sceneWidth, height }}
-          onSelect={revertChangelogEntry}
-        />
-      ) : takesView ? (
-        <TakesOverlay
-          set={takesView}
-          terminal={{ width: sceneWidth, height }}
-          onSelect={(candidate) => pickTake(takesView, candidate)}
-        />
-      ) : inputState.walkbackOpen && walkbackList.length > 0 ? (
-        <WalkbackOverlay
-          candidates={walkbackList}
-          terminal={{ width: sceneWidth, height }}
-          onSelect={performWalkback}
-        />
-      ) : (
-        <CommandHintOverlay commands={commandHints} terminal={{ width: sceneWidth, height }} />
-      )}
+      {activeOverlay()}
       {pendingConsent && <DeviceConsentOverlay consent={pendingConsent} terminal={{ width: sceneWidth, height }} />}
       {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width: sceneWidth, height }} />}
       {shellApproval.pending && <ShellApprovalOverlay request={shellApproval.pending} terminal={{ width: sceneWidth, height }} />}
@@ -1906,6 +1952,22 @@ function ChatScene({
   );
 }
 
+
+/** The one line a person reads before typing. While a turn runs, what typing
+ *  does is the one thing worth saying. */
+function composerPlaceholderFor(ready: boolean, isProcessing: boolean): string {
+  if (!ready) return 'Connecting…';
+
+  return isProcessing ? TUI_COMPOSER_STEERING_PLACEHOLDER : TUI_COMPOSER_PLACEHOLDER;
+}
+
+/** What the phase line says: the running turn's phase, or the tier the next
+ *  turn was pinned to. */
+function phaseLineLabel(isProcessing: boolean, turnPhase: string | null, nextTier: TierId | null): string | null {
+  if (isProcessing) return turnPhase ?? 'thinking';
+
+  return nextTier === null ? null : `next turn · ${nextTier}`;
+}
 
 /** A failure as a transcript entry: the provider's own words, plus the next
  *  command when the failure class implies one. Plain text — the TUI styles
