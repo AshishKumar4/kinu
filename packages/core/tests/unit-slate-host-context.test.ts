@@ -27,7 +27,6 @@ test('slateInlineHeight clamps to the schema band and the schema reads the same 
   expect(slateInlineHeight(10)).toBe(SLATE_INLINE_HEIGHT.min);
   expect(slateInlineHeight(240)).toBe(240);
 
-  // The package.json schema enforces the same band: inside parses, outside refuses.
   expect(parseSlateProject({ main: 'server.js', slate: { inline: { height: 240 } } }).slate.inline.height).toBe(240);
   expect(() => parseSlateProject({ main: 'server.js', slate: { inline: { height: 900 } } })).toThrow('height');
   expect(() => parseSlateProject({ main: 'server.js', slate: { inline: { height: 10 } } })).toThrow('height');
@@ -40,8 +39,6 @@ test('isSlateFrameMessage checks the frame, the origin and the envelope', () => 
   const event = (fields: { source?: unknown; origin?: string; data?: unknown }) =>
     ({ source: fields.source ?? null, origin: fields.origin ?? '', data: fields.data });
 
-  // Identity is the whole check: this channel's port is the "frame window",
-  // the other channel's is a different window, and origin/envelope gate too.
   expect(isSlateFrameMessage(event({ source: channel.port1, origin: 'https://p.example.test', data }), channel.port1, 'https://p.example.test')).toBe(true);
   expect(isSlateFrameMessage(event({ source: channel.port2, origin: 'https://p.example.test', data }), channel.port1, 'https://p.example.test')).toBe(false);
   expect(isSlateFrameMessage(event({ source: channel.port1, origin: 'https://evil.example.test', data }), channel.port1, 'https://p.example.test')).toBe(false);
@@ -60,8 +57,7 @@ test('slateFrameSrc embeds a schema-checked context and refuses a malformed one'
   const back = JSON.parse(new URL(slateFrameSrc('https://f.example.test/', context)).searchParams.get(SLATE_QUERY_PARAM) ?? 'null');
   expect(back).toEqual(context);
 
-  // The serializer checks the context against the schema on its way into the
-  // URL; the malformed inputs are built as JSON so the runtime is what fails.
+  // Built as JSON so the runtime schema check is what fails.
   expect(() => slateFrameSrc('https://f.example.test/', JSON.parse(JSON.stringify({ ...context, theme: 'solarized' })))).toThrow();
   expect(() => slateFrameSrc('https://f.example.test/', JSON.parse(JSON.stringify({ ...context, extra: true })))).toThrow();
 });

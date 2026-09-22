@@ -1,7 +1,5 @@
-// The MEMORY.md tail woven into every turn is a bounded read of an append-only
-// file that only grows. Two things are pinned over the real SQLite-backed plane:
-// what comes back is byte-identical to slicing the whole file, and the store is
-// asked for the window rather than the file.
+// The MEMORY.md tail is a bounded read: byte-identical to slicing the whole file,
+// and the store is asked for the window only.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createWorkspaceBundle, createMemoryMemory } from './helpers';
@@ -51,15 +49,12 @@ describe('readMemoryTail', () => {
     const tail = await readMemoryTail(memory);
 
     expect(tail).toHaveLength(MEMORY_TAIL_MAX_CHARS);
-    // A tail of N UTF-16 units spans at most 3N bytes of UTF-8; one line over
-    // that is the slack a windowed read may take. The whole file is not.
+    // N UTF-16 units span at most 3N UTF-8 bytes; one extra line is the allowed slack.
     expect(bytesRead()).toBeLessThanOrEqual(MEMORY_TAIL_MAX_CHARS * 3 + line.length);
   });
 
   test('the ranged tail is the whole-file tail at every bound', async () => {
-    // 1-, 2-, 3- and 4-byte sequences, so every window start that can land
-    // inside a code point does at some bound, and astral characters put a
-    // surrogate pair on both sides of the slice.
+    // Multi-byte and astral characters so window starts land inside code points.
     const content = [
       '### Note (2026-09-10)',
       'café résumé naïve — ünïcödé',

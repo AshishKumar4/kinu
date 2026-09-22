@@ -10,7 +10,6 @@ import { WorkspaceSlates } from '../src/slates/runtime';
 import { WorkspaceBlueprints } from '../src/slates/blueprints';
 import { createTestWorkspace, createWorkspaceBundle, makeSqlExec } from './helpers';
 
-/** One workspace's whole slate plane, on its own database. */
 async function slatePlane(name: string) {
   const ws = createTestWorkspace();
   const session = await createWorkspaceBundle(ws.db).session();
@@ -65,7 +64,6 @@ test('a blueprint carries the included tree and its requirements, and admits wit
     const published = await owner.blueprints.publish('issues', version.id.value, ['src']);
     expect(published.share).toMatchObject({ slate: 'issues', kind: 'blueprint', included: ['package.json', 'src'], revokedAt: null, users: [] });
     const publication = owner.slates.publication(new SlatePublicationId(published.share.publication));
-    // A subset ships as its own bundle; the version's source is untouched.
     expect(publication.materialization.value).not.toBe(version.source.value);
     expect(owner.slates.skeleton(publication.id).sourceDigest.value).toBe(publication.materialization.digest.value);
 
@@ -88,11 +86,9 @@ test('a blueprint carries the included tree and its requirements, and admits wit
     expect(forker.vfs.exists(landed + '/data')).toBe(false);
     expect(forker.store.getSlate(new SlateId(fork.slate))?.workspaceId.value).toBe('forker');
 
-    // Tampered bytes are refused before anything lands.
     const forged = { ...bundle, blobs: Object.fromEntries(Object.entries(bundle.blobs).map(([digest]) => [digest, btoa('stolen')])) };
     await expect(forker.blueprints.admit('forker', forged)).rejects.toMatchObject({ code: 'bad_input' });
 
-    // Revocation refuses the next read and the next bundle.
     owner.blueprints.unshare(published.share.id);
     expect(() => owner.blueprints.read(published.share.id)).toThrow('no longer shared');
     expect(() => owner.blueprints.bundle(published.share.id)).toThrow('no longer shared');

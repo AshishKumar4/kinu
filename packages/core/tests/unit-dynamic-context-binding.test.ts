@@ -1,11 +1,4 @@
-// collectDynamicContext — the ONE binding of each live per-step plane to the
-// store that answers it.
-//
-// `agentDynamicContext` already owned which planes exist; which store feeds each
-// plane was stated once per backend in two eight-field literals. This runs once
-// against the shared binding, so a plane wired to the wrong store — or silently
-// dropped for one backend — fails here rather than in whichever agent noticed
-// its context had gone quiet.
+// collectDynamicContext: the one binding of each per-step plane to its store, shared by both backends.
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import { createTestActors, createTestRuntime, present } from '@kinu.run/test-utils';
@@ -27,8 +20,7 @@ import { withCraftedToolDeclarations } from '../src/tools/sandbox-contract';
 interface Fixture {
   readonly rt: AgentRuntime;
   readonly stores: AgentStores;
-  /** A SECOND bundle over the SAME database, bound to a real sibling actor —
-   *  what the per-step block of another agent in this workspace reads. */
+  /** A second bundle over the same database, bound to a sibling actor. */
   readonly sibling: AgentStores;
 }
 
@@ -56,7 +48,6 @@ interface Overrides {
   readonly tools?: ToolSet;
   readonly memoryTail?: string;
   readonly missingCapabilities?: readonly MissingCapability[];
-  /** The backend-only planes, as the source callbacks a backend supplies. */
   readonly subordinateDelegates?: () => readonly DynamicDelegate[];
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
 }
@@ -122,11 +113,7 @@ test('crafted declarations follow the installed sandbox reader and the bound gra
 });
 
 describe('the four store-backed planes are the reading actor\'s own', () => {
-  // This is the convergence point: ONE function reads four actor-private stores
-  // and its output is the live context block of one model step. Over a database
-  // holding two actors, an unscoped read here is how a sibling's facts, jobs,
-  // tasks and forks get rendered into this agent's prompt — so the isolation is
-  // asserted where the four planes actually meet, not only per store.
+  // Four actor-private stores meet here, so sibling isolation is asserted at the convergence point.
   test('a sibling\'s facts, jobs, tasks and fork runs never enter this block', () => {
     const o = setup();
     o.sibling.facts.upsert('deploy_target', 'sibling.workers.dev', {});
@@ -143,8 +130,6 @@ describe('the four store-backed planes are the reading actor\'s own', () => {
     const ctx = collect(o);
     expect(ctx.jobs).toEqual({ items: [], total: 0 });
     expect(ctx.tasks).toEqual({ items: [], total: 0 });
-    // The live fork roster folds into `delegates` beside subordinates; the
-    // sibling's running head must contribute neither a row nor a count.
     expect(ctx.delegates).toEqual({ items: [], total: 0 });
     expect(ctx.factsBlock).toBeUndefined();
   });
@@ -172,7 +157,7 @@ describe('collectDynamicContext', () => {
     expect(ctx.jobs).toEqual({ items: [], total: 0 });
     expect(ctx.tasks).toEqual({ items: [], total: 0 });
     expect(ctx.delegates).toEqual({ items: [], total: 0 });
-    // Omitted rather than rendered empty — the distinction volatile-context owns.
+    // Omitted, not rendered empty.
     expect(ctx.factsBlock).toBeUndefined();
     expect(ctx.memoryTail).toBeUndefined();
     expect(ctx.recoveries).toBeUndefined();
@@ -218,8 +203,7 @@ describe('collectDynamicContext', () => {
   });
 
   test('reads fresh on every call — no plane is cached across steps', () => {
-    // Load-bearing: this is called once per model STEP, and a job registered
-    // mid-turn has to be visible on the very next one.
+    // Called per step: a job registered mid-turn is visible on the next step.
     const o = setup();
     expect(collect(o).jobs).toEqual({ items: [], total: 0 });
     o.stores.jobs.create({ id: 'j1', kind: 'shell', workMode: 'build', now: 1 });
@@ -229,8 +213,7 @@ describe('collectDynamicContext', () => {
 
 describe('the backend-only planes ride the typed source callbacks', () => {
   test('a backend without them renders nothing and invents no rows', () => {
-    // The CLI wires no consent registry and no roster store; absence must stay
-    // absent, not become an empty roster that reads as "no helpers".
+    // Absence must stay absent, not become an empty roster.
     const ctx = collect(setup());
     expect(ctx.approvals).toBeUndefined();
     expect(ctx.delegates).toEqual({ items: [], total: 0 });
@@ -268,8 +251,7 @@ describe('the backend-only planes ride the typed source callbacks', () => {
       total: 1,
     });
     expect(ctx.missingCapabilities).toContainEqual({ source: 'inbox', reason: 'no transport bound' });
-    // A callback, not a value: the block is re-read per step, so what the
-    // backend's store answers NOW is what renders.
+    // A callback: re-read per step.
     expect(parked).toBe(1);
     collect(o, {
       approvals: () => {

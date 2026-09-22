@@ -1,15 +1,6 @@
 /**
- * Canonical conversation seeding for the fork suites.
- *
- * A fork now carries the canonical store — `session_messages`, their parts and
- * updates, the public `conversation_entries` chain and the working context's
- * membership — so a fixture that INSERTed rows by hand would be a second,
- * hand-maintained writer of exactly the shape under test. These helpers drive
- * the production writers (`SessionMessages`, `SessionContext`,
- * `SessionTranscript`) instead, so what a fork reads is what a turn wrote.
- *
- * Shared by the four fork suites rather than copied into each: the seed IS the
- * subject's input, and four transcriptions of it would drift.
+ * Canonical conversation seeding for the fork suites, through the production
+ * writers rather than hand INSERTs, so what a fork reads is what a turn wrote.
  */
 
 import type { ModelMessage } from 'ai';
@@ -25,24 +16,17 @@ import { writeSoul } from '../../src/identity/soul';
 import type { JsonObject } from '../../src/utils/json';
 import { PLATFORM_CATALOG } from '../../src/platform-catalog';
 
-/** Where the source actor's payload files live, in the shape the hosted main
- *  actor uses (`agentArtifactDirectory(agentHome(MAIN_AGENT))`). */
+/** The hosted main actor's payload directory shape. */
 export const SOURCE_ARTIFACTS = '/home/agent/.kinu/context';
 
-/** The TARGET's own payload plane. Deliberately a different path from the
- *  source's, so a payload reference that was never re-rooted reads a file that
- *  does not exist on the fork. */
+/** Differs from the source's, so an un-re-rooted payload reference reads a missing file. */
 export const TARGET_ARTIFACTS = '/home/fork/.kinu/context';
 
-/** Larger than the payload store's inline ceiling (half of
- *  `do.sqlite.row_bytes`), so the value it is given spills to a FILE and the
- *  row carries a path and a digest instead of JSON. */
+/** Above the inline ceiling (half of `do.sqlite.row_bytes`), so it spills to a file. */
 export const SPILLED_BYTES = 1_100_000;
 
-/** The payload store's inline ceiling: a JSON payload of this many bytes stays in the row. */
 export const INLINE_PAYLOAD_BYTES = Math.floor(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 2);
 
-/** One seeded workspace's canonical conversation, over the production writers. */
 export class ForkConversation {
   readonly actor: ActorHandle;
   readonly payloads: SessionPayloads;
@@ -70,20 +54,12 @@ export class ForkConversation {
     return this.context.selected() ?? this.context.initialize();
   }
 
-  /**
-   * One message, published the way a turn publishes it.
-   *
-   * `chain` puts it in the public transcript; `working` puts it in the model's
-   * context. They are independent on purpose — that split is what a fork has to
-   * carry — so a caller can seed a message the operator sees and the model does
-   * not, or the reverse.
-   */
+  /** `chain` publishes to the transcript; `working` to the model's context. They are independent. */
   async publish(input: {
     readonly id: string;
     readonly message: ModelMessage;
     readonly origin?: MessageOrigin;
-    /** Omitted means "continue the chain" — the transcript parents the entry on
-     *  its current leaf, exactly as a turn does. `null` makes it a root. */
+    /** Omitted continues from the current leaf; `null` makes a root. */
     readonly parentId?: string | null;
     readonly chain?: boolean;
     readonly working?: boolean;
@@ -119,7 +95,6 @@ export class ForkConversation {
     return published;
   }
 
-  /** Plain text, as a user or assistant turn — the common case. */
   async say(input: {
     readonly id: string; readonly role: 'user' | 'assistant'; readonly text: string;
     readonly parentId?: string | null; readonly chain?: boolean; readonly working?: boolean;
@@ -131,8 +106,6 @@ export class ForkConversation {
     });
   }
 
-  /** A tool call and the result that answers it; the result's part records
-   *  `replyTo` against the call's part. */
   async toolExchange(input: {
     readonly callId: string; readonly resultId: string; readonly toolName: string;
     readonly toolCallId: string; readonly output: JsonObject;
@@ -161,8 +134,7 @@ export class ForkConversation {
     });
   }
 
-  /** Drop one entry out of the working context — a prune. The public chain is
-   *  untouched, which is exactly the divergence a fork has to carry. */
+  /** A prune: the public chain is untouched. */
   prune(entryId: string): ContextSelection {
     return this.context.commit(this.selection(), {
       cause: 'context_transform', turnId: null,
@@ -173,8 +145,6 @@ export class ForkConversation {
   }
 }
 
-/** A source workspace with an identity, a main actor, a SOUL and the
- *  non-conversation rows a fork also carries. */
 export async function seedForkSource(workspace: TestWorkspace, opts: {
   readonly workspaceId?: string;
   readonly workspaceName?: string;
@@ -208,8 +178,6 @@ export async function seedForkSource(workspace: TestWorkspace, opts: {
   return new ForkConversation(workspace, opts.artifactDirectory ?? SOURCE_ARTIFACTS);
 }
 
-/** A target workspace as the boot path leaves it: an identity, a main actor and
- *  a default SOUL the fork overwrites. */
 export async function seedForkTarget(workspace: TestWorkspace, opts: {
   readonly workspaceId?: string; readonly workspaceName?: string;
 } = {}): Promise<void> {
@@ -220,9 +188,7 @@ export async function seedForkTarget(workspace: TestWorkspace, opts: {
   await writeSoul(workspace.vfs, workspace.sql, 'default bootstrap purpose');
 }
 
-/** The public chain a workspace holds, read through the production transcript
- *  reader — so a carried payload file is resolved and digest-checked exactly as
- *  a turn would resolve it. */
+/** Read through the production transcript reader, so payload files are resolved and digest-checked. */
 export async function readChain(workspace: TestWorkspace): Promise<{
   readonly ids: readonly string[];
   readonly text: readonly string[];
@@ -244,8 +210,6 @@ export async function readChain(workspace: TestWorkspace): Promise<{
   return { ids: chain.map((entry) => entry.id), text };
 }
 
-/** The working context a workspace holds, materialized as the model would read
- *  it: one native message per member, in position order. */
 export async function readWorkingContext(workspace: TestWorkspace, artifactDirectory: string): Promise<{
   readonly entryIds: readonly string[];
   readonly messages: readonly ModelMessage[];

@@ -1,12 +1,4 @@
-/**
- * The ordinary conditional-template calls, which MUST compile.
- *
- * The half a ban usually skips, and the half that matters most here: a contract
- * strict enough to reject every misuse in `violations.ts` is easy to write and
- * easy to write TOO strictly. An intersection of a string map and a boolean map
- * has to keep accepting a slot object held in a variable, a flag computed from a
- * comparison, and a section whose contract is only flags or only slots.
- */
+/** Ordinary conditional-template calls that must compile, so the contract is not too strict. */
 
 import { definePromptSection, templateContract } from '../../../src/prompting/template';
 
@@ -27,18 +19,15 @@ const tools: readonly string[] = ['shell'];
 // Both slot kinds, inline.
 verification.render({ hasShell: true, shellNote: 'run the check' });
 
-// A flag computed from a real expression at the call site — where the unions
-// are exhaustive, which is the whole argument for keeping logic in TypeScript.
+// A flag computed from an expression.
 verification.render({ hasShell: tools.includes('shell'), shellNote: 'run the check' });
 
-// The slot object held in a variable. An annotated-variable argument skips the
-// excess-property check, so this is the case a `keyof`-based contract can break
-// on; it must still compile.
+// A slot object in an annotated variable skips the excess-property check; must still compile.
 const slots = { hasShell: false, shellNote: '' };
 
 verification.render(slots);
 
-// An empty string is a legal value; absent is what is banned.
+// An empty string is legal; absent is banned.
 verification.render({ hasShell: true, shellNote: '' });
 
 // Contracts that are only flags, only slots, or neither.
@@ -53,7 +42,6 @@ verification.renderFrom('## V{{#if hasShell}} {{shellNote}}{{/if}}', {
   hasShell: true, shellNote: 'x',
 });
 
-// The runtime contract reader takes any string — that is its whole point.
 const promoted = '## V{{#if hasShell}}{{shellNote}}{{/if}}';
 
 templateContract(verification.id, promoted);

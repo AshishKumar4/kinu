@@ -1,9 +1,5 @@
-/** Model-capability attachment sanitizer — the mechanical fix for the
- *  "attached PDF 400s every Workers AI request forever" production bug.
- *  Behavior contract: parts the model cannot accept become content-addressed
- *  VFS references (byte-stable, write-once), small text attachments inline,
- *  accepted media passes through untouched, and the persisted history is
- *  never mutated (message count preserved, untouched messages by reference). */
+/** Attachment sanitizer: unacceptable parts become content-addressed VFS references,
+ *  small text inlines, accepted media passes through, persisted history is never mutated. */
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -94,8 +90,6 @@ describe('sanitizeAttachmentsForModel', () => {
 
     const out = await sanitizeAttachmentsForModel(input, { accepts: accepts(), vfs });
 
-    // Message count preserved; the persisted history untouched; unchanged
-    // messages keep referential identity.
     expect(out).toHaveLength(2);
     expect(JSON.stringify(input)).toBe(before);
     expect(out[1]).toBe(input[1]);
@@ -110,7 +104,6 @@ describe('sanitizeAttachmentsForModel', () => {
     expect(replacement.text).toContain('read it with your file tools');
     expect(text.text).toBe('I have shared the resume.');
 
-    // No file-typed part survives; the payload round-trips through the VFS.
     const path = savedPath(replacement.text);
     expect(path).toStartWith('attachments/');
     const stored = await vfs.readFile(path);
@@ -129,24 +122,19 @@ describe('sanitizeAttachmentsForModel', () => {
   });
 
   test('a spill path that does not hold the attachment bytes is not reused', async () => {
-    // KINU-016: the address was a 64-bit FNV hash and an existing path was
-    // reused because it EXISTED. Any path holding other bytes — a collision, a
-    // truncated write, a file the agent wrote there itself — silently became
-    // the payload the model was told to read. The address is now a
-    // cryptographic digest AND reuse verifies the bytes behind it.
+    // KINU-016: the address is a cryptographic digest and reuse verifies the bytes behind it.
     const { vfs, writes } = countingVfs();
     const policy = { accepts: accepts(), vfs };
     const first = await sanitizeAttachmentsForModel([pdfMessage()], policy);
     const path = savedPath(textParts(first[0])[0].text);
     expect(writes()).toBe(1);
 
-    // Somebody else's bytes now occupy the address.
     await vfs.writeFile(path, new Uint8Array([9, 9, 9]));
 
     const again = await sanitizeAttachmentsForModel([pdfMessage()], policy);
-    // The reference is still byte-stable (the prompt-cache prefix holds)...
+    // Still byte-stable for the prompt-cache prefix...
     expect(savedPath(textParts(again[0])[0].text)).toBe(path);
-    // ...and it resolves to the attachment, not to the impostor.
+    // ...and resolves to the attachment, not the impostor.
     const stored = await vfs.readFile(path);
     expect(stored instanceof Uint8Array ? Array.from(stored) : stored).toEqual(Array.from(PDF_BYTES));
   });
@@ -254,10 +242,7 @@ describe('sanitizeAttachmentsForModel', () => {
   });
 });
 
-// Message-borne bulk, generalized: a giant paste and an oversize document the
-// model CAN accept are the same problem as a model-incompatible attachment —
-// they ride the root's token stream forever, re-priced every turn. Same idiom:
-// content-addressed spill + bounded head + resolvable address.
+// Oversize accepted content is spilled the same way: content-addressed, bounded head, resolvable address.
 describe('message-borne bulk (pasted text and oversize accepted documents)', () => {
   const HUGE_PASTE = `PASTE-HEAD ${'p'.repeat(20_000)} PASTE-TAIL`;
 
@@ -374,8 +359,6 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
 });
 
 describe('the spill-directory mkdir failure is classified, not substring-matched', () => {
-  /** A VFS whose mkdir always fails with `failure` — the shape both the
-   *  workspace file plane and node fs raise: a code on an Error. */
   function vfsWhoseMkdirThrows(failure: Error): VFS {
     const inner = createMemoryVFS(new Database(':memory:'));
 
@@ -428,7 +411,6 @@ describe('acceptedMediaForModel', () => {
     const anthropic = acceptedMediaForModel({ provider: 'anthropic', catalogInputModalities: ['text', 'image', 'pdf'] });
     expect(anthropic.has('pdf')).toBe(true);
     expect(anthropic.has('image')).toBe(true);
-    // No catalog entry: the provider-class ceiling is the default.
     expect(acceptedMediaForModel({ provider: 'anthropic' }).has('pdf')).toBe(true);
   });
 
