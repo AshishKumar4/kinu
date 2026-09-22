@@ -12,8 +12,10 @@ import * as v from 'valibot';
 import { applyFileEdits, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
 import { scanFileWindow } from '../src/tools/file-scan';
 import { TurnFileLedger } from '../src/tools/file-ledger';
-import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
-import { TurnContextBudget } from '../src/context-budget';
+import {
+  createFileTool, FILE_LIST_MAX_ENTRIES, FILE_SEARCH_MAX_BYTES, type FileToolInput,
+} from '../src/tools/file-tool';
+import { SPILL_DIRS, TurnContextBudget } from '../src/context-budget';
 import { JsonObjectSchema } from '../src/utils/json';
 import { makeVfsError } from '../src/vfs/errno';
 import { RESIDENT_TEXT_MAX_BYTES } from '../src/vfs/mounts';
@@ -1050,5 +1052,81 @@ describe('a `file` failure is attributable from the durable row alone', () => {
     });
 
     expect(failure).toBeNull();
+  });
+});
+
+/**
+ * The producer side of the two bulk reads.
+ *
+ * The context cap (clamp.ts) is a cap on what reaches the MODEL, applied after
+ * the whole answer exists. These pin the cap on what the workspace object
+ * BUILDS: a directory the agent does not control, and a file the agent does not
+ * control, must not become an allocation proportional to their size inside the
+ * one object that holds the workspace's files, conversation and ledgers.
+ */
+describe('a bulk read is bounded where it is produced', () => {
+  /** The `list` answer for a directory the case declares. When the listing is
+   *  bigger than the CONTEXT cap the clamp replaces it with a marker and spills
+   *  the whole thing, so the producer's own output is read back from the spill —
+   *  which is where a person reading the transcript would find it too. */
+  const listed = async (entries: readonly string[]): Promise<Record<string, JsonValue>> => {
+    const vfs = { ...memoryVfs(), async readdir() { return [...entries]; } };
+    const { call } = toolFor(vfs);
+    const result = await call({ action: 'list', path: '/d' });
+    const clamped = v.safeParse(v.string(), result);
+
+    if (!clamped.success) return v.parse(JsonObjectSchema, result);
+    const spilled = [...vfs.files].find(([path]) => path.startsWith(`${SPILL_DIRS.toolOutput}/`));
+
+    if (spilled === undefined) throw new Error(`no spill for a clamped listing: ${clamped.output}`);
+
+    return v.parse(JsonObjectSchema, JSON.parse(spilled[1]));
+  };
+
+  test('a directory the agent does not control is cut at the entry ceiling', async () => {
+    const body = await listed(Array.from({ length: FILE_LIST_MAX_ENTRIES * 3 }, (_, at) => `f${String(at)}`));
+
+    expect(v.parse(v.array(v.string()), body.entries)).toHaveLength(FILE_LIST_MAX_ENTRIES);
+    expect(body.truncated).toEqual({ shown: FILE_LIST_MAX_ENTRIES, total: FILE_LIST_MAX_ENTRIES * 3 });
+  });
+
+  test('the byte ceiling bites on its own — few entries, enormous names', async () => {
+    const wide = Array.from({ length: 40 }, (_, at) => `${String(at)}${'n'.repeat(64 * 1024)}`);
+    const body = await listed(wide);
+    const shown = v.parse(v.array(v.string()), body.entries);
+
+    // Well inside the entry ceiling and well past the byte one, so the entry
+    // count cannot be what stopped it.
+    expect(shown.length).toBeLessThan(wide.length);
+    expect(shown.length).toBeLessThan(FILE_LIST_MAX_ENTRIES);
+    expect(body.truncated).toEqual({ shown: shown.length, total: wide.length });
+  });
+  test('a listing that fits is whole, and says nothing about truncation', async () => {
+    const body = await listed(['a.ts', 'b.ts']);
+    expect(body.entries).toEqual(['a.ts', 'b.ts']);
+    expect('truncated' in body).toBe(false);
+  });
+
+  test('search reads the head of a file, not the file', async () => {
+    const line = `${'x'.repeat(200)}\n`;
+    const hit = 'NEEDLE\n';
+    // A megabyte of file with the query in the first line and again past the
+    // ceiling: the second one is evidence the read stopped.
+    const head = hit + line.repeat(Math.ceil(RESIDENT_TEXT_MAX_BYTES / line.length) + 4_000);
+    const vfs = memoryVfs({ 'big.log': head + hit });
+    const { call } = toolFor(vfs);
+    const body = v.parse(JsonObjectSchema, await call({ action: 'search', path: 'big.log', query: 'NEEDLE' }));
+
+    expect(body.matches).toEqual([{ line: 1, text: 'NEEDLE' }]);
+    expect(body.truncated).toEqual({ shown: FILE_SEARCH_MAX_BYTES, total: (head + hit).length });
+  });
+
+  test('a file that fits is searched whole, and says nothing about truncation', async () => {
+    const vfs = memoryVfs({ 's.txt': 'alpha\nNEEDLE\nomega\n' });
+    const { call } = toolFor(vfs);
+    const body = v.parse(JsonObjectSchema, await call({ action: 'search', path: 's.txt', query: 'NEEDLE' }));
+
+    expect(body.matches).toEqual([{ line: 2, text: 'NEEDLE' }]);
+    expect('truncated' in body).toBe(false);
   });
 });

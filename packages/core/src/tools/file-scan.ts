@@ -65,6 +65,70 @@ export async function readFileText(vfs: VFS, path: string, revision?: VfsRevisio
     : new TextDecoder('utf-8', { ignoreBOM: true }).decode(v.parse(v.instance(Uint8Array), raw));
 }
 
+/** A bounded prefix of a file: the text, how many bytes it came from, and the
+ *  size the plane reported for the whole file (null where it reported none). */
+export interface FileHead {
+  readonly text: string;
+  readonly bytes: number;
+  readonly total: number | null;
+}
+
+/**
+ * A file's leading `maxBytes` as text.
+ *
+ * For the callers that scan CONTENT rather than render a window: they need the
+ * text, they do not need the whole file, and the file's size is chosen by
+ * whoever put it in the workspace. The plane's own ranged read fetches at most
+ * the budget, one chunk at a time, so a gigabyte log costs the budget.
+ *
+ * A plane WITHOUT a ranged read falls back to {@link readUnranged}, which
+ * refuses a file over the resident budget instead of fetching it to slice —
+ * the same refusal a windowed read gets, for the same reason.
+ *
+ * `bytes` is what was actually read rather than what was asked for, because a
+ * ranged read is free to answer short; `total` is the stat, so a caller can
+ * tell a file that ENDED from one that was cut.
+ */
+export async function readFileHead(vfs: VFS, path: string, maxBytes: number): Promise<FileHead> {
+  const stat = await vfs.stat(path);
+  // The plane's own ranged read, where it declares one — a widening
+  // assignment for the reason `scanFileWindow` gives above.
+  const probed: VFS & Partial<VfsNativeReads> = vfs;
+  const ranged = probed.readRange;
+
+  if (ranged === undefined) {
+    const text = await readUnranged(vfs, path, stat?.size ?? null);
+
+    return { text, bytes: new TextEncoder().encode(text).byteLength, total: stat?.size ?? null };
+  }
+
+  const decode = new TextDecoder('utf-8', { ignoreBOM: true });
+  let at = 0;
+  let text = '';
+
+  while (at < maxBytes) {
+    let chunk: Uint8Array;
+
+    try {
+      chunk = await ranged.call(vfs, path, at, Math.min(SCAN_CHUNK_BYTES, maxBytes - at));
+    } catch (cause) {
+      if (at === 0 && isVfsError(cause) && cause.code === 'ENOTSUP') {
+        const whole = await readUnranged(vfs, path, stat?.size ?? null);
+
+        return { text: whole, bytes: new TextEncoder().encode(whole).byteLength, total: stat?.size ?? null };
+      }
+
+      throw cause;
+    }
+
+    if (chunk.length === 0) break;
+    at += chunk.length;
+    text += decode.decode(chunk, { stream: true });
+  }
+
+  return { text: text + decode.decode(), bytes: at, total: stat?.size ?? null };
+}
+
 /**
  * Scan `path` and return the line window `opts` asks for plus the fingerprint
  * of everything.
