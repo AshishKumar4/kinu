@@ -492,7 +492,7 @@ export type { MessageReference, MessagePartReference, ActorReadAuthority } from 
 
 export { SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './session/transcript';
 
-export { encodeModelMessages, decodeModelMessages, encodeModelMessageValues, decodeModelMessageValues } from './session/message-codec';
+export { encodeModelMessageValues, decodeModelMessageValues } from './session/message-codec';
 
 export {
   pruneStepToolOutputs,

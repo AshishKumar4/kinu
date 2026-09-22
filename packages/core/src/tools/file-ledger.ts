@@ -1,35 +1,6 @@
 /**
- * The turn's file ledger — what the model has actually looked at, and what its
- * edits did.
- *
- * Two jobs, one object, because they are the same bookkeeping read twice:
- *
- *  1. **Read-before-write.** An `edit` or an overwriting `write` is refused
- *     unless this turn read the file, and refused again if the file changed
- *     after that read. Exact matching already stops an anchor landing in text
- *     the model never saw; this stops the other half — an anchor that is still
- *     there while everything around it moved. It is a mechanism, not doctrine,
- *     and our own measurement is that mechanism converts where doctrine does
- *     not (turn-steering.ts: 0% vs 24%). Its cost is one extra call the first
- *     time a turn touches a file it only saw through a shell command.
- *
- *     How much was read matters, not just that something was. A capped read of
- *     three lines authorizes an `edit` — the anchor still has to be exactly and
- *     uniquely present — but not a `write` that discards the 197 lines the
- *     model never saw. Coverage is tracked as the contiguous prefix a turn has
- *     paged through, which is exactly the shape the read's own
- *     "continue with offset=N" recipe produces, so paging to the end earns the
- *     overwrite and nothing is ever a dead end.
- *
- *  2. **The per-edit outcome.** Shell-based edits produce no gradable signal at
- *     all: `sed -i` exits 0 whether or not it matched. Every edit attempt is
- *     counted here by outcome, and the settle spine writes one `file_edit` run
- *     event per turn, so "how often does an edit miss, and does the model
- *     recover" is a query rather than a guess.
- *
- * Owned per turn by the TurnAccumulator, exactly like the context budget, and
- * per ROOT by construction — a node builds its own toolset and therefore its own
- * ledger, which is correct: a node reads its own files.
+ * Per-turn file ledger: read-before-write gating and per-edit outcome counts.
+ * A `write` that overwrites needs the whole file read (contiguous prefix coverage); an `edit` needs only part.
  */
 
 import { fnv1a64 } from '../utils/fnv1a';
@@ -40,18 +11,15 @@ import { countSharedWrite, newWriteAuthor } from './msg-counters';
 
 export type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
 
-/** How much of a file the caller must have seen. `part` is enough to anchor an
- *  edit; `whole` is what discarding the file's current contents requires. */
+/** `part` suffices to anchor an edit; `whole` is required to discard the file's contents. */
 export type FileSeenNeed = 'part' | 'whole';
 
 export type FileSeenState =
-  /** Seen, to the depth this operation requires. */
   | 'seen'
   /** Seen, but only part of it, and this operation needs the whole. */
   | 'partial'
   /** Seen at this path, but the content has moved on since. */
   | 'stale'
-  /** Never read here. */
   | 'never';
 
 export interface FileSeenVerdict {
@@ -66,8 +34,7 @@ interface SeenContent {
   total: number;
 }
 
-/** One ranged read the model was shown. `fingerprint` MUST be `fnv1a64` of the
- *  file's WHOLE text — see {@link TurnFileLedger.observeRange}. */
+/** `fingerprint` must be `fnv1a64` of the file's whole text. */
 export interface RangeObservation {
   readonly fingerprint: string;
   readonly first: number;
@@ -76,7 +43,6 @@ export interface RangeObservation {
   readonly revision?: VfsRevision;
 }
 
-/** What one ledger row holds for a content digest. */
 interface RangeCoverage {
   readonly fingerprint: string;
   readonly coveredTo: number;
@@ -85,26 +51,18 @@ interface RangeCoverage {
 }
 
 export class TurnFileLedger {
-  /** Digest of every file content the model has been shown this turn, with how
-   *  far into it the reads reached. Keyed on CONTENT, not on the path spelling,
-   *  so reading `/src/a.ts` and then editing `src/a.ts` — two spellings of the
-   *  same canonical file — is not a spurious refusal. */
+  /** Keyed on content digest, not path spelling, so two spellings of one file match. */
   private readonly seen = new Map<string, SeenContent>();
-  /** Paths observed at all, kept only to tell a file that moved on ("read it
-   *  again") from one never read ("read it first"). */
+  /** Tells a file that moved on from one never read. */
   private readonly seenPaths = new Map<string, VfsRevision | undefined>();
   private attempts = 0;
   private applied = 0;
   private readonly failures = new Map<FileEditOutcomeReason, number>();
   private readonly failedPaths = new Set<string>();
   private readonly recoveredPaths = new Set<string>();
-  /** Who this ledger's applied edits belong to, for the shared-write counter.
-   *  Fixed at construction and NOT cleared by `reset()`: an agent is the same
-   *  agent across its turns, and a per-turn identity would report every one of
-   *  its own re-edits as a collision with itself. */
+  /** Not cleared by `reset()`: a per-turn identity would count an agent's own re-edits as collisions. */
   private readonly author = newWriteAuthor();
 
-  /** Clear for a new turn. */
   reset(): void {
     this.seen.clear();
     this.seenPaths.clear();
@@ -115,8 +73,6 @@ export class TurnFileLedger {
     this.recoveredPaths.clear();
   }
 
-  /** The model has seen this content end to end — it read the whole file, or it
-   *  wrote the file and therefore authored every line. */
   observeWhole(path: string, content: string, revision?: VfsRevision): void {
     const total = lineCount(content);
 
@@ -124,18 +80,8 @@ export class TurnFileLedger {
   }
 
   /**
-   * The model has seen lines [first, last] of a `total`-line file. Coverage
-   * extends only when the range continues the prefix already read, which is
-   * what paging with the offset the read handed back does.
-   *
-   * Takes the FINGERPRINT rather than the content, because the read that
-   * produces it never holds the content: it scans the file through the plane's
-   * ranged read and keeps only the window it was asked for
-   * (tools/file-scan.ts). `fingerprint` MUST be `fnv1a64` of the file's whole
-   * text, which is what every other entry point here keys on. A digest of the
-   * window alone — or anything derived from size or mtime — would authorize an
-   * edit against bytes nobody looked at, which is the one thing this ledger
-   * exists to refuse.
+   * Coverage extends only when [first, last] continues the prefix already read.
+   * `fingerprint` must be `fnv1a64` of the whole file text, never of the window or size/mtime.
    */
   observeRange(path: string, scan: RangeObservation): void {
     const existing = this.seen.get(scan.fingerprint);
@@ -145,8 +91,6 @@ export class TurnFileLedger {
     this.record(path, { fingerprint: scan.fingerprint, coveredTo, total: scan.total, revision: scan.revision });
   }
 
-  /** An edit landed: what the model knew about the old content it knows about
-   *  the new one, because only the span it named itself changed. */
   observeEdited(path: string, before: string, after: string, revision?: VfsRevision): void {
     const previous = this.seen.get(fnv1a64(before));
     const total = lineCount(after);
@@ -167,10 +111,6 @@ export class TurnFileLedger {
     return this.seenPaths.get(path);
   }
 
-  /** Whether `content` is something the model has seen, to the depth `need`
-   *  requires. Digest-keyed rather than a boolean, so a read that is still
-   *  accurate stays valid for the rest of the turn however many steps later,
-   *  and a file that moved underneath one is caught instead of edited blind. */
   seenState(path: string, content: string, need: FileSeenNeed): FileSeenVerdict {
     const entry = this.seen.get(fnv1a64(content));
 
@@ -183,21 +123,7 @@ export class TurnFileLedger {
     return { state, coveredTo: entry.coveredTo, total: entry.total };
   }
 
-  /**
-   * One edit attempt settled.
-   *
-   * An APPLIED edit is also reported to the shared-write counter under this
-   * ledger's own author ordinal: one ledger per actor, so two hires seated on
-   * the same workspace are two authors writing one path.
-   * That is the only place in the tree where "which agent wrote this" is known
-   * at the moment a write lands — the file planes below are per-actor views of
-   * shared bytes and carry no author — and it is the whole reason attribution
-   * happens here rather than in an end-of-run diff, which smears concurrent
-   * siblings into one pile.
-   *
-   * Counting only, and only on the applied path: a refused edit changed
-   * nothing, so it cannot have collided with anything.
-   */
+  /** Applied edits are also reported to the shared-write counter under this ledger's author ordinal. */
   recordEdit(path: string, reason: FileEditOutcomeReason | null): void {
     this.attempts++;
 
@@ -231,21 +157,14 @@ export class TurnFileLedger {
     };
   }
 
-  /** True when the turn attempted an edit at all — the settle spine skips the
-   *  durable row otherwise, so `turn_end` stays the denominator. */
+  /** The settle spine skips the durable row otherwise, so `turn_end` stays the denominator. */
   get active(): boolean {
     return this.attempts > 0;
   }
 
   /**
-   * How far the turn's file work has actually got: distinct paths it has
-   * touched at all, and edits that changed something.
-   *
-   * Both are monotone within a turn, which is the whole point — the progress
-   * trigger (orchestrator/turn-steering.ts) reads them once per step and an
-   * INCREASE is literally "the turn moved". Exposed as a pair rather than
-   * folded into `snapshot()` because that snapshot is the durable `file_edit`
-   * row's shape and must not grow fields nothing writes.
+   * Distinct paths touched and applied edits; both monotone within a turn (read by turn-steering's progress trigger).
+   * Kept out of `snapshot()`, whose shape is the durable `file_edit` row.
    */
   get progress() {
     return { filesTouched: this.seenPaths.size, editsApplied: this.applied };

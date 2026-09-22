@@ -11,8 +11,7 @@ const RefusalSchema = v.object({
   execution: v.optional(v.object({ exitCode: v.number() })),
 });
 
-/** A verdict the file plane answered with (`tools/file-tool.ts` `failure()`): the
- *  caller did not meet the operation's precondition. Not an error class. */
+/** A file-plane verdict (`tools/file-tool.ts` `failure()`): unmet precondition, not an error class. */
 const FileVerdictSchema = v.object({ reason: v.picklist(FILE_REFUSAL_REASONS), error: v.string() });
 
 /** The shape every transport settles a command into. */
@@ -41,16 +40,8 @@ export function refusalText(error: KinuError | Refusal): string {
 
 
 /**
- * The refusal a codemode member ANSWERED with, or null when its answer is a value.
- *
- * A provider member returns rather than throws, so a script can branch;
- * a caller that hands the answer on as a RESULT — a slate binding —
- * must recover the class. Two OBJECT shapes and only two, each the exact payload
- * its producer writes: an `ErrorCode` refusal (`refusalOf`) and a file-plane
- * verdict, which is the caller's own unmet precondition and so `bad_input`. A
- * string is never read here: `readFile` answers file CONTENT as a string, and
- * content that happens to spell a refusal is still content. A value that merely
- * carries `reason`/`error` fields of some other vocabulary is data, and stays data.
+ * The refusal a codemode member answered with, or null for a value. Only two object shapes count: an `ErrorCode`
+ * refusal (`refusalOf`) and a file-plane verdict (`bad_input`). Strings are never read: file content may spell a refusal.
  */
 export function answeredRefusal(payload: JsonValue): Refusal | null {
   const classified = v.safeParse(RefusalSchema, payload);

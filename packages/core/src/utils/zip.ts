@@ -1,20 +1,11 @@
 /**
- * The zip container, read and written without a dependency: the Drive takes a
- * folder as a zip from the browser and hands one back as a download, and the
- * platform's `DecompressionStream('deflate-raw')` inflates the one compression
- * method the format is used with. Stored and deflated entries are read; every
- * entry this module writes is stored, so a written archive round-trips through
- * `unpackZip` byte for byte and through any other reader.
- *
- * Zip64, encryption and every other method are refused as `unsupported`, and
- * an entry whose name climbs or is absolute is refused as `bad_input`: the
- * caller lands entries under a folder it chose, and a name that could leave it
- * is not an entry, it is an attack.
+ * Dependency-free zip read/write. Reads stored and deflated entries; writes stored only. Zip64, encryption
+ * and other methods are `unsupported`; absolute or climbing entry names are `bad_input`.
  */
 import { KinuError } from '../obs/error';
 
 export interface ZipEntry {
-  /** The entry's name inside the archive, forward-slashed, no leading slash. */
+  /** Forward-slashed, no leading slash. */
   readonly path: string;
   readonly bytes: Uint8Array;
 }
@@ -31,12 +22,10 @@ const DEFLATED = 8;
 
 const ZIP64_MARK = 0xffffffff;
 
-/** Whether `bytes` begin the way every zip archive does. */
 export function looksLikeZip(bytes: Uint8Array): boolean {
   return bytes.byteLength >= 4 && new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true) === LOCAL_HEADER;
 }
 
-/** Why an archive entry may not land under a folder, or null when it may. */
 function entryNameProblem(name: string): string | null {
   if (name.startsWith('/') || /^[A-Za-z]:/u.test(name)) return 'is absolute';
   const segments = name.split('/');
@@ -49,8 +38,7 @@ function entryNameProblem(name: string): string | null {
 }
 
 async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
-  // Onto its own buffer: the platform's stream types take an ArrayBuffer view,
-  // never a view over a buffer that might be shared.
+  // Copy onto an owned ArrayBuffer: platform stream types reject views over possibly shared buffers.
   const owned = new Uint8Array(new ArrayBuffer(bytes.byteLength));
   owned.set(bytes);
   const stream = new Blob([owned]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
@@ -58,8 +46,7 @@ async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-/** Where the end-of-central-directory record starts: the last such signature,
- *  since a comment of up to 64 KiB may follow it. */
+/** End-of-central-directory offset: the last signature, since an archive comment may follow it. */
 function endOfCentral(view: DataView): number {
   for (let at = view.byteLength - 22; at >= Math.max(0, view.byteLength - 22 - 0xffff); at -= 1) {
     if (view.getUint32(at, true) === END_OF_CENTRAL) return at;
@@ -68,7 +55,6 @@ function endOfCentral(view: DataView): number {
   throw new KinuError('bad_input', 'not a zip archive: no end-of-central-directory record');
 }
 
-/** Every file entry of `archive`, inflated, in central-directory order. */
 export async function unpackZip(archive: Uint8Array): Promise<ZipEntry[]> {
   const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
   const end = endOfCentral(view);
@@ -132,7 +118,7 @@ function crc32(bytes: Uint8Array): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-/** One archive holding `files` as stored entries, in the order given. */
+/** Stored entries, in the order given. */
 export function packZip(files: readonly ZipEntry[]): Uint8Array {
   const encoder = new TextEncoder();
   const locals: Uint8Array[] = [];

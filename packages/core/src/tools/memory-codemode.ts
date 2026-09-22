@@ -1,13 +1,5 @@
-/**
- * `memory.*` — the durable-state tool, projected into the codemode sandbox.
- *
- * A PROJECTION, not a second implementation: every member calls the SAME
- * `createMemoryDispatcher` output the native `memory` tool is built from
- * (tools/memory-tool.ts), so a script and a direct tool call read and write
- * the identical store. remember/recall/forget appear only when a FactsStore
- * is wired — the same structural gate the native tool's action enum reads.
- */
-import type { CodemodeProvider } from './sandbox-contract';
+/** `memory.*` in codemode: projects the native `memory` dispatcher, so both read and write one store. */
+import { codemodeText, type CodemodeProvider } from './sandbox-contract';
 import * as v from 'valibot';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 import { createMemoryDispatcher, type MemoryToolDeps } from './memory-tool';
@@ -33,9 +25,7 @@ const TYPES_BASE = `  /** Save a prose note or lesson too long to be a keyed val
   save(content: string): Promise<string>;
 `;
 
-/** The search member's doc line changes with the facts gate: a runtime without
- *  a FactsStore searches notes only, and the declaration must not promise
- *  remembered facts it cannot find. */
+/** Without a FactsStore the declaration must not promise fact search. */
 const typesSearch = (hasFacts: boolean) => hasFacts
   ? `  /** Search memory notes and remembered facts (matched on key or value) —
    *  hybrid FTS5 + Vectorize (RRF) over the notes when a vector store is wired
@@ -60,24 +50,7 @@ const TYPES_FACTS = `
   /** Forget a keyed fact by name. */
   forget(key: string): Promise<{ ok: boolean; key: string; existed: boolean }>;`;
 
-/**
- * Build the codemode provider exposing `memory.*`. `deps` is a thunk, read
- * per call, so a re-bound facts/vector store lands without rebuilding the
- * tool. Whether remember/recall/forget exist is read once at construction —
- * a FactsStore is wired for a runtime's whole lifetime, never mid-session.
- */
-/** One positional argument a `memory.*` member reads as text. An omitted
- *  argument is empty; an object gets a refusal naming the member rather than
- *  `[object Object]` stored as the note. */
-function textArgument(argument: { readonly value: unknown; readonly where: string }): string {
-  if (argument.value === undefined || argument.value === null) return '';
-  const parsed = v.safeParse(v.string(), argument.value);
-
-  if (!parsed.success) throw new KinuError('bad_input', `${argument.where} takes a string`);
-
-  return parsed.output;
-}
-
+/** `deps` is read per call so rebound stores apply; the facts gate is read once (a FactsStore never changes mid-session). */
 export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): CodemodeProvider {
   const hasFacts = deps().facts !== undefined;
 
@@ -87,9 +60,9 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
 
     switch (action) {
       case 'save':
-        return decodeMemoryResult({ pending: run({ action: 'save', content: textArgument({ value: args[0], where: 'memory.save(content)' }) }) });
+        return decodeMemoryResult({ pending: run({ action: 'save', content: codemodeText({ value: args[0], parameter: 'memory.save(content)' }) }) });
       case 'search':
-        return decodeMemoryResult({ pending: run({ action: 'search', query: textArgument({ value: args[0], where: 'memory.search(query)' }) }) });
+        return decodeMemoryResult({ pending: run({ action: 'search', query: codemodeText({ value: args[0], parameter: 'memory.search(query)' }) }) });
       case 'conversations': {
         const options = v.safeParse(SessionOptionsSchema, args[0] ?? {});
 
@@ -106,7 +79,7 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
         return decodeMemoryResult({
           pending: run({
             action: 'remember',
-            key: textArgument({ value: args[0], where: 'memory.remember(key)' }),
+            key: codemodeText({ value: args[0], parameter: 'memory.remember(key)' }),
             value: args[1],
             confidence: confidence.output,
           }),
@@ -114,9 +87,9 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
       }
 
       case 'recall':
-        return decodeMemoryResult({ pending: run({ action: 'recall', key: textArgument({ value: args[0], where: 'memory.recall(key)' }) }) });
+        return decodeMemoryResult({ pending: run({ action: 'recall', key: codemodeText({ value: args[0], parameter: 'memory.recall(key)' }) }) });
       case 'forget':
-        return decodeMemoryResult({ pending: run({ action: 'forget', key: textArgument({ value: args[0], where: 'memory.forget(key)' }) }) });
+        return decodeMemoryResult({ pending: run({ action: 'forget', key: codemodeText({ value: args[0], parameter: 'memory.forget(key)' }) }) });
       default:
         throw new KinuError('bad_input', `unknown memory action '${action}'`);
     }

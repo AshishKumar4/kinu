@@ -1,12 +1,5 @@
-// Deferred approval — the unattended run that reaches a gated command at 3am
-// and neither stalls on it nor is lied to about it.
-//
-// The behaviour under test is the whole round trip through the real seams: the
-// execution-seam gate (withApprovalGatedShell → gateExec) as a backend wires
-// it, the durable queue, the needs-you rows the owner decides from, and the
-// wake through the ONE signal-delivery seam every asynchronous producer uses.
-// The tests that matter most are the honesty ones — a queued action is never
-// reported as a success, and an approval is never reported as an effect.
+// Deferred approval: a gated command in an unattended run parks durably. A queued action is
+// never reported as a success, and an approval is never reported as an effect.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { toolExecute } from '@kinu.run/test-utils';
@@ -28,15 +21,7 @@ import { createTestActors } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 
-/**
- * A fresh approvals database and the actor whose parked actions it holds.
- *
- * `deferred_approvals` is keyed `(actor_id, id)` — the owner answers a
- * SPECIFIC agent's ask, and a standing grant given to the root is not one a
- * hired subordinate may spend — so a store and the re-opened store beside it
- * have to name the same handle or the parked night's work is invisible to the
- * re-open, which is the very thing those cases exist to catch.
- */
+/** Approvals db + actor. `deferred_approvals` is keyed `(actor_id, id)`, so a re-opened store must name the same actor. */
 function approvalsDb() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -48,10 +33,7 @@ function approvalsDb() {
   };
 }
 
-/** Gated on EVERY executor, including the agent's own workspace, because a
- *  force-push rewrites history on a remote nobody here owns — the harm leaves
- *  the machine. `sudo` would not do: on the workspace that is the agent's own
- *  box and no longer the owner's decision. */
+/** Gated on every executor, workspace included: a force-push harms a remote beyond this machine. */
 const GATED = 'git push --force origin main';
 
 type ShellTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
@@ -59,22 +41,18 @@ type ShellTool = { execute: (args: { command: string; runtime?: string }) => Pro
 function setup(opts: {
   mode?: 'strict' | 'allow_all' | 'deny_all';
   approve?: () => Promise<ShellApprovalOutcome | null>;
-  /** Omit the queue entirely — the no-queue path, which must behave as if
-   *  deferral did not exist. */
+  /** Omit the queue: the no-queue path must behave as if deferral did not exist. */
   noQueue?: boolean;
 } = {}) {
   const { sql, actor } = approvalsDb();
   const store = new DeferredApprovalStore(sql, actor);
 
   const delivered: AgentSignal[] = [];
-  /** Everything the owner's 'always' answers have bought, as the config store
-   *  would hold it. */
   const granted: string[] = [];
   let seq = 0;
   /** Wall-clock offset a test moves to let a denial age. */
   let elapsed = 0;
-  /** The durable audit trail a consumed grant must leave behind — what proves
-   *  an approval was spent once the row that held it is gone. */
+  /** Durable audit trail a consumed grant leaves behind. */
   const audited: Array<{ approvalId: string; command: string; executor: string }> = [];
 
   const queue = new DeferredApprovalQueue({
@@ -155,22 +133,13 @@ describe('a gated action nobody is there to approve', () => {
     const { shellTool, executed, queue } = setup();
 
     const out = shellTool.execute({ command: GATED });
-    // What only this call site knows: nothing ran, which rule, which machine,
-    // the id, and that a decision is coming. The doctrine around it — carry on
-    // or stop, re-issuing returns the same answer — is true of every parked
-    // action on every turn, so it lives in the system prompt, not here.
     await expect(out).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN — queued for owner approval (defer-1): git-force-push on workspace. A decision will wake you.') });
     expect(executed).toEqual([]);
     expect(queue.list().map((a) => a.command)).toEqual([GATED]);
   });
 
   test('NEVER reads as a success — same failure shape a refusal takes', async () => {
-    // The requirement this whole mechanism exists to satisfy. Cloudflare's
-    // gatekeeper fakes success here; ours must be structurally
-    // indistinguishable from a command that did not run, because that is what
-    // it is. Both branches return through `denyResult`, so a queued action and
-    // a refused one differ in their words and in NOTHING else — there is no
-    // success-shaped path for an action that never reached a shell.
+    // A queued action must be indistinguishable from a command that did not run: no success-shaped path.
     const queued = await setup().shell.exec(GATED);
     const refusedByPolicy = await setup({ mode: 'deny_all' }).shell.exec(GATED);
     const ran = await setup({ mode: 'allow_all' }).shell.exec(GATED);
@@ -179,15 +148,13 @@ describe('a gated action nobody is there to approve', () => {
     expect(queued.stdout).toBe(refusedByPolicy.stdout);
     expect(queued.exitCode).not.toBe(ran.exitCode);
     expect(queued.stdout).toBe('');
-    // …and it leads with what did not happen, before anything else.
     expect(queued.stderr).toBe(
       'NOT RUN — queued for owner approval (defer-1): git-force-push on workspace. A decision will wake you.',
     );
   });
 
   test('re-issuing the same command returns the SAME parked row, not a second one', async () => {
-    // One decision, one row. An identical answer is also what lets the turn's
-    // own repeat detector see the loop instead of the queue filling up.
+    // An identical answer lets the turn's repeat detector see the loop.
     const { shellTool, queue } = setup();
 
     const first = shellTool.execute({ command: GATED });
@@ -221,8 +188,6 @@ describe('the standing modes still decide first', () => {
   });
 
   test('deny_all refuses without parking — the owner already answered', async () => {
-    // Parking here would put a question to the owner they have standing
-    // instructions about.
     const { shellTool, executed, queue } = setup({ mode: 'deny_all' });
     const out = shellTool.execute({ command: GATED })
     await expect(out).rejects.toMatchObject({ message: expect.stringContaining('refused by standing policy (deny_all)') });
@@ -244,9 +209,7 @@ describe('the standing modes still decide first', () => {
   });
 
   test('a channel that declines to decide falls through to the queue', async () => {
-    // The unattended case as an ACP surface produces it: attached, but nobody
-    // answering. `null` has always meant "nobody is listening"; it now parks
-    // instead of manufacturing a refusal.
+    // Attached but nobody answering (`null`) parks instead of refusing.
     const { shellTool, queue } = setup({ approve: async () => null });
     await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
     expect(queue.list()).toHaveLength(1);
@@ -271,8 +234,6 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
     expect(delivered[0].kind).toBe(DEFERRED_APPROVAL_SIGNAL);
     expect(delivered[0].text).toContain('APPROVED, still not run');
     expect(delivered[0].text).toContain(GATED);
-    // The approval is a grant, not an execution: nothing ran on the owner's
-    // click, and the needs-you queue has stopped asking.
     expect(executed).toEqual([]);
     expect(queue.list()).toEqual([]);
   });
@@ -288,8 +249,7 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
   });
 
   test('a night of parked actions is ONE decision and ONE wake', async () => {
-    // The point of bulk: five queued commands decided in one sitting must not
-    // cost the agent five separate turns of being told about them.
+    // Bulk decisions produce one wake, not one per command.
     const { shellTool, queue, delivered } = setup();
 
     for (const command of ['npm publish a', 'npm publish b', 'npm publish c', 'npm publish d', 'npm publish e']) {
@@ -333,8 +293,6 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
   });
 
   test('one id sent twice is one decision, not two', async () => {
-    // A double-click, or a bulk selection overlapping a single row: the wake
-    // must not name one command as two decisions.
     const { shellTool, queue, delivered } = setup();
     await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
 
@@ -357,8 +315,6 @@ describe('what an approval actually buys', () => {
   });
 
   test('one approval authorises exactly one run', async () => {
-    // A grant that could be replayed would let a single click authorise an
-    // unbounded number of executions of a command the gate stopped.
     const { shellTool, queue, executed } = setup();
     await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-1'], 'approved');
@@ -381,8 +337,6 @@ describe('what an approval actually buys', () => {
   });
 
   test('a refused command reports the refusal on re-issue instead of re-asking', async () => {
-    // Device consent's doctrine: the owner said no, and asking again
-    // immediately is noise. The escape is named in the message, not hidden.
     const { shellTool, queue, executed } = setup();
     await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-1'], 'denied');
@@ -395,11 +349,7 @@ describe('what an approval actually buys', () => {
   });
 
   test('a refusal stands for a bounded time, then the row is gone and the queue asks again', async () => {
-    // A denial is the owner's answer to THIS ask, and the re-issue an agent
-    // makes minutes later is the noise it exists to absorb. It is not a
-    // standing policy: `deny_all` and the rule grants are. So the row expires
-    // rather than answering for the life of the workspace, and rather than
-    // accumulating one denied row per refused command forever.
+    // A denial answers this ask only: the row expires rather than standing forever.
     const { shellTool, queue, store, executed, advance } = setup();
     await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
     await queue.decide(['defer-1'], 'denied');
@@ -411,7 +361,6 @@ describe('what an approval actually buys', () => {
     await expect(out).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN — queued for owner approval (defer-2)') });
     expect(executed).toEqual([]);
     expect(queue.list().map((a) => a.id)).toEqual(['defer-2']);
-    // The expired refusal did not merely stop answering: its row is gone.
     expect(store.get('defer-1')).toBeNull();
   });
 
@@ -430,16 +379,13 @@ describe('what an approval actually buys', () => {
   });
 
   test('"always" runs this command AND stops the queue asking about that rule again', async () => {
-    // The owner's ask: mark auto-approval for similar commands, not this exact
-    // string. A second, DIFFERENT command of the same kind never reaches the
-    // queue — which is the whole difference between a grant and an approval.
+    // A grant covers similar commands, not only this exact string.
     const { shellTool, queue, executed, granted, delivered } = setup();
     await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
 
     await queue.decide(['defer-1'], 'always');
 
     expect(granted).toEqual(['git-force-push@workspace']);
-    // Still permission, not an effect: the agent re-issues, and it runs.
     expect(executed).toEqual([]);
     expect(await shellTool.execute({ command: GATED })).toBe('ran');
 
@@ -447,7 +393,6 @@ describe('what an approval actually buys', () => {
     expect(await shellTool.execute({ command: different })).toBe('ran');
     expect(executed).toEqual([GATED, different]);
     expect(queue.list()).toEqual([]);
-    // One decision, one wake — the grant did not manufacture a second.
     expect(delivered).toHaveLength(1);
   });
 
@@ -472,8 +417,7 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
     expect(audited).toEqual([
       { approvalId: 'defer-1', command: GATED, executor: 'workspace' },
     ]);
-    // The row is GONE, not flipped to a terminal status: a second run needs a
-    // second approval because there is nothing left to spend.
+    // The row is deleted, not flipped to a terminal status.
     expect(store.get('defer-1')).toBeNull();
   });
 
@@ -483,16 +427,14 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
     await queue.decide(['defer-1'], 'approved');
 
     await expect(shellTool.execute({ command: GATED })).resolves.toBe('ran');
-    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);   // no grant left: parks defer-2
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
 
     expect(executed).toEqual([GATED]);
     expect(audited).toHaveLength(1);
   });
 
   test('store.spend hands the grant out once, and a settle finishes it', () => {
-    // The row outlives the spend only so the gate can close it. While it is
-    // out it answers for nobody: `standing()` cannot see it and a second
-    // spend gets nothing.
+    // While spent, the row is invisible to `standing()` and a second spend gets nothing.
     const { sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
     store.create({ id: 'defer-s', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 });
@@ -507,14 +449,11 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
 
     expect(store.settle(spent.spend, 'spent')).toBe(true);
     expect(store.get('defer-s')).toBeNull();
-    // Closed once. A replay finds nothing and cannot bring the grant back.
     expect(store.settle(spent.spend, 'did-not-run')).toBe(false);
     expect(store.standing(GATED, 'workspace', 3)).toBeNull();
   });
 
   test('re-opening the workspace keeps parked and approved rows intact', () => {
-    // Table init is idempotent and touches no data: a night's parked actions
-    // survive every eviction and re-open between the ask and the answer.
     const { db, sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
     store.create({ id: 'defer-parked', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 });
@@ -531,9 +470,7 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
 
 describe('the parked action stays visible until it is decided', () => {
   test('every step of the turn re-states that it has not happened', () => {
-    // The structural half of the honesty invariant: the model cannot forget
-    // that the effect is missing, because the per-step dynamic-context block
-    // carries it until the owner answers.
+    // The per-step dynamic-context block carries the missing effect until the owner answers.
     const { queue, store } = setup();
     store.create({ id: 'defer-x', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 10 });
 
@@ -569,8 +506,7 @@ describe('the parked action stays visible until it is decided', () => {
 
 describe('durability — the wait is a night, not a prompt window', () => {
   test('the queue survives the process that parked the action', async () => {
-    // A Durable Object is evicted many times between the ask and the answer;
-    // a parked action that lived in a promise map would be lost with it.
+    // A parked action must survive DO eviction; a promise map would lose it.
     const { sql, actor } = approvalsDb();
     const first = new DeferredApprovalStore(sql, actor);
     first.create({ id: 'defer-9', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
@@ -583,8 +519,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
   });
 
   test('the decision is durable before the wake is attempted', async () => {
-    // An undeliverable wake must not lose the owner's answer: the row is the
-    // record, the signal is only the notification.
+    // The row is the record; the signal is only the notification.
     const { sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
     store.create({ id: 'defer-7', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
@@ -601,25 +536,11 @@ describe('durability — the wait is a night, not a prompt window', () => {
 });
 
 /**
- * The defect the live first-run tier found on staging 2026-09-03: the owner
- * approves a command, and is asked for it a second time.
- *
- * One approval has two consumers. `decide()` writes 'approved' AND wakes the
- * agent so it re-issues the command; `park()` spends the grant by taking the
- * row out of `standing()`'s reach BEFORE the command runs. On a first run the
- * woken re-issue reaches a device transport that is not ready yet, so the
- * grant is spent on an attempt that ran nothing, and the next attempt finds no
- * standing grant and parks a NEW row — the owner's complaint verbatim.
- *
- * The gate keeps spend-before-run: a crash between the spend and the run must
- * cost an approval rather than grant one twice. What it adds is a CLASSIFIED
- * refund — when the wrapped execute answers a code that establishes the
- * command never reached its machine, the same grant becomes spendable again.
+ * Approving once must not cause a second ask: a grant spent on an attempt that never reached its
+ * machine (classified refusal) is refunded. Spend-before-run otherwise holds.
  */
 describe('an approval outlives an attempt that never reached the machine', () => {
-  /** The device seam as a router wires it: an ExecutorProvider whose `exec`
-   *  answers whatever this run of the test needs, gated by `gateProviderExec`
-   *  with the real deferral queue behind it. */
+  /** Device seam: an ExecutorProvider gated by `gateProviderExec` over the real deferral queue. */
   function deviceSetup() {
     const { sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
@@ -636,8 +557,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     });
 
     const executed: string[] = [];
-    /** What the machine answers. Swapped per phase: not connected, then
-     *  connected. */
+    /** What the machine answers; swapped per phase. */
     let answer: () => CommandResult = () => 'ran';
 
     const provider: ExecutorProvider = {
@@ -673,10 +593,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     };
   }
 
-  /** The device transport's own refusal, classified: `unavailable` is the code
-   *  the device path already produces when no machine is attached
-   *  (execution/device-tunnel-executor.ts NOT_CONNECTED_REFUSAL). The test
-   *  reads the CODE, never the prose. */
+  /** `unavailable`: the device path's no-machine refusal code. The test reads the code, never the prose. */
   const notConnected = () => refusalOf(new KinuError('unavailable', 'No device connected.'));
 
   test('a definitive did-not-run leaves the grant spendable and asks nobody again', async () => {
@@ -686,13 +603,10 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     expect(await exec(GATED)).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('defer-1') });
     await queue.decide(['defer-1'], 'approved');
 
-    // The woken re-issue. The command reaches an executor that is not there,
-    // so nothing ran on any machine.
     expect(await exec(GATED)).toMatchObject({ reason: 'unavailable' });
     expect(executed).toEqual([GATED]);
 
-    // The owner approved a RUN, and no run happened: the grant they gave is
-    // still theirs to spend, and they are not asked a second time.
+    // No run happened, so the grant is still spendable.
     expect(store.standing(GATED, 'device', 1_010)?.status).toBe('approved');
     expect(store.standing(GATED, 'device', 1_010)?.id).toBe('defer-1');
     expect(queue.list()).toEqual([]);
@@ -711,9 +625,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     expect(executed).toEqual([GATED, GATED]);
     expect(store.standing(GATED, 'device', 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
-    // One approval, one execution — and one audit for the spend that stuck.
     expect(audited).toEqual([{ approvalId: 'defer-1', command: GATED, executor: 'device' }]);
-    // A fourth attempt has no grant left and parks a fresh row.
     expect(await exec(GATED)).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('defer-2') });
   });
 
@@ -729,8 +641,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
   });
 
   test('a command that reached the machine and FAILED there does not refund', async () => {
-    // The negative control that keeps the refund narrow: a non-zero exit is a
-    // command that ran. The approval is spent, exactly as it always was.
+    // Negative control: a non-zero exit ran, so the approval is spent.
     const { queue, store, exec, answerWith } = deviceSetup();
     answerWith(notConnected);
     await exec(GATED);
@@ -744,9 +655,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
   });
 
   test('an UNCLASSIFIABLE failure does not refund', async () => {
-    // `io` is what this seam answers for a cause its classifier does not
-    // recognise, and an unknown outcome must keep the safe behaviour: the
-    // frame may have reached the machine and run.
+    // `io` is unclassified: the frame may have run, so the grant stays spent.
     const { queue, store, exec, answerWith } = deviceSetup();
     answerWith(notConnected);
     await exec(GATED);
@@ -759,7 +668,6 @@ describe('an approval outlives an attempt that never reached the machine', () =>
   });
 
   test('a throw out of the executor does not refund', async () => {
-    // Nothing classified anything, so nothing is known. Same rule.
     const { queue, store, exec, answerWith } = deviceSetup();
     answerWith(notConnected);
     await exec(GATED);
@@ -772,8 +680,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
   });
 
   test('two refunds of one spend change nothing', async () => {
-    // The refund must be a state transition on the SAME row, not a second way
-    // to grant: replaying it must not resurrect a grant a later attempt spent.
+    // The refund is a transition on the same row; a replay must not resurrect a later-spent grant.
     const { queue, store, exec, answerWith } = deviceSetup();
     answerWith(notConnected);
     await exec(GATED);
@@ -790,7 +697,6 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     queue.channel.settle(spend.spend, 'did-not-run');
     expect(store.standing(GATED, 'device', 1_010)?.id).toBe('defer-1');
 
-    // …and a replay that arrives after a LATER spend cannot undo it.
     const second = store.spend('defer-1');
     expect(second).not.toBeNull();
 
@@ -802,21 +708,17 @@ describe('an approval outlives an attempt that never reached the machine', () =>
   });
 
   test('a refund beside a second re-issue answers the grant, not the fresh ask', async () => {
-    // The two-consumer shape the whole defect comes from: `decide()` wakes the
-    // agent AND leaves the grant for anyone, so a second re-issue can park a
-    // NEW row in the window between the first one's spend and its refund. Once
-    // the refund lands, one key holds both. Answering the newer QUEUED row
-    // there would ask the owner for the very thing they already approved.
+    // A second re-issue can park a new row between the first spend and its refund; that row must stay queued.
     const { queue, store, exec, executed, answerWith } = deviceSetup();
     answerWith(notConnected);
     await exec(GATED);
     await queue.decide(['defer-1'], 'approved');
 
-    // Consumer A takes the grant and has not come back yet.
+    // Consumer A takes the grant.
     const spend = store.spend('defer-1');
 
     if (!spend) throw new Error('the approved grant must be spendable');
-    // Consumer B finds nothing standing and parks its own row.
+    // Consumer B parks its own row.
     expect(await exec(GATED)).toMatchObject({ error: expect.stringContaining('NOT RUN — queued for owner approval (defer-2)') });
     // A never reached the machine, so the grant comes back beside defer-2.
     queue.channel.settle(spend.spend, 'did-not-run');

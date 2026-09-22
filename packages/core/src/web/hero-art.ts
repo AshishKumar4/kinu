@@ -1,18 +1,7 @@
 /**
- * The living search tree: attempts branch rightward from one seed, every tip
- * carries the score its verifier returned, weak attempts dim to embers and
- * are pruned, the best lineage brightens and keeps growing, and every so
- * often the search restarts from the best frontier — the evolution loop.
- *
- * Pure and deterministic: the same seed and the same sequence of `step(dt)`
- * calls produce the same frames on any runtime. There is no DOM here and no
- * drawing; a renderer reads `frame()` and draws what it says. The pointer
- * never touches the random stream, so a pointer can bend the picture without
- * changing what the search does.
- *
- * Coordinates are view-normalised: x and y run 0..1 across the drawn box,
- * x left to right, y top to bottom. `aspect` (height / width) makes distances
- * isotropic on screen, so a radius reads the same in both directions.
+ * Animated search tree for the hero. Pure and deterministic per seed and
+ * `step(dt)` sequence; the pointer never touches the random stream.
+ * Coordinates are 0..1 view-normalised; `aspect` (height / width) keeps distances isotropic.
  */
 
 import {
@@ -96,19 +85,14 @@ interface LayerRules {
   readonly drift: number;
 }
 
-/** The seed sits right of the copy's column and below the headline's band
- *  (the mount hands the tree that band as a keep-out); the deeper layers
- *  start from their own seeds, smaller, slower, and fainter, and drift with
- *  the pointer the way a far plane does. */
+/** Deeper layers: smaller, slower, fainter, with pointer parallax. */
 const LAYERS: readonly LayerRules[] = [
   { foreground: true, generationSeconds: 24, rootX: 0.5, rootY: 0.58, stepLength: 0.062, growthSeconds: 1.15, population: 240, width: 1.25, alpha: 0.8, drift: 0 },
   { foreground: false, generationSeconds: 31, rootX: 0.58, rootY: 0.72, stepLength: 0.05, growthSeconds: 1.5, population: 120, width: 0.9, alpha: 0.34, drift: 0.012 },
   { foreground: false, generationSeconds: 37, rootX: 0.74, rootY: 0.3, stepLength: 0.042, growthSeconds: 2, population: 80, width: 0.7, alpha: 0.2, drift: 0.026 },
 ];
 
-/** Scores are unbounded verifier progress: root 0, each attempt its parent's
- *  plus a gain that is usually small and sometimes negative. Margins below are
- *  in the same units, so pruning behaves the same at every depth. */
+/** Scores are unbounded verifier progress; margins below share the unit. */
 const ROOT_SCORE = 0;
 
 /** Below this distance behind the best result a lineage is cut. */
@@ -127,13 +111,10 @@ const ASH_SECONDS = 4;
 /** Past this the picture has left the view; a branch there spawns nothing. */
 const RIGHT_EDGE = 0.94;
 
-/** The camera follows the best frontier once it reaches this far across,
- *  so the search keeps advancing and its history recedes to the left. */
+/** The camera follows the best frontier once it reaches this far across. */
 const FOLLOW_X = 0.8;
 
-/** The camera parks the best frontier here after a restart, or right of
- *  the keep-out when one is set, so the strongest branch never sits behind
- *  the headline. */
+/** Post-restart frontier position, or right of the keep-out when set. */
 const REGROW_X = 0.5;
 
 /** History recedes: left of here a branch fades, gone before the edge. */
@@ -141,20 +122,14 @@ const HISTORY_X = 0.34;
 
 const REGROW_DELAY = 1.1;
 
-/** The camera is a critically damped follow: it leaves rest gently, never
- *  passes PAN_SPEED (view widths per second) or changes speed faster than
- *  PAN_ACCEL, and settles on its target without overshoot. Measured
- *  2026-09-14: a first-order ease moved the picture 0.014 view widths in
- *  the one frame after a restart, from near rest; the cap here is 0.004. */
+/** Critically damped camera follow capped by PAN_SPEED (view widths/s) and PAN_ACCEL. */
 const PAN_OMEGA = 1.3;
 
 const PAN_SPEED = 0.25;
 
 const PAN_ACCEL = 0.6;
 
-/** How fast a branch's drawn look follows its phase: a prune or a restart
- *  is an event and reads in a quarter second, never a one-frame cut —
- *  faster than the connectome's activity fade, which tracks a mood. */
+/** Phase transitions ease over about a quarter second, never a one-frame cut. */
 const BRANCH_FADE_RATE = 4;
 
 const BEND_RATE = 7;
@@ -174,12 +149,10 @@ const PULSE_FORK = 0.3;
 /** How often a tip that has just been scored sends its result back to the seed. */
 const PULSE_RETURN = 0.04;
 
-/** Pulses alive at once in one layer, so a busy generation stays a hum. */
+/** Max pulses alive at once in one layer. */
 const PULSE_CAP = 22;
 
-/** A pulse is brighter than the branch it rides: that branch's drawn alpha
- *  lifted by PULSE_LIFT, never under PULSE_FLOOR of the layer's alpha, never
- *  over PULSE_CEILING. A returning score is PULSE_RETURN_DIM of that. */
+/** Pulse alpha: branch alpha × PULSE_LIFT, clamped to [PULSE_FLOOR × layer alpha, PULSE_CEILING]; returns × PULSE_RETURN_DIM. */
 const PULSE_LIFT = 1.6;
 
 const PULSE_FLOOR = 0.35;
@@ -212,9 +185,7 @@ interface LayerState {
   hidden: number;
 }
 
-/** The drawn frame plus what the search did to reach it. Pulses run forward
- *  from the seed toward the tips, the way attempts are made, and back from
- *  a scored tip toward the seed, the way a score returns, rarer and dimmer. */
+/** Pulses run forward from the seed and, rarer and dimmer, back from scored tips. */
 export interface SearchTreeFrame extends ArtFrame {
   readonly generation: number;
   /** Cumulative branches the search pruned, foreground layer. */
@@ -257,8 +228,6 @@ function pointOnCurve(branch: Branch, t: number): readonly [number, number] {
   ];
 }
 
-/** One stroke's look for this frame: the branch it draws, how far along it is
- *  grown, and the light it carries. */
 interface StrokeLook {
   branch: Branch;
   t: number;
@@ -279,8 +248,6 @@ interface NodePoint {
   layer: number;
 }
 
-/** Where a tip would land: the branch it grows from and the heading, length
- *  and height that put it there. */
 interface TipReach {
   parent: Branch;
   heading: number;
@@ -288,8 +255,7 @@ interface TipReach {
   y1: number;
 }
 
-/** Children for an attempt that scored at least as well as its parent: mostly
- *  three, sometimes two or four. */
+/** Children for an attempt that scored at least as well as its parent. */
 function improvedChildren(roll: number): number {
   if (roll < 0.2) return 2;
 
@@ -298,8 +264,7 @@ function improvedChildren(roll: number): number {
   return 4;
 }
 
-/** Children for an attempt that scored worse: often none, so a weak line ends
- *  rather than spreading. */
+/** Children for an attempt that scored worse: often none. */
 function worseChildren(roll: number): number {
   if (roll < 0.4) return 0;
 
@@ -333,8 +298,7 @@ export class SearchTree {
 
   private pointerY: number | null = null;
 
-  /** The parallax the far layers drift by, eased toward the pointer so a
-   *  pointer entering or leaving the stage never moves them in one frame. */
+  /** Far-layer parallax, eased so entering or leaving the stage never jumps. */
   private driftX = 0;
 
   private driftY = 0;
@@ -404,8 +368,7 @@ export class SearchTree {
     return [...layer.branches.values()].map((branch) => ({ id: branch.id, phase: branch.phase, value: branch.value, age: branch.phaseAge }));
   }
 
-  /** Plant a new attempt at the live tip nearest the given view point; a
-   *  tip with nothing growing from it yet is preferred over a branch point. */
+  /** Plant an attempt at the live tip nearest the view point, preferring unexpanded tips. */
   plant(x: number, y: number): void {
     const layer = this.layers[0];
 
@@ -557,8 +520,7 @@ export class SearchTree {
     return count + 1;
   }
 
-  /** Lengths are fractions of the width; a box taller than wide (a phone)
-   *  would grow a tree too small to read, so they scale up with the aspect. */
+  /** Scales lengths up on boxes taller than wide so the tree stays readable. */
   private reach(): number {
     return Math.max(1, this.aspect);
   }
@@ -651,8 +613,6 @@ export class SearchTree {
     this.prune(layer);
     this.settleLooks(layer, dt);
 
-    // Children spawned here join the walk at its end, still growing, and
-    // match none of the branches below; a deleted entry is simply skipped.
     for (const branch of layer.branches.values()) {
       if (branch.phase === 'alive' && !branch.expanded && this.elapsed >= branch.spawnAt && population < layer.rules.population) {
         population += this.expand(layer, branch);
@@ -681,9 +641,7 @@ export class SearchTree {
     }
   }
 
-  /** A critically damped follow with a speed cap: the camera leaves rest
-   *  gently and settles on its target without overshoot, so the picture
-   *  never moves faster than `SearchTree.pan.maxSpeed`. */
+  /** Never moves faster than `SearchTree.pan.maxSpeed`. */
   private pan(layer: LayerState, dt: number): void {
     const gap = layer.offsetTarget - layer.offset;
     const pull = clamp(PAN_OMEGA * PAN_OMEGA * gap - 2 * PAN_OMEGA * layer.velocity, -PAN_ACCEL, PAN_ACCEL);
@@ -691,8 +649,6 @@ export class SearchTree {
     layer.offset += layer.velocity * dt;
   }
 
-  /** The far layers' parallax follows the pointer at the bend's own rate,
-   *  and returns to rest when it leaves. */
   private settleDrift(dt: number): void {
     const ease = 1 - Math.exp(-dt * BEND_RATE);
     const targetX = this.pointerX === null ? 0 : this.pointerX - 0.5;
@@ -735,8 +691,6 @@ export class SearchTree {
     branch.width += (width - branch.width) * mix;
   }
 
-  /** Every branch's drawn look eases toward what its phase asks, so a prune
-   *  or a restart is a fade and never a one-frame cut. */
   private settleLooks(layer: LayerState, dt: number): void {
     const bestValue = this.bestValueOf(layer);
     const ease = 1 - Math.exp(-dt * BRANCH_FADE_RATE);
@@ -750,8 +704,7 @@ export class SearchTree {
 
     for (const branch of layer.branches.values()) branch.value = branch.score;
 
-    // Children carry larger ids than their parents, so a reverse walk backs
-    // every subtree's best result up before its parent is read.
+    // Children have larger ids than parents, so a reverse walk backs values up bottom-first.
     for (const branch of [...layer.branches.values()].reverse()) {
       if (branch.phase !== 'growing' && branch.phase !== 'alive') continue;
       const parent = layer.branches.get(branch.parent);
@@ -843,8 +796,6 @@ export class SearchTree {
     // Past the view's edge, or behind the headline, an attempt spawns nothing.
     if (branch.x1 - layer.offset > RIGHT_EDGE || this.inKeepOut(branch.x1 - layer.offset, branch.y1)) children = 0;
 
-    // Siblings fan out around the parent's own heading, so a subtree keeps
-    // to its band instead of crossing its neighbours.
     let spawned = 0;
 
     for (let index = 0; index < children; index += 1) {
@@ -857,8 +808,7 @@ export class SearchTree {
     return spawned;
   }
 
-  /** Grow one attempt from `parent`; false when the only place it could
-   *  land is behind the headline, in which case nothing is grown. */
+  /** False when the only landing spot is inside the keep-out. */
   private spawn(layer: LayerState, parent: Branch, angle: number, reach: number): boolean {
     const rules = layer.rules;
     const length = rules.stepLength * this.reach() * reach * (0.8 + layer.random() * 0.5);
@@ -880,7 +830,6 @@ export class SearchTree {
     const x1 = parent.x1 + Math.cos(heading) * length;
 
     if (this.inKeepOut(x1 - layer.offset, y1)) return false;
-    // A branch bows away from its parent's line, the way a fan opens.
     const bow = (0.1 + layer.random() * 0.35) * length * Math.sign(heading - parent.angle || 1);
     const noise = (layer.random() + layer.random() + layer.random() - 1.5) * 0.35;
     const score = parent.score + 0.03 + noise;
@@ -899,7 +848,6 @@ export class SearchTree {
       y1,
       angle: heading,
       score,
-      // The first levels shoot out fast so the picture is alive at once.
       growthSeconds: rules.growthSeconds * (0.8 + layer.random() * 0.5) * (parent.depth < 3 ? 0.55 : 1),
       grace: 0.7 + layer.random() * 1.1,
       value: score,
@@ -946,9 +894,7 @@ export class SearchTree {
     return this.keepOut === null ? REGROW_X : Math.max(REGROW_X, this.keepOut.right + KEEP_OUT_MARGIN);
   }
 
-  /** The heading that keeps a tip out of the keep-out, or null when the
-   *  one given already does. A tip that would land inside turns to the side
-   *  of the box its parent is on, at least a shallow angle, still rightward. */
+  /** A heading that keeps the tip out of the keep-out, or null when the given one already does. */
   private turnAway(layer: LayerState, tip: TipReach): number | null {
     const { parent, heading, length, y1 } = tip;
     const box = this.keepOut;
@@ -988,8 +934,7 @@ export class SearchTree {
     }
   }
 
-  /** The evolution loop: keep the best lineage, let the rest go to ash, pan
-   *  the camera so the kept frontier has room, and grow again from there. */
+  /** The evolution loop: keep the best lineage, ash the rest, pan, regrow. */
   private restart(layer: LayerState): void {
     layer.generationStart = this.elapsed;
     layer.regrowAt = this.elapsed + REGROW_DELAY;

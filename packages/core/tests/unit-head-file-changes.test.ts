@@ -1,20 +1,10 @@
-/**
- * What a head did to the filesystem — attribution at the write, not at the end.
- *
- * The trap this design exists to avoid: diffing the shared workspace once a
- * split ends cannot say which of two concurrent heads made which change. So
- * every assertion here is about a write landing in the ledger of the plane it
- * was made through, and about the counts being the ones a review would state.
- */
-
 import { describe, test, expect } from 'bun:test';
 import { observeWrites } from '../src/vfs/observe';
 import { HeadFileChanges } from '../src/heads/file-changes';
 import type { VFS } from '../src/types/primitives';
 import { makeVfsError } from '../src/vfs/errno';
 
-/** An in-memory VFS leaf, with a read counter so "one baseline read per path"
- *  is measured rather than assumed. */
+/** In-memory VFS with a read counter. */
 function memVfs(seed: Record<string, string> = {}): VFS & { reads: number; files: Map<string, string> } {
   const files = new Map(Object.entries(seed));
 
@@ -46,9 +36,7 @@ function memVfs(seed: Record<string, string> = {}): VFS & { reads: number; files
   return self;
 }
 
-/** A head's view of its PARENT's workspace, watched. The head's own filesystem
- *  is a different object entirely and is deliberately not observed — it is
- *  private scratch that dies with the head. */
+/** The parent's workspace, watched; the head's own scratch VFS is not observed. */
 function watched(seed: Record<string, string> = {}) {
   const local = memVfs();
   const workspace = memVfs(seed);
@@ -90,7 +78,6 @@ describe('HeadFileChanges — the review a parent gets', () => {
     expect(changes.snapshot()).toEqual([
       { path: 'f.ts', status: 'changed', added: 1, removed: 0 },
     ]);
-    // And the baseline was read once, not once per write.
     expect(workspace.reads).toBe(1);
   });
 
@@ -150,8 +137,6 @@ describe('HeadFileChanges — the review a parent gets', () => {
 
   test("the head's own workspace is not reported — the parent cannot address it", async () => {
     const { local, changes } = watched();
-    // The head's private scratch is a DIFFERENT filesystem, and nothing wraps
-    // it: writing there cannot reach this ledger even by accident.
     await local.writeFile('notes.md', 'thinking out loud\n');
     await local.writeFile('plan.md', 'also mine\n');
     expect(changes.snapshot()).toEqual([]);

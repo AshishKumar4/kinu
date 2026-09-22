@@ -1,6 +1,4 @@
-// References: one grammar, `root://path`, over the live mount table. Every
-// mounted path formats to the reference of the plane serving it, and a
-// reserved root is never a machine's segment.
+// References: `root://path` over the live mount table; a reserved root is never a machine segment.
 import { describe, expect, test } from 'bun:test';
 import { formatReference, referenceRoots } from '../src/vfs/references';
 import { deviceMountSegment } from '../src/execution/device-tunnel-executor';

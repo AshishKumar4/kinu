@@ -1,11 +1,4 @@
-/**
- * Unit tests: crafted-tool source lifting.
- *
- * `toCraftedToolSource` is the filter standing between the crafted_tools table
- * and the platform executor: whatever it lets through, some adapter will try to
- * compile. Comment-only and empty rows are the residue of a failed extraction
- * and must not reach a child Worker.
- */
+/** `toCraftedToolSource`: comment-only and empty rows must not reach a child Worker. */
 
 import { describe, test, expect } from 'bun:test';
 import { toCraftedToolSource } from '../src/tools/crafted-executor';
@@ -47,8 +40,6 @@ describe('toCraftedToolSource', () => {
   });
 
   test('an empty-string description is preserved, not replaced', () => {
-    // `??` guards null/undefined only. Pinned so the distinction from the null
-    // case above stays deliberate rather than accidental.
     expect(toCraftedToolSource(tool({ description: '' }))?.description).toBe('');
   });
 

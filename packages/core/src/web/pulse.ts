@@ -1,42 +1,29 @@
-/**
- * Information moving along a picture: a bright head with a soft tail,
- * travelling one edge at a time. The search tree sends attempts out along
- * its branches and scores back toward the seed; the connectome sends
- * signals along its fibres. Both ride this one type: the pulse's place on
- * its edge, how it moves, how far its tail reaches, and how it is written
- * into the frame. Which edge comes next at an edge's end is each
- * picture's own rule — a tree walks parent and child, a graph walks
- * neighbours — so that step stays with the simulation.
- */
+/** A pulse moving along one edge of a picture (search tree or connectome); choosing the next edge stays with each simulation. */
 
 import { clamp, grown, PULSE_STRIDE } from './art';
 
 export interface Pulse {
   readonly id: number;
-  /** The frame's layer slot: a depth for the tree, a lobe for the connectome. */
+  /** A depth for the tree, a lobe for the connectome. */
   layer: number;
-  /** The edge whose curve the pulse is on. */
   edge: number;
-  /** Where the head is along the edge, 0 at its start, 1 at its end. */
+  /** 0 at the edge's start, 1 at its end. */
   head: number;
-  /** +1 from the edge's start toward its end, -1 the other way. A tree's
-   *  pulse keeps its direction for life; a graph's turns with every edge. */
+  /** A tree's pulse keeps its direction for life; a graph's turns with every edge. */
   direction: 1 | -1;
   readonly strength: number;
 }
 
-/** Advance the head by `speed` view widths per second along an edge `length` view widths long. */
+/** `speed` and `length` are in view widths (per second). */
 export function movePulse(pulse: Pulse, speed: number, dt: number, length: number): void {
   pulse.head += pulse.direction * speed * dt / Math.max(1e-6, length);
 }
 
-/** Where the tail sits on the edge: `reach` view widths behind the head, clamped to the edge. */
+/** `reach` view widths behind the head, clamped to the edge. */
 export function pulseTail(pulse: Pulse, reach: number, length: number): number {
   return clamp(pulse.head - pulse.direction * reach / Math.max(1e-6, length), 0, 1);
 }
 
-/** One pulse as the frame carries it: the edge's whole curve in view
- *  units, the span the pulse lights, its look, and its identity. */
 export interface PulseRecord {
   readonly x0: number;
   readonly y0: number;
@@ -55,7 +42,7 @@ export interface PulseRecord {
   readonly direction: number;
 }
 
-/** Write `record` as the `count`-th pulse of `data`, growing the buffer when it is full; returns the buffer to keep. */
+/** Grows the buffer when full; returns the buffer to keep. */
 export function writePulse(data: Float32Array<ArrayBuffer>, count: number, record: PulseRecord): Float32Array<ArrayBuffer> {
   const kept = grown(data, (count + 1) * PULSE_STRIDE);
   const at = count * PULSE_STRIDE;

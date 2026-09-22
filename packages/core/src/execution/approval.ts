@@ -1,29 +1,6 @@
 /**
- * Approval gating at the execution seam — the two places a command actually
- * reaches a shell: the `shell` tool's workspace shortcut (a raw `Shell`) and
- * every `ExecutorProvider`'s `exec`/`startProcess` tool (workspace, sandbox,
- * device — reached both by `shell`'s router dispatch AND by codemode's
- * `<name>.exec()` namespace calls inside `eval`).
- *
- * Before this, the gate lived inside the `shell` TOOL's own executor — one
- * call site out of the many that reach the same shells. `eval`
- * calling `workspace.exec()` / `sandbox.exec()` /
- * `device.exec()` skipped it entirely: same shell, same permissions, no
- * review. Moving the gate here closes that hole with ONE implementation
- * (safety/approval-gate.ts's `gateExec`) applied at construction, not N
- * copies re-derived at each call site.
- *
- * `workspace.exec` is gated once, at its `Shell` (withApprovalGatedShell) —
- * `createInlineExecutor` is a thin wrapper over that same `Shell.exec`, so
- * the provider gate skips that tool to avoid reviewing the command twice.
- * A hosted workspace's `startProcess` reaches the remote session directly,
- * however, and is gated here like every other background process surface.
- * Every other executor kind has no shared primitive underneath it (sandbox
- * talk to a remote SDK, device forwards over a device-tunnel RPC), so those
- * are gated at the ExecutorProvider boundary instead — the ExecutionRouter's
- * `register()` calls `gateProviderExec` for everything it accepts, so a
- * future executor kind is covered automatically, not by remembering to wrap
- * it.
+ * Approval gating at the two places a command reaches a shell: the workspace `Shell` (withApprovalGatedShell)
+ * and every other ExecutorProvider's `exec`/`startProcess`, gated on `ExecutionRouter.register()`.
  */
 
 import { gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
@@ -49,27 +26,14 @@ function parseShellExecOptions(input: { value: unknown }): string | ShellExecOpt
 }
 
 /**
- * Gate a `Shell`'s `exec` — the primitive the `shell` tool's workspace branch
- * calls directly and `createInlineExecutor`'s `workspace.exec()` calls
- * underneath it. A refusal is shaped as a command that did not run: exit 1 with
- * the message on stderr for readers of the process fields, plus the gate's own
- * classification in `refusal`. Command tools retain that object; display-only
- * readers may format it. An executed command
- * that exits 1 carries no `refusal` and stays a command failure, whatever its
- * stdout says.
- *
- * The `refusalCode` reader reads that classification and nothing else: prose on
- * stderr is a command's own output. A spent grant is refunded only when the
- * result proves the command never started.
+ * A refusal is shaped as a command that did not run: exit 1, message on stderr, classification in `refusal`.
+ * `refusalCode` reads only that classification; a spent grant is refunded only if the command never started.
  */
 export function withApprovalGatedShell(
   shell: Shell,
   policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
 ): Shell {
-  // 'workspace': this wrapper exists for the workspace shell specifically —
-  // the one executor gateProviderExec skips, because it is gated here instead.
-  // Nothing else may be wrapped with it; another machine's shell reaches the
-  // gate through its own ExecutorProvider, under that provider's own name.
+  // 'workspace' only: gateProviderExec skips the workspace `exec` because it is gated here.
   const execute = gateExec<ShellExecResult>(
     (command, ...rest) => shell.exec(command, parseShellExecOptions({ value: rest[0] })),
     (error) => ({ stdout: '', stderr: error.message, exitCode: 1, refusal: refusalOf(error) }),
@@ -86,35 +50,13 @@ export function withApprovalGatedShell(
   };
 }
 
-/** Tool names that take a raw shell command as their first argument and hand
- *  it to a real process — the surface `reviewCommand`'s regex ruleset was
- *  written for. Every ExecutorProvider kind names its synchronous runner
- *  `exec`; Nimbus additionally exposes `startProcess` (the same risk,
- *  backgrounded) — see execution/nimbus.ts. VFS-shaped tools (`readFile`,
- *  `writeFile`, `readdir`, ...) are a different capability and out of scope
- *  for a shell-command reviewer.
- * The names identify shell capabilities for approval, never an output format.
- */
+/** Tools taking a raw shell command as first argument; VFS-shaped tools are out of scope. */
 const SHELL_COMMAND_MEMBERS = ['exec', 'startProcess'] as const;
 
-/** Functions this module has already wrapped, keyed by the wrapped
- *  reference itself — not the provider object. A CLI head runtime reuses the
- *  parent's `device` ExecutorProvider verbatim (same real device, same
- *  transport) across two ExecutionRouter instances; without this, the
- *  second router's `register()` would wrap an already-gated `execute` again,
- *  reviewing the command twice and consulting the approval channel twice.
- *  Checking the INCOMING `execute` reference against this set makes
- *  `gateProviderExec` idempotent no matter how many routers see the same
- *  provider object. */
+/** Already-wrapped executes, so a provider shared across routers is gated once (idempotent). */
 const GATED_EXECUTES = new WeakSet<ExecutorTool['execute']>();
 
-/**
- * Gate an ExecutorProvider's shell-reaching tools with the live approval
- * policy. Called by `ExecutionRouter.register()` for every provider it
- * accepts, so `shell`'s router dispatch and every codemode `<name>.exec()`
- * call reach the identical decision — see the module doc for why `workspace`
- * is excluded and why re-registration of the same provider is a no-op.
- */
+/** Gate an ExecutorProvider's shell-reaching tools; no-op on re-registration. */
 export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprovalPolicy): ExecutorProvider {
   let changed = false;
   const tools = { ...provider.tools };
@@ -125,11 +67,7 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
 
     if (!entry || GATED_EXECUTES.has(entry.execute)) continue;
 
-    // Keyed on `name`, not `kind`: the name is this executor's identity
-    // everywhere else the owner and the model meet it — the `runtime:` value,
-    // the codemode namespace, the executor a standing grant is written
-    // against — so the gate must not answer to a different word than the one
-    // the grant is spelled with.
+    // Keyed on `name`, not `kind`: standing grants are written against the executor name.
     const gated = gateExec<ExecutorToolResult>(
       (command, ...rest) => entry.execute(command, ...rest),
       (error) => refusalOf(error),

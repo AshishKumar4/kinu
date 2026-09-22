@@ -1,22 +1,6 @@
 /**
- * The `db` capability, over ONE real workspace database holding TWO issued
- * actors.
- *
- * Every case runs against a single `initWorkspaceSchema` SQLite with a main
- * actor and a real subordinate of it, both from the production
- * `WorkspaceActorDirectory` — the shape the scoping exists for and the only one
- * that can falsify it. With a database per actor the isolation assertions all
- * pass vacuously, because the rows were never in the same table.
- *
- * The logical keys COLLIDE on purpose: both actors declare the same table name
- * and write the same primary key, so "the ids happen to differ" is not
- * available as a reason the rows stay apart.
- *
- * What is asserted here is behaviour a consumer observes — rows read back,
- * refusals classified, events recorded, `sqlite_master` unchanged — never the
- * text of a statement. The one place SQL is inspected is `PRAGMA table_info`,
- * because "the actor id leads the primary key" is a property of the physical
- * table and of nothing else.
+ * The `db` capability over one real workspace database holding two issued actors whose table names and
+ * primary keys collide on purpose; a database per actor would pass the isolation cases vacuously.
  */
 
 import * as v from 'valibot';
@@ -37,8 +21,7 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import type { RunEvent } from '../src/events/types';
 import type { SqlExec, SqlExecutor, SqlValue } from '../src/types/primitives';
 
-/** What `PRAGMA table_info` answers, narrowed to the two columns the key
- *  assertion is about. */
+/** `PRAGMA table_info`, narrowed to the key assertion's columns. */
 const ColumnInfoSchema = v.object({ name: v.string(), pk: v.number() });
 
 interface World {
@@ -50,9 +33,7 @@ interface World {
   readonly b: ActorHandle;
   store(actor: ActorHandle): AppDataStore;
   events(actor: ActorHandle): RunEvent[];
-  /** Every TABLE this database holds. Indexes are excluded because SQLite
-   *  mints an autoindex for a declared key, and the subject of a
-   *  before/after comparison is which tables exist. */
+  /** Every table (indexes excluded: SQLite mints autoindexes for declared keys). */
   tables(): string[];
   close(): void;
 }
@@ -83,16 +64,7 @@ function world(): World {
   };
 }
 
-/**
- * The catalogue's physical name, OBSERVED rather than restated.
- *
- * `initAgentDataTables` is the production call every workspace schema makes,
- * and on an empty database it creates exactly one table — that table is the
- * catalogue. Reading the name out of the database instead of writing it here
- * ties "the table the schema creates" to "the table no logical name reaches",
- * which is the property the case below is about; a second copy of the string
- * would agree with the module by construction and could not catch it moving.
- */
+/** The catalogue's physical name, observed: on an empty db `initAgentDataTables` creates exactly one table. */
 function catalogueTable(): string {
   const probe = new Database(':memory:');
 
@@ -146,8 +118,7 @@ describe('db value fidelity', () => {
           { name: 'absent', type: 'text' },
         ],
       });
-      // Base64 with a byte no UTF-8 decoder would survive, so a blob that came
-      // back through a text path could not read as equal.
+      // Includes a byte no UTF-8 decoder survives, so a text round-trip cannot compare equal.
       const bytes = 'AAECf4D//g==';
       store.apply({
         op: 'insert',
@@ -172,8 +143,7 @@ describe('db value fidelity', () => {
         absent: null,
       });
 
-      // A blob column really holds bytes: SQLite's own type function is the
-      // witness, not our decoder agreeing with our encoder.
+      // SQLite's own `typeof` is the witness, not our decoder.
       const stored = w.sql<{ kind: string; size: number }>`
         SELECT typeof(bytes) AS kind, length(bytes) AS size FROM app_kinds`[0];
 
@@ -233,7 +203,6 @@ describe('two actors, one database', () => {
       const first = w.store(w.a);
       const second = w.store(w.b);
       first.createTable(NOTES);
-      // The SAME logical table and the SAME primary key from both actors.
       second.createTable(NOTES);
       first.apply({ op: 'insert', table: 'notes', rows: [{ slug: 'shared-key', body: 'mine', rank: 1 }] });
       second.apply({ op: 'insert', table: 'notes', rows: [{ slug: 'shared-key', body: 'theirs', rank: 2 }] });
@@ -242,11 +211,9 @@ describe('two actors, one database', () => {
       expect(second.select('notes')).toEqual([{ slug: 'shared-key', body: 'theirs', rank: 2 }]);
       expect(first.count('notes')).toBe(1);
       expect(second.count('notes')).toBe(1);
-      // One physical table, two rows: the isolation is the predicate, not
-      // separate storage.
+      // One physical table, two rows: isolation is the predicate, not separate storage.
       expect(w.sql<{ n: number }>`SELECT COUNT(*) AS n FROM app_notes`[0]?.n).toBe(2);
 
-      // A blanket update and a blanket delete reach only the caller's rows.
       expect(first.apply({ op: 'update', table: 'notes', set: { body: 'edited' }, where: {} }).rowsAffected).toBe(1);
       expect(second.select('notes')).toEqual([{ slug: 'shared-key', body: 'theirs', rank: 2 }]);
       expect(first.apply({ op: 'delete', table: 'notes', where: {} }).rowsAffected).toBe(1);
@@ -271,9 +238,7 @@ describe('two actors, one database', () => {
         ],
       });
 
-      // The physical key, off the table itself. `PRAGMA table_info` is the one
-      // place this suite reads schema rather than behaviour, because "the actor
-      // id LEADS the key" is a property of the table and of nothing else.
+      // The one schema read: the actor id must lead the physical key.
       const key = w.exec.exec(`PRAGMA table_info(app_labels)`).toArray()
         .map((column) => v.parse(ColumnInfoSchema, column))
         .filter((column) => column.pk > 0)
@@ -282,14 +247,11 @@ describe('two actors, one database', () => {
       expect(key).toEqual([{ name: 'actor_id', pk: 1 }, { name: 'id', pk: 2 }]);
 
       first.apply({ op: 'insert', table: 'labels', rows: [{ id: 'a', label: 'only-one' }] });
-      // A sibling's identical unique value is admitted: a workspace-wide UNIQUE
-      // over private rows would let one actor's value refuse another's, and
-      // that refusal is itself a disclosure.
+      // A sibling's identical unique value is admitted; a workspace-wide UNIQUE would disclose private rows.
       second.apply({ op: 'insert', table: 'labels', rows: [{ id: 'a', label: 'only-one' }] });
       expect(first.count('labels')).toBe(1);
       expect(second.count('labels')).toBe(1);
-      // Within one actor it is still unique, and the failure is classified as
-      // the caller's input rather than as a transport fault.
+      // Within one actor it is unique, classified as caller input, not a transport fault.
 
       for (const row of [{ id: 'b', label: 'only-one' }, { id: 'a', label: 'other' }]) {
         expect(() => first.apply({ op: 'insert', table: 'labels', rows: [row] })).toThrow(/constraint/i);
@@ -328,8 +290,6 @@ describe('two actors, one database', () => {
       expect(second.select('findings', { orderBy: [{ column: 'id' }] }).map((row) => row.id)).toEqual(['f1', 'f2']);
       expect(first.count('findings')).toBe(2);
       expect(second.schema('findings').createdBy).toBe(w.a.actorId);
-      // The catalogue is workspace-wide: the shape of a table is schema, and
-      // ownership of it is stated rather than hidden.
       expect(second.listTables().map((table) => ({ name: table.name, scope: table.scope, by: table.createdBy })))
         .toEqual([{ name: 'findings', scope: 'workspace', by: w.a.actorId }]);
     }
@@ -350,11 +310,8 @@ describe('two actors, one database', () => {
       expect(w.tables()).toContain('app_notes');
       expect(second.count('notes')).toBe(1);
 
-      // A non-declarer cannot drop it at all, whoever holds rows.
       expect(() => second.dropTable('notes')).toThrow(/declared by another agent/);
 
-      // Once the sibling's rows are gone the declarer may retire it, and the
-      // catalogue row goes with the table.
       second.apply({ op: 'delete', table: 'notes', where: {} });
       first.dropTable('notes');
       expect(w.tables()).not.toContain('app_notes');
@@ -378,13 +335,12 @@ describe('two actors, one database', () => {
         reference: { actorId: w.b.actorId, workspaceId: w.b.workspaceId, parentActorId: w.b.parentActorId },
       });
 
-      // Every operation re-validates the binding before its statement, so a
-      // read refuses for the same reason a write does.
+      // Every operation re-validates the binding, so reads refuse too.
       expect(() => store.select('notes')).toThrow();
       expect(() => store.count('notes')).toThrow();
       expect(() => store.apply({ op: 'insert', table: 'notes', rows: [{ slug: 'b' }] })).toThrow();
       expect(() => store.listTables()).toThrow();
-      // The rows themselves are retained: dismissal is not deletion.
+      // Dismissal is not deletion.
       expect(w.sql<{ n: number }>`SELECT COUNT(*) AS n FROM app_notes`[0]?.n).toBe(1);
     }
     finally { w.close(); }
@@ -422,9 +378,6 @@ describe('what db cannot reach', () => {
       const store = w.store(w.a);
       const before = w.tables();
 
-      // Host tables of every protected family: identity, roster, conversation,
-      // credentials, approvals, claims, audit, effect claims, config, and the
-      // `db` catalogue itself.
       for (const name of [
         'workspace_identity', 'workspace_actors', 'conversation_entries', 'session_messages',
         'workspace_capability',
@@ -437,8 +390,7 @@ describe('what db cannot reach', () => {
         expect(() => store.dropTable(name)).toThrow();
       }
 
-      // A protected name cannot be declared into the catalogue either: the
-      // physical table would be `app_<name>`, which is a different object.
+      // Declaring a protected name would create `app_<name>`, a different object.
       const identity = store.createTable({
         name: 'workspace_identity',
         scope: 'actor',
@@ -475,10 +427,7 @@ describe('what db cannot reach', () => {
 
       expect(w.tables()).toEqual(before);
 
-      // `sqlite_master` IS a usable LOGICAL name, and that is the point of the
-      // prefix rather than a hole in it: the physical table is
-      // `app_sqlite_master`, so SQLite's own catalogue is neither shadowed nor
-      // reachable, and nothing had to be added to a list of forbidden words.
+      // `sqlite_master` is a usable logical name: its physical table is `app_sqlite_master`.
       store.createTable({ name: 'sqlite_master', scope: 'actor', columns: [{ name: 'a', type: 'text' }] });
       expect(w.tables()).toEqual([...before, 'app_sqlite_master'].sort());
       expect(w.sql<{ name: string }>`SELECT name FROM sqlite_master WHERE name = 'app_sqlite_master'`).toHaveLength(1);
@@ -516,13 +465,10 @@ describe('what db cannot reach', () => {
       })).toThrow(/actor_id/);
       store.createTable(NOTES);
       store.apply({ op: 'insert', table: 'notes', rows: [{ slug: 'a' }] });
-      // Naming the injected column is a column the table does not declare, on
-      // every surface — including a read that would have exposed the owner.
       expect(() => store.select('notes', { columns: ['actor_id'] })).toThrow(/actor_id/);
       expect(() => store.select('notes', { where: { actor_id: w.b.actorId } })).toThrow(/actor_id/);
       expect(() => store.apply({ op: 'update', table: 'notes', set: { actor_id: w.b.actorId }, where: {} }))
         .toThrow(/actor_id/);
-      // Nor is it returned by an unprojected read.
       expect(Object.keys(store.select('notes')[0] ?? {})).toEqual(['slug', 'body', 'rank']);
     }
     finally { w.close(); }
@@ -533,8 +479,7 @@ describe('what db cannot reach', () => {
 
     try {
       const store = w.store(w.a);
-      // A host table, or a leftover of one, that happens to carry the agent
-      // prefix. Declaring over it would hand its rows to the caller.
+      // A host table carrying the agent prefix; declaring over it would hand its rows to the caller.
       w.db.exec(`CREATE TABLE app_secrets (token TEXT)`);
       w.db.exec(`INSERT INTO app_secrets (token) VALUES ('sk-live')`);
       expect(() => store.createTable({
@@ -563,7 +508,7 @@ describe('what db cannot reach', () => {
       ] as const) {
         expect(() => store.createTable(redeclared)).toThrow(/already exists/);
       }
-      // Column ORDER is part of the shape, because the physical table has one.
+      // Column order is part of the shape.
 
       expect(() => store.createTable({
         name: 'notes',
@@ -575,8 +520,6 @@ describe('what db cannot reach', () => {
         ],
       })).toThrow(/already exists/);
 
-      // Neither the catalogue nor the data moved, and the identical
-      // declaration is still accepted.
       expect(store.schema('notes')).toMatchObject({ scope: 'actor', createdBy: w.a.actorId });
       expect(store.select('notes')).toEqual([{ slug: 'a', body: 'kept', rank: null }]);
       expect(store.createTable(NOTES).name).toBe('notes');
@@ -602,7 +545,6 @@ describe('what db cannot reach', () => {
         ],
       });
 
-      // A string that would be an operator if it were text got bound as a value.
       expect(store.count('notes', { slug: "a' OR '1'='1" })).toBe(0);
       expect(store.count('notes', { body: { op: 'like', value: '100\\%%' } })).toBe(1);
       expect(store.count('notes', { rank: { op: '>=', value: 2 } })).toBe(2);
@@ -634,8 +576,7 @@ describe('batch atomicity and evidence', () => {
     try {
       const store = w.store(w.a);
       store.createTable(NOTES);
-      // The third operation collides with the first on the primary key, so it
-      // is SQLite that refuses rather than a pre-flight check.
+      // Collides with the first op on the primary key, so SQLite refuses, not a pre-flight check.
       let failedIndex: unknown;
 
       try {
@@ -647,8 +588,7 @@ describe('batch atomicity and evidence', () => {
 
       expect(failedIndex).toBe(2);
       expect(store.count('notes')).toBe(0);
-      // No ghost evidence: a mutation that did not happen recorded nothing,
-      // including for the two operations that had already succeeded.
+      // A mutation that did not happen records no evidence, including for the ops that had succeeded.
       expect(w.events(w.a).filter((event) => event.type === 'db_op' && event.op === 'insert')).toEqual([]);
     }
     finally { w.close(); }
@@ -671,8 +611,7 @@ describe('batch atomicity and evidence', () => {
         { type: 'db_op', op: 'update', table: 'notes', scope: 'actor', rowsAffected: 2, batch: 3 },
       ]);
 
-      // Through the durable parser, not the in-memory value: the evidence has
-      // to read back off the row.
+      // Through the durable parser: the evidence must read back off the row.
       const stored = w.sql<{ payload: string }>`SELECT payload FROM run_events WHERE type = 'db_op' ORDER BY event_index`
         .map((row) => parseStoredRunEvent(row.payload));
 
@@ -688,9 +627,7 @@ describe('batch atomicity and evidence', () => {
       const seen: RunEvent[] = [];
       let failEvidence = false;
 
-      // A genuinely unwritable log: the recorder is the production class over a
-      // SQL handle that refuses the one statement it persists with. Nothing
-      // about the store is replaced.
+      // A genuinely unwritable log: the production recorder over a SQL handle refusing its persist statement.
       const cutting: SqlExecutor = <Row = unknown>(query: TemplateStringsArray, ...values: SqlValue[]): Row[] => {
         if (failEvidence && query.join('?').includes('INSERT INTO run_events')) {
           throw new Error('the event log is unwritable');
@@ -718,8 +655,7 @@ describe('batch atomicity and evidence', () => {
         { op: 'insert', table: 'notes', rows: [{ slug: 'b' }] },
       ])).toThrow(/unwritable/);
       failEvidence = false;
-      // Neither the data nor a notification survived: evidence and effect are
-      // one transaction.
+      // Evidence and effect are one transaction.
       expect(store.count('notes')).toBe(0);
       expect(seen).toEqual([]);
     }
@@ -770,7 +706,6 @@ describe('role and Plan authority', () => {
 
       if (db === undefined) throw new Error('no db namespace');
 
-      // Private research state: declare an actor-scope table and write it.
       expect(await inWorkMode('plan', () => db.createTable.execute(NOTES)))
         .toMatchObject({ name: 'notes', scope: 'actor' });
       expect(await inWorkMode('plan', () => db.insert.execute('notes', [{ slug: 'a', body: 'planning' }])))
@@ -782,8 +717,7 @@ describe('role and Plan authority', () => {
       expect(await inWorkMode('plan', () => db.count.execute('notes'))).toBe(1);
       expect(await inWorkMode('plan', () => db.listTables.execute())).toHaveLength(1);
 
-      // A workspace mutation is external to the actor, and Plan does not make
-      // those — declaring the shared table included.
+      // Plan makes no workspace mutations, including declaring the shared table.
       expect(await inWorkMode('plan', () => db.createTable.execute(SHARED)))
         .toMatchObject({ reason: 'denied' });
       expect(await inWorkMode('plan', () => db.dropTable.execute('notes')))
@@ -791,11 +725,9 @@ describe('role and Plan authority', () => {
       expect(w.tables()).toContain('app_notes');
       expect(w.tables()).not.toContain('app_findings');
 
-      // The same members on a Build turn are permitted, which is what makes
-      // the refusals above a mode decision rather than an absent capability.
+      // Permitted on Build: the refusals above are a mode decision.
       store.createTable(SHARED);
       expect(store.apply({ op: 'insert', table: 'findings', rows: [{ id: 'f1' }] }).rowsAffected).toBe(1);
-      // And a workspace table already declared still refuses a Plan write.
       expect(await inWorkMode('plan', () => db.insert.execute('findings', [{ id: 'f2' }])))
         .toMatchObject({ reason: 'denied' });
       expect(store.count('findings')).toBe(1);
@@ -837,7 +769,6 @@ describe('role and Plan authority', () => {
       expect(types.match(/export declare const db:/gu)).toHaveLength(1);
       expect(types).toContain("scope: 'actor'");
       expect(types).toContain('No operation takes SQL');
-      // No second name for the same capability.
       expect(types).not.toContain('env.db');
       expect(Object.keys(provider.tools).sort()).toEqual([
         'batch', 'count', 'createTable', 'deleteRows', 'dropTable', 'insert', 'listTables', 'schema', 'select', 'update',
@@ -870,12 +801,7 @@ describe('agent data in the one workspace snapshot', () => {
       try {
         await restoreWorkspaceArchive(archiveSqlFromDatabase(target), lines);
         const restoredSql = makeSql(target);
-        // The catalogue comes back through a production store bound to the
-        // RESTORED database, so what is asserted is that the `db` capability
-        // still resolves both declarations there — not that bytes reached a
-        // table this test names. `listTables` orders by creation time, so the
-        // comparison sorts by name and does not rest on two writes landing in
-        // different milliseconds.
+        // Read through a production store bound to the restored db. `listTables` orders by creation time, so sort by name.
         const restoredActor = testActorHandle(restoredSql, { actorId: w.a.actorId });
 
         const restored = createAppDataStore({
@@ -891,11 +817,7 @@ describe('agent data in the one workspace snapshot', () => {
           { name: 'findings', scope: 'workspace' },
           { name: 'notes', scope: 'actor' },
         ]);
-        // And the capability reads its own row out of the restored physical
-        // table, scoped to the actor the store is bound to.
         expect(restored.select('notes')).toEqual([{ slug: 'k', body: 'main row', rank: 1 }]);
-        // The rows come back with their owners, so the restored workspace's
-        // isolation is the same isolation.
         expect(restoredSql<{ actor_id: string; body: string }>`
           SELECT actor_id, body FROM app_notes ORDER BY body`).toEqual([
           { actor_id: w.a.actorId, body: 'main row' },

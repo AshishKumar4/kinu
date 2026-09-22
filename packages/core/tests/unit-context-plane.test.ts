@@ -21,7 +21,7 @@ import type { PendingContextProposal } from '../src/session/proposals';
 import { contextMount } from '../src/vfs/context-plane';
 import { withMountTable } from '../src/vfs/mounts';
 import { makeVfsError } from '../src/vfs/errno';
-import { decodeModelMessages, encodeModelMessages } from '../src/session/message-codec';
+import { decodeModelMessageValues, encodeModelMessageValues } from '../src/session/message-codec';
 import { composePrepareStep, type StepContextPlane } from '../src/prompting/prepare-step';
 import { DynamicContextLedger } from '../src/prompting/volatile-context';
 import { createFileDispatcher } from '../src/tools/file-tool';
@@ -31,7 +31,7 @@ import type { ActorContextStores, ChildContextResolver, ContextFileHeader } from
 import type { ContextEditEvent } from '../src/types/context-plane';
 import type { VFS } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
-import type { JsonValue } from '../src/utils/json';
+import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 
 const PROGRAM = { kind: 'builtin' as const, version: 0, digest: null, build: null };
 
@@ -218,16 +218,16 @@ function servedHeader(text: string): ServedHeader {
  *  in. Each line is an ENTRY; the message it references is the payload. */
 function servedMessages(text: string): ModelMessage[] {
   const lines = text.split('\n').filter((line) => line.trim().length > 0);
-  const entries = lines.slice(1).map((line) => v.parse(v.object({ message: v.unknown() }), JSON.parse(line)).message);
+  const entries = lines.slice(1).map((line) => v.parse(v.object({ message: JsonValueSchema }), JSON.parse(line)).message);
 
-  return decodeModelMessages(JSON.stringify(entries));
+  return decodeModelMessageValues(entries);
 }
 
 /** The served bytes with more messages after them: every line the read produced
  *  left exactly as it arrived, then one new entry per new message — the append
  *  half of a real read-modify-write. */
 function appended(text: string, extra: readonly ModelMessage[]): string {
-  const encoded = v.parse(v.array(v.unknown()), JSON.parse(encodeModelMessages(extra)));
+  const encoded = encodeModelMessageValues(extra);
   const head = text.endsWith('\n') ? text : `${text}\n`;
 
   return head + encoded.map((message) => `${JSON.stringify({ new: true, message })}\n`).join('');

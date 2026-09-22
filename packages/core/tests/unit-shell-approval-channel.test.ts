@@ -1,12 +1,5 @@
-// The `shell` tool's 'gate' decision is wired to a real approval channel. These
-// tests pin it — who gets asked, what the answer does, and that with no
-// channel wired 'strict' still keeps its explanatory refusal rather than
-// running the command unasked.
-//
-// The gate itself lives at the execution seam (withApprovalGatedShell —
-// see execution/approval.ts), not inside `shell`'s own executor, so the
-// harness wraps a mock `Shell` with the policy under test and hands it to
-// `rt.shell`, exactly as a backend's runtime.ts does at construction.
+// `shell`'s 'gate' decision over a real approval channel; with none wired, 'strict' still refuses.
+// The gate lives at the execution seam (execution/approval.ts), so the harness wraps `rt.shell`.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
@@ -19,8 +12,7 @@ import {
 
 type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 
-/** Gated on every executor including the agent's own workspace, which is what
- *  this harness's shell is: the harm of a force-push lands on a remote. */
+/** Gated even on the agent's own workspace: a force-push lands on a remote. */
 const GATED = 'git push --force origin main';
 
 function harness(opts: {
@@ -72,7 +64,6 @@ describe('run tool — interactive shell approval channel', () => {
 
     expect(out).toBe('ran');
     expect(executed).toEqual([GATED]);
-    // The channel sees the command and the review that explains the gate.
     expect(asked.length).toBe(1);
     expect(asked[0].command).toBe(GATED);
     expect(asked[0].review.decision).toBe('gate');
@@ -129,8 +120,7 @@ describe('run tool — interactive shell approval channel', () => {
   });
 
   test('a merely "warn" command runs without consulting the channel', async () => {
-    // The channel is consulted for 'gate' only; this pins that boundary so a
-    // reclassified rule cannot silently start or stop prompting the user.
+    // Only 'gate' consults the channel.
     const { run, executed, asked } = harness({ approve: async () => 'deny' });
 
     const out = await run.execute({ command: 'printenv' });

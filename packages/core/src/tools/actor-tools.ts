@@ -1,24 +1,6 @@
 /**
- * An ACTOR's tool surface: `buildBuiltinTools` plus the one tool that factory
- * cannot hold — `agents`, the delegation tool.
- *
- * The split is a layering fact, not a preference. `agents`' implementation IS
- * the search engine: delegation/agents-tool.ts → strategy/swarm-run.ts →
- * strategy/node-agent.ts, and a node's own tool surface comes back out of
- * `buildBuiltinTools`. Registering the tool inside that factory therefore closed
- * a four-module runtime import cycle, and a value cycle is not a style
- * complaint: the module-scope reader at the far end of the equivalent ring
- * through heads/head-tools.ts hit the temporal dead zone, which made a test FILE
- * fail to load and its six tests disappear from the count rather than fail.
- *
- * Nothing was made lazy to hide that. Instead the surface is composed in the one
- * place where the ordering is unambiguous, and the confined surfaces stay below
- * it: `HEAD_BUILTIN_TOOLS` never contained `agents` (heads/types.ts), so a head
- * or a swarm node linking the delegation tool only to filter it back out was
- * paying for a dependency it is defined not to have.
- *
- * One composition step per surface, and no second definition of any tool: this
- * is the SAME `buildBuiltinTools` output, with one more entry.
+ * An actor's tool surface: `buildBuiltinTools` plus the `agents` delegation tool.
+ * `agents` lives here, not in that factory, because registering it there closes a runtime import cycle.
  */
 
 import type { ToolSet } from 'ai';
@@ -26,34 +8,17 @@ import { buildToolSurface, type BuiltinToolDeps, type CodemodeBuilder } from './
 import { createAgentsTool, type AgentsToolDeps } from '../delegation/agents-tool';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 
-// Named for the toolset rather than the actor because cf-backend's actor-agent.ts
-// already owns an `ActorToolDeps` — the actor PROFILE's deps (team / peers /
-// report / submitPlan), which is what feeds `agents` below, not this factory.
+// Not `ActorToolDeps`: cf-backend's actor-agent.ts already owns that name.
 export interface ActorToolsetDeps extends BuiltinToolDeps {
-  /** The `agents` delegation tool's deps: swarm substrate (model +
-   *  host-injected infra) and/or subordinate + peer transports. The
-   *  tool is registered when ANY group is wired; actions gate per group. */
+  /** Deps for `agents`; registered when any group is wired, actions gate per group. */
   agents?: AgentsToolDeps;
-  /** The durable once-only boundary for tools whose effects leave the process.
-   *  Required, not optional: an actor built without it would run every
-   *  `claimed` tool with no replay protection at all, which is the state this
-   *  seam exists to end. */
+  /** Durable once-only boundary for tools whose effects leave the process. */
   effectClaims: EffectClaimDeps;
-  /** Builds `eval` over this actor's FINISHED surface (every builtin
-   *  plus `agents`), because the sandbox declares each of them as
-   *  `tools.<name>`. Runs before the effect-claim wrap, so the built entry
-   *  keeps its clamp and its claim. */
+  /** Builds `eval` over the finished surface (builtins plus `agents`); runs before the effect-claim wrap. */
   codemode?: CodemodeBuilder;
 }
 
-/**
- * The builtin surface an actor is given: every tool `buildBuiltinTools` emits,
- * plus `agents` when this actor's deps wire any delegation group — and every
- * one of them behind its declared replay policy (tools/effect-claim.ts), which
- * is why both backends assemble here and neither wraps tools of its own.
- * Per-action gating (swarm / team / peers) lives in `createAgentsTool`, so an
- * actor with only `team` sees hire/msg/list/dismiss and no swarm.
- */
+/** Every builtin, plus `agents` when any delegation group is wired, each behind its replay policy (tools/effect-claim.ts). */
 export function buildActorTools(deps: ActorToolsetDeps): ToolSet {
   let extra: ToolSet | undefined;
 
@@ -64,9 +29,6 @@ export function buildActorTools(deps: ActorToolsetDeps): ToolSet {
   return withEffectClaims(buildToolSurface({ ...deps, extra }), deps.effectClaims);
 }
 
-// The delegation deps contracts (and the reserved peer-reply topic) live with
-// the tool that consumes them — delegation/agents-tool.ts — and are re-exported here
-// for the backends that implement them, beside the factory that registers it.
 export {
   PEER_REPLY_TOPIC,
   type AgentsToolDeps, type AgentsSwarmDeps,

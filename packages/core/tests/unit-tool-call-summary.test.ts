@@ -1,6 +1,4 @@
-// The chat's tool card summary line. Six `team` chips in a row must read as
-// six different calls, and no summary may claim detail the arguments never
-// carried.
+// Tool card summary lines: repeated calls stay distinguishable, and no summary invents detail.
 import { describe, test, expect } from 'bun:test';
 import { clip, describeToolCall, summarizeToolCall, toolCallEffect } from '../src/tools/tool-call-summary';
 import { renderCodemodeDescription } from '../src/tools/registry';
@@ -31,10 +29,7 @@ describe('tool call summaries — the unified agents tool', () => {
   });
 });
 
-// NOTE: the think/team/peers, fact and web_search/web_fetch cases below pin
-// HISTORICAL renderers — those tools were unified into `agents`, `memory` and
-// `web`, but stored transcripts still carry their names and must keep
-// rendering.
+// think/team/peers, fact and web_search/web_fetch are retired tools still in stored transcripts.
 describe('tool call summaries — builtins', () => {
   test('team calls are told apart by their target, not just their name', () => {
     expect(summarizeToolCall('team', { action: 'dismiss', name: 'arch-auditor' })).toBe('dismiss arch-auditor');
@@ -71,7 +66,6 @@ describe('tool call summaries — builtins', () => {
     expect(summarizeToolCall('memory', { action: 'save', content: 'the deploy target is staging' }))
       .toBe('save — "the deploy target is staging"');
     expect(summarizeToolCall('memory', { action: 'conversations' })).toBe('conversations');
-    // The keyed-fact actions read by their key, not by a query they never carry.
     expect(summarizeToolCall('memory', { action: 'remember', key: 'user.tz', value: 'UTC' }))
       .toBe('remember user.tz');
     expect(summarizeToolCall('memory', { action: 'forget', key: 'deploy.target' })).toBe('forget deploy.target');
@@ -84,15 +78,11 @@ describe('tool call summaries — builtins', () => {
   });
 
   test('a stored transcript from before the merges still renders', () => {
-    // `fact` and web_search/web_fetch calls live in history for good. Their
-    // summarizers stay, exactly as think/team/peers did after `agents`.
     expect(summarizeToolCall('fact', { action: 'remember', key: 'user.tz', value: 'UTC' })).toBe('remember user.tz');
     expect(summarizeToolCall('fact', { action: 'recall', key: 'deploy.target' })).toBe('recall deploy.target');
     expect(summarizeToolCall('web_search', { query: 'workers ai session affinity' }))
       .toBe('"workers ai session affinity"');
     expect(summarizeToolCall('web_fetch', { url: 'https://example.com/docs' })).toBe('https://example.com/docs');
-    // `experience` left the tool surface for the owner's RPC; the calls the
-    // agent already made stay in history and keep their line.
     expect(summarizeToolCall('experience', { action: 'search', query: 'auth retry backoff' }))
       .toBe('search — "auth retry backoff"');
     expect(summarizeToolCall('experience', { action: 'publish', kind: 'craft', key: 'slugify' }))
@@ -149,9 +139,7 @@ describe('tool call summaries — builtins', () => {
   });
 
   test('retired tool names still render, so stored transcripts do not degrade', () => {
-    // Persisted transcripts carry calls under these names. Each one must keep
-    // summarizing — the alternative is a wall of `summarizeUnknownTool` in history
-    // the owner cannot re-record.
+    // Persisted transcripts carry these names; each must keep summarizing.
     expect(summarizeToolCall('product_change', { action: 'create', userPrompt: 'dark mode toggle' }))
       .toBe('create — "dark mode toggle"');
     expect(summarizeToolCall('think', { task: 'compare the two designs' })).not.toBe('');
@@ -165,7 +153,6 @@ describe('tool call summaries — truthfulness', () => {
     expect(summarizeToolCall('shell', {})).toBe('');
     expect(summarizeToolCall('shell', 'git status')).toBe('');
     expect(summarizeToolCall('think', { strategy: 'heads' })).toBe('heads');
-    // Mid-stream partial args: the action has landed, the body has not.
     expect(summarizeToolCall('team', { action: 'assign', name: 'scout' })).toBe('assign scout');
   });
 
@@ -192,7 +179,7 @@ describe('toolCallEffect — consequence controls activity density', () => {
     expect(toolCallEffect('tasks', { action: 'update', id: 't3', status: 'done' })).toBe('mutate');
     expect(toolCallEffect('memory', { action: 'remember', key: 'deploy.target' })).toBe('mutate');
     expect(toolCallEffect('agents', { action: 'swarm', task: 'audit it' })).toBe('mutate');
-    // `mode` with a role durably mutates actor_config via changeActiveRole.
+    // `mode` with a role mutates actor_config via changeActiveRole.
     expect(toolCallEffect('tasks', { action: 'mode', role: 'researcher' })).toBe('mutate');
     expect(toolCallEffect('tasks', { action: 'mode' })).toBe('read');
 

@@ -75,8 +75,7 @@ describe('skill trust binds raw policy source', () => {
 
     expect(demoted.active[0]?.trust).toBe('unverified');
     expect(demoted.active[0]?.allowed_tools).toEqual(['shell']);
-    // Known answers. Each digest is the platform sha256 over the documented
-    // serialization, worked out without calling the function under test.
+    // Known answers computed without calling the function under test.
     expect(instructionDigest(REVIEWED)).toBe('e0919db09d4f769f92f0e140d20cc0e81b49e6335e167138d6794c2adf60300e');
     expect(instructionDigest(POLICY_CHANGED)).toBe('fa1e149284a484694dcde937a4987c88f3f40f301935565748ab87e61b9466a0');
   });
@@ -174,8 +173,7 @@ body`;
       trust: (_path, raw) => raw === POLICY_CHANGED ? 'approved' : 'unverified',
     });
 
-    // Activation came from the first read, but no policy field from that
-    // snapshot survives beside the second read's trust/body.
+    // No policy field from the first read's snapshot survives beside the second read's trust/body.
     expect(active.active[0]?.trust).toBe('approved');
     expect(active.active[0]?.body).toBe('Review the diff first.\n');
     expect(active.active[0]?.allowed_tools).toEqual(['shell']);

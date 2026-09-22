@@ -1,9 +1,4 @@
-/**
- * The release signature: what a daemon, the launcher and the CLI verify
- * before any downloaded byte reaches a live path (SECURITY-devices C1). The
- * message is canonical text over (version, checksums); the two pins — core's
- * constant and the daemon's, which ships as plain JavaScript — are one key.
- */
+/** Release signature (SECURITY-devices C1): canonical text over (version, checksums); core's and the daemon's pins are one key. */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { RELEASE_SIGNING_PUBLIC_KEY, generateReleaseSigningKey, signRelease, verifyRelease } from '../src/http/release-signing';
@@ -17,8 +12,6 @@ test('a signature verifies under its key and under nothing else', async () => {
 
   expect(await verifyRelease(signed, key.publicKeyHex)).toBe(true);
   expect(await verifyRelease(signed, other.publicKeyHex)).toBe(false);
-  // Any change to what the signature covers — the version, a checksum, an
-  // artifact added — is a signature that does not hold.
   expect(await verifyRelease({ ...signed, version: '1.0.1+abc' }, key.publicKeyHex)).toBe(false);
   expect(await verifyRelease({ ...signed, checksums: { ...CHECKSUMS, '/downloads/kinu-cli-linux-x64.tar.gz': 'c'.repeat(64) } }, key.publicKeyHex)).toBe(false);
   expect(await verifyRelease({ ...signed, checksums: { ...CHECKSUMS, '/downloads/extra.tar.gz': 'd'.repeat(64) } }, key.publicKeyHex)).toBe(false);
@@ -31,14 +24,12 @@ test('the message is canonical: the order the checksums arrive in does not chang
   const reversed = Object.fromEntries(Object.entries(CHECKSUMS).reverse());
 
   expect(await verifyRelease({ ...signed, checksums: reversed }, key.publicKeyHex)).toBe(true);
-  // And upper-case hex is the same checksum.
   const upper = Object.fromEntries(Object.entries(CHECKSUMS).map(([path, digest]) => [path, digest.toUpperCase()]));
   expect(await verifyRelease({ ...signed, checksums: upper }, key.publicKeyHex)).toBe(true);
 });
 
 test('the daemon pins the same public key core does, and it is a real key', () => {
-  // The daemon ships as plain JavaScript and cannot import core; its pin is
-  // read off the module it exports, the surface `kinu connect` installs.
+  // The daemon cannot import core; its pin is read off the module `kinu connect` installs.
   const daemon = v.parse(v.object({ RELEASE_SIGNING_PUBLIC_KEY: v.string() }), require('../../pc-agent/src/update.js'));
 
   expect(daemon.RELEASE_SIGNING_PUBLIC_KEY).toBe(RELEASE_SIGNING_PUBLIC_KEY);

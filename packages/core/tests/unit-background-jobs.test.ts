@@ -1,4 +1,3 @@
-// BackgroundJobStore + withBackgroundThreshold — the #173 background/async core.
 import { describe, test, expect } from 'bun:test';
 import { DELEGATION_RUNGS } from '../src/tools/registry';
 import { Database } from 'bun:sqlite';
@@ -17,8 +16,6 @@ function newStore() {
   return new BackgroundJobStore(makeSql(db), createTestActorsOver(db).main);
 }
 
-/** Work that ends when the test says: the promise the subject is handed, and
- *  the release the test holds. */
 function heldWork<T>(value: T) {
   const { promise, resolve } = Promise.withResolvers<void>();
 
@@ -42,7 +39,6 @@ describe('BackgroundJobStore', () => {
     const j = s.get('j1');
     expect(j?.status).toBe('completed');
     expect(j?.result).toBe('the result');
-    // A duplicate completion wake must NOT overwrite.
     s.settle('j1', 0, 'DIFFERENT', 3);
     expect(s.get('j1')?.result).toBe('the result');
     s.fail('j1', 0, 'late error', 4);
@@ -61,8 +57,7 @@ describe('BackgroundJobStore', () => {
   });
 
   test('listRunning returns only in-flight jobs, newest first, capped', () => {
-    // The dynamic-context roster reads this: `list` would let a settled backlog
-    // crowd the still-running work out of the block entirely.
+    // The roster uses this so a settled backlog cannot crowd out running work.
     const s = newStore();
 
     for (let i = 0; i < 5; i++) s.create({ id: `j${i}`, kind: 'shell', workMode: 'build', now: i });
@@ -70,8 +65,7 @@ describe('BackgroundJobStore', () => {
     s.fail('j3', 0, 'boom', 9);
     expect(s.listRunning().items.map((j) => j.id)).toEqual(['j4', 'j2', 'j0']);
     expect(s.listRunning().total).toBe(3);
-    // The bound cuts the PAGE, never the count: the renderer's elision line
-    // is computed from `total`, so it stays honest past the cap.
+    // The bound cuts the page, never `total`, which the elision line reads.
     const capped = s.listRunning(2);
     expect(capped.items.map((j) => j.id)).toEqual(['j4', 'j2']);
     expect(capped.total).toBe(3);
@@ -83,7 +77,6 @@ describe('BackgroundJobStore', () => {
     s.cancel('c', 0, 2);
     expect(s.get('c')?.status).toBe('cancelled');
     expect(s.get('c')?.error).toMatch(/cancelled/i);
-    // A settle after cancel must NOT revive it.
     s.settle('c', 0, 'late', 3);
     expect(s.get('c')?.status).toBe('cancelled');
   });
@@ -93,23 +86,17 @@ describe('BackgroundJobStore', () => {
     s.create({ id: 'e', kind: 'think', workMode: 'build', now: 1 });
     expect(s.epochOf('e')).toBe(0);
 
-    // Evict + recover: reclaim bumps the epoch (fences the dead executor) + attempts.
     const claim = s.reclaim('e');
     expect(claim).toEqual({ epoch: 1, attempts: 1 });
     expect(s.epochOf('e')).toBe(1);
 
-    // The zombie executor from the dead process still holds epoch 0 → its settle is
-    // a no-op: the job stays running under the new lease.
     s.settle('e', 0, 'zombie result', 3);
     expect(s.get('e')?.status).toBe('running');
 
-    // The reclaiming executor writes under the current epoch → accepted.
     s.settle('e', 1, 'live result', 4);
     expect(s.get('e')?.status).toBe('completed');
     expect(s.get('e')?.result).toBe('live result');
 
-    // Monotonic: a second reclaim would only ever raise the epoch — but a settled
-    // job is no longer running, so reclaim declines it.
     expect(s.reclaim('e')).toBeNull();
   });
 
@@ -136,7 +123,6 @@ describe('BackgroundJobStore', () => {
     expect(s.listRunning().items[0]?.resumeAfter).toBe(5_000);
     expect(s.list()[0]?.resumeAfter).toBe(5_000);
 
-    // The claim SERVES the wait, so it clears it — and arms nothing by itself.
     expect(s.reclaim('w', 6_000)).toEqual({ epoch: 1, attempts: 1 });
     expect(s.get('w')?.resumeAfter).toBeNull();
     expect(s.nextResumeAtInWorkspace()).toBeNull();
@@ -146,7 +132,6 @@ describe('BackgroundJobStore', () => {
     const s = newStore();
     s.create({ id: 'settled', kind: 'agents', workMode: 'build', now: 1 });
     s.settle('settled', 0, '"done"', 2);
-    // A settled row must not become work the next sweep thinks is still coming.
     s.deferResume('settled', 9_000);
     expect(s.get('settled')?.resumeAfter).toBeNull();
     expect(s.nextResumeAtInWorkspace()).toBeNull();
@@ -164,7 +149,6 @@ describe('BackgroundJobStore', () => {
 
     expect(s.resumeOwedIdsInWorkspace(5_000)).toEqual(['waiting']);
     expect(s.resumeOwedIdsInWorkspace(50_000)).toEqual([]);
-    // The soonest instant is what a caller arms its one wake for.
     expect(s.nextResumeAtInWorkspace()).toBe(1_000);
   });
 
@@ -197,12 +181,10 @@ describe('BackgroundJobStore', () => {
     s.create({ id: 'run1', kind: 'shell', workMode: 'build', now: 1 });
     s.create({ id: 'done1', kind: 'think', workMode: 'build', now: 2 });
     s.settle('done1', 0, 'ok', 3);
-    // Can't dismiss a running job.
     s.dismiss('run1');
     expect(s.get('run1')).not.toBeNull();
     s.dismiss('done1');
     expect(s.get('done1')).toBeNull();
-    // clearSettled drops settled, keeps running.
     s.create({ id: 'done2', kind: 'think', workMode: 'build', now: 4 }); s.fail('done2', 0, 'x', 5);
     s.clearSettled();
     expect(s.get('done2')).toBeNull();
@@ -219,9 +201,7 @@ describe('serializeJobResult', () => {
   });
 
   test('non-serializable success (BigInt) degrades to a named reason, never thrown', () => {
-    // A backgrounded eval can resolve a BigInt — JSON.stringify throws
-    // on it; the helper must degrade to a string that says so and carries the
-    // thrown reason, so settle() still records it.
+    // JSON.stringify throws on BigInt; the helper must degrade to a string carrying the reason.
     expect(serializeJobResult({ value: 10n })).toMatch(/^unserializable job result: /);
 
     interface CircularValue { self?: CircularValue }
@@ -281,7 +261,6 @@ describe('withBackgroundThreshold', () => {
 
     if (isBackgroundHandle(out)) { expect(out.jobId).toBe('job-7'); expect(out.kind).toBe('heads'); }
 
-    // The detached promise is the SAME live work and still resolves.
     slow.release();
     await expect(detached[0]).resolves.toBe('slow-result');
   });
@@ -328,8 +307,6 @@ describe('withBackgroundThreshold', () => {
   });
 
   test('the default threshold is the interactive policy', async () => {
-    // No thresholdMs: a caller that does not state a surface gets the one a
-    // human is waiting on, never an unbounded inline wait.
     expect(BACKGROUND_POLICY.interactive.detachAfterMs).toBe(30_000);
 
     const out = await withBackgroundThreshold('shell', async () => 'inline', {
@@ -361,7 +338,6 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
     const exploration = heldWork('merged fork answer');
 
     const out = await withSpawnDetach('agents', async (spawnStarted) => {
-      // The spawn is validated fast; the actual exploration is what's slow.
       spawnStarted();
       const answer = await exploration.work();
       explored = true;
@@ -383,12 +359,8 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
       expect(out.kind).toBe('agents');
     }
 
-    // The detach came from the spawn announce while the exploration was still
-    // running; the old behaviour rode the 30 s interactive threshold, long after
-    // it had settled. An ordering, not a wall-clock bound, so scheduler latency
-    // under load cannot fail it.
+    // An ordering, not a wall-clock bound, so scheduler latency cannot fail it.
     expect(exploringAtDetach).toBe(true);
-    // The detached promise is the SAME live exploration and still resolves.
     exploration.release();
     await expect(detached[0]).resolves.toBe('merged fork answer');
   });
@@ -426,9 +398,6 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
     expect(out).toBe('completed after the capacity refusal');
   });
 
-  // The wake promise lives in the runtime message; the never-poll doctrine
-  // lives ONCE, in the agents docstring the model reads at every step. The
-  // old assertion pinned ~70 tokens of that doctrine repeated per spawn.
   test('the detach message is terse and promises the wake; the docstring carries the doctrine', async () => {
     const out = await withSpawnDetach('agents', async (spawnStarted) => {
       spawnStarted();

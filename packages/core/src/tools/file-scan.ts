@@ -1,16 +1,6 @@
 /**
- * Reading a file's text without making the file resident.
- *
- * The saving is MEMORY, not I/O. Every byte is still fetched and hashed,
- * because the read ledger keys on the fingerprint of the WHOLE content;
- * what changes is that peak residency is one chunk plus the requested
- * window, whatever the file's size, instead of the file plus a copy of the
- * window.
- *
- * Fingerprinting only the window, or keying the ledger on size and mtime,
- * was rejected: either would let an edit land against a file that changed
- * outside the lines the model read, which is the failure read-before-write
- * exists to stop.
+ * Reads a file's text without making it resident. Every byte is still hashed: the read ledger keys on
+ * the whole-content fingerprint, so an edit cannot land against lines changed outside the read window.
  */
 
 import * as v from 'valibot';
@@ -21,36 +11,18 @@ import { isVfsError, makeVfsError } from '../vfs/errno';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
 import { BOM, FileRefusalError, type SliceWindow } from './file-edit';
 
-/**
- * Bytes fetched per ranged read, and therefore the scan's resident ceiling
- * over and above the window it keeps. Deliberately NOT the transfer plane's
- * `FILE_CHUNK_BYTES` (8 MiB), which sizes one RPC payload moving a whole
- * file: adopting it would reintroduce megabytes of residency to save round
- * trips this path does not care about.
- */
+/** Bytes per ranged read (the scan's resident ceiling); intentionally smaller than `FILE_CHUNK_BYTES`. */
 const SCAN_CHUNK_BYTES = 64 * 1024;
 
-/** One scanned file: the window the formatter renders, and the fingerprint the
- *  read ledger keys on. */
+/** One scanned file: the rendered window and the ledger fingerprint. */
 export interface ScannedFile {
   readonly window: SliceWindow;
-  /** The plane's revision of the scanned bytes, when it names one. */
   readonly revision: VfsRevision | undefined;
-  /** `fnv1a64` of the file's ENTIRE text, byte-order mark included, identical
-   *  to hashing the string a whole-file read would have produced — which is
-   *  what lets a scanned read and a later edit agree on what was seen. */
+  /** `fnv1a64` of the entire text, BOM included; equals hashing a whole-file read. */
   readonly fingerprint: string;
 }
 
-/**
- * A file's text, whole.
- *
- * A VFS is free to answer `{encoding:'utf8'}` with bytes; decoding beats an
- * unchecked cast that would throw out of `execute`. `ignoreBOM` keeps the
- * byte-order mark, because the planes that answer with a STRING keep it: a
- * decoder that dropped it would give an edit a different fingerprint from the
- * read that authorized it, and would write the file back with its BOM gone.
- */
+/** A file's whole text. `ignoreBOM` keeps the BOM so the fingerprint matches string-returning planes. */
 export async function readFileText(vfs: VFS, path: string, revision?: VfsRevision): Promise<string> {
   if (revision !== undefined && !vfs.readFileAtRevision) throw makeVfsError('ENOTSUP', 'this file plane does not retain file revisions', path);
 
@@ -65,8 +37,7 @@ export async function readFileText(vfs: VFS, path: string, revision?: VfsRevisio
     : new TextDecoder('utf-8', { ignoreBOM: true }).decode(v.parse(v.instance(Uint8Array), raw));
 }
 
-/** A bounded prefix of a file: the text, how many bytes it came from, and the
- *  size the plane reported for the whole file (null where it reported none). */
+/** A bounded prefix: text, bytes read, and the plane-reported total size (null if none). */
 export interface FileHead {
   readonly text: string;
   readonly bytes: number;
@@ -74,25 +45,11 @@ export interface FileHead {
 }
 
 /**
- * A file's leading `maxBytes` as text.
- *
- * For the callers that scan CONTENT rather than render a window: they need the
- * text, they do not need the whole file, and the file's size is chosen by
- * whoever put it in the workspace. The plane's own ranged read fetches at most
- * the budget, one chunk at a time, so a gigabyte log costs the budget.
- *
- * A plane WITHOUT a ranged read falls back to {@link readUnranged}, which
- * refuses a file over the resident budget instead of fetching it to slice —
- * the same refusal a windowed read gets, for the same reason.
- *
- * `bytes` is what was actually read rather than what was asked for, because a
- * ranged read is free to answer short; `total` is the stat, so a caller can
- * tell a file that ENDED from one that was cut.
+ * A file's leading `maxBytes` as text. Planes without a ranged read fall back to {@link readUnranged},
+ * which refuses over-budget files. `bytes` is what was read; `total` is the stat.
  */
 export async function readFileHead(vfs: VFS, path: string, maxBytes: number): Promise<FileHead> {
   const stat = await vfs.stat(path);
-  // The plane's own ranged read, where it declares one — a widening
-  // assignment for the reason `scanFileWindow` gives above.
   const probed: VFS & Partial<VfsNativeReads> = vfs;
   const ranged = probed.readRange;
 
@@ -129,25 +86,14 @@ export async function readFileHead(vfs: VFS, path: string, maxBytes: number): Pr
   return { text: text + decode.decode(), bytes: at, total: stat?.size ?? null };
 }
 
-/**
- * Scan `path` and return the line window `opts` asks for plus the fingerprint
- * of everything.
- *
- * Errors propagate: a missing file, a denied read, a plane that fell over
- * mid-scan. Nothing partial is returned and nothing is recorded anywhere, so
- * a caller cannot end up with a ledger entry for a read that did not complete.
- */
+/** Scan `path` for the window `opts` asks for plus the whole-file fingerprint. Errors propagate; nothing partial is returned. */
 export async function scanFileWindow(
   vfs: VFS,
   path: string,
   opts: { offset?: number | undefined; limit?: number | undefined; maxChars: number },
 ): Promise<ScannedFile> {
   const scan = beginScan(opts);
-  // One stat before and, when the plane has an authoritative revision, one
-  // after: a chunked scan is not the atomic snapshot a whole-file read was, so
-  // a file rewritten underneath it would otherwise be reported as a coherent
-  // version that never existed. Size and mtime are NOT consulted for this —
-  // a same-size, same-mtime write is still a different file.
+  // A chunked scan is not atomic: re-stat after when the plane has a revision. Size and mtime do not detect rewrites.
   const before = await vfs.stat(path);
   const revision = before?.revision;
   const historical = vfs.readFileAtRevision;
@@ -162,14 +108,10 @@ export async function scanFileWindow(
     if (pinned) return scan.done(revision);
   }
 
-  // The plane's own ranged read, where it declares one. A widening assignment,
-  // not a cast: the member is optional, and the planes that have it
-  // (execution/{nimbus,sandbox}.ts, vfs/nimbus-workspace.ts, the routed tree in
-  // vfs/mounts.ts) carry exactly this signature.
+  // Widening assignment, not a cast: the optional member has exactly this signature where present.
   const probed: VFS & Partial<VfsNativeReads> = vfs;
   const ranged = probed.readRange;
 
-  // Without immutable reads, the scanned bytes must still name one revision.
   if (!ranged || !await feedRanges(scan, vfs, ranged, path)) {
     scan.feed(await readUnranged(vfs, path, before?.size ?? null));
   }
@@ -183,23 +125,14 @@ export async function scanFileWindow(
   return scan.done(before?.revision);
 }
 
-/**
- * Feed the whole file through the plane's ranged read, one chunk at a time.
- *
- * `false` means this path has no ranged read after all: the routed tree
- * (vfs/mounts.ts) declares ONE `readRange` for every plane under it and
- * answers ENOTSUP where there is none, so only the first window can answer
- * the capability question — and answering it costs a refused call, not a
- * read of the file.
- */
+/** Feed the file through the ranged read in chunks. `false`: the first window answered ENOTSUP (vfs/mounts.ts). */
 async function feedRanges(
   scan: { feed(text: string): void },
   vfs: VFS,
   ranged: VfsNativeReads['readRange'],
   path: string,
 ): Promise<boolean> {
-  // `ignoreBOM` for the same reason `readFileText` uses it: the mark belongs
-  // to the file and therefore to its fingerprint.
+  // `ignoreBOM`: the mark belongs to the fingerprint.
   const decode = new TextDecoder('utf-8', { ignoreBOM: true });
 
   for (let at = 0; ; ) {
@@ -223,17 +156,8 @@ async function feedRanges(
 }
 
 /**
- * The whole file, for a plane that serves no ranged read, and only within the
- * resident-text budget every bounded view in the tree shares
- * (`vfs/mounts.ts`). Over budget there is deliberately no fallback: fetching
- * the file to slice it is the allocation this path exists to prevent.
- *
- * The stat ADMITS the read; it does not promise what comes back. A file can
- * grow between the two, and a plane with no ranged read offers no way to ask
- * for less — by the time the length is knowable the provider has already
- * allocated it, and nothing here can prevent that. What the checks after the
- * read refuse is carrying an over-budget result any further, with no retry
- * and no invented revision. Planes that DO serve ranges never reach this.
+ * The whole file for a plane with no ranged read, only within the shared resident-text budget
+ * (`vfs/mounts.ts`). The stat admits the read; over-budget results are still refused after it.
  */
 async function readUnranged(vfs: VFS, path: string, size: number | null): Promise<string> {
   const refuse = (what: string): never => {
@@ -244,9 +168,7 @@ async function readUnranged(vfs: VFS, path: string, size: number | null): Promis
   };
 
   if (size === null) {
-    // A path the plane could not stat is usually a path that is not there,
-    // and answering a typo with a lecture about ranged reads would send the
-    // model looking for the wrong problem.
+    // An unstattable path is usually missing; do not answer it with a ranged-read error.
     if (!await vfs.exists(path)) throw makeVfsError('ENOENT', `no such file, open '${path}'`, path);
 
     return refuse('a file of unknown size');
@@ -255,11 +177,7 @@ async function readUnranged(vfs: VFS, path: string, size: number | null): Promis
   if (size > RESIDENT_TEXT_MAX_BYTES) return refuse(`${String(size)} bytes`);
   const text = await readFileText(vfs, path);
 
-  // The budget is in BYTES, and characters are not bytes: 300k CJK characters
-  // are 900k bytes and would sail past a character count. The cheap test runs
-  // first only to BOUND the exact one — UTF-8 never spends fewer bytes than
-  // characters, so a string already over the budget needs no measuring, and
-  // one that is not costs at most three bytes per character to measure.
+  // Budget is in bytes. UTF-8 never uses fewer bytes than characters, so the length check only bounds the exact one.
   if (text.length > RESIDENT_TEXT_MAX_BYTES) return refuse(`${String(text.length)} characters`);
   const bytes = new TextEncoder().encode(text).byteLength;
 
@@ -267,35 +185,22 @@ async function readUnranged(vfs: VFS, path: string, size: number | null): Promis
 }
 
 /**
- * The line scanner: text in, one `SliceWindow` out.
- *
- * Chunk boundaries fall wherever the plane's reads and the decoder's
- * multi-byte buffering put them, never on line boundaries, so every count is
- * accumulated as characters go past rather than derived afterwards from what
- * was kept. That is the correctness argument: `requestedLines`,
- * `requestedChars` and `firstLineChars` describe the ORIGINAL file while
- * `lines` holds only what fits, and a formatter inferring the former from the
- * latter would report a truncated read as a complete one.
+ * The line scanner. Chunks do not align with lines, so `requestedLines`, `requestedChars` and
+ * `firstLineChars` are accumulated to describe the original file, not the kept `lines`.
  */
 function beginScan(opts: { offset?: number | undefined; limit?: number | undefined; maxChars: number }) {
   const first = Math.max(1, Math.floor(opts.offset ?? 1));
-  // A limit is a count of lines, so anything under one line is one line; left
-  // as given it would ask for an empty range, which has no honest rendering.
+  // A limit under one line means one line.
   const limit = opts.limit != null ? Math.max(1, Math.floor(opts.limit)) : undefined;
   const lastWanted = limit === undefined ? Number.POSITIVE_INFINITY : first + limit - 1;
   const { maxChars } = opts;
   const hash = new Fnv1a64();
 
-  /** The display stream drops ONE leading byte-order mark — it is invisible,
-   *  so a model copying the first line back as `old_text` would carry it and
-   *  never match. The hash above sees it, because the file contains it. */
+  /** The display stream drops one leading BOM so a copied first line matches `old_text`; the hash keeps it. */
   let bomPending = true;
-  /** 1-indexed line currently being accumulated. */
   let line = 1;
   let total = 0;
   let unterminated = false;
-  /** Length of the line being accumulated, and its leading `maxChars`
-   *  characters where the window still wants them. */
   let pendingChars = 0;
   let pendingHead = '';
 
@@ -304,12 +209,10 @@ function beginScan(opts: { offset?: number | undefined; limit?: number | undefin
   let requestedLines = 0;
   let requestedChars = 0;
   let firstLineChars = 0;
-  /** False once a requested line did not fit: everything after it is counted
-   *  and discarded, exactly as a whole-string slice would have dropped it. */
+  /** False once a requested line did not fit; later lines are counted and discarded. */
   let accepting = true;
   let retaining = first === 1;
 
-  /** One completed line, offered to the window. */
   const record = (): void => {
     if (line < first || line > lastWanted) return;
     requestedLines++;
@@ -318,9 +221,7 @@ function beginScan(opts: { offset?: number | undefined; limit?: number | undefin
     if (requestedLines === 1) firstLineChars = pendingChars;
 
     if (!accepting) return;
-    // The joining newline costs a character for every line after the first —
-    // keyed on the line COUNT, not on the running total, so a leading blank
-    // line does not make the next one look free.
+    // The joining newline is keyed on line count, so a leading blank line still costs one.
     const cost = lines.length === 0 ? pendingChars : pendingChars + 1;
 
     if (keptChars + cost <= maxChars) {
@@ -330,8 +231,7 @@ function beginScan(opts: { offset?: number | undefined; limit?: number | undefin
       return;
     }
 
-    // One line, on its own, larger than the whole budget: its head is kept so
-    // the formatter can show it and say how much it did not show.
+    // A single line larger than the budget keeps its head for the formatter.
     if (lines.length === 0) lines.push(pendingHead);
     accepting = false;
   };
@@ -384,8 +284,7 @@ function beginScan(opts: { offset?: number | undefined; limit?: number | undefin
     },
 
     done(revision: VfsRevision | undefined): ScannedFile {
-      // A trailing newline ENDS the last line rather than starting a phantom
-      // one, so only a non-empty remainder is a further line.
+      // A trailing newline ends the last line; only a non-empty remainder is another line.
       if (pendingChars > 0) {
         record();
         total++;

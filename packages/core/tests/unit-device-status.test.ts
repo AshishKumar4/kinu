@@ -1,5 +1,4 @@
-// Device presence + mid-session change notice — the per-turn awareness the
-// device runtime feeds into the agent's context.
+// Device presence and mid-session change notice fed into the agent's context.
 import { describe, expect, test } from 'bun:test';
 import {
   deviceChangeNotice,
@@ -76,14 +75,12 @@ describe('deviceChangeNotice', () => {
 describe('observeDevicePresence', () => {
   test('a mid-session connect is announced on exactly the next turn', () => {
     const store = memoryStore();
-    // Turn 1: no device yet — first observation seeds the watermark silently.
+    // Turn 1: the first observation seeds the watermark silently.
     expect(observeDevicePresence(store, { connected: false, registered: false, toolchain: null }))
       .toEqual({ presence: 'none', notice: null });
-    // The user runs `kinu connect` between turns.
     const turn2 = observeDevicePresence(store, { connected: true, registered: true, toolchain: null });
     expect(turn2.presence).toBe('connected');
     expect(turn2.notice).toContain('just connected');
-    // Turn 3: same state — no repeat notice.
     expect(observeDevicePresence(store, { connected: true, registered: true, toolchain: null }).notice).toBeNull();
   });
 

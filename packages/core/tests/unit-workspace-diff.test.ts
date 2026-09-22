@@ -108,19 +108,8 @@ describe('workspace diff lifecycle', () => {
     await resetWorkspaceBaseline(rt);
     await rt.storage.vfs.writeFile('f-7.txt', 'v2 7');
 
-    // The invariant is PEAK RESIDENCY, not total reads: comparing a file against
-    // its baseline necessarily reads that baseline, but the bodies must arrive
-    // one at a time. Returning every body in ONE array holds it beside the whole
-    // workspace map and the diff output — three copies, each up to
-    // 400 x 256 KiB = 102.4 MiB, against a ~200 MiB silent-reset wall. So what is
-    // measured here is the largest number of bodies any single query result
-    // carried.
-    //
-    // Matched on the query's own text rather than by inspecting row shapes,
-    // because `content FROM vfs_baseline` appears in the per-path read AND in the
-    // batch read this rules out — so the measurement cannot go silently vacuous
-    // against the shape it exists to rule out. The path-list query and the
-    // INSERTs do not contain it.
+    // The invariant is peak residency: baseline bodies must arrive one at a time. Matched on the query text
+    // `content FROM vfs_baseline`, which both the per-path read and the ruled-out batch read contain.
     const sql = rt.storage.sql;
     let baselineRowsRead = 0;
     let peakBodiesInOneResult = 0;
@@ -140,8 +129,7 @@ describe('workspace diff lifecycle', () => {
     const result = await getWorkspaceDiff(rt);
 
     expect(result.files.map((f) => f.path)).toEqual(['f-7.txt']);
-    // Denominator: the baseline really does hold every file, so a peak of one
-    // is a bound and not an empty table.
+    // Denominator: the baseline holds every file, so a peak of one is a real bound.
     expect(baselineRowsRead).toBeGreaterThan(20);
     expect(peakBodiesInOneResult).toBe(1);
   });
@@ -149,9 +137,7 @@ describe('workspace diff lifecycle', () => {
   test('an appended log is diffed exactly, however long the file is', async () => {
     const { rt } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
-    // 8,000 short lines: under the 256 KiB admission gate, far over what a
-    // whole-file alignment can afford. Only the differing region is aligned, and
-    // an append has none on the baseline side.
+    // Under the admission gate but far over what whole-file alignment affords; only the differing region is aligned.
     const lines = 8000;
     const before = Array.from({ length: lines }, (_, i) => `${i % 10}`.repeat(9)).join('\n');
     await rt.storage.vfs.writeFile('agent.log', before);
@@ -166,7 +152,6 @@ describe('workspace diff lifecycle', () => {
     expect(file.status).toBe('changed');
     expect(file.added).toBe(1);
     expect(file.removed).toBe(0);
-    // The body is bounded, and says so.
     expect(file.lines.length).toBe(MAX_LINES_PER_FILE);
     expect(file.truncated).toBe(true);
   });
@@ -174,8 +159,7 @@ describe('workspace diff lifecycle', () => {
   test('a wholly rewritten long file is listed with true totals rather than dropped', async () => {
     const { rt } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
-    // No shared head or tail, so the differing region IS the file and the bound
-    // is what stands between this and a table the isolate cannot hold.
+    // No shared head or tail, so the differing region is the whole file and the bound applies.
     const lines = 8000;
     const before = Array.from({ length: lines }, (_, i) => `${i % 10}`.repeat(9)).join('\n');
     const after = Array.from({ length: lines }, (_, i) => `${(i % 10) + 1}`.repeat(9)).join('\n');
@@ -191,8 +175,7 @@ describe('workspace diff lifecycle', () => {
     expect(file.status).toBe('changed');
     expect(file.truncated).toBe(true);
     expect(file.lines).toEqual([]);
-    // Coarse but true: every line out, every line in. Nothing here claims an
-    // alignment that was never computed.
+    // Coarse but true: every line out, every line in.
     expect(file.removed).toBe(lines);
     expect(file.added).toBe(lines);
   });
@@ -212,8 +195,7 @@ describe('workspace diff lifecycle', () => {
       "SELECT path, content, active FROM vfs_baseline WHERE path <> ''",
     ).all();
 
-    // The generation that failed is neither active nor left behind, and the
-    // previous one still holds the content it was captured with.
+    // The failed generation is neither active nor left behind; the previous one keeps its content.
     expect(rows.filter((r) => r.path === 'bad.txt')).toEqual([]);
     expect(rows.filter((r) => r.active === 0)).toEqual([]);
     expect(rows.find((r) => r.path === 'old.txt')).toMatchObject({ content: 'old', active: 1 });
@@ -251,7 +233,6 @@ describe('workspace diff lifecycle', () => {
     ).all();
 
     expect(rows.filter((r) => r.active === 0)).toEqual([]);
-    // Still the captured content, not the unreadable newer one.
     expect(rows.find((r) => r.path === 'kept.txt')).toMatchObject({ content: 'before', active: 1 });
   });
 
@@ -294,9 +275,7 @@ describe('workspace diff lifecycle', () => {
     writeFileSync(join(repo, 'tracked.txt'), 'after\n');
     writeFileSync(join(repo, 'untracked file.txt'), 'new\n');
 
-    // The shell the executor tool stands in for. It runs `git` too, so it needs
-    // the same clean environment: under a git hook the inherited GIT_DIR points
-    // the diff at the developer's checkout instead of `repo`.
+    // Needs the clean git environment: under a git hook the inherited GIT_DIR points at the developer's checkout.
     const exec = async (command: string): Promise<CommandResult> => {
       const result = Bun.spawnSync(['bash', '-lc', command], {
         cwd: repo, env: gitEnv(), stdout: 'pipe', stderr: 'pipe',

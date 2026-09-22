@@ -1,7 +1,3 @@
-/**
- * Safety subsystem — approval gating, deferred approval, device consent, and
- * argument digests.
- */
 
 export {
   reviewCommand,

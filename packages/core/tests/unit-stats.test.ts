@@ -1,8 +1,4 @@
-/**
- * Confidence intervals — the Wilson bounds every reported score travels with.
- * Expected values are the published Wilson figures for these counts, checked
- * by hand rather than recomputed from the implementation.
- */
+/** Wilson intervals; expected values are published figures, not recomputed. */
 import { describe, test, expect } from 'bun:test';
 import {
   wilsonInterval, scoreInterval, lossInterval, formatScoreInterval,
@@ -27,7 +23,7 @@ describe('wilsonInterval — hand-checked against published values', () => {
   test('10 of 10 → (0.7225, 1): the mirror image', () => {
     const i = wilsonInterval(10, 10);
     expect(i.lo).toBeCloseTo(0.7225, 4);
-    // Exactly 1 in closed form; floating point lands a rounding step below.
+    // Exactly 1 in closed form; floating point lands a step below.
     expect(i.hi).toBeCloseTo(1, 10);
   });
 

@@ -1,19 +1,6 @@
 /**
- * What "Stop" reaches, and what it must not.
- *
- * The composer's Stop button ends the turn the person is looking at. A
- * background job has already left that turn — detaching is the whole point of
- * the >30s lane — so it keeps running, and stopping it needs its own id.
- *
- * These cases FORCE the interleaving rather than asserting an end state. The
- * defect was an ordering one (`cancelRunning()` ran before the foreground
- * abort), so a test that let the job settle first would pass over it: the job
- * would read `completed` either way. Each case here holds the detached job at
- * its settlement boundary, fires Stop while it is held, and only then releases.
- *
- * The negative control is the last case: the same held job IS stopped when its
- * id is named. Without it, "the job survived" would also be satisfied by a
- * harness in which nothing can cancel anything.
+ * Stop ends the foreground turn but not a detached background job. Each case holds the job at its
+ * settlement boundary and fires Stop while held, since a settled job reads `completed` either way.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -29,8 +16,7 @@ import type { JsonValue } from '../src/utils/json';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 
-/** A fiber that runs its body inline and exposes the in-flight promises, so a
- *  test can decide WHEN the settlement completes. */
+/** A fiber running its body inline and exposing in-flight promises, so a test decides when settlement completes. */
 function inlineFiber() {
   const runs: Promise<unknown>[] = [];
 
@@ -59,9 +45,7 @@ function scene() {
   const hubSql = makeSqlExec(db);
   initEventsHubTables(hubSql);
   const { fiber, settled } = inlineFiber();
-  // ONE actor across the job store and the inbox: the job and the notice it
-  // publishes belong to the same actor, and two handles here would file the
-  // notice where nothing drains it.
+  // One actor for job store and inbox: two handles would file the notice where nothing drains it.
   const actor = createTestActorsOver(db).main;
   const store = new BackgroundJobStore(makeSql(db), actor);
 
@@ -115,24 +99,17 @@ describe('Stop scopes to the displayed turn', () => {
     const foreground = new AbortController();
     s.activeToolControllers.add(foreground);
 
-    // Stop fires with the job's settlement still un-run: this is the interleaving
-    // the old ordering lost, because `cancelRunning()` ran first and aborted the
-    // job's own signal before the foreground abort it was asked for.
+    // Stop fires while the job's settlement is still un-run.
     const outcome = await s.stop();
 
     expect(outcome).toEqual({ ok: true, abortedTools: 1, deviceCommands: [] });
-    // The framework abort ran, and it ran BEFORE the tool abort: the foreground
-    // controller was still live when chats went, and the device sweep ran after.
+    // The framework abort ran before the tool abort and the device sweep.
     expect(s.calls).toEqual(['chats', 'devices']);
     expect(s.chatsSawAborted()).toBe(false);
     expect(foreground.signal.aborted).toBe(true);
-    // The job's own handle is untouched, and its row still reads running: the
-    // work has not been told to stop and nothing has settled it.
     expect(job.controller.signal.aborted).toBe(false);
     expect(s.store.get(job.jobId)?.status).toBe('running');
 
-    // Only now does the held work finish — and it finishes as its own work,
-    // not as a casualty of a turn that ended.
     job.release('the answer');
     await s.settled();
 
@@ -169,9 +146,7 @@ describe('Stop scopes to the displayed turn', () => {
 
     expect(s.broadcasts).toHaveLength(1);
 
-    // Parsed, not cast. `strictObject` states the frame's WHOLE surface, so a
-    // `cancelledJobs` that came back would fail here — which is a real assertion
-    // about the wire rather than a spelling of `Object.keys`.
+    // `strictObject` states the frame's whole surface, so a returned `cancelledJobs` fails here.
     const frame = v.parse(v.strictObject({
       type: v.literal('work_cancelled'),
       abortedTools: v.number(),
@@ -185,11 +160,7 @@ describe('Stop scopes to the displayed turn', () => {
     expect(frame.abortedTools).toBe(1);
   });
 
-  /**
-   * The negative control. Naming the job is what stops it, so the survival
-   * asserted above is a scoping decision rather than a harness in which
-   * cancellation is unreachable.
-   */
+  /** Negative control: naming the job stops it, so the survival above is scoping, not unreachable cancellation. */
   test('naming the job is what stops it', async () => {
     const s = scene();
     const job = s.detachHeldJob();

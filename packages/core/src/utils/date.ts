@@ -1,4 +1,3 @@
-/** Date helpers — no external dependencies. */
 
 export function isoDate(at: number = Date.now()): string {
   return new Date(at).toISOString().slice(0, 10);

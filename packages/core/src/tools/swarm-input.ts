@@ -1,38 +1,7 @@
 /**
- * The WIRE form of a swarm call's two structured fields, and the mapping onto the
- * types the search is written over.
- *
- * Specified by docs/EXPLORATION.md — "Comparability" and "Validity over the
- * resolved configuration".
- *
- * WHY A MAPPING EXISTS AT ALL. `strategy/objective.ts` and `strategy/swarm.ts` are
- * camelCase because that is correct TypeScript. This surface is snake_case —
- * `merge_strategy`, `budget_usd`, `wall_clock_ms`, `keep_history`, `event_id` — so
- * `objective`'s wire form is snake_case too and the mapping is part of the contract
- * rather than an implementation detail. An `objective` that were the one camelCase
- * island in a snake_case action would make camelCase-for-snake_case the EXPECTED
- * model error rather than an exotic one, on the surface where that error is already
- * measured: a model spelling `budgetUsd` asked for a $5 ceiling, and a surface
- * that drops an unrecognised entry hands it none.
- *
- * FOUR NAMES ARE ACTUALLY AFFECTED and the rest of both types is single-word, which
- * is why this file is small: `best_known_honest` on a floor, and
- * `exploration_weight` / `prune_threshold` / `min_visits_for_prune` on a composed
- * configuration. `samples` and `threshold` are already single words because they
- * sit ON the axis values that own them, which is the same decision paying twice.
- *
- * AND ONE PAYLOAD IS DELIBERATELY NOT MAPPED. `verify.spec` crosses untouched. It is
- * opaque to this convention because the convention governs the fields this
- * specification declares, not the interior of a payload whose schema the registered
- * verifier kind owns — and if anything transformed it, `verifierDigest` would differ
- * depending on which side of the transform it was computed on, which is the failure
- * mode *Comparability* names, reached through a naming convention. With no transform
- * there are not two sides, so "wire form" and "as received" are the same bytes.
- *
- * `strictObject` throughout, for the reason the input itself is strict: valibot's
- * `object` EXCLUDES an unrecognised entry rather than rejecting it, and a dropped
- * field on this surface is a caller who asked for something getting the same result
- * as a caller who asked for nothing.
+ * Wire form (snake_case) of a swarm call's structured fields, mapped onto the camelCase domain types
+ * (docs/EXPLORATION.md). `verify.spec` crosses untouched so `verifierDigest` sees the same bytes.
+ * `strictObject` throughout: valibot's `object` silently drops unknown keys.
  */
 import * as v from 'valibot';
 import { JsonValueSchema } from '../utils/json';
@@ -44,15 +13,12 @@ const DirectionSchema = v.picklist(['minimise', 'maximise'] as const);
 
 const ScaleSchema = v.picklist(['linear', 'log'] as const);
 
-/** A verifier as DATA. `kind` is checked against the registry at dispatch rather than
- *  here, so the refusal can name the registered kinds instead of reading as a schema
- *  violation; `spec` is whatever that kind owns, carried through unexamined. */
+/** `kind` is checked against the registry at dispatch so the refusal can name registered kinds. */
 const VerifierSpecSchema = v.strictObject({
   kind: v.pipe(v.string(), v.minLength(1)),
   spec: JsonValueSchema,
 });
 
-/** A floor is a PROOF, so `proof` is required prose and not a citation. */
 const FloorSchema = v.pipe(
   v.strictObject({
     value: v.pipe(v.number(), v.finite()),
@@ -81,14 +47,7 @@ const ScalarEntries = {
 
 const ScalarObjectiveSchema = v.strictObject(ScalarEntries);
 
-/**
- * The four arms, discriminated on `kind` so a call that names one gets that arm's
- * complaint rather than a union's.
- *
- * `instances` and `components` carry their minimum in the schema because a front over
- * one axis is an argmax, and reporting an argmax as a frontier is the thing
- * `advance:'pareto'` must not be able to do.
- */
+/** `instances`/`components` require ≥2: a front over one axis is an argmax, not a frontier. */
 const ObjectiveSchema = v.variant('kind', [
   ScalarObjectiveSchema,
   v.strictObject({
@@ -108,26 +67,7 @@ const ObjectiveSchema = v.variant('kind', [
   }),
 ]);
 
-/**
- * The axes, partial — `config` is the OVERRIDE half of a composition, so a call with
- * `from` states only what differs and a call without it is refused naming the axes it
- * did not state (that refusal lives in `resolveSwarm`, over the merged tuple, because
- * completeness is a property of the resolution rather than of the field).
- *
- * The tagged axes keep their parameters ON the value that owns them: `samples` only
- * under `score:'judge'`, the novelty rejection test only under `advance:'archive'`,
- * and a threshold only under the two `carry` values that admit into a store. That is
- * what makes the marginalisation refusal in *A parameter belongs to its value*
- * always have its input instead of reasoning over an absent field.
- *
- * WHY THE CUT SPELLINGS ARE STILL WRITTEN DOWN HERE. Deleting them outright would
- * leave a caller who writes one with `Invalid key: Expected never`, which names the
- * key and nothing else — not where the question went, and not that two of the cuts
- * lost a capability rather than gaining an equivalent. Each removed spelling
- * therefore keeps an arm whose only job is to refuse itself by name. They are
- * unrepresentable in {@link SwarmConfig} either way; this is about what the caller
- * is told.
- */
+/** Cut spellings keep a refusing arm so the caller gets prose instead of `Expected never`. */
 const CUT_OBSERVE = '`observe` was cut entirely, because all three of its values were '
   + 'already something else: observe:"none" is what a unit:{kind:"thought"} node IS, '
   + 'observe:"own" is what holding tools MEANS now that every other unit is a real '
@@ -174,8 +114,7 @@ const CUT_BEAM = 'advance:"beam" was cut, and this one COSTS SOMETHING rather th
   + 'LEVEL-SYNCHRONISED ORDER and its `beamWidth` do not. No composition reproduces '
   + 'them. Use advance:{kind:"best-first"} and expect frontier order.';
 
-/** An axis that was cut: present in the wire form only so writing it is answered by
- *  prose rather than by `Expected never`. */
+/** A cut axis: present only so writing it is refused with prose. */
 function cutAxis(why: string) {
   return v.optional(v.pipe(v.unknown(), v.check(() => false, why)));
 }
@@ -222,17 +161,7 @@ const SwarmConfigWireSchema = v.strictObject({
   min_visits_for_prune: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
 });
 
-/**
- * The resolved-configuration override, with the three region parameters renamed and
- * every ABSENT one left absent.
- *
- * Absent rather than present-and-undefined, which is not a nicety here: `resolveSwarm`
- * decides an axis is missing by reading `undefined`, and *A parameter belongs to its
- * value* refuses a pruning parameter supplied under an `advance` that does not
- * prune. A key written as `undefined` would make "the caller did not say" and "the
- * caller said nothing" indistinguishable in the merge, which is the one distinction
- * this specification exists to keep.
- */
+/** Absent keys stay absent: `resolveSwarm` reads `undefined` as "caller did not state this axis". */
 function configOf(wire: v.InferOutput<typeof SwarmConfigWireSchema>): Partial<SwarmConfig> {
   const config: Partial<SwarmConfig> = {};
 
@@ -263,14 +192,7 @@ function configOf(wire: v.InferOutput<typeof SwarmConfigWireSchema>): Partial<Sw
   return config;
 }
 
-/**
- * `objective` as it crosses the wire, mapped onto the type the search reads.
- *
- * Annotated with the DECLARED type rather than left to inference, so the four arms
- * above are held to `Objective` by the compiler: an arm that drifts from the type the
- * search is written over stops compiling here instead of parsing into something the
- * search cannot read.
- */
+/** Annotated with the domain type so an arm that drifts from `Objective` fails to compile here. */
 export const SwarmObjectiveSchema: v.GenericSchema<unknown, Objective> = ObjectiveSchema;
 
 /** `config` as it crosses the wire, mapped onto the axis tuple's partial. */
@@ -280,41 +202,8 @@ export const SwarmConfigSchema: v.GenericSchema<unknown, Partial<SwarmConfig>> =
 );
 
 /**
- * THE CALLER'S OWN PER-NODE ASSIGNMENTS: what each node of the first level is asked,
- * and the brief it is asked it under.
- *
- * WHY THE SURFACE NEEDED A FIELD AT ALL. Every other per-node assignment in this
- * engine arrives as a parent's PROPOSAL — `BranchProposal.branches[i]` carries a
- * `task`, a `rationale` and a `context`, and `swarm-run.ts` expands from exactly
- * that. At level 1 the parent is the ROOT, which is the workspace as found and which
- * no model ever wrote, so it has no proposal to make: every sibling of the first
- * level received `resolved.task` verbatim, and the only thing that differed between
- * them was a canned diversity angle. There was no axis that could say otherwise —
- * `unit`, `context`, `expand`, `advance`, `carry` and `score` are all run-scoped
- * single values, and `branches` is a count.
- *
- * SO THIS IS THE ROOT'S PROPOSAL, WRITTEN BY THE CALLER, and it converts into the
- * branch shape the engine already expands from (`strategy/swarm-level.ts`'s
- * `assignedRootGrant`). Nothing downstream is new: `task` lands in the node's own
- * `head_journal.task` and `prompt` in its `rationale`, which are the two columns a
- * node's assignment has always been recorded in — and both are therefore replayed by
- * a re-drive and re-asked verbatim by a re-entry, with no snapshot column and no
- * durable field of their own.
- *
- * TWO FIELDS AND NOT THREE. `context` stays run-level: a node may not decide whether
- * it inherits, because the run's `context` axis is what makes its siblings
- * comparable. `rationale` is not exposed separately either — `prompt` IS the brief,
- * and two names for one string is how the two come to disagree.
- *
- * BOTH REQUIRED AND BOTH NON-EMPTY. A node with an empty task is a node asked
- * nothing, and the surface that accepts it is the one that silently substitutes the
- * run's own task — which is the behaviour this field exists to replace.
- *
- * ANNOTATED WITH THE DOMAIN TYPE rather than inferred, exactly as `objective` and
- * `config` are two declarations above and for the same reason: `strategy/swarm.ts`
- * owns the shape the search is written over and this file owns the wire, so the
- * compiler holds the two together and an arm that drifts stops compiling here. There
- * is one declaration of the shape and one schema that admits it.
+ * The caller's per-node assignments for the first level (the root has no proposal of its own);
+ * converted into branch shape by `strategy/swarm-level.ts` `assignedRootGrant`. Both fields non-empty.
  */
 export const SwarmNodeAssignmentsSchema: v.GenericSchema<unknown, readonly SwarmNodeAssignment[]> =
   v.pipe(
@@ -322,32 +211,13 @@ export const SwarmNodeAssignmentsSchema: v.GenericSchema<unknown, readonly Swarm
       task: v.pipe(v.string(), v.minLength(1)),
       prompt: v.pipe(v.string(), v.minLength(1)),
     })),
-    // At least one: an empty list is a search with no nodes, which is a shape
-    // `branches` already expresses as a refusal.
+    // Empty list: `branches` already expresses that as a refusal.
     v.minLength(1),
   );
 
 /**
- * `models` as it crosses the wire: a list of model specs, assigned ROUND-ROBIN over
- * the expansion children by slot (`strategy/swarm.ts` — `SwarmInput.models`).
- *
- * A MINIMUM LENGTH OF ONE, for the same reason `SwarmNodeAssignmentsSchema` carries
- * one: an empty list is a search with no routing, which is what omitting the field
- * already expresses — and a caller who sends `[]` has asked for something the empty
- * list cannot name. Refused here rather than resolved to the default, because a
- * routing decision accepted and ignored is the *Accepted and ignored* lie.
- *
- * NO SPEC VALIDATION HERE, and that is the split the surface already holds: whether a
- * spec RESOLVES is a question about the caller's session and its provider registry,
- * which this schema cannot see. The runner resolves each spec through the one
- * `AgentsSwarmDeps.resolveModel` seam the actor routes a tier through, and an
- * unresolvable spec is refused as `bad_input` naming it — BEFORE any node runs, so a
- * fabricated spec costs nothing. An empty STRING is rejected here (minLength 1) because
- * it is a shape question rather than a session one, and `resolveSwarm` restates it as a
- * semantic refusal so an in-process caller bypassing this schema meets the same rule.
- *
- * ANNOTATED WITH THE DOMAIN TYPE rather than inferred, for the same reason as the two
- * declarations above: one declaration of the shape, one schema that admits it.
+ * Model specs assigned round-robin over expansion children. Whether a spec resolves is checked
+ * by the runner via `AgentsSwarmDeps.resolveModel`, before any node runs.
  */
 export const SwarmModelsSchema: v.GenericSchema<unknown, readonly string[]> =
   v.pipe(

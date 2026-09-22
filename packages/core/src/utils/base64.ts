@@ -1,6 +1,4 @@
-/** Binary ⇄ base64 over the platform primitives every backend has (`btoa` /
- *  `atob` exist in Workers, Bun and Node ≥16). Chunked so a multi-megabyte
- *  buffer cannot blow the argument stack of `String.fromCharCode`. */
+/** `btoa`/`atob` exist on every backend; chunked so large buffers don't overflow `String.fromCharCode`'s argument stack. */
 
 const CHUNK = 0x8000;
 

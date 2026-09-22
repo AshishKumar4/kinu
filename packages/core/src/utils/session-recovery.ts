@@ -1,42 +1,13 @@
 /**
- * Session recovery policy — the client half of surviving a deploy supersede.
- *
- * A deploy kills the workspace's isolate mid-session. When the browser learns
- * about it (a close event), partysocket redials and React re-runs the loads
- * keyed on connection status. When it does NOT learn — the close frame lost,
- * hibernation reattach gone quiet, device network transitioned — the socket
- * becomes a CORPSE: `readyState` says OPEN, every send vanishes, every RPC
- * dies at the agents SDK's `DEFAULT_CALL_TIMEOUT_MS` backstop, the degraded
- * banner sets, and nothing ever forces a redial. That is the shape behind
- * "Network connection lost … Showing last known data.", and without the policy
- * below only a manual reload clears it.
- *
- * This module owns the whole policy as a plain controller the hook wires to
- * real events:
- *
- *   - every non-initial WS 'open' re-runs the full initial load, so recovery
- *     never depends on React observing an intermediate disconnected state
- *     (close and open can coalesce into one render);
- *   - consecutive RPC timeouts while the socket claims OPEN are evidence of a
- *     corpse; enough of them inside a short window forces a redial, with a
- *     growing minimum spacing so a genuinely down origin is not hammered;
- *   - any success, and any FAST rejection (the transport answered), restores
- *     trust and the base spacing;
- *   - the public /api/health build sha, compared per reconnect against the
- *     session's baseline, turns a supersede the client DID ride through into
- *     a one-time "new version — reload" affordance instead of silent chunk
- *     404s on the next dynamic import.
+ * Client policy for surviving a deploy supersede. A silently dead socket (OPEN, but every RPC times out)
+ * is detected by consecutive timeouts and force-redialed with growing spacing; every non-initial 'open'
+ * re-runs the initial load; a changed /api/health build sha offers a one-time reload.
  */
 
 import * as v from "valibot";
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
-/* ── timeout classification ─────────────────────────────────────────────────── */
-
-/** The agents SDK's verbatim rejection when no response arrives in time
- *  (`node_modules/agents/dist/react.js`, the `defaultCallTimeout` backstop).
- *  A fast rejection — any server answer, even an error — is proof of life and
- *  must not feed the corpse detector. */
+/** The agents SDK's verbatim timeout rejection. A fast rejection is proof of life. */
 const RPC_TIMEOUT_PATTERN = /^RPC call to .+ timed out after \d+ms$/;
 
 function isRpcTimeoutError(input: { cause: unknown }): boolean {
@@ -46,26 +17,18 @@ function isRpcTimeoutError(input: { cause: unknown }): boolean {
     && RPC_TIMEOUT_PATTERN.test(renderThrownChain({ cause: parsed.output }));
 }
 
-/* ── corpse detection and forced redial ─────────────────────────────────────── */
-
-/** Consecutive timed-out RPCs (while the socket claims OPEN) that condemn the
- *  transport. One timeout is a slow method; three inside the window, with zero
- *  successes between, is a peer that is not there. */
+/** Consecutive timed-out RPCs (socket claims OPEN) that condemn the transport. */
 const TIMEOUTS_TO_REDIAL = 3;
 
-/** How long a streak may take to accumulate and still count as ONE outage. */
 const REDIAL_WINDOW_MS = 90_000;
 
-/** Minimum spacing between forced redials — doubles per redial up to the cap,
- *  so a long-dead origin is probed at a heartbeat, not with a hammer. */
+/** Minimum spacing between forced redials; doubles per redial up to the cap. */
 const REDIAL_MIN_INTERVAL_MS = 15_000;
 
 const REDIAL_MAX_INTERVAL_MS = 60_000;
 
 export interface SessionRecoveryCallbacks {
-  /** Re-run the initial load and the live-data refresh. */
   refetch(): void;
-  /** Force the underlying partysocket to close and dial again. */
   forceRedial(): void;
 }
 
@@ -78,15 +41,10 @@ export interface SessionRecoveryOptions {
 }
 
 export interface SessionRecovery {
-  /** A WS 'open' event. The session's FIRST open changes nothing here (the
-   *  hook's mount effect already loads); every later open re-fetches, because
-   *  a reconnect the UI never saw as "disconnected" still missed pushes. */
+  /** A WS 'open'. The first changes nothing; later opens re-fetch because missed pushes are lost. */
   socketOpened(isFirstForSession: boolean): void;
-  /** An RPC rejected. `socketOpen` is the transport's own readyState belief. */
   rpcFailed(thrown: { cause: unknown }, socketOpen: boolean): void;
-  /** An RPC succeeded — the transport is alive. */
   rpcSucceeded(): void;
-  /** The user pressed Retry. */
   manualRetry(forceRedial?: boolean): void;
 }
 
@@ -105,12 +63,7 @@ export function createSessionRecovery(
   let lastRedialMs = Number.NEGATIVE_INFINITY;
   let minRedialIntervalMs = baseMinIntervalMs;
 
-  /** Proof of life — a success or any fast rejection — clears the streak AND
-   *  the redial spacing: the growing interval spaces probes inside ONE
-   *  continuous outage, while a transport that demonstrably answered since the
-   *  last dial has earned an immediate re-examination when it dies again. The
-   *  three-timeout streak itself bounds how fast that can happen (~30s per
-   *  timed-out call). */
+  /** Proof of life clears the streak and the redial spacing. */
   function restoreTrust(): void {
     timeoutStreak = 0;
     lastRedialMs = Number.NEGATIVE_INFINITY;
@@ -123,9 +76,7 @@ export function createSessionRecovery(
     },
 
     rpcFailed(thrown, socketOpen) {
-      // Closing a corpse rejects every other in-flight RPC with
-      // `Connection closed`. That is not peer evidence and must not erase the
-      // redial spacing this outage already earned.
+      // Closing a corpse rejects other in-flight RPCs with `Connection closed`; that is not peer evidence.
       if (!socketOpen) return;
 
       if (!isRpcTimeoutError(thrown)) {
@@ -165,34 +116,21 @@ export function createSessionRecovery(
   };
 }
 
-/* ── version-skew signal ────────────────────────────────────────────────────── */
-
 const HealthBuildSchema = v.object({ sha: v.pipe(v.string(), v.trim(), v.minLength(1)) });
 
-/**
- * Bound on the best-effort public health read. Its own policy, not the
- * synthetic-probe TIMEOUT_MS in monitor/probes.ts: that one bounds
- * server-side probe verdicts, while this one bounds a browser read whose
- * failures are tolerated into "no signal" — and the two never share a fetch.
- */
+/** Bound on the best-effort health read; independent of monitor/probes.ts TIMEOUT_MS. */
 const HEALTH_READ_TIMEOUT_MS = 10_000;
 
 const HealthBodySchema = v.object({ build: v.nullable(HealthBuildSchema) });
 
-/** Transport-level failures of a best-effort public read: the request timed
- *  out (AbortError travels as DOMException), never left the process
- *  (TypeError), or the answer was not JSON (SyntaxError). Anything else
- *  propagates — silence must not eat real breakage. */
+/** Tolerated failures of a best-effort read: AbortError, TypeError, SyntaxError. Anything else propagates. */
 function isTolerableHealthFailure(input: { cause: unknown }): boolean {
   return input.cause instanceof TypeError
     || input.cause instanceof DOMException
     || input.cause instanceof SyntaxError;
 }
 
-/** The deployed build's sha from the public health endpoint, or null when this
- *  deployment carries none (a dev server has no stamp — correctly no signal).
- *  Tolerable transport failures fold into "no signal"; a shared baseline owner
- *  records any unexpected defect before it reaches a page consumer. */
+/** The deployed build sha from the health endpoint, or null when none is stamped or the read failed tolerably. */
 export async function fetchDeployedBuildSha(): Promise<string | null> {
   try {
     const res = await fetch("/api/health", { signal: AbortSignal.timeout(HEALTH_READ_TIMEOUT_MS) });
@@ -208,31 +146,20 @@ export async function fetchDeployedBuildSha(): Promise<string | null> {
   }
 }
 
-/** This page's baseline, read at most once. */
 let pageBuild: Promise<string | null> | null = null;
 
-/** The memoized baseline's async boundary. The module retains this task from
- * creation through settlement, so both eager priming and later readers share
- * one settled answer, and the handler itself decides nothing — it holds what it
- * caught, and the two ways to have no sha are told apart below it. */
+/** The memoized baseline task, retained through settlement so all readers share one answer. */
 async function loadPageBuildSha(): Promise<string | null> {
   let thrown: { cause: unknown } | null = null;
 
   try {
-    // The read's OWN answer, its absences included: a deployment that carries
-    // no stamp, and a transport failure {@link isTolerableHealthFailure} names
-    // as expected, are both a null this page is meant to see. Neither is a
-    // defect, and neither is reported as one.
+    // A missing stamp or tolerated transport failure is an expected null, not a defect.
     return await fetchDeployedBuildSha();
   } catch (cause) {
     thrown = { cause };
   }
 
-  // Only a defect reaches past the handler: the read rethrows precisely what it
-  // does not tolerate. It lands on the sink WITH a class, so a health read that
-  // broke is a recorded failure and not a page that merely looks unstamped —
-  // and the null below is then the one honest answer for two readers that can
-  // use nothing but a comparable sha.
+  // Only untolerated defects reach here; they are recorded with a class before resolving to null.
   diagnostics.failure('session_recovery.build_baseline_failed', toKinuError({
     doing: "reading this page's deployed build sha",
     cause: thrown.cause,
@@ -243,19 +170,8 @@ async function loadPageBuildSha(): Promise<string | null> {
 }
 
 /**
- * The build this PAGE loaded, read once and shared.
- *
- * One read per document, memoised, because a baseline that is re-read is not a
- * baseline. Two callers need the same answer and would otherwise each capture
- * their own: the version-skew notice, whose per-workspace hook is remounted on
- * every navigation and so re-baselined itself onto whatever was live at the time
- * — hiding the very skew it exists to report — and the render-failure report,
- * which is asked for a sha at the moment of a fault and must not answer with the
- * deployment now serving instead of the one that produced the stack.
- *
- * Called eagerly by `index.tsx` at load, so the read happens while the page is
- * still the page it says it is. The shared loader records an unexpected failure
- * and resolves to no signal, so every consumer receives the same settled value.
+ * The build this page loaded, read once per document and shared by the skew notice and the render-failure
+ * report. Primed eagerly by `index.tsx` at load.
  */
 export function pageDeployedBuildSha(): Promise<string | null> {
   pageBuild ??= loadPageBuildSha();
@@ -263,17 +179,12 @@ export function pageDeployedBuildSha(): Promise<string | null> {
   return pageBuild;
 }
 
-/**
- * Start the shared baseline at page load. `pageBuild` retains the task through
- * settlement, and {@link loadPageBuildSha} owns its rejection boundary.
- */
+/** Start the shared baseline at page load. */
 export function primePageDeployedBuildSha(): void {
   pageBuild ??= loadPageBuildSha();
 }
 
-/** Skew needs BOTH ends identified: without a baseline (the health read failed
- *  at mount) or a live stamp (dev) there is nothing to compare, and no claim
- *  about versions is honest. */
+/** Skew needs both a baseline and a live stamp. */
 export function isNewerDeployedBuild(baseline: string | null, live: string | null): boolean {
   return baseline !== null && live !== null && baseline !== live;
 }

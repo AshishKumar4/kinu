@@ -1,23 +1,11 @@
 /**
- * `GET /downloads/kinu-worker-<version>.tar.gz` — the worker release artifact.
- *
- * It is served from a bucket rather than published as a static asset because
- * it is larger than Cloudflare's per-file static-asset limit; a deploy that
- * staged it in `dist/client` would fail at asset upload.
- * `scripts/deploy.test.ts` holds the limit and measures both halves.
- * Everything small about a release — `release.json` and the artifact's
- * `.sha256` — stays an asset, so the manifest and the checksum a downloader
- * verifies against are published beside the build stamp and signed with it.
- *
- * Public, like the rest of `/downloads/*`: a person deploying their own Kinu
- * has no account here, and the bytes are the bytes kinu.run runs.
+ * `GET /downloads/kinu-worker-<version>.tar.gz`, served from a bucket because the artifact exceeds the
+ * static-asset per-file limit (held in `scripts/deploy.test.ts`). Public, like the rest of `/downloads/*`.
  */
 import { RELEASE_ARTIFACT_ROUTE } from '../deploy/manifest';
 import { err } from './http';
 
-/** The slice of an R2 bucket this route needs, declared structurally so the
- *  handler compiles in either backend closure: `env.RELEASES_BUCKET` on
- *  Cloudflare satisfies it, and so does any object store shaped like it. */
+/** Structural slice of an R2 bucket, so the handler compiles in either backend. */
 export interface ReleaseArtifactObject {
   readonly size: number;
   readonly httpEtag: string;
@@ -34,8 +22,7 @@ function metadata(object: ReleaseArtifactObject): Headers {
     'content-type': 'application/gzip',
     'content-length': String(object.size),
     etag: object.httpEtag,
-    // A release artifact is immutable: its name carries the version, and a
-    // deployment that has one never needs to ask whether it changed.
+    // Immutable: the name carries the version.
     'cache-control': 'public, max-age=31536000, immutable',
   });
 }

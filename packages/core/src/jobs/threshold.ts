@@ -1,14 +1,5 @@
-// withBackgroundThreshold — the auto-background race.
-//
-// Runs a tool's work and races it against the surface's detach threshold. If it
-// finishes first, the result is returned inline (the common, fast case — no job,
-// no overhead). If the threshold elapses, the still-running promise is handed to
-// `deps.onThreshold` (which the orchestrator wraps in a durable runFiber that
-// keeps the DO alive, settles the job, and publishes a completion event the
-// reactor drains into a synthesis turn) and the model gets a BackgroundHandle
-// immediately — "this is continuing in the background; you'll be woken with the
-// result." If capacity refuses a detach, the foreground keeps its live promise
-// and waits for its settlement instead of treating elapsed time as cancellation.
+// withBackgroundThreshold: races a tool's work against the surface's detach threshold. Inline if it
+// finishes first; otherwise `deps.onThreshold` takes the live promise. A refused detach keeps waiting.
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
 import { DeviceRequestOwnership, type DeviceRequestChannel } from './device-ownership';
@@ -21,23 +12,8 @@ export {
   BACKGROUND_POLICY, type BackgroundPolicy, type InvocationSurface,
 } from '../types/jobs';
 
-/**
- * The policy for ONE invocation, from its two independent facts.
- *
- * The SURFACE owns the foreground half — who watches the stream decides what
- * detaching a slow call costs, so it picks the row's `detachAfterMs` and
- * `settleGraceMs`. SESSION DURABILITY owns the wake half — whether a wake can
- * arrive after this turn is the only thing {@link BackgroundPolicy.wakesAfterTurn}
- * has ever meant, and a Durable Object answers YES even on its unwatched turns:
- * it holds itself open and its alarms deliver wakes with nobody connected. A CLI
- * one-shot process answers NO — the process exits after the answer.
- *
- * Keying both halves off the surface string alone is what gave cloud
- * programmatic turns `wakesAfterTurn: false` on the very turn that proved a
- * wake had arrived: a swarm spawned during a wake turn ran inline to completion,
- * with eviction re-running the whole conversation instead of re-entering the
- * durable job row.
- */
+/** The surface owns the foreground half (`detachAfterMs`, `settleGraceMs`); session durability owns
+ *  `wakesAfterTurn` (a Durable Object delivers wakes unwatched; a CLI one-shot does not). */
 export function invocationBackgroundPolicy(
   surface: InvocationSurface,
   wakesAfterTurn: boolean,
@@ -47,7 +23,6 @@ export function invocationBackgroundPolicy(
   return base.wakesAfterTurn === wakesAfterTurn ? base : { ...base, wakesAfterTurn };
 }
 
-/** Returned to the model when a tool call is moved to the background. */
 export interface BackgroundHandle {
   readonly background: true;
   readonly jobId: string;
@@ -55,9 +30,7 @@ export interface BackgroundHandle {
   readonly message: string;
 }
 
-/** A historical serialized shape for a detach refusal. The threshold helpers
- *  now keep a refusal's live work foreground-owned and return its eventual
- *  settlement instead. */
+/** Historical serialized shape; live refusals now stay foreground-owned. */
 export interface BackgroundRefusal {
   readonly background: false;
   readonly kind: string;
@@ -75,15 +48,7 @@ export function isBackgroundHandle<T>(value: T): value is T & BackgroundHandle {
   return v.safeParse(BackgroundHandleSchema, value).success;
 }
 
-/**
- * The same discriminator over the SERIALIZED result — a current handle or a
- * historical refusal.
- *
- * The tool-result extension seam carries the rendered string, not the value
- * (extension.ts), so a consumer that must not read a detached call as a
- * finished one has only the text. A handle means work is still running; an
- * earlier refusal means this historical result was not the tool's settlement.
- */
+/** Same discriminator over the serialized result, the only form the tool-result extension seam carries. */
 export function isBackgroundOutcomeText(result: string): boolean {
   const text = result.trimStart();
 
@@ -100,31 +65,20 @@ export function isBackgroundOutcomeText(result: string): boolean {
   return true;
 }
 
-/** What `onThreshold` decided: the job it minted, or a classified refusal to
- * detach. */
 export type DetachOutcome =
   | { readonly detached: true; readonly jobId: string }
   | { readonly detached: false; readonly reason: string };
 
 export interface ThresholdDeps {
-  /** Override the surface's detach threshold. */
   thresholdMs?: number;
-  /** The threshold's clock. A test hands one it advances itself, so "the
-   *  work outran the window" is a step rather than a real timer racing real
-   *  work. */
   clock?: Clock;
-  /** The threshold elapsed. Either mint a background job and keep `promise`
-   *  alive durably (settling the job and waking the agent when it resolves), or
-   *  refuse the detach. A refusal leaves this live promise foreground-owned, so
-   *  the threshold helper returns or throws its eventual settlement. */
+  /** Mint a background job that keeps `promise` alive durably, or refuse; a refusal leaves it foreground-owned. */
   onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome | Promise<DetachOutcome>;
 }
 
 const TIMED_OUT = Symbol('timed-out');
 
-/** A lexical settlement boundary over work a race may abandon: the outcome is a
- *  VALUE either way, so the loser of the race is still observed and its
- *  rejection is never an unhandled one. */
+/** Outcome is a value either way, so the race's loser is observed and never an unhandled rejection. */
 function settlement<T>(promise: Promise<T>): Promise<{ value: T } | { error: unknown }> {
   return (async () => {
     try {
@@ -156,9 +110,7 @@ export async function withBackgroundThreshold<T>(
     return winner.value;
   }
 
-  // Slow path: hand the live work to the background runner. A refusal is an
-  // admission decision, not an implicit timeout: no job owns this promise, so
-  // preserve the foreground's controller and eventual settlement.
+  // A refusal is an admission decision, not a timeout: keep the foreground's controller and settlement.
   const outcome = await deps.onThreshold(kind, promise);
 
   if (!outcome.detached) {
@@ -179,18 +131,8 @@ export async function withBackgroundThreshold<T>(
   };
 }
 
-/**
- * withSpawnDetach — the spawn-shaped sibling of {@link withBackgroundThreshold}.
- *
- * The threshold race is a heuristic for tools whose duration is UNKNOWN: wait a
- * bit, and detach only work that proved slow. A fork is not unknown — it spawns
- * a process that is long by construction, and its completion arrives as a wake
- * event, not as a result this turn is blocked on. So it does not ride the
- * timer: the tool announces the moment its spawn is validated and in flight
- * (the {@link SPAWN_STARTED_OPTION} callback), and the call detaches right
- * then. Work that settles WITHOUT announcing — a validation error, an action
- * the spawn gate does not cover — returns inline exactly as before.
- */
+/** Spawn-shaped sibling of {@link withBackgroundThreshold}: detaches when the tool announces its spawn
+ *  via {@link SPAWN_STARTED_OPTION}, not on a timer. Work that settles without announcing returns inline. */
 export async function withSpawnDetach<T>(
   kind: string,
   exec: (spawnStarted: () => void) => Promise<T>,
@@ -228,19 +170,13 @@ export async function withSpawnDetach<T>(
   };
 }
 
-/** Options-bag key the background wrapper sets on spawn-shaped tool calls: a
- *  callback the tool invokes once its spawn is validated and in flight, which
- *  is the moment {@link withSpawnDetach} detaches. Absent on inline surfaces
- *  (codemode `agents.*`, resume re-drives, the raw eval toolset), where the
- *  same tool simply runs to completion. */
+/** Callback a tool invokes once its spawn is validated and in flight. Absent on inline surfaces. */
 export const SPAWN_STARTED_OPTION = 'kinuSpawnStarted';
 
 const SpawnStartedOptionsSchema = v.object({
   [SPAWN_STARTED_OPTION]: v.optional(v.function()),
 });
 
-/** The spawn announcement out of a tool-call options bag, if the background
- *  wrapper armed one. */
 export function readSpawnStarted(input: { toolOptions: unknown }): (() => void) | undefined {
   const parsed = v.safeParse(SpawnStartedOptionsSchema, input.toolOptions);
   const fn = parsed.success ? parsed.output[SPAWN_STARTED_OPTION] : undefined;
@@ -248,55 +184,29 @@ export function readSpawnStarted(input: { toolOptions: unknown }): (() => void) 
   return fn;
 }
 
-/**
- * Options-bag key the background wrapper arms per INVOCATION: the ownership
- * holder for the durable external requests this ONE call issues (see
- * ./device-ownership, which owns the two-phase rule).
- *
- * Per invocation and not per turn, because one turn can hold several parallel
- * device commands and only the detaching call changes hands. A turn-wide
- * handover would move requests that never detached, and the job-scoped cancel
- * that follows would then kill work the foreground is still waiting on. Absent
- * on inline surfaces (codemode, resume re-drives, the raw eval toolset) and on
- * calls the gate says cannot detach: those own nothing to hand over.
- */
+/** Per-invocation ownership holder for durable external requests (see ./device-ownership).
+ *  Per invocation, not per turn: only the detaching call's requests change hands. */
 export const DEVICE_REQUEST_OPTION = 'kinuDeviceRequest';
 
 const DeviceRequestOptionsSchema = v.object({
   [DEVICE_REQUEST_OPTION]: v.optional(v.instance(DeviceRequestOwnership)),
 });
 
-/** This invocation's ownership holder out of a tool-call options bag, if the
- *  background wrapper armed one — narrowed to the two members a tool may use,
- *  so the claim stays the runner's. */
+/** Narrowed to the two members a tool may use, so the claim stays the runner's. */
 export function readDeviceRequestChannel(input: { toolOptions: unknown }): DeviceRequestChannel | undefined {
   const parsed = v.safeParse(DeviceRequestOptionsSchema, input.toolOptions);
 
   return parsed.success ? parsed.output[DEVICE_REQUEST_OPTION] : undefined;
 }
 
-/**
- * Options-bag key the RESUME path sets: this call is an evict/exit re-drive of a
- * durable job row, not a fresh call from a model.
- *
- * The distinction is load-bearing and nothing else carries it. A re-drive replays the
- * stored input verbatim, so the input cannot say which it is — and only a re-drive may
- * RE-ENTER an interrupted search: a fresh `agents.swarm` whose task happens to match a
- * run still expanding must get its own tree, or two live searches would grow one
- * (`mcts/search-store.ts` findRunningSwarms states the whole rule). Absent everywhere
- * else, which is what makes a first call structurally unable to adopt a sibling's tree.
- *
- * Set on the options bag rather than on the input for {@link SPAWN_STARTED_OPTION}'s
- * reason: the input is the durable row, and a field this path added to it would be
- * persisted on the next detach and re-read as if the model had sent it.
- */
+/** Set only by the resume path; only a re-drive may re-enter an interrupted search (`mcts/search-store.ts`).
+ *  On the options bag, not the input, because the input is the durable row. */
 export const RESUME_REDRIVE_OPTION = 'kinuResumeRedrive';
 
 const ResumeRedriveOptionsSchema = v.object({
   [RESUME_REDRIVE_OPTION]: v.optional(v.boolean()),
 });
 
-/** Whether this tool call is a job re-drive. False for every other caller. */
 export function readResumeRedrive(input: { toolOptions: unknown }): boolean {
   const parsed = v.safeParse(ResumeRedriveOptionsSchema, input.toolOptions);
 

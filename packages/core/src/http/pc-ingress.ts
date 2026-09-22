@@ -1,32 +1,7 @@
 /**
- * Device tunnel — reverse-WebSocket from the user's device, at the USER level.
- *
- * Routes:
- *   POST /pc/connect-ticket         — exchange local device token for short-lived WS ticket
- *   WS   /pc/connect?user=U&ticket=T — daemon WS upgrade
- *
- * A device links ONCE to the user (token minted by UserDO.registerDevice), and
- * every one of that user's agents can then reach it. The daemon stores that
- * token locally, exchanges it over HTTPS for a one-minute ticket, then connects
- * the WebSocket with the ticket so long-lived secrets do not appear in URLs.
- *
- * This Worker serves the daemon to nobody. The daemon travels inside the CLI
- * release and `kinu connect` writes it from there. Two paths DO hand a
- * machine bytes to run — the launcher's refresh and the daemon's UPDATE
- * frame, both of which download a published release — and what keeps a
- * compromised deploy from reaching one is not this module: every release is
- * signed at build with a key the deployment never holds, and the launcher,
- * the CLI and the daemon verify that signature against the public key
- * pinned in their bundles before a byte reaches a live path
- * (`http/release-signing.ts`, SECURITY-devices C1). A deploy can serve any
- * bytes it likes; it cannot sign them.
- *
- * The two authenticated rails (`/pc/connect-ticket`, `/pc/connect`) are the
- * only unauthenticated paths here that choose a Durable Object by name, so
- * both are gated twice before any `idFromName`: an ingress guard bounds how
- * often each source may knock, and every presented identifier must match its
- * exact issued shape. See "Ingress guard" below for why this is rate limiting
- * rather than cryptographic route verification, and what that leaves open.
+ * Device tunnel ingress, per user: POST /pc/connect-ticket exchanges the device token for a short-lived
+ * ticket; WS /pc/connect upgrades with it, so long-lived secrets stay out of URLs. Release bytes are
+ * trusted by signature, not by this Worker (`http/release-signing.ts`, SECURITY-devices C1).
  */
 
 import { DEVICE_CONNECT_PATH } from '../cloud-wire';
@@ -45,15 +20,7 @@ export interface PcUserStub {
   fetch(request: Request): Promise<Response>;
 }
 
-/**
- * The shape Worker code uses a Durable Object namespace through.
- *
- * Generic in the id: nothing here reads the id beyond handing it straight
- * back to `get`, so a caller that mints its own names satisfies the port,
- * while the deployment's binding, which mints a `DurableObjectId`, satisfies
- * it too. `Stub` is named by each port as a `Pick` of the object class, so a
- * module states the methods it reaches instead of the whole object.
- */
+/** A Durable Object namespace port, generic in the id so callers minting their own names satisfy it. */
 export interface ObjectNamespace<Id, Stub> {
   idFromName(name: string): Id;
   get(id: Id): Stub;
@@ -66,32 +33,14 @@ export interface PcIngressEnv<Id> extends OwnerCapabilityEnv {
   UserDO?: PcUserNamespace<Id>;
 }
 
-// ── Ingress guard ──────────────────────────────────────────────────────────
-//
-// Both unauthenticated rails here (`/pc/connect-ticket`, `/pc/connect`) choose
-// a UserDO by a name the caller supplied, so both spend a knock from the shared
-// budget in `lib/ingress-budget.ts` and pass strict shape gates before any
-// `idFromName`. That module states the budget's exact residuals.
-//
-// The preferred architecture would bind an opaque routing id INTO the device
-// token, so the edge could verify which UserDO a token belongs to before
-// choosing one. It cannot be done here without a migration: deployed daemons
-// hold tokens minted as opaque `pdt_<random>` whose only server-side trace is
-// a bare SHA-256 hash inside the user's DO, so nothing about a live token can
-// be checked from the Worker alone. Until UserDO mints — and devices re-register
-// with — the bound format, the honest control on this rail is rate limiting
-// plus shape gates, NOT a pretend verification. A distributed attacker rotating
-// IPs stays under the per-source radar; only the token-format migration closes
-// that, because then a wrong guess is rejected at the edge without waking any
-// DO at all.
+// Ingress guard: both unauthenticated rails choose a UserDO by caller-supplied name, so both spend a knock
+// (`ingress-budget.ts` states the residuals) and pass shape gates before `idFromName`. This is rate limiting,
+// not route verification: tokens carry no routing id until a token-format migration binds one.
 
-/** The ticket request body is two short strings. Anything past 4 KiB is not a
- *  ticket exchange: it is refused before parsing, counted off the stream, and
- *  never buffered whole past the limit. */
+/** Larger bodies are refused before parsing and never buffered past the limit. */
 const PC_TICKET_BODY_MAX_BYTES = 4 * 1024;
 
-/** Self-imposed budget, not a measured platform number: generous enough for a
- *  daemon retrying against jitter, far below what a guessing attack needs. */
+/** Self-imposed, not a platform number: covers daemon retries, far below a guessing attack. */
 const PC_KNOCKS_PER_WINDOW = 30;
 
 const USER_ID_PATTERN = /^[a-f0-9]{32}$/;
@@ -164,8 +113,7 @@ async function handlePcConnectTicket<Id>(
     return json({ body: { error: "user and token required" } }, { status: 400 });
   }
 
-  // Shape gates BEFORE idFromName: a malformed identifier never reaches the
-  // namespace, so garbage costs zero DO wake-ups.
+  // Shape gates before idFromName: garbage never wakes a DO.
   if (!USER_ID_PATTERN.test(body.output.user)) return json({ body: { error: "invalid user" } }, { status: 400 });
 
   if (!DEVICE_TOKEN_PATTERN.test(body.output.token)) return json({ body: { error: "unauthorized" } }, { status: 401 });
@@ -203,13 +151,10 @@ async function handlePcConnect<Id>(
 
   if (!(await ingressAdmitted(kv, "connect", peerIp(request), PC_KNOCKS_PER_WINDOW))) return ingressDenied();
 
-  // Same gates as the ticket rail, same order: shape first, DO choice last.
   if (!USER_ID_PATTERN.test(userId)) return new Response("invalid user", { status: 400 });
 
   if (!CONNECT_TICKET_PATTERN.test(ticket)) return new Response("invalid ticket", { status: 400 });
 
-  // A WebSocket cannot cross the DO RPC boundary (not serializable) — but the
-  // upgrade Request can. Forward it to the UserDO, which verifies + consumes
-  // the ticket and accepts the socket inside its own fetch().
+  // A WebSocket cannot cross DO RPC, but the upgrade Request can; the UserDO consumes the ticket and accepts.
   return ns.get(ns.idFromName(userId)).fetch(request);
 }

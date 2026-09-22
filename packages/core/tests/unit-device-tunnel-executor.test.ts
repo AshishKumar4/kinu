@@ -57,8 +57,7 @@ describe('createDeviceTunnelExecutor', () => {
     await provider.tools.exec.execute('first', { onDeviceRequest: (id: string) => observed.push(id) });
     await provider.tools.exec.execute('second', { onDeviceRequest: (id: string) => observed.push(id) });
 
-    // Two parallel-capable calls, two distinct identities, each reported to the
-    // caller that issued it — the handover unit is one request, not the turn.
+    // Two parallel calls, two identities, each reported to its caller: the handover unit is one request.
     expect(observed).toHaveLength(2);
     expect(observed[0]).not.toBe(observed[1]);
     expect(issued.map((call) => call.sent)).toEqual(observed);
@@ -72,7 +71,6 @@ describe('createDeviceTunnelExecutor', () => {
       status: () => ({ connected: true, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
       rpc: async (_method, _params, opts) => {
-        // Every device exec carries an identity, or nothing could cancel it.
         if (opts?.requestId === undefined) throw new Error('exec reached the device with no identity');
         issued.push({ requestId: opts.requestId, backgroundJobId: opts.backgroundJobId });
 
@@ -81,7 +79,7 @@ describe('createDeviceTunnelExecutor', () => {
     };
 
     const provider = createDeviceTunnelExecutor(t);
-    // One scope whose owner changes under it, exactly as a detach does.
+    // One scope whose owner changes under it, as a detach does.
     let owner: string | null = null;
 
     const context = {
@@ -93,12 +91,9 @@ describe('createDeviceTunnelExecutor', () => {
     owner = 'job-1';
     await provider.tools.exec.execute('after detach', context);
 
-    // Before the detach there is no owner to record, so the request is the
-    // turn's and a transfer is what moves it. After, the call is the job's as it
-    // is issued, so nothing has to be handed over.
+    // Before detach the request is the turn's and a transfer moves it; after, it is the job's from issue.
     expect(issued.map((call) => call.backgroundJobId)).toEqual([undefined, 'job-1']);
-    // The identity is announced for EVERY call, owned or not: the holder decides
-    // what a report means, so this executor never branches on ownership.
+    // The identity is announced for every call; the holder decides what a report means.
     expect(reported).toEqual(issued.map((call) => call.requestId));
   });
 
@@ -132,13 +127,8 @@ describe('createDeviceTunnelExecutor', () => {
   });
 
   /**
-   * F2. The base tier reaches nothing the device did not name. Defaulting it to
-   * `$HOME` costs twice: learning `$HOME` means running `printf %s "$HOME"` on
-   * the machine — an exec, which needs the FULL tier, so a base-tier workspace
-   * could not list a directory without first being pushed through a
-   * full-filesystem card. And `$HOME` holds `~/.kinu/config.json` (the owner's
-   * CLI bearer), `~/.ssh` and `~/.aws`, so "inside its connected folder" would
-   * mean the whole home, and reading one file in it would escalate the tier.
+   * F2. The base tier reaches nothing the device did not name. Defaulting to `$HOME` would need an exec
+   * (full tier) to learn it and would expose `~/.kinu/config.json`, `~/.ssh`, `~/.aws`.
    */
   test('a device that named no directory has no base-tier reach, and asks for none', async () => {
     const t = transport(() => 'contents');
@@ -149,8 +139,7 @@ describe('createDeviceTunnelExecutor', () => {
       unconfined: async () => false,
     });
 
-    // Every file tool refuses, and none of them asks the machine anything —
-    // no path probe, and above all no `exec`.
+    // Every file tool refuses without asking the machine anything, above all no `exec`.
     for (const answer of [
       await provider.tools.readFile.execute('/home/dev/notes.md'),
       await provider.tools.readdir.execute('/home/dev'),
@@ -162,9 +151,7 @@ describe('createDeviceTunnelExecutor', () => {
 
     expect(t.calls).toEqual([]);
 
-    // The full tier still opens somewhere, from the home the machine reported
-    // on HELLO rather than a command run on it. The provider opens on the
-    // roster; the machine's own opening dir is asked by its mount segment.
+    // The full tier opens from the home reported on HELLO, not from a command run on the machine.
     const calls: Array<{ method: string; params: JsonValue[] }> = [];
 
     const described = staticTransport({
@@ -199,14 +186,13 @@ describe('createDeviceTunnelExecutor', () => {
       workspaceGranted: true,
     }, async () => undefined);
 
-    // The CONNECTED machine names the row, not whichever was registered first.
+    // The connected machine names the row, not whichever registered first.
     expect(createDeviceTunnelExecutor(named).getStatus?.()).toEqual({
       configured: true, available: true, active: true, status: 'active',
       label: 'ashish@studio', granted: true,
     });
 
-    // Offline but registered: still named, so the model can ask for it by name,
-    // and still ungranted, so it does not predict a prompt-free call.
+    // Offline but registered: still named, still ungranted.
     const offline = staticTransport({
       connected: false,
       registered: true,
@@ -219,7 +205,6 @@ describe('createDeviceTunnelExecutor', () => {
       status: 'disconnected', label: 'ashish@studio', granted: false,
     });
 
-    // A hub that says nothing about names claims nothing: no label, no grant.
     const bare = staticTransport({ connected: true, registered: true, toolchain: null }, async () => undefined);
     expect(createDeviceTunnelExecutor(bare).getStatus?.()).toEqual({
       configured: true, available: true, active: true, status: 'active',
@@ -266,8 +251,7 @@ describe('createDeviceTunnelExecutor', () => {
   });
 
   test('tools reach the hub even when the cached snapshot is stale-false', async () => {
-    // A runtime that gates every call on the cached flag can never flip a false
-    // back to true, so the tools ask the hub rather than the snapshot.
+    // A cached false could never flip back to true, so the tools ask the hub rather than the snapshot.
     const t = transport(() => ({ stdout: 'hi', stderr: '', exitCode: 0 }));
     t.status = () => ({ connected: false, registered: true, toolchain: null });
     const provider = createDeviceTunnelExecutor(t);
@@ -301,9 +285,7 @@ describe('createDeviceTunnelExecutor', () => {
       connected: true, registered: true, toolchain: null, workspaceGranted: true,
     }, rpc);
 
-    // The ungranted row is the one the model reads before it decides where to
-    // put work: it says the machine is there and that the first call raises a
-    // card, so the model asks instead of concluding no machine exists.
+    // The ungranted row says the machine exists and the first call raises a card.
     expect(createDeviceTunnelExecutor(ungranted).getStatus?.()).toMatchObject({
       available: false, active: false, granted: false, status: 'idle',
     });
@@ -315,8 +297,7 @@ describe('createDeviceTunnelExecutor', () => {
   test('a caller with no workspace identity keeps the liveness reading', () => {
     const rpc: DeviceTransport['rpc'] = async () => 'unused';
 
-    // `workspaceGranted` absent — a non-workspace caller, or one whose snapshot
-    // predates the field. The row stays as it always was.
+    // `workspaceGranted` absent: a non-workspace caller or an older snapshot; row unchanged.
     const status = createDeviceTunnelExecutor(staticTransport({
       connected: true, registered: true, toolchain: null,
     }, rpc)).getStatus?.();
@@ -328,8 +309,7 @@ describe('createDeviceTunnelExecutor', () => {
   test('a fleet entry answers reach for the machine it names, not the first one', () => {
     const rpc: DeviceTransport['rpc'] = async () => 'unused';
 
-    // One live machine whose own entry says ungranted: the row reads reach
-    // from THAT entry, which is the machine the label names.
+    // Reach comes from the live machine's own entry.
     const single = staticTransport({
       connected: true, registered: true, toolchain: null,
       devices: [{ id: 'dev-1', name: 'studio', os: 'linux', hostname: 's', connected: true, granted: false }],
@@ -343,10 +323,7 @@ describe('createDeviceTunnelExecutor', () => {
   test('two live machines have no "the" machine, so the row keeps liveness', () => {
     const rpc: DeviceTransport['rpc'] = async () => 'unused';
 
-    // The fleet model leaves the top-level reach fields ABSENT with several
-    // live machines, because there is no single machine to describe. The row
-    // degrades the same way a caller with no workspace identity does: the
-    // model learns both machines are there and names one when it calls.
+    // With several live machines the top-level reach fields are absent; the row lists both and the model names one.
     const status = createDeviceTunnelExecutor(staticTransport({
       connected: true, registered: true, toolchain: null,
       devices: [
@@ -371,10 +348,7 @@ describe('createDeviceTunnelExecutor', () => {
     const fromHub = await createDeviceTunnelExecutor(hubRejects).tools.exec.execute('ls');
     const fromTunnel = await createDeviceTunnelExecutor(tunnelDropped).tools.readFile.execute('/tmp/a');
 
-    // The connect guidance survives, and it now arrives with the CLASS in front of
-    // it: `unavailable` is what puts a device that is not attached in the census's
-    // platform part instead of counting it against the tool. Asserting the prose
-    // alone is what let this ship as a value no reader could see was a failure.
+    // `unavailable` classifies an unattached device as platform, not a tool failure.
     expect(fromHub).toMatchObject({ reason: 'unavailable' });
     expect(JSON.parse(refusalDocument(fromTunnel))).toMatchObject({ reason: 'unavailable' });
     expect(fromHub).toMatchObject({ error: expect.stringContaining('kinu connect') });
@@ -387,8 +361,7 @@ describe('createDeviceTunnelExecutor', () => {
       throw new Error('permission denied');
     });
 
-    // `io`, not `unavailable`: the device answered and its filesystem said no.
-    // Pooling the two would read a permission problem as an absent machine.
+    // `io`, not `unavailable`: the device answered and its filesystem refused.
     expect(await createDeviceTunnelExecutor(t).tools.exec.execute('ls')).toEqual({
       reason: 'io',
       error: 'device exec `ls`: permission denied',
@@ -402,9 +375,7 @@ describe('createDeviceTunnelExecutor', () => {
 
     const answer = await createDeviceTunnelExecutor(t).tools.exists.execute('/tmp/a');
 
-    // `false` would read as "the path is absent on your machine", which is what
-    // a catch that drops its error answers. An unreachable read and an absent
-    // path are different facts and the boolean channel cannot hold both.
+    // `false` would claim the path is absent; an unreachable read is a different fact.
     expect(answer).not.toBe(false);
     expect(JSON.parse(refusalDocument(answer))).toMatchObject({ reason: 'io' });
   });

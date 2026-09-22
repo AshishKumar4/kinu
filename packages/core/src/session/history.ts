@@ -154,11 +154,8 @@ export class SessionHistory {
   async materialize(): Promise<{ selection: ContextSelection; entries: readonly ContextEntry[]; messages: ModelMessage[] }> {
     const selection = this.context.selected() ?? this.context.initialize();
     const entries = this.context.entries(selection);
-    const messages: ModelMessage[] = [];
 
-    for (const reference of entries) messages.push(await this.messages.materialize(reference));
-
-    return { selection, entries, messages };
+    return { selection, entries, messages: await this.messages.materializeAll(entries) };
   }
 
   stagePrepared(proposal: Omit<ContextProposal, 'base'> & { readonly base: ContextSelection | null }, messages: readonly PreparedMessage[], assertOwner: () => void, events: ContextEventRecorder | null = null): void {
@@ -241,9 +238,7 @@ export class SessionHistory {
       return { messages: current.messages, changed: false };
     }
 
-    const messages: ModelMessage[] = [];
-
-    for (const entry of candidate) messages.push(await this.messages.materialize(entry));
+    const messages = await this.messages.materializeAll(candidate);
     const before = toolPairingGaps(current.messages);
     const after = toolPairingGaps(messages);
     const refusal = before.calls.size > 0 || after.calls.size > 0 || after.results.size > 0 ? 'unpaired_tool_call' : null;

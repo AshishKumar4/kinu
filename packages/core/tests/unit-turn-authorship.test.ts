@@ -1,25 +1,5 @@
-// Who wrote the words in a turn, decided once at the WRITE and read everywhere.
-//
-// An allowlist of event names living in the chat pane drifts from the writers.
-// Measured on the owner's live production workspaces on 2026-08-20, over the same
-// `cf_agent_chat_messages` frame the browser renders from:
-//
-//   sunlit-stone-4a20            3 rows  metadata.kinuEvent = fork_interrupted
-//   stone-ash-71f2               1 row   metadata.kinuEvent = fork_interrupted
-//   principal-machine-f1296946   1 row   metadata.kinuEvent = fork_interrupted
-//
-// each reading "23 head(s) across 6 fork run(s) were still marked running from
-// an activation that has ended…" and each drawn in the owner's own bubble,
-// because the measured four-name chat-pane classifier holds none of
-// `fork_interrupted`, `completion_gate`, `take_pick` or `overflow_retry`. These
-// unstamped production rows establish why authorship must be read from their
-// event metadata rather than inferred from a UI allowlist.
-//
-// So the default is inverted: a turn written through the programmatic seam is
-// the harness speaking unless its producer says otherwise. These tests hold the
-// two halves of that — the stamp the seam applies, and the reading of rows that
-// carry no stamp — and the unstamped cases are the real production shapes above,
-// not invented ones.
+// Turn authorship is decided at the write: a programmatic-seam turn is the harness unless its
+// producer says otherwise. Unstamped cases are real production row shapes (2026-08-20).
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -33,9 +13,7 @@ import { OVERFLOW_RETRY_EVENT } from '../src/turn-failure';
 import type { BackendHost } from '../src/types/backend-host';
 import { JsonObjectSchema, type JsonObject } from '../src/utils/json';
 
-/** A host that records what the seam wrote, on both rails: the durable turn and
- *  the live card broadcast beside it. The two must agree, because the chat
- *  renders a queued signal and a spliced one through the same classifier. */
+/** Records both the durable turn and the live card; both render through one classifier. */
 function recordingHost() {
   const turns: Array<{ text: string; metadata?: JsonObject }> = [];
   const cards: JsonObject[] = [];
@@ -87,8 +65,7 @@ describe('the seam stamps who wrote the turn', () => {
   });
 
   test('a producer carrying the operator\'s words keeps them', async () => {
-    // The MCP bridge (cf-backend runTaskFromMcp) is the one signal whose text
-    // a person typed. It says so, and the seam does not overwrite it.
+    // The MCP bridge (cf-backend runTaskFromMcp) is the one signal a person typed.
     const { host, turns } = recordingHost();
     await new Inbox(host).send({
       kind: 'mcp', text: 'ship the coupon fix',
@@ -99,9 +76,7 @@ describe('the seam stamps who wrote the turn', () => {
   });
 
   test('the live card and the durable turn carry the same authorship', async () => {
-    // A mid-turn splice is never persisted, so its card is the only record of
-    // it. The card and the row disagreeing is a signal that renders one way
-    // while it is live and the other way after a reload.
+    // A mid-turn splice is never persisted; its card is the only record.
     const { host, turns, cards } = recordingHost();
     await new Inbox(host).send({ kind: FORK_INTERRUPTED_SIGNAL, text: '23 head(s)…' });
     expect(cards).toHaveLength(1);
@@ -110,25 +85,20 @@ describe('the seam stamps who wrote the turn', () => {
   });
 
   test('the stamp survives the metadata a producer brings with it', () => {
-    // jobs/runner.ts sends kinuMode/jobId/kind/status; signals.ts merges the
-    // producer's object over its own. The author is applied after that merge,
-    // so a producer key named the same thing cannot land underneath the seam.
+    // The author is applied after the producer metadata merge, so a same-named key cannot override it.
     const stamped = stampTurnAuthor({ kinuEvent: 'background_job', jobId: 'bgjob-1', status: 'completed' });
     expect(stamped).toEqual({
       kinuEvent: 'background_job', jobId: 'bgjob-1', status: 'completed',
       [TURN_AUTHOR_METADATA_KEY]: 'harness',
     });
-    // Idempotent: passing through a second funnel does not relabel it.
     expect(stampTurnAuthor(stamped)).toEqual(stamped);
     expect(stampTurnAuthor(stampTurnAuthor({ [TURN_AUTHOR_METADATA_KEY]: 'operator' })))
       .toEqual({ [TURN_AUTHOR_METADATA_KEY]: 'operator' });
-    // A turn that reaches the seam saying nothing at all is still the harness.
     expect(stampTurnAuthor()).toEqual({ [TURN_AUTHOR_METADATA_KEY]: 'harness' });
   });
 });
 
 describe('a row that carries no stamp is read from what it does carry', () => {
-  // The four shapes actually present in the owner's production workspaces.
   test('an unstamped fork_interrupted row is the harness, by its event name', () => {
     expect(turnAuthor({
       id: 'f8798675-5e9a-4d13-aac2-293f4557f1c1',
@@ -137,8 +107,6 @@ describe('a row that carries no stamp is read from what it does carry', () => {
   });
 
   test('an unstamped background-job wake is the harness, with or without the id prefix', () => {
-    // stone-ash-71f2 wrote these under a bare UUID; principal-machine-f1296946
-    // wrote the same fact under the prefix once both backends derived it.
     const metadata = { kinuEvent: 'background_job', kinuMode: 'build', status: 'completed' };
     expect(turnAuthor({ id: '21957535-fe0f-4929-a454-e5e9f53fe804', metadata })).toBe('harness');
     expect(turnAuthor({ id: `${PROGRAMMATIC_MESSAGE_ID_PREFIX}background-job-wake:bgjob-1`, metadata }))
@@ -146,33 +114,24 @@ describe('a row that carries no stamp is read from what it does carry', () => {
   });
 
   test('the owner\'s own messages stay the owner\'s', () => {
-    // A real typed message carries a work mode and nothing else — 19 of them in
-    // stone-ash-71f2 alone. Reading a work mode as provenance would put every
-    // one of them behind a system card.
+    // A typed message carries only a work mode; reading it as provenance would hide real user rows.
     expect(turnAuthor({ id: 'oeqkRs2rHNekyDPv', metadata: { kinuMode: 'build' } })).toBe('operator');
     expect(turnAuthor({ id: 'ZGkXEnDwCrv7VFTn' })).toBe('operator');
-    // A mid-turn steer is the owner talking, and says so its own way.
     expect(turnAuthor({ id: 'steer-ozev3bmdd9tv', metadata: { kinuSteer: true } })).toBe('operator');
   });
 
   test('an unparseable metadata row still answers from its id prefix', () => {
-    // A corrupt metadata cell carries no stamp and no event name, so the id
-    // prefix decides: the ambiguous shape resolves to the harness rather than
-    // putting the harness's words in the owner's mouth.
+    // Corrupt metadata: the id prefix decides, resolving ambiguity to the harness.
     expect(turnAuthor({ id: `${PROGRAMMATIC_MESSAGE_ID_PREFIX}x`, metadata: 123 })).toBe('harness');
     expect(turnAuthor({ id: 'ZGkXEnDwCrv7VFTn', metadata: 123 })).toBe('operator');
   });
 
   test('the transcript read model reaches the same answer as the chat pane', () => {
-    // getChatHistoryPage reported the fork_interrupted rows above as `user`,
-    // because it read only the id prefix and those rows predate it. The rule is
-    // one function now, so the two surfaces cannot disagree again.
     expect(transcriptRole({
       id: 'f8798675-5e9a-4d13-aac2-293f4557f1c1', role: 'user', metadata: { kinuEvent: 'fork_interrupted' },
     })).toBe('system');
     expect(transcriptRole({ id: 'oeqkRs2rHNekyDPv', role: 'user', metadata: { kinuMode: 'build' } })).toBe('user');
     expect(transcriptRole({ id: `${PROGRAMMATIC_MESSAGE_ID_PREFIX}x`, role: 'user' })).toBe('system');
-    // Assistant rows are never touched, whatever they carry.
     expect(transcriptRole({ id: `${PROGRAMMATIC_MESSAGE_ID_PREFIX}x`, role: 'assistant' })).toBe('assistant');
   });
 });

@@ -1,19 +1,7 @@
 /**
- * The workspace plane's mount table.
- *
- * One filesystem view for the agent: its own durable workspace tree, EXTENDED
- * by the machines it can reach. `/pc` serves the device tunnel's files (only
- * while a device is connected), `/sandbox` the container's (only while the
- * Sandbox binding exists). A read under a mount point crosses to the owning
- * executor's transport — device WebSocket, container HTTP — through that
- * executor's own `files` VFS, so every boundary the executor enforces
- * (device consent, path scoping) is enforced on the mounted path too.
- *
- * The workspace tree stays the canonical plane. Mounts are reserved root
- * names, never a second copy of workspace bytes, and memory indexing, fork
- * snapshots and identity provisioning keep addressing the base tree alone.
- * Like a POSIX mount, a mount point is ABSOLUTE: relative paths resolve in
- * the workspace, so `pc/x` is still a workspace file.
+ * Workspace plane mount table: the durable workspace tree extended by `/pc` (device tunnel) and `/sandbox`
+ * (container), each read through that executor's own `files` VFS so its boundaries still apply.
+ * Mount points are absolute; relative paths stay in the workspace, so `pc/x` is a workspace file.
  */
 
 import type { VFS, VfsEntryStat } from '../types/primitives';
@@ -21,55 +9,36 @@ import { renderThrownChain } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import { isVfsError, makeVfsError } from './errno';
 
-/** One entry of the mount table. */
 export interface VfsMount {
-	/** Reserved root name: the mount point is `/${name}`. */
 	readonly name: string;
-	/** The mounted tree while its environment is live, null while absent.
-	 *  Read live at every call — a device connects and disconnects mid-session
-	 *  without this plane being rebuilt. */
+	/** Read live at every call: a device connects and disconnects mid-session. */
 	readonly files: () => VFS | null;
-	/** Why it is absent right now, stated verbatim in every refusal — an
-	 *  absent mount is a stated absence, never an empty directory. */
+	/** Stated verbatim in every refusal; an absent mount is never an empty directory. */
 	readonly absentReason: () => string;
 }
 
-/** The mount point each executor namespace's files are served under. One
- *  table so prompt text and documentation cannot drift from routing. */
 export const EXECUTOR_MOUNTS = {
 	device: '/pc',
 	sandbox: '/sandbox',
 } as const satisfies Record<string, string>;
 
-/** The reference roots every backend reserves (`vfs/references.ts`): never a
- *  machine's mount segment, so `local` — the CLI's alias of its own workspace
- *  — and the two fixed planes can never be shadowed by a device's name. */
+/** Never a machine's mount segment, so `local` and the fixed planes cannot be shadowed by a device name. */
 export const RESERVED_REFERENCE_ROOTS: readonly string[] = ['vfs', 'sandbox', 'local'];
 
-/** The same table read the other way: mount point → the executor serving it.
- *  Here rather than at each reader, because three readers had each inverted it
- *  themselves — one keyed by mount point, one by bare entry name — and a fourth
- *  spelling is how they start disagreeing about which mount is which. */
+/** The mount table inverted: mount point → executor. */
 export const MOUNT_EXECUTORS: Record<string, string> = Object.fromEntries(
 	Object.entries(EXECUTOR_MOUNTS).map(([executor, mount]) => [mount, executor]),
 );
 
-/** The provider surface a standard mount resolves against — structurally
- *  `ExecutionRouter.getProvider`'s answer, without importing the router. */
+/** Structurally `ExecutionRouter.getProvider`'s answer, without importing the router. */
 export interface MountableProvider {
 	files?: VFS;
 	isAvailable(): boolean;
 }
 
 /**
- * The two mounts every backend declares off its executor registry.
- *
- * Different environments gate differently, because they come and go
- * differently. A device tunnel is a PRESENCE: gated on the executor answering
- * right now, so a mid-session disconnect states absence instead of serving a
- * dead-socket error through the file plane. A container is a BINDING: the SDK
- * provisions it on first touch, so the mount exists whenever the binding does
- * and lets the first file call pay the cold start.
+ * A device mount is gated on presence (executor answering now); a container mount on its binding,
+ * letting the first file call pay the cold start.
  */
 export function standardMounts(provider: (name: string) => MountableProvider | undefined): VfsMount[] {
 	return [
@@ -94,82 +63,40 @@ function absentError(mount: VfsMount, path: string): Error {
 	return makeVfsError('ENXIO', `/${mount.name} — ${mount.absentReason()}`, path);
 }
 
-/**
- * Mutations some planes implement natively past the base VFS contract: Nimbus
- * renames without reading the bytes and removes a tree in one bounded
- * statement. The composite plane forwards them where the routed tree has
- * them, so a workspace rename through the mount table stays free.
- */
+/** Native mutations the composite plane forwards where the routed tree has them. */
 export interface VfsNativeMutations {
 	rename(oldPath: string, newPath: string): Promise<void>;
 	removeRecursive(path: string): Promise<void>;
 }
 
-/** One directory entry with the metadata a listing needs, as the plane itself
- *  reports it. `stat` is null for an entry that vanished between the listing
- *  and its own metadata — a gap, not a failure of the directory. */
+/** `stat` is null for an entry that vanished between the listing and its metadata. */
 export interface VfsListedEntry {
 	readonly name: string;
 	readonly stat: VfsEntryStat | null;
 }
 
 /**
- * Reads some planes serve better than the base contract can express.
- *
- * `readRange` is a PREFIX read: the plane hands back the first `length` bytes
- * from `offset` without materializing the file. Only planes whose transport has
- * an offset/length read declare it — the session's file plane does
- * (execution/nimbus.ts) — and the viewer's bounded preview is the
- * caller that needs it, because reading a gigabyte to show half a megabyte is
- * the cost, not the clipping.
- *
- * `readdirStats` is a listing that already carries type and size. Two planes
- * return both from ONE call, and declaring it here is what keeps the listing
- * from statting every child separately — the container's `stat` derives itself
- * from the PARENT LISTING, so an N-child directory would cost N+1 full listings
- * of the same directory.
+ * `readRange` is a prefix read from `offset` without materializing the file.
+ * `readdirStats` returns type and size in one call; the container's `stat` derives from the parent listing.
  */
 export interface VfsNativeReads {
 	readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
 	readdirStats(path: string): Promise<VfsListedEntry[]>;
 }
 
-/** The routed tree's native operations, where it declares them. A widening
- *  assignment, not a cast: the extras are optional, and vfs/nimbus-workspace.ts
- *  and execution/{nimbus,sandbox}.ts are the producers whose
- *  members carry exactly these signatures. */
+/** A widening assignment, not a cast: the extras are optional. */
 function nativeOps(files: VFS): Partial<VfsNativeMutations & VfsNativeReads> {
 	const probed: VFS & Partial<VfsNativeMutations & VfsNativeReads> = files;
 
 	return probed;
 }
 
-/**
- * The most text a surface will hold in memory to serve a BOUNDED view of a
- * file.
- *
- * It bounds the two places a plane with no ranged read leaves no choice: the
- * viewer's text preview, which decodes this many bytes and marks the rest
- * truncated, and the `file` tool's scan, which refuses a file this large
- * rather than materialize it (tools/file-scan.ts). One number because it is
- * one question — a plane that cannot hand back a window can only hand back
- * the file, and this is how much of it anything here is willing to hold.
- */
+/** Most text held in memory for a bounded view on a plane with no ranged read (viewer preview, tools/file-scan.ts). */
 export const RESIDENT_TEXT_MAX_BYTES = 512 * 1024;
 
 /**
- * A file's leading `limit` bytes, off the plane's own prefix read.
- *
- * `size` is what the plane's stat said, and it decides whether a plane WITHOUT
- * a prefix read may be asked at all: a file that already fits the limit is one
- * whole read of a bounded file, and a file that does not is REFUSED here rather
- * than fetched and sliced. There is deliberately no whole-file fallback for the
- * over-budget case — that fallback is exactly the allocation the bound exists
- * to prevent, and dressing it as a bound would be a lie the caller cannot see.
- *
- * The refusal is EPERM with a stated reason, so the viewer can offer the raw
- * route (which streams to a response body and never makes the file resident)
- * instead of pretending the file is unreadable.
+ * A plane without a prefix read is read whole only when `size` fits `limit`; otherwise EPERM with a stated
+ * reason, never a whole-file fallback.
  */
 export async function readBoundedWithVfsOps(
 	files: VFS, path: string, limit: number, size: number | null,
@@ -194,15 +121,8 @@ export async function readBoundedWithVfsOps(
 }
 
 /**
- * A file's trailing `bytes` as text, off the plane's own ranged read — the
- * memory tail's read. `null` for an absent file, as `read` answers.
- *
- * The plane's stat places the window and its ranged read fetches ONLY that
- * window, so an append-only file that has grown to megabytes costs the tail's
- * few kilobytes, not the file. A window that opens inside a multi-byte
- * sequence drops that sequence's continuation bytes: what remains decodes to
- * exactly the code points a whole-file read would have decoded there, and the
- * caller slicing the text to its own bound never sees the cut.
+ * A file's trailing `bytes` as text via the plane's ranged read; `null` for an absent file.
+ * A window opening mid-sequence drops the continuation bytes.
  */
 export async function readTailWithVfsOps(
 	files: VFS & Pick<VfsNativeReads, 'readRange'>, path: string, bytes: number,
@@ -223,17 +143,7 @@ export async function readTailWithVfsOps(
 }
 
 /**
- * A directory's entries with their metadata, off the plane's stat-inclusive
- * listing where it has one and off concurrent per-child stats where it does
- * not.
- *
- * The stats run together rather than one after another, and a child that is
- * GONE is isolated to that child: ENOENT answers `stat: null`, because a file
- * removed between the listing and its own metadata is a gap in the listing and
- * not a failure of the directory. Anything else — a permission refusal, an I/O
- * fault, a plane that stopped answering — PROPAGATES. Those are the plane
- * failing, and a listing that reported them as sizeless files would hide an
- * outage behind a plausible directory.
+ * Stats run concurrently; ENOENT on a child answers `stat: null`, any other error propagates.
  */
 export async function listWithVfsOps(files: VFS, dir: string): Promise<VfsListedEntry[]> {
 	const native = nativeOps(files).readdirStats;
@@ -247,21 +157,14 @@ export async function listWithVfsOps(files: VFS, dir: string): Promise<VfsListed
 		try {
 			return { name, stat: await files.stat(child) };
 		} catch (cause) {
-			// The plane's OWN code, never prose matching. A tree that reports
-			// absence by throwing rather than by answering null is the only case
-			// this absorbs.
+			// The plane's own code, never prose matching.
 			if (isVfsError(cause) && cause.code === 'ENOENT') return { name, stat: null };
 			throw cause;
 		}
 	}));
 }
 
-/**
- * What the fallback tree removal did. `removed` and `remaining` partition the
- * enumeration exactly: every path the walk listed is in one of them, so a
- * caller reporting a partial removal never has to re-ask the plane what is
- * still there — the answer is the one the removal itself recorded.
- */
+/** `removed` and `remaining` partition the enumeration exactly. */
 export type TreeRemoval =
 	| { readonly ok: true; readonly removed: readonly string[]; readonly remaining: readonly string[] }
 	| {
@@ -272,18 +175,8 @@ export type TreeRemoval =
 	};
 
 /**
- * Depth-first tree removal spelled in base VFS ops, for planes with no native
- * removal.
- *
- * ENUMERATE FIRST, THEN DELETE. A walk that discovers children while it
- * deletes them reads a directory it is simultaneously emptying, so the
- * listing it acts on is the one the operation started from, not whatever a
- * half-removed tree still answers. Children unlink before their parents, and
- * the first unlink that fails ends the pass: the result names what was
- * removed and what remains, because an unlink cannot be rolled back and the
- * honest record is the only thing a caller can act on. An entry that vanished
- * between the listing and its own unlink is counted removed — the operation
- * wanted it gone and it is — the same reading `listWithVfsOps` gives a gap.
+ * Depth-first removal in base VFS ops: enumerate first, then delete children before parents.
+ * The first failed unlink ends the pass; an entry that vanished before its unlink counts as removed.
  */
 export async function removeTreeWithVfsOps(files: VFS, path: string): Promise<TreeRemoval> {
 	const st = await files.stat(path);
@@ -299,8 +192,6 @@ export async function removeTreeWithVfsOps(files: VFS, path: string): Promise<Tr
 		if (current === undefined) break;
 		const currentStat = current === path ? st : await files.stat(current);
 
-		// A child that vanished between the listing and its own stat is already
-		// the end state the removal wants — a gap, not a failure.
 		if (currentStat === null) continue;
 
 		order.push(current);
@@ -312,8 +203,7 @@ export async function removeTreeWithVfsOps(files: VFS, path: string): Promise<Tr
 		}
 	}
 
-	// Deepest first: a directory unlinks after everything beneath it, the same
-	// order the recursive descent reached children before parents.
+	// Deepest first: a directory unlinks after everything beneath it.
 	order.sort((a, b) => b.split('/').length - a.split('/').length);
 
 	const removed: string[] = [];
@@ -340,10 +230,7 @@ export async function removeTreeWithVfsOps(files: VFS, path: string): Promise<Tr
 	return { ok: true, removed, remaining: [] };
 }
 
-/** The refusal text of a removal that stopped: where it stopped, why, and
- *  which entries are gone versus still present. Shared by the composite
- *  plane's throw and the file manager's error value, so both name the same
- *  two sets off the one record. */
+/** Shared by the composite plane's throw and the file manager's error value. */
 export function partialTreeRemovalMessage(path: string, removal: Extract<TreeRemoval, { ok: false }>): string {
 	const gone = removal.removed.length === 0 ? 'none' : removal.removed.join(', ');
 	const left = removal.remaining.join(', ');
@@ -352,29 +239,15 @@ export function partialTreeRemovalMessage(path: string, removal: Extract<TreeRem
 		+ `so ${path} was only partly removed: gone [${gone}]; still present [${left}]`;
 }
 
-/** One side of a carry: the plane that holds the bytes, and the path inside
- *  it. Named because a carry can cross planes, so the two sides are not
- *  interchangeable and neither is "the VFS". */
+/** A carry can cross planes, so the two sides are not interchangeable. */
 export interface CarrySide {
 	readonly files: VFS;
 	readonly path: string;
 }
 
 /**
- * Fallback rename spelled in base VFS ops, for a plane with no native rename
- * and for a move that crosses planes, where no native rename can exist.
- *
- * Only a file can ride a carry, and the carry itself holds that line: a
- * directory source refuses with EPERM before the payload read, the staged
- * write, or the source unlink — so a tree is never half-copied under a
- * rename's name.
- *
- * A byte carry is not atomic, so its completion boundary is explicit: the copy
- * must be confirmed present before the source is destroyed, and a carry that
- * cannot finish removes the copy it made. Both halves exist for one invariant
- * — a rename either happened or it did not. Without them a failed unlink left
- * the file under BOTH names and reported failure, so the caller could not tell
- * which name to trust.
+ * Fallback rename in base VFS ops. Directories refuse with EPERM before any I/O.
+ * The copy is confirmed before the source goes, and a failed carry removes its copy: a rename happens or not.
  */
 export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promise<void> {
 	const sourceStat = await from.files.stat(from.path);
@@ -393,8 +266,7 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 	const temp = siblingPath(to.path, 'carry', nanoid(10));
 	const destinationExisted = await to.files.exists(to.path);
 	const native = nativeOps(to.files).rename;
-	// A plane without a native rename overwrites its destination in place, so
-	// the only way to put back what was there is to have read it first.
+	// Without native rename the destination is overwritten in place, so it must be read first to be restorable.
 	const destinationBytes = destinationExisted && !native ? await to.files.readFile(to.path) : null;
 
 	await to.files.writeFile(temp, payload);
@@ -404,19 +276,14 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 	}
 
 	try {
-		// An existing destination keeps its own bytes until the LAST step. The
-		// source goes once the copy is staged beside the destination, and the
-		// destination is then replaced by one rename over it — never by moving it
-		// aside first, which would leave the name missing in between.
+		// The destination keeps its bytes until one final rename over it; never moved aside first.
 		await from.files.unlink(from.path);
 
 		if (native) await native.call(to.files, temp, to.path);
 		else {
 			await to.files.writeFile(to.path, payload);
 
-			// The staged copy is the only remaining witness of these bytes, so the
-			// destination has to be confirmed before it goes — the same check the
-			// staged copy itself got, for the same reason.
+			// The staged copy is the last witness, so the destination is confirmed before it goes.
 			if (!(await to.files.exists(to.path))) {
 				throw makeVfsError('EIO', `the copy at ${to.path} is not there after writing it`, to.path);
 			}
@@ -425,8 +292,6 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 		}
 	} catch (cause) {
 		try {
-			// Whatever the destination was before this carry is what it must be
-			// again: its old bytes if it had any, and no file at all if it did not.
 			if (destinationBytes !== null) await to.files.writeFile(to.path, destinationBytes);
 			else if (!destinationExisted && await to.files.exists(to.path)) await to.files.unlink(to.path);
 
@@ -441,8 +306,7 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 	}
 }
 
-/** Containment-preserving temporary sibling. It never interprets user path
- * segments and cannot escape the destination parent. */
+/** Never interprets user path segments and cannot escape the destination parent. */
 function siblingPath(path: string, purpose: string, nonce: string): string {
 	const slash = path.lastIndexOf('/');
 	const parent = slash < 0 ? '' : path.slice(0, slash + 1);
@@ -453,21 +317,8 @@ function siblingPath(path: string, purpose: string, nonce: string): string {
 
 
 /**
- * `base`, extended by `mounts`. Base routes pass through untouched — relative
- * paths, absolute paths, everything the workspace owns. A mount route
- * delegates with the mount prefix stripped (`/pc/home/me.txt` reads the
- * machine's `/home/me.txt`), and an absent mount refuses every reading or
- * mutating call with ENXIO carrying the stated absence, answers `exists`
- * false and `stat` null.
- *
- * The operation matrix has one router: read, write, conditional write, list,
- * stat, existence, mkdir, unlink, bounded reads and stat-inclusive listings
- * all dispatch through the same first-segment decision. `rename` and
- * `removeRecursive` extend that matrix: native where the routed tree has them,
- * spelled in base operations where it does not. Rename stays in its source
- * namespace: a base↔mount or mount↔mount move refuses before either tree
- * changes, while a fallback carry is allowed only inside one tree. A mount
- * point itself is an entry of THIS plane and rejects every mutation.
+ * `base` extended by `mounts`. Mount routes delegate with the prefix stripped; an absent mount refuses with
+ * ENXIO (`exists` false, `stat` null). Rename stays within one namespace; mount points reject every mutation.
  */
 export function withMountTable(
 	base: VFS, mounts: readonly VfsMount[],
@@ -491,10 +342,7 @@ export function withMountTable(
 		byName.set(mount.name, mount);
 	}
 
-	/** Split a path into its mount route (`/pc/a/b` → pc, `/a/b`) or a base
-	 * route. Only a whole first segment matches, so `/pcs/x` stays base. A
-	 * `..` may simplify inside a mounted tree, but may never climb through its
-	 * root into the composite namespace. */
+	/** Only a whole first segment matches; `..` may never climb out of a mounted tree's root. */
 	const routeOf = (path: string): { mount: VfsMount; native: string } | { base: string } => {
 		if (!path.startsWith('/')) return { base: path };
 		const slash = path.indexOf('/', 1);
@@ -548,15 +396,7 @@ export function withMountTable(
 		return files;
 	};
 
-	/**
-	 * A mutating call's route, resolved ONCE.
-	 *
-	 * A mount point is an entry of THIS plane, so mutating it is EPERM — and that
-	 * refusal outranks an absent mount, because the path names something no tree
-	 * behind the table owns either way. Both answers come out of ONE route, so
-	 * every write, unlink and mkdir parses its argument once and no second
-	 * reader can disagree about which answer comes first.
-	 */
+	/** Mutating a mount point is EPERM, which outranks an absent mount. */
 	const mutate = async <T>(
 		path: string, operation: string, op: (files: VFS, native: string) => Promise<T>,
 	): Promise<T> => {
@@ -606,9 +446,7 @@ export function withMountTable(
 			return delegate(path, async (files, native) => {
 				const entries = await files.readdir(native);
 
-				// Only the true root carries the mount points themselves, and only
-				// LIVE ones: they are entries of THIS plane, not of any one tree
-				// behind it, and an absent mount is no entry at all.
+				// Only the true root lists mount points, and only live ones.
 				if (path !== '/') return entries;
 				const mounted = [...byName.values()].filter((m) => m.files() !== null).map((m) => m.name);
 
@@ -621,14 +459,10 @@ export function withMountTable(
 			if (!('mount' in routed)) return base.stat(path);
 			const files = routed.mount.files();
 
-			// An absent mount names nothing: null, the VFS contract for absent,
-			// rather than an error that would fail a mere existence probe.
+			// Null, not an error, so an existence probe does not fail.
 			if (!files) return null;
 
-			// The mount point itself is a directory of this plane by construction.
-			// Some trees cannot stat their own root (the container derives stat
-			// from the parent listing, and '/' has no parent entry), which typed
-			// /sandbox as a file in the root listing.
+			// Some trees cannot stat their own root (the container derives stat from the parent listing).
 			if (routed.native === '/') return MOUNT_POINT_STAT;
 
 			return files.stat(routed.native);
@@ -637,14 +471,8 @@ export function withMountTable(
 			return mutate(path, 'unlinked', (files, native) => files.unlink(native));
 		},
 		async mkdir(path, opts) {
-			// `mkdir -p` on a directory that already exists is success, and a live
-			// mount point IS a directory of this plane — the same answer `stat`
-			// gives it. Refusing it as "a mount point cannot be created" broke
-			// every write to a file at the ROOT of a mount, because the one write
-			// path in the file surface calls `ensureDir` on the parent first
-			// (`tools/file-tool.ts`), and an unrecognised refusal there is
-			// re-thrown. A non-recursive mkdir of a mount point is still EPERM:
-			// nothing may create one.
+			// `mkdir -p` on a live mount point succeeds (file-tool calls `ensureDir` on the parent);
+			// a non-recursive mkdir of one is still EPERM.
 			const routed = routeOf(path);
 
 			if ('mount' in routed && routed.native === '/' && opts?.recursive === true) {
@@ -723,9 +551,7 @@ export function withMountTable(
 
 				const removal = await removeTreeWithVfsOps(files, native);
 
-				// The VFS surface reports by throwing, so the record of a partial
-				// removal rides the error: the failing entry keeps its own code
-				// and the message names both halves of the tree it left.
+				// The partial-removal record rides the error; the failing entry keeps its code.
 				if (!removal.ok) {
 					throw makeVfsError(
 						isVfsError(removal.failed.cause) ? removal.failed.cause.code : 'EIO',
@@ -735,22 +561,12 @@ export function withMountTable(
 				}
 			});
 		},
-		// mounted machine answer differently, and no caller should have to know
-		// which plane a path landed on.
-		//
-		// The plane's own operation or a stated refusal, never a whole-file read
-		// behind a range's name: a plane with no ranged read cannot serve ANY
-		// window without fetching the file to slice it, which is the cost a range
-		// exists to avoid. `readBoundedWithVfsOps` is the one place allowed to
-		// whole-read, and only for a file its stat already proved fits.
+		// A plane with no ranged read refuses rather than whole-reading; only `readBoundedWithVfsOps` may whole-read.
 		readRange(path, offset, length) {
 			return delegate(path, (files, native) => {
 				const range = nativeOps(files).readRange;
 
-				// ENOTSUP, not EPERM: the capability is absent, the caller is not
-				// forbidden. One routed tree answers for every plane under it, so a
-				// caller that can fall back to a bounded whole read — the `file`
-				// tool's scan does — can only tell the two apart by the code.
+				// ENOTSUP, not EPERM: callers like the `file` scan fall back on this code.
 				if (!range) throw makeVfsError('ENOTSUP', 'this plane serves no ranged read', path);
 
 				return range.call(files, native, offset, length);
@@ -760,8 +576,6 @@ export function withMountTable(
 			return delegate(path, async (files, native) => {
 				const listed = await listWithVfsOps(files, native);
 
-				// The rule `readdir` above states, once: only the true root carries
-				// the mount points themselves, and only the live ones.
 				if (path !== '/') return listed;
 				const named = new Set(listed.map((entry) => entry.name));
 
@@ -776,7 +590,5 @@ export function withMountTable(
 	};
 }
 
-/** A mount point is a directory of the composite plane by construction — the
- *  same answer `stat` gives it above, for the same reason: some trees cannot
- *  stat their own root. */
+/** Some trees cannot stat their own root. */
 const MOUNT_POINT_STAT: VfsEntryStat = { size: 0, mtimeMs: 0, isDir: true };

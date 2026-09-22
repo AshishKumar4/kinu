@@ -1,59 +1,11 @@
-/**
- * Canonical tool registry — the single source of truth for Kinu's built-in
- * tool names, how the model REACHES each of them, and their descriptions.
- * Consumed by:
- *   - tools/builtins.ts      (factory for the built-in ToolSet)
- *   - tools/*-codemode.ts    (each namespace takes its NAME from TOOL_REACH)
- *   - execution/sandbox-errors.ts (where a capability actually is, when a
- *                            model reaches for a native tool inside the sandbox)
- *   - prompting/surface.ts   (crafted-tool projection of the live ToolSet)
- *   - conformance/manifest.ts (per-root wiring, keyed by these names)
- *   - cf-backend/orchestrator.ts  (getToolList, getToolDescriptions, beforeTurn)
- *   - cli surfaces           (chat-loop, tui)
- *
- * Changing any name here is a breaking change to prompts, UI, and MCTS scoring.
- */
+/** Canonical built-in tool names, reach, and descriptions. Renaming one breaks prompts, UI, and MCTS scoring. */
 
-// ── The reach axis (single source) ──────────────────────────────────────────
-// Until this declaration existed, how the model reaches a capability was
-// emergent rather than stated: native meant "whichever names buildBuiltinTools
-// happened to put in the ToolSet", codemode meant "whichever
-// createXCodemodeProvider some backend actor class happened to call", and the
-// Tools panel guessed `nativeNames.has(name) ? 'native' : 'codemode'` — a
-// binary that cannot say "neither", so the one deps-gated builtin (`report`)
-// rendered as codemode-only on the orchestrator, an actor that has it on no
-// surface at all.
-//
-// `codemode` is a NAMESPACE and not a boolean because it is not always the
-// capability's own name: `shell` and `file` are reached inside the sandbox
-// through the shared `workspace` primitives they already dispatch into, so
-// they own no namespace of their own. A capability OWNS its namespace exactly
-// when `codemode` equals its own key, which is what every *-codemode.ts factory
-// relies on: each takes its provider `name` straight from this table.
-//
-// Reach is not permission. What a given actor gets is reach ∩ the deps its
-// backend wires; the per-root record of which roots wire what, with a stated
-// reason for every deliberate absence, is conformance/manifest.ts.
+// Reach is not permission: an actor gets reach ∩ the deps its backend wires (conformance/manifest.ts).
+// A capability owns its codemode namespace when `codemode` equals its own key; *-codemode.ts factories rely on that.
 
 /**
- * How a capability behaves when the SAME call is reached twice.
- *
- * Named for recovery, because that is the only question it answers. A turn can
- * be interrupted between a tool's effect and the durable record of its
- * completion — an eviction, a code update, a crash — and recovery replays the
- * provider response that asked for it.
- *
- *   safe     rerunning the call cannot do anything twice: it reads, or it
- *            converges on the same state. Recovery just runs it again.
- *   claimed  rerunning it might. The call goes through the effect claim
- *            (tools/effect-claim.ts): the attempt is durable BEFORE the
- *            effect, a completed call replays its stored output, and a call
- *            whose outcome is unknown is refused rather than repeated.
- *
- * Mandatory on every row, so a new capability cannot arrive without an answer,
- * and there is no list anywhere that can opt one out. A name this table does
- * not declare — an MCP tool, any dynamically adapted surface — resolves to
- * `claimed`, because nothing has proven its replay safety.
+ * Behavior when the same call is reached twice, e.g. a replay after eviction.
+ * `safe` reruns freely; `claimed` goes through the effect claim (tools/effect-claim.ts).
  */
 export type ReplayPolicy = 'safe' | 'claimed';
 
@@ -62,63 +14,30 @@ export type ToolReach =
   | { readonly native: false; readonly codemode: string; readonly replay: ReplayPolicy };
 
 /**
- * Every capability the model can call by name, where it can call it, and what
- * happens if the same call is reached twice.
- *
- * The native rows come first, in registration order. Adding one GROWS the
- * standing tool surface, which is 8 by deliberate design (10 → 8, 2026-08-13:
- * every native tool is a standing choice the model weighs on every turn it is
- * not the answer to, and selection accuracy degrades with choice count).
- * unit-tools.test.ts pins both the count and the names against this table, so
- * growth is a decision and never a side effect of editing it.
- *
- * The claim is enforced at the PROVIDER tool-call boundary, which is where a
- * replay re-enters. A codemode-only capability is reached from inside
- * `eval`, so its own row states the policy of the calls it makes and
- * the claim that actually covers it is the enclosing `eval` one.
+ * Every model-callable capability, where it is reachable, and its replay policy.
+ * Native rows come first in registration order; unit-tools.test.ts pins their count and names.
+ * The claim is enforced at the provider tool-call boundary, so codemode-only rows are covered by `eval`'s.
  */
 export const TOOL_REACH = {
-  // Arbitrary code with the whole executor surface behind it: nothing about a
-  // second run of it is safe.
   eval: { native: true, codemode: null, replay: 'claimed' },
   shell: { native: true, codemode: 'workspace', replay: 'claimed' },
-  // `file` reads AND writes, and one policy covers the capability, so the
-  // answer is the one that is never wrong for a write.
+  // Reads and writes share one policy, so it is the write-safe one.
   file: { native: true, codemode: 'workspace', replay: 'claimed' },
   agents: { native: true, codemode: 'agents', replay: 'claimed' },
-  // A remembered fact converges, but a saved note does not: two runs leave two
-  // notes.
+  // Two saves leave two notes.
   memory: { native: true, codemode: 'memory', replay: 'claimed' },
   tasks: { native: true, codemode: 'tasks', replay: 'claimed' },
-  // Search and fetch are reads. A repeat costs a request and answers the same
-  // question.
   web: { native: true, codemode: 'web', replay: 'safe' },
-  // A report is a message to the orchestrator; a second one is a second
-  // message.
   report: { native: true, codemode: 'report', replay: 'claimed' },
-  // Codemode-only by decision, not by omission: a governed high-blast-radius
-  // lane, and the agent's own self-steering. Neither is the answer to enough
-  // turns to earn a standing top-level choice.
+  // Codemode-only by decision: occasional lanes that do not earn a standing choice.
   release: { native: false, codemode: 'release', replay: 'claimed' },
   agent: { native: false, codemode: 'agent', replay: 'claimed' },
-  // Structured workspace data. Codemode-only because a table is worked, not
-  // announced: the operations are compiled from arguments by the host store
-  // (tools/db-codemode.ts), and a program that creates a table then fills it
-  // is one call rather than eight. `claimed` because an insert repeated by a
-  // recovery replay is a second row — the same reason `memory` is claimed.
+  // A replayed insert is a second row.
   db: { native: false, codemode: 'db', replay: 'claimed' },
   slate: { native: false, codemode: 'workspace', replay: 'claimed' },
 } as const satisfies Record<string, ToolReach>;
 
-/**
- * The replay policy of a tool the model just called, by the name the provider
- * used.
- *
- * `claimed` for anything this table does not declare. That is the whole
- * fallback: an MCP server's tool, or any adapter added later, is an external
- * effect whose replay safety nothing here has established — so it goes through
- * the claim until its own declaration says otherwise.
- */
+/** Replay policy by provider tool name; undeclared names (MCP, adapters) resolve to `claimed`. */
 export function replayPolicyFor(toolName: string): ReplayPolicy {
   return isToolReachName(toolName) ? TOOL_REACH[toolName].replay : 'claimed';
 }
@@ -129,92 +48,43 @@ function isToolReachName(value: string): value is keyof typeof TOOL_REACH {
 
 type CapabilityName = keyof typeof TOOL_REACH;
 
-/** The capabilities handed to the model as tool definitions, derived from the
- *  reach declaration — so BUILTIN_TOOL_SPECS and BUILTIN_TOOL_DESCRIPTIONS
- *  cannot compile without an entry for a newly-native capability, and
- *  BUILTIN_TOOLS cannot list one the declaration does not call native. */
+/** Capabilities TOOL_REACH declares native. */
 export type BuiltinToolName = {
   [K in CapabilityName]: (typeof TOOL_REACH)[K]['native'] extends true ? K : never
 }[CapabilityName];
 
-/** Whether a name is one the reach table declares. `TOOL_REACH` is a `const`
- *  object literal in this module and nothing outside it can add a key, so the
- *  table is the authority on its own key union. */
 function isCapabilityName(name: string): name is CapabilityName {
   return Object.hasOwn(TOOL_REACH, name);
 }
 
-/**
- * The reach table's own keys, recovered once.
- *
- * `Object.keys` loses the key union in the lib signature. This is the only place
- * that recovers it, so every derivation below indexes a typed name.
- */
+/** Typed keys of TOOL_REACH; `Object.keys` loses the key union. */
 const CAPABILITY_NAMES: readonly CapabilityName[] = Object.keys(TOOL_REACH).filter(isCapabilityName);
 
-/**
- * The standing eight, DERIVED. Hand-listing them was membership-checked and not
- * exhaustiveness-checked — `satisfies readonly BuiltinToolName[]` refuses a name
- * the table does not call native, but silently accepts a list missing one, so a
- * capability could go native and never be handed to the model. Filtering the
- * table cannot omit a row, and the order is the table's declaration order, which
- * is what the hand list spelled.
- */
+/** Native tools, derived from TOOL_REACH in declaration order. */
 export const BUILTIN_TOOLS: readonly BuiltinToolName[] =
   CAPABILITY_NAMES.filter((name): name is BuiltinToolName => TOOL_REACH[name].native);
 
-/** Set form for O(1) membership checks in hot paths (e.g. craft score filter). */
 export const BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set(BUILTIN_TOOLS);
 
-/** Narrows a name that arrived off the wire — a sandbox ReferenceError, an
- *  MCTS score row — to the native surface, so TOOL_REACH can be indexed with
- *  it without a cast. */
+/** Narrows an untrusted name (sandbox error, score row) to the native surface. */
 export function isBuiltinToolName(value: string): value is BuiltinToolName {
   return BUILTIN_TOOL_NAMES.has(value);
 }
 
-/**
- * The subordinate → parent progress spine's tool id.
- *
- * A constant because the name has to agree across places no compiler was
- * joining: the actor's advertised tool list, the deps that wire it, the
- * `report.*` codemode gate, and one backend's deps-gate array. Typed
- * `BuiltinToolName`, so deleting or renaming the capability in TOOL_REACH
- * breaks every one of them at once instead of silently disabling a gate.
- */
+/** The subordinate → parent progress tool id. */
 export const REPORT_TOOL: BuiltinToolName = 'report';
 
-/**
- * Plan mode's one completion surface.
- *
- * NOT a `BuiltinToolName`: it is not in TOOL_REACH and never joins the standing
- * eight, because it exists only on a Plan turn whose actor owns the submission
- * boundary (`buildBuiltinTools` adds it there). It is declared here anyway so
- * the backends that filter and allow-list it stop doing so through bare
- * literals with nothing linking them to this declaration.
- */
+/** Plan mode's completion tool. Not in TOOL_REACH: `buildBuiltinTools` adds it only on Plan turns. */
 export const SUBMIT_PLAN_TOOL = 'submit_plan';
 
-/**
- * Builtins dropped from the advertised surface when an actor's profile wires no
- * deps for them.
- *
- * Derived from the ids above rather than spelled as strings: the array is a
- * gate, and a gate keyed on a literal that no longer names a real tool stops
- * gating without failing. `agents` is deliberately absent — every actor has the
- * delegation substrate, so it is never dropped; its ACTIONS gate separately on
- * the same profile.
- */
+/** Builtins dropped when an actor's profile wires no deps for them. `agents` is never dropped. */
 export const DEPS_GATED_TOOLS: readonly BuiltinToolName[] = [REPORT_TOOL];
 
-/** One capability and the codemode namespace it owns. */
 interface CapabilityReach {
   readonly name: CapabilityName;
   readonly namespace: string;
 }
 
-/** Codemode-only capabilities with the namespace each owns. Derived rather than
- *  listed again, so a capability that changes reach cannot fall out of step. */
 const CODEMODE_ONLY_REACH: readonly CapabilityReach[] = Object.freeze(
   CAPABILITY_NAMES.flatMap((name) => {
     const reach = TOOL_REACH[name];
@@ -223,10 +93,7 @@ const CODEMODE_ONLY_REACH: readonly CapabilityReach[] = Object.freeze(
   }),
 );
 
-/** Which capabilities reach one codemode namespace. Plural because two do:
- *  `shell` and `file` both reach `workspace`, so that namespace survives while
- *  EITHER of them does. Derived from the reach table at load, so a namespace
- *  cannot join the surface without joining this index. */
+/** Capabilities per codemode namespace; `workspace` survives while either `shell` or `file` does. */
 const CAPABILITIES_BY_NAMESPACE: Readonly<Record<string, readonly CapabilityName[]>> = (() => {
   const index: Record<string, CapabilityName[]> = {};
 
@@ -241,17 +108,8 @@ const CAPABILITIES_BY_NAMESPACE: Readonly<Record<string, readonly CapabilityName
 })();
 
 /**
- * The codemode-only capabilities a wired provider list actually reaches.
- *
- * For the surface a backend hands the resolver: pass the provider list as
- * built, after every conditional and after the Plan-mode filter, and get back
- * exactly the keys whose namespace is present. A capability whose provider was
- * not wired is not returned, so a role's list can never allow a lane that is
- * physically absent — which would be the same silent lie, from the other side,
- * as a lane reachable despite being excluded.
- *
- * Namespaces belonging to natively-nameable capabilities contribute nothing:
- * the native tool id already names those.
+ * Codemode-only capabilities whose namespace is present in a wired provider list.
+ * Pass the list after every conditional and after the Plan-mode filter.
  */
 export function codemodeCapabilitiesFor(
   providers: readonly { readonly name: string }[],
@@ -264,14 +122,8 @@ export function codemodeCapabilitiesFor(
 }
 
 /**
- * One role's tool surface, over BOTH places a capability can be reached.
- *
- * THE POINT IS THE SINGLE SET. Both surfaces read the same merged list, so they
- * cannot disagree. Narrow the native ToolSet alone and `eval` builds
- * its codemode providers from unfiltered deps — a role allowed `eval`
- * and denied `agents` still delegates, hires and writes memory through
- * `agents.*`, and the narrowing is decorative for any role that keeps the
- * sandbox.
+ * One role's tool surface over native tools and codemode namespaces. Both read one set:
+ * narrowing only the ToolSet would leave `agents.*` reachable through `eval`.
  */
 export interface ToolSurfaceNarrowing {
   /** Whether a native tool id survives. */
@@ -283,21 +135,9 @@ export interface ToolSurfaceNarrowing {
 }
 
 /**
- * Build the narrowing for one resolved turn.
- *
- * `allowedTools` is the resolver's merged output — the caller's surface already
- * intersected with the role's list. `undefined` allows everything, the same
- * rule the resolver applies to a role with no list at all: absent inherits.
- *
- * A DECLARED namespace (some capability's `codemode` in TOOL_REACH) is exposed
- * when at least one capability reaching it is named.
- *
- * An EXTERNAL namespace — an executor plane like `pc` or `sandbox`, or any
- * provider a backend wired without a reach row — is exposed when
- * `eval` itself is. Core does not invent a per-namespace denial for a
- * name the owner cannot write in a role's list: that would silently take away
- * the filesystem from every narrowed role, which is a worse failure than the
- * one being fixed and a much quieter one.
+ * `allowedTools` is the resolver's merged list; `undefined` allows everything.
+ * A declared namespace is exposed when any capability reaching it is allowed; an
+ * undeclared one (e.g. `pc`, `sandbox`) is exposed when `eval` is.
  */
 export function narrowToolSurface(
   allowedTools: readonly string[] | undefined,
@@ -330,70 +170,23 @@ export function narrowToolSurface(
 
 export interface BuiltinToolSpec {
   name: BuiltinToolName;
-  /** What the tool IS, in one sentence. The only field the system prompt's
-   *  tool index renders as prose. */
+  /** One sentence; the only field the system prompt's tool index renders. */
   summary: string;
   /** When to reach for it, and how to shape the call. Schema-only. */
   whenToUse: string;
-  /** Where it is the wrong instrument. Schema-only — providers weight the
-   *  schema description for tool SELECTION, which is exactly the decision this
-   *  field informs. The system prompt teaches by example instead. */
+  /** Schema-only; providers weight the schema description for tool selection. */
   whenNotToUse: string;
-  /** A standing fact about the tool's environment that changes how a call
-   *  should be written — not when to reach for it. Optional: most tools have
-   *  none, and inventing one per tool is prompt bloat. */
+  /** Optional standing fact about the environment that changes how a call is written. */
   doctrine?: string;
   /** What comes back. Never a restatement of the summary. */
   result: string;
-  /** One real call, rendered in the system prompt beside the summary. The
-   *  argument shapes are the point — they must match the input schema. */
+  /** One real call, rendered in the system prompt; must match the input schema. */
   example: string;
 }
 
-// ── Delegation doctrine (single source) ─────────────────────────────────────
-// The `agents` tool is ONE ladder with TWO rungs, and they differ on who
-// decides: swarm = an ephemeral search whose candidates are MEASURED against a
-// number the caller declares and which settles into this turn; hire = one agent
-// engaged on one workstream, whose `lifetime` says whether it answers once and
-// retires or stays in the roster across turns. msg = talking to what already
-// exists. The tool docstring renders these rungs verbatim and the prompt's
-// Delegation section indexes them, so editing them here is the only place
-// delegation doctrine changes.
-//
-// TREE SEARCH IS `swarm`, AND IT HAS EXACTLY ONE SPELLING. Every configured
-// search of any depth is `action:'swarm'`, whose candidates are scored against
-// the caller's own `objective` through the verifier registry. A node is a real
-// tool-using agent holding the same builtins a head does, and whether it starts
-// from the caller's conversation is the `context` axis (strategy/swarm.ts,
-// SWARM_CONTEXTS) rather than a rung of its own — which is what makes a second
-// spelling unnecessary rather than merely discouraged. Nothing on this surface
-// spawns an ephemeral helper whose result is not measured.
-//
-// NAMING, settled 2026-08-17 so it is not re-opened: the persistent rung is
-// `hire`, not `staff` and not `spawn`.
-//   `spawn` is disqualified outright — EVERY rung spawns something, so the word
-//     is exactly the information the ladder is keyed on, removed.
-//   `staff` carries the lifetime signal but takes the wrong OBJECT: you staff
-//     an organisation and you hire a person, and this action's object is one
-//     person (`role` + `mission` → one subordinate). It was defensible only
-//     while the caller was the workspace orchestrator, where "staff the
-//     workspace" was a readable elision; a subordinate hiring its own helper
-//     has no organisation to staff, and subordinates hire now.
-//   `hire` takes the object the call actually has, matches the workplace
-//     vocabulary the rest of this surface already uses (role, mission, roster,
-//     dismiss), and pairs with `dismiss` — hire/dismiss is a matched pair on the
-//     enum, staff/dismiss was not.
-//
-// LIFETIME IS A FIELD: `hire` with `lifetime:'task'` answers one question over
-// the same roster a durable hire stays in; the lifetime says how long the
-// helper lives.
-//
-// ADDRESSING IS ONE VERB: `msg` takes `agent` or `event_id` and refuses both.
-// No alias, no accepted-legacy action.
+// Delegation doctrine: the `agents` docstring renders these rungs verbatim, so delegation doctrine changes only here.
 
-/** Every action the `agents` tool can expose. Which ones a given actor
- *  actually gets is decided by the deps its backend wires — see
- *  agentsActionsFor in delegation/agents-tool.ts. */
+/** Every `agents` action; per-actor availability is agentsActionsFor in delegation/agents-tool.ts. */
 export const AGENTS_TOOL_ACTIONS = [
   'swarm', 'hire', 'msg', 'list', 'dismiss',
 ] as const;
@@ -405,35 +198,8 @@ export const DELEGATION_FRAME =
   'One delegation ladder, two rungs: a search is ephemeral and settles into this turn, and a hire is one agent working a workstream of its own beside you.';
 
 /**
- * The CONTEXT axis, one entry per rung — the half of the ladder that decides
- * which rung a task wants, and the half each rung's doctrine composes from here
- * rather than wording for itself.
- *
- * Keyed by ACTION because a search's preset chooses its context, while a hire
- * starts fresh unless the caller requests inheritance. The shape is the deepseek
- * harness's (deepseek-ai/deepseek-harness 0.1.0-rc.7, tool-subagent/src/index.ts
- * :213-243), where a single provider-declared `inheritsParentContext` boolean
- * selects between two tool descriptions AND two prompt-parameter descriptions,
- * with the same reason in its own comment: the restate-everything instruction
- * "would be false for a fork".
- *
- * `rung` goes into the rung's doctrine (selection: which helper do I want).
- * `brief` goes onto the field that carries the helper's instructions — a swarm's
- * `task`, a hire's `mission` — because that is where the fact changes what gets
- * TYPED, and a field description is read at the moment it is filled. Both halves
- * read from here so the two surfaces cannot drift into disagreeing about what a
- * helper can see, which is exactly what they did once: a brief field said its
- * helper "sees this workspace but not this conversation" three lines under a
- * comment stating it inherits the parent's completed turns.
- *
- * Measured, not asserted. What a search node starts from is the `context` axis
- * (strategy/swarm.ts, SWARM_CONTEXTS): `inherit` hands it the parent's conversation
- * VERBATIM as one cacheable prefix per branch point, `fresh` hands it the
- * engine-authored seed and its focus and nothing else, and each preset takes the
- * value its search needs. A fresh hire gets its role and mission and nothing
- * else — the bounded digest it used to get reached no reader on either backend
- * and was deleted. An inherited hire gets the shared heads-support conversation
- * window, frozen into its birth assignment.
+ * Per-rung context doctrine. `rung` feeds the rung's doctrine; `brief` feeds the field
+ * carrying the helper's instructions (swarm `task`, hire `mission`).
  */
 export const DELEGATION_CONTEXT_DESCRIPTION =
   'Under `inherit` your recent turns arrive as its conversation, so it already knows what you know; under `fresh` it starts from the brief. Fork when the work needs the conversation you share; use fresh when your own framing is the thing in question.';
@@ -455,199 +221,78 @@ export const DELEGATION_INHERITANCE = {
   },
 } as const;
 
-/** The rungs of the delegation ladder. Rendered verbatim into the `agents` schema
- *  description, which every family reads for SELECTION; the prompt's Delegation
- *  section indexes the same rungs in its own words and carries only the operational
- *  doctrine no schema does (prompt.ts). */
+/** Delegation rungs, rendered verbatim into the `agents` schema description. */
 export const DELEGATION_RUNGS = {
-  // Factual and flat: what a search IS, what each sentence costs, and what it
-  // refuses to do. No triggers, no payoff framing — whether to search is the
-  // caller's judgement against the mechanism stated here.
   swarm:
     'Run a search (action=swarm): N nodes each running its own tool loop over this workspace in parallel, handing you back only what they found. '
-    // THE COUNT IS A DECISION, and the rung said "N nodes" without ever telling
-    // the caller to pick N. The measured case is Anthropic's multi-agent research
-    // system: on their BrowseComp eval token usage by itself explains 80% of the
-    // performance variance, a multi-agent run costs about 15x a chat turn, and the
-    // fix they shipped was EXPLICIT NUMBERS in the lead's prompt ("1 agent with
-    // 3-10 tool calls" for fact-finding, "more than 10 subagents with clearly
-    // divided responsibilities" for complex research) because agents misjudge
-    // effort in BOTH directions — the failure they name is spawning 50 subagents
-    // for a simple query. So the sentence scales the count to the task and prices
-    // it; a widen-by-default instruction is the over-spawn half written down.
-    //
-    // OUR band, not theirs: 3 is `optimise`/`prove`, 5 is `ideate`, and
-    // unit-prompt.test.ts derives min/max from SWARM_PRESET_POINTS and fails this
-    // string when a row's width moves — this module imports nothing by design, and
-    // strategy/swarm.ts names that exact drift hazard against this exact file.
-    //
-    // `branches` only. `depth` is deliberately absent: a bare `{preset, task}` call
-    // resolves through `unmeasuredPoint`, which pins depth to 1 on every row, so a
-    // "1 to 7 levels" band here would be false for the most common call. The depth
-    // band rides the `depth` property, which is read when depth is actually set.
+    // unit-prompt.test.ts derives the preset band from SWARM_PRESET_POINTS and fails this string when it moves.
+    // Depth is omitted: a bare `{preset, task}` call pins depth to 1.
     + 'Scale the candidate count to the size of the task and state it on the call: `branches` is that count, the named presets set it from 3 to 5 per level, and each candidate is one more tool loop with its own token bill — so name a number above that band only when the task has that many independent angles. '
     + 'Candidates are scored by your verifier running in this workspace when you declare an `objective`, and ranked by a judge ensemble when you do not. '
-    // The CONTEXT axis reads from DELEGATION_INHERITANCE.swarm above, which the
-    // `task` field also composes, so the rung and the field cannot disagree about
-    // what a node can see.
     + `${DELEGATION_INHERITANCE.swarm.rung} `
-    // What separates this from every other way of spawning several things and
-    // picking one: WHO DECIDES. A judge has an opinion; a verifier runs.
     + 'You name the shape with `preset`, and a verifier is CODE that runs here rather than a model\'s opinion of the answer. '
-    // The preset enumeration is NOT here. Which presets exist is read at the
-    // moment `preset` is filled, so it rides that field (SWARM_PRESET_DOCTRINE in
-    // strategy/swarm.ts); the rung carries only what decides whether to search at all.
+    // Preset enumeration rides the `preset` field (SWARM_PRESET_DOCTRINE in strategy/swarm.ts).
     + '`preset` and `task` are the whole call: every preset runs from those two alone. `objective` is the OPTIONAL upgrade that turns a judged sweep into a measured search — it states what is measured, in what unit, which direction is better, the target that counts as done, and `verify` as {kind, spec} naming a registered instrument. A verifier is CODE that runs, so a metric nothing can execute is not an objective: leave it out and take the judged sweep. '
     + 'A floor is optional and is a PROOF: declare one and a candidate that measures past it is reported as a breach with the measurement kept, never as a score, because the bound may be what is wrong. '
-    // A production deliberation burned ~4k reasoning tokens on what an omitted budget means.
     + 'Spend: `budget_tokens`/`budget_usd` cap everything the search transitively spawns and nest under your own mission scope; omitted means uncapped within that scope, so omit unless the caller gave you a number to enforce. '
-    // The delivery contract, stated because it changes how a caller plans the turn.
     + 'It takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you; never poll a backgrounded job or spawn it twice. '
     + 'It refuses rather than approximates: an illegal composition comes back naming the axis and what to change, and a shape no engine here can run faithfully says so instead of returning a number from a different mechanism.',
-  // ONE rung, and `lifetime` is the whole choice inside it. It used to be two
-  // actions, and the two differed on exactly one fact — how long the helper
-  // lives — so the caller had to pick a VERB to express a duration. Stating the
-  // cheap lifetime first because it is the cheaper mistake to make: a `task`
-  // hire that should have been `durable` wastes one question, while a `durable`
-  // hire that should have been `task` leaves a roster row nobody retires.
   hire:
     'Hire a helper (action=hire): one agent per independent workstream, each running its own tool loop over this same workspace. '
-    // The line above is a UNIT rule — what one agent is — and the caller still had
-    // no rule for HOW MANY. Same measured source as the search rung, and the same
-    // two halves: scale the count to the work, and say what the count spends.
-    //
-    // It carries no number and no field, because it must stand ALONE.
-    // `agentsActionsFor` gates `swarm` on its own deps, so a team-only actor
-    // renders this rung with no search rung beside it: a preset width or
-    // `branches` quoted here would calibrate on machinery that actor never
-    // receives. The split itself is the calibration instead, and it is reachable
-    // from any deps set that renders this rung at all.
-    //
-    // The dependent-chain clause is the anti-over-spawn half, and it is the one
-    // Anthropic states as a rule: an orchestrator buys something only when there
-    // is bulk to hand off, and on one dependent chain it pays for a plan, a
-    // handoff and a merge that a single agent gets for free.
+    // No number or field here: a team-only actor renders this rung without the swarm rung.
     + 'Say how many independent workstreams the task holds before the first hire, as a range: a part that runs without waiting on another part is one workstream, each hire adds one more tool loop and one more token bill, and a chain of dependent steps is one workstream however long it is. '
     + 'A hire outlives this turn and stays in your roster: hand it more work with msg, read the roster with list. A finished hire reports and STAYS, resumable with its context intact — dismiss only one whose role is permanently over. '
-    // The other half of the CONTEXT axis, from the same per-action source the
-    // `mission` field composes.
     + `${DELEGATION_INHERITANCE.hire.rung} `
     + 'Naming an `agent` that already exists instead of a `role` hands that agent the workstream rather than creating one, with `deliverable` saying what finished looks like.',
 } as const;
 
-/**
- * The `task` lifetime, rendered ONLY where the actor wires a substrate that can
- * run one. `lifetime` joins the schema on the same condition, and an unwired
- * `task` hire is refused, so promising it everywhere advertised a field the
- * caller could not set and a rung it could not reach.
- *
- * It OPENS BY SCOPING the rung above it, because that rung says a hire stays in
- * the roster and a task hire does not. Where this paragraph is absent the rung
- * is the whole truth and carries no lifetime vocabulary at all, which is what a
- * team-only actor reads; where it is present it names itself the exception. The
- * rung must not hedge instead — a "default" implies an alternative the reader
- * may have no way to reach.
- */
+/** The `task` lifetime, rendered only where a substrate can run one. Opens by scoping the
+ *  roster rung above it, so that rung stays unhedged. */
 export const DELEGATION_TASK_LIFETIME =
   'That roster account is the DEFAULT lifetime, and `lifetime:"task"` overrides it: a task hire is for when you want an answer, not a colleague — the agent is created for that one question, this call waits for it to finish and returns its answer here, and it is archived the moment it answers with its transcript kept. It is the lifetime for work that is bounded and self-contained: reading a large file to answer something specific, an independent review of something you produced, a focused investigation whose result you need before your next step. There is no follow-up, so state the whole question once; a second exchange wanted the default "durable".';
 
-/**
- * The `agents` result contract, in the three pieces its two renderers select
- * from. The `taskHire` sentence is the same conditional fact as
- * {@link DELEGATION_TASK_LIFETIME}: an actor with no temporary substrate cannot
- * produce that shape, so it is not told what it looks like. The full catalogue
- * description concatenates all three, so a full surface renders byte-identical
- * text and there is no second assembly to drift.
- */
+/** `agents` result contract pieces; `taskHire` is gated like {@link DELEGATION_TASK_LIFETIME}.
+ *  The full description concatenates all three. */
 export const AGENTS_RESULT_PARTS = {
   roster: 'A hire and dismiss return roster state. ',
   taskHire: 'A lifetime:"task" hire returns the agent\'s finished answer, its elapsed time and no roster row. ',
   rest:
     'A hire handed to an agent that already exists, and msg, return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
     + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id. '
-    // The result half is stated because a swarm's answer is not the only thing it
-    // carries, and the two extra fields are the ones a caller must not skip: the
-    // margin is the check docs/EXPLORATION.md — "Floor margin" requires be LOOKED
-    // at, and the caveat is the one sentence that stops a suspect number being
-    // quoted as a result.
     + 'swarm returns the axes actually in force, the caps and where each came from, `best` with its RAW measured value in your unit beside the normalised score, every candidate including the ones that produced no usable answer and why, and a settle report carrying the measured baseline and the floor margin — and on a live session the call hands back a background job at spawn, with that report arriving as the wake when it settles. '
     + 'A run that measured past its floor comes back with a publication caveat and no score on that candidate: the answer is still yours to read and is NOT publishable until the bound is re-derived.',
 } as const;
 
-/** How `msg` addresses an agent or an inbound question — the converse half of
- *  the `agents` docstring. */
+/** How `msg` addresses an agent or an inbound question. */
 export const DELEGATION_CONVERSE =
   'msg says something to an agent without handing it a workstream: `agent` names one — a subordinate in this workspace or one of the owner\'s other workspace agents — and `event_id` answers an incoming agent message event instead. One or the other, never both. ' +
   'hire scope=workspace creates a specialist workspace of its own. ' +
-  // The delivery contract, stated because it changes how to delegate: there is
-  // no waiting for a helper to free up, and no reason to hold work back.
   'A busy agent is never blocked on — your message is queued immediately for its own mode-homogeneous turn, so send follow-ups as soon as you have them.';
 
-// The preset doctrine is NOT here. It lives in strategy/swarm.ts as
-// `SWARM_PRESET_DOCTRINE`, beside the preset table it describes, and is rendered
-// from those rows rather than written alongside them.
-//
-// Distance from the table is the defect that placement avoids. This module is
-// import-free by design, so prose written here cannot read the table there: it
-// would assert that `optimise` "requires `objective`" and that
-// research/audit/redteam "require `objective` and `key`" while the table and the
-// validator are what actually decide, and the two would be free to disagree. A
-// live incident spent five of a model's ten steps on a call hand-written doctrine
-// described as legal. Only the clause a renderer cannot derive is hand-written,
-// and it sits on the row itself (`SwarmPresetPoint.doctrine`).
+// Preset doctrine lives in strategy/swarm.ts (SWARM_PRESET_DOCTRINE), rendered from the preset table.
 
-// ── Durable-state doctrine (single source) ──────────────────────────────────
-// `memory` is ONE tool because it is one concept — state this agent writes down
-// now and reads back in a later turn. Prose notes and keyed facts are two
-// storage shapes of that concept, not two decisions the model should have to
-// make between tools, so they are actions inside it. The keyed-fact actions
-// exist only where a FactsStore is wired, and the docstring is composed from
-// the same gate, so it never advertises an action the runtime cannot perform.
+// Keyed-fact memory actions exist only where a FactsStore is wired; the docstring uses the same gate.
 
-/** Always present: the memory plane is `rt.memory` plus the canonical
- *  transcript, which every runtime has. */
+/** Always present: every runtime has `rt.memory` and the transcript. */
 export const MEMORY_NOTE_ACTIONS = ['save', 'search', 'conversations'] as const;
 
 /** Present only where a FactsStore is wired. */
 export const MEMORY_FACT_ACTIONS = ['remember', 'recall', 'forget'] as const;
 
-/** The memory actions a runtime can actually perform — the ONE expression of
- *  the facts gate, so the enum the model is shown, the vocabulary a refusal
- *  names, and the set the dispatcher accepts cannot disagree. (Sibling of
- *  `agentsActionsFor`, which does the same job for `agents`.) */
+/** Memory actions a runtime can perform: the single facts gate for the enum, refusals and dispatch. */
 export function memoryActionsFor(hasFacts: boolean): readonly MemoryToolAction[] {
   return hasFacts ? [...MEMORY_NOTE_ACTIONS, ...MEMORY_FACT_ACTIONS] : MEMORY_NOTE_ACTIONS;
 }
 
-/** The `web` plane's two actions. Beside the other tool vocabularies rather
- *  than inline in builtins.ts, so the schema enum, the dispatcher's accepted
- *  set and a refusal's wording are one symbol. */
 export const WEB_TOOL_ACTIONS = ['search', 'fetch'] as const;
 
 export type WebToolAction = (typeof WEB_TOOL_ACTIONS)[number];
 
-/** The `file` plane's actions — the one file/execution surface's whole
- *  vocabulary, declared beside its siblings for the same reason. */
 export const FILE_TOOL_ACTIONS = ['read', 'write', 'edit', 'list', 'stat', 'search'] as const;
 
 export type FileToolAction = (typeof FILE_TOOL_ACTIONS)[number];
 
-/**
- * The one wording for "the model sent a discriminant that is not in the
- * vocabulary" — shared by every native dispatcher, because a per-dispatcher
- * wording is free to drop the half that matters: `unknown tasks action 'list">'`
- * names what the model typed and none of the words that would have worked, so
- * the retry repeats the mistake.
- *
- * Both halves earn their place. The vocabulary is what makes the next call
- * succeed. The echo is what tells the model WHICH of its arguments was wrong
- * when a call carried several — and it is `JSON.stringify`d so a malformed
- * fragment reads as a string literal rather than blending into the message.
- *
- * `received` is typed as the caller's DECLARED type, which is a string on
- * every dispatcher: this runs after the parse has already refused it, so its
- * only job is to render what arrived.
- */
+/** Shared unknown-discriminant error: lists the vocabulary and JSON-quotes what arrived. */
 export function unknownActionError(
   tool: string,
   field: string,
@@ -657,16 +302,7 @@ export function unknownActionError(
   return `${tool} requires \`${field}\` — one of ${allowed.join(', ')}; got ${JSON.stringify(received)}`;
 }
 
-// ── Task-list doctrine (single source) ──────────────────────────────────────
-// `tasks` is its own tool rather than three more actions on `memory` because
-// the two answer different questions. `memory` is what the agent will want to
-// look up in some later turn — its own docstring rules out "temporary task
-// progress" in as many words. A task list is the opposite: live plan state
-// for the work in front of it, read back every step from the dynamic-context
-// block, closed out as the work lands, and shown to the owner on its own
-// surface. Folding it in would make `memory`'s one-sentence summary untrue and
-// put four more properties on the schema the model reads for every durable-
-// state decision.
+// `tasks` is separate from `memory`: live plan state for current work, not durable recall.
 
 export const TASKS_TOOL_ACTIONS = ['add', 'update', 'list', 'mode'] as const;
 
@@ -677,14 +313,9 @@ export type MemoryToolAction =
   | (typeof MEMORY_NOTE_ACTIONS)[number]
   | (typeof MEMORY_FACT_ACTIONS)[number];
 
-/**
- * The durable-state spec for a runtime that does (or does not) wire facts.
- * `BUILTIN_TOOL_SPECS.memory` is the full surface; buildBuiltinTools renders
- * the gated one when no FactsStore is supplied.
- */
+/** Memory spec gated on facts; `BUILTIN_TOOL_SPECS.memory` is the full surface. */
 export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
-  // The conversations mode contract (query searches, around_message_id scrolls,
-  // neither browses) lives only in the input-schema property descriptions.
+  // The conversations mode contract lives in the input-schema property descriptions.
   return {
     name: 'memory',
     summary: hasFacts
@@ -700,9 +331,6 @@ export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
         : 'save/search hold a lesson or note too long to be a value; ')
       + 'conversations reads what this agent said before.',
     whenNotToUse: 'Do not store temporary task progress, stale logs, or anything this turn already carries.',
-    // Not a usage rule but a fact about what is already in the store: the
-    // harness writes failed work here as lessons, so the search is worth
-    // making before the retry rather than after it.
     doctrine: 'Your own failures are recorded as lessons in here — search before retrying similar work.',
     result: hasFacts
       ? 'Returns save or fact-mutation status, recalled fact values, note and fact search hits, or conversation transcript slices.'
@@ -713,21 +341,9 @@ export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
   };
 }
 
-// ── Release doctrine (single source) ────────────────────────────────────────
-// The release lane has two halves and no actor has both. Where an execution
-// engine drives the working copy, apply/run_checks/preview/deploy/rollback earn
-// their results from real command output, and the ledger's record_* twins are
-// refused as assertions of what was never run. Where no engine is wired, the
-// agent runs the commands itself and the record_* actions are the only way the
-// ledger learns what happened. This gate lives on in tools/release-codemode.ts,
-// which projects the SAME action set into the sandbox — release left the
-// model's top-level surface (a governed, high-blast-radius, occasional lane
-// costs a standing choice every turn it is not the answer to), but the
-// gate-on-engine-presence policy did not move.
+// Release: record_* actions only without an execution engine, engine actions only with one.
+// Codemode-only (tools/release-codemode.ts).
 
-/** The governance ledger — wherever the release lane exists at all. Module-local:
- *  `releaseToolActions` below is the seam every caller reads, and three exported
- *  tables beside it were three more names for one answer. */
 const RELEASE_LEDGER_ACTIONS = [
   'board', 'bind_source', 'create', 'update', 'transition', 'request_approval',
 ] as const;
@@ -751,36 +367,8 @@ export function releaseToolActions(hasEngine: boolean): readonly ReleaseToolActi
 }
 
 /**
- * Canonical descriptions. These are what the LLM sees as tool docstrings and
- * what the UI shows in the Tools tab.
- *
- * Namespace contract (see docs/CRAFT-ARCHITECTURE.md):
- *   - `workspace.*` — filesystem / shell / memory primitives, including
- *     `editFile` — the exact-match edit reachable natively as `file`'s `edit`
- *     action (tools/file-tool.ts's createFileDispatcher, shared by both).
- *   - `tools.<name>` — the ONE callable form for every tool, native and
- *     crafted, on every backend (tools/sandbox-contract.ts). Native members
- *     dispatch to the host; crafted members are defined by the sandbox
- *     prelude from their stored source. Crafted-tool bodies may call
- *     `workspace.*`, `tools.<other>` and the namespaces below interchangeably.
- *   - `agents.*` / `memory.*` / `tasks.*` / `report.*` — the same-named
- *     native tool, projected into the sandbox over its own dispatcher
- *     (delegation/agents-codemode.ts, memory-codemode.ts, tasks-codemode.ts,
- *     report-codemode.ts), gated to the same deps/actions the native tool
- *     is. `agents.*` is what makes a crafted tool able to BE a workflow:
- *     plain control flow over delegated steps.
- *   - `release.*` — the governed release lane's ONLY reach (tools/release-
- *     codemode.ts): no native `release` tool exists. Same reasoning as
- *     `skills`, below, applied to a lane occasional and high-blast-radius
- *     enough that it should not cost a standing top-level choice either.
- *
- * `skills` has no tool AND no codemode namespace: SKILL.md files are
- * ordinary paths under /workspace/skills/ on the SAME VFS `workspace.*`
- * already addresses (readFile/writeFile/readdir/exec('rm …')) — a dedicated
- * surface would have been a third path to the same bytes. Discovery is
- * ambient (renderSkillsIndexSection in the system prompt); activation is
- * resolved once at turn start (orchestrator/turn-surface.ts), never by a
- * tool call.
+ * Canonical descriptions: the LLM tool docstrings and the UI Tools tab.
+ * Namespace contract: docs/CRAFT-ARCHITECTURE.md.
  */
 export const BUILTIN_TOOL_SPECS = {
   eval: {
@@ -789,8 +377,6 @@ export const BUILTIN_TOOL_SPECS = {
       'Run a JavaScript program in a Node-like sandbox where every tool you have is callable as `tools.<name>(input)`, files and shells are namespaces, and `state.*` keeps values between programs.',
     whenToUse: 'Use when a step needs real logic: loops, branching, several calls whose results feed each other, calling a tool you crafted, fetching over HTTP, or holding state between calls.',
     whenNotToUse: 'Do not use for a single shell command when `shell` is enough, or to read and edit one file when `file` is enough.',
-    // Other runtimes still own their own paths. The workspace namespace is the
-    // stable anchor: the same canonical bytes as `file` and `shell` workspace.
     doctrine:
       'workspace.* is the agent\'s canonical durable workspace: the same files addressed by the `file` tool and `shell` with runtime "workspace". '
       + 'A separate container or machine keeps its commands behind its own runtime; when live, its files also sit in the workspace plane at /pc or /sandbox.',
@@ -802,23 +388,12 @@ export const BUILTIN_TOOL_SPECS = {
     summary: 'Run one shell command in one explicitly selected available runtime.',
     whenToUse: 'Use for a direct command in the same runtime where its files and dependencies live.',
     whenNotToUse: 'Do not use for multi-step logic, cross-runtime file access, or a runtime that is not explicitly listed as available.',
-    // The caffe OOM: `nproc` inside a 1-CPU/2GB cgroup reports the HOST's
-    // cores, so `make -j$(nproc)` forked 32 compilers into 2GB. The live
-    // execution-status block carries the measured cpus/mem when the runtime
-    // declares them; this is the sentence that tells the model to use them.
-    //
     doctrine:
       'Inside a container `nproc`, `/proc/cpuinfo` and `free` report the HOST, not your cgroup — sizing `-j` or worker counts from them will OOM the job. When the execution status lists cpus/mem for a runtime, those are the real limits: size parallelism from them. '
       + '`runtime: "workspace"` is the shell over the canonical durable workspace; its live execution status is authoritative for which programs and runtimes it supports. Separate containers and machines keep their own files and paths, so select those runtimes explicitly when the work lives there.',
     result: 'Returns the command output — both streams, labelled when both wrote — prefixed with the exit code when it is non-zero, or a structured runtime_not_provisioned error.',
     example: "shell({runtime:'workspace', command:'npm test'})",
   },
-  // ── The file plane (single source) ────────────────────────────────────────
-  // ONE tool, three actions, for the same reason `memory` is one tool: reading
-  // a file, changing part of it and creating it are one concept, and which
-  // action a call needs follows from what the model is doing rather than from a
-  // comparison it has to make. The actions are named after the codemode calls
-  // they mirror (workspace.readFile / writeFile), so there is one vocabulary.
   file: {
     name: 'file',
     summary: 'Inspect file contents, directory entries, metadata and literal text matches; replace exact text or create files in the canonical workspace. Plan permits inspection, not writes.',
@@ -830,8 +405,6 @@ export const BUILTIN_TOOL_SPECS = {
     whenNotToUse:
       'Do not rewrite a whole file with write to change part of it — edit it. '
       + 'Do not change files by pointing `shell` at sed -i, a heredoc, or an inline python/perl script: those write whether or not the text they aimed at was there.',
-    // The two rules that make an edit safe, stated where the model decides how
-    // to write the call — not after it has already failed one.
     doctrine:
       'Read a file here before editing or overwriting it: the change is refused otherwise, and refused again if the file moved on after that read. '
       + 'An edit whose old_text is missing, or present more than once, fails and touches nothing — widen old_text until it is unique rather than retrying the same anchor.',
@@ -841,42 +414,18 @@ export const BUILTIN_TOOL_SPECS = {
       + 'write returns the size written and whether the file was created or replaced.',
     example: "file({action:'edit', path:'src/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
   },
-  // Delegation doctrine lives in two bodies, and they answer different
-  // questions. This spec answers WHICH rung and WHEN — selection doctrine,
-  // composed from the DELEGATION_* constants above. What a backend actually
-  // ships is narrower: `renderAgentsToolDescription` rebuilds this field and
-  // drops every rung whose deps are not wired.
-  //
-  // The system prompt's Delegation section (`prompting/section-templates.ts`
-  // DELEGATION_SECTION) answers how to RUN the delegation once chosen, and
-  // renders NONE of these constants — `prompt.ts` hands it six booleans and no
-  // rungs text. That is deliberate and it is pinned: `unit-prompt.test.ts`
-  // asserts the prompt contains no rung string, because the prompt's own second
-  // copy of the swarm rung was measured and deleted. Measured 2026-08-21, not
-  // one sentence of this field appears in that section. So neither body is the
-  // other's source, and a change to selection doctrine belongs here alone.
+  // Selection doctrine; `renderAgentsToolDescription` drops unwired rungs. The prompt's
+  // Delegation section renders none of it (pinned by unit-prompt.test.ts).
   agents: {
     name: 'agents',
     summary:
       "Spawn and talk to helper agents — a measured search over ephemeral nodes of your own, persistent subordinates in this workspace, and the owner's other workspace agents.",
     whenToUse:
       `${DELEGATION_FRAME} ${DELEGATION_RUNGS.swarm} ${DELEGATION_RUNGS.hire} ${DELEGATION_TASK_LIFETIME} ${DELEGATION_CONVERSE}`,
-    // The same facts as positives. This field's LABEL still frames them
-    // ("Avoid when: …", renderToolSchemaDescription below), which is the honest
-    // place for the framing; the sentences inside it do not have to be
-    // prohibitions, and this was the one delegation surface that read as one.
-    // The race half gained the remedy it was missing — the fix for two nodes
-    // over one resource is one node that owns it, which is what a node's own
-    // prompt already tells it to do (heads/head-inference.ts).
     whenNotToUse:
       'A single short coherent change is yours to make directly. Work that is ONE DEPENDENT CHAIN — each step needing the step before it — belongs to one agent, however large it is: splitting a chain across agents pays for planning and for merging what they each assumed, and buys none of the parallelism the ladder exists for. Fan out over slices that are genuinely independent, and say what each owns. Nodes that would write the same mutable resource belong in one node that owns it. Every subordinate or peer message wakes that agent for a full turn, so each one carries real work.',
     result: `${AGENTS_RESULT_PARTS.roster}${AGENTS_RESULT_PARTS.taskHire}${AGENTS_RESULT_PARTS.rest}`,
-    // The cheapest COMPLETE call, which is what an example is for: `preset` and
-    // `task` are the whole minimum, and `ideate` is the one preset that legally
-    // takes no `objective`. The shape a model gets wrong here is the objective's
-    // three-deep nesting, and that rides `objective`'s own property description
-    // instead — read at the moment the field is being filled, which is where a
-    // schema beats an example.
+    // Cheapest complete call: `ideate` is the one preset that takes no `objective`.
     example: "agents({action:'swarm', preset:'ideate', task:'Three ways to stop staging 502ing under load'})",
   },
   memory: memoryToolSpec(true),
@@ -889,8 +438,6 @@ export const BUILTIN_TOOL_SPECS = {
       + 'update moves one item to active as you start it and done as you finish it, or to dropped when it turns out not to be needed; it also accepts `note`, a one-line annotation beside the item (null clears it). '
       + 'list reads the whole list back, closed items included. '
       + `mode switches your durable role — pass \`role\` to switch (it applies from your NEXT turn; the current one keeps its resolved profile), or call with no argument to read the active role id.`,
-    // A standing fact about where the list is READ, which is what makes
-    // keeping it current worth the call.
     doctrine:
       'Your open items are re-rendered into your live context at every step, so this list is what you read back after a long tool call, a background job settles, or the user interrupts with something else.',
     whenNotToUse:
@@ -924,9 +471,7 @@ export const BUILTIN_TOOL_SPECS = {
   },
 } satisfies Record<BuiltinToolName, BuiltinToolSpec>;
 
-/** Render a spec into the JSON-schema tool docstring. Providers weight the
- *  schema `description` most for tool selection, so the when-to-use doctrine
- *  ships here — the system prompt carries only the one-line summary. */
+/** Render a spec into the JSON-schema tool docstring. */
 export function renderToolSchemaDescription(spec: BuiltinToolSpec): string {
   return [
     spec.summary,
@@ -937,14 +482,7 @@ export function renderToolSchemaDescription(spec: BuiltinToolSpec): string {
   ].join('\n');
 }
 
-/** One rendered docstring per spec.
- *
- *  Spelled out rather than derived from `BUILTIN_TOOL_SPECS` with
- *  `Object.fromEntries`: an object literal under `satisfies Record<BuiltinToolName,
- *  string>` is already EXHAUSTIVE — a missing key fails to compile — so this table
- *  cannot fall behind the specs the way an array of names could fall behind the
- *  reach table. Deriving it would trade a compiler-checked list for a type
- *  assertion, which is the worse of the two. */
+/** Spelled out so `satisfies` checks exhaustiveness without a type assertion. */
 export const BUILTIN_TOOL_DESCRIPTIONS = {
   eval: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.eval),
   shell: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.shell),
@@ -956,9 +494,7 @@ export const BUILTIN_TOOL_DESCRIPTIONS = {
   report: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.report),
 } satisfies Record<BuiltinToolName, string>;
 
-/** Which substrate runs the program, because the two differ in what `require`
- *  and `fs` mean: hosted programs get shims over the workspace; a local CLI
- *  program runs in-process with the machine's own Node builtins. */
+/** Which substrate runs the program; they differ in what `require` and `fs` mean. */
 export type SandboxSubstrate = 'hosted' | 'local';
 
 const SANDBOX_FACTS = {
@@ -971,23 +507,12 @@ const SANDBOX_FACTS = {
     + 'The Node builtins, `require` and `fetch` are the machine\'s own; the `workspace` namespace is the durable workspace, which is not the machine\'s filesystem. `console.log` output comes back beside the result.',
 } satisfies Record<SandboxSubstrate, string>;
 
-/** The `code` field's own description on the `eval` input schema.
- *  Codemode's `createCodeTool` ships it as "JavaScript async arrow function to
- *  execute" — a shape NEITHER sandbox accepts, since both run the body as a
- *  script (the normalizer takes the bare body). Both backends read this one
- *  constant through `codemodeInputSchema` (sandbox-contract.ts), so the
- *  field can never contradict the docstring again. */
+/** The `code` field description on the `eval` input schema, shared via `codemodeInputSchema`. */
 export const CODEMODE_CODE_DESCRIPTION = 'The JavaScript program: top-level statements, `await` allowed, `return` (or a trailing expression) hands back the result.';
 
 /**
- * The `eval` docstring the model actually receives: this registry's
- * doctrine for the tool, the standing facts about the sandbox itself, then the
- * TypeScript declaration of every namespace that sandbox binds. BOTH backends
- * compose it here so one tool is described one way.
- *
- * `typeBlock` is the namespace declarations, assembled per backend: CF hands
- * codemode its own `{{types}}` placeholder and lets it substitute; the CLI
- * joins its providers' declared `types`.
+ * The `eval` docstring: tool doctrine, sandbox facts, then the namespace declarations
+ * (`typeBlock`, assembled per backend). Both backends compose it here.
  */
 export function renderCodemodeDescription(typeBlock: string, substrate: SandboxSubstrate = 'hosted'): string {
   return [

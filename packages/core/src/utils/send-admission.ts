@@ -1,23 +1,9 @@
 /**
- * Who may start a chat turn right now.
- *
- * One synchronous latch, acquired before any asynchronous send step and
- * released only by the matching send's terminal settle. Reactive state cannot
- * own this: `isStreaming` is React state, so two presses inside one tick — a
- * double click, a keydown racing a click, a held Enter — both read the same
- * not-yet-committed value and both pass the guard, which started two
- * overlapping turns on one conversation.
- *
- * The transitions are pure and separately tested; `useKinu` is the thin React
- * binding over them, the same split `use-async-resource.ts` uses.
+ * Synchronous chat-send latch, acquired before any async step and released by the matching send's terminal
+ * settle. React state cannot own it: two presses in one tick both read the uncommitted value.
  */
 
-/**
- * `owner` is the token of the send holding admission, or null when nobody does.
- * `minted` is the last token issued. Tokens strictly increase, so a settle can
- * prove it is still the owner before releasing — and a stale one cannot open the
- * door for whoever holds the latch next.
- */
+/** Tokens strictly increase, so a stale settle cannot release the latch held by a later send. */
 export interface SendLatch {
   minted: number;
   owner: number | null;
@@ -28,15 +14,8 @@ export function newSendLatch(): SendLatch {
 }
 
 /**
- * Start one turn under the latch.
- *
- * `true` when this call was admitted and IS that turn; `false` when a turn
- * already holds admission — and then `begin` was never called, so the caller
- * keeps the user's draft rather than destroying it.
- *
- * `begin` must resolve at the turn's TERMINAL settle: finished, failed, or
- * aborted. The AI SDK's `sendMessage` and `regenerate` both do, which is why
- * their promise is the release rather than a separate completion signal.
+ * `false` when a turn already holds admission; `begin` is then never called and the caller keeps the draft.
+ * `begin` must resolve at the turn's terminal settle (finished, failed, or aborted).
  */
 export function admitTurn(latch: SendLatch, begin: () => Promise<void>): boolean {
   if (latch.owner !== null) return false;
@@ -47,7 +26,6 @@ export function admitTurn(latch: SendLatch, begin: () => Promise<void>): boolean
   try {
     begin().then(release, release);
   } catch (thrown) {
-    // A synchronous throw IS this send's terminal settle.
     release();
     throw thrown;
   }
@@ -55,23 +33,12 @@ export function admitTurn(latch: SendLatch, begin: () => Promise<void>): boolean
   return true;
 }
 
-/**
- * Abandon the latch: this conversation is a different one now.
- *
- * The abandoned turn's own settle can no longer release it, because the token it
- * holds is no longer the owner. That is the same ordering `admitTurn` relies on,
- * stated once here for the reset path.
- */
+/** The abandoned turn's settle can no longer release it: its token is no longer the owner. */
 export function abandonTurn(latch: SendLatch): void {
   latch.owner = null;
 }
 
-/**
- * Abandon the latch only while its owner is still `expected`: the abort path
- * awaits two RPCs before releasing, and a new Send admitted in that window owns
- * the latch now — clearing it would release a turn that only just started and
- * admit a second one beside it. A null owner is nobody's turn to release.
- */
+/** The abort path awaits two RPCs before releasing; a send admitted in that window must keep the latch. */
 export function abandonTurnIfOwner(latch: SendLatch, expected: number | null): void {
   if (expected === null) return;
 

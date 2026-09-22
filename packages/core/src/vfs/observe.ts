@@ -1,42 +1,17 @@
-/**
- * Watching what a file plane was told to change.
- *
- * One wrapper over any {@link VFS}, so the thing being watched does not have to
- * know it is being watched. The only consumer today is a head reporting which of
- * its parent's files IT changed (heads/file-changes.ts), and that is exactly the
- * shape the problem has: attribution has to happen where a write lands, because
- * sibling heads run concurrently over the same files and an end-of-run diff
- * smears all of their work into one pile.
- */
+/** Write attribution happens where a write lands: sibling heads run concurrently over the same files. */
 
 import type { VFS, VfsRevision } from '../types/primitives';
 import { diagnostics, toKinuError } from '../obs/index';
 
-/** A write or delete that landed, reported to an observer. */
 export interface WriteEvent {
-  /** The path as the caller addressed it. */
   readonly path: string;
-  /** Content before this write, or null when the path did not exist. Absent
-   *  when the observer declined it (see {@link WriteObserver}), or when
-   *  `unread` says why it is unknown. */
+  /** null when the path did not exist; absent when not asked for or `unread` is set. */
   readonly before?: string | Uint8Array | null;
-  /** Why an asked-for `before` is unknown: the path was a directory, which has
-   *  no content and is never read, or reading it failed. The change landed. */
+  /** Why an asked-for `before` is unknown. The change still landed. */
   readonly unread?: 'directory' | 'unreadable';
-  /** Content after. null for a delete. */
   readonly after: string | Uint8Array | null;
 }
 
-/**
- * A write payload AS TEXT, or the fact that it is not text.
- *
- * Parsed once, here, because {@link WriteEvent} is what owns the
- * `string | Uint8Array | null` union and every consumer of it needs the same question
- * answered before it can do anything else. What each does with a non-text payload
- * differs and belongs to the consumer: a review renders "(binary)" and a merge-back
- * refuses the member rather than decoding an image into a patch side. Both of those are
- * a mapping over this, not a second parse of it.
- */
 export type TextPayload =
   | { readonly kind: 'absent' }
   | { readonly kind: 'text'; readonly text: string }
@@ -55,10 +30,7 @@ const utf8 = new TextDecoder();
 
 const encoder = new TextEncoder();
 
-/** The bytes as text, or null when they are not text. A plane answers bytes
- *  for every raw read, so the representation says nothing about the file;
- *  the content does: git's rule, a NUL byte means binary, and bytes that do
- *  not survive a UTF-8 decode and re-encode unchanged are not text either. */
+/** git's rule: a NUL byte means binary; bytes must also round-trip UTF-8 unchanged. */
 function decodedText(bytes: Uint8Array): string | null {
   if (bytes.includes(0)) return null;
   const text = utf8.decode(bytes);
@@ -71,16 +43,7 @@ function decodedText(bytes: Uint8Array): string | null {
   return text;
 }
 
-/**
- * Notified of every write and delete through a wrapped plane.
- *
- * The pre-write content is fetched only when `needsBaseline` says so, which is
- * what keeps this from costing a second read on every write: an observer
- * accumulating a NET change per path wants the content only the first time a
- * path is touched. A directory is never read, and a baseline that cannot be
- * taken is reported as `unread` rather than dropped: the write landed, so the
- * change is real even when its size is unknown.
- */
+/** `before` is read only when `needsBaseline` says so, to avoid a second read per write. */
 export interface WriteObserver {
   needsBaseline(path: string): boolean;
   record(event: WriteEvent): void;
@@ -88,19 +51,12 @@ export interface WriteObserver {
 
 type Baseline = Pick<WriteEvent, 'before' | 'unread'>;
 
-/**
- * `vfs`, with every write and delete reported to `observer`.
- *
- * Reports only AFTER the plane accepted the mutation, so a failed write is
- * never reported as a change, and never blocks one: taking the baseline cannot
- * fail the write it observes.
- */
+/** Reports only after the plane accepted the mutation; the baseline read never fails the write. */
 export function observeWrites<T extends VFS>(vfs: T, observer: WriteObserver): T {
   const baselineFor = async (path: string): Promise<Baseline> => {
     if (!observer.needsBaseline(path)) return {};
 
     try {
-      // Asked, not caught: a directory is a state of the path, not a failed read.
       const stat = await vfs.stat(path);
 
       if (stat === null) return { before: null };

@@ -1,25 +1,14 @@
-// Reading files out of the deployed static-asset bundle.
-//
-// The bundle is served with `not_found_handling: "single-page-application"`,
-// so a file that was never published comes back as 200 + the SPA shell rather
-// than a 404. A deploy made without the CLI archive step therefore served the
-// index.html body as the CLI tarball, its checksum, and its version JSON —
-// every fresh install died on a checksum mismatch and nothing reported it.
-// So: one place owns "did this deployment actually publish that file?", and
-// the SPA shell is never an acceptable answer for a file we asked for by name.
+// Reads files out of the deployed static-asset bundle. SPA fallback serves a missing file as 200 + index.html,
+// so the SPA shell is never an acceptable answer for a file asked for by name.
 import { tolerateAsync } from '../obs/index';
 import * as v from 'valibot';
 
-/** The platforms the CLI distribution is built for. The launcher's `uname`
- *  maps onto these exactly: Darwin/Linux and arm64/x86_64. */
+/** Matches the launcher's `uname` mapping: Darwin/Linux, arm64/x86_64. */
 export const CLI_DIST_PLATFORMS = [
   'darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64',
 ] as const;
 
-/** One prebuilt CLI artifact per platform, the CPython runtime they all share,
- *  and the served build stamp. Written into `dist/client/downloads/` by
- *  scripts/build-cli-dist.sh. Every artifact carries a sibling `.sha256` the
- *  launcher verifies before it unpacks anything. */
+/** Written into `dist/client/downloads/` by scripts/build-cli-dist.sh; each has a sibling `.sha256`. */
 export const CLI_RUNTIME_PATH = '/downloads/kinu-runtime-cpython.tar.gz';
 
 export const CLI_DIST_PATHS: string[] = [
@@ -29,10 +18,7 @@ export const CLI_DIST_PATHS: string[] = [
 
 export const CLI_VERSION_PATH = '/downloads/kinu-version.json';
 
-/** Identity of the build that produced the deployed asset bundle, and — on
- *  a build the lane signed — every artifact's checksum with the signature
- *  over them (`http/release-signing.ts`). Absent on a manifest an older
- *  build wrote, which no verifier accepts. */
+/** Checksums and signature (`http/release-signing.ts`) are absent on older manifests, which no verifier accepts. */
 export interface BuildStamp {
   version: string;
   sha: string;
@@ -49,20 +35,12 @@ const BuildStampSchema = v.object({
   signature: v.optional(v.string()),
 });
 
-/** The slice of the static-assets binding this module needs, declared
- *  structurally: a `Fetcher` (`env.ASSETS` on Cloudflare) satisfies it, and a
- *  local fetch — cli-backend's — satisfies it too. */
+/** Structural: `env.ASSETS` and cli-backend's local fetch both satisfy it. */
 export interface AssetFetcher {
   fetch(input: Request): Promise<Response>;
 }
 
-/**
- * Fetch a published asset, or null when this deployment does not contain it.
- *
- * Null covers every "not really there" case: a non-2xx from the asset worker
- * and the single-page-application fallback (an HTML body under the requested
- * path). Callers ask only for non-HTML files, so HTML is always the impostor.
- */
+/** Null for a non-2xx or an HTML body (the SPA fallback); callers only ask for non-HTML files. */
 export async function fetchDeployedAsset(
   env: { readonly ASSETS: AssetFetcher },
   base: string | URL,
@@ -78,9 +56,7 @@ export async function fetchDeployedAsset(
   return res;
 }
 
-/** The served build's `{version, sha, builtAt}`, or null when the deployment
- *  shipped no (or a malformed) build stamp — which means its asset bundle is
- *  incomplete and its CLI download endpoints are broken. */
+/** Null when the build stamp is missing or malformed. */
 export async function readBuildStamp(env: { readonly ASSETS: AssetFetcher }, base: string | URL): Promise<BuildStamp | null> {
   const res = await fetchDeployedAsset(env, base, CLI_VERSION_PATH);
 
