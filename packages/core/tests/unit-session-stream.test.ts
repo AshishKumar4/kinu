@@ -92,6 +92,27 @@ test('a step finishing while the turn settles seals each container once', async 
   } finally { s.testSql.close(); }
 });
 
+test('a step that finishes after the turn settled keeps the settled record', async () => {
+  // The other order of the race above: the consumer failed and the turn
+  // settled first, then the SDK's step finish arrives with a final message.
+  // What streamed is the record, as `settle` says; the late message neither
+  // re-seals the container nor throws the step away.
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('t1');
+    await stream.nativePart({ type: 'text-start', id: '0' });
+    await stream.nativePart({ type: 'text-delta', id: '0', text: 'partial' });
+    await stream.settle();
+    expect(s.open()).toEqual([]);
+
+    await stream.nativeStep([{ role: 'assistant', content: [{ type: 'text', text: 'partial answer' }] }]);
+    expect(s.open()).toEqual([]);
+    expect((await s.history.materialize()).messages.at(-1))
+      .toEqual({ role: 'assistant', content: [{ type: 'text', text: 'partial' }] });
+  } finally { s.testSql.close(); }
+});
+
 test('an admission the store refuses seals nothing of a live stream', async () => {
   const s = setup();
 

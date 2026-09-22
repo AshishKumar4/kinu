@@ -41,6 +41,7 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
+import { webHeaders } from '../evals/public-session';
 
 const SUITE = 'First-run · agent-chats-persist';
 
@@ -74,7 +75,13 @@ function announce(subgoals: readonly EvalSubgoal[]): readonly EvalSubgoal[] {
 
 afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
-const CreatedSchema = v.object({ name: v.string() });
+/** What `createSubordinateAgent` answers with, read for the two identities
+ *  the pane uses: the name its socket is addressed by, the actor id its
+ *  history is paged by. */
+const CreatedSchema = v.object({
+  name: v.string(),
+  subordinate: v.object({ actorReference: v.object({ actorId: v.string() }) }),
+});
 
 const RosterSchema = v.array(v.object({ name: v.string(), status: v.optional(v.string()) }));
 
@@ -122,6 +129,7 @@ describe(SUITE, () => {
           }
 
           const names: string[] = [];
+          const actorIds: string[] = [];
 
           for (let index = 0; index < SAID.length; index += 1) {
             const answer = await ask(first, 'createSubordinateAgent', []);
@@ -138,6 +146,7 @@ describe(SUITE, () => {
             }
 
             names.push(created.output.name);
+            actorIds.push(created.output.subordinate.actorReference.actorId);
           }
 
           subgoals.push({
@@ -223,8 +232,25 @@ describe(SUITE, () => {
           const reachable: string[] = [];
           const lost: string[] = [];
 
+          // The pane's two reads, exactly as the client makes them: the SDK's
+          // own `get-messages` seed on the actor's socket path (use-kinu.ts,
+          // `hostedActorSocketPath`), and its pager, `getChatHistoryPage`
+          // with the pane's actor id (use-chat-thread.ts). A page request
+          // WITHOUT the actor id answers the workspace's own rows by
+          // contract, so a row that omitted it read an empty workspace chat
+          // as a lost conversation — measured 2026-09-22 on 78f345bf1.
           for (const [index, name] of names.entries()) {
-            const child = open(`${room}/${hostedActorSocketPath(name)}`);
+            const path = `${room}/${hostedActorSocketPath(name)}`;
+            const wanted = SAID[index] ?? '';
+            const seed = await fetch(new URL(`${path}/get-messages`, plan.origin), { headers: webHeaders(plan.identity) });
+            const seeded = seed.ok ? JSON.stringify(await seed.json()) : '';
+
+            if (!seeded.includes(wanted)) {
+              lost.push(`${name}: the seed on its own path (${String(seed.status)}) came back without the words said in it`);
+              continue;
+            }
+
+            const child = open(path);
             live.push(child);
 
             if (!(await child.opened)) {
@@ -232,13 +258,12 @@ describe(SUITE, () => {
               continue;
             }
 
-            const historyAnswer = await ask(child, 'getChatHistoryPage', [{}]);
+            const historyAnswer = await ask(child, 'getChatHistoryPage', [{ actor: actorIds[index] ?? '', limit: 50 }]);
             const text = historyAnswer.ok ? historyText(historyAnswer.value) : '';
-            const wanted = SAID[index] ?? '';
 
             if (text.includes(wanted)) reachable.push(name);
             else if (!historyAnswer.ok) lost.push(`${name}: ${historyAnswer.failure.slice(0, 160)}`);
-            else lost.push(`${name}: its conversation came back without the words said in it`);
+            else lost.push(`${name}: its pager came back without the words said in it`);
           }
 
           subgoals.push({

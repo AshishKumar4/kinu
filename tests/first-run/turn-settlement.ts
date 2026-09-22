@@ -1,5 +1,5 @@
 import { absorbingRunId } from '@kinu.run/test-utils';
-import type { RunEvent } from '../../packages/core/src/index';
+import { decodeModelMessageValues, type RunEvent } from '../../packages/core/src/index';
 
 export type TurnSettlement = 'pending' | 'replied' | { readonly ended: string };
 
@@ -92,7 +92,9 @@ export function firstRunTurnSettlement(
 
   if (end === undefined || end.type !== 'run_end') return 'pending';
 
-  const replied = own.some((event) => event.type === 'step_finish' && event.messages?.some((message) =>
+  // A recorded step holds its messages in the session codec's form; read
+  // them back as the model messages they were.
+  const replied = own.some((event) => event.type === 'step_finish' && decodeModelMessageValues(event.messages ?? []).some((message) =>
     message.role === 'assistant' && (Array.isArray(message.content)
       ? message.content.some((part) => part.type === 'text' && part.text.trim().length > 0)
       : message.content.trim().length > 0)));
