@@ -16,7 +16,7 @@ import { compareSource, proveCommentOnly } from './comment-only';
 
 const BASE = `/** The sum. */
 export function add(a: number, b: number): number {
-  // add them
+  // exported and summed here; a line comment is never an eslint directive
   return a + b;
 }
 const big = 10n;
@@ -40,8 +40,8 @@ function edit(from: string, to: string): string {
   return BASE.replace(from, to);
 }
 
-test('a comment-only edit is proven, a removed JSX comment child included', () => {
-  const text = edit('/** The sum. */\n', '').replace('  // add them\n', '').replace('{/* a note */}', '');
+test('a comment-only edit is proven, a removed JSX comment child and `// exported …` prose included', () => {
+  const text = edit('/** The sum. */\n', '').replace(/ {2}\/\/ exported[^\n]*\n/, '').replace('{/* a note */}', '');
 
   expect(compareSource('view.tsx', BASE, text)).toMatchObject({ kind: 'comment-only' });
 });
