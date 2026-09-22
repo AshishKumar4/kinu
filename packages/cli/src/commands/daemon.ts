@@ -267,6 +267,13 @@ async function waitUntilRelease(
   }
 }
 
+/** The earlier of two wake times; either may be absent. */
+function soonest(current: number | null, candidate: number | null): number | null {
+  if (candidate === null) return current;
+
+  return current === null ? candidate : Math.min(current, candidate);
+}
+
 async function runDaemonLoop(): Promise<void> {
   ensureAgentHome();
   writePid(process.pid);
@@ -303,9 +310,7 @@ async function runDaemonLoop(): Promise<void> {
       for (const ref of listLocalRefsAllProjects()) {
         try {
           const result = await host.tick(ref.name, now);
-          const agentNext = result.nextAt;
-
-          if (agentNext !== null) nextAt = nextAt === null ? agentNext : Math.min(nextAt, agentNext);
+          nextAt = soonest(nextAt, result.nextAt);
         } catch (error) {
           log(`${ref.name}: ${renderThrownChain({ cause: error })}`);
         }

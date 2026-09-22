@@ -158,8 +158,12 @@ export async function runStartupUpdateCheck(opts: {
     };
 
     if (!shouldCheckForUpdate(ctx)) return null;
+    const origin = config.origin;
 
-    const served = await fetchServedVersion(config.origin!, opts.fetchImpl ?? fetch, STARTUP_PROBE_TIMEOUT_MS);
+    // `shouldCheckForUpdate` already refused a config with no origin.
+    if (origin === undefined) return null;
+
+    const served = await fetchServedVersion(origin, opts.fetchImpl ?? fetch, STARTUP_PROBE_TIMEOUT_MS);
     // Record the attempt either way so a persistently unreachable origin does
     // not retry on every single invocation.
     updateConfigFile((c) => {

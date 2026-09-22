@@ -288,6 +288,12 @@ const COMMANDS_PER_TURN = 40;
  * visit in sorted order and sessions oldest-file-first, so every run mines
  * the same corpus.
  */
+/** Keep the turn's first few shell commands, clipped, for the summary line. */
+function recordCommand(commands: string[], command: string | undefined): void {
+  if (command === undefined || commands.length >= COMMANDS_PER_TURN) return;
+  commands.push(command.slice(0, COMMAND_CHARS));
+}
+
 export function mineTranscripts(opts: MineOptions): MineResult {
   const skips: MineSkips = {
     unparsableLines: 0, emptyFiles: 0, nonInteractivePrompts: 0, sidechainEntries: 0,
@@ -471,11 +477,7 @@ function mineSession(
         if (block.type === 'tool_use' && block.name !== undefined) {
           const args = block.input ?? {};
           current.toolCalls.push({ name: block.name, args, result: null });
-          const command = stringValue(args.command);
-
-          if (command !== undefined && current.commands.length < COMMANDS_PER_TURN) {
-            current.commands.push(command.slice(0, COMMAND_CHARS));
-          }
+          recordCommand(current.commands, stringValue(args.command));
         }
       }
 
