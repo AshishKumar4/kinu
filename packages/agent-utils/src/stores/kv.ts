@@ -24,6 +24,12 @@ export interface KvStore {
   delete(key: string): Promise<void>;
 }
 
+type KvJson = string | number | boolean | null | readonly KvJson[] | { readonly [key: string]: KvJson };
+
+/** What a writer stores: a record, never a bare scalar, because every reader
+ *  parses it back with a schema and every schema here is over a record. */
+type KvRecord = { readonly [key: string]: KvJson };
+
 export async function readKvJson<Schema extends v.GenericSchema>(
   kv: KvStore,
   key: string,
@@ -36,10 +42,10 @@ export async function readKvJson<Schema extends v.GenericSchema>(
   return v.parse(schema, JSON.parse(raw));
 }
 
-export async function writeKvJson<Value>(
+export async function writeKvJson(
   kv: KvStore,
   key: string,
-  value: Value,
+  value: KvRecord,
   expiresAtMs: number,
 ): Promise<void> {
   const ttl = Math.max(MIN_TTL_SECONDS, Math.ceil((expiresAtMs - Date.now()) / 1000));
