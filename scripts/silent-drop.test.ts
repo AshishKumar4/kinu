@@ -266,6 +266,18 @@ export function readCredential(read: () => string): string | null {
     expect(after === undefined ? 'no site after the edit' : keyOf(after)).toBe(KEY);
   });
 
+  test('a rest-tuple rejection handler is read through its head', () => {
+    const head = `declare const p: Promise<void>;\ndeclare function wrap(o: { cause: unknown }): Error;\n`
+      + 'declare const log: { failure: (e: Error) => void; warn: (m: string) => void };\n';
+
+    const forwards = `${head}p.catch((...rejection: [unknown]) => {\n  log.failure(wrap({ cause: rejection[0] }));\n});\n`;
+    const drops = `${head}p.catch((...rejection: [unknown]) => {\n  log.warn('lane failed');\n});\n`;
+    const flattens = `${head}p.catch((...rejection: [unknown]) => {\n  log.warn(String(rejection[0]));\n});\n`;
+    expect(auditFile('a.ts', forwards)).toEqual([]);
+    expect(auditFile('a.ts', drops).map((drop) => drop.kind)).toEqual(['handler_absorbs']);
+    expect(auditFile('a.ts', flattens).map((drop) => drop.kind).sort()).toEqual(['handler_absorbs', 'message_only']);
+  });
+
   test('the live corpus is the one no-swallow measures, and it is not empty', () => {
     const sources = readSources();
 

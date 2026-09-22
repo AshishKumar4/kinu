@@ -267,11 +267,22 @@ const FORWARDING_PARENTS: ReadonlySet<string> = new Set([
   'LogicalExpression', 'ArrayExpression',
 ]);
 
-function fateOf(scope: SyntaxNode, binding: string): Fate {
+/** `rejection[0]` when the binding is a rest tuple, `(...rejection: [unknown])`:
+ *  the spelling `no-unknown-parameters` leaves a rejection handler, whose error
+ *  is the tuple's head. Any other use is the tuple itself flowing on. */
+function headOf(use: SyntaxNode): SyntaxNode {
+  const parent = use.parent;
+  const index = parent?.type === 'MemberExpression' && parent.children[0] === use ? parent.children[1] : undefined;
+
+  return index?.raw.type === 'Literal' && index.raw.value === 0 && parent !== undefined ? parent : use;
+}
+
+function fateOf(scope: SyntaxNode, binding: string, tuple = false): Fate {
   let forwarded = false;
   const projections: SyntaxNode[] = [];
-  walk(scope, (node) => {
-    if (node.type !== 'Identifier' || identifierText(node) !== binding) return;
+  walk(scope, (use) => {
+    if (use.type !== 'Identifier' || identifierText(use) !== binding) return;
+    const node = tuple ? headOf(use) : use;
     const parent = node.parent;
 
     if (parent === undefined) return;
@@ -536,9 +547,9 @@ export function auditFile(file: string, text: string): readonly Drop[] {
    *  and an inline rejection handler. One function because it is one defect.
    *  Answers whether the error was forwarded, which the caller needs to decide
    *  whether the handler also ABSORBED it. */
-  const auditHandler = (scope: SyntaxNode, binding: string | undefined): boolean => {
+  const auditHandler = (scope: SyntaxNode, binding: string | undefined, tuple = false): boolean => {
     if (binding === undefined) return false;
-    const { forwarded, projections } = fateOf(scope, binding);
+    const { forwarded, projections } = fateOf(scope, binding, tuple);
 
     if (forwarded || projections.length === 0) return forwarded;
     // The outermost projection, once per handler: three `error.message` reads
@@ -659,13 +670,16 @@ export function auditFile(file: string, text: string): readonly Drop[] {
         const block = blockBodyOf(handler);
         const scope = block ?? handler.children.at(-1);
 
+        const first = handler.children[0];
+        const rest = first?.type === 'RestElement' ? first.children[0] : undefined;
+
         const parameter = handler.children.length > 1
-          ? identifierText(handler.children[0] ?? handler)
+          ? identifierText(rest ?? first ?? handler)
           : undefined;
 
         const own = block === undefined ? [] : ownNodes(block);
         const rethrows = own.some((statement) => statement.type === 'ThrowStatement');
-        const forwarded = scope === undefined ? false : auditHandler(scope, parameter);
+        const forwarded = scope === undefined ? false : auditHandler(scope, parameter, rest !== undefined);
 
         // A body that is empty, or a bare sentinel return, is `no-sentinel-catch`'s.
         // What is left — a handler that runs statements, forwards nothing and
