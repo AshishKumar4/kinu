@@ -50,6 +50,12 @@ const ProgrammaticMetadataSchema = v.looseObject({
   count: v.optional(v.number()),
 });
 
+/** A metadata string as a card field. A field carried as an empty string names
+ *  nothing, so it takes the default an absent one takes. */
+function cardField(value: string | undefined, fallback: string): string {
+  return value === undefined || value === '' ? fallback : value;
+}
+
 const SignalCardEventSchema = v.variant('state', [
   v.object({ type: v.literal('signal_card'), id: v.string(), state: v.picklist(['shown', 'undelivered']) }),
   v.object({
@@ -87,9 +93,11 @@ const SignalCardEventSchema = v.variant('state', [
  * The advisor's note gets its own card because its severity is the one thing
  * a reader needs at a glance, and the `system_event` fold would hide it.
  */
-export function classifyProgrammaticTurn<Metadata>(
-  metadata: Metadata, id?: string,
+export function classifyProgrammaticTurn(
+  row: { metadata: unknown; id?: string },
 ): ClassifiedProgrammaticTurn | null {
+  const { metadata, id } = row;
+
   if (turnAuthor({ id, metadata }) === "operator") return null;
   const parsed = v.safeParse(ProgrammaticMetadataSchema, metadata);
   const turn = parsed.success ? parsed.output : {};
@@ -102,13 +110,13 @@ export function classifyProgrammaticTurn<Metadata>(
     case "background_job":
       return {
         kind: "background_job",
-        jobKind: turn.kind || "task",
-        status: turn.status || "completed",
+        jobKind: cardField(turn.kind, "task"),
+        status: cardField(turn.status, "completed"),
       };
     case "deferred_approval":
       return {
         kind: "deferred_approval",
-        decision: turn.decision || "decided",
+        decision: cardField(turn.decision, "decided"),
         count: turn.count ?? 1,
       };
     case ADVISOR_SIGNAL_KIND:
@@ -116,26 +124,28 @@ export function classifyProgrammaticTurn<Metadata>(
         kind: "advisor",
         severity: isAdvisorSeverity(turn.advisorSeverity) ? turn.advisorSeverity : DEFAULT_ADVISOR_MIN_SEVERITY,
       };
+    case undefined:
     default:
-      return { kind: "system_event", event: turn.kinuEvent || "system" };
+      return { kind: "system_event", event: cardField(turn.kinuEvent, "system") };
   }
 }
 
 /** The signal id a programmatic message carries, joining it to its card. */
-export function messageSignalId<Metadata>(metadata: Metadata): string | null {
-  const parsed = v.safeParse(v.looseObject({ [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()) }), metadata);
+export function messageSignalId(row: { metadata: unknown }): string | null {
+  const parsed = v.safeParse(v.looseObject({ [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()) }), row.metadata);
 
   if (!parsed.success) return null;
+  const id = parsed.output[SIGNAL_ID_METADATA_KEY];
 
-  return parsed.output[SIGNAL_ID_METADATA_KEY] || null;
+  return id === undefined || id === '' ? null : id;
 }
 
 /** Whether a durable user row is one the agent was STEERED with mid-turn (the
  *  actor stamps `kinuSteer` when it persists a drained steer). It is a real
  *  user message either way — this only decides whether the thread explains why
  *  it appears inside another turn's work. */
-export function isSteeredMessage<Metadata>(metadata: Metadata): boolean {
-  const parsed = v.safeParse(v.looseObject({ kinuSteer: v.optional(v.boolean()) }), metadata);
+export function isSteeredMessage(row: { metadata: unknown }): boolean {
+  const parsed = v.safeParse(v.looseObject({ kinuSteer: v.optional(v.boolean()) }), row.metadata);
 
   return parsed.success && parsed.output.kinuSteer === true;
 }
@@ -186,8 +196,8 @@ export function applySignalCard(
 }
 
 /** Parse a broadcast frame into a card event, or null when it is not one. */
-export function parseSignalCardEvent<Value>(value: Value): SignalCardEvent | null {
-  const parsed = v.safeParse(SignalCardEventSchema, value);
+export function parseSignalCardEvent(frame: { value: unknown }): SignalCardEvent | null {
+  const parsed = v.safeParse(SignalCardEventSchema, frame.value);
 
   return parsed.success ? parsed.output : null;
 }

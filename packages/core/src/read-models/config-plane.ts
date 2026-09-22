@@ -15,6 +15,8 @@
 import * as v from 'valibot';
 import { DEFAULT_CONFIG } from '../config';
 import type { AgentConfigStore, ShellApprovalMode } from '../config/store';
+import type { ApprovalGrant } from '../safety/approval-gate';
+import type { JsonValue } from '../utils/json';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../strategy/effort';
 import { ADVISOR_SEVERITIES, type AdvisorSeverity } from '../advisor/review';
 
@@ -93,8 +95,11 @@ export interface ReasoningEffortWrite<Effort extends ReasoningEffort | null> { o
 
 /** Null clears the setting: the tier's level applies again. */
 export function setReasoningEffort(config: AgentConfigStore, effort: null): ReasoningEffortWrite<null>;
-export function setReasoningEffort<Effort>(config: AgentConfigStore, effort: Effort): ReasoningEffortWrite<ReasoningEffort>;
-export function setReasoningEffort<Effort>(config: AgentConfigStore, effort: Effort | null): ReasoningEffortWrite<ReasoningEffort | null> {
+/** Anything else is wire input this setter is the validator for: the parameter
+ *  stays as wide as what a transport can deliver, because a type no bad value
+ *  can inhabit would make the parse below unreachable. */
+export function setReasoningEffort(config: AgentConfigStore, effort: JsonValue): ReasoningEffortWrite<ReasoningEffort>;
+export function setReasoningEffort(config: AgentConfigStore, effort: JsonValue): ReasoningEffortWrite<ReasoningEffort | null> {
   if (effort === null) {
     config.setReasoningEffort(null);
 
@@ -103,7 +108,9 @@ export function setReasoningEffort<Effort>(config: AgentConfigStore, effort: Eff
 
   const parsed = v.safeParse(ReasoningEffortSchema, effort);
 
-  if (!parsed.success) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
+  // The refused value verbatim when it is text, and its JSON otherwise: an
+  // operator reading this needs to recognise what they sent.
+  if (!parsed.success) throw new Error(`Invalid reasoning effort: ${v.is(v.string(), effort) ? effort : JSON.stringify(effort)}`);
   config.setReasoningEffort(parsed.output);
 
   return { ok: true, effort: parsed.output };
@@ -157,7 +164,7 @@ export function getShellApprovalGrants(config: AgentConfigStore) {
  *  taken back. No `onChanged`: unlike the approval MODE, a grant binds nothing
  *  at tool-build time — the gate reads grants live, so a revocation takes
  *  effect on the very next command. */
-export function revokeShellApprovalGrants<Grants>(config: AgentConfigStore, grants: Grants) {
+export function revokeShellApprovalGrants(config: AgentConfigStore, grants: readonly ApprovalGrant[]) {
   const parsed = v.safeParse(v.array(v.object({ rule: v.string(), executor: v.string() })), grants);
 
   if (!parsed.success) throw new Error('grants must be an array of { rule, executor }');
@@ -172,7 +179,7 @@ export function getAlwaysActiveSkills(config: AgentConfigStore) {
 }
 
 /** Pin a set of skills. An empty list clears the pin. */
-export function setAlwaysActiveSkills<Names>(config: AgentConfigStore, names: Names) {
+export function setAlwaysActiveSkills(config: AgentConfigStore, names: JsonValue | readonly JsonValue[]) {
   const array = v.safeParse(ArrayBoundarySchema, names);
 
   if (!array.success) throw new Error('names must be a string array');

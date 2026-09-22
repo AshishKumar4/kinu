@@ -94,6 +94,13 @@ export interface NodeTranscriptView {
   readonly codeUsed: string | null;
 }
 
+/** Which node, in which run. The pair travels together because a node id alone
+ *  does not identify a node: a workspace accumulates every tree it ever grew. */
+export interface NodeTranscriptRef {
+  readonly runId: string;
+  readonly nodeId: string;
+}
+
 /**
  * One node's transcript, from whichever store holds it.
  *
@@ -104,11 +111,10 @@ export interface NodeTranscriptView {
 export function readNodeTranscript(
   sql: SqlExecutor,
   actor: ActorHandle,
-  runId: string,
-  nodeId: string,
+  node: NodeTranscriptRef,
   request: PageRequest = {},
 ): NodeTranscriptView | null {
-  return readHeadTranscript(sql, actor, runId, nodeId, request) ?? readRolloutTranscript(sql, actor, runId, nodeId);
+  return readHeadTranscript(sql, actor, node, request) ?? readRolloutTranscript(sql, actor, node);
 }
 
 /** A row either store can be walked by: both key their parent the same way. */
@@ -151,10 +157,10 @@ function ancestorCrumbs<Row extends Branchy>(
 function readHeadTranscript(
   sql: SqlExecutor,
   actor: ActorHandle,
-  runId: string,
-  nodeId: string,
+  node: NodeTranscriptRef,
   request: PageRequest,
 ): NodeTranscriptView | null {
+  const { runId, nodeId } = node;
   const journal = new HeadJournal(sql, actor);
   // The run's head rows carry the parent chain; the trace is its own read. Three
   // reads rather than one because only one of them is per-head, and a reader who
@@ -168,7 +174,7 @@ function readHeadTranscript(
 
   if (!head) return null;
 
-  const path = ancestorCrumbs(row, rows, (head) => head.task);
+  const path = ancestorCrumbs(row, rows, (ancestor) => ancestor.task);
   const counted = journal.countSteps(nodeId);
 
   return {
@@ -196,9 +202,9 @@ function readHeadTranscript(
 function readRolloutTranscript(
   sql: SqlExecutor,
   actor: ActorHandle,
-  runId: string,
-  nodeId: string,
+  ref: NodeTranscriptRef,
 ): NodeTranscriptView | null {
+  const { runId, nodeId } = ref;
   const nodes = readSearchTree(sql, actor, runId);
   const node = nodes.find((candidate) => candidate.id === nodeId);
 

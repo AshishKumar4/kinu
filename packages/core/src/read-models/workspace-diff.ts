@@ -105,8 +105,11 @@ export async function walkWorkspaceTextFiles(
   // tree can never hide the authored files beside it at the workspace root.
   const directories = [''];
 
-  while (directories.length > 0) {
-    const dir = directories.shift()!;
+  // A cursor rather than a shift: the queue grows as directories are found, and
+  // reading it in index order is the same breadth-first walk with no read that
+  // can come back empty.
+  for (let next = 0; next < directories.length; next++) {
+    const dir = directories[next];
     const children: string[] = [];
     let names: string[];
 

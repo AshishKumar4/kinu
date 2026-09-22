@@ -98,7 +98,7 @@ const STATIC_PRIORITY = ["device", "sandbox"];
 
 export function pickDefaultExecutor(executors: ExecutorAvailability[], lastActive?: string | null): string {
   const isActive = (name: string) => executors.some((e) =>
-    e.name === name && e.available && (e.active || e.status === "active"));
+    e.name === name && e.available && (e.active === true || e.status === "active"));
 
   if (lastActive && isActive(lastActive)) return lastActive;
 

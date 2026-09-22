@@ -77,7 +77,7 @@ const ProvisionErrorSchema = v.object({
 
 /** Try to parse `{error:'runtime_not_provisioned', runtime, message}` from a
  *  string-ified tool output. Returns null if the output doesn't match. */
-export function parseProvisionError<Output>(output: Output):
+export function parseProvisionError(output: JsonValue | undefined):
   { runtime: string; message: string } | null {
   const text = v.safeParse(v.string(), output);
 

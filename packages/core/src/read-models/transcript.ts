@@ -87,8 +87,8 @@ const SteerRowSchema = v.looseObject({
  * index existed. It stays a top-level bubble rather than being guessed into a
  * position — a wrong position is a worse claim than an honest one at the end.
  */
-function steerRowStep<Metadata>(metadata: Metadata): number | null {
-  const parsed = v.safeParse(SteerRowSchema, metadata ?? {});
+function steerRowStep(row: { metadata: unknown }): number | null {
+  const parsed = v.safeParse(SteerRowSchema, row.metadata ?? {});
 
   if (!parsed.success || parsed.output[STEER_METADATA_KEY] !== true) return null;
   const step = parsed.output[STEER_STEP_METADATA_KEY];
@@ -133,7 +133,7 @@ export function extendTranscript(
   let pending = [...fold.pending];
 
   for (const message of messages) {
-    const step = message.role === 'user' ? steerRowStep(message.metadata) : null;
+    const step = message.role === 'user' ? steerRowStep({ metadata: message.metadata }) : null;
 
     if (step !== null) {
       steerRowIds.add(message.id);
@@ -206,7 +206,7 @@ function attachLive(
   if (live.length === 0) return entries;
   const last = entries.length - 1;
 
-  if (last < 0 || entries[last]!.message.role !== 'assistant') return entries;
+  if (last < 0 || entries[last].message.role !== 'assistant') return entries;
 
   return entries.map((entry, index) => index === last
     ? { message: entry.message, steers: [...entry.steers, ...live] }
@@ -234,7 +234,10 @@ export function segmentBySteers(
 ): readonly TurnSegment[] {
   if (steers.length === 0) return [{ steer: null, parts }];
   const boundaries: number[] = [];
-  parts.forEach((part, index) => { if (part.type === 'step-start') boundaries.push(index); });
+
+  for (const [index, part] of parts.entries()) {
+    if (part.type === 'step-start') boundaries.push(index);
+  }
 
   const segments: TurnSegment[] = [];
   let cursor = 0;

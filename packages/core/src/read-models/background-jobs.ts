@@ -19,6 +19,7 @@
 import type { ToolSet } from 'ai';
 
 import type { BackgroundJob, BackgroundJobStore } from '../jobs/store';
+import type { BackgroundRetryRequest } from '../jobs/runner';
 import type { WorkMode } from '../types/turn';
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
 import { resumableAgentsInput } from '../delegation/agents-tool';
@@ -30,7 +31,7 @@ import { renderThrownChain } from '../obs/index';
  *  was not given. */
 export interface BackgroundJobControl {
   cancel(jobId: string): Promise<boolean>;
-  createRetry(sourceId: string, kind: string, input: JsonValue, mode: WorkMode, controller: AbortController): string | null;
+  createRetry(request: BackgroundRetryRequest): string | null;
   detach(jobId: string, kind: string, promise: Promise<JsonValue | undefined>): void;
 }
 
@@ -125,7 +126,7 @@ export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string):
 
   if (translated) input = decodeJsonValue({ value: translated });
   const controller = new AbortController();
-  const newId = deps.jobRunner.createRetry(jobId, job.kind, input, job.workMode, controller);
+  const newId = deps.jobRunner.createRetry({ sourceId: jobId, kind: job.kind, input, mode: job.workMode, controller });
 
   if (newId === null) {
     const replacement = deps.jobs.get(jobId)?.retriedBy;

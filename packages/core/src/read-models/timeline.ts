@@ -147,6 +147,25 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
       return { ...base, kind: 'llm-turn', label: `Turn ${e.turnIndex} done`, detail: turnUsageDetail(e.usage) };
     case 'run_end':
       return { ...base, kind: e.reason === 'aborted' ? 'abort' : 'other', label: e.reason ? `Run ended (${e.reason})` : 'Run ended', detail: e.error };
+    // Recorded for diagnosis rather than for reading: each is listed so a new
+    // event type is a finding here instead of arriving unnoticed as its own
+    // name. `default` stays for a row written before this union named it.
+    case 'step_partial':
+    case 'model_call':
+    case 'provider_wait':
+    case 'model_operation':
+    case 'db_op':
+    case 'context_edit':
+    case 'context_budget':
+    case 'file_edit':
+    case 'turn_steering':
+    case 'profile_resolution':
+    case 'completion_gate':
+    case 'craft_cycle':
+    case 'execution_recovery':
+    case 'approval_consumed':
+    case 'execution_escalation':
+    case 'budget_exhausted':
     default:
       return { ...base, kind: 'other', label: e.type };
   }
@@ -205,7 +224,9 @@ export function getRunTimeline(
   // WORKSPACE_RUN_ID, so the fallback cannot land on the pseudo-run a
   // between-turn model call is filed under.
   const recent = deps.events.listRunsBefore(null, 1)[0]?.runId;
-  const runId = opts?.runId || deps.currentRunId || recent;
+  // First candidate that names a run: an empty id names none, so it falls
+  // through to the next exactly as an absent one does.
+  const runId = [opts?.runId, deps.currentRunId, recent].find((id) => id !== null && id !== undefined && id !== '');
   const spans: TimelineSpan[] = [];
 
   // 1) Durable per-run events for the focused run.
@@ -242,8 +263,8 @@ export function getRunTimeline(
   // 4) Background jobs — auto-detached >30s tool calls, as first-class spans
   // (the run that "ended" because work moved to the background must say so).
   for (const j of deps.jobs.list(limit)) {
-    const detail = j.status === 'running' ? 'running in background'
-      : j.error ? `${j.status}: ${j.error}` : j.status;
+    const failure = j.error === null || j.error === '' ? null : `${j.status}: ${j.error}`;
+    const detail = j.status === 'running' ? 'running in background' : (failure ?? j.status);
 
     spans.push({
       ts: j.createdAt, kind: 'background',

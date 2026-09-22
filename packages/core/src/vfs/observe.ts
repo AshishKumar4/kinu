@@ -109,7 +109,7 @@ export function observeWrites<T extends VFS>(vfs: T, observer: WriteObserver): T
     if (baseline) observer.record({ path, ...baseline, after });
   };
 
-  const conditional = vfs.writeFileIfRevision;
+  const conditional = vfs.writeFileIfRevision?.bind(vfs);
 
   const wrapped: T = {
     ...vfs,

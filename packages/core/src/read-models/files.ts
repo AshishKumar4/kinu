@@ -157,7 +157,8 @@ export class ExecutorFileUpload {
 
     if (!('assembled' in step)) return step;
 
-    return writeExecutorFileOp(this.router, this.executorId, this.path, step.assembled, this.expectedRevision);
+    return writeExecutorFileOp(this.router, this.executorId, this.path,
+      { bytes: step.assembled, expectedRevision: this.expectedRevision });
   }
 
   abort(): void {
@@ -245,7 +246,7 @@ export async function pumpUploadChunks<Result>(
     let at = 0;
 
     while (at < want) {
-      const part = pending[0]!;
+      const part = pending[0];
       const count = Math.min(part.byteLength, want - at);
       out.set(part.subarray(0, count), at);
 
@@ -560,6 +561,13 @@ export async function readExecutorFile(
   }
 }
 
+/** The bytes to land, and the revision the write must still find when it lands.
+ *  No expected revision writes unconditionally. */
+export interface ExecutorFileWrite {
+  readonly bytes: Uint8Array;
+  readonly expectedRevision?: VfsRevision;
+}
+
 /**
  * Write one uploaded file into an executor — binary-safe through the same raw
  * handle the reads use.
@@ -574,14 +582,14 @@ export async function writeExecutorFileOp(
   router: ExecutorFileLookup,
   executorId: string,
   path: string,
-  bytes: Uint8Array,
-  expectedRevision?: VfsRevision,
+  upload: ExecutorFileWrite,
 ): Promise<ExecutorWriteResult> {
   if (!path || path.endsWith('/')) return { error: 'file path required' };
   const vfs = executorFiles(router, executorId);
 
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
-  const conditional = vfs.writeFileIfRevision;
+  const { bytes, expectedRevision } = upload;
+  const conditional = vfs.writeFileIfRevision?.bind(vfs);
 
   if (expectedRevision === undefined) {
     try {

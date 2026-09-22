@@ -121,6 +121,13 @@ const DEFAULT_OCCUPANT_PAGE = 50;
  */
 const MAX_RECORD_PAGE = 200;
 
+/** Where a cell or occupant page starts and how many rows it may carry. Absent
+ *  asks for the first page at that read's own default size. */
+export interface RecordPageRequest {
+  readonly cursor?: SeekCursor | null;
+  readonly limit?: number;
+}
+
 /**
  * Every comparable set the store holds, most recently written FIRST.
  *
@@ -179,7 +186,7 @@ export function listRecordObjectives(
      LIMIT ${page + 1}`;
 
   return mapPage(seekPage(groups, page, objectiveCursor), (rows) => rows.map((row) => {
-    const direction = asDirection(row.direction);
+    const direction = storedMember('direction', OBJECTIVE_DIRECTIONS, row.direction);
     const handle = { objectiveId: row.objective_id, floorDigest: row.floor_digest };
 
     return {
@@ -187,13 +194,13 @@ export function listRecordObjectives(
       metric: row.metric,
       unit: row.unit,
       direction,
-      scale: asScale(row.scale),
+      scale: storedMember('scale', OBJECTIVE_SCALES, row.scale),
       // COUNT DISTINCT skips NULLs, so the no-partition cell is added back explicitly:
       // it is one cell, and counting it as none would report an unpartitioned set as
       // covering nothing.
       cells: row.named_cells + (row.unpartitioned > 0 ? 1 : 0),
       rows: row.row_count,
-      best: recordsUnder(sql, actor, handle, direction, 1)[0] ?? null,
+      best: recordsUnder(sql, actor, handle, { direction, limit: 1 })[0] ?? null,
       lastRecordedAt: row.last_recorded_at,
     };
   }));
@@ -225,13 +232,13 @@ export function listRecordCells(
   sql: SqlExecutor,
   actor: ActorHandle,
   handle: RecordObjectiveHandle,
-  cursor: SeekCursor | null = null,
-  limit = DEFAULT_CELL_PAGE,
+  request: RecordPageRequest = {},
 ): Page<RecordCellSummary> {
   const direction = directionOf(sql, actor, handle);
 
   if (direction === null) return { status: 'end', items: [] };
-  const page = boundedInt(limit, DEFAULT_CELL_PAGE, 1, MAX_RECORD_PAGE);
+  const page = boundedInt(request.limit, DEFAULT_CELL_PAGE, 1, MAX_RECORD_PAGE);
+  const cursor = request.cursor ?? null;
   const after = cursor === null ? null : cellAnchorOf(sql, actor, handle, cursor.after);
   const from = after === null ? 0 : 1;
   const descriptor = after === null ? null : after.descriptor;
@@ -251,7 +258,7 @@ export function listRecordCells(
   return mapPage(seekPage(cells, page, cellCursor), (rows) => rows.map((row) => ({
     descriptor: row.descriptor,
     occupants: row.occupants,
-    elite: recordsInCell(sql, actor, { ...handle, descriptor: row.descriptor }, direction, null, 1)[0] ?? null,
+    elite: recordsInCell(sql, actor, { ...handle, descriptor: row.descriptor }, { direction, seek: null, limit: 1 })[0] ?? null,
   })));
 }
 
@@ -269,16 +276,16 @@ export function readRecordCell(
   sql: SqlExecutor,
   actor: ActorHandle,
   handle: RecordCellHandle,
-  cursor: SeekCursor | null = null,
-  limit = DEFAULT_OCCUPANT_PAGE,
+  request: RecordPageRequest = {},
 ): Page<ExplorationRecord> {
   const direction = directionOf(sql, actor, handle);
 
   if (direction === null) return { status: 'end', items: [] };
-  const page = boundedInt(limit, DEFAULT_OCCUPANT_PAGE, 1, MAX_RECORD_PAGE);
+  const page = boundedInt(request.limit, DEFAULT_OCCUPANT_PAGE, 1, MAX_RECORD_PAGE);
+  const cursor = request.cursor ?? null;
   const seek = cursor === null ? null : occupantSeek(sql, actor, handle, cursor.after);
 
-  return seekPage(recordsInCell(sql, actor, handle, direction, seek, page + 1), page,
+  return seekPage(recordsInCell(sql, actor, handle, { direction, seek, limit: page + 1 }), page,
     (record) => record.artifactDigest);
 }
 
@@ -419,15 +426,17 @@ function parseAnchor<T>(what: string, after: string, schema: v.GenericSchema<T>)
   }
 }
 
+const OBJECTIVE_DIRECTIONS: readonly ObjectiveDirection[] = ['minimise', 'maximise'];
+
+const OBJECTIVE_SCALES: readonly ObjectiveScale[] = ['linear', 'log'];
+
 /** A stored direction or scale outside its union is a corrupt row, and a corrupt row is
  *  not a row that measured nothing — the discipline `records.ts`'s `decode` applies to
  *  `measured_json`. */
-function asDirection(stored: string): ObjectiveDirection {
-  if (stored === 'minimise' || stored === 'maximise') return stored;
-  throw new Error(`exploration_records.direction is ${JSON.stringify(stored)}, not a direction`);
-}
+function storedMember<Member extends string>(column: string, admitted: readonly Member[], stored: string): Member {
+  const member = admitted.find((candidate) => candidate === stored);
 
-function asScale(stored: string): ObjectiveScale {
-  if (stored === 'linear' || stored === 'log') return stored;
-  throw new Error(`exploration_records.scale is ${JSON.stringify(stored)}, not a scale`);
+  if (member === undefined) throw new Error(`exploration_records.${column} is ${JSON.stringify(stored)}, not a ${column}`);
+
+  return member;
 }

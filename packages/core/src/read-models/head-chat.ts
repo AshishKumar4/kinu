@@ -15,7 +15,7 @@
  * so applying one is a concatenation and nothing else.
  */
 import type { UIMessage } from "ai";
-import type { HeadStep, HeadStepToolCall } from '../heads/types';
+import type { HeadStep } from '../heads/types';
 
 /** What a running head has produced but not yet journalled, in the two streams
  *  the provider separates. Both halves, because the chat draws both. */
@@ -103,12 +103,13 @@ export function stepAsMessage(step: HeadStep, index: number, headId: string): UI
   if (step.reasoning) parts.push({ type: "reasoning", text: step.reasoning, state: "done" });
 
   if (step.text) parts.push({ type: "text", text: step.text, state: "done" });
-  step.toolCalls.forEach((call: HeadStepToolCall, callIndex) => {
+
+  for (const [callIndex, call] of step.toolCalls.entries()) {
     const toolCallId = `${headId}-s${index}-t${callIndex}`;
     parts.push(call.output === undefined
       ? { type: "dynamic-tool", toolName: call.name, toolCallId, state: "input-available", input: call.input }
       : { type: "dynamic-tool", toolName: call.name, toolCallId, state: "output-available", input: call.input, output: call.output });
-  });
+  }
 
   return { id: `${headId}-s${index}`, role: "assistant", parts };
 }

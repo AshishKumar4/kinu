@@ -28,5 +28,5 @@ export function cycleTakeIndex(current: number, delta: number, count: number): n
 
 /** A set is comparable when there is a genuine choice to make. */
 export function hasComparableTakes(set: AlternateTakeSet | undefined | null): set is AlternateTakeSet {
-  return !!set && set.candidates.length >= 2;
+  return (set?.candidates.length ?? 0) >= 2;
 }

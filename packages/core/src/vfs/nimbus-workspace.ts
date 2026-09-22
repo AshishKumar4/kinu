@@ -417,107 +417,105 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   let booting: Promise<NimbusWorkspace> | undefined;
 
   const open = async (): Promise<NimbusWorkspace> => {
-    if (!booting) {
-      booting = (async (): Promise<NimbusWorkspace> => {
-        try {
-          const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
-          // The pid base is THIS generation's floor, adopted before anything
-          // spawns: opening the filesystem revokes every append writer at or
-          // below `generation * PID_GEN_STRIDE`, so a supervisor left at zero
-          // would hand out pids whose write authority the boot has withdrawn.
-          // Fabric's allocator swallows a storage failure and stays on the
-          // previous value — a first boot at zero, a later one at the last
-          // incarnation's floor, which is the pid repeat the counter exists
-          // to prevent. So the counter is read BEFORE the adopt (the read
-          // also lets the storage's own error surface, which fabric would
-          // hide) and the adopted value must be the bump of it: fabric takes
-          // the bump only after its put resolved, so anything else is a bump
-          // that did not persist, and the open is refused whatever the
-          // previous value was.
-          // Fabric adopts once per isolate: a boot retried in the same
-          // isolate (the first open failed after the adopt) keeps the
-          // generation it already holds, and that is the expected value.
-          const adopted = generation(opts.generation);
-          const before = adopted !== 0 ? null : v.parse(v.optional(v.number()), await opts.generation.storage.get(GENERATION_KEY)) ?? 0;
-          await adoptGeneration(opts.generation);
-          const generationNow = generation(opts.generation);
-          const expected = before === null ? adopted : before + 1;
+    booting ??= (async (): Promise<NimbusWorkspace> => {
+      try {
+        const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
+        // The pid base is THIS generation's floor, adopted before anything
+        // spawns: opening the filesystem revokes every append writer at or
+        // below `generation * PID_GEN_STRIDE`, so a supervisor left at zero
+        // would hand out pids whose write authority the boot has withdrawn.
+        // Fabric's allocator swallows a storage failure and stays on the
+        // previous value — a first boot at zero, a later one at the last
+        // incarnation's floor, which is the pid repeat the counter exists
+        // to prevent. So the counter is read BEFORE the adopt (the read
+        // also lets the storage's own error surface, which fabric would
+        // hide) and the adopted value must be the bump of it: fabric takes
+        // the bump only after its put resolved, so anything else is a bump
+        // that did not persist, and the open is refused whatever the
+        // previous value was.
+        // Fabric adopts once per isolate: a boot retried in the same
+        // isolate (the first open failed after the adopt) keeps the
+        // generation it already holds, and that is the expected value.
+        const adopted = generation(opts.generation);
+        const before = adopted !== 0 ? null : v.parse(v.optional(v.number()), await opts.generation.storage.get(GENERATION_KEY)) ?? 0;
+        await adoptGeneration(opts.generation);
+        const generationNow = generation(opts.generation);
+        const expected = before === null ? adopted : before + 1;
 
-          if (generationNow !== expected) throw new KinuError('unavailable', 'the workspace generation counter could not be persisted');
+        if (generationNow !== expected) throw new KinuError('unavailable', 'the workspace generation counter could not be persisted');
 
-          processes.setPidBase(generationNow * PID_GEN_STRIDE);
+        processes.setPidBase(generationNow * PID_GEN_STRIDE);
 
-          let creation: Parameters<typeof NimbusWorkspace.create>[0] = {
-            sql: opts.sql,
-            transactions: opts.transactions,
-            generation: generationNow,
-            cwd: WORKSPACE_ROOT,
-            env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
-            // The one process owner of this filesystem: the shell, every
-            // agent plane and a host's background processes allocate from
-            // it, so no two of them are ever handed the same pid.
-            processes,
-            // The embedder's fabric, stated once per isolate. A workspace
-            // whose host can run dynamic workers reaches them through this:
-            // the fabric mints every facet's `env.SUPERVISOR` binding from
-            // the composed entrypoint, and `ctx.exports` is adopted off
-            // `transactions` (in a Durable Object that IS `ctx`). Absent —
-            // the local CLI passes none — the workspace stays the
-            // filesystem, the shell and the coreutils, and anything needing
-            // a dynamic worker refuses before it spawns. First-write-wins
-            // per isolate, so passing it on every create is idempotent.
-            fabric: opts.fabric,
-          };
+        let creation: Parameters<typeof NimbusWorkspace.create>[0] = {
+          sql: opts.sql,
+          transactions: opts.transactions,
+          generation: generationNow,
+          cwd: WORKSPACE_ROOT,
+          env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
+          // The one process owner of this filesystem: the shell, every
+          // agent plane and a host's background processes allocate from
+          // it, so no two of them are ever handed the same pid.
+          processes,
+          // The embedder's fabric, stated once per isolate. A workspace
+          // whose host can run dynamic workers reaches them through this:
+          // the fabric mints every facet's `env.SUPERVISOR` binding from
+          // the composed entrypoint, and `ctx.exports` is adopted off
+          // `transactions` (in a Durable Object that IS `ctx`). Absent —
+          // the local CLI passes none — the workspace stays the
+          // filesystem, the shell and the coreutils, and anything needing
+          // a dynamic worker refuses before it spawns. First-write-wins
+          // per isolate, so passing it on every create is idempotent.
+          fabric: opts.fabric,
+        };
 
-          // A remote catalog makes every name it can satisfy an install-on-
-          // first-use stub; the supplied packages stay this module's own.
-          if (opts.runtimeSource !== undefined) {
-            creation = { ...creation, runtimeSource: opts.runtimeSource, runtimeInstall: 'on-demand' };
-          }
-
-          const workspace = await NimbusWorkspace.create(creation);
-
-          // Before the first command, and after the substrate's own
-          // registrations so a coreutil is never shadowed by a runtime bin of
-          // the same name.
-          const provisioning: Parameters<typeof provisionWorkspaceRuntimes>[0] = {
-            workspace,
-            runtimes: opts.runtimes ?? [],
-          };
-
-          if (opts.runtimeFacets !== undefined) provisioning.facets = opts.runtimeFacets;
-          await provisionWorkspaceRuntimes(provisioning);
-          const root = workspace.vfs.as(CRED_KERNEL);
-          const main = agentIdentity(opts.sql, MAIN_AGENT);
-          provisionAgentHome(root, MAIN_AGENT, main);
-          confineAgentTmp(workspace.vfs, MAIN_AGENT, main);
-          // Rebuild each live facet's temporary-path mapping after a reset.
-          restoreAgentTmpConfinements(opts.sql, root, workspace.vfs);
-          workspace.vfs.events.on((batch) => {
-            if (fileListeners.size === 0) return;
-            const paths = batch.map((event) => event.path);
-
-            for (const listener of fileListeners) listener(paths);
-          });
-
-          return workspace;
-        } catch (cause) {
-          // Clear the cache BEFORE rethrowing: this bundle lives for the whole
-          // actor isolate, and a cached rejection is poison with no expiry —
-          // every later read, exec, fork frame and archive walk re-awaits the
-          // same failure, and each user retry resets the eviction timer, so
-          // the retry defeats the only recovery path there was. A
-          // deterministic failure simply re-fails on the next open, which is
-          // the correct answer; a transient one gets its retry.
-          booting = undefined;
-          diagnostics.failure(
-            'workspace.boot_failed',
-            toKinuError({ doing: 'boot the Nimbus workspace', cause, otherwise: 'unavailable' }),
-          );
-          throw cause;
+        // A remote catalog makes every name it can satisfy an install-on-
+        // first-use stub; the supplied packages stay this module's own.
+        if (opts.runtimeSource !== undefined) {
+          creation = { ...creation, runtimeSource: opts.runtimeSource, runtimeInstall: 'on-demand' };
         }
-      })();
-    }
+
+        const workspace = await NimbusWorkspace.create(creation);
+
+        // Before the first command, and after the substrate's own
+        // registrations so a coreutil is never shadowed by a runtime bin of
+        // the same name.
+        const provisioning: Parameters<typeof provisionWorkspaceRuntimes>[0] = {
+          workspace,
+          runtimes: opts.runtimes ?? [],
+        };
+
+        if (opts.runtimeFacets !== undefined) provisioning.facets = opts.runtimeFacets;
+        await provisionWorkspaceRuntimes(provisioning);
+        const root = workspace.vfs.as(CRED_KERNEL);
+        const main = agentIdentity(opts.sql, MAIN_AGENT);
+        provisionAgentHome(root, MAIN_AGENT, main);
+        confineAgentTmp(workspace.vfs, MAIN_AGENT, main);
+        // Rebuild each live facet's temporary-path mapping after a reset.
+        restoreAgentTmpConfinements(opts.sql, root, workspace.vfs);
+        workspace.vfs.events.on((batch) => {
+          if (fileListeners.size === 0) return;
+          const paths = batch.map((event) => event.path);
+
+          for (const listener of fileListeners) listener(paths);
+        });
+
+        return workspace;
+      } catch (cause) {
+        // Clear the cache BEFORE rethrowing: this bundle lives for the whole
+        // actor isolate, and a cached rejection is poison with no expiry —
+        // every later read, exec, fork frame and archive walk re-awaits the
+        // same failure, and each user retry resets the eviction timer, so
+        // the retry defeats the only recovery path there was. A
+        // deterministic failure simply re-fails on the next open, which is
+        // the correct answer; a transient one gets its retry.
+        booting = undefined;
+        diagnostics.failure(
+          'workspace.boot_failed',
+          toKinuError({ doing: 'boot the Nimbus workspace', cause, otherwise: 'unavailable' }),
+        );
+        throw cause;
+      }
+    })();
 
     return await booting;
   };

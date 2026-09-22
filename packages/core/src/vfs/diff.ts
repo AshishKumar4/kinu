@@ -107,16 +107,16 @@ export function diffLines(before: string, after: string): LineDiff {
   const done = (): LineDiff =>
     dropped ? { lines, added, removed, truncated: true } : { lines, added, removed };
 
-  for (let k = 0; k < head; k++) emit('ctx', a[k]!);
+  for (let k = 0; k < head; k++) emit('ctx', a[k]);
 
   // One side of the differing region is empty — a pure insertion or deletion.
   // The common subsequence is empty by definition, so the answer is exact with
   // no table at any size. This is also the workspace-birth shape, where every
   // file is diffed against an empty baseline.
   if (n === 0 || m === 0) {
-    for (let k = 0; k < n; k++) emit('del', a[head + k]!);
+    for (let k = 0; k < n; k++) emit('del', a[head + k]);
 
-    for (let k = 0; k < m; k++) emit('add', b[head + k]!);
+    for (let k = 0; k < m; k++) emit('add', b[head + k]);
   } else {
     // lcs[i][j] = length of the longest common subsequence of mid-a[i:] and
     // mid-b[j:], indexed relative to the differing region.
@@ -127,26 +127,26 @@ export function diffLines(before: string, after: string): LineDiff {
 
     for (let i = n - 1; i >= 0; i--) {
       for (let j = m - 1; j >= 0; j--) {
-        lcs[i]![j] = a[head + i] === b[head + j]
-          ? lcs[i + 1]![j + 1]! + 1
-          : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
+        lcs[i][j] = a[head + i] === b[head + j]
+          ? lcs[i + 1][j + 1] + 1
+          : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
       }
     }
 
     let i = 0, j = 0;
 
     while (i < n && j < m) {
-      if (a[head + i] === b[head + j]) { emit('ctx', a[head + i]!); i++; j++; }
-      else if (lcs[i + 1]![j]! >= lcs[i]![j + 1]!) { emit('del', a[head + i]!); i++; }
-      else { emit('add', b[head + j]!); j++; }
+      if (a[head + i] === b[head + j]) { emit('ctx', a[head + i]); i++; j++; }
+      else if (lcs[i + 1][j] >= lcs[i][j + 1]) { emit('del', a[head + i]); i++; }
+      else { emit('add', b[head + j]); j++; }
     }
 
-    while (i < n) emit('del', a[head + i++]!);
+    while (i < n) emit('del', a[head + i++]);
 
-    while (j < m) emit('add', b[head + j++]!);
+    while (j < m) emit('add', b[head + j++]);
   }
 
-  for (let k = a.length - tail; k < a.length; k++) emit('ctx', a[k]!);
+  for (let k = a.length - tail; k < a.length; k++) emit('ctx', a[k]);
 
   return done();
 }
@@ -174,6 +174,18 @@ function carry(file: FileDiff, l: DiffLine): void {
   file.lines.push(l);
 }
 
+/** The file's status from the two absence facts. An absent before side is an
+ *  addition, an absent after side a removal; a file present on both sides
+ *  changed. Shared by the map form and the `git diff` parse, which learn the
+ *  same two facts from different evidence. */
+function statusOf(absentBefore: boolean, absentAfter: boolean): FileStatus {
+  if (absentBefore) return 'added';
+
+  if (absentAfter) return 'removed';
+
+  return 'changed';
+}
+
 /** Diff a workspace baseline against its current state — the cumulative
  *  change-set a review surface shows. Pure: the caller supplies the
  *  before/after path→content maps. Unchanged files are omitted; result sorted
@@ -187,7 +199,7 @@ export function computeWorkspaceDiff(baseline: Record<string, string>, current: 
     const after = current[path];
 
     if (before === after) continue;
-    const status: FileStatus = before === undefined ? 'added' : after === undefined ? 'removed' : 'changed';
+    const status = statusOf(before === undefined, after === undefined);
     out.push(fileDiff(path, status, diffLines(before ?? '', after ?? '')));
   }
 
@@ -203,6 +215,18 @@ export function fileDiff(path: string, status: FileStatus, d: LineDiff): FileDif
   return d.truncated
     ? { path, status, added, removed, lines, truncated: true }
     : { path, status, added, removed, lines };
+}
+
+/** The row a unified-diff body line carries, by its first column, or null when
+ *  the line belongs to no body. */
+function bodyKind(line: string): DiffLine['kind'] | null {
+  if (line.startsWith('+')) return 'add';
+
+  if (line.startsWith('-')) return 'del';
+
+  if (line.startsWith(' ')) return 'ctx';
+
+  return null;
 }
 
 /**
@@ -223,7 +247,7 @@ export function parseGitDiff(unified: string): FileDiff[] {
   const flush = () => {
     if (!cur) return;
     cur.path = newPath ?? oldPath ?? cur.path;
-    cur.status = isNew ? 'added' : isDeleted ? 'removed' : 'changed';
+    cur.status = statusOf(isNew, isDeleted);
     out.push(cur);
   };
 
@@ -276,8 +300,7 @@ export function parseGitDiff(unified: string): FileDiff[] {
     // counters, so a file past the limit stops SHOWING without stopping
     // COUNTING — a bound above them presents the undercount as the file's +/-
     // totals.
-    const kind: DiffLine['kind'] | null =
-      line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : line.startsWith(' ') ? 'ctx' : null;
+    const kind = bodyKind(line);
 
     if (kind === null) continue;
 
