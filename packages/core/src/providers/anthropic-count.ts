@@ -138,9 +138,12 @@ function toolResultBlock(part: ToolResultPart): Converted<CountBlock> {
       return { ok: true, value: { type: 'tool_result', tool_use_id: part.toolCallId, content: blocks } };
     }
 
-    default:
-      // `json`, `error-json`, `execution-denied` and anything the SDK adds
-      // later: the vendor serialises the value, and so does the wire.
+    // `json`, `error-json` and `execution-denied`: the vendor serialises the
+    // value, and so does the wire. No default — a part type the SDK adds later
+    // must fail the build here rather than be counted as something it is not.
+    case 'json':
+    case 'error-json':
+    case 'execution-denied':
       return {
         ok: true,
         value: {
@@ -235,7 +238,9 @@ function assistantBlocks(content: AssistantModelMessage['content']): Converted<C
         break;
       }
 
-      default:
+      // A pending approval is a control part with nothing to price; refused so
+      // the caller falls back rather than counting a body it did not send.
+      case 'tool-approval-request':
         return { ok: false, reason: `an assistant content part of type "${part.type}"` };
     }
   }

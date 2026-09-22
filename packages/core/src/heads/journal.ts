@@ -56,6 +56,31 @@ function parseArray<T>(json: string | null): T[] {
   return parsed;
 }
 
+/** A run's status when its root kept no row of its own: still running while any
+ *  head is; otherwise completed once the merge lands, else `partial` to surface
+ *  that the heads finished without a synthesis. */
+function runStatusOf(heads: readonly HeadRunHeadView[], merged: boolean): string {
+  if (heads.some((h) => h.status === 'running')) return 'running';
+
+  if (merged) return 'completed';
+
+  return heads.every((h) => h.status === 'completed') ? 'completed' : 'partial';
+}
+
+/** The `head_steps` columns a recorded step is read back from. */
+type StepRow = { text: string | null; reasoning: string | null; tool_calls_json: string | null };
+
+/** One stored trace row as the step it recorded. A NULL `reasoning` reads back
+ *  ABSENT and not empty: a model that wrote none and a model that wrote a blank
+ *  line are the same to a reader, and `HeadStep` spells that by omission. */
+function stepOf(row: StepRow): HeadStep {
+  return {
+    text: row.text ?? '',
+    reasoning: row.reasoning ?? undefined,
+    toolCalls: parseArray<HeadStepToolCall>(row.tool_calls_json),
+  };
+}
+
 /**
  * The stored usage columns as a {@link Usage}.
  *
@@ -109,12 +134,8 @@ function headViewOf(row: HeadViewRow): HeadRunHeadView {
     summary: row.summary, errorMessage: row.error_message,
     usage: storedUsage(row), wallClockMs: row.wall_clock_ms,
     spawnedAt: row.spawned_at, lastStepAt: row.last_step_at,
-    decisions: parseArray<{ question?: unknown; choice?: unknown; rationale?: unknown }>(row.decisions_json)
-      .map((d) => ({
-        question: String(d?.question ?? ''),
-        choice: String(d?.choice ?? ''),
-        rationale: String(d?.rationale ?? ''),
-      })),
+    decisions: parseArray<Decision>(row.decisions_json)
+      .map((d) => ({ question: d.question, choice: d.choice, rationale: d.rationale })),
   };
 }
 
@@ -507,15 +528,9 @@ export class HeadJournal {
   readSteps(headId: HeadId): HeadStep[] {
     this.actor.assertCurrent();
 
-    type Row = { text: string | null; reasoning: string | null; tool_calls_json: string | null };
-
-    return this.sql<Row>`
+    return this.sql<StepRow>`
       SELECT text, reasoning, tool_calls_json FROM head_steps
-      WHERE actor_id = ${this.actorId} AND head_id = ${headId} ORDER BY seq`.map((r) => ({
-        text: r.text ?? '',
-        reasoning: r.reasoning ?? undefined,
-        toolCalls: parseArray<HeadStepToolCall>(r.tool_calls_json),
-      }));
+      WHERE actor_id = ${this.actorId} AND head_id = ${headId} ORDER BY seq`.map(stepOf);
   }
 
   /** Reading bound and default for one trace page. A page is what one click
@@ -538,7 +553,7 @@ export class HeadJournal {
     const after = request.cursor?.after ?? null;
     const from = after === null ? null : this.stepAnchor(headId, after);
 
-    type Row = { id: string; text: string | null; reasoning: string | null; tool_calls_json: string | null };
+    type Row = StepRow & { id: string };
 
     return mapPage(seekPage(from === null
       ? this.sql<Row>`
@@ -547,11 +562,7 @@ export class HeadJournal {
       : this.sql<Row>`
         SELECT id, text, reasoning, tool_calls_json FROM head_steps
         WHERE actor_id = ${this.actorId} AND head_id = ${headId} AND seq < ${from} ORDER BY seq DESC LIMIT ${over}`,
-      limit, (row) => row.id), (rows) => rows.slice().reverse().map((r) => ({
-        text: r.text ?? '',
-        reasoning: r.reasoning ?? undefined,
-        toolCalls: parseArray<HeadStepToolCall>(r.tool_calls_json),
-      })));
+      limit, (row) => row.id), (rows) => rows.slice().reverse().map(stepOf));
   }
 
   /** How much trace this head has, steps and tool calls across them — the
@@ -907,7 +918,11 @@ export class HeadJournal {
       SELECT rationale FROM head_runs WHERE actor_id = ${this.actorId} AND root_id = ${rootId}`[0];
 
     const rationale = runRow?.rationale ?? rootRow?.rationale ?? '';
-    const task = rootRow?.task || rationale || heads[0]?.task || '(head run)';
+
+    // An empty task column is an absent one here: a run header with no text of
+    // its own is labelled by its rationale, then by its first head's task.
+    const named = [rootRow?.task, rationale, heads.at(0)?.task].find((candidate) => candidate !== undefined && candidate !== '');
+    const task = named ?? '(head run)';
 
     const mergeRow = this.sql<{ merged_narrative: string; cost_head_count: number; cost_total_tokens: number | null }>`
       SELECT merged_narrative, cost_head_count, cost_total_tokens
@@ -917,12 +932,7 @@ export class HeadJournal {
       ? { narrative: mergeRow.merged_narrative, headCount: mergeRow.cost_head_count, totalTokens: mergeRow.cost_total_tokens }
       : null;
 
-    // Run status: still running while any head is; otherwise completed once the
-    // merge lands, else surface that heads finished without a synthesis.
-    const status = rootRow?.status
-      ?? (heads.some((h) => h.status === 'running') ? 'running'
-        : merge ? 'completed'
-        : heads.every((h) => h.status === 'completed') ? 'completed' : 'partial');
+    const status = rootRow?.status ?? runStatusOf(heads, merge !== null);
 
     return { rootId, task, rationale, status, spawnedAt, heads, merge };
   }

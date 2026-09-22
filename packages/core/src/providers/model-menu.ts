@@ -178,7 +178,7 @@ function dedupeModelEntries(rows: AgentModelEntry[]): AgentModelEntry[] {
     bySpec.set(row.spec, {
       ...existing,
       capabilities: MODEL_CAPABILITIES.filter((capability) =>
-        existing.capabilities?.includes(capability) || row.capabilities?.includes(capability)),
+        (existing.capabilities?.includes(capability) ?? false) || (row.capabilities?.includes(capability) ?? false)),
     });
   }
 

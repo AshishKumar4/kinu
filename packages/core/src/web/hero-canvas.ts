@@ -76,6 +76,16 @@ function recede(palette: ArtPalette, color: Rgb): Rgb {
  * the best path still reads as lit, which costs a second stroke only for the
  * few strokes that earn it.
  */
+/** What either renderer leaves behind when it is torn down: the transform reset
+ *  and the whole device-pixel canvas wiped. */
+function clearSurface(
+  surface: Pick<DustSurface, 'setTransform' | 'clearRect'>,
+  size: { width: number; height: number; ratio: number },
+): void {
+  surface.setTransform(1, 0, 0, 1, 0, 0);
+  surface.clearRect(0, 0, size.width * size.ratio, size.height * size.ratio);
+}
+
 export function createCanvasRenderer(context: StrokeSurface, initialPalette: ArtPalette): ArtRenderer {
   let palette = initialPalette;
   let width = 1;
@@ -231,8 +241,7 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
       }
     },
     dispose() {
-      context.setTransform(1, 0, 0, 1, 0, 0);
-      context.clearRect(0, 0, width * ratio, height * ratio);
+      clearSurface(context, { width, height, ratio });
     },
   };
 }
@@ -431,8 +440,7 @@ export function createDustRenderer(context: DustSurface, initialPalette: ArtPale
       }
     },
     dispose() {
-      context.setTransform(1, 0, 0, 1, 0, 0);
-      context.clearRect(0, 0, width * ratio, height * ratio);
+      clearSurface(context, { width, height, ratio });
     },
   };
 }

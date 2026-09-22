@@ -84,7 +84,11 @@ export interface DiscoverOpts {
  *  and these names sit in a prompt prefix that must be byte-identical across
  *  every machine serving the same agent. */
 export function compareSkillNames(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
+  if (a < b) return -1;
+
+  if (a > b) return 1;
+
+  return 0;
 }
 
 /** Built-ins as discovery sees them: headers whose bodies are module constants

@@ -97,7 +97,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
 
         if (!res.ok) return cloneModelInfos(FALLBACK_MODELS);
         const body: unknown = await res.json();
-        const models = parseCodexModels(body);
+        const models = parseCodexModels({ body });
 
         if (models.length === 0) return cloneModelInfos(FALLBACK_MODELS);
         modelCache = { at: Date.now(), authKey, models };
@@ -124,9 +124,9 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         // refresh (UserDO serves a credential until it is proven dead).
         // Both get the same answer: the remedy sentence, on the 401 the AI
         // SDK already knows how to carry to the chat's failed-turn card.
-        const resolveAuth = async (opts?: { forceRefresh?: boolean }): Promise<AuthResolution | 'revoked' | null> => {
+        const resolveAuth = async (refresh?: { forceRefresh?: boolean }): Promise<AuthResolution | 'revoked' | null> => {
           try {
-            return await deps.getAuth(CODEX_CRED_KEY, opts);
+            return await deps.getAuth(CODEX_CRED_KEY, refresh);
           } catch (cause) {
             if (cause instanceof CodexOAuthTokenError && cause.oauthError === 'invalid_grant') return 'revoked';
             throw cause;
@@ -168,7 +168,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         const send = async (headers: Record<string, string>) => {
           const merged = copyHeaders(init?.headers);
 
-          for (const [k, v] of Object.entries(headers)) merged.set(k, v);
+          for (const [name, value] of Object.entries(headers)) merged.set(name, value);
 
           return baseFetch(input, { ...requestInit, headers: merged });
         };
@@ -256,8 +256,8 @@ const ModelInputModalitySchema: v.GenericSchema<ModelInputModality> = v.picklist
 /** The object form of a `supported_reasoning_levels` row; the other form is a bare level string. */
 const CodexReasoningLevelSchema = v.object({ effort: v.string() });
 
-function parseCodexModels<T>(body: T): ModelInfo[] {
-  const parsed = v.safeParse(CodexModelsResponseSchema, body);
+function parseCodexModels(input: { body: unknown }): ModelInfo[] {
+  const parsed = v.safeParse(CodexModelsResponseSchema, input.body);
 
   if (!parsed.success) return [];
   const rows = parsed.output.models ?? [];
@@ -265,7 +265,7 @@ function parseCodexModels<T>(body: T): ModelInfo[] {
 
   for (const row of rows) {
     if (row.visibility !== 'list' && row.visibility !== undefined) continue;
-    const id = nonEmptyString(row.slug);
+    const id = nonEmptyString({ value: row.slug });
 
     if (!id) continue;
     const capabilities: NonNullable<ModelInfo['capabilities']> = ['tools', 'streaming'];
@@ -291,9 +291,9 @@ function parseCodexModels<T>(body: T): ModelInfo[] {
     const priority = v.safeParse(v.number(), row.priority);
     models.push({
       id,
-      label: nonEmptyString(row.display_name) ?? id,
+      label: nonEmptyString({ value: row.display_name }) ?? id,
       capabilities,
-      contextWindow: positiveInteger(row.context_window) ?? positiveInteger(row.max_context_window),
+      contextWindow: positiveInteger({ value: row.context_window }) ?? positiveInteger({ value: row.max_context_window }),
       inputModalities: inputModalities.length > 0 ? inputModalities : undefined,
       reasoningEfforts,
       priority: priority.success ? priority.output : 0,
@@ -328,7 +328,7 @@ export function normalizeCodexResponsesRequest(init: RequestInit | undefined): R
   if (!parsedBody.success) return init;
   const body = parsedBody.output;
 
-  if (nonEmptyString(body.instructions)) {
+  if (nonEmptyString({ value: body.instructions })) {
     return {
       ...init,
       body: JSON.stringify({ ...body, store: false }),
@@ -378,7 +378,7 @@ const InstructionInputItemSchema = v.object({
   content: JsonValueSchema,
 });
 
-function parseInstructionInputItem<T>(value: T): v.InferOutput<typeof InstructionInputItemSchema> | null {
+function parseInstructionInputItem(value: JsonValue): v.InferOutput<typeof InstructionInputItemSchema> | null {
   const parsed = v.safeParse(InstructionInputItemSchema, value);
 
   return parsed.success ? parsed.output : null;
@@ -386,7 +386,7 @@ function parseInstructionInputItem<T>(value: T): v.InferOutput<typeof Instructio
 
 const InstructionContentPartsSchema = v.array(v.object({ text: v.optional(v.string()) }));
 
-function contentToText<T>(content: T): string {
+function contentToText(content: JsonValue): string {
   const text = v.safeParse(v.string(), content);
 
   if (text.success) return text.output.trim();

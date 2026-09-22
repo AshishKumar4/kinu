@@ -66,7 +66,7 @@ export function createMyGatewayProvider(): ModelProvider {
     async isAvailable(deps) {
       const auth = await deps.getAuth(CLOUDFLARE_AI_GATEWAY_CRED_KEY);
 
-      return !!auth?.baseURL;
+      return Boolean(auth?.baseURL);
     },
     unavailableReason: () =>
       'Connect Cloudflare and select an AI Gateway in User settings to use your own gateway (BYOK provider keys or Unified Billing credits).',

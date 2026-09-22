@@ -188,8 +188,7 @@ export type HeadUnsettledStatus = (typeof HEAD_UNSETTLED_STATUSES)[number];
 
 /** Is this stored status one a head is still executing under? */
 export function headStatusUnsettled(status: string): status is HeadUnsettledStatus {
-  // SAFETY: `includes` checked tuple membership — the exact invariant the predicate's narrowing declares; widening only relaxes the parameter.
-  return (HEAD_UNSETTLED_STATUSES as readonly string[]).includes(status);
+  return HEAD_UNSETTLED_STATUSES.some((unsettled) => unsettled === status);
 }
 
 /**
@@ -204,10 +203,7 @@ export function headStatusUnsettled(status: string): status is HeadUnsettledStat
  * status nothing will ever change.
  */
 export function storedHeadReportStatus(status: string): HeadReportStatus | null {
-  // SAFETY: `includes` checked membership in HEAD_REPORT_STATUSES, the invariant both assertions state; widening only relaxes the parameter.
-  return (HEAD_REPORT_STATUSES as readonly string[]).includes(status)
-    ? status as HeadReportStatus
-    : null;
+  return HEAD_REPORT_STATUSES.find((reported) => reported === status) ?? null;
 }
 
 /** What a head reports back to its parent on completion. */

@@ -92,7 +92,11 @@ function readInspectorChoice(account: string, workspace: string | undefined): bo
     ? null
     : localStorage.getItem(`kinu.inspector.open.${account}.${workspace}`);
 
-  return raw === "1" ? true : raw === "0" ? false : null;
+  if (raw === "1") return true;
+
+  if (raw === "0") return false;
+
+  return null;
 }
 
 /** Who keys a persisted layout, or why nobody does: a signed-in profile with

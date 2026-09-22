@@ -53,7 +53,7 @@ import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from 
 import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
 import type { BuiltinToolName } from '../tools/registry';
 import { agentAffinityKey } from '../providers/workers-ai';
-import type { ActorTurnClaim } from '../orchestrator/actor-claims';
+import type { ActorTurnClaim, ClaimOutcome } from '../orchestrator/actor-claims';
 import type { ActorExecutionResult, ActorSession, ActorTurnLease } from '../orchestrator/actor-session';
 import type { MessageReference, MessagePartReference } from '../session/messages';
 import { snapshotCompletedTurn } from '../orchestrator/turn-lifecycle';
@@ -100,9 +100,19 @@ export class HeadCapture {
    *  node-agent.ts exists to improve on. The actor kinds' equivalent
    *  (`TurnAccumulator.recordToolCall`) has always recorded the output; this is the
    *  same treatment, through the same projection. */
-  recordToolCall(name: string, args: JsonObject, result: JsonValue, outcome: ToolOutcome, toolCallId: string): void {
-    this.toolCalls.push({ toolCallId, name, args, result, outcome });
+  recordToolCall(call: HeadToolCall): void {
+    this.toolCalls.push(call);
   }
+}
+
+/** A head's own tool call: everything {@link ToolCallRecord} leaves optional for
+ *  rows recorded before invocation outcomes were persisted is required here,
+ *  because a head records the call it just ran and knows all of it. */
+export interface HeadToolCall extends ToolCallRecord {
+  toolCallId: string;
+  args: JsonObject;
+  result: JsonValue;
+  outcome: ToolOutcome;
 }
 
 import { permitInPlan } from '../execution/work-mode';
@@ -131,7 +141,7 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
         if (ref !== undefined) args.ref = ref;
 
         if (confidence !== undefined) args.confidence = confidence;
-        capture.recordToolCall('record_evidence', args, 'ok', { success: true }, options.toolCallId);
+        capture.recordToolCall({ name: 'record_evidence', args, result: 'ok', outcome: { success: true }, toolCallId: options.toolCallId });
 
         return `evidence recorded (id=${ev.id})`;
       },
@@ -148,7 +158,10 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
       execute: async ({ question, choice, rationale, supportingEvidence }, options) => {
         const d: Decision = { question, choice, rationale, supportingEvidence };
         capture.recordDecision(d);
-        capture.recordToolCall('record_decision', { question, choice, rationale }, 'ok', { success: true }, options.toolCallId);
+        capture.recordToolCall({
+          name: 'record_decision', args: { question, choice, rationale },
+          result: 'ok', outcome: { success: true }, toolCallId: options.toolCallId,
+        });
 
         return 'decision recorded';
       },
@@ -195,11 +208,17 @@ function recordingTool<Entry extends ToolSet[string]>(
 
       try {
         const result = await execute(input, options);
-        capture.recordToolCall(name, args, projectJsonValue({ value: result }), { success: true }, options.toolCallId);
+        capture.recordToolCall({
+          name, args, result: projectJsonValue({ value: result }),
+          outcome: { success: true }, toolCallId: options.toolCallId,
+        });
 
         return result;
       } catch (err) {
-        capture.recordToolCall(name, args, renderThrownChain({ cause: err }), failedToolOutcome({ cause: err }), options.toolCallId);
+        capture.recordToolCall({
+          name, args, result: renderThrownChain({ cause: err }),
+          outcome: failedToolOutcome({ cause: err }), toolCallId: options.toolCallId,
+        });
         throw err;
       }
     },
@@ -313,15 +332,23 @@ function renderHeadToolConventions(
     lines.push('- Do not propose recursive subheads; split_subheads is not available in this run.');
   }
 
-  return [
-    ...lines,
-    '',
-    input.mode === 'plan'
-      ? 'You are ONE OF SEVERAL Plan research heads with read access to the parent workspace. Inspect it read-only, do not create scratch files or worktrees, and return evidence and recommendations to the parent plan.'
-      : workspaceLayout === 'shared-workspace'
-        ? `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path (\`shared/findings/${input.id}/…\` in the parent workspace). Read-only inspection of shared resources is always fine.`
-        : `Your workspace and file tools are private scratch. The canonical parent workspace exposed through parent.* is shared with sibling heads; isolate any mutation there (for a git repo, create a worktree such as \`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`). Read-only inspection is always fine.`,
-  ];
+  return [...lines, '', renderIsolationDoctrine(input, workspaceLayout)];
+}
+
+/** How this head keeps out of its siblings' way, which depends on what it can
+ *  reach: a Plan head mutates nothing at all, a shared-workspace head owns the
+ *  isolation of every resource its siblings also hold, and a private-scratch
+ *  head shares only what it reaches through `parent.*`. */
+function renderIsolationDoctrine(input: HeadInput, workspaceLayout: HeadWorkspaceLayout): string {
+  if (input.mode === 'plan') {
+    return 'You are ONE OF SEVERAL Plan research heads with read access to the parent workspace. Inspect it read-only, do not create scratch files or worktrees, and return evidence and recommendations to the parent plan.';
+  }
+
+  if (workspaceLayout === 'shared-workspace') {
+    return `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path (\`shared/findings/${input.id}/…\` in the parent workspace). Read-only inspection of shared resources is always fine.`;
+  }
+
+  return `Your workspace and file tools are private scratch. The canonical parent workspace exposed through parent.* is shared with sibling heads; isolate any mutation there (for a git repo, create a worktree such as \`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`). Read-only inspection is always fine.`;
 }
 
 export function buildHeadSystemPrompt(
@@ -429,6 +456,15 @@ function incompleteHeadSummary(
     + (recorded ? `What it recorded before stopping: ${recorded}` : 'It produced no findings.');
 }
 
+interface ExhaustedMission {
+  input: HeadInput;
+  capture: HeadCapture;
+  refusal: MissionBudgetRefusal;
+  wallClockMs: number;
+  /** Steps the run banked before the governor stopped it. */
+  stepCount: number;
+}
+
 /**
  * The report of a head the mission governor stopped.
  *
@@ -437,13 +473,7 @@ function incompleteHeadSummary(
  * refusal's own words as the reason, so the parent's merge can say which budget
  * ran out rather than reporting an unexplained short run.
  */
-function exhaustedMissionReport(
-  input: HeadInput,
-  capture: HeadCapture,
-  refusal: MissionBudgetRefusal,
-  wallClockMs: number,
-  stepCount = 0,
-): HeadReport {
+function exhaustedMissionReport({ input, capture, refusal, wallClockMs, stepCount }: ExhaustedMission): HeadReport {
   return {
     id: input.id,
     status: 'budget_exceeded',
@@ -655,6 +685,13 @@ export interface HeadInferenceDeps {
  *  vendor-shaped value in this tree is read, so it survives an SDK spec bump. */
 const ConstructedModelSchema = v.object({ modelId: v.string(), provider: v.string() });
 
+/** One reading of what ended a run: the status the report carries and the
+ *  reason behind it, which name the same cut. */
+interface HeadOutcome {
+  status: HeadReport['status'];
+  stopReason: string | null;
+}
+
 /**
  * WHAT ENDED THE RUN, and how it reads: the report's `status` and the
  * `stopReason` every non-completed summary and `errorMessage` is built from.
@@ -682,25 +719,24 @@ function classifyHeadOutcome(
   budget: HeadInput['budget'],
   deps: Pick<HeadInferenceDeps, 'isAborted' | 'abortReason'>,
   failure: KinuError | undefined,
-) {
+): HeadOutcome {
   const budgetGate = budgetExhausted(budget);
   const aborted = deps.isAborted();
-  const broke = failure !== undefined && !aborted && !budgetGate.exhausted;
 
-  const status: HeadReport['status'] = broke
-    ? 'errored'
-    : aborted
-      ? 'aborted'
-      : budgetGate.exhausted ? 'budget_exceeded' : 'completed';
+  if (failure !== undefined && !aborted && !budgetGate.exhausted) {
+    return { status: 'errored', stopReason: renderThrownChain({ cause: failure }) };
+  }
 
-  const stopReason = broke
-    ? renderThrownChain({ cause: failure })
-    : deps.abortReason?.()
-      ?? (budgetGate.exhausted
-        ? `${budgetGate.reason} budget exhausted`
-        : null);
+  const stopReason = deps.abortReason?.()
+    ?? (budgetGate.exhausted
+      ? `${budgetGate.reason} budget exhausted`
+      : null);
 
-  return { status, stopReason };
+  if (aborted) return { status: 'aborted', stopReason };
+
+  if (budgetGate.exhausted) return { status: 'budget_exceeded', stopReason };
+
+  return { status: 'completed', stopReason };
 }
 
 /**
@@ -760,11 +796,26 @@ function classifyHeadOutcome(
  */
 function promptModelContext(model: HeadInferenceDeps['model']): PromptModelContext {
   const constructed = v.safeParse(ConstructedModelSchema, model);
+
+  if (constructed.success) {
+    return { id: constructed.output.modelId, provider: constructed.output.provider.split('.', 1)[0] };
+  }
+
   const named = v.safeParse(v.string(), model);
 
-  return constructed.success
-    ? { id: constructed.output.modelId, provider: constructed.output.provider.split('.', 1)[0] }
-    : named.success ? { id: named.output } : {};
+  if (named.success) return { id: named.output };
+
+  return {};
+}
+
+/** The turn the advisor reviews, as the run holds it: the session and lease it
+ *  ran under, what it produced, and the run's own inputs. */
+interface CompletedTurnReview {
+  session: ActorSession;
+  input: HeadInput;
+  deps: HeadInferenceDeps;
+  lease: ActorTurnLease;
+  outcome: ActorExecutionResult;
 }
 
 /**
@@ -773,9 +824,7 @@ function promptModelContext(model: HeadInferenceDeps['model']): PromptModelConte
  * A review that fails is recorded and advises nothing: it watches the work and
  * must not end it.
  */
-async function adviseCompletedTurn(
-  session: ActorSession, input: HeadInput, deps: HeadInferenceDeps, lease: ActorTurnLease, outcome: ActorExecutionResult,
-): Promise<ModelMessage[]> {
+async function adviseCompletedTurn({ session, input, deps, lease, outcome }: CompletedTurnReview): Promise<ModelMessage[]> {
   const advice: ModelMessage[] = [];
 
   if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return advice;
@@ -800,14 +849,45 @@ async function adviseCompletedTurn(
   return advice;
 }
 
+/** `kind` is the reason the messages exist — the advisor's review of the last
+ *  turn, or the spawner's resume — and it namespaces their canonical ids. */
+interface NextTurnInput {
+  session: ActorSession;
+  deps: HeadInferenceDeps;
+  conversation: ModelMessage[];
+  turnId: string;
+  kind: 'advice' | 'resume';
+  messages: readonly ModelMessage[];
+}
+
 /** What the next turn opens with, appended to the actor's canonical history under that turn's id and echoed into the run's conversation. */
-async function appendNextTurnInput(
-  session: ActorSession, deps: HeadInferenceDeps, conversation: ModelMessage[], turnId: string, kind: 'advice' | 'resume', messages: readonly ModelMessage[],
-): Promise<void> {
+async function appendNextTurnInput({ session, deps, conversation, turnId, kind, messages }: NextTurnInput): Promise<void> {
   for (const [part, message] of messages.entries()) {
     const reference = await session.canonical.append({ id: `${turnId}:${kind}:${part}`, message, origin: 'input', turnId, assertOwner: () => deps.actor.handle.assertCurrent() });
     conversation.push(await session.canonical.messages.materialize(reference));
   }
+}
+
+/** How a turn's claim closes, in the same vocabulary the run ledger uses —
+ *  never the host's silence read as success. `interrupted` covers both the
+ *  spawner's cancel and the budget cut, which are aborts of the turn and not
+ *  failures of it. */
+function turnClaimOutcome(failed: boolean, interrupted: boolean): ClaimOutcome {
+  if (failed) return 'error';
+
+  if (interrupted) return 'aborted';
+
+  return 'completed';
+}
+
+/** Canonical output references as the messages a conversation carries, in the
+ *  order the turn wrote them. */
+async function materializeMessages(session: ActorSession, references: readonly MessageReference[]): Promise<ModelMessage[]> {
+  const messages: ModelMessage[] = [];
+
+  for (const reference of references) messages.push(await session.canonical.messages.materialize(reference));
+
+  return messages;
 }
 
 /** Hands the settled conversation to the spawner. A report that fails becomes the run's failure, joined to the one the run already had. */
@@ -825,17 +905,31 @@ function reportConversation(deps: HeadInferenceDeps, input: HeadInput, conversat
   return failure;
 }
 
+/** What the report is written from: the run's own inputs, everything it banked,
+ *  how it ended, and the last text it produced. */
+interface HeadSummaryInput {
+  input: HeadInput;
+  capture: HeadInferenceDeps['capture'];
+  outcome: HeadOutcome;
+  final: { text: string; reasoningText: string };
+}
+
 /** How the run reads in its report: a completed run's final answer, or what the head captured when it left none; an errored run's reason; an incomplete run's account of itself. */
-function headSummary(
-  input: HeadInput, capture: HeadInferenceDeps['capture'], status: HeadReport['status'], stopReason: string | null, final: { text: string; reasoningText: string },
-): string {
-  return status === 'completed'
-    ? (extractFinalText(final)
-      || synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })
-      || `Head ${input.id} completed without producing a textual summary.`)
-    : status === 'errored'
-      ? `Head ${input.id} errored: ${stopReason ?? 'no reason reported'}`
-      : incompleteHeadSummary(input, status, capture, stopReason);
+function headSummary({ input, capture, outcome, final }: HeadSummaryInput): string {
+  const { status, stopReason } = outcome;
+
+  if (status === 'errored') return `Head ${input.id} errored: ${stopReason ?? 'no reason reported'}`;
+
+  if (status !== 'completed') return incompleteHeadSummary(input, status, capture, stopReason);
+
+  // An empty final text is a run that produced no prose, not a run that said
+  // nothing: what it recorded stands in for the answer it never wrote.
+  const finalText = extractFinalText(final);
+
+  if (finalText !== '') return finalText;
+
+  return synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })
+    ?? `Head ${input.id} completed without producing a textual summary.`;
 }
 
 /**
@@ -1060,8 +1154,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
           canonicalClaim = outcome.claim;
           canonicalOutput.push(...outcome.outputReferences);
           canonicalParts.push(...outcome.outputPartReferences);
-
-          for (const reference of outcome.outputReferences) conversation.push(await session.canonical.messages.materialize(reference));
+          conversation.push(...await materializeMessages(session, outcome.outputReferences));
         }
 
         if (outcome.failure !== null) {
@@ -1078,13 +1171,9 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         // what the head recorded.
         if (outcome.answer !== null) lastText = outcome.answer;
 
-        if (!turnFailed && !outcome.interrupted) advice = await adviseCompletedTurn(session, input, deps, lease, outcome);
+        if (!turnFailed && !outcome.interrupted) advice = await adviseCompletedTurn({ session, input, deps, lease, outcome });
 
-        // The claim closes under the outcome THIS turn reached, in the same
-        // vocabulary the run ledger uses — never the host's silence read as
-        // success. `interrupted` covers both the spawner's cancel and the
-        // budget cut, which are aborts of the turn and not failures of it.
-        session.settleTurnClaim(lease, turnFailed ? 'error' : outcome.interrupted ? 'aborted' : 'completed');
+        session.settleTurnClaim(lease, turnClaimOutcome(turnFailed, outcome.interrupted));
       } finally {
         session.finishTurn(lease);
       }
@@ -1094,7 +1183,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       if (failure !== undefined || deps.isAborted() || budgetExhausted(input.budget).exhausted) break;
 
       if (advice.length > 0) {
-        await appendNextTurnInput(session, deps, conversation, `${turnId}#${index + 1}`, 'advice', advice);
+        await appendNextTurnInput({ session, deps, conversation, turnId: `${turnId}#${index + 1}`, kind: 'advice', messages: advice });
 
         continue;
       }
@@ -1102,7 +1191,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       const resumed = await deps.resume?.();
 
       if (!resumed) break;
-      await appendNextTurnInput(session, deps, conversation, `${turnId}#${index + 1}`, 'resume', resumed);
+      await appendNextTurnInput({ session, deps, conversation, turnId: `${turnId}#${index + 1}`, kind: 'resume', messages: resumed });
     }
   } catch (err) {
     failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: err, otherwise: 'unavailable' });
@@ -1113,11 +1202,12 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   if (settled) failure = reportConversation(deps, input, conversation, failure);
 
   if (refusal) {
-    return exhaustedMissionReport(input, capture, refusal, clock.now() - startedAt, recorded);
+    return exhaustedMissionReport({ input, capture, refusal, wallClockMs: clock.now() - startedAt, stepCount: recorded });
   }
 
-  const { status, stopReason } = classifyHeadOutcome(input.budget, deps, failure);
-  const summary = headSummary(input, capture, status, stopReason, { text: lastText, reasoningText: lastReasoning });
+  const outcome = classifyHeadOutcome(input.budget, deps, failure);
+  const { status, stopReason } = outcome;
+  const summary = headSummary({ input, capture, outcome, final: { text: lastText, reasoningText: lastReasoning } });
 
   const canonicalCompletion = canonicalClaim === null ? undefined : {
     turnId: canonicalClaim.turnId, runId: canonicalClaim.runId, outputReferences: canonicalOutput, outputPartReferences: canonicalParts,
