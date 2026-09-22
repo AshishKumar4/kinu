@@ -184,9 +184,7 @@ describe('ChatApp consent ownership', () => {
   });
 
   test('a wide glyph is budgeted two columns, not four', () => {
-    // 24 half-width columns: "Command: " plus 39 emoji is 48 code points, two
-    // rows, and the 9-row terminal holds those two with the dialog's seven.
-    // Counted in UTF-16 units the same command reads as four rows and refuses.
+    // Counting UTF-16 units would read 39 emoji as four rows and refuse.
     expect(deviceConsentCanApprove({ command: '😀'.repeat(39) }, { width: 100, height: 11 })).toBe(true);
     expect(deviceConsentCanApprove({ command: '😀'.repeat(40) }, { width: 100, height: 11 })).toBe(false);
   });
