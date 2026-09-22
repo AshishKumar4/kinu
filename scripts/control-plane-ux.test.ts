@@ -139,12 +139,14 @@ function headingFor(tab: string): string {
   return heading;
 }
 
+/** Open the control page on `tab` and return once that tab's read has settled,
+ *  or at its heading for a test that holds the read (`until: 'heading'`). */
 async function openControl(
-  browserPage: Page, origin: string, tab = 'overview',
+  browserPage: Page, origin: string, tab = 'Overview', until: 'settled' | 'heading' = 'settled',
 ): Promise<void> {
   await browserPage.goto(`${origin}/gallery.html?frame=control`, { waitUntil: 'networkidle0' });
 
-  if (tab !== 'overview') {
+  if (tab !== 'Overview') {
     const clicked = await browserPage.evaluate((label: string) => {
       const button = [...document.querySelectorAll('nav button')]
         .find((node) => node.textContent?.trim() === label);
@@ -159,18 +161,25 @@ async function openControl(
     // test that reads the OVERVIEW body and reports a missing string from the tab
     // it never opened, which is the least useful failure a browser test can give.
     if (!clicked) throw new Error(`no control-plane tab labelled ${tab}`);
-    // The tab's own heading, not network idle. An intercepted read settles before
-    // React commits, so idleness is not readiness — the same class of flake a
-    // sibling gate hit by sampling a canvas that existed but was not painted.
-    await browserPage.waitForFunction(
-      (heading: string) => document.body.innerText.includes(heading),
-      {}, headingFor(tab),
-    );
+  }
+
+  // The tab's own heading, not network idle. An intercepted read settles before
+  // React commits, so idleness is not readiness — the same class of flake a
+  // sibling gate hit by sampling a canvas that existed but was not painted.
+  await browserPage.waitForFunction(
+    (heading: string) => document.body.innerText.includes(heading),
+    {}, headingFor(tab),
+  );
+
+  // The heading commits beside the panel's loader, which gives way to the rows
+  // only once the read settles.
+  if (until === 'settled') {
+    await browserPage.waitForFunction(() => document.querySelector('[role="status"][aria-label="Loading"]') === null);
   }
 }
 
 /**
- * The heading each tab renders once its read has committed.
+ * The heading each tab renders when it mounts, beside the panel's loader.
  *
  * A readiness signal the page itself produces, so a test never samples a body
  * belonging to the tab it navigated away from.
@@ -532,7 +541,7 @@ describe('the control plane in a browser', () => {
         },
       });
 
-      await openControl(browserPage, origin, 'Workspaces');
+      await openControl(browserPage, origin, 'Workspaces', 'heading');
       const opened = openWorkspaceRow(browserPage);
       // Let the click attempt run while the list response is still held.
       await browserPage.evaluate(() => document.querySelector('tbody'));

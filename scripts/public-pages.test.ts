@@ -1218,7 +1218,7 @@ describe('the standalone landing runs', () => {
       console.log(`hero loss path: landed=${landed.renderer ?? 'none'} destroyed=${destroyed}`);
 
       await page.close();
-    }, ['--enable-unsafe-webgpu']);
+    }, { browserArgs: ['--enable-unsafe-webgpu'] });
   });
 });
 

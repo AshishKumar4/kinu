@@ -242,13 +242,26 @@ function builtAssetContentType(file: string): string {
  *  transcript; this is what an unwrapped hand run sees. */
 const SIGTERM_EXIT_CODE = 143;
 
+/** A mouse, declared at launch: a fine pointer that hovers. */
+const DECLARED_MOUSE = '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2';
+
+export interface GalleryOptions {
+  /** Declare a mouse; default true. Headless Chrome reports no pointing
+   *  device, so `(hover: hover)` and `(pointer: fine)` are both false and every
+   *  `hover:` utility Tailwind emits behind them is dead. Chrome re-applies
+   *  this launch setting over touch emulation on every preferences push, so a
+   *  touch-only visitor launches without it (measured in app-background-ux). */
+  readonly mouse?: boolean;
+  /** Launch flags for the one test that needs a capability the default lane
+   *  disables (e.g. WebGPU). */
+  readonly browserArgs?: string[];
+}
+
 /** Run `body` against a live gallery, then tear the server and browser down
  *  entirely. Every route answers one immutable, pre-rendered build of
  *  `gallery-dist` — a frozen artifact, never the dev server — so a page's
- *  every response is a file that existed before the browser launched.
- *  `browserArgs` appends launch flags for the one test that needs a
- *  capability the default lane disables (e.g. WebGPU). */
-export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, browserArgs: string[] = []): Promise<T> {
+ *  every response is a file that existed before the browser launched. */
+export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, options: GalleryOptions = {}): Promise<T> {
   const dist = await builtGalleryDist();
 
   const http = createHttpServer((request, response) => {
@@ -300,19 +313,18 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, bro
     const executablePath = chromePath();
 
     const launchOptions: LaunchOptions = {
-      // Headless Chrome reports no pointing device, so `(hover: hover)` and
-      // `(pointer: fine)` are both false and every `hover:` utility Tailwind
-      // emits behind them is dead. Declaring the mouse restores desktop states.
       args: [
         '--no-sandbox',
         '--disable-dev-shm-usage',
-        '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
-        ...browserArgs,
+        ...(options.mouse === false ? [] : [DECLARED_MOUSE]),
+        ...(options.browserArgs ?? []),
       ],
-      // No clock on a CDP round trip either: puppeteer's 180 s default is a
-      // wall under load, and `0` disables it (puppeteer 25.10 guards every
-      // timer with `if (timeout)`). A protocol call that never answers ends
-      // when the browser is closed below.
+      // No clock on the launch or a CDP round trip: puppeteer's 30 s launch and
+      // 180 s protocol defaults are walls under load (a launch ran past 30 s at
+      // load 109 on 2026-09-22), and `0` disables both (puppeteer 25.10 guards
+      // every timer with `if (timeout)`). A browser that dies fails the launch on
+      // its exit; a protocol call that never answers ends when it is closed below.
+      timeout: 0,
       protocolTimeout: 0,
     };
 

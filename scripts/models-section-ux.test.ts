@@ -123,11 +123,11 @@ async function elevatedColor(page: Page): Promise<string> {
  * The composer sheet at one width, in one theme.
  *
  * The width is the page's from before the load and never changes after: a
- * `setViewport` on a loaded page turns `(hover: hover)` false for the rest of
- * that page's life — measured 2026-09-21 on this harness's Chrome, where the
- * launch flags declare the pointer — and every `hover:` utility Tailwind emits
- * behind that query is then dead. One page per width keeps the hover read
- * honest.
+ * `setViewport` on a loaded page turns `(hover: hover)` false until the next
+ * preferences push re-applies the launch flags (a full-page screenshot is one;
+ * measured 2026-09-22 on Chrome 151.0.7922.173), and every `hover:` utility
+ * Tailwind emits behind that query is dead meanwhile. One page per width keeps
+ * the hover read honest.
  */
 async function composerPage(gallery: Gallery, theme: 'dark' | 'light', width: number): Promise<Page> {
   const page = await gallery.newPage();
