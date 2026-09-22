@@ -537,6 +537,22 @@ export class TerminalTransitions {
   }
 
   /**
+   * A detached close that rejected, on whatever carrier held it.
+   *
+   * RELEASED: a sequence this process still holds is one every later sweep
+   * skips, which is the one way this design wedges. RE-ARMED: the close
+   * carries the ledger's own final wake, so the rejection can BE that wake
+   * failing, and the rows would stay owed with nothing coming back for them.
+   */
+  async closeFailed(transition: TerminalTransition, failure: { readonly cause: unknown }): Promise<void> {
+    this.leave(transition);
+    diagnostics.failure('turn.terminal_transition_close_failed', toKinuError({
+      doing: "recording that a settled turn's effects had all reported", cause: failure.cause, otherwise: 'io',
+    }), { turnId: transition.turnId, messageId: transition.messageId });
+    await this.armRecovery(transition, failure);
+  }
+
+  /**
    * Leave a durable way BACK to a sequence whose ledger arm failed.
    *
    * `TerminalEffectLedger.run` rejects when the wake it arms fails. The rows are
