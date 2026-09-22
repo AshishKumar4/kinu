@@ -18,8 +18,8 @@ import type { OrchestratorAgent } from '../orchestrator';
 import type { ObjectNamespace } from '@kinu.run/core';
 
 export interface CloudWorkspaceRegistry extends UserCredentialClient {
-  /** The account's profile catalog: its `default` tier is the one place the
-   *  account's default model lives, for new workspaces and every turn alike. */
+  /** The account's `default` tier is the single source of the default model, for new workspaces
+   *  and every turn. */
   getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope>;
   registerWorkspace(
     caller: UserCaller,
@@ -28,9 +28,8 @@ export interface CloudWorkspaceRegistry extends UserCredentialClient {
     from?: WorkspaceRegistrationSource,
   ): Promise<WorkspaceRegistration>;
   removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void>;
-  /** Drop the exact roster row this create inserted, matched on its own
-   *  `createdAt`, without touching the workspace's Durable Object. The only
-   *  correct undo when the object turned out to belong to another account. */
+  /** Drop the roster row this create inserted (matched on `createdAt`) without touching the DO;
+   *  the only correct undo when the object belongs to another account. */
   releaseWorkspaceReservation(caller: UserCaller, name: string, createdAt: number): Promise<boolean>;
   ensureWorkspaceCapability(name: string, presentedHash: string | null): Promise<void>;
 }
@@ -44,15 +43,12 @@ export interface CreateCloudWorkspaceInput {
   role?: string;
 }
 
-/** Every call a create makes on the workspace object it is bringing up. */
 export type CloudWorkspaceBirth = Pick<
   OrchestratorAgent,
   'claimOwner' | 'setInitialDisplayName' | 'setSoul' | 'resetWorkspaceBaseline'
   | 'setModel' | 'setReasoningEffort' | 'setRole' | 'beginGenesisTurn'
 >;
 
-/** Every binding a create reads: the model menu's, the index feed's, and the
- *  workspace object it addresses by name. */
 export interface CreateCloudWorkspaceEnv<Id> extends AvailableModelsEnv<Id>, IndexFeedEnv<Id> {
   OrchestratorAgent: ObjectNamespace<Id, CloudWorkspaceBirth>;
 }
@@ -78,11 +74,8 @@ export async function createCloudWorkspaceForUser<Id>(
 
   const menu = await listAvailableModels(env, userId, caller);
 
-  // The CHOICE is core's (`defaultSpecFor`): the catalog's default tier wins
-  // only if the account can actually serve it, else the native Workers AI
-  // model, else nothing — never the first entry in the menu, which would sign
-  // new workspaces up to a paid BYO provider. The COPY below stays here, because
-  // the remedy is this surface's: the CLI's counterpart names `kinu auth`.
+  // Core picks the model (`defaultSpecFor`): default tier if servable, else native Workers AI,
+  // never the first menu entry (could be a paid BYO provider). The error copy is surface-specific.
   const model = defaultSpecFor(
     input.model ?? (await userDO.getProfileCatalog(caller)).catalog.tiers.default.model,
     menu.models.map((entry) => entry.spec),
@@ -94,29 +87,20 @@ export async function createCloudWorkspaceForUser<Id>(
 
   const identity = createInitialCloudAgentIdentity(input, purpose);
 
-  // The origin TRAVELS with the title rather than being re-derived from whether
-  // a display name is empty: only this call knows whether the string it is
-  // handing over is the owner's choice or the mission's first line.
+  // Only this call knows whether the title is the owner's choice or the mission's first line.
   const registered = await userDO.registerWorkspace(
     caller, identity.name, identity.displayName, { purpose, nameOrigin: identity.nameOrigin },
   );
 
-  // A name an uncommitted fork transfer is holding is not a name a create may
-  // take: the roster row IS that reservation, and the workspace it will become
-  // is still being streamed into.
+  // A 'reserved' row is an uncommitted fork transfer's reservation; a create may not take it.
   if (registered.status === 'reserved') {
     throw new Error(`Workspace name conflict: "${identity.name}" is being created by a transfer that has not finished. Choose another name or try again once it lands.`);
   }
 
   const entry = registered.entry;
 
-  // ALREADY SOMEBODY'S. Running the whole birth sequence over a live workspace
-  // re-seeds SOUL.md from this request's mission, resets the Output baseline
-  // the workspace measures its diff against, and opens a SECOND genesis turn
-  // beside whatever it was already doing — which is what two creates racing on
-  // one name do to each other, and what a retried request does to itself. The
-  // name is taken by a workspace this owner already has, so the honest answer
-  // is that workspace, unchanged and byte-stable across retries.
+  // Already this owner's workspace: re-running birth would reseed SOUL.md, reset the baseline,
+  // and open a second genesis turn. Return it unchanged so retries and races are idempotent.
   if (registered.status === 'active') return entry;
 
   try {
@@ -131,38 +115,19 @@ export async function createCloudWorkspaceForUser<Id>(
 
     if (input.role) initialization.role = input.role;
     await initializeOrchestrator(initialization);
-    // AFTER the workspace's own object has accepted this account as its owner,
-    // never before. `OrchestratorAgent` is addressed by a GLOBAL name while a
-    // roster row is per-account, so two accounts can register the same name and
-    // only one claim can win. Indexing at registration published a row saying
-    // this account owns that workspace while the claim was still outstanding —
-    // and the loser's row survived, because the rollback below cannot destroy a
-    // Durable Object it does not own. Reported and non-fatal: the registry row
-    // is the truth and this is a copy of it, and the user drilldown reconciles
-    // from that row anyway.
+    // Index only after claimOwner succeeds: the DO name is global, roster rows are per-account.
+    // Non-fatal: the registry row is the truth and the drilldown reconciles from it.
     await indexNewWorkspace(env, {
       userId, name: entry.name, displayName: entry.displayName, createdAt: entry.createdAt,
     });
 
-    // NO PRE-TURN NAMING CALL. The genesis turn queued above owes a durable
-    // `auto_title` effect, and that effect replaces the stand-in title this
-    // create stored — the one path, retried until it lands, for every caller.
-    // The `waitUntil` variant only ever ran for a create with a Worker request
-    // behind it, so a workspace created any other way was named by nothing.
+    // No pre-turn naming call: the genesis turn's durable `auto_title` effect replaces the stand-in
+    // title for every caller, retried until it lands.
 
     return entry;
   } catch (err) {
-    // Only a row THIS create inserted is rolled back, which is now a fact about
-    // the status rather than a flag: an `active` create returned above without
-    // touching the workspace, so the undo below can only ever be undoing its
-    // own insert. `removeWorkspace` wipes an agent's whole Durable Object, and
-    // that is only ever correct for a workspace this call brought into being.
-    //
-    // A ROLLBACK FAULT MUST NOT REPLACE THE FAULT THAT CAUSED IT. The caller
-    // asked for a workspace, and why the create failed is the answer it needs;
-    // an undo that could not finish is a second, separate fact. So the undo's
-    // own failure is recorded under its own name here and the original still
-    // propagates.
+    // Only reached for a row this create inserted (`active` returned above), so undo is safe.
+    // A rollback failure is recorded separately; the original fault still propagates.
     try {
       await rollbackRegistration({ env, userId, userDO, caller, entry, cause: err });
     } catch (rollbackFailure) {
@@ -178,28 +143,9 @@ export async function createCloudWorkspaceForUser<Id>(
 }
 
 /**
- * Undo the roster row a failed create inserted.
- *
- * TWO PATHS, and picking the wrong one is a cross-user defect rather than an
- * untidy rollback. `removeWorkspace` is the right undo for a workspace this
- * account owns: it tears the Durable Object down first and fails closed if that
- * teardown fails. But when the create failed BECAUSE the object already belongs
- * to somebody else, that teardown is a call into a victim's workspace which
- * correctly refuses — and that refusal leaves this account's roster row in
- * place, pointing at a workspace it does not own, which every later ownership
- * check then has to catch. `releaseWorkspaceReservation` exists for exactly this
- * case: it drops the one row this create inserted, matched on its own
- * `createdAt`, and never contacts the target object at all.
- *
- * ONE ROLLBACK FAILURE IS A STATE, THE REST ARE FAULTS. `removeWorkspace` fails
- * closed on purpose, so a teardown it could not finish deliberately leaves the
- * roster row standing — and the index row with it, which is why the tombstone
- * below is not reached on that path. That outcome is recorded with its class and
- * tolerated. The release path touches nothing but this account's own roster, so
- * a failure there is not a state this undo knows how to leave behind: it
- * propagates to the create, which records it beside the fault that started the
- * rollback. Returning nothing for both is how a rollback that never ran reads
- * exactly like one that did.
+ * Undo the roster row a failed create inserted. If the DO belongs to another account, use
+ * `releaseWorkspaceReservation` (never contacts it); otherwise `removeWorkspace`, which fails
+ * closed and leaves the rows standing (recorded, tolerated). A release failure propagates.
  */
 async function rollbackRegistration<Id>(input: {
   env: CreateCloudWorkspaceEnv<Id>;
@@ -235,16 +181,12 @@ async function rollbackRegistration<Id>(input: {
     return;
   }
 
-  // The index row this create published, if it got that far. A tombstone for a
-  // row that was never written is a no-op, which is why this is unconditional
-  // rather than guarded by a flag that could disagree with the truth.
+  // Unconditional: tombstoning a row that was never written is a no-op.
   await unindexWorkspace(env, { userId, name: entry.name });
 }
 
-/** `OrchestratorAgent.claimOwner`'s refusal when the name is already another
- *  account's workspace. Matched rather than typed because it crosses a Durable
- *  Object RPC boundary, where an error class does not survive and the message is
- *  the contract — the same reading `claimOwnedWorkspace` does to answer 403. */
+/** `claimOwner`'s refusal for another account's name. Matched by message because error classes
+ *  don't survive DO RPC; same reading `claimOwnedWorkspace` uses for 403. */
 const OWNED_BY_ANOTHER = /owned by a different user/i;
 
 interface InitialCloudAgentIdentity {
@@ -260,9 +202,7 @@ function createInitialCloudAgentIdentity(
   const requestedName = input.name?.trim();
 
   if (requestedName) {
-    // A workspace's name is its object's address and cannot change after
-    // creation, so a name no preview hostname could carry is refused here, with
-    // the limit, rather than admitted as a workspace whose ports never preview.
+    // The name is the object's permanent address; refuse names no preview hostname could carry.
     const refusal = workspaceAddressRefusal(requestedName);
 
     if (refusal !== null) throw new Error(`Invalid workspace name: ${refusal}`);
@@ -281,9 +221,8 @@ function createInitialCloudAgentIdentity(
 
   return {
     name: fallback.name,
-    // 'auto': `fallback.displayName` is the mission's first line, a stand-in
-    // the genesis turn's `auto_title` effect replaces with a model's name.
-    // Recorded as the owner's, nothing could ever replace it (#18).
+    // 'auto': `fallback.displayName` is a stand-in the genesis turn's `auto_title` effect replaces;
+    // recorded as 'user', nothing could replace it (#18).
     displayName: requestedDisplayName === '' ? fallback.displayName : requestedDisplayName,
     nameOrigin: requestedDisplayName === '' ? 'auto' : 'user',
   };
@@ -315,16 +254,12 @@ async function initializeOrchestrator<Id>(input: InitializeOrchestratorInput<Id>
   );
 
   const claim = await orchestrator.claimOwner(userId);
-  // Before anything else touches it: a new workspace runs its first turn (its
-  // own genesis turn, a peer's task, an auto-title, an inbound email) without
-  // ever being opened, and every one of those needs its identity to reach the
-  // owner's UserDO.
+  // First: a new workspace may run turns without being opened, and each needs its identity
+  // to reach the owner's UserDO.
   await userDO.ensureWorkspaceCapability(agentName, claim.capabilityHash);
   await orchestrator.setInitialDisplayName(displayName, nameOrigin);
   await orchestrator.setSoul(renderSoulMarkdown({ name: displayName, mission }));
-  // The Output diff is relative to workspace birth, never to the first time
-  // somebody happens to open the tab. Capture after identity seeding and
-  // before any user/peer turn can change files.
+  // The Output diff is relative to birth: capture after identity seeding, before any turn.
   await orchestrator.resetWorkspaceBaseline();
 
   if (model) await orchestrator.setModel(model);
@@ -332,9 +267,8 @@ async function initializeOrchestrator<Id>(input: InitializeOrchestratorInput<Id>
   if (reasoningEffort) await orchestrator.setReasoningEffort(reasoningEffort);
 
   if (role && role !== DEFAULT_ROLE_ID) await orchestrator.setRole(role);
-  // The agent takes the first turn. Last, so the soul, model and effort it runs
-  // under are all already durable — and the mission it reads is the one the row
-  // holds, not a second copy passed down this call.
+  // Last, so soul, model and effort are already durable; the mission is read from the row,
+  // not passed down this call.
   await orchestrator.beginGenesisTurn();
 }
 
