@@ -1,34 +1,7 @@
-// The long-horizon bench family: an OOLONG-style corpus the agent must digest,
-// in two modes, scored by exact match with no LLM anywhere in the path.
-//
-// Why a second family at all. The 176-task defect corpus scores a repo fix and
-// is blind to everything context-shaped: it cannot tell whether a turn drowned
-// in tool bulk, whether a fact survived compaction, or whether peak prompt
-// tokens moved. This family is the instrument for those questions, and it is
-// deliberately the ONLY thing here that is new — the split, the seal, the
-// pairing, the statistics and the report are the existing ones.
-//
-// Two modes, from the two things worth measuring:
-//
-//   digest        materials on disk, one ask, answers written to a file. What a
-//                 single heavy turn does with a corpus far larger than its
-//                 window — the egress/ingress question.
-//
-//   continuation  the same corpus delivered across K sequential asks, each part
-//                 DELETED once its ask is answered, the final ask answerable
-//                 only from what survived. The published RLM results have no
-//                 instrument of this kind: every one of them is single-query
-//                 over an inert corpus. Deleting the parts is what makes the
-//                 mode honest — an agent that re-reads the corpus at the end
-//                 is not demonstrating continuation, and "please don't re-read"
-//                 is a rubric, not a measurement. An agent that wrote its own
-//                 notes to a file DOES keep them, and should: that is the
-//                 lossless-archive discipline, done by hand.
-//
-// Everything here is a pure function of the spec. The corpus the solver reads
-// and the answer key the checker compares against are generated from the same
-// seed by the same code, so there is no key on disk to find, and the spec never
-// enters the sandbox.
+// The long-horizon bench family: an OOLONG-style corpus scored by exact match,
+// no LLM in the path. `digest`: one ask over the whole corpus. `continuation`: K
+// asks, each part deleted once answered, so the final ask tests what survived.
+// Corpus and answer key derive from the same seed; no key exists on disk.
 
 import { fnv1a64 } from '../utils/fnv1a';
 import { parseJsonValue } from '../utils/json';
@@ -37,32 +10,23 @@ import * as v from 'valibot';
 
 const FiniteInteger = v.pipe(v.number(), v.finite(), v.integer());
 
-/** Sandbox-relative root the corpus is materialized under. */
 export const LONGHORIZON_CORPUS_DIR = 'bench-corpus';
 
-/** Sandbox-relative file the solver writes its answers to. */
 export const LONGHORIZON_ANSWER_FILE = 'bench-answer.txt';
 
-/** Entries per corpus file. Small enough that reading one file is a partial
- *  read, large enough that a corpus is not thousands of files. */
 export const LONGHORIZON_ENTRIES_PER_FILE = 25;
 
 export type LongHorizonMode = 'digest' | 'continuation';
 
-/** A corpus and its questions, in full. Every field moves the length bucket,
- *  the planted-fact count, or the aggregation arity — the three axes OOLONG
- *  parameterizes — and nothing else. */
+/** Fields set the three axes OOLONG parameterizes: length, planted facts, arity. */
 export interface LongHorizonSpec {
   mode: LongHorizonMode;
   seed: number;
-  /** Log entries in the corpus. With `filler`, this sets the length bucket. */
   entries: number;
-  /** Filler characters per entry. */
   filler: number;
-  /** Entries carrying a unique `marker:`/`value:` pair — the planted facts. */
+  /** Entries carrying a unique `marker:`/`value:` pair. */
   markers: number;
-  /** Material parts. `digest` is always 1; `continuation` uses one ask per
-   *  part plus a final ask. */
+  /** `digest` is always 1. */
   parts: number;
 }
 
@@ -83,12 +47,9 @@ const VALUE_WORDS = [
   'obsidian', 'wren', 'saffron', 'gantry', 'kelp',
 ] as const;
 
-/** Fraction of entries that fail. Well away from 0 and 1 so the count question
- *  is neither trivially zero nor trivially the corpus size. */
 const FAIL_RATE = 0.35;
 
 export interface LongHorizonEntry {
-  /** 1-based. Rendered as `entry-00042`. */
   index: number;
   id: string;
   actor: string;
@@ -96,7 +57,6 @@ export interface LongHorizonEntry {
   region: string;
   status: 'ok' | 'fail';
   code: number;
-  /** 1-based part this entry belongs to. */
   part: number;
   /** Present on exactly `spec.markers` entries. */
   marker?: { token: string; value: string };
@@ -110,11 +70,7 @@ export function longHorizonEntryId(index: number): string {
   return `entry-${String(index).padStart(5, '0')}`;
 }
 
-/** Which entries carry a planted marker: the lowest draws WITHIN each part, in
- *  a quota spread as evenly as the count allows. Ranking per part rather than
- *  globally is what guarantees every part plants at least one fact — a part
- *  that plants none is an episode the final ask does not actually depend on,
- *  and the continuation mode would then be measuring nothing across it. */
+/** Lowest draws within each part, so every part plants at least one fact. */
 function markerIndices(spec: LongHorizonSpec): Set<number> {
   const base = Math.floor(spec.markers / spec.parts);
   const remainder = spec.markers % spec.parts;
@@ -213,14 +169,12 @@ export function renderLongHorizonEntry(spec: LongHorizonSpec, entry: LongHorizon
 }
 
 export interface LongHorizonFile {
-  /** Sandbox-relative path. */
   path: string;
   text: string;
   part: number;
 }
 
-/** Sandbox-relative directory holding one part's files. `digest` keeps its
- *  single part flat, because a prompt that says "part 1 of 1" is noise. */
+/** `digest` keeps its single part flat. */
 export function longHorizonPartDir(spec: LongHorizonSpec, part: number): string {
   return spec.mode === 'digest' ? LONGHORIZON_CORPUS_DIR : `${LONGHORIZON_CORPUS_DIR}/part-${part}`;
 }
@@ -261,28 +215,19 @@ export type LongHorizonQuestionKind = 'count' | 'list' | 'verbatim';
 export interface LongHorizonQuestion {
   id: string;
   kind: LongHorizonQuestionKind;
-  /** As put to the solver. Never contains the answer. */
+  /** Never contains the answer. */
   text: string;
-  /** The exact answer, computed from the generated entries. */
   answer: string;
 }
 
-/**
- * The three aggregation arities OOLONG-Synthetic uses, over one corpus:
- * a whole-corpus count, an exact enumeration, and verbatim recall of one
- * planted fact. In `continuation` mode all three span every part, and the
- * verbatim target is planted in part 1 — the part that has been through the
- * most compaction by the time the final ask lands.
- */
+/** OOLONG-Synthetic's three arities: count, enumeration, verbatim recall. */
 export function buildLongHorizonQuestions(spec: LongHorizonSpec): LongHorizonQuestion[] {
   const entries = generateLongHorizonEntries(spec);
   const component = pick(COMPONENTS, unitHash(`${spec.seed}:question:component`));
 
   const failures = entries.filter((e) => e.component === component && e.status === 'fail');
   const marked = entries.filter((e): e is MarkedEntry => e.marker !== undefined);
-  // Part 1 by construction (markerIndices gives every part a quota): the first
-  // part is the one that has been through the most compaction by the time the
-  // final ask lands, so it is the hardest place to recall a value from.
+  // Part 1 has been through the most compaction by the final ask.
   const verbatimTarget = marked.find((e) => e.part === 1);
 
   if (verbatimTarget === undefined) {
@@ -311,13 +256,10 @@ export function buildLongHorizonQuestions(spec: LongHorizonSpec): LongHorizonQue
   ];
 }
 
-/** What the harness sends the solver, and what it removes between sends. */
 export interface LongHorizonAsks {
-  /** Sent in order, on ONE session. */
+  /** Sent in order on one session. */
   asks: string[];
-  /** Parallel to `asks`: a sandbox-relative directory to delete once that ask
-   *  has been answered, or null. This is what makes the continuation mode
-   *  measure continuation rather than re-reading. */
+  /** Parallel to `asks`: a directory to delete after that ask, or null. */
   removeAfterAsk: Array<string | null>;
 }
 
@@ -377,9 +319,7 @@ export function buildLongHorizonAsks(spec: LongHorizonSpec): LongHorizonAsks {
   return { asks, removeAfterAsk };
 }
 
-/** Lines the solver's answer file is read as: `<question-id>: <answer>`, first
- *  occurrence wins, everything else ignored. Forgiving about surrounding prose,
- *  unforgiving about the answer itself. */
+/** Reads `<question-id>: <answer>` lines; first occurrence wins. */
 export function parseLongHorizonAnswerFile(text: string): Map<string, string> {
   const found = new Map<string, string>();
 
@@ -403,11 +343,7 @@ function entryIds(text: string): string[] {
   return [...new Set(tokens(text).filter((t) => /^entry-\d+$/.test(t)))].sort();
 }
 
-/** Exact match, per arity. No partial credit and no judge: a count is right or
- *  it is not, an enumeration is the right set or it is not, and a planted value
- *  is the right token or it is not. The only latitude is formatting — an answer
- *  is read for its content, not its punctuation, because punctuation is not
- *  what this measures, and neither is the order a complete list came out in. */
+/** Exact match per arity; only formatting and list order are forgiven. */
 export function longHorizonAnswerMatches(question: LongHorizonQuestion, submitted: string): boolean {
   switch (question.kind) {
     case 'count': {
@@ -436,7 +372,6 @@ export interface LongHorizonQuestionResult {
 }
 
 export interface LongHorizonScore {
-  /** All-or-nothing: every question must be right. */
   passed: boolean;
   results: LongHorizonQuestionResult[];
 }
@@ -461,15 +396,12 @@ export function scoreLongHorizonAnswers(
   return { passed: results.length > 0 && results.every((r) => r.ok), results };
 }
 
-/** The answer file a perfect solver would write. The oracle control writes
- *  exactly this, which is what proves the checker can be passed at all. */
+/** What the oracle control writes, proving the checker is passable. */
 export function renderLongHorizonAnswerFile(questions: readonly LongHorizonQuestion[]): string {
   return `${questions.map((q) => `${q.id}: ${q.answer}`).join('\n')}\n`;
 }
 
-/** An ask that contains an answer is not an ask. Counts are exempt: a small
- *  integer occurs in ordinary prose and flagging it would be noise, not a leak.
- *  Returns the offending answer, or null when the asks are clean. */
+/** Returns a leaked answer, or null. Short answers (counts) are exempt as noise. */
 export function longHorizonAsksLeakAnswer(
   asks: readonly string[],
   questions: readonly LongHorizonQuestion[],
@@ -485,8 +417,7 @@ export function longHorizonAsksLeakAnswer(
   return null;
 }
 
-/** Canonical field order — this string lands in the check argv, so it lands in
- *  the task hash, so it must not depend on object-literal order. */
+/** Canonical order: the string lands in the check argv and so in the task hash. */
 export function encodeLongHorizonSpec(spec: LongHorizonSpec): string {
   assertLongHorizonSpec(spec);
 

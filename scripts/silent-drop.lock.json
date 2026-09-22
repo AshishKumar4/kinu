@@ -6,7 +6,6 @@
   "logged_default/wire packages/cli-backend/src/claude-cli-provider.ts#start",
   "logged_default/wire packages/cli/src/tui/home-app.tsx#openModelPicker",
   "logged_default/wire packages/cli/src/version-check.ts#runStartupUpdateCheck",
-  "logged_default/wire packages/core/src/evolution/session-window.ts#append",
   "logged_default/wire packages/core/src/execution/device-hub.ts#probeToolchain",
   "logged_default/wire packages/core/src/jobs/runner.ts#failUnsettled",
   "message_only/other packages/agent-utils/src/vfs/addressing.ts#vfsAddressingHint"

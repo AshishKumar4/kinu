@@ -1,17 +1,7 @@
 /**
- * Evolution Changelog — the "what I changed about myself" digest.
- *
- * Covers:
- *   - buildChangelog assembles every entry kind from the REAL seeded ledgers
- *     (scaffold archive + shadow record, crafted tools + EMA, facts, GEPA
- *     runs, replay evals, turn-outcome aggregate) with evidence numbers
- *   - since-window filtering + countUnseenChangelog (the badge logic), and
- *     that the unseen window is always a SUBSET of what the digest renders —
- *     the needs-you queue and the journal are one ledger read twice
- *   - renderChangelogText (the one CLI/TUI text form)
- *   - reverts go through the real machinery: scaffold rollback round-trip
- *     (pending discard AND promoted-version rollback), fact forget;
- *     informational entries (including crafted tools) refuse to revert
+ * The evolution changelog digest over real seeded ledgers: every entry kind, since
+ * filtering, the unseen window as a subset of what the digest renders, the text form,
+ * and reverts through the real machinery.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -94,7 +84,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(scaffold.evidence).toContain('win-rate 50%');
     expect(scaffold.revert).toEqual({ type: 'scaffold_rollback', target: String(version) });
     expect(scaffold.scaffoldVersion).toBe(version);
-    // The v0 bootstrap is not a self-change — no entry for it.
+    // The v0 bootstrap is not a self-change.
     expect(entries.filter((e) => e.kind === 'scaffold')).toHaveLength(1);
     // Nothing named a pathology, so the line claims none.
     expect(scaffold.evidence).not.toContain('targets');
@@ -130,8 +120,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(entry.evidence).toContain('Crafted tool fetch_and_summarize');
     expect(entry.evidence).toContain('Fetch a URL and summarize it');
     expect(entry.evidence).toContain('EMA 0.82 over 5 uses');
-    // A crafted tool is not something the owner approves: no Keep/Revert
-    // action rides along, so the Journal renders it as information only.
+    // A crafted tool carries no Keep/Revert action.
     expect(entry.revert).toBeUndefined();
   });
 
@@ -215,7 +204,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       runId, status: 'completed', stopReason: 'metric_budget_exhausted', winnerId: 'cand-1',
       metricCalls: 12, iterations: 3,
     });
-    // An aborted run changed nothing — it must not appear.
+    // An aborted run changed nothing.
     const abortedId = startGepaRun(sql, actor, { target: 'scaffold', budget: {} });
     finishGepaRun(sql, actor, {
       runId: abortedId, status: 'aborted', stopReason: 'aborted', winnerId: null,
@@ -258,9 +247,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const { rt } = setup();
     const sql = rt.storage.sql;
     const actor = rt.actor;
-    // `execution` is the runtime's own verdict on a headless turn: no user saw
-    // it, let alone followed up. Reporting the whole batch as "from real user
-    // follow-ups" invents a person for these two.
+    // `execution` verdicts had no user, so the batch must not claim user follow-ups.
     recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'execution',
       userMessage: 'ship it', assistantResponse: 'shipped',
@@ -283,8 +270,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(outcomes.summary).toContain('2 by whether their tool calls ran');
     expect(outcomes.summary).toContain('1 from how the user replied');
     expect(outcomes.summary).not.toContain('real user follow-ups');
-    // The outcome tally is unchanged — provenance is a separate question from
-    // what the verdicts were.
+    // The outcome tally is unchanged by provenance.
     expect(outcomes.evidence).toBe('2 accepted · 1 corrected');
   });
 
@@ -298,8 +284,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       followup: 'no, the other list',
       evidence: 'the user named a different list than the one that changed', now: 100,
     });
-    // No reason on record: the source IS the reason, and the item has to read
-    // as one rather than as a verdict with its evidence missing.
+    // No reason on record: the source is the reason.
     recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'explicit',
       userMessage: 'ship it', assistantResponse: 'shipped', now: 200,
@@ -329,10 +314,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   });
 
   test('a refinement that changed nothing is marked at the source, and only the changes-only page drops it', () => {
-    // OWNER, 2026-09-16: "I reviewed my own recent failures and changed
-    // nothing" was reported beside the changes that moved behaviour. The run
-    // is real and Self-changes keeps it; what it is NOT is a change, and the
-    // flag is set here so no surface has to read that out of the prose.
+    // A run that changed nothing is kept but flagged, so no surface parses prose for it.
     const { rt } = setup();
     const store = createRefinementStore(rt.storage.sql, rt.actor);
     const refused = store.open({ trigger: 'explicit', scope: 'workspace', turnIds: ['t-1'] }).request;
@@ -381,9 +363,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const sql = rt.storage.sql;
     const actor = rt.actor;
 
-    // The real change sits OLDER than the measurement rows that follow it:
-    // this is the supervisefresh defect — eight bookkeeping entries inside
-    // the limit would push it off the page.
+    // The real change sits older than eight bookkeeping rows that would push it off the page.
     const version = await seedScaffoldPending(rt);
     const now = Date.now();
 
@@ -397,8 +377,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       userMessage: 'ship it', assistantResponse: 'shipped', now: now + 1,
     });
 
-    // The default page is bookkeeping only — the same rows it returns today,
-    // the change beyond the limit — while the change-only page still finds it.
+    // The default page is bookkeeping only; the change-only page still finds it.
     const page = buildChangelog(sql, actor, { limit: 8 });
     expect(page).toHaveLength(8);
     expect(page.every((entry) => entry.kind === 'outcomes' || entry.kind === 'replay')).toBe(true);
@@ -407,7 +386,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(changes).toHaveLength(1);
     expect(changes[0].id).toBe(`scaffold:v${version}:pending`);
 
-    // The unseen marker counts the digest unfiltered either way.
+    // The unseen marker counts the digest unfiltered.
     expect(countUnseenChangelog(sql, actor, 0)).toBe(9);
   });
 
@@ -433,8 +412,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
           VALUES (${rt.actor.actorId}, ${id}, ${at}, ${n}, ${n / 2}, ${n / 2}, ${mean}, ${1 - mean}, ${scaffoldVersion}, '[]')`;
     };
 
-    // 0.50 → 0.75 over 4 instances: the intervals overlap almost entirely, so
-    // this is not a direction and must not be reported as one.
+    // 0.50 → 0.75 over 4 instances: overlapping intervals, not a direction.
     replayRow({ id: 'rpl-old', at: now - 1000, n: 4, mean: 0.50, scaffoldVersion: 0 });
     replayRow({ id: 'rpl-new', at: now, n: 4, mean: 0.75, scaffoldVersion: version });
     // 0.30 → 0.95 over 40 instances: the intervals clear each other.
@@ -494,13 +472,7 @@ describe('unseen-count logic (the badge)', () => {
     expect(agg.evidence).toBe('1 corrected');
   });
 
-  /**
-   * The needs-you queue announces the unseen window; the journal renders the
-   * digest. They are one ledger read twice, so the queue must never be able to
-   * count something the journal would not show — a queue row saying "1
-   * self-change you have not seen" over a journal saying nothing is settled is
-   * a contradiction the reader cannot resolve.
-   */
+  /** The needs-you queue must never count what the journal would not show. */
   test('every unseen entry is one the digest itself renders', () => {
     const { rt, facts } = setup();
     const sql = rt.storage.sql;
@@ -518,11 +490,7 @@ describe('unseen-count logic (the badge)', () => {
     expect(countUnseenChangelog(sql, actor, 0)).toBe(unseen.length);
   });
 
-  /**
-   * A brand-new workspace's very first unseen entry is the execution verdict on
-   * its first turn — real, but a measurement: it carries no revert, so the
-   * queue must not offer a decision over it.
-   */
+  /** A first-turn execution verdict is unseen but carries no revert to decide. */
   test('the first turn of a fresh workspace produces an unseen entry with nothing to decide', () => {
     const { rt } = setup();
     recordTurnOutcome(rt.storage.sql, rt.actor, {
@@ -554,7 +522,7 @@ describe('renderChangelogText — the one text form', () => {
     const factDetailLine = text.split('\n').find((line) => line.includes('confidence 70%'));
     expect(factDetailLine).toBeDefined();
     expect(factDetailLine).not.toContain('revertable');
-    // The replay measurement line is NOT marked revertable.
+    // The replay measurement line is not revertable.
     const replayLine = text.split('\n').find((l) => l.includes('confidence') === false && l.includes('labeled turns'));
     expect(replayLine).toBeDefined();
     expect(replayLine).not.toContain('revertable');
@@ -612,9 +580,7 @@ describe('reverts — real paths only', () => {
   });
 
   test('an applied revert is announced on the audit stream, whichever backend asked', async () => {
-    // One backend wrote this row and the other did not, so the changelog that
-    // showed a change showed its reversal only in the cloud. A refused revert
-    // announces nothing: there is no act to audit.
+    // A refused revert announces nothing: there is no act to audit.
     const { rt, facts } = setup();
     facts.upsert('editor', 'helix');
 
@@ -673,7 +639,7 @@ describe('reverts — real paths only', () => {
     await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(await rt.identity.scaffold.read()).toBe(V1_CODE);
 
-    // The digest now shows the promotion as a revertable entry…
+    // The digest shows the promotion as a revertable entry…
     const entry = present(
       buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'scaffold'),
       'the scaffold entry',
@@ -696,7 +662,7 @@ describe('reverts — real paths only', () => {
     expect(present(rows.find((r) => r.version === 0), 'the v0 row').status).toBe('current');
     expect(present(rows.find((r) => r.version === version), 'the promoted row').status).toBe('rolled_back');
 
-    // A second revert of the same (now rolled-back) entry refuses.
+    // A second revert of the same entry refuses.
     const again = await executeChangelogRevert({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, {
       type: 'scaffold_rollback', target: String(version),
     });
@@ -754,7 +720,7 @@ describe('session-end digest — assembled when the window closes', () => {
     expect(digest[0].message).toContain('1 fact');
     expect(digest[0].message).toContain('revertable');
 
-    // …and it lands in the durable evolution_events log for the timeline.
+    // …and it lands in the durable evolution_events log.
     const rows = rt.storage.sql<{ type: string }>`
       SELECT type FROM evolution_events WHERE type = 'changelog_digest'`;
 
@@ -773,10 +739,7 @@ describe('session-end digest — assembled when the window closes', () => {
   });
 });
 
-// ── digest assembly: ordering, windowing, and the per-kind timestamps ──
-//
-// The tests above seed one entry kind at a time, so the sort, the limit and
-// the `since` boundary were all exercised against single-element lists.
+// Digest assembly across mixed kinds: ordering, windowing, per-kind timestamps.
 
 /** Seed `n` crafted tools stamped at distinct, controllable times. */
 function seedTools(rt: AgentRuntime, names: ReadonlyArray<string>, at: (i: number) => number): void {
@@ -802,8 +765,7 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
   });
 
   test('entries sharing a timestamp fall back to a stable id order', () => {
-    // Without a deterministic tiebreak the digest reshuffles between reads and
-    // the "unseen" badge flickers on entries nobody touched.
+    // Without a deterministic tiebreak the unseen badge flickers.
     const { rt } = setup();
     const at = Date.now();
     seedTools(rt, ['aaa_tool', 'zzz_tool'], () => at);
@@ -814,8 +776,7 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
   });
 
   test('an explicit limit keeps the NEWEST entries, not the first assembled ones', () => {
-    // Each source is capped at `limit` internally, so the assembled list can be
-    // several times the limit before the final slice.
+    // Each source is capped at `limit`, so the assembled list exceeds it before the final slice.
     const { rt } = setup();
     const now = Date.now();
     seedTools(rt, ['t1', 't2', 't3', 't4', 't5', 't6'], (i) => now - (5 - i) * 1000);
@@ -856,8 +817,7 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
 
 describe('buildChangelog — per-kind timestamps and evidence', () => {
   test('a scaffold status flip re-dates its entry, attributed to the right version', async () => {
-    // Promotion flips a flag on an existing row, so written_at alone would hide
-    // the change from the unseen window forever.
+    // Promotion flips a flag on an existing row, so written_at alone would hide it.
     const { rt } = setup();
     initRunEventTables(rt.storage.execRaw);
     const written = Date.now() - 3_600_000;
@@ -876,7 +836,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
         .map((e) => [e.scaffoldVersion, e] as const),
     );
 
-    // The promotion belongs to the version promoted INTO, not the one left behind.
+    // The promotion belongs to the version promoted into.
     expect(present(byVersion.get(2), 'the v2 scaffold entry').at).toBe(promotedAt);
     expect(present(byVersion.get(1), 'the v1 scaffold entry').at).toBe(written);
   });
@@ -896,8 +856,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
         .map((e) => [e.scaffoldVersion, e.revert !== undefined] as const),
     );
 
-    // Rolling back something already rolled back or superseded would rewrite
-    // history that the user cannot see.
+    // Already rolled back or superseded versions are not revertable.
     expect(revertable).toEqual(new Map([[1, true], [2, true], [3, false], [4, false]]));
   });
 
@@ -918,16 +877,13 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     rt.craftStore.create({ name: 'brand_new', description: 'fresh', code: 'async () => 1', params: null, scope: 'local' });
 
     const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'tool');
-    // Born scored: the column defaults are the EMA line, so a fresh tool
-    // reads as unexercised, never as missing.
+    // A fresh tool reads as unexercised, never missing.
     expect(entry.evidence).toContain('EMA 0.50 over 0 uses');
     expect(entry.evidence).not.toContain('undefined');
   });
 
   test('a dotted, underscored fact key reads as a sentence', () => {
-    // The covered cases are a single bare word (nothing to rewrite) and the
-    // sandbox.*_version special case, so the general separator rewrite itself
-    // was never exercised.
+    // Exercises the general separator rewrite.
     const { rt, facts } = setup();
     facts.upsert('project.deploy_target', 'example.workers.dev');
 
@@ -938,8 +894,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
   });
 
   test('the fact aggregate id is observation-order independent', () => {
-    // The id addresses a revert action; if it depended on which fact was seen
-    // last, a digest fetched before a re-observation could not be reverted.
+    // The id must not depend on which fact was seen last.
     const idFor = (order: ReadonlyArray<readonly [string, number]>): string => {
       const { rt, facts } = setup();
 
@@ -972,10 +927,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
   });
 
   test('replay direction is computed against the predecessor even at the limit edge', () => {
-    // replayEntries reads one row beyond the limit so the OLDEST entry it
-    // returns still has something to compare against. Without that lookahead
-    // the last card silently degrades to "reached" and a real regression at
-    // the window edge reads as a fresh baseline.
+    // A one-row lookahead gives the oldest entry something to compare against.
     const { rt } = setup();
     const now = Date.now();
 
@@ -1020,8 +972,7 @@ describe('renderChangelogText + revert guards', () => {
   });
 
   test('discarding a pending trial refuses when it is no longer THE pending', async () => {
-    // Two proposals in flight: the decision machinery only knows the newest.
-    // Discarding the stale one through it would restore the wrong file.
+    // Only the newest in-flight proposal is decidable; discarding the stale one would restore the wrong file.
     const { rt, facts } = setup();
     const written = Date.now() - 10_000;
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)

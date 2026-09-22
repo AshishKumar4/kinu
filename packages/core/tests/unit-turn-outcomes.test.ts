@@ -24,16 +24,11 @@ import type { ToolCallRecord } from '../src/evolution/types';
 import { jsonObjectOnlyInstruction } from '../src/prompts/structured';
 import { present } from '@kinu.run/test-utils';
 
-/** The PRODUCTION schema, not this module's own tables alone: the eval split
- *  reconstructs process evidence from the message and run-event ledgers, and a
- *  harness that omits them would force that reader to tolerate an absence no
- *  real workspace has. */
+/** The production schema: the eval split reads the message and run-event ledgers too. */
 function setup() {
   const ws = createTestWorkspace();
 
-  // A REAL workspace main actor, not a stand-in: the split's evidence reader
-  // goes through `conversationTurnPair`, so the transcript entries seeded below
-  // have to carry the same `actor_id` the reader scopes by.
+  // A real workspace actor, since `conversationTurnPair` scopes transcript entries by `actor_id`.
   const actor = createTestActor(ws.sql, ws.execRaw, 'ws-outcomes', 'outcomes');
 
   const history = new SessionHistory({
@@ -107,13 +102,8 @@ describe('the classifier prompt', () => {
   });
 
   test('teaches the corrected-vs-frustrated boundary by contrast, not by definition alone', () => {
-    // The gap this closes. Three one-line definitions leave a terse follow-up
-    // undecided, and a terse follow-up is most of them: "no" and "again?!" are
-    // the same length and are different rows in the ledger. Everything
-    // downstream counts these judgements rather than what happened — K_align,
-    // the per-scaffold rates, the GEPA split, craft retirement — so a boundary
-    // the prompt leaves to inference is a boundary a literal instruction-follower
-    // gets wrong at an unknown rate (docs/EVOLUTION.md § the classifier).
+    // Terse follow-ups ("no" vs "again?!") are the boundary the classifier gets wrong,
+    // so the prompt teaches it explicitly.
     expect(prompt).toContain('A terse follow-up is the one this gets wrong.');
     expect(prompt).toContain('"no" / "wrong file" / "not that one" → corrected');
     expect(prompt).toContain('"no, seriously?" / "again?!" → frustrated');
@@ -139,8 +129,7 @@ describe('the classifier prompt', () => {
   }
 
   test('an unsettled follow-up is directed at `confidence` rather than at a firmer verdict', () => {
-    // Without this the model answers one of three labels whatever it saw, and
-    // calibration.ts measures a rater that never admits doubt.
+    // Otherwise calibration.ts measures a rater that never admits doubt.
     expect(prompt).toContain('An unsettled follow-up belongs in confidence');
     expect(prompt).toContain('at a LOW confidence');
   });
@@ -219,9 +208,7 @@ describe('executionVerdict — the environment\'s verdict, read symmetrically', 
     }))).toBe('succeeded');
   });
 
-  // The opposite mistake, and the reason the LAST acting call decides rather
-  // than any of them: run the suite, see it red, edit, run it green. That turn
-  // is the system working and must not be graded `corrected`.
+  // The last acting call decides: red, edit, green is a successful repair.
   test('a failure the turn went on to FIX still SUCCEEDED', () => {
     expect(executionVerdict(turn({
       toolCalls: [
@@ -275,8 +262,7 @@ describe('the verdict reason is durable', () => {
       userMessage: 'u', assistantResponse: 'a', followup: 'no, the other one',
       evidence: 'the user restated the request with a correction', now: 100,
     });
-    // A thumb carries no reason to store — `source` already says everything
-    // there is to know about how that verdict was reached.
+    // A thumb carries no reason; `source` says it all.
     recordTurnOutcome(sql, actor, {
       turnId: 'm2', outcome: 'accepted', confidence: 1, source: 'explicit',
       userMessage: 'u', assistantResponse: 'a', now: 200,
@@ -324,9 +310,7 @@ describe('turn_outcomes ledger', () => {
   test('a rare outcome buried under many newer rows is still returned', () => {
     const { sql, actor } = setup();
 
-    // The failures the optimizer learns from, followed by far more accepted
-    // turns than any candidate window: a JS-side filter over a bounded window
-    // drops them silently, which truncates the whole evolution signal.
+    // A bounded pre-filter window would drop the few failures behind many accepted turns.
     for (let i = 0; i < 3; i++) {
       recordTurnOutcome(sql, actor, {
         turnId: `neg${i}`, outcome: 'corrected', confidence: 1, source: 'classifier',
@@ -343,7 +327,7 @@ describe('turn_outcomes ledger', () => {
 
     expect(listTurnOutcomes(sql, actor, { limit: 10, outcomes: ['corrected', 'frustrated'] })
       .map((r) => r.turnId)).toEqual(['neg2', 'neg1', 'neg0']);
-    // The limit now bounds the rows actually wanted, not a pre-filter window.
+    // The limit bounds the rows actually wanted.
     expect(listTurnOutcomes(sql, actor, { limit: 4, outcomes: ['accepted'] })).toHaveLength(4);
     expect(listTurnOutcomes(sql, actor, { limit: 2 }).map((r) => r.turnId)).toEqual(['pos499', 'pos498']);
     expect(listTurnOutcomes(sql, actor, { outcomes: [] })).toEqual([]);
@@ -435,8 +419,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
     }
   }
 
-  /** The turn each instance came from — the identity that must not appear on
-   *  both sides of the split. */
+  /** The turn identity that must not appear on both sides of the split. */
   const turnOf = (instance: { id: string }) => instance.id.split('-').slice(2).join('-');
 
   test('train = failures to fix; val = HELD-OUT failures + accepted guards, with no overlap', async () => {
@@ -468,8 +451,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
     const { sql, actor, transcript } = setup();
     seed(sql, actor, 5, 0);
 
-    // The optimizer's targets are the OLDEST rows here. A bounded pre-filter
-    // window would leave the split with nothing to optimize toward.
+    // The targets are the oldest rows here.
     for (let i = 0; i < 400; i++) {
       recordTurnOutcome(sql, actor, {
         turnId: `a${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
@@ -498,17 +480,13 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
 
   test('instances carry process evidence reconstructed from the existing run ledger', async () => {
     const { sql, actor, history, transcript } = setup();
-    // The ask is recorded before the run and the answer after it, so the pair
-    // the evidence reader resolves brackets the window it then reads.
+    // The ask is recorded before the run and the answer after, bracketing the evidence window.
     await history.record(CHAT_SESSION_ID, { id: 'u0', parentId: null, origin: 'input',
       message: { role: 'user', content: 'fix task 0' } });
     const recorder = new RunEventRecorder(sql, actor);
     recorder.emit('run-1', { type: 'run_start', agentId: 'agent', caused_by: 'chat', userMessage: 'fix task 0' });
-    // The step transcript, which is what the evidence reader reads. Rebuilding
-    // the calls from `tool_call_end` instead gives every one an empty `args`,
-    // and delegationFeatures' fingerprint is null for an argument-less call —
-    // so redundancy and loop counts could only ever be zero. Seeding the real
-    // messages is what makes those counts mean anything.
+    // The real step messages: calls rebuilt from `tool_call_end` have empty args, which
+    // would zero the redundancy and loop counts.
     recorder.emit('run-1', {
       type: 'step_finish',
       stepIndex: 1,

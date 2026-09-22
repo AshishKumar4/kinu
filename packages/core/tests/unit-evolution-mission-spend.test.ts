@@ -1,23 +1,7 @@
 /**
- * Turn-review spend under a mission budget.
- *
- * The outcome review is spend the user never asked for and never watches: up to
- * three fast completions fired after the answer, on a lane the turn accumulator
- * has already closed. Nothing bounded it. `MissionGovernor.govern` had exactly
- * one call site in the tree — the swarm — so a mission could declare a $5 cap,
- * spend it, and go on paying for reviews of the turns it already ran.
- *
- * What these tests hold:
- *   • a governed turn's review debits the mission that ran the turn, through
- *     the SAME seam the swarm uses;
- *   • an ungoverned turn is untouched — no label is invented for it, and no
- *     query reaches the ledger;
- *   • a spent cap refuses the CALL and never corrupts the queue: the row stays,
- *     named as `budget`, and a raised cap runs it.
- *
- * Each is proven RED in both directions: the debit test also asserts the
- * unlabelled turn charges nothing, and the refusal test also asserts the review
- * runs once the cap is raised.
+ * Turn-review spend under a mission budget: a governed turn's review debits its
+ * mission through the swarm's seam; an ungoverned turn is untouched; a spent cap
+ * refuses the call and leaves the row queued as `budget` until the cap is raised.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -48,8 +32,7 @@ function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
   };
 }
 
-/** A workspace whose fast tier is counted, wired exactly as a live one is: the
- *  governor over the workspace's own storage, handed to the engine as config. */
+/** Counted fast tier, with the governor wired as a live workspace wires it. */
 function workspace() {
   const { rt, stores } = createTestRuntime({
     llmResponses: { [CLASSIFY]: '{"outcome":"corrected","confidence":0.9,"evidence":"test"}' },
@@ -82,7 +65,7 @@ describe('evolution spend under a mission budget', () => {
     const ws = workspace();
     ws.governor.declare('checkout-fixes', { tokens: 1_000_000 }, {});
 
-    // The control: the same review on the same workspace, with no label.
+    // The control: the same review with no label.
     await ws.engine.reviewTurn(makeTurn({ turnId: 'unscoped' }), FOLLOWUP);
     expect(ws.governor.snapshot('checkout-fixes')[0].calls).toBe(0);
     expect(ws.governor.snapshot('checkout-fixes')[0].spent.tokens).toBe(0);
@@ -93,8 +76,7 @@ describe('evolution spend under a mission budget', () => {
     );
 
     const spent = ws.governor.snapshot('checkout-fixes')[0];
-    // Both graded turns produced the same verdict, so the difference in the
-    // ledger is attributable to the label and to nothing else.
+    // Same verdict for both, so the ledger difference is the label alone.
     expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor).map((r) => r.turnId ?? '')
       .sort((a, b) => a.localeCompare(b)))
       .toEqual(['scoped', 'unscoped']);
@@ -111,8 +93,7 @@ describe('evolution spend under a mission budget', () => {
       FOLLOWUP,
     );
 
-    // The review ran, and the one declared mission is untouched: an undeclared
-    // label charges its own absent row, never the nearest real one.
+    // An undeclared label charges its own absent row, never the nearest real one.
     expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toHaveLength(1);
     expect(ws.governor.snapshot('checkout-fixes')[0].calls).toBe(0);
   });
@@ -129,7 +110,7 @@ describe('evolution spend under a mission budget', () => {
     )).rejects.toThrow('budget');
 
     expect(ws.calls()).toBe(before);
-    // No verdict was written from a call that never happened.
+    // No verdict from a call that never happened.
     expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toEqual([]);
   });
 
@@ -141,7 +122,7 @@ describe('evolution spend under a mission budget', () => {
     await ws.engine.reviewTurn(makeTurn(), FOLLOWUP);
 
     expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toHaveLength(1);
-    // The exhausted label was never consulted: nothing bound this turn to it.
+    // The exhausted label was never consulted.
     expect(ws.governor.snapshot('someone-elses-mission')[0].calls).toBe(1);
   });
 });
@@ -155,7 +136,7 @@ describe('a deferred review carries its mission across processes', () => {
       makeTurn({ missionLabels: ['checkout-fixes'] }),
       FOLLOWUP,
     )).toBe('queued');
-    // The drain runs with NO active scope — the process that queued it is gone.
+    // The drain runs with no active scope.
     ws.governor.activate([]);
 
     expect(await ws.engine.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: [] });
@@ -172,21 +153,17 @@ describe('a deferred review carries its mission across processes', () => {
     const drain = await ws.engine.runDeferredTurnReviews();
     expect(drain.reviewed).toBe(0);
     expect(drain.refused.map((r) => r.reason)).toEqual(['budget']);
-    // Re-queued, explicitly: the turn is sound and the evidence is not thrown
-    // away because the mission happens to be out of money right now.
+    // Re-queued: the turn is sound, the mission is just out of money.
     expect(ws.engine.sessionWindow.countQueuedReviews()).toBe(1);
     expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toEqual([]);
-    // And nothing recorded the review as HAVING RUN. A governor declining is a
-    // decision, not a completion: a tombstone here would make activation
-    // recovery settle the row and the raised cap below would find nothing owed.
+    // No tombstone: a refusal is not a completion, or recovery would settle the row.
     expect(ws.rt.storage.sql`SELECT key FROM effect_tombstones
       WHERE actor_id = ${ws.rt.actor.actorId} AND scope = 'turn_review'`)
       .toEqual([]);
     expect(ws.engine.sessionWindow.resetStaleClaims()).toBe(0);
     expect(ws.engine.sessionWindow.countQueuedReviews()).toBe(1);
 
-    // Raise the cap by declaring a roomier parent the label already nests under
-    // — the same row now runs.
+    // A roomier parent the label nests under lets the same row run.
     ws.governor.declare('checkout-fixes', { tokens: 1_000_000 }, {});
     void ws.rt.storage.sql`UPDATE mission_budget SET limit_tokens = 1000000, exhausted_at = NULL
       WHERE actor_id = ${ws.rt.actor.actorId} AND label = 'checkout-fixes'`;

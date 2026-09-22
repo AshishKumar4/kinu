@@ -1837,7 +1837,7 @@ export {
 
 // The workspace's work across every actor — the read model behind
 // `listWorkspaceWork` on both backends.
-export { readWorkspaceWork, hasWorkspaceWork } from './read-models/workspace-work';
+export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle } from './read-models/workspace-work';
 
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
 

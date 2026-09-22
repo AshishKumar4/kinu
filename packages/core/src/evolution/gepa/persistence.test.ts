@@ -1,6 +1,4 @@
-/**
- * GEPA persistence — survives DO hibernation, supports run resumption.
- */
+/** GEPA persistence and run resumption. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -19,8 +17,7 @@ function setup() {
   initGepaTables(execRaw);
   const sql = makeSql(db);
 
-  // Every gepa row is one actor's: the run ledger, the candidates and the front
-  // are all keyed on the owner, so the fixture issues a real bound handle.
+  // Every gepa table is keyed on the owner, so the fixture issues a real bound handle.
   return { sql, execRaw, db, actor: testActorHandle(sql) };
 }
 
@@ -131,10 +128,7 @@ describe('loadGepaParetoFront — the derived front', () => {
   test('derives the per-instance front from accepted candidates alone', () => {
     const { sql, actor } = setup();
     const runId = startGepaRun(sql, actor, { target: 'scaffold', budget: {} });
-    // A specialist per instance: neither dominates the other. The old
-    // membership table stored this shape after every iteration; the
-    // derivation must reproduce it from scores_json with no stored
-    // membership at all.
+    // Neither specialist dominates; the front is derived from scores_json.
     const a = mkCandidate('a', 'src-a', { i1: 0.9, i2: 0.3 });
     const b = mkCandidate('b', 'src-b', { i1: 0.3, i2: 0.9 });
 

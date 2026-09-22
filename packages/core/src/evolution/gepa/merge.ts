@@ -1,23 +1,7 @@
 /**
- * GEPA Merge operator — Appendix F of the paper.
- *
- * The paper's Merge picks two candidates with complementary strengths
- * (different lineages, distinct per-instance winners) and constructs a
- * child that combines the best version of each module from each parent.
- *
- * Kinu's primary GEPA target is the scaffold source — a single file,
- * not a multi-module system. The paper's structural Merge (pick module
- * `j` from lineage A, module `k` from lineage B) doesn't apply directly.
- * The honest analogue for single-file artifacts is **reflective merge**:
- * hand both candidates + their per-instance score vectors to the
- * reflection LM and ask it to synthesise a hybrid that keeps each
- * parent's specialty.
- *
- * Triggering rule (matches the paper's spirit): merge is attempted only
- * when the pool contains a complementary pair — two candidates each best
- * on at least one instance and each NOT strictly dominating the other.
- * Random or aggregate-greedy pair selection is rejected; merging two
- * similar candidates is wasteful.
+ * GEPA Merge (Appendix F), as reflective merge: a single-file artifact has no modules
+ * to splice, so the reflection LM synthesises a hybrid from two complementary parents.
+ * Attempted only when the pool holds a pair each best somewhere and neither dominating.
  */
 
 import type {
@@ -29,15 +13,11 @@ import { stripMarkdownFences } from '../../prompts/structured';
 export interface MergePair {
   a: GepaCandidate;
   b: GepaCandidate;
-  /** Instance ids where `a` strictly outperforms `b`. */
   aDominates: string[];
-  /** Instance ids where `b` strictly outperforms `a`. */
   bDominates: string[];
 }
 
-/** Find a complementary pair in the pool — two candidates that are each best
- *  on some instances and neither strictly dominates the other. Returns null
- *  if no such pair exists. */
+/** Two candidates each best on some instances with neither strictly dominating; null if none. */
 export function findComplementaryPair(
   pool: ReadonlyArray<GepaCandidate>,
   instanceIds: ReadonlyArray<string>,
@@ -61,16 +41,13 @@ export function findComplementaryPair(
         else if (sb > sa) bDom.push(id);
       }
 
-      // Each side must win on at least one instance; otherwise one strictly
-      // dominates the other (or they're identical).
       if (aDom.length === 0 || bDom.length === 0) continue;
       pairs.push({ a, b, aDominates: aDom, bDominates: bDom });
     }
   }
 
   if (pairs.length === 0) return null;
-  // Weight pairs by total complementary surface so distinctly-complementary
-  // pairs are preferred over almost-similar ones.
+  // Prefer distinctly complementary pairs over almost-similar ones.
   let total = 0;
 
   for (const p of pairs) total += p.aDominates.length + p.bDominates.length;
@@ -85,15 +62,7 @@ export function findComplementaryPair(
   return pairs[pairs.length - 1];
 }
 
-/** Render the merge-reflection prompt — the LM sees both parents, their
- *  per-instance score vectors, and the instances each one wins on.
- *
- *  "Do not naively concatenate" names the single likeliest failure mode of a
- *  merge-two-files task, so it is shown rather than asserted. The survival line
- *  under it states what `checkConstraints` will refuse downstream — a child that
- *  loses the entry point or the host bridge is rejected AFTER a full eval-set
- *  scoring pass has been paid for, and stating the contract up front is cheaper
- *  than discovering it there. */
+/** States the `checkConstraints` survival contract up front: a violating child is only rejected after a paid scoring pass. */
 export function renderMergePrompt<I, E>(opts: {
   pair: MergePair;
   evalSet: ReadonlyArray<EvalInstance<I, E>>;
@@ -153,7 +122,6 @@ ${lines('B', opts.pair.bDominates).join('\n')}
 Return ONLY the merged ${desc} source — no commentary, no markdown fences.`;
 }
 
-/** Run the LM-driven merge. Returns the synthesised source string. */
 export async function proposeMerge<I, E>(opts: {
   pair: MergePair;
   evalSet: ReadonlyArray<EvalInstance<I, E>>;

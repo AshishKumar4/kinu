@@ -15,6 +15,7 @@ import {
 } from '@kinu.run/core';
 import type { SubordinateRosterEntry } from '@kinu.run/core/protocol';
 import { SubordinateTabs } from '../src/components/SubordinateTabs';
+import { KeptTranscript } from '../src/components/KeptTranscript';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
@@ -368,11 +369,11 @@ describe('a dismissed agent keeps its conversation reachable', () => {
 
   const ROSTER: SubordinateRosterEntry[] = [
     {
-      name: 'busy-mill-01', displayName: 'Busy Mill', role: 'task', createdBy: 'user',
+      name: 'busy-mill-01', actorId: 'actor-busy-mill', displayName: 'Busy Mill', role: 'task', createdBy: 'user',
       status: 'working', currentTask: 'Build the chess app', createdAt: 1, dismissedAt: null,
     },
     {
-      name: 'quiet-harbor-1a4e20', displayName: 'Quiet Harbor', role: 'task', createdBy: 'user',
+      name: 'quiet-harbor-1a4e20', actorId: 'actor-quiet-harbor', displayName: 'Quiet Harbor', role: 'task', createdBy: 'user',
       status: 'dismissed', currentTask: null, createdAt: 2, dismissedAt: 200,
     },
   ];
@@ -401,5 +402,23 @@ describe('a dismissed agent keeps its conversation reachable', () => {
 
     expect(markup).toContain('/workspace/hardy-workshop/agents/quiet-harbor-1a4e20');
     expect(markup).toContain('aria-expanded="true"');
+  });
+
+  test('the kept pane draws an entry it could not read in its place, named, between the ones it could', () => {
+    // The page marks an entry whose content spilled to the dismissed agent's
+    // private files; an empty bubble there, or no row at all, is the loss.
+    const row = (id: string, role: 'user' | 'assistant', text: string) =>
+      ({ message: { id, role, parts: [{ type: 'text' as const, text }] }, steers: [] });
+
+    const markup = renderToStaticMarkup(createElement(KeptTranscript, {
+      entries: [row('m1', 'user', 'asked before'), row('m2', 'assistant', ''), row('m3', 'user', 'asked after')],
+      unavailable: new Set(['m2']),
+    }));
+
+    const note = markup.indexOf('role="note"');
+
+    expect(markup.indexOf('asked before')).toBeLessThan(note);
+    expect(note).toBeLessThan(markup.indexOf('asked after'));
+    expect(markup.slice(note, markup.indexOf('</p>', note))).toContain('unavailable');
   });
 });

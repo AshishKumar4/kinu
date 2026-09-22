@@ -1,15 +1,6 @@
-// Two contracts of the outcome-ledger redesign, tested against the REAL
-// engine surfaces:
-//
-//   S5 — lessons live ONLY in the ledger. Corroboration is a row-status
-//        change, nothing is ever copied into MEMORY.md, and every reader
-//        (prompt tail, search, session reflection) derives from the rows.
-//        So wiping MEMORY.md cannot hide what the workspace learned.
-//
-//   S8 — observations are APPEND-ONLY and readers resolve ONE effective
-//        verdict per turn by source precedence. A later explicit thumb
-//        overrules the classifier without erasing the classifier's row,
-//        which is exactly the row the calibration set labels by id.
+// Lessons live only in the ledger, so wiping MEMORY.md hides nothing; observations
+// are append-only and readers resolve one effective verdict per turn by source
+// precedence, keeping the classifier row the calibration set labels by id.
 import { describe, test, expect } from 'bun:test';
 import { present } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
@@ -51,15 +42,13 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
 
     const engine = new EvolutionEngine(rt, stores.history);
 
-    // A wrong turn graded through the user's own reply: the lesson is born
-    // corroborated — a row in the ledger, never a MEMORY.md copy.
+    // A lesson graded by the user's reply is born corroborated, as a ledger row.
     await engine.reviewTurn(makeTurn(), 'no — you rotated production, not staging');
     const lessons = listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' });
     expect(lessons).toHaveLength(1);
     const lessonText = lessons[0].text;
 
-    // THE RESET: the whole memory file plane is wiped, as a workspace reset
-    // does. A lesson kept as a MEMORY.md copy goes with it.
+    // Wipe the memory file plane, as a workspace reset does.
     await rt.storage.vfs.writeFile('memory/MEMORY.md', '');
 
     // 1. The prompt view still carries the lesson.
@@ -67,7 +56,7 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
     // 2. Search still finds it.
     expect(listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' })
       .filter((lesson) => lesson.text.includes('cluster'))).toHaveLength(1);
-    // 3. The session-reflection pass reads the same rows, not a heading parse.
+    // 3. The session-reflection pass reads the same rows.
     recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: 'msg-1', outcome: 'corrected', confidence: 0.9, source: 'explicit',
       userMessage: 'u', assistantResponse: 'a',
@@ -86,7 +75,7 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
     });
     const reflectionPrompt = prompts.find(p => p.includes('reflecting on your recent interactions')) ?? '';
     expect(reflectionPrompt).toContain('check the cluster name before rotating keys');
-    // And nothing re-created a MEMORY.md copy along the way.
+    // Nothing re-created a MEMORY.md copy.
     const memory = await rt.memory.read('memory/MEMORY.md');
     expect((memory ?? '')).not.toContain(lessonText);
   });
@@ -111,7 +100,7 @@ describe('S8 — an explicit verdict overrules the classifier without erasing it
       userMessage: 'u', assistantResponse: 'a', scaffoldVersion: 3,
     });
 
-    // One EFFECTIVE verdict per identified turn — never both.
+    // One effective verdict per identified turn.
     const rows = listTurnOutcomes(rt.storage.sql, rt.actor);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ turnId: 't1', outcome: 'corrected', source: 'explicit' });
@@ -130,7 +119,7 @@ describe('S8 — an explicit verdict overrules the classifier without erasing it
     const [classifierRow] = listTurnOutcomes(rt.storage.sql, rt.actor, { outcomes: ['accepted'] });
     expect(classifierRow.source).toBe('classifier');
 
-    // The human's gold label lands on THAT row, by id.
+    // The gold label lands on that row, by id.
     const written = recordOutcomeLabels(rt.storage.sql, rt.actor, {
       labeler: 'owner', labels: [{ outcomeId: classifierRow.id, label: 'corrected' }],
     });
@@ -139,8 +128,7 @@ describe('S8 — an explicit verdict overrules the classifier without erasing it
     const gold = goldLabels(rt.storage.sql, rt.actor);
     expect(present(gold.get(classifierRow.id), 'the gold label for the classifier row').label).toBe('corrected');
 
-    // …and the calibration universe is drawn from classifier rows only, so a
-    // later explicit verdict neither dilutes nor deletes the measured error.
+    // The universe is classifier rows only, so a later explicit verdict neither dilutes nor deletes it.
     recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: 't1', outcome: 'corrected', confidence: 1, source: 'explicit',
       userMessage: 'u', assistantResponse: 'a',
