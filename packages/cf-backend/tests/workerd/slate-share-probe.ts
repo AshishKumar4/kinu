@@ -6,7 +6,7 @@
  * The class binds under two names in its vitest project: `SLATE_SHARE_PROBE`,
  * the handle the tests hold, and `OrchestratorAgent`, because the slate's
  * FILES binding is a `SlateBinding` worker entrypoint whose `call` resolves
- * `workspaceOwner(env, workspace).slateBindingCallAs` — the probe's own DO,
+ * `workspaceOwner(env, workspace).slateBindingCallAsWire` — the probe's own DO,
  * named by `ctx.id.name`.
  */
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
@@ -262,6 +262,12 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     if (parsed.success && parsed.output.invocation !== null) this.lastCall = parsed.output.invocation;
 
     return this.host.bindingCall(caller, id, name, request);
+  }
+
+  /** The wire half `workspaceOwner` reads, as the production object answers
+   *  it: the same result as a JSON string, decoded at the one adapter. */
+  async slateBindingCallAsWire(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<string> {
+    return JSON.stringify(await this.slateBindingCallAs(caller, id, name, request));
   }
 }
 
