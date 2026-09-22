@@ -64,7 +64,6 @@ import { TierIdSchema,
   createTimerTrigger, cancelTrigger, fireDueTriggers,
   EvolutionEngine,
   readMemoryTail,
-  listProposedTasks, updateProposedTaskStatus,
   agentsActionsFor,
   facetHomeProvisioner, facetHomeReleaser, headAgentName, explorationActorKey,
   type HostedNodeSeat, type NodeIdentity, type ModelPricing,
@@ -79,7 +78,7 @@ import { TierIdSchema,
   // The terminal transition — core owns the vocabulary, the roster, the state
   // machine and the replay; this backend supplies only the effect bodies and
   // the wake. The same class the Durable Object drives.
-  TerminalTransitions, initTerminalEffectTable, declareTerminalRoster,
+  TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial,
   takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
@@ -88,7 +87,7 @@ import { TierIdSchema,
   RunEndReasonSchema, WorkModeSchema,
   shadowTrialPlan, trimTrialContext,
   type TerminalTransition, type TerminalEffectTable, type TerminalEffectFault,
-  type TerminalTurnParts, type OwedEffect,
+  type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
   buildActorTools, buildMcpToolSet, buildSystemPromptSync, currentDateForPrompt,
   type ActorToolsetDeps,
   activePromptSectionOverrides,
@@ -117,13 +116,11 @@ import { TierIdSchema,
   type InstructionTrustResolver,
   // The scaffold evolution control plane — core owns the drivers; this session
   // supplies the local surface they run against.
-  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
-  proposeScaffold, runScaffoldGepaOptimization,
+  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, runScaffoldGepaOptimization,
   queueTurnShadowTrial, runQueuedShadowTrials,
   type GepaOptimizationResult, type ScaffoldControl,
-  type ScaffoldDecisionResult, type ScaffoldVersionView, createScaffoldCandidateSurface,
+  type ScaffoldDecisionResult, createScaffoldCandidateSurface,
   type ShadowStatus,
-  listReplayEvals, type ReplayEvalSummary,
   // Continual refinement — `/refine` and the automatic evolution-debt trigger.
   decideRefinementRoute, listRefinements, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type RefinementDecisionInput, type RefinementDecisionResult,
@@ -147,19 +144,19 @@ import { TierIdSchema,
   resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile, currentOperationProfile,
   buildModelCallEvent,
   applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
-  isPlaceholderMission, type WorkspaceTitleState,
+  type WorkspaceTitleState,
   type PromptIdentity,
   narrowToolSurface, codemodeCapabilitiesFor,
   readSoul,
   type ResolvedTurnProfile, type TierId,
   decodeJsonValue, projectJsonValue, JsonValueSchema,
-  createAgentSelfProvider,
+  agentSelfHost, createAgentSelfProvider,
   // ── Read models: the same implementations the cloud backend's RPCs call ──
   cancelBackgroundJob, jobResult, listBackgroundJobs,
   getAlwaysActiveSkills, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
   getShellApprovalGrants, revokeShellApprovalGrants, gatedGrants, type ApprovalGrant,
   setAlwaysActiveSkills, setModel, setReasoningEffort, setShellApprovalMode,
-  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getEvolutionChangelog, markChangelogSeen, pickAlternateTake,
   type EvolutionChangelogView,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
@@ -512,8 +509,6 @@ function tierFromMetadata(metadata: ProgrammaticTurn['metadata']): TierId | unde
 
   return parsed.success ? parsed.output.profile_tier : undefined;
 }
-
-type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 
 export class LocalAgentSession implements BackendHost {
   private readonly rt: CLIRuntime;
@@ -1349,11 +1344,6 @@ export class LocalAgentSession implements BackendHost {
     return cancelBackgroundJob(this.jobRunner, jobId);
   }
 
-  /** The persisted replay-eval loss curve, newest first (read-only). */
-  async getReplayEvals(limit?: number): Promise<ReplayEvalSummary[]> {
-    return listReplayEvals(this.rt.storage.sql, this.rt.actor, limit);
-  }
-
   // ── Evolution Changelog (parity with the DO's RPCs) ───────────────
 
   /** The self-change digest over the durable ledgers (core buildChangelog). */
@@ -1391,20 +1381,6 @@ export class LocalAgentSession implements BackendHost {
     return pickAlternateTake(
       { sql: this.rt.storage.sql, actor: this.rt.actor, history: this.stores.history, engine: this.engine, inbox: this.actorSession.orchestrator.inbox },
       takeId, nodeId);
-  }
-
-  async proposeCurriculumTasks(count?: number) {
-    return proposeCurriculumTasks(this.rt, count);
-  }
-
-  async listCurriculumTasks(status?: CurriculumStatus) {
-    return listProposedTasks(this.rt, status);
-  }
-
-  async setCurriculumTaskStatus(id: string, status: CurriculumStatus): Promise<{ ok: true }> {
-    updateProposedTaskStatus(this.rt, id, status);
-
-    return { ok: true };
   }
 
   // ── Plan review (parity with the DO's RPCs) ────────────────────────
@@ -2559,17 +2535,6 @@ export class LocalAgentSession implements BackendHost {
    */
   private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
     const mission = localActorMission(this.rt, makeSqlExec(this.db));
-    // WHICH candidate this turn is sampled against, decided ONCE, here. The
-    // plan re-reads the pending version on every call, so a replay that asked
-    // again would score this turn against a candidate that was not under trial
-    // when it ran. A turn the plan declines owes no row.
-    //
-    // Asked only on a session whose evolution lanes are ON. `--no-auto-evolve`
-    // records no evolution state and spends no evolution compute, so this
-    // session genuinely does not have the lane — and an effect a backend does
-    // not have is an absent part, not a claimed row that completes on the
-    // engine's refusal a moment later.
-    const sampled = this.engine.recordsTurns ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
 
     // The gate's decision belongs to the LIVE turn: `shouldGate` reads RAM the
     // gate keeps (armed, already fired) that a restart does not have, so the
@@ -2600,7 +2565,7 @@ export class LocalAgentSession implements BackendHost {
     const relay = this.parentRelay;
     const parentReport = relay?.owed(ending, input.assistantText) ?? null;
 
-    const facts: Parameters<typeof declareTerminalRoster>[0] = {
+    const facts: TerminalTurnFacts = {
       messageId: input.messageId,
       status: input.status,
       workMode: this.actorSession.workMode,
@@ -2655,6 +2620,12 @@ export class LocalAgentSession implements BackendHost {
       },
     });
 
+    // WHICH candidate this turn is sampled against, decided ONCE, here. The
+    // plan re-reads the pending version on every call, so a replay that asked
+    // again would score this turn against a candidate that was not under trial
+    // when it ran. A turn the plan declines owes no row.
+    const sampled = owesShadowTrial(facts) ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
+
     if (sampled !== null) {
       parts.shadowTrial = {
         pendingVersion: sampled,
@@ -2666,7 +2637,7 @@ export class LocalAgentSession implements BackendHost {
       };
     }
 
-    parts.autoTitle = { subject: isPlaceholderMission(mission) ? input.userText : mission ?? '' };
+    parts.autoTitle = { mission };
 
     // The answer this child owes its parent — ONE claimed effect, covering a
     // task child's errored and interrupted endings too. An untracked
@@ -3164,15 +3135,6 @@ export class LocalAgentSession implements BackendHost {
     }
   }
 
-  /** `agent.compactNow()` — the agent folding a finished phase itself instead
-   *  of waiting for the token trigger. It rides the SAME one-shot flag
-   *  overflow recovery arms, so there is one forced-rebuild path and a repeat
-   *  call can never loop the ladder. The in-flight turn's context is already
-   *  assembled, so the fold lands on the next one. */
-  armCompactNow(): void {
-    this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey);
-  }
-
   /** Prompt-cache identity for runChat: the resolved provider/model, a stable
    *  per-conversation key (the agent's affinity key + session id — same
    *  `kinu-<name>` scheme Workers AI affinity pins with), and the agent's
@@ -3375,17 +3337,6 @@ export class LocalAgentSession implements BackendHost {
     if (result.ok) this.invalidateModelState();
 
     return result;
-  }
-
-  /** Propose a new scaffold version through the existing 4-gate pipeline. An
-   *  accepted proposal lands as `pending` and is resolved by the shadow eval. */
-  async proposeScaffold(rationale: string, code: string, baseVersion?: number) {
-    return proposeScaffold(this.scaffoldControl, rationale, code, baseVersion);
-  }
-
-  /** Read-only scaffold archive: versions with status, lineage and shadow record. */
-  listScaffoldVersions(limit = 20): ScaffoldVersionView[] {
-    return listScaffoldVersions(this.rt.storage.sql, this.rt.actor, limit);
   }
 
   /**
@@ -3988,7 +3939,17 @@ export class LocalAgentSession implements BackendHost {
     const report = this.reportGateOpen() ? this.reportDeps : null;
 
     return [
-      createAgentSelfProvider(this),
+      createAgentSelfProvider(agentSelfHost({
+        rt: this.rt,
+        scaffoldControl: () => this.scaffoldControl,
+        triggers: () => this.triggerRegistry,
+        jobs: () => this.jobs,
+        budget: () => this.budget,
+        // The owner's revoke path, which re-arms the local alarm after it.
+        cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
+        // The fold lands on the NEXT turn's assembly, under this conversation's cache key.
+        armCompactNow: () => { this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey); },
+      })),
       // `agents.*` — the delegation tool projected into the sandbox, over
       // the same deps the top-level tool holds. Locally that is fork only.
       createAgentsCodemodeProvider(() => this.agentsToolDeps(mode)),
