@@ -54,22 +54,13 @@ describe('findComplementaryPair', () => {
   });
 
   test('draws each pair in proportion to its complementary surface', () => {
-    // Three pairwise surfaces over this pool: A/B is 2 (one win each), while
-    // A/C and B/C are 3 (C wins two instances against either). The previous
-    // version of this test asserted `pair.a.id === 'a' || ... || pair.b.id === 'c'`,
-    // which every pair drawable from {a,b,c} satisfies, under a comment that put
-    // A/C's surface at 1. It could not tell weighted selection from uniform, from
-    // first-pair-always, or from returning a dominated pair.
+    // Pairwise surfaces: A/B is 2 (one win each); A/C and B/C are 3 (C wins two against either).
     const a = mkCandidate('a', { i1: 0.9, i2: 0.3, i3: 0.5 });
     const b = mkCandidate('b', { i1: 0.3, i2: 0.9, i3: 0.5 });
     const c = mkCandidate('c', { i1: 0.5, i2: 0.5, i3: 0.7 });
     const ids = ['i1', 'i2', 'i3'];
 
-    // A stratified sweep of the unit interval rather than a seeded stream: it
-    // reads the whole distribution the weighting defines, and it is exact. The
-    // wins each draw reported are kept per pair rather than asserted per draw —
-    // there are three distinct pairs, so 4000 in-loop assertions would say the
-    // same three things 4000 times.
+    // A stratified sweep of the unit interval reads the whole distribution exactly.
     const draws = 4000;
     const share = new Map<string, number>();
     const wins = new Map<string, string>();
@@ -89,9 +80,7 @@ describe('findComplementaryPair', () => {
     expect(share.get('ac')).toBeCloseTo(3 / 8, 2);
     expect(share.get('bc')).toBeCloseTo(3 / 8, 2);
 
-    // Every pair the sweep drew is genuinely complementary on the recorded
-    // scores: each side wins somewhere, which is what makes it a merge candidate
-    // rather than a dominated pair.
+    // Every drawn pair is complementary: each side wins somewhere.
     expect([...wins.entries()].sort(([keyA], [keyB]) => keyA.localeCompare(keyB))).toEqual([
       ['ab', 'i1|i2'],
       ['ac', 'i1|i2,i3'],
@@ -125,11 +114,7 @@ describe('renderMergePrompt', () => {
     expect(prompt).toContain('first task');
     expect(prompt).toContain('second task');
     expect(prompt).toContain('Return ONLY the merged');
-    // "Do not naively concatenate" was the only anti-pattern the merge operator
-    // named, and naming the likeliest failure mode of a merge-two-files task
-    // without showing it is the weakest form of a prohibition. Shown now, with
-    // the structural contract the downstream constraint gate would otherwise
-    // refuse only after a whole eval-set scoring pass had been paid for.
+    // The likeliest merge failure is shown, not only named.
     expect(prompt).toContain('Do not naively concatenate');
     expect(prompt).toContain('Naive concatenation, and what to do instead:');
     expect(prompt).toContain('the entry point defined twice');
@@ -173,7 +158,6 @@ describe('runGepa with Merge end-to-end', () => {
     //   spec-A → 0.9 on i1, 0.3 on i2  (i1 specialist)
     //   spec-B → 0.3 on i1, 0.9 on i2  (i2 specialist; complementary to A)
     //   merged → 0.9 on both (best of both)
-    // Override metric per-instance:
     const richMetric = async (source: string, inst: EvalInstance<string>): Promise<MetricOutcome> => {
       const i = inst.id;
 
@@ -221,9 +205,5 @@ describe('runGepa with Merge end-to-end', () => {
     expect(result.winner.aggregateScore).toBeCloseTo(0.95, 3);
   });
 
-  // `useMerge: false` is asserted in gepa.test.ts, by 'useMerge off means the
-  // operator never runs', which counts the merge prompts and requires zero. The
-  // test that stood here ran the same configuration and asserted
-  // `iterationsRun >= 0` — true for every possible outcome, since the engine sets
-  // it to `history.length - 1` and history always holds the seed.
+  // `useMerge: false` is covered in gepa.test.ts ('useMerge off means the operator never runs').
 });

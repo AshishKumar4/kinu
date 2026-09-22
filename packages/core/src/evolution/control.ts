@@ -1,23 +1,7 @@
 /**
- * The scaffold evolution control plane — the drivers that turn the evolution
- * primitives into operations an agent can be asked to perform.
- *
- * Every piece this file calls (`runScaffold`, `modifyScaffold`,
- * `decidePromotion`, `applyPromotionDecision`, `buildOutcomeEvalSplit`,
- * `runScaffoldGepa`) was already core. Only the drivers were not — they were
- * written as Durable Object methods, so a capability with nothing
- * Cloudflare-shaped about it existed on exactly one backend. GEPA is the stark
- * case: the flagship self-optimisation pass could not be run from the CLI at
- * all, because its driver was a `@callable()` on OrchestratorAgent. Four more
- * (propose, shadow status, apply decision, list versions) existed twice, once
- * per backend, and had already drifted — the cf copy writes an
- * `evolution_events` row and emits a run event, the local copy did neither.
- *
- * What a backend supplies is a {@link ScaffoldSurface}: the four ports a
- * candidate loop runs against (inference, tools, history, default loop). That
- * is a genuine per-backend difference — cf resolves it from the actor's raw
- * ToolSet and Think's message stream, the CLI from the session's ToolSet and
- * its own history. Everything else is policy and lives here.
+ * The scaffold evolution control plane: backend-neutral drivers over the evolution
+ * primitives. A backend supplies only a {@link ScaffoldSurface}; everything else is
+ * policy and lives here.
  */
 
 import { generateText, type LanguageModel, type ModelMessage } from 'ai';
@@ -82,92 +66,56 @@ import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 export type { ScaffoldVersionView } from '../types/scaffold';
 
 /**
- * The inference surface a candidate scaffold runs against.
- *
- * The one genuine per-backend part of this plane: cf builds these over the
- * actor's raw ToolSet and Think's prepared messages, the CLI over the
- * session's ToolSet and its own history. All four ports are built by core
- * factories (`orchestrator/scaffold-host.ts`) on both sides.
+ * The one per-backend part of this plane. Both sides build the ports with core
+ * factories (`orchestrator/scaffold-host.ts`).
  */
 export interface ScaffoldSurface {
   readonly llmStream: ScaffoldRunOptions['llmStream'];
   readonly callTool?: ScaffoldRunOptions['callTool'];
   readonly history?: ScaffoldRunOptions['history'];
-  /** What `host.defaultInference()` runs — the backend's ordinary turn loop.
-   *  Absent means a scaffold that delegates gets the documented error. */
+  /** Absent means a scaffold that delegates gets the documented error. */
   readonly defaultInference?: ScaffoldRunOptions['defaultInference'];
 }
 
-/** The conversation a candidate's default loop replays. Empty means the caller
- *  has none, and the backend reconstructs one from the task alone. */
+/** The conversation a candidate's default loop replays. Empty means the backend
+ *  reconstructs one from the task alone. */
 export type ScaffoldReplayContext = readonly ModelMessage[];
 
-/** Structured output from a model, validated against a schema. */
 export type JsonGenerator = <T>(opts: {
   schema: v.GenericSchema<unknown, T>;
   prompt: string;
 }) => Promise<T>;
 
-/** What the control plane needs from whichever backend is hosting it. */
 export interface ScaffoldControl {
   readonly rt: AgentRuntime;
   readonly events: ScaffoldDecisionEvents;
   readonly sql: SqlExecutor;
-  /** The actor's conversation store. Every eval split this plane draws reads
-   *  the graded turns' request/response text out of it, so the plane is given
-   *  the one the host already owns rather than opening a second view of it. */
+  /** The host's conversation store; eval splits read graded turns' text from it. */
   readonly history: SessionHistory;
   readonly config: Pick<
     AgentConfigStore,
     'getShadowSampleRate' | 'getAutoPromoteScaffold' | 'getGepaEvalBudget'
   >;
-  /** Resolved per call against the task being run, so a control-plane
-   *  operation issued mid-session runs the candidate against the tools the
-   *  session has right now, and `defaultInference` delegates to the ordinary
-   *  loop for THIS task. `context` is the conversation that task was asked in,
-   *  which a delegating candidate must be given or it answers a
-   *  context-dependent task from the task text alone; empty for the one-shot
-   *  operations (preview, GEPA rollout, replay), which have none. */
-  /** `callScope`, when the caller can be re-driven: it makes the rollout's tool
-   *  call ids reproducible so the effect claim can dedupe a replay. Omitted by
-   *  callers with no durable identity — a live preview, a GEPA candidate. */
+  /** Resolved per call against the task being run. `context` is the conversation the
+     *  task was asked in, empty for one-shot operations. */
+  /** `callScope` makes the rollout's tool call ids reproducible so the effect claim
+     *  can dedupe a replay; omitted by callers with no durable identity. */
   readonly surface: (
     task: string, context?: ScaffoldReplayContext, callScope?: string,
   ) => ScaffoldSurface;
-  /** The chat model — what a candidate loop and the reflection LM run on. */
   readonly model: () => LanguageModel | Promise<LanguageModel>;
   /**
-   * The judge. Must NOT be the chat model: GEPA is the largest judge consumer
-   * in the system, and letting a model grade its own candidates is exactly the
-   * self-enhancement bias (arXiv:2306.05685) every other scorer here routes
-   * around. Backends build this over their cross-family review model.
-   */
+     * Must not be the chat model: a model grading its own candidates is
+     * self-enhancement bias (arXiv:2306.05685).
+     */
   readonly judge: JsonGenerator;
-  /**
-   * Where this plane's own model calls are reported, as `reflection` spend.
-   *
-   * Evolution is the largest non-turn producer in the system — a GEPA pass runs
-   * one candidate rollout plus one judge call per metric evaluation, times the
-   * eval budget, and none of it is a turn step. The rollout reports itself
-   * through the scaffold stream and the judge through whichever model the
-   * backend built it over; this field is for the piece that has no other seam,
-   * the reflection LM that rewrites the scaffold.
-   *
-   * Optional: a backend that wires no sink runs the plane exactly as before.
-   */
+  /** Reports the reflection LM's calls as `reflection` spend; rollouts and judge report elsewhere. */
   readonly reportModelCall?: ModelCallSink;
-  /**
-   * Where this plane's operation lifecycle goes — the start/end pair that
-   * names what was in flight when a process died. Same optional contract as
-   * the sink above: absent means the plane's in-flight work is unattributable,
-   * which the ledger states rather than hides. Backends build both from one
-   * recorder through {@link recordModelOperations}.
-   */
+  /** Operation lifecycle sink. Absent means in-flight work is unattributable. */
   readonly operations?: ModelOperationSink;
 }
 
-/** The chat transcript an eval split is drawn from — the graded turns all live
- *  in the default conversation, whatever else this plane is optimising. */
+/** The graded turns all live in the default conversation. */
 export function controlTranscript(control: ScaffoldControl): SessionTranscriptReader {
   return control.history.transcript(CHAT_SESSION_ID);
 }
@@ -192,13 +140,9 @@ function scaffoldRunOptions(
 }
 
 /**
- * Run a scaffold against a task and return the text it produced. With
- * `candidateCode` this is the GEPA metric's rollout; without it, it rolls the
- * LIVE scaffold — the replay-eval harness's current-config runner.
- *
- * The rollout carries no elapsed deadline, like the live turn: this run IS
- * the candidate's score, and a candidate cut off early would score as a bad
- * candidate rather than be measured.
+ * Run a scaffold and return its text: with `candidateCode`, the GEPA metric's
+ * rollout; without it, the live scaffold. No deadline: a candidate cut off early
+ * would score as a bad candidate rather than be measured.
  */
 export async function runScaffoldCaptureText(
   control: ScaffoldControl,
@@ -218,10 +162,8 @@ export async function runScaffoldCaptureText(
 }
 
 /**
- * Execute the current scaffold for a one-shot task and return everything it
- * emitted, injecting nothing back into the conversation — how a scaffold
- * mutation is tried without touching the live turn loop. `useShadowOverride`
- * runs the pending version instead, when one exists.
+ * Run the current scaffold for a one-shot task without injecting into the
+ * conversation. `useShadowOverride` runs the pending version instead.
  */
 export async function runScaffoldOnce(
   control: ScaffoldControl,
@@ -237,38 +179,14 @@ export async function runScaffoldOnce(
 }
 
 /**
- * The turn-bound half of the shadow loop, in two calls.
- *
- * {@link shadowTrialPlan} DECIDES: which candidate this turn is sampled
- * against, or null for a turn that is not sampled. {@link queueTurnShadowTrial}
- * RECORDS a decided plan as one row carrying the task, what the live turn
- * answered, and the conversation it answered in. The split exists because both
- * halves of the decision move: the rate is a coin flip, and the pending
- * candidate is promoted and replaced. A caller that owes the queueing makes the
- * decision once, when the turn ends, and writes it into its durable record; a
- * replay records the same plan instead of deciding again. Deciding twice would
- * perform a different obligation than the one owed: a turn the first attempt
- * declined gets enqueued, and a sampled one gets scored against a candidate
- * that was not under trial when it ran.
- *
- * The trial itself, a whole candidate turn plus two judge calls, minutes of
- * wall clock, is NOT run here. On the turn's own lane it would resolve the
- * promotion gate against the user's clock: a `kinu exec` process waiting up to
- * its settle bound for a rollout, a Durable Object running a full extra
- * inference beside the next request. What runs the queue is the cadence lane
- * ({@link runQueuedShadowTrials}), and until it does the gate has less
- * evidence, which `decidePromotion` already answers with 'continue' and
- * `getShadowStatus` reports as queued rather than as trials.
- *
- * Whether any of this runs is not decided here: both halves of the loop are
- * reached through the EvolutionEngine, which holds the one auto-evolution gate
- * (`queueShadowTrial` / `runDueShadowTrials`).
+ * {@link shadowTrialPlan} decides which candidate a turn is sampled against;
+ * {@link queueTurnShadowTrial} records that plan. Split so a replay records the
+ * same plan instead of deciding again against a moved rate or candidate.
+ * The trial itself runs on the cadence lane ({@link runQueuedShadowTrials}), never
+ * on the user's turn. The auto-evolution gate lives in EvolutionEngine.
  */
 export function shadowTrialPlan(control: ScaffoldControl, turnKey: string): number | null {
-  // An empty key is every unkeyed turn's key. Hashing it answers the same way for
-  // all of them — permanently in or permanently out of the evidence, depending on
-  // the rate — which is a stable BIAS, not a stable decision. Such a turn has no
-  // durable identity to record a trial under either, so it offers none.
+  // An empty key would hash to a stable bias, and has no durable identity to record under.
   if (turnKey === '') return null;
   const sampleRate = control.config.getShadowSampleRate();
 
@@ -283,18 +201,11 @@ export function shadowTrialPlan(control: ScaffoldControl, turnKey: string): numb
 }
 
 /**
- * A stable fraction in [0, 1) for one turn — the coin flip, made reproducible.
- *
- * A caller that OWES this decision may be asked for it more than once: a
- * duplicate callback rebuilds the whole declaration before the ledger recognises
- * it. A fresh `Math.random()` there answers differently and the sequence claims a
- * different set of rows than the one already on record. Derived from the turn's
- * own id instead, the answer is the same every time it is asked, while remaining
- * uniform across turns.
+ * A stable fraction in [0, 1) from the turn id, so a repeated ask for an owed
+ * decision answers the same while staying uniform across turns.
  */
 function sampleFraction(turnKey: string): number {
-  // FNV-1a, 32-bit. Not a security hash — it needs to spread short, similar ids
-  // evenly, and it needs to be the same three lines on every backend.
+  // FNV-1a, 32-bit: spreads short similar ids evenly; identical on every backend.
   let hash = 0x811c9dc5;
 
   for (let i = 0; i < turnKey.length; i++) {
@@ -306,9 +217,8 @@ function sampleFraction(turnKey: string): number {
 }
 
 /**
- * Record one decided plan as a queued trial. Synchronous and total: a lost
- * trial must never fail the turn that produced it, so every failure is absorbed
- * and named in the return value.
+ * Synchronous and total: a lost trial must never fail its turn, so failures are
+ * absorbed and named in the return value.
  */
 export function queueTurnShadowTrial(
   control: ScaffoldControl,
@@ -318,14 +228,8 @@ export function queueTurnShadowTrial(
   try {
     const trial = {
       pendingVersion: plan.pendingVersion,
-      // Passed WHOLE. runAutoShadowEval owns the evidence budget and applies it
-      // once, to the judge and the trial row together; a clamp here both
-      // duplicates the policy and lies about it — windowing an already windowed
-      // string reports the second pass's omission count, not the total. It also
-      // matters beyond tidiness: `task` is what the PENDING scaffold is run on,
-      // so a slice here would ask the pending to answer a truncated version of
-      // the question the live turn answered in full, then judge the two against
-      // each other.
+      // Passed whole: runAutoShadowEval applies the evidence budget once, and the pending
+      // scaffold must answer the same question the live turn did.
       task: turn.task,
       currentOutput: turn.currentOutput,
       context: turn.context,
@@ -347,19 +251,9 @@ export function queueTurnShadowTrial(
 }
 
 /**
- * The offline half: run every trial queued for the pending scaffold, then let
- * the promotion gate read what has accumulated.
- *
- * Cadence-lane work by construction — minutes of wall clock per trial, so only
- * a host that can afford to finish it ever starts it (the Durable Object under
- * keepAlive, a long-lived CLI session, the local scheduler daemon). A host that
- * exits first leaves the rows where they are; the queue is durable and the next
- * capable host runs them.
- *
- * Trials for any version that is no longer pending are discarded rather than
- * run: a trial is evidence about ONE candidate, and once that candidate is
- * resolved its remaining trials would score a version nobody is deciding on.
- * The same reason stops the loop the moment a decision is applied.
+ * Run every trial queued for the pending scaffold, then let the promotion gate read
+ * the result. Cadence-lane only; the queue is durable across hosts. Trials for a
+ * version no longer pending are discarded, and the loop stops once a decision applies.
  */
 export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<ShadowTrialDrain> {
   const pending = getPendingScaffold(control.sql, control.rt.actor);
@@ -370,11 +264,8 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
   let trials = 0;
   let processed = 0;
 
-  // Re-read between laps: a turn can queue a trial while the previous lap is
-  // running, and a drain that only ever saw its opening snapshot would leave
-  // the newest evidence for a pass that may never come. A lap that finds
-  // nothing ends the drain; the ceiling bounds the pathological case, and past
-  // it one drain has already run more trials than the gate can consume.
+  // Re-read between laps so trials queued mid-drain are included; the ceiling bounds
+  // the pathological case.
   while (processed < MAX_QUEUED_SHADOW_TRIALS) {
     const batch = listQueuedShadowTrials(control.sql, control.rt.actor, pending.version);
 
@@ -383,9 +274,8 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
     for (const trial of batch) {
       if (processed >= MAX_QUEUED_SHADOW_TRIALS) break;
       processed++;
-      // Scoped on the QUEUE ROW: a re-drive after an interruption reproduces the
-      // same call ids, so the tool-effect claim recognises the rollout's external
-      // work instead of running it a second time.
+      // Scoped on the queue row so a re-drive reproduces call ids and the effect claim
+      // does not repeat external work.
       const surface = control.surface(trial.task, trial.context, trial.id);
       let applied: 'promote' | 'rollback' | null = null;
 
@@ -401,9 +291,8 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
           history: surface.history,
           defaultInference: surface.defaultInference,
           config: { ...DEFAULT_AUTO_JUDGE_CONFIG, autoApply: control.config.getAutoPromoteScaffold() },
-          // The queue row's identity. It keys the evaluation AND gates the
-          // rollout: an interruption between the score and the delete below must
-          // not run the pending scaffold's tool calls a second time.
+          // Keys the evaluation and gates the rollout, so an interruption before the delete
+          // does not rerun the pending scaffold's tool calls.
           trialId: trial.id,
         });
 
@@ -411,8 +300,7 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
 
         if (!result.skipped) trials++;
       } catch (err) {
-        // A trial that throws is a trial we cannot score, not a queue we should
-        // wedge on: drop it below and carry on with the rest.
+        // An unscorable trial is dropped, not a reason to wedge the queue.
         diagnostics.failure(
           'evolution.shadow_trial_failed',
           toKinuError({ doing: 'run a queued shadow trial', cause: err, otherwise: 'unavailable' }),
@@ -433,11 +321,7 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
   return { trials, applied: null };
 }
 
-/**
- * Run an arbitrary scaffold version against a task — previewing a candidate
- * live before promoting it. Reads the version's source from the VFS
- * `agent.js.vN` backup.
- */
+/** Preview a scaffold version from its VFS `agent.js.vN` backup. */
 export async function previewScaffoldLive(
   control: ScaffoldControl,
   version: number,
@@ -455,10 +339,8 @@ export async function previewScaffoldLive(
 }
 
 /**
- * Propose a new version of the agent's own inference loop, through the
- * existing modifyScaffold 4-gate pipeline. An accepted proposal lands as
- * `pending` and is scored by the sampled shadow eval + promotion gate like any
- * other — no new safety surface.
+ * Propose a new scaffold version through modifyScaffold's gates. It lands
+ * `pending` and goes through shadow eval and the promotion gate like any other.
  */
 export async function proposeScaffold(
   control: ScaffoldControl,
@@ -505,14 +387,11 @@ export type ShadowStatus =
       pending: NonNullable<ReturnType<typeof getPendingScaffold>>;
       decision: ReturnType<typeof decidePromotion>;
       config: typeof DEFAULT_SHADOW_CONFIG;
-      /** Trials sampled but not yet executed. Reported separately from
-       *  `pending.trialsSoFar` and never folded into it: this is evidence the
-       *  candidate is OWED, and the gate has not seen a single bit of it. */
+      /** Sampled but unexecuted trials; never folded into `pending.trialsSoFar`. */
       queuedTrials: number;
     };
 
-/** The pending scaffold's rollout state — trials so far and what the promotion
- *  gate currently says. With nothing pending, the recent archive instead. */
+/** With nothing pending, the recent archive instead. */
 export function getShadowStatus(sql: SqlExecutor, actor: ActorHandle): ShadowStatus {
   const pending = getPendingScaffold(sql, actor);
 
@@ -532,11 +411,9 @@ export type ScaffoldDecisionResult =
   | (Awaited<ReturnType<typeof applyPromotionDecision>> & { ok: true; fromVersion: number });
 
 /**
- * Apply the pending rollout decision by hand. `auto` acts only on a conclusive
- * promotion gate; `promote`/`rollback` force the corresponding action — though
- * the misevolution recheck inside applyPromotionDecision can still convert a
- * requested promote into a rollback, which is why the result reports the
- * action ACTUALLY applied.
+ * `auto` acts only on a conclusive gate; `promote`/`rollback` force it. The
+ * misevolution recheck can still turn a promote into a rollback, so the result
+ * reports the action actually applied.
  */
 export async function applyScaffoldDecision(
   control: ScaffoldControl,
@@ -562,17 +439,10 @@ export async function applyScaffoldDecision(
   return { ok: true, fromVersion, ...result };
 }
 
-/**
- * GEPA's reflection LM, over the chat model, reporting as `reflection` spend.
- *
- * One for both targets. The reasoning effort is `scaffold_mutation` for a
- * prompt section too: the job is the same — read the failures, rewrite the
- * artifact — and a second effort key would be a second knob for one decision.
- */
+/** Uses the `scaffold_mutation` effort for prompt sections too: the job is the same. */
 function reflectionLmFor(control: ScaffoldControl, model: LanguageModel): ReflectionLM {
   return async (prompt) => {
-    // The frame opens before the request: a GEPA pass killed mid-rewrite is
-    // exactly the operation §9.1's start row exists to name.
+    // Opens before the request so a pass killed mid-rewrite is named.
     const operation = beginModelOperation(
       { source: 'reflection', operations: control.operations },
       'complete',
@@ -596,15 +466,12 @@ function reflectionLmFor(control: ScaffoldControl, model: LanguageModel): Reflec
   };
 }
 
-// ── GEPA offline scaffold optimisation ──────────────────────────────────────
-
 const GepaScoreSchema = v.object({
   score: MetricScoreSchema,
   feedback: v.pipe(v.string(), v.minLength(1)),
 });
 
-/** A metric exists only when the judge answers. Failure aborts the measurement
- * through the caller's existing failed-run path, never as a numeric quality. */
+/** Judge failure aborts the measurement via the failed-run path, never as a score. */
 async function judgeScore(control: ScaffoldControl, prompt: string): Promise<MetricOutcome> {
   const scored = await control.judge({
     schema: GepaScoreSchema,
@@ -624,30 +491,17 @@ export interface GepaOptimizationResult {
   bestScore?: ScoreInterval;
   seedScore?: ScoreInterval;
   iterations?: number;
-  /** What the winner was selected on: failures it never trained on, plus
-   *  accepted regression guards. */
   selection?: { heldOutNegatives: number; guards: number };
-  /** Present when the split could not support an out-of-sample selection —
-   *  the result is exploratory, not evidence. */
+  /** Present when the split could not support an out-of-sample selection. */
   selectionWarning?: string;
 }
 
 /**
- * Run a GEPA (Genetic-Pareto) optimisation pass over the agent's scaffold.
- *
- * Offline and batch: draws a budgeted, DISJOINT train/val split from the
- * turn-outcome ledger (older corrected/frustrated turns are the train set
- * reflection must fix; the newest failures held out, plus accepted turns, are
- * the val set the winner is selected on), runs the current scaffold and
- * reflection-mutated candidates against them, scores each with an
- * outcome-aware judge, and — if a strictly better candidate is found — hands
- * the winner to modifyScaffold so it enters the normal shadow-eval → promote
- * pipeline. Persisted to gepa_runs/gepa_candidates for lineage.
- *
- * Cost-bounded: the instance budget comes from actor_config gepa_eval_budget
- * unless `evalSize` overrides it, and each metric call is a full scaffold run
- * plus a judge call. Scores come back as intervals — with a val set this size,
- * a winner inside the seed's interval is not evidence of anything.
+ * GEPA (Genetic-Pareto) pass over the scaffold. Draws a disjoint train/val split
+ * from the outcome ledger: older negatives train reflection; held-out newest
+ * negatives plus accepted guards select the winner. A strictly better winner goes
+ * to modifyScaffold and the normal shadow-eval pipeline. Budget from
+ * `gepa_eval_budget` unless `evalSize` overrides it.
  */
 export async function runScaffoldGepaOptimization(
   control: ScaffoldControl,
@@ -655,34 +509,27 @@ export async function runScaffoldGepaOptimization(
 ): Promise<GepaOptimizationResult> {
   const evalSize = clampGepaEvalBudget(opts?.evalSize ?? control.config.getGepaEvalBudget());
 
-  // 1. Train/val split from outcome-labeled turns (the turn_outcomes ledger).
   const split = await buildOutcomeEvalSplit(control.sql, control.rt.actor, controlTranscript(control), evalSize);
   const { train: trainSet, val: evalSet } = split;
 
-  // Without a failure to optimise toward there is nothing to select on but
-  // judge noise over already-accepted turns — and an empty train set would
-  // hand the eval set straight back to reflection as its minibatch source.
+  // Without a failure there is nothing to select on but judge noise, and an empty
+  // train set would hand val back to reflection.
   if (split.degeneracy === 'no_labeled_turns' || split.degeneracy === 'no_negatives') {
     return { ok: false, error: describeSplitDegeneracy(split.degeneracy) };
   }
 
   const budget = {
     maxIterations: Math.max(1, Math.min(opts?.maxIterations ?? 4, 20)),
-    // Seed scoring (|val|) plus one minibatch and one full scoring per
-    // iteration; the default covers the default 4 iterations over a
-    // default-budget split with headroom.
+    // Seed scoring plus one minibatch and one full scoring per iteration.
     maxMetricCalls: Math.max(10, Math.min(opts?.maxMetricCalls ?? 120, 400)),
-    // The paper's 3 — reflection reads three failures per proposal. The engine
-    // caps it at the (disjoint) train set when fewer exist.
+    // The paper's 3; the engine caps it at the train set size.
     minibatchSize: 3,
   };
 
   const model = await control.model();
 
-  // 2. Metric: run the candidate scaffold against the task, then judge against
-  // the recorded outcome — accepted turns are regression checks against the
-  // response the user approved; negatives are scored on whether the candidate
-  // already addresses the complaint, whoever made it.
+  // Accepted turns are regression checks against the approved response; negatives
+  // score on whether the candidate addresses the complaint.
   let metricCalls = 0;
 
   const metric = async (
@@ -708,10 +555,8 @@ export async function runScaffoldGepaOptimization(
     );
   };
 
-  // 3. Reflection LM — rewrites the artifact from the failure feedback.
   const reflectionLm = reflectionLmFor(control, model);
 
-  // 4. Run GEPA, persisting every candidate + Pareto snapshot.
   const runId = startGepaRun(control.sql, control.rt.actor, { target: 'scaffold', budget });
   const persist = makePersistingHooks({ sql: control.sql, actor: control.rt.actor, runId });
   let iterations = 0;
@@ -770,8 +615,6 @@ export async function runScaffoldGepaOptimization(
   return output;
 }
 
-// ── GEPA offline prompt-section optimisation ────────────────────────────────
-
 const SECTION_WORDING_RULE: OutcomeScoringRule = {
   accepted: 'Score 1.0 when the candidate wording would still have produced a response at least '
     + 'this good, 0.0 when it would have pushed the agent off it.',
@@ -780,19 +623,9 @@ const SECTION_WORDING_RULE: OutcomeScoringRule = {
 };
 
 /**
- * Score one candidate SECTION against one outcome-labeled turn.
- *
- * No rollout, and the omission is the point. A scaffold is code, so the only
- * way to know what it does is to run it; a prompt section is guidance the model
- * reads, and the question a labeled turn answers about it is counterfactual:
- * would this wording have prevented the correction the user wrote, or kept the
- * answer they accepted? Re-running a whole turn per instance would cost the
- * eval budget many times over to answer the same question with a sampled loop
- * in the way.
- *
- * That makes the score weaker evidence than a scaffold rollout, which is why
- * nothing here promotes: a winner lands PENDING and earns its way live through
- * held-out trials and the same calibrated rule (`prompting/section-store.ts`).
+ * Scores a section counterfactually with no rollout: would this wording have
+ * prevented the correction or kept the accepted answer? Weaker evidence, so a winner
+ * only lands pending (`prompting/section-store.ts`).
  */
 function renderSectionScorePrompt(
   sectionId: string,
@@ -820,28 +653,17 @@ export interface PromptSectionOptimizationResult {
   proposed?: boolean;
   pendingVersion?: number | null;
   skipReason?: string;
-  /** Present when the gate refused — `size_rule` is the anti-bloat rule, not a
-   *  fault, and callers report it as such. */
+  /** `size_rule` is the anti-bloat rule, not a fault. */
   refusal?: string;
   bestScore?: ScoreInterval;
   incumbentScore?: ScoreInterval;
   iterations?: number;
-  /** Bytes the winner would add to every turn if promoted. Negative is the
-   *  outcome worth celebrating. */
+  /** Bytes the winner would add to every turn if promoted. */
   byteDelta?: number;
   selectionWarning?: string;
 }
 
-/**
- * Run a GEPA pass over ONE prompt section.
- *
- * The scaffold sibling of this driver (`runScaffoldGepaOptimization`) draws the
- * same DISJOINT train/val split from the turn-outcome ledger, and for the same
- * reason: older corrected/frustrated turns are what reflection must fix, the
- * newest failures plus accepted-turn regression guards are what the winner is
- * SELECTED on. A section optimised against the turns it was selected on has
- * learned those turns, not the job.
- */
+/** GEPA over one prompt section, with the same disjoint train/val split as the scaffold pass. */
 async function runPromptSectionGepaOptimization(
   control: ScaffoldControl,
   opts: { sectionId: string; maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
@@ -855,8 +677,7 @@ async function runPromptSectionGepaOptimization(
 
   const budget = {
     maxIterations: Math.max(1, Math.min(opts.maxIterations ?? 4, 20)),
-    // A section metric call is ONE judge call, where a scaffold's is a whole
-    // rollout plus a judge call, so the same iteration count buys more here.
+    // A section metric call is one judge call, not a rollout plus judge.
     maxMetricCalls: Math.max(10, Math.min(opts.maxMetricCalls ?? 120, 400)),
     minibatchSize: 3,
   };
@@ -936,7 +757,6 @@ async function runPromptSectionGepaOptimization(
 
 export interface PromptSectionTrialResult {
   sectionId: string;
-  /** No pending candidate for this section — nothing to trial. */
   pending: boolean;
   trialsRun: number;
   decision?: 'promote' | 'rollback' | 'continue';
@@ -954,15 +774,8 @@ function trialWinner(pendingScore: number, currentScore: number): 'current' | 'p
 }
 
 /**
- * The offline half: score the pending section against the incumbent on turns it
- * was never selected on, then let the calibrated rule decide.
- *
- * The shadow loop's discipline, kept: a trial is EXPENSIVE (two judge calls),
- * so it runs on the cadence lane and never on a user's turn; the two sources
- * are scored on the SAME instance so the comparison is paired; a tie is
- * recorded as a tie. What differs from the scaffold's loop is only what a trial
- * IS — no queue, because a section trial needs no live turn to ride on. It
- * needs a labeled turn, and the ledger already has those.
+ * Score the pending section against the incumbent on held-out turns, paired per
+ * instance, on the cadence lane only. No queue: a section trial needs no live turn.
  */
 async function runPromptSectionTrials(
   control: ScaffoldControl,
@@ -978,9 +791,7 @@ async function runPromptSectionTrials(
 
   const incumbent = incumbentSectionSource(control.sql, control.rt.actor, section);
   const metric = sectionMetric(control, sectionId);
-  // Drawn fresh each pass, so consecutive passes see the turns that happened in
-  // between: the newest failures plus the accepted-turn guards, and never the
-  // train half the candidate was written against.
+  // Drawn fresh each pass, never including the train half.
   const split = await buildOutcomeEvalSplit(control.sql, control.rt.actor, controlTranscript(control), control.config.getGepaEvalBudget());
   const instances = split.val.slice(0, Math.max(1, opts?.trials ?? 3));
 
@@ -1023,9 +834,7 @@ async function runPromptSectionTrials(
   return result;
 }
 
-/** What a measured proposal did. `code` names the bar rather than numbering it,
- *  for the same reason `ProposeSectionRefusal` does: a caller that must tell
- *  anti-bloat from a safety veto cannot branch on prose. */
+/** `code` names the bar so callers can branch without parsing prose. */
 export type MeasuredSectionProposal =
   | {
     readonly ok: true;
@@ -1042,23 +851,9 @@ export type MeasuredSectionProposal =
   };
 
 /**
- * Hand ONE externally authored section candidate to the proposal gate, having
- * first measured it.
- *
- * The sibling of `runPromptSectionGepaOptimization`, minus the search: GEPA
- * writes its own candidates and this takes one it was given, but both owe the
- * gate the same thing — a candidate and the incumbent scored on the SAME
- * held-out labeled turns, so `proposePromptSection`'s size rule is deciding on
- * measurement rather than on a proposer's confidence in itself.
- *
- * That is what makes an LLM-authored refinement unable to move the live prompt:
- * a candidate nobody could score never becomes a proposal, and a candidate that
- * becomes one lands PENDING and needs `advancePromptSectionLane`'s trials.
- *
- * A degenerate split is a REFUSAL and not a neutral score. Scoring a
- * counterfactual about a failure against a ledger holding no failures would
- * produce a number with nothing behind it, and the size rule would then trade
- * real bytes for it.
+ * Measure one externally authored section candidate against the incumbent on
+ * held-out labeled turns, then hand it to the proposal gate. It lands pending and
+ * needs `advancePromptSectionLane`'s trials. A degenerate split is a refusal.
  */
 export async function proposeMeasuredPromptSection(
   control: ScaffoldControl,
@@ -1086,8 +881,7 @@ export async function proposeMeasuredPromptSection(
 
   const incumbent = incumbentSectionSource(control.sql, control.rt.actor, section);
   const metric = sectionMetric(control, section.id);
-  // The held-out half, exactly as the trials use it: a candidate measured on the
-  // turns whoever wrote it was shown has learned those turns.
+  // Held-out turns only: a candidate measured on turns its author saw has learned them.
   const instances = split.val.slice(0, Math.max(1, input.trials ?? 3));
 
   const scored = await Promise.all(instances.map(async (instance) => Promise.all([
@@ -1116,17 +910,8 @@ export async function proposeMeasuredPromptSection(
 }
 
 /**
- * Which section the next optimisation pass targets: the one whose last pass is
- * oldest, and a section never passed before any that has.
- *
- * DERIVED from `gepa_runs`, never stored. An in-memory cursor is reset by a
- * Durable Object eviction, and the joint idle-eviction window is measured at
- * 2-5 minutes (`platform-catalog.ts` `do.facet.eviction_joint`), far shorter
- * than the 25-turn cadence between passes; a probe over the real actor showed
- * the first section receiving every pass. Every pass already writes its own
- * `gepa_runs` row under `target_ref`, so the rotation needs no new state. Ties
- * break on the registry's own order, so two never-passed sections resolve the
- * way `PROMPT_SECTIONS` declares them.
+ * The section whose last pass is oldest; never-passed first, ties by registry order.
+ * Derived from `gepa_runs` because an in-memory cursor is reset by Durable Object eviction.
  */
 function nextPromptSectionTarget(sql: SqlExecutor, actor: ActorHandle): PromptSection<string> | null {
   const lastPass = lastGepaRunPerTarget(sql, actor, 'prompt_section');
@@ -1145,30 +930,14 @@ function nextPromptSectionTarget(sql: SqlExecutor, actor: ActorHandle): PromptSe
   return next;
 }
 
-/** What one turn of the prompt-section lane did. */
 export type PromptSectionLaneStep =
-  /** A candidate was under trial and got its trials. */
   | { readonly step: 'trials'; readonly sectionId: string; readonly trials: PromptSectionTrialResult }
-  /** Nothing was pending, so the least-recently-passed section got a pass. */
   | { readonly step: 'pass'; readonly sectionId: string; readonly pass: PromptSectionOptimizationResult }
-  /** No sections are registered. */
   | { readonly step: 'idle' };
 
 /**
- * Advance the evolved-prompt-section loop by one step.
- *
- * A section under trial is FINISHED first, always: trials are what turn a
- * proposal into evidence, and a proposal nobody trials never lands. With
- * nothing pending, the next section in the rotation gets an optimisation pass,
- * so over nine cadence ticks every section has had one.
- *
- * Core rather than per backend because both halves of this — the order and the
- * selection — are policy over a `ScaffoldControl` with nothing platform-shaped
- * in them, and the order is exactly what a second backend would have to copy.
- * Two copies of "trials before a new pass" is one copy that eventually says
- * something else. What legitimately stays with the caller is the LIFECYCLE: how
- * a Durable Object gets this off its turn's critical path, and what it does with
- * a fault.
+ * A section under trial is finished first; with nothing pending, the next section
+ * in rotation gets a pass. Scheduling and fault handling stay with the caller.
  */
 export async function advancePromptSectionLane(
   control: ScaffoldControl,
@@ -1190,12 +959,8 @@ export async function advancePromptSectionLane(
   };
 }
 
-/** Structured output over a review LanguageModel at the judge stage's
- *  reasoning effort — what the cf actor builds over its cross-family review
- *  model. A bare sink rather than a `ModelCallSpend`: this factory IS one
- *  producer, so it supplies the `judge` label itself, and `generateJson` below
- *  is the substrate that needs telling. GEPA is the largest judge consumer in
- *  the system, which is why this seam's silence hid a whole producer. */
+/** Structured output over a review model at the judge stage's reasoning effort.
+ *  Supplies its own `judge` spend label. */
 export function createJsonJudge(
   model: () => LanguageModel | Promise<LanguageModel>,
   reportModelCall?: ModelCallSink,
@@ -1212,15 +977,8 @@ export function createJsonJudge(
   });
 }
 
-/** Structured output over core's `LLM` primitive — the same ask-for-JSON,
- *  extract, validate idiom `createStructuredJudge` uses, for a backend whose
- *  judge is an LLM rather than an ai-SDK LanguageModel.
- *
- *  No sink here, deliberately: `LLM.complete` returns text, so this side of the
- *  seam never sees a usage report to forward. The `LLM` it is handed is the one
- *  place that does, and it reports from its own construction
- *  (`createCompletionLLM({ spend: { source: 'judge', report } })`). A second
- *  channel here could only guess, or double-count. */
+/** Structured output over core's `LLM`. No sink: the `LLM` reports its own spend,
+ *  and a second channel would double-count. */
 export function createLlmJsonJudge(llm: LLM): JsonGenerator {
   return async (opts) =>
     v.parse(opts.schema, extractJsonObject(await llm.complete(`${opts.prompt}\n\n${jsonObjectOnlyInstruction()}`)));

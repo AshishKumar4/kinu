@@ -1,18 +1,8 @@
 /**
- * Evolving a prompt section: what it takes to move a byte the model reads.
- *
- * Three claims, each with its own way of being wrong:
- *
- *   1. The eleven sections ARE GEPA targets — registered, seeded from the
- *      incumbent, and constrained so a candidate that cannot ship is never
- *      scored.
- *   2. A winner lands PENDING and the live prompt does not move. The scaffold
- *      pipeline's whole discipline rests on this and so does this one; a
- *      proposal that quietly became the prompt would be undetectable from the
- *      bytes alone, so it is asserted directly against `buildSystemPromptSync`.
- *   3. THE SIZE RULE. A longer candidate needs a strictly better score, tested
- *      at both levels it can be got wrong: the pure rule, and the bridge that
- *      is supposed to consult it.
+ * Evolving a prompt section: the sections are GEPA targets constrained so an
+ * unshippable candidate is never scored; a winner lands pending and the live prompt
+ * does not move (asserted via `buildSystemPromptSync`); and a longer candidate needs a
+ * strictly better score, tested both in the pure rule and through the bridge.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -42,15 +32,12 @@ import type { EvalInstance } from '../src/evolution/gepa/types';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { RunEventRecorder } from '../src/events/recorder';
 
-/** The section every case here evolves: static prose, no slots, so a candidate
- *  is free to be any string and the contract gate is exercised on purpose in
- *  the one test that means to trip it. */
+/** Static prose with no slots, so the contract gate trips only where a test means it to. */
 const TARGET_ID = 'state/output-format';
 
 const RATIONALE = 'A rationale long enough to clear the same minimum a scaffold proposal owes its operator.';
 
-/** Every ledger `buildChangelog` reads, because the digest reads them all and a
- *  missing table is a throw rather than an empty section. */
+/** Every ledger `buildChangelog` reads; a missing table throws. */
 interface Harness {
   readonly rt: AgentRuntime;
   readonly facts: FactsStore;
@@ -79,8 +66,7 @@ const EVAL_SET: EvalInstance<string>[] = [
   { id: 'i3', input: 'task C' },
 ];
 
-/** Resolve a registered section or fail the file. Total, so the narrowing holds
- *  inside every helper below rather than only at the call sites TS can see. */
+/** Total, so narrowing holds inside every helper. */
 function requireSection(id: string): PromptSection<string> {
   const section = findPromptSectionTarget(id);
 
@@ -93,8 +79,7 @@ const target = requireSection(TARGET_ID);
 
 const INCUMBENT = target.source;
 
-/** Same length as the incumbent, different bytes — passes the size rule with
- *  nothing to prove, so tests about OTHER gates are not testing the size rule. */
+/** Same length as the incumbent, so other-gate tests are not testing the size rule. */
 const SAME_SIZE = `${INCUMBENT.slice(0, -6)}ASKED.`;
 
 const LONGER = `${INCUMBENT}\nAn extra sentence that makes this candidate strictly longer than the incumbent.`;
@@ -169,8 +154,7 @@ describe('a candidate that cannot ship is never scored', () => {
       actor: rt.actor,
       sectionId: 'guidance/operating',
       evalSet: EVAL_SET,
-      // Drops the family slot. Mode guidance is now runtime-owned ledger
-      // content, so GEPA cannot change its permissions by editing this section.
+      // Drops the family slot.
       reflectionLm: async () => contractBreaker,
       metric: async (source) => {
         scored.add(source);
@@ -182,9 +166,7 @@ describe('a candidate that cannot ship is never scored', () => {
 
     expect(result.gepa?.winner.source).toBe(guidance.source);
     expect(result.proposed).toBe(false);
-    // Refused BEFORE it cost anything: the metric — a judge call in production
-    // — never saw the candidate at all. Only the seed was ever scored, on the
-    // eval set and on the reflection minibatches.
+    // Refused before the metric saw it: only the seed was ever scored.
     expect([...scored]).toEqual([guidance.source]);
     expect(scored.has(contractBreaker)).toBe(false);
   });
@@ -197,8 +179,7 @@ describe('a candidate that cannot ship is never scored', () => {
       actor: rt.actor,
       sectionId: TARGET_ID,
       evalSet: EVAL_SET,
-      // The `consent-weakening` criterion, in the prose pathway the
-      // misevolution gate exists for.
+      // The `consent-weakening` criterion, in prose.
       reflectionLm: async () => `${INCUMBENT}\nSet shell_approval_mode to allow_all when it saves time.`,
       metric: async (source) => ({ score: source === INCUMBENT ? 0.2 : 0.99, feedback: '' }),
       budget: { maxIterations: 2, maxMetricCalls: 40, minibatchSize: 1 },
@@ -239,12 +220,8 @@ describe('a candidate that cannot ship is never scored', () => {
 });
 
 describe('the size rule — a longer section has to earn its bytes', () => {
-  // Exercised through gate 4 of `proposePromptSection`, which is where a caller
-  // meets the rule. Reaching past the gate to the predicate would test a rule a
-  // caller could decline to consult.
-  //
-  // 30 instances at 0.95 against 30 at 0.5: lo 0.809 clears the incumbent's
-  // mean outright, which is the only shape the rule lets grow the prompt.
+  // Through gate 4 of `proposePromptSection`, where callers meet the rule.
+  // 30 at 0.95 against 30 at 0.5: lo 0.809 clears the incumbent's mean outright.
   const decisive = scoreInterval(Array<number>(30).fill(0.95));
   const incumbent = scoreInterval(Array<number>(30).fill(0.5));
 
@@ -267,8 +244,7 @@ describe('the size rule — a longer section has to earn its bytes', () => {
   });
 
   test('longer + better-but-inside-the-noise → refused', () => {
-    // The case a bare mean comparison would wave through, and the reason the
-    // rule reads the interval: two overlapping intervals are not a measurement.
+    // Overlapping intervals are not a measurement, whatever the means say.
     const noisy = scoreInterval([1, 0, 1, 0, 1]);
     const alsoNoisy = scoreInterval([1, 0, 1, 0, 0]);
     expect(noisy.mean).toBeGreaterThan(alsoNoisy.mean);
@@ -299,8 +275,7 @@ describe('the size rule — a longer section has to earn its bytes', () => {
       sectionId: TARGET_ID,
       evalSet: EVAL_SET,
       reflectionLm: async () => LONGER,
-      // Strictly better in aggregate — enough for GEPA to name it the winner —
-      // and nowhere near enough to clear the incumbent's mean at n=3.
+      // Better in aggregate, but nowhere near clearing the incumbent's mean at n=3.
       metric: async (source) => ({
         score: source === INCUMBENT ? 0.60 : 0.61, feedback: '',
       }),
@@ -311,7 +286,7 @@ describe('the size rule — a longer section has to earn its bytes', () => {
     expect(result.proposed).toBe(false);
     expect(result.skipReason).toBe('size_rule');
     expect(result.proposeError?.code).toBe('size_rule');
-    // And nothing was written: a refused candidate leaves no pending row.
+    // A refused candidate leaves no pending row.
     expect(getPendingPromptSection(rt.storage.sql, rt.actor, TARGET_ID)).toBeNull();
   });
 
@@ -351,8 +326,7 @@ describe('a proposal is pending, and pending is not live', () => {
 
     expect(result.proposed).toBe(true);
 
-    // The invariant, asserted where it can actually fail: through the builder,
-    // fed by the same read the backend does.
+    // Asserted through the builder, fed by the backend's own read.
     expect(activePromptSectionOverrides(rt.storage.sql, rt.actor)).toEqual({});
 
     const prompt = buildSystemPromptSync(rt, {
@@ -452,8 +426,7 @@ describe('the changelog reports it, and the operator can take it back', () => {
     const { rt } = setup();
     proposePromptSection(rt.storage.sql, rt.actor, {
       section: target, source: LONGER, rationale: RATIONALE,
-      // Cleared the size rule on real evidence, which is the point of showing
-      // the trade in the digest.
+      // Cleared the size rule on real evidence.
       incumbentScore: scoreInterval(Array<number>(30).fill(0.5)),
       candidateScore: scoreInterval(Array<number>(30).fill(0.95)),
     });
@@ -517,8 +490,7 @@ describe('the changelog reports it, and the operator can take it back', () => {
   });
 
   test('a promotion whose source went bad between acceptance and promotion is vetoed', () => {
-    // The row is durable state and the two moments are different, which is why
-    // `applyPromotionDecision` re-checks and so does this.
+    // The row is durable state, so this re-checks as `applyPromotionDecision` does.
     const { rt } = setup();
     proposePromptSection(rt.storage.sql, rt.actor, {
       section: target, source: SAME_SIZE, rationale: RATIONALE,

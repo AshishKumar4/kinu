@@ -1,34 +1,14 @@
-/**
- * Pareto frontier maintenance — the load-bearing data structure of GEPA.
- *
- * Two operations:
- *   1. `computeParetoFront(pool, instanceIds)` — for each instance, find
- *      candidates achieving the per-instance MAX; the union (with strictly-
- *      dominated candidates pruned) is the front.
- *   2. `parentSelectionWeights(pool, instanceIds)` — weight each candidate
- *      by the number of instances on which it's the per-instance best.
- *      `sampleParentByWeight` samples proportionally.
- *
- * Why this matters: greedy "pick the highest-mean candidate" silently kills
- * any specialist that's the ONLY thing that handles a rare hard instance.
- * Pareto-by-instance preserves those specialists — they stay in the pool
- * even when their mean is mediocre.
- */
+/** Per-instance Pareto front and parent weighting: preserves specialists that alone solve rare hard instances. */
 
 import type { GepaCandidate } from './types';
 
-/** Result of a Pareto computation. */
 export interface ParetoComputation {
-  /** Candidates on the frontier (not strictly dominated). */
+  /** Not strictly dominated. */
   front: GepaCandidate[];
-  /** Per-instance, the candidates achieving the instance's max score. */
   perInstanceBest: Map<string, GepaCandidate[]>;
 }
 
-/** Find the Pareto frontier of a candidate pool over a set of evaluation
- *  instances. A candidate is **strictly dominated** when another candidate
- *  matches or exceeds its score on every instance AND strictly exceeds it
- *  on at least one. Such candidates are excluded from the front. */
+/** Strictly dominated = another candidate is ≥ on every instance and > on at least one. */
 export function computeParetoFront(
   pool: ReadonlyArray<GepaCandidate>,
   instanceIds: ReadonlyArray<string>,
@@ -37,7 +17,6 @@ export function computeParetoFront(
     return { front: [], perInstanceBest: new Map() };
   }
 
-  // For each instance, find the max score and the candidates achieving it.
   const perInstanceBest = new Map<string, GepaCandidate[]>();
 
   for (const id of instanceIds) {
@@ -54,8 +33,6 @@ export function computeParetoFront(
     perInstanceBest.set(id, bests);
   }
 
-  // Pareto front = candidates appearing in any per-instance best set,
-  // pruning those strictly dominated by another front member.
   const candidatesOnFront = new Set<GepaCandidate>();
 
   for (const bests of perInstanceBest.values()) {
@@ -85,7 +62,6 @@ export function computeParetoFront(
   return { front, perInstanceBest };
 }
 
-/** True iff `a` scores ≥ `b` on every instance and strictly > on at least one. */
 function strictlyDominates(
   a: GepaCandidate,
   b: GepaCandidate,
@@ -105,9 +81,7 @@ function strictlyDominates(
   return strictlyGreaterSomewhere;
 }
 
-/** Per-candidate weights for parent selection. A candidate's weight is the
- *  number of instances on which it's tied-best (its presence count in
- *  `perInstanceBest`). Candidates not on the front get weight 0. */
+/** Weight = number of instances on which the candidate is tied-best; off-front candidates get 0. */
 export function parentSelectionWeights(
   pool: ReadonlyArray<GepaCandidate>,
   instanceIds: ReadonlyArray<string>,
@@ -126,9 +100,7 @@ export function parentSelectionWeights(
   return weights;
 }
 
-/** Sample a candidate proportional to its Pareto weight. Falls back to the
- *  highest-aggregate candidate when all weights are zero (fresh pool with
- *  one seed). */
+/** Falls back to best-aggregate when all weights are zero. */
 export function sampleParentByWeight(
   pool: ReadonlyArray<GepaCandidate>,
   instanceIds: ReadonlyArray<string>,
@@ -143,7 +115,6 @@ export function sampleParentByWeight(
   for (const w of weights.values()) total += w;
 
   if (total === 0) {
-    // No Pareto signal yet — fall back to best-aggregate (greedy).
     return bestAggregate(pool);
   }
 
@@ -158,7 +129,7 @@ export function sampleParentByWeight(
   return bestAggregate(pool);
 }
 
-/** Highest-aggregate-score candidate. Ties broken by createdAt (older wins). */
+/** Ties broken by createdAt (older wins). */
 export function bestAggregate(pool: ReadonlyArray<GepaCandidate>): GepaCandidate {
   if (pool.length === 0) throw new Error('bestAggregate: empty pool');
   let best = pool[0];

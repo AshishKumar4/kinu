@@ -1,12 +1,6 @@
-// ActorHost — N logical actors, ONE physical workspace database.
-//
-// The whole of open-38 is the claim that a hired subordinate, a temporary, a
-// head and a node can share one database WITHOUT sharing state. That claim is
-// only worth something if it fails loudly, so every case below drives two REAL
-// issued actors over ONE `SqlExecutor`, gives them COLLIDING logical keys, and
-// asserts each reads back its own row and no other. No mocked handle, no
-// spoofed facet, no source-text assertion: the stores are the production bundle
-// bound through the production binder over the production directory.
+// ActorHost: N logical actors over one physical database, without sharing state.
+// Two real issued actors over one `SqlExecutor` with colliding keys each read back
+// only their own rows, through the production binder and directory.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { sqlOver, createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
@@ -39,18 +33,11 @@ interface Fixture {
   readonly directory: WorkspaceActorDirectory;
   readonly main: ActorReference;
   child(name: string, creationId: string, kind: 'subordinate' | 'head'): ActorReference;
-  /** A NEW host over the SAME database — what a root eviction leaves behind. */
+  /** A new host over the same database, as a root eviction leaves. */
   rebuild(): Fixture;
 }
 
-/**
- * A scaffold identity over a REAL in-memory file plane, per actor.
- *
- * `createTestRuntime`'s identity is a stub whose `version()` is always 0 and
- * whose `write` drops the bytes, which cannot express a loop pointer at all.
- * The host seeds every actor's loop before it builds a session, so the pointer
- * and the bytes both have to be real here or the seeding is untested.
- */
+/** A real per-actor scaffold identity, since the host seeds every actor's loop pointer and bytes. */
 function scaffoldIdentity(name: string, vfs: VFS, sql: SqlExecutor, actorId: string): Identity {
   const path = `agents/${name}/scaffold/agent.js`;
 
@@ -83,29 +70,24 @@ function build(donor?: Database, unreadableActor?: string, automatic = false): F
   if (!existing) void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, 'hosted')`;
   const directory = new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' });
   const mainHandle = directory.createMain({ name: 'hosted' });
-  // One runtime template per fixture: the fields a hosted actor does NOT own
-  // (model, memory, executor, scheduler, craft store) come from the shared test
-  // runtime, and the fields it DOES own are replaced per actor below.
+  // Shared runtime fields come from the template; actor-owned fields are replaced below.
   const template = createTestRuntime().rt;
   const planes = new Map<string, VFS>();
 
   const orchestrationFor = (bound: BoundActor & { runtime: AgentRuntime }): AgentOrchestratorDeps => ({
-    // Its OWN broadcast, event log and session window — never the root's.
+    // Its own broadcast, event log and session window.
     host: {
       broadcast: () => { throw new Error(`${bound.record.name} broadcast outside a turn`); },
       enqueueTurn: async () => ({ status: 'queued' }),
       turnInFlight: () => false,
-      // Same refusal as `broadcast` above, and for the same reason: nothing in
-      // this suite arms a drain, so a timer armed here is a fault to surface.
-      // `void fn()` discarded the rejection of exactly that fault.
+      // Nothing here arms a drain, so an armed timer is a fault to surface.
       setTimer: () => { throw new Error(`${bound.record.name} armed a drain timer outside a turn`); },
     },
     engine: new EvolutionEngine(bound.runtime, bound.stores.history, { enabled: automatic }),
     eventLog: new EventLog(exec, bound.handle),
   });
 
-  // The actor's own file plane, memoized per actor so the session store and the
-  // runtime address the same bytes. Hosted actors live under their own id.
+  // Memoized per actor so the session store and runtime address the same bytes.
   const planeFor = (actorId: string): VFS => {
     const plane = planes.get(actorId) ?? createMemoryVfs().vfs;
     planes.set(actorId, plane);
@@ -139,9 +121,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false): F
     },
     loopFor: () => ({ origin: { kind: 'builtin' }, parent: null }),
     orchestrationFor,
-    // NULL, stated rather than defaulted: `RunEventRecorder` satisfies
-    // `ContextEventRecorder` only once the recorder's `context_edit` variant is in
-    // the same tree, and this fixture asserts hosting, not context auditing.
+    // Null: this fixture asserts hosting, not context auditing.
     contextEvents: () => null,
   });
 
@@ -160,8 +140,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false): F
   };
 }
 
-/** The working selection a turn is fenced against — initialized on first use,
- *  because an actor that has never spoken has no context row yet. */
+/** Initialized on first use: a silent actor has no context row yet. */
 function contextOf(actor: BoundActor): ContextSelection {
   return actor.stores.history.context.selected() ?? actor.stores.history.context.initialize();
 }
@@ -270,7 +249,7 @@ describe('one workspace database, many logical actors', () => {
     fx.host.release(ref);
     expect(fx.host.hosted(ref)).toBeNull();
     expect(() => claims.read('t')).toThrow(/released by its root/);
-    // The ROWS survive: dropping runtime objects is not destroying the actor.
+    // The rows survive releasing the runtime objects.
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${ref.actorId}`[0]?.n).toBe(1);
   });
 
@@ -283,12 +262,10 @@ describe('one workspace database, many logical actors', () => {
 
     const second = await fx.host.acquire(ref);
     expect(second.handle).not.toBe(first.handle);
-    // The NEW binding works…
+    // The new binding works…
     await second.stores.claims.admit({ runId: 'r2', turnId: 't2', workMode: 'build', program: BUILTIN, context: contextOf(second) });
     expect(second.stores.claims.read('t2')?.runId).toBe('r2');
-    // …and the old one stays dead. A fence keyed on the actor ID rather than on
-    // the binding would be reset by this acquisition and hand a caller who still
-    // held the released stores a working binding again.
+    // …and the old one stays dead: the fence is keyed on the binding, not the actor id.
     expect(() => staleClaims.read('t2')).toThrow(/released by its root/);
   });
 
@@ -302,7 +279,7 @@ describe('one workspace database, many logical actors', () => {
     const cold = fx.rebuild();
     const record = cold.host.describe(ref.actorId);
     expect(record?.name).toBe('gone');
-    // describe() built no runtime objects, so nothing is hosted and nothing ran.
+    // describe() built no runtime objects.
     expect(cold.host.list()).toHaveLength(0);
     expect(cold.host.hosted(ref)).toBeNull();
   });
@@ -326,8 +303,7 @@ describe('one workspace database, many logical actors', () => {
 
     const second = fx.host.run(a, async () => { order.push('a2'); });
     await started.promise;
-    // Another actor's work runs while this one is parked: one database, two
-    // independent queues.
+    // Another actor's work runs while this one is parked.
     await fx.host.run(b, async () => { order.push('b1'); });
     expect(order).toEqual(['a1-start', 'b1']);
     held.resolve();
@@ -342,8 +318,7 @@ describe('one workspace database, many logical actors', () => {
     const held = Promise.withResolvers<void>();
     let finished = false;
 
-    // The caller starts work and walks away — a client disconnecting, a request
-    // returning. Nothing here observes the promise until after the fact.
+    // The caller starts work and walks away.
     const work = fx.host.run(ref, async () => {
       await held.promise;
       finished = true;
@@ -373,7 +348,7 @@ describe('one workspace database, many logical actors', () => {
     await expect(fx.host.retire(fx.main, { reference: a, name: 'not-alpha', destroy: true }))
       .rejects.toThrow(/alias this actor no longer holds/);
 
-    // A newer epoch admitted the same turn since the caller looked at it.
+    // A newer epoch admitted the same turn since the caller looked.
     await alpha.stores.claims.admit({ runId: 'r3', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
     await expect(fx.host.retire(fx.main, {
       reference: a, name: 'alpha', destroy: true, observed: { turnId: 'turn-1', epoch: 1 },
@@ -383,7 +358,7 @@ describe('one workspace database, many logical actors', () => {
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${a.actorId}`[0]?.n).toBe(0);
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM context_revisions WHERE actor_id = ${a.actorId}`[0]?.n).toBe(0);
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM scaffold_versions WHERE actor_id = ${a.actorId}`[0]?.n).toBe(0);
-    // The sibling that shared every one of those tables is untouched.
+    // The sibling is untouched.
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${b.actorId}`[0]?.n).toBe(1);
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM scaffold_versions WHERE actor_id = ${b.actorId}`[0]?.n).toBe(1);
   });
@@ -399,7 +374,7 @@ describe('one workspace database, many logical actors', () => {
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${a.actorId}`[0]?.n).toBe(1);
     // The name is released, so the actor is no longer an active member…
     expect(fx.directory.list().some((actor) => actor.actorId === a.actorId)).toBe(false);
-    // …but it is still nameable, which is what makes its history readable.
+    // …but it is still nameable, so its history stays readable.
     expect(fx.host.describe(a.actorId)?.name).toBe('alpha');
   });
 
@@ -521,16 +496,10 @@ describe('one workspace database, many logical actors', () => {
     const beta = await fx.host.acquire(b);
     await alpha.stores.claims.admit({ runId: 'r-a', turnId: 't-a', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
     await beta.stores.claims.admit({ runId: 'r-b', turnId: 't-b', workMode: 'build', program: BUILTIN, context: contextOf(beta) });
-    // A table this workspace grew AFTER the host was built, carrying `actor_id`
-    // the way every actor-scoped table does. This is the property, and the rows
-    // are where it is observable: the purge reads its table set off the schema
-    // in front of it, so a table nobody remembered to add to a cleanup list is
-    // swept anyway. Against a hand-kept list, alpha's row below OUTLIVES alpha
-    // — under an id the directory is free to issue again.
+    // A table grown after the host was built: the purge reads its table set off the
+    // live schema, so it is swept without a hand-kept list.
     fx.db.exec(`CREATE TABLE actor_late_notes (actor_id TEXT NOT NULL, note TEXT NOT NULL)`);
-    // …and one that carries no actor at all, which the same pass has to leave
-    // alone: a purge that swept every table would delete the workspace's own
-    // rows, and `DELETE ... WHERE actor_id = ?` over this one throws instead.
+    // …and one with no actor column, which the purge must leave alone.
     fx.db.exec(`CREATE TABLE workspace_late_notes (note TEXT NOT NULL)`);
     void fx.sql`INSERT INTO actor_late_notes (actor_id, note) VALUES (${a.actorId}, 'alpha-note')`;
     void fx.sql`INSERT INTO actor_late_notes (actor_id, note) VALUES (${b.actorId}, 'beta-note')`;
@@ -538,14 +507,13 @@ describe('one workspace database, many logical actors', () => {
 
     await fx.host.retire(fx.main, { reference: a, name: 'alpha', destroy: true });
 
-    // ONE pass took both: the table the schema shipped and the table it grew.
+    // One pass took both the shipped and the grown table.
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${a.actorId}`[0]?.n).toBe(0);
     expect(fx.sql<{ actor_id: string; note: string }>`SELECT actor_id, note FROM actor_late_notes`)
       .toEqual([{ actor_id: b.actorId, note: 'beta-note' }]);
-    // The table with no actor column was not the purge's business…
+    // The table with no actor column was untouched…
     expect(fx.sql<{ note: string }>`SELECT note FROM workspace_late_notes`).toEqual([{ note: 'workspace-note' }]);
-    // …and neither was the directory's own row, which is what leaves a
-    // destroyed actor NAMEABLE instead of a dangling id in somebody's log.
+    // …and so was the directory row, keeping the destroyed actor nameable.
     expect(fx.host.describe(a.actorId)?.name).toBe('alpha');
   });
 
@@ -556,8 +524,7 @@ describe('one workspace database, many logical actors', () => {
 
     const resolver = childContextResolver({
       host: fx.host, directory: fx.directory, parent: fx.directory.open(fx.main.actorId),
-      // The CHILD's own recorder, which is the point: an edit a parent makes to
-      // a child's context is recorded against the child whose context moved.
+      // The child's own recorder: an edit to a child's context is recorded against the child.
       events: () => null,
     });
 
@@ -565,8 +532,7 @@ describe('one workspace database, many logical actors', () => {
     expect(resolver.list()).toContain(storageKey);
     expect(resolver.resolve(storageKey)?.claims.actorId).toBe(a.actorId);
     expect(resolver.resolve('not-a-child')).toBeNull();
-    // The child's own store, bound to the CHILD's handle: an edit made through
-    // it is refused by the same fence the child's own edit meets.
+    // Bound to the child's handle, so the same fence refuses it.
     const child = resolver.resolve(storageKey);
     expect(child?.claims).toBeDefined();
   });

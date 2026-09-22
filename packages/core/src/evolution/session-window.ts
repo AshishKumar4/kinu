@@ -1,27 +1,11 @@
-// CompletedTurnStore — ONE durable row per completed turn that still owes
-// evolution work, carrying both of its independent lifetimes:
+// One durable row per completed turn that still owes evolution work, carrying
+// two lifetimes: window membership (`in_window`, `claim()`/`settle()`) and the
+// review obligation ('awaiting_followup' | 'queued' | 'claimed' | 'done'). The
+// row is deleted only when both are over, so they cannot disagree.
 //
-//   • WINDOW MEMBERSHIP — the open reflection window the session-evolution
-//     pass consumes (`in_window`, `claim()`/`settle()`).
-//   • REVIEW OBLIGATION — the typed state of the turn's outcome review:
-//     'awaiting_followup' (a conversational follow-up may still grade it),
-//     'queued' (a host owes the review), 'claimed' (a host is running it),
-//     'done' (it ran). The row is DELETED only when both lifetimes are over.
-//
-// One row carries both lifetimes, so they cannot disagree: taking a turn
-// awaiting review never destroys the row before its deferred copy exists,
-// and a detached review that dies leaves its row behind instead of losing it.
-//
-// A window is CLAIMED for a session-evolution pass and settled only once that
-// pass has run (`claim()` → `settle()`), never closed up front. That is what
-// lets a host decline to wait for the pass: a `kinu exec` process that exits,
-// or an interactive session the user quits mid-cycle, leaves its turns in the
-// window for the next host that can afford the work — rather than consuming
-// them for a pass that was killed halfway.
-//
-// The table lives in the workspace's SQLite next to the other evolution
-// ledgers (turn_outcomes, lessons, replay_evals — created by EvolutionEngine's
-// constructor, which owns this one too).
+// A window is settled only after its pass runs, so a host that exits mid-cycle
+// leaves its turns for the next host. EvolutionEngine's constructor creates
+// this table.
 
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
@@ -37,10 +21,8 @@ import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { ToolOutcomeSchema } from '../tools/outcome';
 
-/** The durable mirror of {@link CompletedTurn} — the one schema every table
- *  that stores a snapshotted turn serializes through, because two mirrors of
- *  one type drift and the drift shows up as a turn that silently will not
- *  decode. */
+/** The one durable mirror of {@link CompletedTurn}; a second mirror would drift
+ *  into turns that silently fail to decode. */
 export const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
   userMessage: v.string(),
   assistantResponse: v.string(),
@@ -60,17 +42,13 @@ export const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
   sessionId: v.optional(v.string()),
   origin: v.optional(v.picklist(['user', 'programmatic'])),
   usage: v.optional(UsageSchema),
-  // The label its review debits. Persisted with the turn rather than beside it,
-  // so the deferred-review row already carries what the drain has to know: the
-  // scope that ran the turn is long gone by then.
+  // Persisted with the turn: the drain needs it after the running scope is gone.
   missionLabels: v.optional(v.array(v.pipe(v.string(), v.nonEmpty()))),
 });
 
-/** The keyed append of one recorded turn. */
 const APPEND_SCOPE = 'turn_append';
 
-/** That turn's review having RUN — its `turn_outcomes` row, craft EMA move and
- *  lesson. Distinct from the row's `done` state, which is only the lease. */
+/** The review's side effects ran; distinct from the row's `done` lease state. */
 const REVIEW_SCOPE = 'turn_review';
 
 export function initCompletedTurnTable(execRaw: RawSqlExec): void {
@@ -84,104 +62,64 @@ export function initCompletedTurnTable(execRaw: RawSqlExec): void {
     created_at INTEGER NOT NULL,
     PRIMARY KEY (actor_id, id)
   )`);
-  // Both lifetimes are read as "this owner's rows in this state, oldest first",
-  // so the owner leads and the state follows it.
   execRaw(`CREATE INDEX IF NOT EXISTS idx_completed_turns_review
              ON completed_turns(actor_id, review, created_at)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_completed_turns_window
              ON completed_turns(actor_id, in_window, created_at)`);
-  // Both of this row's lifetimes end in a DELETE, and both of them are keyed
-  // durable work a backend can replay — so the tombstones are as much a part of
-  // this table's contract as its own columns, and the store must never be
-  // constructed without them.
+  // Both lifetimes end in a DELETE of replayable work, so tombstones are part
+  // of this table's contract.
   initEffectTombstoneTable(execRaw);
 }
 
 /**
- * Reviews ONE session open drains.
- *
- * The drain runs before the host's first turn, so its cost is latency the user
- * is waiting on — the very thing the deferral exists to remove. One review is
- * one to three sequential fast-model completions, so the batch is sized to a
- * session-reflection window (five turns): enough that a normal backlog clears
- * in one open, small enough that an abandoned workspace's accumulated ceiling
- * cannot be paid all at once by whoever happens to open it next. What is not
- * drained stays queued for the next open.
+ * Reviews one session open drains. The drain delays the first turn, so the
+ * batch is one reflection window; the rest stays queued for the next open.
  */
 export const MAX_TURN_REVIEWS_PER_OPEN = 5;
 
 /**
- * Reviews one workspace may hold undrained.
- *
- * A drain normally empties the queue, so depth is one or two. The ceiling is
- * for the workspace nothing ever drains — only ever opened by one-shot
- * invocations, with no scheduler daemon and no interactive session — and is set
- * well above the session-reflection interval so a full window's worth of turns
- * can be owed at once without the queue starting to shed the newest evidence.
+ * Ceiling for a workspace nothing drains (one-shot invocations only); above the
+ * reflection interval so a full window can be owed without shedding.
  */
 const MAX_QUEUED_TURN_REVIEWS = 32;
 
-/** The open window, handed to ONE session-evolution pass. The turns stay in
- *  the window until `settle()`, so a host that dies mid-pass leaves them for
- *  the next host instead of consuming them for work that never happened. */
+/** Turns stay in the window until `settle()`, so a host dying mid-pass leaves
+ *  them for the next host. */
 export interface ClaimedWindow {
-  /** The claimed turns, oldest first. */
   readonly turns: CompletedTurn[];
-  /** Epoch ms the window opened (its oldest turn). */
   readonly startedAt: number;
-  /** Retire exactly the claimed rows. Turns appended while the pass ran stay
-   *  in the window and open the next one. */
+  /** Retire exactly the claimed rows; turns appended meanwhile open the next window. */
   settle(): void;
 }
 
-/** A turn claimed off `awaiting_followup` for its conversational review. The
- *  row stays `claimed` until {@link CompletedTurnStore.settleReview} — so a
- *  process that dies mid-review leaves a recoverable trace instead of losing
- *  the review. */
+/** Stays `claimed` until {@link CompletedTurnStore.settleReview}, so a crash mid-review is recoverable. */
 export interface PendingTurnReview {
   readonly rowId: string;
   readonly turn: CompletedTurn;
 }
 
-/** A review some host owes and has not run yet. Exactly `reviewTurn`'s two
- *  arguments, plus its row identity. */
+/** A review some host owes: `reviewTurn`'s arguments plus the row id. */
 export interface DeferredTurnReview {
   readonly id: string;
   readonly turn: CompletedTurn;
-  /** The conversational follow-up that grades the turn, or null when no
-   *  follow-up can — the same distinction `reviewTurn` reads, carried rather
-   *  than re-guessed by whoever drains the row. */
+  /** Null when no follow-up can grade the turn; carried so drains need not guess. */
   readonly followup: string | null;
   readonly queuedAt: number;
 }
 
 /**
- * A row the drain would not run, and why. Named rather than skipped, and each
- * reason states its own disposition, because a review that vanishes without one
- * is the failure this queue exists to prevent.
- *
- * `unreadable` RETIRES the row: it is this module's own write, so an undecodable
- * one is a corrupt database, and reviewing a default in its place would write a
- * `turn_outcomes` verdict against a turn nobody can read. One corrupt row must
- * not wedge the queue behind it either.
- *
- * `budget` RE-QUEUES it: the mission the turn ran under is over its cap, so the
- * host declined the review's model call. Nothing about the row is wrong and the
- * owner can raise the cap, so retiring it would throw away evidence the mission
- * already paid to produce. The queue's own ceiling bounds what that can cost.
+ * A row the drain would not run. `unreadable` retires it: a corrupt row of our
+ * own must not produce a verdict or wedge the queue. `budget` re-queues it:
+ * the mission is over its cap and the owner may raise it.
  */
 export interface RefusedTurnReview {
   readonly id: string;
   readonly reason: 'unreadable' | 'budget';
 }
 
-/** What {@link CompletedTurnStore.enqueueReview} did. `queue_full` and
- *  `unserializable` are refusals: the review does not exist and no later host
- *  will find it. */
+/** `queue_full` and `unserializable` are refusals: no later host will find the review. */
 export type EnqueueOutcome = 'queued' | 'queue_full' | 'unserializable';
 
-/** What one drain accomplished. `refused` names the rows it would not review
- *  and why — a count alone cannot say whether a row is gone or still owed. */
 export interface DeferredReviewDrain {
   readonly reviewed: number;
   readonly refused: readonly RefusedTurnReview[];
@@ -192,124 +130,68 @@ export interface TakenTurnReviews {
   readonly refused: readonly RefusedTurnReview[];
 }
 
-/** How a completed turn enters the store. */
 export interface AppendTurnOpts {
-  /** Whether a conversational follow-up that could GRADE this turn can still
-   *  arrive. Only then does the turn park awaiting review. The caller decides:
-   *  a programmatic turn has no user behind it, and a one-shot host's next
-   *  invocation is an independent task, not a reply — parking either would
-   *  hand the classifier a "follow-up" that is not one. */
+  /** Whether a follow-up that could grade this turn can still arrive; false for
+   *  programmatic turns and one-shot hosts, whose next input is not a reply. */
   awaitsFollowup: boolean;
-  /** The row identity, when the caller has a durable one for the turn being
-   *  recorded. It makes this append IDEMPOTENT: a replay of one turn's
-   *  recording refuses instead of writing a second row, so the session
-   *  cadence — which counts window rows — is not advanced twice by one turn.
-   *
-   *  The refusal is decided by the `turn_append` TOMBSTONE, not by the row:
-   *  `sweepSettled` deletes the row as soon as its review is done and it has
-   *  left the window, and `ON CONFLICT(id) DO NOTHING` protects nothing once
-   *  that has happened — a replay would reinsert the same turn with a fresh
-   *  queued review and `in_window = 1`.
-   *
-   *  The identity is the CALLER's because only the caller knows it. A window
-   *  that minted its own could never recognise a replay: the second call would
-   *  arrive with a fresh id and look like a new turn. A caller with no durable
-   *  identity (an interactive session, whose recording cannot be replayed
-   *  because nothing durable owes it) passes none and gets a fresh row. */
+  /** Caller-owned durable identity; makes the append idempotent via the
+   *  `turn_append` tombstone, since `sweepSettled` may already have deleted the
+   *  row. Omit when the recording cannot be replayed. */
   id?: string;
-  /** Epoch ms to stamp the row with. Defaults to now. */
+  /** Epoch ms; defaults to now. */
   now?: number;
 }
 
 export interface CompletedTurnStore {
-  /** Buffer a completed turn: it joins the open window, and — when a
-   *  conversational follow-up can still grade it — additionally waits for
-   *  that follow-up. Returns the row id (pass it to `enqueueReview`/
-   *  settlement when the caller reviews immediately), or null when the turn
-   *  could not be serialized. With `opts.id` the append is idempotent and the
-   *  returned id is that one, whether this call wrote the row or found it. */
+  /** Joins the open window and, when `awaitsFollowup`, parks for review. Returns
+   *  the row id (or `opts.id`), or null when the turn cannot be serialized. */
   append(turn: CompletedTurn, opts: AppendTurnOpts): string | null;
-  /** How many turns the open window holds. */
   size(): number;
-  /** Claim the open window for one session-evolution pass, or null when it is
-   *  empty. The caller settles it once the pass has run. */
+  /** Null when empty; the caller settles once the pass has run. */
   claim(): ClaimedWindow | null;
-  /** Claim the turn waiting to be graded by the next conversational message,
-   *  if one is waiting. */
   claimPendingReview(): PendingTurnReview | null;
-  /** Demote every turn still parked awaiting a follow-up into the owed queue.
-   *  The CALLER decides when that happened: an independent task's arrival
-   *  proves the conversational follow-up can never grade its predecessor,
-   *  while a programmatic turn proves nothing about the conversation and must
-   *  not displace it. Returns how many rows were demoted.
-   *
-   *  `before` scopes the demotion to rows created at or before that instant —
-   *  the recorded turn's own clock, for a caller whose recording is replayable.
-   *  A replay of an independent task that ended long ago must not demote the
-   *  parked review of a NEWER conversational turn that did not exist when it
-   *  ran. Absent, every parked row is demoted, which is what a live caller
-   *  standing at the present moment means. */
+  /** Demote parked reviews into the owed queue; the caller decides when a
+   *  follow-up can no longer grade them. `before` limits demotion to rows
+   *  created at or before it, so a replayed old task cannot demote a newer
+   *  turn's review. Returns the count. */
   expireAwaitingReviews(opts?: { before?: number }): number;
-  /** The claimed review ran — its obligation is settled, and the row may be
-   *  swept. */
   settleReview(rowId: string): void;
-  /** The review's own side effects have landed (the `turn_outcomes` row, the
-   *  craft EMA move, the lesson). Split from its lease so recovery can tell
-   *  "the review ran" from "a host held the row": a claim is only a lease, so
-   *  without this an eviction after the side effects but before
-   *  {@link settleReview} re-runs the whole review on the next activation.
-   *  Idempotent. */
+  /** The review's side effects landed. Separate from the lease so recovery does
+   *  not re-run a review that finished before {@link settleReview}. Idempotent. */
   recordReviewRan(rowId: string): void;
-  /** Defer one turn's review. With `storedRowId`, the turn is ALREADY a row
-   *  here (just claimed) and the row itself becomes the owed review instead of
-   *  a second copy. Returns what happened so the caller reports an honest
-   *  reason rather than a silent no-op. */
+  /** With `storedRowId`, the existing row becomes the owed review rather than a copy. */
   enqueueReview(
     turn: CompletedTurn,
     followup: string | null,
     opts?: { storedRowId?: string },
   ): EnqueueOutcome;
-  /** Take the oldest `limit` queued reviews. Each taken row moves to
-   *  `claimed`; settle or release it afterwards. A row whose review has already
-   *  run is not offered — it is settled instead, so it stops being owed. */
+  /** Take the oldest `limit` queued reviews into `claimed`; rows whose review
+   *  already ran are settled instead. */
   takeQueuedReviews(limit: number): TakenTurnReviews;
-  /** Return a claimed queued review to the queue — a refusal that is a
-   *  decision (budget), not a completion. */
+  /** Re-queue a claimed review after a refusal (budget), not a completion. */
   releaseQueuedReview(rowId: string): void;
   countQueuedReviews(): number;
-  /** Activation recovery: a `claimed` review whose claiming process died is
-   *  owed again — UNLESS its work already ran, in which case the claim outlived
-   *  the review and the row is settled rather than re-queued. Returns how many
-   *  rows were re-queued. */
+  /** Re-queue claims whose process died, unless the review already ran (then
+   *  settle). Returns how many rows were re-queued. */
   resetStaleClaims(): number;
 }
 
 interface TurnRow { id: string; turn: string; followup: string | null; created_at: number }
 
-/**
- * Bind the completed-turn ledger to ONE actor.
- *
- * Every id here is minted by this store or handed to it by the caller that
- * recorded the turn, so two actors of one workspace present colliding row ids
- * — and the window size, the queue depth and the stale-claim sweep are all
- * counts, which a shared table would silently take over every sibling's turns.
- */
+/** Bound to one actor: ids can collide across actors, and window size, queue
+ *  depth and stale-claim sweeps are counts. */
 export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): CompletedTurnStore {
   const actorId = actor.actorId;
   const authorize = actor.assertCurrent;
 
-  // A row whose two lifetimes are both over carries no information — dropping
-  // it keeps the table bounded by the open window, the pending review, and the
-  // owed queue.
+  // Rows with both lifetimes over carry nothing; dropping them bounds the table.
   const sweepSettled = (): void => {
     void sql`DELETE FROM completed_turns
       WHERE actor_id = ${actorId} AND in_window = 0 AND review IN ('none','done')`;
   };
 
   const decode = (row: TurnRow): CompletedTurn | null => {
-    // A row written by another version of this code is skipped, not fatal —
-    // the store buffers turns, and one unreadable turn must not stall the
-    // cadence.
+    // Unreadable rows (e.g. another code version) are skipped so the cadence never stalls.
     const parsed = v.safeParse(
       CompletedTurnSchema,
       tolerate(() => parseJsonValue(row.turn), 'malformed-input'),
@@ -334,14 +216,11 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
 
   return {
     append(turn, opts) {
-      // Refused before the encode: a keyed replay has nothing to add and the
-      // row it would have written may already be gone.
+      // A keyed replay has nothing to add, and its row may already be swept.
       authorize();
 
       if (opts.id !== undefined && effectAlreadyDone(sql, actor, APPEND_SCOPE, opts.id)) return opts.id;
-      // A turn that cannot be serialized cannot be replayed to the engine
-      // later, and losing the whole window to one bad tool result would be
-      // worse than losing that turn — so a failed encode drops just this turn.
+      // An unserializable turn is dropped alone rather than losing the window.
       let encoded: string;
 
       try {
@@ -355,24 +234,17 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
         return null;
       }
 
-      // `queued`, not `none`, and written in the SAME insert as the turn. The
-      // obligation is PART OF THE ROW, and the durable queued-review lane
-      // claims it exactly once. Dispatched inline by the caller after this
-      // insert returned instead, an eviction between the two would leave the
-      // row at `none` with its review lost, and a replay of the recording would
-      // dispatch it a second time.
+      // The review obligation is written in the same insert, so an eviction
+      // cannot lose it and a replay cannot dispatch it twice.
       const review = opts.awaitsFollowup ? 'awaiting_followup' : 'queued';
       const id = opts.id ?? `turn-${nanoid()}`;
       const now = opts.now ?? nowMs();
-      // DO NOTHING, not a replace: the row the first append wrote is the
-      // recording, and a replay must leave the window membership and the
-      // review state that row has since reached exactly as they are.
+      // DO NOTHING: a replay must not reset the state the original row reached.
       void sql`INSERT INTO completed_turns (actor_id, id, turn, followup, in_window, review, created_at)
           VALUES (${actorId}, ${id}, ${encoded}, ${null}, 1, ${review}, ${now})
           ON CONFLICT(actor_id, id) DO NOTHING`;
 
-      // Same synchronous pass as the insert, so nothing can observe the row
-      // without the tombstone that outlives it.
+      // Same synchronous pass, so nothing observes the row without its tombstone.
       if (opts.id !== undefined) recordEffectDone(sql, actor, { scope: APPEND_SCOPE, key: opts.id }, now);
       sweepSettled();
 
@@ -401,9 +273,8 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
         turns: rows.map(decode).filter((t): t is CompletedTurn => t !== null),
         startedAt: oldest.created_at,
         settle() {
-          // Retire by claimed id, not by `in_window = 1`: a turn appended while
-          // the pass ran belongs to the NEXT window, and an undecodable row
-          // must still retire or it would wedge the window forever.
+          // Retire by claimed id: later appends belong to the next window, and
+          // undecodable rows must still retire.
           authorize();
 
           for (const row of rows) {
@@ -439,8 +310,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
     },
 
     settleReview(rowId) {
-      // The tombstone first: settling makes the row sweepable, and after the
-      // sweep the row can no longer say that its review ran.
+      // Tombstone first: after the sweep the row can no longer record that its review ran.
       recordEffectDone(sql, actor, { scope: REVIEW_SCOPE, key: rowId });
       void sql`UPDATE completed_turns SET review = 'done'
         WHERE actor_id = ${actorId} AND id = ${rowId}`;
@@ -453,8 +323,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
 
     expireAwaitingReviews(opts) {
       authorize();
-      // MAX_SAFE_INTEGER, not a second query: `created_at` is epoch ms, so an
-      // absent cutoff is the same predicate with a bound nothing can exceed.
+      // `created_at` is epoch ms, so MAX_SAFE_INTEGER means no cutoff.
       const before = opts?.before ?? Number.MAX_SAFE_INTEGER;
 
       const stale = sql<{ id: string }>`
@@ -472,8 +341,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
       authorize();
 
       if (opts?.storedRowId) {
-        // The turn already lives here as a claimed row — convert THAT row into
-        // the owed review instead of writing a second copy of it.
+        // Convert the claimed row itself instead of writing a second copy.
         void sql`UPDATE completed_turns SET review = 'queued', followup = ${followup}
             WHERE actor_id = ${actorId} AND id = ${opts.storedRowId}`;
 
@@ -512,9 +380,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
       const refused: RefusedTurnReview[] = [];
 
       for (const row of rows) {
-        // Its work already landed and something re-queued the lease. Not a
-        // refusal — there is nothing wrong with the row and nothing owed by it
-        // — so it is settled here and never offered again.
+        // Work already landed; settle rather than offer or refuse it.
         if (effectAlreadyDone(sql, actor, REVIEW_SCOPE, row.id)) {
           void sql`UPDATE completed_turns SET review = 'done'
             WHERE actor_id = ${actorId} AND id = ${row.id}`;
@@ -559,13 +425,9 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
         SELECT id FROM completed_turns WHERE actor_id = ${actorId} AND review = 'claimed'`;
 
       if (stale.length === 0) return 0;
-      // THE defect this split exists for. A claim is a lease, not the work: an
-      // eviction after `reviewTurn` appended its `turn_outcomes` row and moved
-      // the craft EMAs, but before `settleReview`, arrives here — and without
-      // the tombstone it would re-run the whole review on the next activation,
-      // where both of those writes are append-only or cumulative, so the
-      // duplicate is observable.
-      // A row whose work is tombstoned is settled; only the rest is owed again.
+      // A claim is a lease: an eviction after `reviewTurn`'s append-only writes
+      // but before `settleReview` must not re-run the review, so tombstoned rows
+      // are settled and only the rest re-queued.
       let requeued = 0;
 
       for (const row of stale) {

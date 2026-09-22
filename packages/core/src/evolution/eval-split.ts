@@ -1,9 +1,4 @@
-/**
- * GEPA / section-trial eval data — the budgeted, disjoint train/val split
- * drawn from the graded turns of the `turn_outcomes` ledger (upstream
- * gepa-ai/gepa eval discipline), with advisor notes backfilling the negatives
- * pool from turns the ledger never graded.
- */
+/** Budgeted, disjoint GEPA train/val split drawn from graded `turn_outcomes` turns; advisor notes backfill negatives. */
 
 import * as v from 'valibot';
 import type { ModelMessage } from 'ai';
@@ -25,8 +20,6 @@ import {
   type TurnOutcome, type TurnOutcomeRow,
 } from './outcomes';
 
-/** Only the discriminant and the timestamp are read here: what a turn DID now
- *  comes from the step transcript, not from event names. */
 interface StoredRunEvent {
   type: string;
 }
@@ -41,24 +34,14 @@ const ChatRunStartSchema = v.object({
   userMessage: v.string(),
 });
 
-/** One stored run event, or null when the row is not an event shape this reads.
- *  A payload that is not JSON at all is corruption of a ledger this process
- *  wrote, so it propagates rather than being counted as "no such event". */
+/** Null when the row is not an event shape read here; non-JSON payloads propagate as ledger corruption. */
 function parseRunEvent(payload: string): StoredRunEvent | null {
   const parsed = v.safeParse(StoredRunEventSchema, parseJsonValue(payload));
 
   return parsed.success ? parsed.output : null;
 }
 
-/**
- * The tool calls a turn's durable step transcript records — name, real
- * arguments, and the tool's own output, paired on the provider's call id.
- *
- * Reconstructing them from `tool_call_end` rows instead gave every call an
- * empty `args`, and `delegationFeatures`' fingerprint is null for an
- * argument-less call — so the redundancy and loop counts in a corpus row could
- * never be anything but zero, whatever the turn actually did.
- */
+/** Tool calls from a turn's durable step transcript, paired on the provider's call id. */
 function toolCallsFromTranscript(messages: readonly ModelMessage[]): ToolCallRecord[] {
   const results = new Map<string, JsonValue>();
 
@@ -89,25 +72,18 @@ function toolCallsFromTranscript(messages: readonly ModelMessage[]): ToolCallRec
   return calls;
 }
 
-/** Reconstruct non-scoring process evidence from the existing message + run
- *  ledgers. Both tables are created by `initWorkspaceSchema` on every backend,
- *  so a failed read here is a real fault and is NOT caught: a blanket catch
- *  would report it as "this turn ran no tools". */
+/** Non-scoring process evidence from the message + run ledgers. Read failures propagate: a catch would report "no tools ran". */
 async function turnProcessEvidence(
   sql: SqlExecutor, actor: ActorHandle, transcript: SessionTranscriptReader, turnId: string | null,
 ): Promise<string | undefined> {
   if (!turnId) return undefined;
-  // INNER-join semantics preserved: a turn with no user row behind it has no
-  // window and no evidence.
   const pair = await conversationTurnPair(transcript, turnId);
 
   if (!pair || pair.request === null || pair.startedAtMs === null) return undefined;
 
   const from = new Date(pair.startedAtMs).toISOString();
   const to = new Date(pair.endedAtMs).toISOString();
-  // One check for both raw reads below. `run_events` is actor-scoped and this is
-  // a free function rather than a store, so nothing else re-verifies the binding
-  // before the statements run.
+  // `run_events` is actor-scoped and nothing else re-verifies the binding before these reads.
   actor.assertCurrent();
 
   const starts = sql<{ runId: string; payload: string }>`
@@ -136,7 +112,6 @@ async function turnProcessEvidence(
 
   if (events.length === 0) return undefined;
 
-  // The turn's real trajectory, from the rows written as each step finished.
   const toolCalls = toolCallsFromTranscript(new RunEventRecorder(sql, actor).transcript(runId));
   const steps = events.filter(({ event }) => event.type === 'step_finish').length;
   const startAt = events.find(({ event }) => event.type === 'run_start')?.at ?? events[0].at;
@@ -151,14 +126,7 @@ async function turnProcessEvidence(
   }));
 }
 
-/** A turn the advisor complained about and the outcome ledger never graded.
- *
- *  `turn_outcomes` grades a turn from the user's NEXT message, so three classes
- *  of turn are structurally ungradable by it: a programmatic wake, a one-shot
- *  invocation, and a turn where the agent ground serially through work a
- *  delegation or search capability was there for. Nothing in the follow-up
- *  says that. The advisor is a second model that read the turn as it happened
- *  and can. */
+/** An advisor-flagged turn the outcome ledger never graded (wakes, one-shots, serial work the ledger cannot see). */
 export interface AdvisorNegativeRow {
   readonly id: string;
   readonly turnId: string;
@@ -175,27 +143,9 @@ interface RawAdvisorRow {
 }
 
 /**
- * Advisor notes that grade a turn nothing else graded, newest first.
- *
- * One exclusion and one resolution carry the whole rule:
- *
- *   - `NOT EXISTS` over `turn_outcomes` is what keeps this ADDITIONAL. Where the
- *     ledger spoke about a turn — for or against — the ledger is the verdict and
- *     a reviewer's second opinion is not counted beside it. Without this a turn
- *     the user corrected could be drawn twice, land in `train` as a ledger row
- *     and in `val` as an advisor row, and quietly break the one property the
- *     split exists to hold.
- *   - The transcript is where the conversation comes from. The row stores the
- *     note and a turn id, never a copy of the text, so there is exactly one
- *     place the words the agent read live. A note whose turn id names no
- *     request/response pair is dropped: a note with no conversation behind it
- *     has nothing to be scored against.
- *
- * The payload goes through the schema its own writer types against
- * (`AdvisorRowDataSchema`), so a row that fails to parse is corruption and
- * throws, exactly as `toLessonRow` treats a malformed `turn_ids`. A row whose
- * payload carries no turn id cannot reach the parse at all — the query drops it
- * first.
+ * Advisor notes for turns absent from `turn_outcomes`, newest first. The `NOT EXISTS`
+ * keeps a turn from landing in both train and val; notes with no transcript pair are
+ * dropped; a payload failing `AdvisorRowDataSchema` throws.
  */
 async function advisorNegatives(
   sql: SqlExecutor, actor: ActorHandle, transcript: SessionTranscriptReader, limit: number,
@@ -238,20 +188,9 @@ async function advisorNegatives(
   return negatives;
 }
 
-/** Share of the drawn failures held OUT of the reflection minibatch and
- *  scored on instead. A third keeps most of the (scarce) failures available
- *  to learn from while still leaving a real held-out set — at the default
- *  budget, 8 to train on and 4 to be judged on. */
+/** Share of drawn failures held out of the reflection minibatch for scoring. */
 const NEGATIVE_HOLDOUT_SHARE = 1 / 3;
 
-/**
- * One eval instance's worth of a graded turn, whoever graded it.
- *
- * Three producers, one shape: a ledger failure, an advisor note about a turn the
- * ledger never graded, and an accepted turn drawn as a regression guard. The
- * partition below then sorts and slices ONE list, which is why a merged pool
- * cannot come to disagree with itself about which turn is newest.
- */
 interface EvalDraw {
   readonly rowId: string;
   readonly createdAt: number;
@@ -261,8 +200,6 @@ interface EvalDraw {
   readonly outcome: TurnOutcome;
   readonly complaint: string | null;
   readonly critic: 'user' | 'advisor';
-  /** Evidence above the outcome line — what this producer knows and the others
-   *  do not. */
   readonly extraEvidence: readonly string[];
 }
 
@@ -275,13 +212,7 @@ function ledgerDraw(row: TurnOutcomeRow): EvalDraw {
   };
 }
 
-/**
- * `corrected` is the ledger's word for "this turn landed badly", and that is
- * what a note says. It is the verdict, never a claim about who gave it: the
- * ledger already records `execution`-sourced rows as `corrected` with nobody
- * having corrected anything. `critic` carries who, the evidence line says the
- * user never graded this turn, and the scoring prompt reads both.
- */
+/** `corrected` is the verdict, not who gave it; `critic` carries who. */
 function advisorDraw(row: AdvisorNegativeRow): EvalDraw {
   return {
     rowId: row.id, createdAt: row.createdAt, turnId: row.turnId,
@@ -302,43 +233,24 @@ function splitDegeneracy(negatives: number, holdoutCount: number, valSize: numbe
   return null;
 }
 
-/** Draw a budgeted, DISJOINT train/val split from the graded turns.
- *
- *  Negatives come first (up to half the budget — they are the optimization
- *  targets) and are then partitioned: the newest go to `val` as held-out
- *  failures, the rest to `train`. Holding out the newest is a temporal
- *  holdout — a candidate proves itself on failures more recent than the ones
- *  it was written against. Accepted turns fill the remaining budget as `val`
- *  regression guards. Newest turns win throughout.
- *
- *  Advisor notes BACKFILL the negatives pool: they are drawn only for the slots
- *  the outcome ledger leaves empty, and only about turns the ledger never
- *  graded. So a workspace with real user corrections optimises against those and
- *  a reviewer's opinion never displaces one; a workspace whose turns no user
- *  ever graded, which is every headless run, has something to optimise toward
- *  instead of an empty train set and a refusal.
- *
- *  No instance is ever in both sets: a winner selected on `val` was never
- *  reflected on during training. When the evidence is too thin to hold anything
- *  out, the split says so via `degeneracy` instead of quietly overlapping. */
+/** Draw a budgeted, disjoint train/val split. Negatives take up to half the budget;
+ *  the newest go to `val` (temporal holdout), the rest to `train`. Accepted turns fill
+ *  the rest as `val` regression guards. Advisor notes only backfill slots the ledger
+ *  leaves empty. Too little evidence to hold out is reported via `degeneracy`. */
 export async function buildOutcomeEvalSplit(
   sql: SqlExecutor, actor: ActorHandle, transcript: SessionTranscriptReader, budget: number,
 ): Promise<OutcomeEvalSplit> {
   const size = Math.max(2, Math.floor(budget));
   const ledgerNegatives = listTurnOutcomes(sql, actor, { limit: size, outcomes: NEGATIVE_TURN_OUTCOMES });
   const accepted = listTurnOutcomes(sql, actor, { limit: size, outcomes: ['accepted'] });
-  // Enough to fill every negative slot the ledger cannot, before the clamps
-  // below decide how many of those slots the final draw actually has.
   const advisorRows = await advisorNegatives(sql, actor, transcript, size - ledgerNegatives.length);
 
-  // Array.sort is stable, so rows of equal age keep the `created_at DESC, id
-  // DESC` order their own query already imposed.
+  // Array.sort is stable, so equal-age rows keep their query order.
   const negatives = [...ledgerNegatives.map(ledgerDraw), ...advisorRows.map(advisorDraw)]
     .sort((a, b) => b.createdAt - a.createdAt);
 
   const negativeShare = Math.min(negatives.length, Math.ceil(size / 2));
   const acceptedCount = Math.min(accepted.length, size - negativeShare);
-  // Negatives backfill what the accepted pool can't cover (and vice versa).
   const negativeCount = Math.min(negatives.length, size - acceptedCount);
 
   const toInstance = async (draw: EvalDraw, i: number, kind: string): Promise<OutcomeEvalInstance> => ({
@@ -359,8 +271,7 @@ export async function buildOutcomeEvalSplit(
 
   const drawnNegatives = negatives.slice(0, negativeCount);
 
-  // A single failure cannot be both trained on and held out, so it stays in
-  // train and the split reports that selection is blind to improvement.
+  // A single failure stays in train; selection is then blind to improvement.
   const holdoutCount = drawnNegatives.length >= 2
     ? Math.max(1, Math.round(drawnNegatives.length * NEGATIVE_HOLDOUT_SHARE))
     : 0;

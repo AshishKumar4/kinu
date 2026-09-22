@@ -1,36 +1,4 @@
-/**
- * GEPA SQL persistence — survives DO hibernation.
- *
- * Schema:
- *   gepa_runs
- *     actor_id          TEXT (PK part 1 — the actor whose artifact is optimized)
- *     run_id            TEXT (PK part 2)
- *     target            TEXT ('scaffold' | 'prompt_section')
- *     target_ref        TEXT (the section id; null for the scaffold)
- *     started_at        INTEGER
- *     ended_at          INTEGER (null while in flight)
- *     status            TEXT ('running' | 'completed' | 'aborted')
- *     stop_reason       TEXT (null while in flight)
- *     winner_id         TEXT (FK to gepa_candidates.id; null while in flight)
- *     metric_calls      INTEGER
- *     iterations        INTEGER
- *     budget_json       TEXT (snapshot of GepaBudget)
- *
- *   gepa_candidates
- *     actor_id          TEXT (PK part 1)
- *     id                TEXT (PK part 2)
- *     run_id            TEXT (FK, within the same actor)
- *     parent_id         TEXT (null for seed)
- *     source            TEXT (the artifact string)
- *     scores_json       TEXT (Map<instanceId, number> as JSON object)
- *     feedback_json     TEXT (Map<instanceId, string>  as JSON object)
- *     aggregate         REAL
- *     created_at        INTEGER
- *     iteration         INTEGER (0 = seed)
- *     accepted          INTEGER (0/1; whether it entered the pool)
- *
- * Idempotent inits via CREATE TABLE IF NOT EXISTS.
- */
+/** GEPA run and candidate persistence; survives DO hibernation. */
 
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../../types/primitives';
@@ -93,9 +61,7 @@ export function initGepaTables(execRaw: RawSqlExec): void {
 
 }
 
-/** Start a new run row and return its id. Accepts a partial budget (same as
- *  GepaConfig.budget) and persists the FULLY-RESOLVED budget so the snapshot
- *  matches what runGepa actually used. */
+/** Persists the fully resolved budget so the snapshot matches what runGepa used. */
 export function startGepaRun(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -118,7 +84,6 @@ export function startGepaRun(
   return runId;
 }
 
-/** Persist a candidate (seed or mutated) row. */
 export function persistGepaCandidate(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -142,7 +107,7 @@ export function persistGepaCandidate(
 }
 
 
-/** Update counters mid-run so a hibernating DO can resume. */
+/** Mid-run, so a hibernating DO can resume. */
 export function updateGepaRunCounters(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -154,7 +119,6 @@ export function updateGepaRunCounters(
         WHERE actor_id = ${actor.actorId} AND run_id = ${args.runId}`;
 }
 
-/** Mark a run finished. */
 export function finishGepaRun(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -179,19 +143,9 @@ export function finishGepaRun(
 }
 
 /**
- * When each `target_ref` under one target last had a pass STARTED, newest wins.
- *
- * `started_at` and not `ended_at`: a pass that began and is still running has
- * had its turn, and a caller picking the least-recently-attempted target must
- * not pick it again while it works. An aborted pass counts for the same reason —
- * it spent, and repeating it immediately spends again on the same evidence.
- *
- * This is what lets a rotation over a fixed target list be DERIVED instead of
- * stored. A cursor held in a Durable Object's memory is reset by an eviction,
- * and eviction is measured at 2-5 minutes of idleness
- * (`platform-catalog.ts` `do.facet.eviction_joint`) — far shorter than the
- * activity a rotation needs to advance. The run ledger is already durable and
- * already written by every pass, so there is nothing to keep in step.
+ * When each `target_ref` under one target last had a pass started (running and aborted
+ * passes count). Lets target rotation be derived from the durable ledger: an in-memory
+ * cursor dies with DO eviction at 2-5 minutes idle (`do.facet.eviction_joint`).
  */
 export function lastGepaRunPerTarget(
   sql: SqlExecutor, actor: ActorHandle, target: string,
@@ -206,7 +160,6 @@ export function lastGepaRunPerTarget(
   return new Map(rows.map((row) => [row.target_ref, row.started_at]));
 }
 
-/** List recent runs (newest first). */
 export interface GepaRunSummary {
   runId: string;
   target: string;
@@ -251,7 +204,7 @@ export function listGepaRuns(sql: SqlExecutor, actor: ActorHandle, limit = 20): 
   }));
 }
 
-/** Load every persisted candidate for a run (oldest first). */
+/** Oldest first. */
 export function loadGepaCandidates(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -287,8 +240,7 @@ export function loadGepaCandidates(
   });
 }
 
-/** Retain fully measured candidates at measurement, and counters at real
- * iteration completion. Pareto membership remains derived from stored scores. */
+/** Retain measured candidates at measurement and counters at iteration completion. */
 export function makePersistingHooks(args: {
   sql: SqlExecutor;
   actor: ActorHandle;
@@ -307,21 +259,14 @@ export function makePersistingHooks(args: {
   };
 }
 
-/** One row of the Pareto front, computed from the candidates' own score
- *  maps — there is no persisted membership state to keep in step. */
+/** Computed from score maps; no persisted membership state. */
 export interface GepaParetoEntry {
   readonly candidateId: string;
   readonly instanceId: string;
   readonly score: number;
 }
 
-/**
- * The run's per-instance Pareto front, DERIVED from accepted candidates.
- *
- * Instance ids come from the stored score keys themselves, so a run is fully
- * described by `gepa_candidates` and nothing else. Rejected candidates are
- * excluded — they never entered the pool the engine maintained its front over.
- */
+/** Derived from accepted candidates' stored score keys; rejected ones never entered the pool. */
 export function loadGepaParetoFront(
   sql: SqlExecutor, actor: ActorHandle, runId: string,
 ): GepaParetoEntry[] {

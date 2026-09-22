@@ -1,10 +1,4 @@
-/**
- * The judge panel: what it is shown, how it votes, what it refuses to say, and
- * whether it clears the pre-registered stand-in bar.
- *
- * No live model calls anywhere — every judge is a scripted LLM at the `LLM`
- * seam, which is the same seam production passes a model-backed one through.
- */
+/** The judge panel: its prompt, vote, refusals, and the pre-registered stand-in bar. Judges are scripted at the `LLM` seam. */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { present, testActorHandle } from '@kinu.run/test-utils';
@@ -29,9 +23,7 @@ import type { LLM } from '../src/types/primitives';
 
 type Sql = ReturnType<typeof makeSql>;
 
-/** An already-built panel as an EnsemblePanel. Real backends resolve a judge's
- *  model lazily — that is the point of the two stages — but a scripted judge
- *  costs nothing, so these hand it back directly. */
+/** Scripted judges are free, so the lazy model stage is skipped. */
 function panelOf(judges: ReadonlyArray<EnsembleJudge>): EnsemblePanel {
   return {
     async specs() { return judges.map((j) => j.spec); },
@@ -44,14 +36,12 @@ function setup() {
   const sql = makeSql(db);
   initTurnOutcomeTables(makeExecRaw(db));
 
-  // A real bound handle: the ledger is actor-scoped, so a fixture that could
-  // not fail `assertCurrent` would not be exercising the store these tests read.
+  // A real bound handle, since the ledger is actor-scoped.
   return { db, sql, actor: testActorHandle(sql) };
 }
 
-/** A ledger shaped like a real one: mostly accepted, a minority corrected, a
- *  few frustrated. Turn ids are recoverable from the message text so a scripted
- *  judge can answer per turn without ever being told which turn it is. */
+/** Mostly accepted, some corrected, a few frustrated. Turn ids are recoverable from
+ *  message text so a scripted judge can answer per turn without being told. */
 function seedLedger(
   sql: Sql, actor: ActorHandle, spec: { accepted?: number; corrected?: number; frustrated?: number },
 ): void {
@@ -91,8 +81,7 @@ function labelAll(sql: Sql, actor: ActorHandle, choose: (row: LedgerRow, i: numb
   });
 }
 
-/** A judge that answers from the prompt text alone — the only thing a real one
- *  gets. `null` makes it fail the way an outage would. */
+/** Answers from the prompt text alone; `null` fails like an outage. */
 function judge(spec: string, answer: (prompt: string) => OutcomeLabel | null): EnsembleJudge {
   const llm: LLM = {
     async *stream() { yield ''; },
@@ -108,8 +97,7 @@ function judge(spec: string, answer: (prompt: string) => OutcomeLabel | null): E
   return { spec, llm };
 }
 
-/** Read a judge's prompt back to the seeded turn it is about — the test's own
- *  key into its fixture, never something a real judge would be shown. */
+/** The test's own key into its fixture, never shown to a judge. */
 function turnOfPrompt(prompt: string): PromptTurn {
   const match = /request (accepted|corrected|frustrated) (\d+)/.exec(prompt);
 
@@ -126,8 +114,6 @@ function turnOfPrompt(prompt: string): PromptTurn {
   return { verdict, index: Number(index) };
 }
 
-// ── Blindness ────────────────────────────────────────────────────
-
 describe('the judging prompt', () => {
   const item = {
     outcomeId: 'outc-1',
@@ -141,8 +127,7 @@ describe('the judging prompt', () => {
     const prompt = buildEnsembleJudgePrompt(item);
     expect(prompt).toContain('fix the parser');
     expect(prompt).toContain('no, still broken');
-    // The only outcome words are the verdict legend's, exactly as in the human
-    // file. The evidence itself carries none.
+    // The only outcome words are the verdict legend's.
     const evidence = prompt.slice(prompt.indexOf('USER  ('), prompt.indexOf('Verdicts:'));
 
     for (const word of ['accepted', 'corrected', 'frustrated', 'abandoned', 'unclear']) {
@@ -151,9 +136,7 @@ describe('the judging prompt', () => {
   });
 
   test('cannot see the classifier or the human, because it is a function of the turn alone', () => {
-    // Two ledgers where the SAME turn is classified and hand-labeled
-    // differently. Identical prompts is the structural proof of blindness:
-    // there is no path from either verdict into the text.
+    // Identical prompts across differing verdicts prove blindness.
     const build = (outcome: TurnOutcome, label: OutcomeLabel): string => {
       const { sql, actor } = setup();
       recordTurnOutcome(sql, actor, {
@@ -187,8 +170,6 @@ describe('the judging prompt', () => {
   });
 });
 
-// ── Voting ───────────────────────────────────────────────────────
-
 describe('the panel rule', () => {
   test('unanimity is the verdict and a split is unclear', () => {
     expect(panelVerdict(['corrected', 'corrected'])).toBe('corrected');
@@ -197,8 +178,6 @@ describe('the panel rule', () => {
     expect(panelVerdict([])).toBeNull();
   });
 });
-
-// ── Refusals ─────────────────────────────────────────────────────
 
 describe('running the panel', () => {
   const always = (spec: string, label: OutcomeLabel): EnsembleJudge => judge(spec, () => label);
@@ -258,12 +237,10 @@ describe('running the panel', () => {
     seedLedger(sql, actor, { accepted: 4, corrected: 2 });
     labelAll(sql, actor, () => 'accepted');
     const flaky = judge('b/1', (prompt) => turnOfPrompt(prompt).verdict === 'corrected' ? null : 'accepted');
-    // A failed CALL is not a verdict. Counting it as one would report a rate
-    // limit as a panel that read every turn and could not make sense of any.
+    // A failed call is not a verdict.
     await expect(runEnsemble(sql, actor, panelOf([always('a/1', 'accepted'), flaky]))).rejects.toThrow('judge unavailable');
 
-    // Every call already paid for is durable, so the next run tops up from here
-    // rather than re-billing the whole panel.
+    // Paid-for calls are durable, so the next run tops up.
     const stored = ensembleLabels(sql, actor);
     expect(stored.filter((row) => row.model === 'a/1')).toHaveLength(6);
     expect(stored.filter((row) => row.model === 'b/1').length).toBeLessThan(6);
@@ -286,8 +263,7 @@ describe('running the panel', () => {
   });
 
   test('writes each verdict as it lands, not in a batch at the end', async () => {
-    // Two hundred model calls is a real bill. A pass that dies partway must
-    // keep what it paid for, which it only does if the writes are incremental.
+    // A pass that dies partway keeps what it paid for: writes are incremental.
     const { sql, actor } = setup();
     seedLedger(sql, actor, { accepted: 5 });
     labelAll(sql, actor, () => 'accepted');
@@ -325,8 +301,6 @@ describe('running the panel', () => {
     expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM outcome_ensemble_labels`[0].n).toBe(5);
   });
 });
-
-// ── The report ───────────────────────────────────────────────────
 
 /** Seed a ledger, hand-label it, and have the panel answer per turn. */
 async function panelOver(spec: {
@@ -381,9 +355,7 @@ describe('the panel report', () => {
   });
 
   test('a panel no better than the classifier fails the coherence condition', async () => {
-    // The panel simply echoes the classifier. κ(you↔panel) then equals
-    // κ(you↔classifier) exactly, which passes condition 2 by a hair — so the
-    // interesting case is the panel that echoes it WORSE.
+    // An echoing panel passes condition 2 by a hair; the interesting case echoes it worse.
     const { sql, actor } = await panelOver({
       ledger: { accepted: 200, corrected: 60, frustrated: 40 },
       // The owner disagrees with the classifier on a third of the corrections.
@@ -413,7 +385,7 @@ describe('the panel report', () => {
     const report = ensembleReport(sql, actor);
     expect(report.split).toBe(40);
     expect(report.confusion).toContainEqual({ ensemble: 'unclear', human: 'frustrated', count: 40 });
-    // An abstention on a bad turn is a miss, not a neutral outcome.
+    // An abstention on a bad turn is a miss.
     const accuracy = present(report.accuracy, 'the panel accuracy');
 
     expect(accuracy.sensitivity.mean).toBeLessThan(1);
@@ -428,8 +400,7 @@ describe('the panel report', () => {
     });
 
     const report = ensembleReport(sql, actor);
-    // Both raters are perfect on these turns, so both κ are 1 — the point is
-    // that they are computed from the same `compared` set.
+    // Both κ come from the same `compared` set.
     expect(report.kappa.humanClassifier?.n).toBe(report.kappa.humanEnsemble?.n);
     expect(report.kappa.ensembleClassifier?.n).toBe(report.compared);
     expect(renderEnsembleReport(report)).toContain('same turns, so the two compare');
@@ -451,8 +422,6 @@ describe('the panel report', () => {
     expect(present(report.kappa.humanEnsemble, 'the human-ensemble κ').value).toBeLessThan(firstMember.value);
   });
 });
-
-// ── Honest nulls ─────────────────────────────────────────────────
 
 describe('an unmeasured panel', () => {
   test('says which step is missing instead of a number', () => {
@@ -484,21 +453,14 @@ describe('an unmeasured panel', () => {
   });
 });
 
-// ── What the numbers are worth ───────────────────────────────────
-
-/**
- * A synthetic ledger whose TRUE negative rate and whose TWO raters' true error
- * profiles are known by construction, plus the stratified gold draw
- * calibration.ts really performs. The only honest way to check an estimator is
- * to ask it for an answer that is already known.
- */
+/** A synthetic ledger with known truth and two raters' known error profiles, drawn
+ *  as calibration.ts draws. */
 function syntheticDraw(spec: { panelSensitivity: number; panelSpecificity: number; budget: number; seed: number }) {
   const random = seededRandom(spec.seed);
 
   const population = Array.from({ length: 3000 }, () => {
     const negative = random() < 0.15;
-    // The classifier is the one the sample is stratified on: 60% sensitive,
-    // 95% specific — roughly what the real one measures at.
+    // The stratifying classifier: 60% sensitive, 95% specific.
     const classifierFlags = negative ? random() < 0.6 : random() >= 0.95;
     let predicted: TurnOutcome = 'accepted';
 
@@ -526,7 +488,7 @@ function syntheticDraw(spec: { panelSensitivity: number; panelSpecificity: numbe
   for (const [i, [, bucket]] of strata.entries()) {
     const take = Math.min(quotas[i], bucket.length);
 
-    // Systematic, so the draw spans the stratum rather than a corner of it.
+    // Systematic, so the draw spans the stratum.
     for (let j = 0; j < take; j++) {
       const row = bucket[Math.floor(((j + 0.5) * bucket.length) / take)];
       compared.push({
@@ -564,10 +526,8 @@ describe('the panel’s error profile, against a known truth', () => {
   });
 
   test('the resampled interval covers far better than the closed form it replaces', () => {
-    // The panel's verdict varies inside a stratum the closed form assumes it is
-    // constant in, so the closed form's delta method treats two halves of one
-    // sample as independent and reports an interval that is much too narrow.
-    // This is the measurement that chose the bootstrap; see ppi.ts's note.
+    // The panel varies within a stratum, so the closed form's interval is too narrow;
+    // this is the measurement that chose the bootstrap.
     const truth = { sensitivity: 0.7, specificity: 0.9 };
 
     const strata = Array.from({ length: 120 }, (_, i) =>
@@ -586,8 +546,7 @@ describe('the panel’s error profile, against a known truth', () => {
   });
 
   test('a rater that never slipped is not reported as certain', () => {
-    // Every resample of a clean stratum returns exactly 1, so the percentile
-    // interval alone would be [1, 1] — a claim of certainty from forty draws.
+    // The percentile interval alone would be [1, 1] from forty draws.
     const clean = resampledAccuracy([
       { key: 'accepted', population: 800, draws: Array.from({ length: 40 }, () => ({ predictedEvent: false, event: false })) },
       { key: 'corrected', population: 200, draws: Array.from({ length: 40 }, () => ({ predictedEvent: true, event: true })) },
@@ -600,9 +559,7 @@ describe('the panel’s error profile, against a known truth', () => {
   });
 });
 
-/** The closed form applied to the same split — what `resampledAccuracy` would
- *  do if it kept `classifierAccuracy`'s interval instead of resampling. Only
- *  the test above builds this, to measure what that would have cost. */
+/** The closed form on the same split, built only to measure its cost. */
 function splitForClosedForm(strata: ReadonlyArray<AccuracyStratum>): PredictionStratum[] {
   return strata.flatMap((stratum) => [true, false].flatMap((predictedEvent) => {
     const cell = stratum.draws.filter((draw) => draw.predictedEvent === predictedEvent);
@@ -623,8 +580,7 @@ describe('the bar’s operating characteristic', () => {
     accuracy.specificity.lo >= STAND_IN_THRESHOLDS.specificity;
 
   test('never certifies a panel whose true profile is below it', () => {
-    // The failure that would matter: a bad panel waved through, after which
-    // every corrected rate quietly carries an error nobody measured.
+    // A bad panel waved through is the failure that matters.
     for (const below of [
       { panelSensitivity: 0.5, panelSpecificity: 0.85 },
       { panelSensitivity: 0.6, panelSpecificity: 0.9 },
@@ -644,8 +600,6 @@ describe('the bar’s operating characteristic', () => {
   });
 });
 
-// ── The bar itself ───────────────────────────────────────────────
-
 describe('the pre-registered bar', () => {
   test('is stated in the conditions it prints, at the values the module fixes', async () => {
     const { sql, actor } = await panelOver({
@@ -661,8 +615,7 @@ describe('the pre-registered bar', () => {
   });
 
   test('a respectable panel still fails on the bound, not on the point estimate', async () => {
-    // Catches half the negatives and calls one accepted turn in ten bad.
-    // Respectable, and nowhere near good enough to label on the owner's behalf.
+    // Catches half the negatives and calls one accepted turn in ten bad: not good enough.
     const { sql, actor } = await panelOver({
       ledger: { accepted: 200, corrected: 60, frustrated: 40 },
       human: (row) => row.outcome,
@@ -679,7 +632,7 @@ describe('the pre-registered bar', () => {
 
     expect(recall.met).toBe(false);
     expect(recall.detail).toMatch(/recall ≥ 0\.\d\d, specificity ≥ 0\.\d\d/);
-    // The point estimate is the honest middle; the bound is what the bar reads.
+    // The bar reads the bound, not the point estimate.
     expect(accuracy.sensitivity.lo).toBeLessThan(accuracy.sensitivity.mean);
     expect(accuracy.sensitivity.mean).toBeGreaterThan(0.4);
   });
