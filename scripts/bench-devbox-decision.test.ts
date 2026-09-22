@@ -1,14 +1,5 @@
-/**
- * The decision rule, proved without a deployment.
- *
- * This rule decides which storage strategy ships, so it has to be checkable
- * against hand-built rows rather than only against a run that costs a container
- * and thirty minutes. Every test here pins a behaviour a plausible bug would
- * break, and the two that matter most are the refusals: a rule that returns a
- * winner for every input is not a rule, and a rule that treats an unmeasured arm
- * as an infinitely good one would have crowned an arm on the day it could not
- * attach.
- */
+/** Tests the storage-strategy decision rule against hand-built rows, without a deployment.
+ *  It must refuse: never a winner for every input, never an unmeasured arm as the best one. */
 
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -72,9 +63,7 @@ const tick = (
   classA: extra.classA ?? 0,
   classB: extra.classB ?? 0,
   classFree: extra.classFree ?? 0,
-  // PRESENCE, not truthiness. `?? 0` here coerced an explicit `null` to zero —
-  // the exact collapse these tests exist to forbid, inside the helper that tests
-  // for it.
+  // Test by key presence, not `??`: an explicit `null` must stay null, not collapse to zero.
   bytesPut: 'bytesPut' in extra ? extra.bytesPut ?? null : 0,
   heldBytes: extra.heldBytes ?? null,
   movedReported: extra.movedReported ?? true,
@@ -158,12 +147,8 @@ describe('startup polling contract', () => {
       .toEqual({ kind: 'pending' });
   });
 
-  /**
-   * PROBE wakeprobe09010650: a `snapshot-chain` box, alone on its own Worker,
-   * answered this reading for 300 s. `pending` describes the driver's
-   * knowledge; the box had already filed two incidents, and a ceiling refusal
-   * that says only "pending" throws that away.
-   */
+  /** `pending` describes only the driver's knowledge; a ceiling refusal must report the
+   *  box's own reading, since the box may already have filed incidents. */
   test('the reading a refusal reports names the incidents a pending verdict hides', () => {
     expect(describeStartupState({
       state: {
@@ -184,16 +169,8 @@ describe('startup polling contract', () => {
   });
 });
 
-/**
- * A fixture that answers the two routes a startup uses and records what it was
- * asked, in order.
- *
- * It answers BYTES, because bytes are what the driver decodes: a reply built as
- * a typed object here would be one the driver's own schema never had to accept.
- * `typeof globalThis.fetch` carries a `preconnect` member beside its call
- * signature, so the stub is COMPLETED with the real one's rather than asserted
- * into shape.
- */
+/** The fixture replies with bytes so the driver's own schema must decode them.
+ *  The fetch stub copies the real `preconnect` member instead of asserting into shape. */
 
 const BENCH_FIXTURE = { origin: 'https://bench.invalid', token: 'bench-token' };
 
@@ -432,39 +409,19 @@ const PostedBodySchema = v.looseObject({
   command: v.optional(v.string()),
 });
 
-/**
- * A fixture that implements the ASYNC operation protocol the deployed one now
- * implements, and counts the publications it starts.
- *
- * `publications` is the quantity the blocking protocol got wrong: a checkpoint
- * that outlived the driver's 180 s per-attempt deadline was re-posted, and the
- * fixture then ran a second full publication behind the first — measured on the
- * 20260831031426 and 20260831143544 decisive runs, on both candidate arms. Here
- * a publication starts when an `op` is armed for the FIRST time, so a re-post
- * that resolves to an existing token adds nothing, and a post carrying a fresh
- * `op` adds one. The counter can therefore fail in both directions.
- */
+/** Fixture for the async operation protocol; a publication starts only when an `op` is
+ *  first armed, so a re-post resolving to an existing token adds none and the count fails both ways. */
 
 /** Fast bounds: the protocol under test is the cadence's client, not the
  *  cadence. Production values live beside `OPERATION_DEADLINE_MS`. */
 
 
-/**
- * A fixture that measures a whole arm and then refuses its WAKE.
- *
- * The shape of both 2026-08-31 decisive runs: a cold attach that landed, a
- * checkpoint ladder that committed, and a refusal at the recycle. Every route
- * an arm touches before that point answers here, so what the artifact keeps is
- * decided by the driver rather than by how far the fake got.
- */
+/** A fixture that measures a whole arm and then refuses its WAKE. Every earlier route answers,
+ *  so what the artifact keeps is decided by the driver, not by how far the fake got. */
 
 
-/**
- * A fixture whose store tally moves on every stop and every wake, so a window
- * that opens before a stop confirms prices the stop's own operations. The
- * first two wakes attach (the two tree-size rung restores); the third refuses,
- * which ends the arm after its ladder with the rung rows already settled.
- */
+/** Store tally moves on every stop and wake, so a window opened before a stop confirms prices
+ *  its operations. Wakes one and two attach (rung restores); the third refuses, ending the arm. */
 function rungRestoreFixture(stopOps: number, wakeOps: number, workloadChurn = false) {
   const asked: string[] = [];
   let wakes = 0;
@@ -580,12 +537,8 @@ describe('the tree-size restore rows', () => {
   });
 
   test('price the wake alone, never the stop that preceded it', async () => {
-    // RED-FIRST. Run 20260905193714 recorded 67 remote operations for five
-    // rung restores of three arms with different call mixes, and 10 puts on a
-    // chain restore that puts nothing: the rung opened its /ops window before
-    // the stop, so the stop's final checkpoint was priced as the restore. The
-    // post-ladder wake opens its window after the stop confirms; the rungs
-    // must do the same.
+    // A rung opens its /ops window only after the stop confirms, so the stop's final
+    // checkpoint is never priced as the restore.
     const fixture = rungRestoreFixture(10, 3);
     let arm: ArmResult;
 
@@ -606,33 +559,17 @@ describe('the tree-size restore rows', () => {
   });
 });
 
-/**
- * A verify-only probe arm: one arm's ladder, stop and wake with the evidence
- * reads, then teardown — and nothing else. The fake answers the whole probe
- * path the way `wakeRefusingFixture` answers the failure path, so what the
- * arm does NOT ask for is decided by the driver rather than by how far the
- * fake got. The publish and wake answers differ on purpose: two reads that
- * archived the same bytes would prove nothing about when each was taken.
- */
+/** The fake answers the whole probe path, so what the arm skips is the driver's choice.
+ *  Publish and wake answers differ: identical archived bytes cannot show when each was read. */
 
 
-/** When a stub lane started or finished: the ORDER it happened in, which is
- *  what an overlap claim rests on, and the wall clock it happened at, which is
- *  what a reader of a failure wants to see. */
+/** A stub lane's start or finish: overlap claims rest on the recorded ORDER;
+ *  the wall clock is only for a reader of a failure. */
 
 
-/**
- * A fake-armed driver: one stub lane per arm, each recording when it started
- * and when it finished.
- *
- * The stubs are the whole point. What is under test is the DRIVER's own
- * scheduling — whether two arms are in flight at once, and whether one arm's
- * throw can reach a sibling — and a real lane would answer that question only
- * by deploying five Workers.
- */
+/** Stub lanes test the driver's own scheduling (arms in flight at once, throw isolation);
+ *  a real lane could answer that only by deploying five Workers. */
 
-/** A row shaped like a completed arm. Only the fields these tests read carry
- *  anything; the rest is the empty shape `unmeasuredArm` writes. */
 function measuredArm(strategy: Strategy): ArmResult {
   return {
     strategy,
@@ -664,19 +601,11 @@ function measuredArm(strategy: Strategy): ArmResult {
 }
 
 
-/** `/state` answers the same internal error forever; `/exec` never answers at
- *  all, which is what a readiness drive against a wedged box really does. */
 
 
 
-
-/** Facts in which every control's documented defect DID show up.
- *
- *  `deltaLayerCollapse` is the SERVED shape: the delta reaches the merged view
- *  through a lower layer of its own, the fresh upper never holds it, and the
- *  next checkpoint collapses onto a new generation naming no delta.
- *  {@link COPIED_INTO_THE_UPPER} models the behaviour the wake fix removed, so
- *  the witness has to tell the two apart rather than accepting either. */
+/** Facts in which each control's defect shows up; `deltaLayerCollapse` is the served shape:
+ *  delta in its own lower layer, never in the upper, next checkpoint collapses naming no delta. */
 const WITNESSED: ControlWitnessFacts = {
   deltaLayerCollapse: {
     chainId: 'chain-7',
@@ -698,18 +627,8 @@ const WITNESSED: ControlWitnessFacts = {
   },
 };
 
-/**
- * The OLD copy behaviour, as a fake: `cumulative-delta-seed` preregistered
- * exactly this reading, and the wake fix deleted the copy that produced it.
- *
- * A copying attach reads the delta end to end into the fresh upper, so the
- * marker committed into that delta lands in the upper, no layer of its own is
- * ever mounted, and the changed set is whole again — so the next checkpoint
- * appends an ordinary delta inside the SAME generation instead of collapsing.
- * Every one of those four facts is the opposite of {@link WITNESSED}, which is
- * what makes the witness a copy-versus-serve discriminator rather than a
- * statement that something happened.
- */
+/** A copying attach seeds the delta into the upper: marker in upper, no delta layer mounted,
+ *  same-generation append; each fact is opposite to `WITNESSED`, so the witness discriminates. */
 const COPIED_INTO_THE_UPPER: ControlWitnessFacts = {
   ...WITNESSED,
   deltaLayerCollapse: {
@@ -776,13 +695,12 @@ describe('the preregistered witness cells', () => {
     const [, collapse] = controlWitnessChecks('snapshot-chain', COPIED_INTO_THE_UPPER, 'layered');
     expect(collapse?.name).toBe('delta-layer-collapse');
     expect(collapse?.observed).toBe(false);
-    // Both halves of the copy are named, so a reader sees WHICH behaviour ran.
     expect(collapse?.detail).toContain('NOT mounted as a layer');
     expect(collapse?.detail).toContain('the attach copied the delta');
     expect(collapse?.detail).toContain('did NOT collapse');
 
-    // And the SERVED facts observe it, so the two directions are discriminated
-    // by this witness rather than by which fields happen to be populated.
+    // The served facts observe it: this witness, not which fields happen to be populated,
+    // discriminates the two directions.
     const [, served] = controlWitnessChecks('snapshot-chain', WITNESSED, 'layered');
     expect(served?.observed).toBe(true);
     expect(served?.detail).toContain('mounted as a lower layer');
@@ -844,8 +762,6 @@ describe('the preregistered witness cells', () => {
 });
 
 
-/** Ratios of exactly 12x on git and 4x on npm: comfortably over the bar. */
-
 
 describe('the lifecycle-proof gate at the rule', () => {
 
@@ -857,20 +773,8 @@ describe('the lifecycle-proof gate at the rule', () => {
 
 });
 
-/**
- * Money language, as one pattern the report contract is held to.
- *
- * THE RULING THIS ENFORCES, and the reason it is a fixture rather than a
- * habit: this benchmark incurs no cost and money is not a decision criterion,
- * so a dollar figure in a user-facing artifact is a claim the experiment never
- * measured. The words the strip removed are exactly the ones that can come
- * back by copy-paste — a `usd` total, a `$` cell, a "priced at" sentence — so
- * the pattern names them and the two tests below scan the WHOLE rendered
- * artifact rather than one column.
- *
- * `class A`/`class B` are deliberately NOT in it: they name the KIND of R2 API
- * operation, and the counts stay because the experiment measures them.
- */
+/** The benchmark incurs no cost, so a dollar figure in the report is an unmeasured claim.
+ *  `class A`/`class B` stay allowed: they name R2 operation kinds the experiment counts. */
 
 
 describe('the rendered report carries no money', () => {
@@ -914,9 +818,8 @@ describe('the rendered report carries no money', () => {
 
 
   test('and it still carries the operation classes, bytes moved and latency', () => {
-    // The strip removes money, NOT measurement: `class A`/`class B` name the
-    // kind of R2 API operation, and those counts plus bytes moved and tick
-    // time are what the decision reads.
+    // The strip removes cost only: `class A`/`class B` name R2 operation kinds, and those counts,
+    // bytes moved and tick time are what the decision reads.
     const report = render({
       arms: [reportArm('snapshot-chain')],
       meta: reportMeta,
@@ -927,7 +830,6 @@ describe('the rendered report carries no money', () => {
     expect(report).toContain('Σ tick ms');
     expect(report).toContain('#### R2 operations and teardown');
     expect(report).toContain('| arm | class A | class B | free | total | teardown |');
-    // The tallies themselves survive, so nothing was dropped with the column.
     expect(report).toContain('912');
     expect(report).toContain('145');
   });
@@ -969,9 +871,8 @@ describe('restore and backup time versus tree size', () => {
   };
 
   test('measured tree-size rows round-trip through the artifact and render', () => {
-    // RED WHEN THE SECTION OMITS A MEASURED ROW: every number the driver took
-    // is asserted in the rendered report, so a section that drops a rung fails
-    // here rather than publishing a short table. Measured 2026-09-05.
+    // Every measured number is asserted in the rendered report, so a section that drops a rung
+    // fails here rather than publishing a short table.
     const root = scratchDir('devbox-complexity-rows');
     const complexity = measuredRows();
     const arm = complexityArm('snapshot-chain', complexity);
@@ -992,9 +893,8 @@ describe('restore and backup time versus tree size', () => {
     expect(report).toContain('| `snapshot-chain` | 65,536 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
     expect(report).toContain('| `snapshot-chain` | 4,259,840 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
     expect(report).toContain('| `snapshot-chain` | 71,368,704 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
-    // THE SECTION CARRIES THE RUN'S OWN DATE. It carried the literal
-    // 2026-09-05, the day the cell was written, so every later run's table
-    // would have dated its numbers to a day nobody measured them on.
+    // The section dates its numbers from `meta.date`, never a literal: a table must carry
+    // the day its run measured it.
 
     const later = render({
       arms: [{ ...arm, complexity: rows }],
@@ -1011,9 +911,8 @@ describe('restore and backup time versus tree size', () => {
 
 describe('detecting a blind op counter', () => {
   test('bytes moved with zero ops is blindness, not a cheap arm', () => {
-    // The contradiction that makes it detectable: bytes reach R2 through a PUT or
-    // a multipart part and there is no third way, so non-zero bytes with zero
-    // operations of every class cannot describe a real tick.
+    // Bytes reach R2 only through a PUT or a multipart part, so non-zero bytes with zero ops
+    // of every class cannot describe a real tick.
     expect(opsAreBlind([
       tick('a', 'git', 100, { bytesPut: 536 * 1024 * 1024 }),
     ], 'git')).toBe(true);
@@ -1040,9 +939,8 @@ describe('detecting a blind op counter', () => {
 
 describe('operation totals', () => {
   test('free operations are counted, and counting them is the whole of it', () => {
-    // MONEY IS NOT A DECISION CRITERION HERE, so there is nothing to price:
-    // the free class is counted because small-file churn has to stay visible
-    // in the operation columns, not because a rate applies to it.
+    // Money is not a decision criterion: the free class is counted so small-file churn stays
+    // visible in the operation columns, not because a rate applies to it.
     const totals = totalsFor([tick('a', 'git', 10, { classFree: 500 })], 'git');
     expect(totals.classFree).toBe(500);
     expect(totals.classA).toBe(0);
@@ -1072,8 +970,6 @@ describe('moved bytes are three-valued, and the third value is not zero', () => 
 
 
   test("a skip's honest zero is answerable and is NOT unanswerable", () => {
-    // A skip knows it moved nothing. Folding it in with the cannot-answer case
-    // would lose the distinction the strategies deliberately draw.
     const totals = totalsFor([tick('a', 'git', 5, { bytesPut: 0 })], 'git');
     expect(totals.unanswerable).toBe(0);
     expect(totals.movedReported).toBe(true);
@@ -1107,9 +1003,8 @@ describe('container create retry classification', () => {
     expect(isTransientContainerCreateError('invalid strategy')).toBe(false);
   });
   test('the box\u2019s own re-armable sentences are told apart from its terminal one', () => {
-    // Verbatim from `Devbox.ensureReady()`. A driver that guessed at this
-    // wording would drift the moment the box reworded itself, which is why the
-    // test quotes all three rather than paraphrasing.
+    // Verbatim from `Devbox.ensureReady()`; quoted exactly so a rewording of the box's
+    // refusals breaks this test instead of silently drifting the driver.
     expect(isRearmableStartupRefusal(
       'this devbox is not ready: no restoration has run for this container yet. '
       + 'Nothing has been classified as a failure; a startup is armed, so ask again.',
@@ -1168,7 +1063,6 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
     });
 
     expect(await probes.bucketState('bench')).toEqual({ absent: false, objects: 2, multipartResidue: 1 });
-    // OBSERVED, not remediated: the verifier deleted and aborted nothing.
     expect(world.deleted).toEqual([]);
     expect(world.aborted).toEqual([]);
   });
@@ -1183,8 +1077,7 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
   });
 
   test('an unmeasurable multipart count is a FAILURE, never a zero', async () => {
-    // The pre-fix shape hardcoded multipartResidue: 0 with no instrument — the
-    // exact residue class two aborted runs left behind an empty object list.
+    // An empty object list does not rule out multipart residue: aborted runs leave uploads behind it.
     const probes = cleanupObservationProbes({
       wrangler: (args) => (args[0] === 'r2' ? 'name: bench\nobject_count: 0' : 'unexpected'),
       residue: null,
@@ -1232,8 +1125,6 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
   });
 
   test('no verifier probe carries a destructive command', async () => {
-    // Driven, not read: both observation probes run against a world that
-    // records every mutation, and every wrangler command they issue is shown.
     const world = plane({ exists: true, objects: ['a'], uploads: [{ key: 'b', uploadId: 'u1' }] });
     const commands: string[] = [];
 
@@ -1253,15 +1144,12 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
     expect(world.aborted).toEqual([]);
 
     for (const command of commands) expect(command).not.toMatch(/delete|remove|--force/);
-    // And the replay arm drains residue before retrying its delete. That order
-    // lives in the recovery path whose wrangler calls are real subprocesses,
-    // so no fake can drive it and only the source shows it.
+    // The replay arm drains residue before retrying its delete; that path runs real wrangler
+    // subprocesses no fake can drive, so only a source check pins the order.
     const source = readFileSync(join(import.meta.dirname, 'bench-devbox-strategies.ts'), 'utf8');
     expect(source).toContain('drainBucketResidue(residue, entry.name)');
   });
 });
-
-// ── what the store must hold for the generation the record names ────────────
 
 describe('the chain arm asks the store for what its record names', () => {
   const CHAIN = 'c0ffee00-0000-4000-8000-00000000beef';
@@ -1282,12 +1170,8 @@ describe('the chain arm asks the store for what its record names', () => {
   });
 
   test('RED PROOF: a REBASED record wants its base and NO delta', () => {
-    // The shape the instrument used to refuse. A quiesce whose delta has
-    // outgrown its base collapses the chain onto a fresh generation, which has
-    // a `data.sqsh` and no `delta.sqsh` — the last commit of run
-    // 20260831184750, whose 71,389,184 bytes are a bare base. Asking for a
-    // delta there failed the arm's verify for holding exactly the shape its
-    // strategy documents, and G1 refused the run for it.
+    // A delta that outgrows its base collapses the chain onto a fresh generation: a
+    // `data.sqsh` and no `delta.sqsh`, which is the strategy's documented shape, not a fault.
     const expectations = chainArchiveExpectations(CHAIN, undefined);
     expect(expectations.map((row) => [row.key, row.present])).toEqual([
       [`backups/${CHAIN}/data.sqsh`, true],
@@ -1296,9 +1180,8 @@ describe('the chain arm asks the store for what its record names', () => {
   });
 
   test('the absence is a real expectation: an unnamed delta object is a finding', () => {
-    // The other direction, so the correction is not simply "ask for less". An
-    // archive under a generation whose record names none is a publication that
-    // lost its record or a sweep that never ran.
+    // A delta archive under a generation whose record names none is a publication that lost
+    // its record or a sweep that never ran, so its presence is a finding.
     const absent = chainArchiveExpectations(CHAIN, undefined)
       .find((row) => row.key.endsWith('delta.sqsh'));
 
@@ -1312,30 +1195,26 @@ describe('the chain arm asks the store for what its record names', () => {
   });
 
   test('the arm checks every expectation the record produced, in both directions', () => {
-    // The wiring, guarded at the source: a branch that only ever called `head`
-    // could not express an absence, which is how the one-directional check
-    // survived. Both the loop and the absence arm have to be there.
+    // Guards the source: a branch that only calls `head` cannot express an absence,
+    // so both the loop and the absence arm must be present.
     const source = readFileSync(join(import.meta.dirname, 'bench-devbox-strategies.ts'), 'utf8');
     expect(source).toContain('for (const expectation of expectations) await archive(expectation);');
     expect(source).toContain('found.exists !== true,');
 
-    // And the chain branch no longer asks for a delta whatever the record says:
-    // the only surviving unconditional delta head is the EXTRACTION branch's,
-    // which is about a record that cannot have collapsed onto a fresh base.
+    // The chain branch must not request a delta unconditionally; the slice excludes EXTRACTION's
+    // delta head, whose record cannot have collapsed onto a fresh base.
     const chainBranch = source.slice(
       source.indexOf("if (mode === 'chain') {"),
       source.indexOf('  } else {\n    // The chain in EXTRACTION mode'),
     );
 
     expect(chainBranch.length).toBeGreaterThan(200);
-    // Comments stripped: the prose in that branch explains the defect by name,
-    // and a guard that could be tripped by its own explanation guards nothing.
+    // Comments are stripped because the branch's prose names the defect,
+    // and a guard its own explanation could trip guards nothing.
     const code = chainBranch.split('\n').filter((line) => !line.trim().startsWith('//')).join('\n');
     expect(code).not.toContain('delta.sqsh');
   });
 });
-
-// ── the teardown manifest exists before the resources do ────────────────────
 
 
 
@@ -1363,36 +1242,12 @@ describe('an abandoned run is deleted from its names alone', () => {
   });
 });
 
-// ── the paths the lifecycle proof checks ────────────────────────────────────
-//
-// THE DEPLOYED DEFECT this pins. One arm of run 20260903140046
-// failed its lifecycle proof on `the tree lower is present and mounted at its
-// lower path: /var/tmp/devbox/cas-lower -> no` — while the same proof's other
-// rows showed the folded tree holding the committed marker and the cursor
-// advanced. The mount graph was healthy; the CHECK was three commits stale.
-// `cas-lower` was the lower's path until the arm moved it inside the store
-// mount (one mount, so a fold and the lower are one object), and the driver
-// kept asking about a path the strategy no longer creates — and demanding it
-// be its own mount line, which the new layout deliberately does not have.
-//
-// A hardcoded container path in the driver is the defect class: the strategy
-// owns those paths and exports them. This asserts the driver reads them from
-// the strategy rather than restating them.
+// The strategy owns container paths and exports them; the driver must read them from the
+// strategy, never restate them, or its lifecycle proof checks paths no longer created.
 
 
-// ── every admission check admits what the product can answer ────────────────
-//
-// THE FAMILY THIS PINS. Three instrument defects reached deployed runs in one
-// day, all the same shape — a check narrower than the thing it measures:
-//   1. the lifecycle proof asking for a layer path the strategy had moved,
-//   2. a fence reader demanding a manifest version the daemon no longer writes,
-//   3. a startup step admitting only `attached` where the box legitimately
-//      answered `already-attached`, which ended an arm after it had completed
-//      its cold attach, its ladder, its stop and its wake.
-//
-// The third cost a full arm of a decisive run, so the rule is asserted rather
-// than remembered: a step may narrow what it admits ONLY with a stated reason,
-// and the set it narrows from is the product's own.
+// An admission step narrows what it admits only with a stated reason, and narrows from
+// the product's own answer set, never a narrower restatement of it.
 
 
 describe('the counted restore (G5)', () => {
@@ -1415,8 +1270,6 @@ describe('the counted restore (G5)', () => {
     expect(diffOpTallies(null, { calls: {} })).toBeNull();
     expect(diffOpTallies({ calls: { get: 1 } }, { calls: { get: 1, list: 1 } }))
       .toEqual({ calls: { list: 1 }, total: 1 });
-    // The byte tally rides the bracket when both sides carry one, and stays
-    // absent when either side predates it.
     expect(diffOpTallies(
       { calls: { get: 1 }, bytes: { payload: 100 } },
       { calls: { get: 3 }, bytes: { payload: 4196, metadata: 512 } },
@@ -1445,7 +1298,6 @@ describe('the counted restore (G5)', () => {
       serialRemoteOps: 7, totalRemoteOps: 7, metadataBytes: 0, payloadBytes: 65536, cpuSteps: 12, mounts: 4, replayUnits: 1,
     });
 
-    // Without the byte tally or the served count the row refuses, field by field.
     const uncounted = countedRestoreWork({
       wakeKind: 'attached', wakeDetail: 'chain abc 4096B base',
       wakeOps: { calls: { get: 2 }, total: 2 }, wakeMountLines: lines.slice(0, 3), wakeServedEntries: null,

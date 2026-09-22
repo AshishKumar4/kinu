@@ -1,15 +1,5 @@
-// The decision gate.
-//
-// Every rule a devbox runs on, at its boundary. These are pure functions on
-// purpose: a container lifecycle cannot be driven from a unit test, so the
-// reasoning is separated from the platform and the reasoning is what is pinned
-// here. A table beats reading the same condition twice.
-//
-// The defect class this exists for: a durability path that silently did
-// nothing. A wrapper reported a restore it had not performed, and nothing
-// observed the difference, so an agent ran against an empty directory for the
-// rest of the container's life. So every test below asserts an OUTCOME rather
-// than that a function was reachable.
+// Pure lifecycle decisions, pinned apart from the platform a unit test cannot drive.
+// Tests assert outcomes, not reachability: a silent no-op durability path must fail here.
 import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -26,12 +16,8 @@ function devboxScratchDir(label: string): string {
   return mkdtempSync(join(suiteRoot, `${label}-`));
 }
 
-// Imported from the modules that hold them, NOT from the barrel. The barrel
-// pulls in the Devbox class, which imports the Sandbox runtime and therefore
-// `cloudflare:workers`, which does not exist outside a Worker. That the
-// decisions are reachable without the platform is the point of separating them,
-// so this import is the property rather than a workaround. The barrel's own
-// coherence is checked by `tsc`.
+// Import from the defining modules, not the barrel: it pulls in `cloudflare:workers` via
+// Sandbox, absent outside a Worker. Platform-free reachability is the property tested.
 import { DEVBOX_WORKDIR, parseDevboxStrategyName } from '../src/storage';
 import {
   DEFAULT_DEVBOX_POLICY,
@@ -77,10 +63,7 @@ import {
 
 const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 
-/** The generation a record retains as its restore fallback. */
 const FALLBACK_ID = 'a1b2c3d4-0000-4000-8000-0000000000fb';
-
-// ── the activity lease ──────────────────────────────────────────────────────
 
 describe('quiesce timing matrix — three gates and a confirmed quiet window', () => {
   const T = 1_000_000_000;
@@ -127,9 +110,8 @@ describe('quiesce timing matrix — three gates and a confirmed quiet window', (
     });
 
     expect(step.action).toBe('hold');
-    // And the stretch is FORGOTTEN, so the confirmation starts over once the
-    // work finishes. A remembered stretch would stop the box on the first tick
-    // after a long job, which is the worst possible moment.
+    // Background work forgets the quiet stretch so confirmation restarts after it; a remembered
+    // stretch would stop the box on the first tick after a long job.
     expect(step.quietSince).toBeUndefined();
   });
 
@@ -146,10 +128,6 @@ describe('quiesce timing matrix — three gates and a confirmed quiet window', (
       .toEqual({ action: 'hold', quietSince: undefined });
   });
 
-  // Run `20260914234711`, segment git/1/1: quietSince 1789430330189, a
-  // caller's stamp at 1789430354094, a 72 s checkpoint tick holding the alarm,
-  // and the first beat afterwards (1789430427189) read an idle lease and a
-  // confirmed stretch that had begun before the caller touched the box.
   test('a quiet stretch older than the last interaction ended with it, however long ago it began', () => {
     const step = quiesceStep({
       ...base,
@@ -177,24 +155,19 @@ describe('quiesce timing matrix — three gates and a confirmed quiet window', (
   });
 
   test('the attach budget is bounded, and short enough to be a bound', () => {
-    // The attach runs in a scheduled callback, so this budget is entirely ours
-    // and it can actually fire. It still sits under the platform's 30 s
-    // blockConcurrencyWhile cancel window, because a box whose attach takes
-    // longer than that has a problem a longer budget does not fix.
+    // The attach runs in a scheduled callback, so this budget is ours and can actually fire.
+    // It stays under the blockConcurrencyWhile cancel window; a longer budget fixes nothing.
     expect(DEFAULT_DEVBOX_POLICY.attachBudgetMs).toBeGreaterThan(20_000);
     expect(DEFAULT_DEVBOX_POLICY.attachBudgetMs).toBeLessThan(30_000);
   });
 
   test('the retry cadence is the heartbeat, so a refused box is retried but not spun', () => {
-    // A failed attach re-arms the startup schedule at this cadence and refuses
-    // operations in between, instead of re-attaching once per call and
-    // recording an incident each time.
+    // A failed attach re-arms the startup schedule at this cadence and refuses operations
+    // in between, rather than re-attaching and recording an incident on every call.
     expect(DEFAULT_DEVBOX_POLICY.heartbeatSeconds).toBeGreaterThan(10);
     expect(DEFAULT_DEVBOX_POLICY.heartbeatSeconds).toBeLessThanOrEqual(120);
   });
 });
-
-// ── restart ordering ────────────────────────────────────────────────────────
 
 describe('restart plan — processes serve ports, so processes go first', () => {
   const procs: readonly SupervisedProcessSpec[] = [
@@ -208,9 +181,8 @@ describe('restart plan — processes serve ports, so processes go first', () => 
   ];
 
   test('the plan is two phases, so no exposure can be reached before the starts', () => {
-    // The SHAPE is the guard. There is no op that exposes a port, so there is no
-    // way to write an executor that exposes one whose listener was never probed
-    // — which is exactly what the flat three-op list allowed.
+    // The plan's shape is the guard: with no expose op, no executor can expose a port
+    // whose listener was never probed.
     const plan = restartPlan(procs, ports);
     expect(Object.keys(plan).sort()).toEqual(['serve', 'start']);
     expect(plan.start.map(spec => spec.processId)).toEqual(['p2', 'p1']);
@@ -239,14 +211,8 @@ describe('restart plan — processes serve ports, so processes go first', () => 
   });
 });
 
-// ── the recovery taxonomy ───────────────────────────────────────────────────
-
-/**
- * A failure as `@cloudflare/sandbox` really presents one: the code is a GETTER
- * on the class, not an own property, and none of its error classes is exported.
- * A stand-in carrying the code as a plain field would pass a check the shipped
- * SDK fails.
- */
+/** Mirrors `@cloudflare/sandbox`: `code` is a getter, not an own property, and no error class is
+ *  exported; a plain-field stand-in would pass a check the shipped SDK fails. */
 class Coded extends Error {
   constructor(readonly errorResponse: { readonly code: string; readonly message: string }) {
     super(errorResponse.message);
@@ -289,10 +255,8 @@ describe('classifying a lifecycle failure — the SDK\'s own codes, never its pr
   });
 
   test('THE CAUSE CHAIN is classified, because this package wraps its failures', () => {
-    // The snapshot chain rethrows a mount failure as its own sentence with the
-    // SDK's error as `cause`. A classifier that read only the outermost value
-    // would answer `unclassified` for every wrapped failure, which is the one
-    // generic policy this taxonomy exists to end.
+    // The snapshot chain rethrows a mount failure with the SDK's error as `cause`;
+    // reading only the outermost value would answer `unclassified` for every wrapped failure.
     const wrapped = new Error('chain abc is stored as lazy layers and could not be mounted', {
       cause: coded('MISSING_CREDENTIALS'),
     });
@@ -305,15 +269,12 @@ describe('classifying a lifecycle failure — the SDK\'s own codes, never its pr
       cause: new ContainerStartOverrun('Devbox.attach', 1),
     });
 
-    // The overrun is the outer fact here only when it IS outermost; wrapped the
-    // other way round the inner one still answers, which is the chain walk.
     expect(classifyRecovery({ cause: wrapped })).toBe('abandoned');
   });
 
   test('a message that merely MENTIONS a classified condition is not classified', () => {
-    // The whole reason the codes are the authority: an application error saying
-    // "no space left in the plan" is not NO_SPACE, and a taxonomy built on
-    // regexes would refuse a box over a sentence.
+    // Codes are the authority: a message saying "no space left in the plan" is not NO_SPACE,
+    // and regex classification would refuse a box over a sentence.
     expect(classifyRecovery({ cause: new Error('no space left in the plan; connection reset') }))
       .toBe('unclassified');
   });
@@ -347,14 +308,12 @@ describe('the ladder row is parsed strictly, and an unreadable one is not an abs
   });
 
   test('anything else is malformed rather than absent', () => {
-    // Absent means "nothing has failed" and leads to a retry, so reading an
-    // unreadable row as absent would restart the ladder every time — and a box
-    // that restarts the ladder can destroy its container identity repeatedly.
+    // Absent means "nothing has failed" and restarts the ladder; reading an unreadable row as
+    // absent could destroy the container identity repeatedly.
     const rejected = [
       null, 'retry', 3, {}, [],
       // No owner: a row nothing can be conditioned on.
       { stage: 'retry' },
-      // A stage outside the vocabulary, and an owner of the wrong type.
       { owner: OWNER, stage: 'refuse' }, { owner: OWNER, stage: 1 }, { owner: 7 },
       // An unknown key: this row has exactly one builder, so a second shape is
       // evidence of something else writing here.
@@ -373,8 +332,8 @@ describe('admission claims the row, and refuses on evidence it cannot read', () 
   });
 
   test('a readable row admits the attempt and hands it the stage to preserve', () => {
-    // THE RESET CASE. A container start, an eviction and a replacement all mint
-    // a new owner, and none of them may forget how far the ladder has gone.
+    // A container start, an eviction and a replacement each mint a new owner; none may
+    // reset how far the recovery ladder has gone.
     expect(admissionStep({ kind: 'row', row: { owner: OWNER } }))
       .toEqual({ admit: true, stage: undefined });
 
@@ -385,9 +344,8 @@ describe('admission claims the row, and refuses on evidence it cannot read', () 
   });
 
   test('an unreadable row refuses the attempt and normalises to the terminal stage', () => {
-    // Refusing is the safe half: nothing is destroyed on evidence nobody can
-    // read. Normalising is the other half — a row left unreadable would refuse
-    // for ever, and a permanent brick is its own defect.
+    // Refusing destroys nothing on unreadable evidence; normalising matters because a row left
+    // unreadable would refuse for ever and brick the devbox.
     expect(admissionStep({ kind: 'malformed' })).toEqual({ admit: false, stage: 'replace' });
   });
 });
@@ -400,8 +358,8 @@ describe('recovery is one decision per failure, with no count and no timeout', (
   const STAGES: readonly (RecoveryStage | undefined)[] = [undefined, 'retry', 'replace'];
 
   test('a superseded attempt is INERT for every class and every stage', () => {
-    // KINU-030/031: the stale continuation must not publish readiness, file a
-    // failure, re-arm a startup or destroy an identity it did not start on.
+    // A stale continuation must not publish readiness, file a failure, re-arm a startup
+    // or destroy an identity it did not start on.
     for (const failure of CLASSES) {
       for (const stage of STAGES) {
         expect(recoveryStep({ owned: false, failure, stage }))
@@ -410,8 +368,6 @@ describe('recovery is one decision per failure, with no count and no timeout', (
     }
   });
 
-  /** The failure classes an owned attempt settles on the spot, whatever stage
-   *  the ladder is at. */
   const SETTLED: readonly { name: string; failure: RecoveryClass; action: 'refuse' | 'retry' }[] = [
     { name: 'exhaustion refuses, repeats nothing, destroys nothing and moves nothing', failure: 'exhausted', action: 'refuse' },
     // Nothing a retry reaches changes a permanent configuration, so spending
@@ -432,8 +388,8 @@ describe('recovery is one decision per failure, with no count and no timeout', (
   }
 
   test('abandoned work enters at REPLACE, because destruction is its cancellation', () => {
-    // KINU-031: the work is `exec` calls inside the container, so no token can
-    // fence it. The identity has to go before anything attaches again.
+    // The work is `exec` calls inside the container, so no token can fence it.
+    // The identity has to go before anything attaches again.
     for (const stage of [undefined, 'retry'] as const) {
       expect(recoveryStep({ owned: true, failure: 'abandoned', stage }))
         .toEqual({ action: 'replace', stage: 'replace' });
@@ -441,9 +397,8 @@ describe('recovery is one decision per failure, with no count and no timeout', (
   });
 
   test('a failure at REPLACE is terminal AND KEEPS the stage, so nothing loops', () => {
-    // Both halves matter. Terminal stops a second destruction now; keeping the
-    // stage stops the next eviction from restarting a destructive ladder from
-    // scratch. Only a successful attach clears it.
+    // Terminal stops a second destruction now; keeping the stage stops the next eviction
+    // from restarting the destructive ladder. Only a successful attach clears it.
     for (const failure of CLASSES) {
       expect(recoveryStep({ owned: true, failure, stage: 'replace' }))
         .toEqual({ action: failure === 'stale-owner' ? 'retry' : 'refuse', stage: 'replace' });
@@ -452,10 +407,8 @@ describe('recovery is one decision per failure, with no count and no timeout', (
 
   for (const failure of ['transient', 'unclassified'] as const) {
     test(`${failure} walks the ladder once: retry, replace, then refuse for ever`, () => {
-      // KINU-032: repeated failure of ONE identity ends by replacing it. The
-      // bound is the ladder's length, not a tuned retry count — each stage is a
-      // different action, so nothing harmful is repeated. And the walk does not
-      // wrap: a fourth failure is still a refusal.
+      // The bound is the ladder's length, not a tuned retry count: each stage is a different
+      // action, so nothing harmful repeats. The walk does not wrap.
       const walk: string[] = [];
       let stage: RecoveryStage | undefined;
 
@@ -497,8 +450,8 @@ describe('port tokens and listener probes', () => {
   });
 
   test('the probe reads curl verdicts, and treats an unparsable answer as silence', () => {
-    // A response of any kind proves a listener exists. Whether it is happy is a
-    // different question and not this one.
+    // A response of any kind, even an error status, proves a listener exists;
+    // whether it is healthy is a separate question.
     expect(healthProbeSilent('404|0')).toBe(false);
     expect(healthProbeSilent('503|0')).toBe(false);
     expect(healthProbeSilent('200|0')).toBe(false);
@@ -519,8 +472,6 @@ describe('port tokens and listener probes', () => {
   });
 });
 
-// ── incidents ───────────────────────────────────────────────────────────────
-
 describe('incident retry schedule', () => {
   test('five seconds doubling to a five-minute ceiling', () => {
     expect(incidentRetryDelayMs(0)).toBe(5_000);
@@ -535,19 +486,14 @@ describe('incident retry schedule', () => {
   });
 });
 
-// ── the container-start budget ──────────────────────────────────────────────
-
 describe('readiness is per container, not per Durable Object', () => {
   test('the startup callback turns the lifecycle over before admitting a stopped container', () => {
     const source = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
     const startup = source.slice(source.indexOf('async #startContainer('));
     const body = startup.slice(0, startup.indexOf('\n  }'));
     expect(body).toContain('this.#invalidateGeneration();');
-    // Admitted through `start()` on the instance: the patched SDK marks healthy
-    // before the hook, so a command the restore issues routes straight to the
-    // container — and no app port is waited on, because the restore starts the
-    // app. An app-port wait here would hold the restore behind work it has not
-    // done yet.
+    // The patched SDK marks healthy before the hook, so restore commands reach the container.
+    // No app port is awaited: the restore starts the app, so that wait would block the restore.
     const admission = source.slice(source.indexOf('async #admitControlListener('));
     const admitting = admission.slice(0, admission.indexOf('\n  }'));
     expect(admitting).toContain('await this.startAndWaitForPorts({');
@@ -561,19 +507,8 @@ describe('readiness is per container, not per Durable Object', () => {
 });
 
 describe('every self-re-arming schedule needs a first link', () => {
-  // Three of this class's four schedule rows re-arm themselves, so each one is a
-  // chain that runs forever once started and never starts on its own. `onStart`
-  // is the one hook that fires per container start, so it is the only place a
-  // first link can be. A missing link is silent: the callback exists, its
-  // re-arm is correct, and the row simply never appears.
-  //
-  // Caught live by deployed probe P5: `devboxHeartbeat` re-arms itself at three
-  // sites and nothing armed it, so the activity lease never ticked and quiesce
-  // was unreachable. The probe's /heartbeatSchedules answered [].
-  //
-  // Pinned as source shape because the property is about a platform hook no unit
-  // harness can fire: there is no way to start a container from a test. What is
-  // checked is exactly the rule — `onStart` arms all three.
+  // Self-re-arming schedule rows never start on their own; `onStart` must arm each first link,
+  // and a missing link is silent. Pinned as source shape: no test can start a container.
   const source = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
 
   const bodyOf = (signature: string): string => {
@@ -591,25 +526,15 @@ describe('every self-re-arming schedule needs a first link', () => {
       expect(schedules).toContain(`this.#arm(${callback}`);
     }
 
-    // THE STARTUP ROW GOES THROUGH `kickStartup`, which owns the question "is
-    // anything going to try". A bare `#arm` here armed a successor one second
-    // after every admission probe — and the SDK runs this hook on every probe —
-    // so a settled box woke itself for ever. `kickStartup` arms the same row on
-    // the same cadence and refuses on a phase that needs no drive.
+    // The startup row goes through `kickStartup`: the SDK runs this hook on every admission probe,
+    // so a bare `#arm` would wake a settled box for ever; `kickStartup` refuses such phases.
     expect(schedules).toContain('await this.kickStartup();');
     expect(bodyOf('async kickStartup(')).toContain('this.#arm(STARTUP_CALLBACK, 1)');
   });
 
   test('the sweep of unreachable schedule rows runs at activation, before any arming', () => {
-    // MEASURED IN PRODUCTION (build 6d19d50e7): `Callback
-    // snapshotWorkspaceIfDue not found or is not a function`, twice a second
-    // per sandbox object, with the alarm re-arming for ever. The sweep used to
-    // run first inside `#armContainerSchedules`, but the container-start hook
-    // never fires on a wake whose container is asleep, while the alarm loop
-    // still runs — so a start-gated sweep could never reach the rows that spin
-    // the loop. The sweep runs in the constructor's activation gate instead,
-    // which settles before the runtime delivers any event, alarm included —
-    // and marks the running container's restoration pending, asking it nothing.
+    // The start hook never fires on a wake whose container is asleep, yet the alarm loop runs;
+    // the activation gate settles before any event, alarm included, so the sweep belongs there.
     const schedules = bodyOf('async #armContainerSchedules(');
     expect(schedules).not.toContain('#sweepUnknownSchedules');
     const activation = bodyOf('constructor(ctx: DurableObjectState<{}>, env: Env) {');
@@ -617,11 +542,8 @@ describe('every self-re-arming schedule needs a first link', () => {
     expect(activation).toContain('this.#activate()');
     const activate = bodyOf('async #activate(');
     expect(activate).toContain('this.#sweepUnknownSchedules()');
-    // STORAGE ONLY. The gate delivers no timer, so a container command issued
-    // here cannot be bounded: a control server that accepts and never answers
-    // held the gate to the platform's cancel and the reset repeated it (dated
-    // 6e96741cc, 2026-09-09). The activation notes the durable claim; the
-    // first delivered frame asks the container (`#resolveAdoption`).
+    // Activation is storage only: the gate delivers no timer, so a container command here is
+    // unbounded. It notes the durable claim; the first delivered frame asks (`#resolveAdoption`).
     expect(activate).toContain('this.#durableClaim()');
     expect(activate).not.toContain('#adoptIfCurrent');
     expect(activate).not.toContain('#readBootId');
@@ -635,38 +557,23 @@ describe('every self-re-arming schedule needs a first link', () => {
   });
 
   test('the incident row is armed on demand, not at start', () => {
-    // The fourth row is deliberately NOT a start link: an incident schedule with
-    // no incidents to deliver is a wakeup that does nothing forever.
+    // The incident row is not a start link: an incident schedule with no incidents to deliver
+    // is a wakeup that does nothing forever.
     expect(bodyOf('async #armContainerSchedules(')).not.toContain('INCIDENT_CALLBACK');
     expect(source).toContain('this.#arm(INCIDENT_CALLBACK');
   });
 
   test('quiesce arms NOTHING, so no row outlives the stop', () => {
-    // The reconciliation between "the heartbeat must always be armed" and the
-    // lease's own rule. Once the box is stopped there is nothing to heartbeat
-    // for, and a row that survived would wake a sleeping container forever.
-    // The next container start is what re-arms all three.
+    // A stopped box has nothing to heartbeat; a surviving row would wake the container forever.
+    // The next container start re-arms all three rows.
     const quiesce = bodyOf('async quiesce(');
     expect(quiesce).not.toContain('#arm(');
     expect(quiesce).toContain("this.stop('SIGTERM')");
   });
 
   test('every self-re-arming callback re-arms through ONE guard, not by hand', () => {
-    // This used to count the occurrences of `#arm(HEARTBEAT_CALLBACK)` in the
-    // heartbeat and require exactly five, one per path that leaves the box
-    // alive. That pin held the right property with the wrong instrument: it
-    // could not see a SIXTH path added without a re-arm, it broke on any
-    // refactor that did not change behaviour, and it said nothing at all about
-    // the other way the chain dies — a throw, which the alarm loop reduces to a
-    // console line before deleting the row.
-    //
-    // Both failures are now one wrapper's job, except a failed container
-    // admission: that callback must record its classified refusal and leave a
-    // startup successor before it returns. The remaining calls are first links:
-    // the container-start hook forges one per self-re-arming chain, the
-    // recovery ladder re-arms the startup for the ONE action that asks the
-    // same container again, the incident recorder starts delivery on demand,
-    // and the guard maintains every chain thereafter.
+    // The guard re-arms every chain; a failed container admission must itself record its refusal
+    // and leave a startup successor. Other `#arm(` calls are first links of a chain.
     for (const callback of ['devboxCheckpoint', 'devboxHeartbeat', 'devboxIncidents']) {
       const body = bodyOf(`async ${callback}(`);
       expect({ callback, guarded: body.includes('this.#scheduled(') }).toEqual({
@@ -691,52 +598,39 @@ describe('every self-re-arming schedule needs a first link', () => {
       total: 7, onStart: 2, startupAdmission: 1, startupRetry: 1, hookFailure: 0,
       onKick: 1, onRecord: 1, guard: 1,
     });
-    // And the ONE re-arm is reachable only from the action that means "ask this
-    // same identity again". A refusal or a replacement that armed a startup
-    // would be the loop the ladder exists to end.
+    // Only the `retry` action re-arms startup; a refusal or replacement that armed one
+    // would recreate the loop the ladder exists to end.
     const recover = bodyOf('async #recover(');
     expect(recover.slice(recover.indexOf("decision.action === 'retry'")))
       .toContain('await this.#arm(STARTUP_CALLBACK');
     expect(bodyOf('async #scheduled(')).toContain('await this.#arm(callback, nextSeconds)');
-    // And the guard re-arms after a throw as well as after a return, which is
-    // the half the old pin could not express.
     expect(bodyOf('async #scheduled(')).toContain('} catch (error) {');
-    // The clock the SDK actually reads is renewed on entry: its alarm chain
-    // ends WITHOUT a successor when `sleepAfterMs` passes, so a tick that does
-    // not renew it is the last tick there will ever be.
+    // The SDK's alarm chain ends without a successor once `sleepAfterMs` passes, so a tick
+    // that does not renew the activity timeout is the last tick.
     expect(bodyOf('async devboxHeartbeat(')).toContain('this.renewActivityTimeout();');
   });
 
   test('the liveness ping passes NO port, because that argument is a port', () => {
-    // `containerFetch(request, port)` takes a PORT second, not a timeout. A
-    // millisecond value there pointed every ping at a port nothing serves and
-    // waited for it to become ready, so every tick took the ping-failed path and
-    // the quiesce decision never ran. Omitting it uses the SDK's defaultPort.
+    // `containerFetch(request, port)` takes a port second, not a timeout; omitting it uses
+    // the SDK's defaultPort.
     const heartbeat = bodyOf('async devboxHeartbeat(');
     expect(heartbeat).toContain("this.containerFetch(new Request('http://127.0.0.1/'))");
     expect(heartbeat).not.toContain('HEARTBEAT_PING_TIMEOUT');
   });
 
   test('a replaced container instance is detected and re-driven, not waited on', () => {
-    // The platform can reclaim an instance mid-idle and nothing announces it:
-    // measured on a deployed probe where the chain ticked healthily through an
-    // 11-minute idle while the instance underneath was replaced. The boot id is
-    // the only reliable signal, and the tick is the only place it can be read.
+    // The platform can reclaim an instance mid-idle without notice; the boot id is the only
+    // reliable signal, and the heartbeat tick is the only place it can be read.
     const heartbeat = bodyOf('async devboxHeartbeat(');
-    // ONE COMPARISON, AND EVERY CALLER GOES THROUGH IT. The heartbeat asks
-    // `#containerWasReplaced()`, which is where the boot id is read; a second
-    // copy of that comparison is how the two would drift.
+    // Every caller goes through `#containerWasReplaced()`, the one place the boot id is read;
+    // a second copy of that comparison would drift.
     expect(heartbeat).toContain('#containerWasReplaced()');
     expect(bodyOf('async #containerWasReplaced(')).toContain('#readBootId()');
     expect(heartbeat).toContain('this.kickStartup()');
     expect(heartbeat).not.toContain('this.#restoreNow(');
     expect(heartbeat).not.toContain('this.#startContainer(');
-    // The COUNTER lives where the evidence is, not where it is noticed. Every
-    // restoration passes through the stamp, whether the container-start hook or
-    // a heartbeat drove it. Counting only in the heartbeat under-reported the
-    // case worth measuring: a replacement handled through `onStart` incremented
-    // nothing, measured locally as a boot id that changed while the count
-    // stayed at zero.
+    // The replacement counter increments in `#stampBootId`, which every restoration passes through;
+    // counting only in the heartbeat misses replacements handled through `onStart`.
     expect(heartbeat).not.toContain('REPLACED_COUNT_KEY');
     expect(bodyOf('async #stampBootId(')).toContain('REPLACED_COUNT_KEY');
     // The id must die with the instance, or it proves nothing.
@@ -744,16 +638,8 @@ describe('every self-re-arming schedule needs a first link', () => {
   });
 
   test('a commit asks the same question, because a heartbeat cadence is not a fence', () => {
-    // MEASURED, TWICE. Detection every `heartbeatSeconds` leaves every operation
-    // in between running against a container that no longer holds the mount, and
-    // proof that it does. Deployed control boxes died of exactly that on
-    // 2026-08-31: writes landed in a bare `/workspace` until the mount was
-    // refused forever, and writes hidden under the next overlay made a wake
-    // report `empty` for a box that had been written to.
-    //
-    // A COMMIT is where it has to be asked: it is the moment a box claims bytes
-    // are durable, it runs at checkpoint cadence rather than per operation, and
-    // one read of the boot marker is the whole cost.
+    // Heartbeat detection leaves operations between beats on a replaced container without the mount.
+    // A commit asks: it is where bytes are claimed durable, and one boot-marker read is the cost.
     expect(bodyOf('async checkpointNow(')).toContain('#healReplacedContainer()');
     expect(bodyOf('async quiesce(')).toContain('#healReplacedContainer()');
     const heal = bodyOf('async #healReplacedContainer(');
@@ -767,28 +653,20 @@ describe('every self-re-arming schedule needs a first link', () => {
   });
 
   test('keepAlive is never enabled, because it kills the alarm chain', () => {
-    // Audited in the SDK source: the activity branch of the container alarm loop
-    // returns without setting a successor, and Sandbox.onActivityExpired only
-    // LOGS when keepAlive is on. So keepAlive turns a clean stop into a dead
-    // chain plus a container the platform reclaims anyway, losing the final
-    // checkpoint and every future tick. Probe P5 measured exactly that.
+    // The SDK alarm loop's activity branch sets no successor and `Sandbox.onActivityExpired`
+    // only logs under keepAlive, so keepAlive kills the chain and loses the final checkpoint.
     expect(source).not.toContain('await this.setKeepAlive(');
-    // The replacement is the SDK's own expiry hook, which checkpoints first.
     expect(source).toContain('override async onActivityExpired(');
     expect(bodyOf('override async onActivityExpired(')).toContain("checkpoint('quiesce')");
   });
 });
 
 describe('arming must ignore the row being dispatched', () => {
-  // The container SDK deletes a fired row AFTER its callback returns, so during
-  // the callback the firing row is still in the table. A guard that counted
-  // every row let a self-re-arming callback see itself, decide it had nothing to
-  // do, and get deleted a moment later with the chain dead and no error
-  // anywhere. Two deployed probe runs died on it.
+  // The container SDK deletes a fired row after its callback returns, so the firing row
+  // is still in the table during the callback and must not count as a pending successor.
   const NOW = 1_700_000_000;
 
   test('the firing row does not count, so a successor is still armed', () => {
-    // Due exactly now, and overdue: both are the dispatch case.
     expect(needsArming([{ time: NOW }], NOW, true)).toBe(true);
     expect(needsArming([{ time: NOW - 30 }], NOW, true)).toBe(true);
   });
@@ -804,26 +682,20 @@ describe('arming must ignore the row being dispatched', () => {
   });
 
   test('the firing row alongside a future row does not suppress the future one', () => {
-    // The old guard and the new one agree here, and they must: arming again
-    // would double the period.
     expect(needsArming([{ time: NOW }, { time: NOW + 60 }], NOW, true)).toBe(false);
   });
 
   test('a caller that is not dispatching counts a due row as pending work', () => {
-    // The poll case, measured on b20260914070552: a due startup row the alarm
-    // loop had not delivered yet was re-armed by every 300 ms state reading,
-    // and each arm moved the platform alarm a second away. Due and overdue
-    // rows both hold the arm; a future one still does.
+    // Each arm moves the platform alarm later, so re-arming a due row on every state read
+    // would keep deferring its delivery (D14).
     expect(needsArming([{ time: NOW }], NOW, false)).toBe(false);
     expect(needsArming([{ time: NOW - 30 }], NOW, false)).toBe(false);
     expect(needsArming([{ time: NOW + 1 }], NOW, false)).toBe(false);
   });
 
   test('the guard the class uses is this one, not a row count', () => {
-    // The whole defect was `length > 0`. Pinned so it cannot come back. The
-    // guard now has TWO readers — `#arm` before it writes a row, and
-    // `resolveReadiness` before it drives a retry the schedule already owes — so it
-    // is pinned where it lives, plus the delegation that keeps it single.
+    // The guard has two readers, `#arm` and `resolveReadiness`, so it is pinned where it lives
+    // plus the delegation that keeps it single.
     const devbox = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
     const guard = devbox.slice(devbox.indexOf('async #pending('));
     const body = guard.slice(0, guard.indexOf('\n  }'));
@@ -835,8 +707,6 @@ describe('arming must ignore the row being dispatched', () => {
 });
 
 describe('an incident is written off only when the host says it LANDED', () => {
-  /** The ledger, as the class's storage presents it to `deliverIncidents`: the
-   *  rows a test reads back, and the four operations the delivery pass uses. */
   interface Ledger {
     readonly rows: Map<string, IncidentRow>;
     readonly store: IncidentStore;
@@ -866,10 +736,6 @@ describe('an incident is written off only when the host says it LANDED', () => {
     [...rows.values()][0];
 
   test('an UNDELIVERED answer leaves the row pending, and the next pass lands it', async () => {
-    // THE DEFECT: a host that could not announce an incident still answered
-    // `queued`, this side stamped `deliveredAt`, and the box stopped retrying an
-    // incident nobody had seen — while the host's own ledger still held it as
-    // re-deliverable. Only a landed announcement may write the row off.
     const { rows, store } = ledger();
     await recordIncident(store, 'attach', 'the mount refused');
     const answers: IncidentDisposition[] = ['undelivered', 'queued'];
@@ -883,8 +749,6 @@ describe('an incident is written off only when the host says it LANDED', () => {
 
     const retryIn = await deliverIncidents(store, answer);
 
-    // Pending, counted, and a retry scheduled at the first-attempt delay, in
-    // the seconds the delivery answer speaks rather than the schedule's ms.
     expect(retryIn).toBe(Math.ceil(incidentRetryDelayMs(1) / 1000));
     const pending = only(rows);
     expect({
@@ -895,16 +759,12 @@ describe('an incident is written off only when the host says it LANDED', () => {
 
     const settled = await deliverIncidents(store, answer);
 
-    // The second pass announced it, so nothing is left to wake for.
     expect(settled).toBeNull();
     expect(only(rows)?.deliveredAt).toBeNumber();
-    // Each pass told the host which announcement it was making.
     expect(ordinals).toEqual([1, 2]);
   });
 
   test('a THROWN handler is the same case, not a special one', async () => {
-    // The disposition's own contract says a throw is `undelivered`, so it takes
-    // that path rather than a copy of it.
     const { rows, store } = ledger();
     await recordIncident(store, 'checkpoint', 'the commit failed');
 
@@ -930,8 +790,6 @@ describe('an incident is written off only when the host says it LANDED', () => {
 });
 
 describe('the attach budget', () => {
-  /** The attach step of the restore's one policy, which is where the budget's
-   *  throwing arm is reached from. */
   const attachWithin = <T>(
     budgetMs: number, work: () => Promise<T>, onOverrun: (failure: { readonly cause: unknown }) => void,
   ): Promise<T> => racedRestoreSteps(openStartBudget(budgetMs)).attach(work, onOverrun);
@@ -969,10 +827,7 @@ describe('the attach budget', () => {
   });
 
   test('the remainder only ever falls', async () => {
-    // ONE CLOCK FOR THE WHOLE RESTORATION. Every phase after the attach used to
-    // run outside any budget, and the listener proof carried a window per port,
-    // so three silent ports added about ninety seconds and nothing bounded the
-    // sum.
+    // One budget bounds the whole restoration; per-port listener windows would sum unbounded.
     const budget = openStartBudget(25_000);
     const first = budget.remainingMs();
     await Promise.resolve();
@@ -983,18 +838,15 @@ describe('the attach budget', () => {
   });
 
   test('a spent budget answers zero rather than a negative remainder', () => {
-    // A step that clamps its own wait on this must never be handed a negative
-    // window, which would make `Date.now() + remaining` a deadline in the past
-    // for one caller and a wait forever for another.
+    // A negative window would make `Date.now() + remaining` a past deadline for one caller
+    // and a wait forever for another, so a clamping step must never receive one.
     expect(openStartBudget(0).remainingMs()).toBe(0);
     expect(openStartBudget(-5).remainingMs()).toBe(0);
   });
 
   test('the allowance divides what is left by the work still declared', () => {
-    // NOT THE PORTS ALONE. Every step of the restoration is declared — each
-    // probe, each exposure and the boot stamp — so a port's probe cannot spend
-    // what its own exposure and the stamp still need. Nothing is reserved: the
-    // last step is welcome to the whole remainder.
+    // Every restoration step is declared (each probe, each exposure, the boot stamp) so a probe
+    // cannot spend what its exposure and the stamp still need; the last step may take the rest.
     const budget = openStartBudget(1_000);
     budget.declare(4);
     const first = budget.nextAllowanceMs();
@@ -1016,10 +868,8 @@ describe('the attach budget', () => {
   });
 
   test('a step that outruns its allowance REPORTS, and its late failure is still told', async () => {
-    // The post-attach policy, and the whole point of the split: a listener that
-    // never answers or a process that will not start must not look like an
-    // abandoned attach, because the container is fine and replacing it would
-    // destroy a healthy box over a slow app.
+    // Post-attach policy: a silent listener or a process that will not start must not read as
+    // an abandoned attach; the container is healthy and replacing it destroys a good box.
     const late: string[] = [];
     const { promise: work, reject: failWork } = Promise.withResolvers<never>();
 
@@ -1040,9 +890,8 @@ describe('the attach budget', () => {
   });
 
   test('a step that THROWS inside its allowance REPORTS the failure, never throws', async () => {
-    // The post-attach policy again: a walk that threw here would abandon the
-    // rest of the restoration over one dead spec, and the caller wants a reason
-    // it can put in `unready` rather than an exception.
+    // A throw here would abandon the rest of the restoration over one dead spec; the caller
+    // needs a reason it can put in `unready`, not an exception.
     const late: string[] = [];
 
     const outcome = await runRestoreStep(
@@ -1058,11 +907,8 @@ describe('the attach budget', () => {
   });
 
   test('the budget rejects with the overrun TYPE, which is what the taxonomy reads', async () => {
-    // The recovery for abandoned work is not a retry: the work is still running
-    // inside the container, where no token can reach it, so the identity is
-    // replaced instead. That decision is made from the class of the thrown
-    // value, so the class is the contract — a caller matching the sentence
-    // would silently stop recognising it the day the sentence is reworded.
+    // Abandoned work is still running in the container, so recovery replaces the identity.
+    // That choice reads the thrown class, not the message, so the class is the contract.
     let overrun: { readonly cause: unknown } | undefined;
 
     try {
@@ -1078,36 +924,21 @@ describe('the attach budget', () => {
   });
 });
 
-// ── the commands this package composes ──────────────────────────────────────
-//
-// MEASURED DEFECT THESE REPAIR. `releaseWorkdirHoldersCommand` joined its lines
-// with a SPACE, so the container received `… fi done if [ -z "$holders" ] …`.
-// `sh` answered `Syntax error: "do" unexpected`, exited 2, and because every
-// command runs inside the SDK's ONE persistent session shell that ended the
-// session: run `e2e20260901140445` lost `stop-small` twice (2,362 ms and 785
-// ms) to `Session 'sandbox-default' shell exited (exit code: 2)`, in both
-// cases AFTER the checkpoint had already committed.
-//
-// The command is asked the same question the container asks — see
-// `support/session-shell.ts`, which every fake exec seam in this package now
-// runs first, so a template that loses a separator fails the suite rather than
-// the deployment.
+// Every command runs in the SDK's one persistent session shell, so a syntax error ends it.
+// Every fake exec seam runs `support/session-shell.ts` first, so a bad template fails here.
 describe('a composed container command is one a POSIX shell will run', () => {
   test('the holder-release command parses, and says nothing that ends the shell', () => {
     const command = releaseWorkdirHoldersCommand(DEVBOX_WORKDIR);
     requireSessionShellAccepts(command);
-    // `exit` is the other way one command ends a session: the chain's
-    // visibility probe did it with `printf ready; exit 0` and cost a wake 1,054
-    // terminated sessions. This command answers its empty scan with `else`.
+    // A top-level `exit` ends the persistent session too; this command answers its empty scan
+    // with `else`.
     expect(command).not.toMatch(/(?:^|[\s;&|(])exit(?:\s+\d+)?\s*(?:$|[;&|)])/);
-    // The wait is the behaviour, not a second opinion of it: five seconds for
-    // a TERM flush before the KILL, read off the command the container runs.
+    // The wait is read off the command the container runs: a TERM flush window before the KILL.
     expect(command).toContain('sleep 5');
   });
 
   test('a work directory holding a quote is still one shell word', () => {
-    // The escape exists for this, and only a real parse can say whether it
-    // works: `'` closes the literal, so the quoted form has to reopen it.
+    // `'` closes the quoted literal, so the escape must reopen it; only a real parse proves it.
     requireSessionShellAccepts(releaseWorkdirHoldersCommand("/work'dir"));
   });
 
@@ -1115,11 +946,8 @@ describe('a composed container command is one a POSIX shell will run', () => {
     requireSessionShellAccepts(healthProbeCommand(8080));
   });
 
-  // The third way one command ends the session: a top-level `set -e` stays
-  // set in the persistent shell, and the next failing command from ANY caller
-  // ends it. Settlement `20260915012040` lost G3's read-only probe that way.
-  // Both directions of the model are measured against a real bash fed the
-  // way the SDK feeds a session, so the fake's verdict is the shell's.
+  // A top-level `set -e` persists in the SDK's one bash session, so any later failing command
+  // ends it (D18); the model is checked against a real bash fed the way the SDK feeds it.
   test('a top-level set -e is refused as a session death; a subshell-scoped one is accepted', () => {
     const unscoped = ['# devbox-namespace-v2', 'set -e', 'mkdir -p /tmp/x'].join('\n');
     const scoped = ['# devbox-namespace-v2', '(', 'set -e', 'mkdir -p /tmp/x', ')'].join('\n');
@@ -1146,30 +974,19 @@ describe('a composed container command is one a POSIX shell will run', () => {
   });
 
   test('the scan\'s own answers are read back: names, and the word for none', () => {
-    // The shape the command really prints, measured against a live holder on a
-    // Linux host: one ` pid:comm` token per holder, on stdout and stderr both.
+    // Real output, measured against a live holder on Linux: one ` pid:comm` token per holder,
+    // on stdout and stderr both.
     expect(parseWorkdirHolders(' 1786951:sleep')).toEqual([{ pid: '1786951', comm: 'sleep' }]);
     expect(parseWorkdirHolders(' 41:bun 42:node\n')).toEqual([
       { pid: '41', comm: 'bun' },
       { pid: '42', comm: 'node' },
     ]);
-    // `none` is the command's own word for an empty scan, and an empty answer
-    // rather than a parse failure.
     expect(parseWorkdirHolders('none')).toEqual([]);
     expect(parseWorkdirHolders('')).toEqual([]);
   });
 
-  /**
-   * The holders, started INSIDE the namespace, because that is the only place
-   * the scan can see them — and reporting back on stdout, because every pid in
-   * here is namespace-local and the host holds no handle on any of them.
-   *
-   * Each holder ANNOUNCES its reference through a FIFO rather than being slept
-   * after, so the scan provably runs against references that already exist.
-   * The FIFOs live OUTSIDE the work directory: a holder that opened one inside
-   * it would hold an fd under the directory and be signalled as a stranger
-   * instead of named as the cwd-only holder this needs.
-   */
+  /** Holders start inside the namespace so the scan sees them; FIFOs sit outside the work dir,
+   *  else the cwd-only holder would hold an fd there and be signalled as a stranger. */
   const HOLDER_SCENARIO = `
 dir=$1; script=$2; sready=$3; cready=$4
 mkfifo "$sready" "$cready"
@@ -1190,66 +1007,8 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
   "$stranger" "$cwd" "$$" "$status" "$alive" "$pids"
 `;
 
-  /**
-   * THE COMMAND, RUN FOR REAL, in a pid namespace of its own.
-   *
-   * The parse gate proves a shell will accept it; only running it proves what
-   * it does, and the properties that matter cannot be asserted against a
-   * string. Three of them, one per class of holder this command distinguishes:
-   *
-   *   - a STRANGER holding an fd is signalled, dies, and is therefore ABSENT
-   *     from the answer. That absence is the repair: the command used to echo
-   *     the list it captured BEFORE signalling, so a writer it had just killed
-   *     was still reported as holding. Deployed runs `probe09011530` and
-   *     `hp0901170218` both refused a stop naming a `bun` pid that the `/proc`
-   *     report taken afterwards proves was already gone — a survivor of
-   *     SIGKILL, which cannot exist, sent the diagnosis after the wrong process
-   *     entirely.
-   *   - a CWD-ONLY holder is NAMED and never signalled. A cwd inside a mount is
-   *     a mount reference exactly as an open fd is, and this command matched
-   *     only fds — so in the deployed container six `node` children of the
-   *     container server sat on `/workspace` completely unreported.
-   *   - an ANCESTOR of the scan's own shell is named and never signalled,
-   *     because signalling it kills the exec channel the stop is speaking
-   *     through: the box's own stop would be the thing that made the box
-   *     unreachable, the same class as a syntax error and with no message at
-   *     all.
-   *
-   * IT RUNS IN A PID NAMESPACE BECAUSE PRODUCTION DOES, and running it without
-   * one is what made this test flaky. The scan walks EVERY pid of its own pid
-   * namespace (`lifecycle.ts:889`), forking two or three helpers per pid to
-   * read that pid's fds and cwd (`lifecycle.ts:891-895`), and it walks TWICE:
-   * once to choose who to signal, once to answer who is still holding
-   * (`lifecycle.ts:900`, `:913`). In production that namespace is the
-   * CONTAINER'S — the command travels through the box's own session shell
-   * (`devbox.ts:2161-2164`) — which is what its procfs contract is written for
-   * (`lifecycle.ts:789-792`): /proc there holds the container server and a
-   * handful of helpers. Against this host's /proc it walked the whole machine
-   * instead. MEASURED 2026-09-02 on the 24-thread box: 851 pids, 9.3-9.8 s per
-   * walk at load 63, so two walks plus the command's own five second wait could
-   * not fit the bound below, and the push tier failed here at 20,021 ms. The
-   * namespace is not a way to buy time — the two bounds below are unchanged,
-   * and `pidsInScan` asserts the scoping rather than trusting it — it is the
-   * environment whose cost this command was designed around.
-   *
-   * IT IS ALSO THE CLEANUP. Everything the scenario starts lives in the
-   * namespace, so its pid 1 exiting kills all of it; the host-side version
-   * leaked two `sleep 60` processes whenever an assertion failed before its
-   * last line.
-   *
-   * WHAT IT NO LONGER EXERCISES: a pid that answers NEITHER probe — a zombie,
-   * or another user's process refusing both reads. A host process table offered
-   * those by accident; eight pids under one uid do not. A zombie planted on
-   * purpose was reaped by the shell in one run of three, which is the kind of
-   * green this repair exists to remove, so it is not planted. Both cases are
-   * handled by the `2>/dev/null` on each probe and neither was asserted here
-   * before.
-   *
-   * Linux only, like the `/proc` walk it exercises. It needs `unshare` and an
-   * unprivileged user namespace — a weaker demand than the privileged
-   * `/dev/fuse` container the same tier runs next door — and it really waits
-   * out the command's five-second TERM wait.
-   */
+  /** Runs the real command in its own pid namespace, as production runs in the container's:
+   *  the scan walks every pid twice, and namespace exit reaps everything the scenario starts. */
   test.skipIf(process.platform !== 'linux')(
     'a stranger is signalled and unnamed; a cwd holder and the scan\'s own session are named',
     () => {
@@ -1258,10 +1017,8 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
       writeFileSync(script, releaseWorkdirHoldersCommand(dir));
       const scenario = join(dir, 'holders.sh');
       writeFileSync(scenario, HOLDER_SCENARIO);
-      // The namespace's pid 1 stands where the container server stands: the
-      // scan excludes it (`lifecycle.ts:889`), so it must not be the shell the
-      // scan runs under. It starts the session as a child and waits on it,
-      // because a pid namespace ends with its pid 1.
+      // pid 1 stands in for the container server the scan excludes, so it must not host the scan;
+      // it waits on the session as a child because a pid namespace ends with its pid 1.
       const init = join(dir, 'init.sh');
       writeFileSync(init, 'inner=$1; shift; sh "$inner" "$@"\n');
       const ready = { stranger: `${dir}-ready-stranger`, cwd: `${dir}-ready-cwd` };
@@ -1281,19 +1038,13 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
         pid.length > 0 && holders.some((holder) => holder.pid === pid);
 
       expect({
-        // Named first, because everything else reads as false when the command
-        // never ran at all: a missing `unshare`, a refused namespace, or the
-        // bound above firing all arrive here rather than as nine mysteries.
+        // First, because every other field reads false when the command never ran (missing
+        // `unshare`, refused namespace, or the bound above firing).
         commandRan: ran.error === undefined ? 'yes' : ran.error.message,
-        // The shell that hosted the scan ran the statement AFTER it: it is alive.
         sessionSurvived: ran.stdout.includes('ALIVE'),
-        // SIGNALLED, and said so — but not reported as still holding, because it
-        // is not: it is dead.
         strangerSignalled: ran.stderr.includes('signalling:'),
         strangerStillNamed: named(reported('stranger')),
         strangerSignal: Number(reported('status')) - 128,
-        // NAMED AND ALIVE: neither of these may be signalled, and both really
-        // are still holding the directory when the command ends.
         cwdHolderNamed: named(reported('cwd')),
         cwdHolderSurvived: reported('cwdalive'),
         cwdHolderExplained: ran.stderr.includes('cwd-only holders'),
@@ -1322,8 +1073,6 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
   );
 });
 
-// ── identity ────────────────────────────────────────────────────────────────
-
 describe('chain identity — UUID keys refuse traversal by construction', () => {
   test('only a UUID is a chain id', () => {
     for (const bad of [
@@ -1334,7 +1083,6 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
     }
 
     expect(isChainId(CHAIN_ID)).toBe(true);
-    // The refusal itself is judged where it is spent: the key builders below.
   });
 
   test('every key builder validates, so no path can be assembled from a guess', () => {
@@ -1342,9 +1090,8 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
 
     for (const build of [baseObjectKey, deltaObjectKey, metadataObjectKey]) {
       expect(() => build(STORE_ROOT, '../../etc/passwd')).toThrow(/is not a UUID/);
-      // UNDER THIS BOX'S ROOT, never a global one: the generation prefix is
-      // nested inside the box's own subtree, which is what lets one mount cover
-      // every generation and what keeps one box's sweep off another's layers.
+      // Keys nest under the box's own root, so one mount covers every generation
+      // and one box's sweep never reaches another box's layers.
       expect(build(STORE_ROOT, CHAIN_ID)).toStartWith(`${STORE_ROOT}/${CHAIN_ID}/`);
       expect(build(STORE_ROOT, CHAIN_ID)).toStartWith('boxes/');
     }
@@ -1367,7 +1114,6 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
       expect(normalizeChainState(raw)).toBeNull();
     }
 
-    // A sound row parses, and every field survives the parse.
     const sound = { mode: 'chain', rev: 2, base: { id: CHAIN_ID, bytes: 9 }, at: 5 };
     expect(normalizeChainState(sound)).toEqual({
       mode: 'chain', rev: 2, at: 5,
@@ -1375,15 +1121,12 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
       delta: undefined, changeVersion: undefined, upperMark: undefined, orphans: undefined,
       fallback: undefined, lastFailure: undefined,
     });
-    // A row written before layer identities existed parses with both absent,
-    // which reads as UNKNOWN rather than unsound: those rows are live, and
-    // refusing them would be the data loss the chain exists to prevent.
+    // A row without layer identities parses with both absent: UNKNOWN, not unsound.
+    // Such rows are live; refusing them would be the data loss the chain exists to prevent.
     expect(normalizeChainState(sound)?.base.digest).toBeUndefined();
     expect(normalizeChainState(sound)?.base.objectVersion).toBeUndefined();
-    // Identities that ARE there survive, and a digest that is not 64 lowercase
-    // hex characters takes the row down rather than being carried as something
-    // nothing can compare. The store's version is the store's own format, so it
-    // is asked only to be a non-empty string.
+    // A malformed digest rejects the row: nothing could compare it against a layer.
+    // `objectVersion` is the store's own format, so only non-emptiness is checked.
     const digest = 'c'.repeat(64);
     const objectVersion = 'e2f4c1a0-upload';
     expect(normalizeChainState({
@@ -1396,8 +1139,8 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
     expect(normalizeChainState({ ...sound, base: { id: CHAIN_ID, bytes: 9, objectVersion: '' } }))
       .toBeNull();
 
-    // A retained fallback survives it too, delta and all: a generation the
-    // reader cannot check is a generation a restore cannot use.
+    // A retained fallback keeps its digest and version, delta included: a restore cannot use a
+    // generation the reader cannot check.
     const withFallback = {
       ...sound,
       fallback: {
@@ -1410,18 +1153,14 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
       base: { id: FALLBACK_ID, bytes: 7, digest, objectVersion },
       delta: { bytes: 3, digest, objectVersion },
     });
-    // And a fallback whose id is not a UUID takes the whole row down, for the
-    // same reason a bad `base` does: every object key is built from one.
+    // A non-UUID fallback id nulls the whole row, as a bad `base` does: object keys derive from it.
     expect(normalizeChainState({ ...sound, fallback: { base: { id: 'nope', bytes: 7 } } }))
       .toBeNull();
   });
 });
 
-// ── integrity and the interval gate ─────────────────────────────────────────
-
 describe('integrity probe — each unsound shape names itself', () => {
-  /** A layer known only by its size, which is every row that predates the
-   *  content digest and the store version. */
+  /** A layer known only by its size: the shape of a row stored without digest or store version. */
   const sized = (bytes: number | undefined): ChainLayer | undefined =>
     (bytes === undefined ? undefined : { bytes, digest: undefined, objectVersion: undefined });
 
@@ -1451,9 +1190,8 @@ describe('integrity probe — each unsound shape names itself', () => {
     expect(refusal).toContain('different archive of the same length');
     expect(refusal).toContain(other);
     expect(refusal).toContain(digest);
-    // Agreement is sound, and so is a digest the store cannot answer for: R2
-    // reports one only for an object it was given a checksum for, and UNKNOWN
-    // must not read as unsound or every multipart archive would be refused.
+    // R2 reports a digest only for objects uploaded with a checksum; a missing one must pass,
+    // or every multipart archive would be refused.
     expect(layerIntegrityFailure({
       declared: { bytes: 4_096, digest, objectVersion: undefined },
       stored: { bytes: 4_096, digest, objectVersion: undefined },
@@ -1464,9 +1202,8 @@ describe('integrity probe — each unsound shape names itself', () => {
       stored: { bytes: 4_096, digest: undefined, objectVersion: undefined },
       label: 'base',
     })).toBeNull();
-    // A record written before digests existed is UNKNOWN in the other
-    // direction, and those rows are live: `Devbox.strategy` defaults to the
-    // chain and the product's sandbox class is deployed on it.
+    // A declared record without a digest is also UNKNOWN, and such rows are live: `Devbox.strategy`
+    // defaults to the chain, so refusing them would break deployed sandboxes.
     expect(layerIntegrityFailure({
       declared: { bytes: 4_096, digest: undefined, objectVersion: undefined },
       stored: { bytes: 4_096, digest: other, objectVersion: undefined },
@@ -1476,11 +1213,8 @@ describe('integrity probe — each unsound shape names itself', () => {
 
   test('KINU-N025: with no digest to compare, a different store version is a DIFFERENT '
     + 'upload', () => {
-      // The multipart case, which no checksum can reach: the Workers multipart
-      // API takes none, so R2 reports no digest for a large archive. What it
-      // always reports is the version it minted for the upload that wrote the
-      // object, so that is what catches a replacement carrying identical length
-      // — even one whose own digest metadata was written to match.
+      // The Workers multipart API takes no checksum, so R2 reports no digest for a large archive;
+      // the upload-minted version is what catches a same-length replacement.
       const big = 512 * 1024 * 1024;
 
       const refusal = layerIntegrityFailure({
@@ -1492,14 +1226,13 @@ describe('integrity probe — each unsound shape names itself', () => {
       expect(refusal).toContain('written by a different upload');
       expect(refusal).toContain('upload-one');
       expect(refusal).toContain('upload-two');
-      // The same object passes: same size, same version, no digest either side,
-      // which is exactly what a sound multipart archive looks like.
+      // No digest on either side is what a sound multipart archive looks like, so size plus version must pass.
       expect(layerIntegrityFailure({
         declared: { bytes: big, digest: undefined, objectVersion: 'upload-one' },
         stored: { bytes: big, digest: undefined, objectVersion: 'upload-one' },
         label: 'base',
       })).toBeNull();
-      // And a pre-version row is UNKNOWN, not unsound.
+      // A row with no recorded `objectVersion` is unknown, not unsound, so it passes.
       expect(layerIntegrityFailure({
         declared: { bytes: 4_096, digest: undefined, objectVersion: undefined },
         stored: { bytes: 4_096, digest: undefined, objectVersion: 'upload-two' },
@@ -1509,20 +1242,14 @@ describe('integrity probe — each unsound shape names itself', () => {
 
   test('KINU-N025: agreeing content outranks a new store version, because a re-upload '
     + 'is not a replacement', () => {
-      // A version is minted per UPLOAD, not per content. This chain can re-put
-      // byte-identical bytes: a write under an excluded path moves the skip-gate
-      // fingerprint while the archive bytes stay the same, so a commit whose
-      // state write is then lost to a crash leaves the store one version ahead
-      // of the record with the SAME content. Refusing that would spend the
-      // fallback on a healthy object, so agreement on content wins and the
-      // version is only consulted when no digest can decide.
+      // A version is minted per upload: a lost state write can leave the store a version ahead
+      // with identical content, so matching digests win and the version decides only without one.
       const digest = 'a'.repeat(64);
       expect(layerIntegrityFailure({
         declared: { bytes: 4_096, digest, objectVersion: 'upload-one' },
         stored: { bytes: 4_096, digest, objectVersion: 'upload-two' },
         label: 'delta',
       })).toBeNull();
-      // Disagreeing content is still a refusal, whatever the versions say.
       expect(layerIntegrityFailure({
         declared: { bytes: 4_096, digest, objectVersion: 'upload-one' },
         stored: { bytes: 4_096, digest: 'b'.repeat(64), objectVersion: 'upload-one' },
@@ -1537,9 +1264,8 @@ describe('archive options', () => {
     const options = chainBackupOptions(false, CHAIN_EXCLUDES);
     expect(options.dir).toBe('/workspace');
     expect(options.excludes).toContain('node_modules');
-    // `.git` holds the only copy of an unpushed commit, and for a linked
-    // worktree the only thing that makes the tree a repository. It is not
-    // reproducible from a lockfile, which is the only test this list applies.
+    // `.git` holds unpushed commits and makes a linked worktree a repository; excludes
+    // cover only what a lockfile reproduces.
     expect(options.excludes).not.toContain('.git');
     // The SDK's own default is three days and it is enforced at restore time,
     // so a shorter TTL is a box that refuses to come back after a break.
@@ -1548,9 +1274,6 @@ describe('archive options', () => {
   });
 
   test('the excludes come from the caller, so both modes obey one policy', () => {
-    // This function used to spell CHAIN_EXCLUDES itself while the chain path
-    // asked the box for `archiveExcludes`, so a box that replaced the policy was
-    // obeyed in one mode and ignored in the other.
     expect(chainBackupOptions(false, ['only-this']).excludes).toEqual(['only-this']);
   });
 });
@@ -1569,8 +1292,7 @@ describe('bench arm selection fails closed', () => {
     expect(parseDevboxStrategyName(undefined)).toBeNull();
     expect(parseDevboxStrategyName(null)).toBeNull();
     expect(parseDevboxStrategyName('unknown')).toBeNull();
-    // A name that was once a format is a name that is not one now: bytes
-    // written by a format nothing builds are bytes nothing can serve.
+    // A retired format name must parse to null: no build can serve bytes written in that format.
     expect(parseDevboxStrategyName('a-retired-format')).toBeNull();
     expect(parseDevboxStrategyName('snapshot-chain')).toBe('snapshot-chain');
   });
@@ -1582,8 +1304,6 @@ describe('bench arm selection fails closed', () => {
     expect(worker).not.toContain(": 'snapshot-chain';");
   });
 });
-
-// ── accepted review findings ────────────────────────────────────────────────
 
 import { createCheckpointLane } from '../src/lifecycle';
 import {
@@ -1654,9 +1374,8 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
     };
 
     await Promise.all([lane.run('tick', slowTick), lane.run('quiesce', quiesce)]);
-    // A quiesce that joined an in-flight tick could inherit a `skipped` answer
-    // and stop the container over work that only just landed; it waits and
-    // runs its own final commit instead.
+    // A quiesce joining an in-flight tick could inherit `skipped` and stop over just-landed work;
+    // it waits and runs its own final commit.
     expect(events).toEqual([
       'tick:start', 'tick:end', 'quiesce:start', 'quiesce:end',
     ]);
@@ -1674,8 +1393,6 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
     await expect(lane.run('tick', ok)).resolves.toHaveProperty('kind', 'committed');
   });
 });
-
-// ── incident ledger retention ───────────────────────────────────────────────
 
 function fakeIncidentStore() {
   const rows = new Map<string, IncidentRow>();
@@ -1723,21 +1440,16 @@ describe('incident ledger retention — delivered rows are bounded, pending neve
 
     expect(deleted).toBe(55);
     expect(box.rows.size).toBe(INCIDENT_LEDGER_MAX_ROWS);
-    // Oldest DELIVERED go first...
     expect(box.rows.has('devbox:incident:d0000')).toBe(false);
     expect(box.rows.has('devbox:incident:d0054')).toBe(false);
     expect(box.rows.has(`devbox:incident:d${String(55).padStart(4, '0')}`)).toBe(true);
 
-    // ...and PENDING is never reaped, however far over the cap they push.
     for (let p = 0; p < 5; p += 1) {
       expect(box.rows.has(`devbox:incident:pending${p}`)).toBe(true);
     }
   });
 
   test('recording goes through the shared writer bound to INCIDENT_REASON_MAX_CHARS', () => {
-    // The producer once hardcoded its own literal here while the exported
-    // constant claimed producer and validator "cannot drift". The class now
-    // calls recordIncident itself.
     const source = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
     const from = source.indexOf('async #record(');
     const body = source.slice(from, source.indexOf('\n  }', from));
@@ -1746,8 +1458,6 @@ describe('incident ledger retention — delivered rows are bounded, pending neve
     expect(source).not.toContain('reason.slice(0, 2000)');
   });
 });
-
-// ── ambient checkpoints and the serialization point ─────────────────────────
 
 describe('ambient checkpoints belong to product boxes, never the bench fixture', () => {
   const devboxSource = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
@@ -1775,7 +1485,6 @@ describe('ambient checkpoints belong to product boxes, never the bench fixture',
   test('the bench box disables it; the interval gate still guards driver ticks', () => {
     expect(workerSource).toContain('protected override get ambientCheckpoints(): boolean');
     expect(workerSource).toContain('return false;');
-    // policy.checkpointIntervalMs stays — it is the guard the driver waits out.
     expect(devboxSource).toContain('this.policy.checkpointIntervalMs / 1000');
   });
 

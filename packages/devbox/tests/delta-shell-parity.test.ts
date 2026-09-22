@@ -1,17 +1,5 @@
-/**
- * The delta shell emulation, held to a real shell on a real filesystem.
- *
- * `delta-shell.ts` answers the chunked delta's generated shell over a
- * `ContainerDisk`. This suite runs THE SAME fragments — the product's own
- * `deltaProbeCommand`, `deltaBaseStatCommand`, `deltaBlockHashCommand`,
- * `buildDeltaStageOps` and `buildDeltaMaterializeOps` — through `bash` on a
- * temporary directory holding the same two trees, and compares what each side
- * reported and what each side left on disk. An emulation that drifts from
- * what a container does fails here, not in a deployed wake.
- *
- * What a real shell cannot stage unprivileged is not compared: a whiteout is
- * a 0/0 device node (`mknod`), so deletions are the battery's to prove.
- */
+/** Runs the product's delta shell fragments through real `bash` and compares against `delta-shell.ts`.
+ *  Whiteouts (0/0 `mknod` device nodes) cannot be staged unprivileged, so deletions are not compared. */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
@@ -61,11 +49,8 @@ const dense = (path: string, bytes: Uint8Array, ino: number, mode = 0o644): Node
 
 const dir = (path: string, ino: number, mode = 0o755): NodeEntry => ({ path, kind: 'dir', mode, ino, metadata: owned });
 
-/** Two trees: the base a chain was cut from and the upper an editor left.
- *  Every shape the planner names is here: a big file with two changed
- *  blocks and one zeroed block, small files changed and added, a hardlink
- *  pair, a symlink, an empty directory with its own mode, a file over a base
- *  directory, and an excluded subtree at two depths. */
+/** Covers every shape the planner names: changed and zeroed blocks, small files, hardlinks,
+ *  a symlink, a moded empty dir, a file over a base dir, and an excluded subtree at two depths. */
 function fixture() {
   const seed = new Seeded(97);
   const big = seed.fill(new Uint8Array(10 * DELTA_BLOCK_BYTES + 1234));
@@ -111,9 +96,8 @@ function fixture() {
   return { base, upper };
 }
 
-/** The block hashes a correct side reports, computed from the real bytes
- *  themselves — never through `parseDeltaBlockHashes`, which is the code under
- *  comparison. A base path that names no file answers null, as the wire does. */
+/** Hashes come from the real bytes, never via `parseDeltaBlockHashes` (the code under test).
+ *  A base path that names no file answers null, as the wire does. */
 function expectedBlockHashes(
   files: readonly { index: number; upperPath: string; basePath: string | null }[],
 ): Map<number, { upper: ReadonlyMap<number, string>; base: ReadonlyMap<number, string> | null }> {
@@ -134,7 +118,6 @@ function expectedBlockHashes(
   }] as const));
 }
 
-/** Plant entries on a real filesystem under `root`. */
 function plantReal(root: string, entries: readonly NodeEntry[]): void {
   const firstName = new Map<number, string>();
 
@@ -173,7 +156,6 @@ function plantReal(root: string, entries: readonly NodeEntry[]): void {
   }
 }
 
-/** A real directory as capture entries: what `lstat` and `readlink` say. */
 function readReal(root: string): NodeEntry[] {
   const out: NodeEntry[] = [];
 
@@ -209,19 +191,16 @@ function realShell(command: string): ShellReply {
   return { stdout: run.stdout.toString(), stderr: run.stderr.toString(), exitCode: run.status ?? 1 };
 }
 
-/** What `runOpsBatched` sends: the header, then the operations under a
- *  subshell-scoped `set -e`. The session-shell model refuses the unscoped
- *  form, and every chain run through the fake goes through that model. */
+/** Mirrors `runOpsBatched`: operations run under a subshell-scoped `set -e` (D18);
+ *  the session-shell model refuses the unscoped form. */
 function batch(ops: readonly string[]): string {
   requireSessionShellAccepts([ops[0], '(', 'set -e', ...ops.slice(1), ')'].join('\n'));
 
   return [ops[0], '(', 'set -e', ...ops.slice(1), ')'].join('\n');
 }
 
-/** Two trees compared, less what the running user decides rather than the
- *  format: the owner of a node the shell CREATES (a chunk, the manifest, the
- *  envelope directories and opacity markers) is the user's, root in a container and whoever runs
- *  this suite here. A node the delta CARRIES keeps the owner it carries. */
+/** Owner is compared only for nodes the delta carries; nodes the shell creates (chunks, manifest,
+ *  envelope dirs, opacity markers) belong to the running user, root in a container. */
 function sameTree(expected: readonly NodeEntry[], served: readonly NodeEntry[], carriedUnder: string): string {
   return describeMismatches(compareTrees(expected, served, NOT_COMPARED)
     .filter((row) => row.property !== 'owner' || (row.path.startsWith(carriedUnder) && !row.path.endsWith('/.wh..wh..opq'))));
@@ -330,9 +309,8 @@ describe('the delta shell against bash', () => {
     const hashCommand = deltaBlockHashCommand({ workDir: `${real.stage}/hash`, files });
     const hashedByBash = realShell(hashCommand);
     const hashedByDisk = diskShell(hashCommand);
-    // The expected side is hashed from the fixture's real bytes by this test —
-    // the property "bash, the emulation and the file agree" fails when the
-    // parser or the shell drifts, where comparing two parses could not.
+    // The expected hashes come from the fixture's real bytes, not a second parse, so parser
+    // or shell drift fails the test.
     const expected = expectedBlockHashes(files);
     expect(parseDeltaBlockHashes(hashedByBash.stdout, wanted)).toEqual(expected);
     expect(parseDeltaBlockHashes(hashedByDisk.stdout, wanted)).toEqual(expected);
@@ -351,8 +329,6 @@ describe('the delta shell against bash', () => {
 
     expect(fromDisk.manifest).toEqual(fromBash.manifest);
     expect(new Map(fromDisk.chunks)).toEqual(new Map(fromBash.chunks));
-    // The plan itself: two changed blocks and one hole in the big file, the
-    // grown file whole-overridden past its base, the file over a directory.
     const big = fromBash.manifest.files.find((file) => file.p === 'vol/big.bin');
     const index = big?.kind === 'chunked' ? fromBash.indexes.get(big.over.index) : undefined;
     expect(big?.kind === 'chunked' && index !== undefined ? readDeltaIndex(big.over, big.s, index).map((o) => [o.o / DELTA_BLOCK_BYTES, o.src]) : null).toEqual([[2, 'chunk'], [4, 'hole'], [7, 'chunk']]);
@@ -392,9 +368,8 @@ describe('the delta shell against bash', () => {
 
     const served = readReal(real.upper2);
     expect(sameTree(served, disk.snapshot(real.upper2), '')).toBe('');
-    // THE PRODUCT'S OWN PROPERTY, on real bytes: base plus delta is the upper
-    // the editor left, for every path the delta carries — the pruned
-    // subtrees excepted, which no delta carries by policy.
+    // Base plus delta must reproduce the editor's upper for every carried path; pruned
+    // subtrees are excluded because no delta carries them by policy.
     const carried = fixture().upper.filter((entry) => entry.kind === 'dir' && !entry.path.split('/').includes('node_modules'));
     expect(sameTree(carried, served, '')).toBe('');
     expect(served.every(entry => entry.kind === 'dir')).toBe(true);

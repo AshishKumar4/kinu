@@ -1,23 +1,5 @@
-/**
- * The chunked delta's shell, run against a {@link ContainerDisk} WITH REAL
- * BYTES.
- *
- * `chunked-delta.ts` publishes and serves a delta as generated shell: a
- * `find -printf` probe, `stat` facts, `split` plus `sha256sum` block hashes,
- * then `cp -a`, `ln`, `dd`, `truncate`, `chown`, `chmod`, a base64 manifest,
- * `cat` and `rm -rf` through the merged view. Every command it issues begins
- * with a `# devbox-<name>-v1` header, and this module answers exactly those:
- * each line is one operation, done to the disk's trees the way the container
- * would do it to its filesystem, so a chunk digest is the sha256 of the bytes
- * that block holds and a materialized file is the base's bytes with the
- * overrides written over them. Nothing here reads the product's plan; it
- * reads the product's SHELL, which is what keeps "the exact bytes came back"
- * an assertion about the format.
- *
- * `delta-shell-parity.test.ts` runs the same fragments through a real shell
- * on a real filesystem and holds this module to it, so the emulation cannot
- * drift from what a container does.
- */
+/** Emulates the chunked delta's generated shell against a `ContainerDisk` with real bytes;
+ *  answers only `# devbox-<name>-v1` commands; `delta-shell-parity.test.ts` pins it to a real shell. */
 
 import { createHash } from 'node:crypto';
 
@@ -35,7 +17,6 @@ import {
 
 export type ShellReply = { stdout: string; stderr: string; exitCode: number };
 
-/** One `dd` line as the chunked delta writes it. */
 interface DdCommand {
   /** The file read, or null for `/dev/zero`. */
   readonly source: string | null;
@@ -46,11 +27,9 @@ interface DdCommand {
   readonly block: number;
 }
 
-/** The package root's own directory: the manifest's first path segment. A
- *  path naming it is a stage or a sidecar, and its root is a tree. */
+/** A path naming this directory is a stage or a sidecar, and its root is a tree. */
 const DELTA_DIR = DELTA_MANIFEST_NAME.slice(0, DELTA_MANIFEST_NAME.indexOf('/'));
 
-/** What `root` and `dd` leave on a file they create: root's, at no time. */
 const ROOT_METADATA: PosixMetadata = { uid: 0, gid: 0, atimeNs: '0', mtimeNs: '0', ctimeNs: '0', xattrs: {} };
 
 /** A single-quoted shell word, as `shellPath` writes one. */
@@ -83,11 +62,8 @@ const OP = {
   mknod: new RegExp(String.raw`^: > ${Q}$`),
 };
 
-/**
- * Answer one of the chunked delta's commands, or undefined for any other
- * command. A line no operation matches is a harness gap and throws: a silent
- * `ok` there would let the product pass on a step nobody emulated.
- */
+/** A line no operation matches throws: a silent `ok` would let the product pass on a step
+ *  nobody emulated. */
 export function deltaCommand(command: string, disk: ContainerDisk): ShellReply | undefined {
   if (!command.startsWith('# devbox-')) return undefined;
 
@@ -147,8 +123,8 @@ function composeBlockMount(command: string, disk: ContainerDisk): ShellReply {
     node.mode = file.mode;
   }
 
-  // Cloud b20260913141100 and the same image in Docker report plain fuse;
-  // the generation-bearing source, not a synthetic subtype, identifies it.
+  // Models D11: the platform reports plain `fuse`, measured on cloud and Docker;
+  // the generation-bearing source, not a synthetic subtype, identifies the mount.
   disk.mount(mount, { source: `devbox-block:${get('generation')}`, fstype: 'fuse', options: 'ro' });
 
   return { stdout: '', stderr: '', exitCode: 0 };
@@ -174,7 +150,6 @@ function splitSuffix(index: number): string {
   return out;
 }
 
-/** One fnmatch character: `*` crosses `/` because FNM_PATHNAME is not set. */
 function patternChar(char: string): string {
   if (char === '*') return '.*';
 
@@ -183,7 +158,6 @@ function patternChar(char: string): string {
   return char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
 }
 
-/** `find -path` matching: fnmatch without FNM_PATHNAME, so `*` crosses `/`. */
 function pathPattern(pattern: string): RegExp {
   return new RegExp(`^${pattern.split('').map(patternChar).join('')}$`);
 }
@@ -207,12 +181,10 @@ function entrySize(entry: NodeEntry): number {
   return entry.content === undefined ? 0 : contentSize(entry.content);
 }
 
-/** A live node's logical length, an absent content being an empty file. */
 function nodeSize(node: LiveInode): number {
   return node.content === undefined ? 0 : contentSize(node.content);
 }
 
-/** A node's logical bytes, holes read as zeros. */
 function bytesOf(node: LiveInode): Uint8Array {
   const content = node.content;
 
@@ -226,7 +198,6 @@ function bytesOf(node: LiveInode): Uint8Array {
   return out;
 }
 
-/** A node as a plantable entry at `path`: what `cp -a` carries. */
 function entryOf(node: LiveInode, path: string): NodeEntry {
   const base = { path, mode: node.mode, ino: 1, metadata: node.metadata };
 
@@ -270,10 +241,8 @@ class DeltaShell {
   #line(line: string): number {
     if (line === '' || line.startsWith('#')) return 0;
 
-    // The subshell `opsBatchCommand` wraps a batch in: `set -e` is scoped to
-    // it, so this shell reads the parens as the batch's boundary and nothing
-    // more. The real shell's subshell semantics are pinned by
-    // `tests/ops-batch-session.test.ts`.
+    // `opsBatchCommand` scopes `set -e` to a subshell (D18); this double treats the parens only as
+    // the batch boundary. Real subshell semantics are pinned by `tests/ops-batch-session.test.ts`.
     if (line === '(' || line === ')') return 0;
 
     if (line === 'set -e') {
@@ -384,8 +353,6 @@ class DeltaShell {
     return made;
   }
 
-  // ── facts ────────────────────────────────────────────────────────────────
-
   #probe(upper: string, prunes: string): number {
     const pruned = [...prunes.matchAll(OP.prune)].map((m) => pathPattern(unquote(m[1])));
     const tree = this.disk.trees.get(upper);
@@ -476,8 +443,6 @@ class DeltaShell {
     return this.#say(`${size === 0 ? 'regular empty file' : 'regular file'} ${size}\n`);
   }
 
-  // ── block hashes ─────────────────────────────────────────────────────────
-
   #split(blockBytes: number, source: string, prefix: string): number {
     const node = this.disk.node(source);
 
@@ -513,8 +478,6 @@ class DeltaShell {
 
     return status;
   }
-
-  // ── the tree operations ──────────────────────────────────────────────────
 
   #mkdir(words: string): number {
     for (const m of words.matchAll(new RegExp(Q, 'g'))) {

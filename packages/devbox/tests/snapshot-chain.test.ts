@@ -1,12 +1,5 @@
-// The snapshot-chain gate.
-//
-// The storage model under test: ONE immutable full base plus ONE cumulative
-// changed layer, at `backups/<uuid>/data.sqsh` and `delta.sqsh`. A production
-// attach mounts a FIXED number of lazy layers and moves zero bytes; a
-// checkpoint moves only changed bytes. Local development keeps extraction and
-// says so.
-//
-// TWO TESTS HERE COME FROM A LIVE FAILURE, and they are the reason the rest is
+// Snapshot-chain gate: one immutable base plus one cumulative delta; attach mounts fixed
+// lazy layers moving zero bytes, a checkpoint moves only changed bytes (D2).
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
@@ -50,37 +43,15 @@ import {
   type SnapshotChainPorts,
 } from '../src/snapshot-chain';
 
-/**
- * THE STRATEGY'S PATHS ARE OBSERVED, NEVER RESTATED.
- *
- * This block holds no mirror of the strategy's private layer vocabulary — not
- * the delta layer's mount point, not a reimplementation of its `/proc/mounts`
- * probe, not the visibility-probe ceiling, not the store mount point. "Drift
- * fails these tests, which is the point" is not a reason to keep one: a mirror
- * agrees with the module by construction. Both sides would read the test's
- * copy, so the only thing it can catch is the strategy MOVING a path, and the
- * thing it cannot catch is the strategy looking somewhere other than where it
- * mounted — which is the defect that costs a workspace.
- *
- * Every path is read off a call the strategy really made. The host is
- * handed each mount point as an ARGUMENT — `mountStore(at)`,
- * `squashfuse <archive> <point>`, `fuse-overlayfs -o lowerdir=…` — so the
- * fake receives the strategy's own choice and the assertions read it back.
- * What the cases then assert are its PROPERTIES: inside the box's own runtime
- * directory, scoped by the chain generation, read through the one mount, and
- * the same path the strategy later reads `/proc/mounts` for.
- */
+/** Paths are read off the strategy's own mount calls, never mirrored: a copy agrees by
+ *  construction and cannot catch the strategy reading somewhere other than it mounted. */
 
-/** This box's chain root, DERIVED through the strategy's own exported helper
- *  rather than spelled: every key a test names lives under it, and the one
- *  mount covers it. `boxes/box-under-test` is this suite's box prefix, which
- *  is a fixture identity rather than a value the strategy owns. */
+/** Derived through the strategy's own helper, not spelled, so every key a test names lives
+ *  under the one mount; `boxes/box-under-test` is a fixture identity. */
 const STORE_ROOT = chainStoreRoot('boxes/box-under-test');
 
-/** The store mount point the strategy chose, read off its own
- *  `mountStore:<at>` call. One mount per binding per container life now, so
- *  there is no read/write split to model — the registry state the last mount
- *  held is what a reattach releases and a fresh mount replaces. */
+/** One mount per binding per container life: no read/write split to model; a reattach
+ *  releases the registry state the last mount held and a fresh mount replaces it. */
 function storeMountOf(calls: readonly string[]): string {
   const at = calls
     .filter((call) => call.startsWith('mountStore:'))
@@ -93,17 +64,12 @@ function storeMountOf(calls: readonly string[]): string {
   return at;
 }
 
-/** One layer mount the strategy made: where in the call sequence it happened,
- *  the archive path it read, and the point it chose. */
 interface LayerMount {
   readonly index: number;
   readonly archive: string;
   readonly point: string;
 }
 
-/** The layer mount the strategy made for `objectKey`, read off its own
- *  `mountLayer:<archive>:<point>` call: where in the sequence it happened, the
- *  archive path it read THROUGH the store mount, and the point it chose. */
 function layerMountOf(calls: readonly string[], objectKey: string): LayerMount {
   const archiveName = objectKey.slice(objectKey.lastIndexOf('/') + 1);
 
@@ -137,7 +103,6 @@ const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 
 const EXTRACT_ID = 'a1b2c3d4-0000-4000-8000-000000000002';
 
-/** The generation a record retains as its restore fallback. */
 const FALLBACK_ID = 'a1b2c3d4-0000-4000-8000-0000000000fb';
 
 const FALLBACK_BYTES = 2_048;
@@ -148,12 +113,10 @@ const DELTA_BYTES = 512;
 
 const INTERVAL_MS = 5 * 60_000;
 
-/** What the fake tree measures as its uncompressed size. */
 const STAGE_NEED_BYTES = 1_000;
 
 const UPPER = `${DEVBOX_RUNTIME_DIR}/upper`;
 
-/** The overlay's bottom lower: the base layer's mount point. */
 const LOWER_BASE = `${DEVBOX_RUNTIME_DIR}/lower-base`;
 
 /** What the PRODUCTION image reports: fuse-overlayfs, with NO dir options. */
@@ -162,37 +125,28 @@ const MOUNTED = [
   `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
 ].join('\n');
 
-/** The live failure's shape: the container is up, the disk is there, and the
- *  work directory is a plain directory on the container's own ext4. */
 const NOT_MOUNTED = 'proc /proc proc rw,relatime 0 0\n/dev/vdc / ext4 rw 0 0';
 
-/** The same mount, with the strategy's own upper directory missing from the
- *  container. Writes would have nowhere to land, so no checkpoint could capture
- *  them. Expressed as a missing PATH, not a missing mount option, because
- *  fuse-overlayfs publishes no options to be missing. */
+/** Same mount text; the upper directory is missing as a PATH, not a mount option,
+ *  because fuse-overlayfs publishes no options to be missing. */
 const MOUNTED_NO_UPPER = MOUNTED;
 
-/** Every outcome kind either half of the suite produced. */
 const seenAttach = new Set<string>();
 
 const seenCheckpoint = new Set<string>();
 
-/** A stand-in for the SHA-256 an upload reports: deterministic per key and
- *  size, so a test can predict what the record should carry, and different for
- *  different content, which is the whole property under test. */
+/** Stand-in for an upload's SHA-256: deterministic per key and size so tests can predict it,
+ *  and different for different content, which is the property under test. */
 function digestOf(key: string, bytes: number): string {
   return createHash('sha256').update(`${key}:${bytes}`).digest('hex');
 }
 
-/** A stand-in for the version the STORE mints per upload. Deterministic the
- *  same way, and distinct from the digest, because the two are separate facts:
- *  a replacement can carry a matching digest and cannot carry a matching
- *  version. */
+/** Stands in for the version the store mints per upload; kept distinct from the digest
+ *  because a replacement can carry a matching digest but never a matching version. */
 function versionOf(key: string, bytes: number): string {
   return `upload-${createHash('sha256').update(`${key}:${bytes}`).digest('hex').slice(0, 12)}`;
 }
 
-/** The base descriptor a record carries for a generation of this size. */
 function baseLayer(id: string, bytes: number): ChainBaseLayer {
   return {
     id,
@@ -202,7 +156,6 @@ function baseLayer(id: string, bytes: number): ChainBaseLayer {
   };
 }
 
-/** The delta descriptor a record carries for a generation of this size. */
 function deltaLayer(id: string, bytes: number): ChainLayer {
   return {
     bytes,
@@ -229,14 +182,12 @@ function publishedDeltaLayer(state: ChainState | null, bytes: number) {
 
 interface Harness {
   readonly ports: SnapshotChainPorts;
-  /** Every port call, in order. The ordering assertions read this. */
   readonly calls: string[];
   /** The store, as key to size. Omitting a key is a missing object; a
    *  disagreeing size is a corrupt one. */
   readonly objects: Map<string, number>;
-  /** Every object-store write attempt a publication made, in order — the
-   *  shape the live publication meter would count: three `put`s for an
-   *  s3fs `dd`, one for the egress publisher. */
+  /** Mirrors the live publication meter: three `put`s for an s3fs `dd`, one for the
+   *  egress publisher. */
   readonly attempts: { operation: 'put' | 'uploadPart' | 'complete'; key: string; bytes: number }[];
   /** The digest the STORE reports per key, which is how a same-length
    *  replacement is expressed: same size, different digest. */
@@ -244,14 +195,12 @@ interface Harness {
   /** The upload version the STORE reports per key. A same-length replacement
    *  that even copies the digest still cannot copy this. */
   readonly versions: Map<string, string>;
-  /** The record the ports read and write, exposed for assertions. */
   state: ChainState | null;
   /** The live fingerprint of the changed set; set it to simulate a write. */
   upperMark: string;
 }
 
-/** The record the ports wrote, for a case that has already asserted a commit
- *  landed — so no record here is that commit publishing nothing. */
+/** Call only after a case asserts a commit landed; a missing record then means it published nothing. */
 function publishedState(record: Harness): ChainState {
   const { state } = record;
 
@@ -260,7 +209,6 @@ function publishedState(record: Harness): ChainState {
   return state;
 }
 
-/** The generation a publication retained as the restore fallback. */
 function retainedFallback(state: ChainState): ChainGeneration {
   const { fallback } = state;
 
@@ -269,23 +217,13 @@ function retainedFallback(state: ChainState): ChainGeneration {
   return fallback;
 }
 
-/**
- * What one recognised shell command turns into: the recorded label the
- * assertions read, and the stdout the strategy consumes.
- */
 interface ShellOutcome {
   readonly call: string;
   readonly stdout: string;
 }
 
-/**
- * The exclude list an archiver command really stages, as patterns.
- *
- * The list travels as base64 inside the command, so nothing a caller writes can
- * become shell syntax. Reading it back here is what makes an assertion about
- * exclude POLICY rather than about argument spelling. The non-anchored twin of
- * each pattern is dropped, so the count is the policy's own length.
- */
+/** Decodes the base64 exclude list so assertions test exclude policy, not argument spelling.
+ *  Non-anchored twins are dropped, so the count equals the policy's own length. */
 function excludePatternsOf(command: string): readonly string[] {
   const encoded = /printf %s '(?<data>[A-Za-z0-9+/=]*)'/.exec(command)?.groups?.data ?? '';
 
@@ -293,21 +231,11 @@ function excludePatternsOf(command: string): readonly string[] {
     .filter(line => line !== '' && !line.startsWith('... '));
 }
 
-/**
- * Every command this strategy composes, held to what the container's ONE
- * persistent session shell would do with it — `support/session-shell.ts` owns
- * the two failures that shell really answers with: a command that says `exit`,
- * and a command it cannot parse.
- */
+/** Each composed command is checked against the container's one persistent session shell;
+ *  `support/session-shell.ts` models its two real failures: an `exit` and a parse error. */
 
-/**
- * Read one container command and answer as the container would.
- *
- * The strategy owns its shell now, so this is where the suite meets it. Each
- * arm names the command it recognises with the label the assertions read, and
- * an unrecognised command falls through to its first word — so a NEW command
- * shows up in the recorded calls instead of silently resolving as nothing.
- */
+/** An unrecognised command falls through to its first word, so a new command shows up in
+ *  the recorded calls instead of silently resolving as nothing. */
 const DELTA_SHELL_REPLIES: ReadonlyMap<string, ShellOutcome> = new Map([
   ['# devbox-probe-v1', { call: 'deltaProbe', stdout: '0 ' }],
   ['# devbox-whiteout-v1', { call: 'deltaWhiteoutStat', stdout: '0,0' }],
@@ -319,8 +247,6 @@ const DELTA_SHELL_REPLIES: ReadonlyMap<string, ShellOutcome> = new Map([
   ['# devbox-manifest-v1', { call: 'deltaManifest', stdout: '' }],
 ]);
 
-/** One command and the world it meets: what `/proc/mounts` says, which paths
- *  the case declares absent, and what the probes report back. */
 interface ShellWorld {
   readonly command: string;
   readonly mounts: string;
@@ -340,7 +266,6 @@ function shellLabel(world: ShellWorld): ShellOutcome {
 
   if (delta !== undefined) return delta;
 
-  // The staging-space probe: one command reporting `<need> <free>`.
   if (command.includes('df -Pk')) {
     return { call: 'stagingShortfall', stdout: `${STAGE_NEED_BYTES} ${freeBytes}` };
   }
@@ -354,12 +279,8 @@ function shellLabel(world: ShellWorld): ShellOutcome {
     };
   }
 
-  // The BOUNDED visibility probe: ONE command that asks the store mount for one
-  // layer a bounded number of times and, when it never appears, reports what the
-  // subtree does hold. The bound lives inside the command the strategy composed,
-  // so this fake never has to know it — the case that asserts the refusal reads
-  // it off the command instead. A path a case declares absent stays absent
-  // however many times it is asked.
+  // The retry bound lives inside the strategy's command, so this fake never models it;
+  // a path a case declares absent stays absent however many times it is asked.
   if (command.includes('printf ready')) {
     const awaited = /test -e '(?<path>[^']+)'/.exec(command)?.groups?.path ?? '';
 
@@ -400,17 +321,13 @@ function shellLabel(world: ShellWorld): ShellOutcome {
     };
   }
 
-  // NO ARM FOR A SEEDING COPY, deliberately. The strategy has none — the delta
-  // is a layer — so a `cp -a` reaching this fake would fall through to
-  // `exec:cp` and show up in the recorded calls, which is what the assertions
-  // below check for by name.
+  // No arm for a seeding `cp -a`: the delta is a layer, so any copy falls through to
+  // `exec:cp` and the assertions detect it by name.
   const squash = /mksquashfs '(?<source>[^']+)'/.exec(command)?.groups?.source;
 
   if (squash !== undefined) {
-    // The build, its exclude list and its measurement are ONE command, so the
-    // fake answers all three: it counts the policy the archiver will really
-    // apply — decoded from the list the command stages — and reports
-    // `<exit> <bytes>`.
+    // Build, exclude list and measurement are one command, so the fake answers all three:
+    // it counts the exclude policy decoded from the staged list and reports `<exit> <bytes>`.
     return {
       call: `makeSquashfs:${squash}:${excludePatternsOf(command).length}`,
       stdout: stagedSize,
@@ -426,24 +343,14 @@ function shellLabel(world: ShellWorld): ShellOutcome {
   return { call: `exec:${command.split(' ')[0]}`, stdout: '' };
 }
 
-/**
- * A container and a store that behave exactly as told.
- *
- * Objects are a map of key to size: omitting one is a missing object and
- * disagreeing sizes are a corrupt one. `mounts` is a closure so a test can make
- * the world change as the code acts on it, which is what lets a postcondition
- * read the world rather than the intention.
- */
-/** The SDK's mount registry as a test holds it: one held entry for the one
- *  binding, shared across the harnesses one test builds so two isolates on one
- *  container see the same mount. */
+/** Shared across the harnesses one test builds, so two isolates on one container
+ *  see the same held mount. */
 interface SdkMountRegistry {
   held?: { readonly prefix: string; readonly readOnly: boolean };
 }
 
-/** The CONTAINER's own mount table, shared the same way the SDK registry is:
- *  `/proc/mounts` belongs to the container, not to the isolate reading it, so
- *  a stop and a wake — two isolates, one container — see the same lines. */
+/** `/proc/mounts` belongs to the container, not the isolate, so a stop and a wake (two
+ *  isolates, one container) must see the same shared table. */
 interface ContainerMounts {
   mounted?: { readonly at: string; readonly prefix: string };
   /** The instance these mounts belong to; a new answer is a replacement. */
@@ -453,8 +360,7 @@ interface ContainerMounts {
 function harness(overrides: {
   state?: ChainState | null;
   mounts?: string | (() => string);
-  /** Which container paths this case says are NOT there, asked per path rather
-   *  than listed — so a case can say "the store subtree exposes nothing"
+  /** Asked per path, not listed, so a case can say "the store subtree exposes nothing"
    *  without knowing where the strategy mounted the store. */
   absent?: (path: string) => boolean;
   generations?: string[];
@@ -462,45 +368,35 @@ function harness(overrides: {
   running?: boolean;
   change?: { status: ChangeStatus; version: string } | Error;
   now?: number;
-  /** The store takes nothing: the container's flush fails, which is the only
-   *  failure a publication can have. */
+  /** The store takes nothing: the container's flush fails, the only failure a publication has. */
   failPublish?: boolean;
-  /** The store refuses every delete. The post-publication sweep runs on it. */
   failDelete?: boolean;
-  /** Which `writeState` calls reject, by 1-based order of arrival. `[2]` fails
-   *  only the post-commit failure stamp, which is the one durable write that
-   *  happens after a record is already published. */
+  /** Which `writeState` calls reject, by 1-based arrival order. `[2]` fails only the
+   *  post-commit failure stamp, the one durable write after a record is published. */
   rejectWrites?: readonly number[];
   refuseOverlay?: boolean;
-  /** The FIRST attempt to mount the delta layer dies, which is the window under
-   *  test: an attach that cannot compose its own delta must leave no overlay. */
+  /** Only the FIRST delta-layer mount dies: an attach that cannot compose its own delta
+   *  must leave no overlay. */
   failDeltaLayer?: boolean;
   /** What the changed set fingerprints to. Empty means the probe failed. */
   upperMark?: string;
-  /** What the archiver reports as `<exit> <bytes>`. `'0 0'` is the shape that
-   *  bit a deployed run: success claimed, no file present. */
+  /** What the archiver reports as `<exit> <bytes>`. `'0 0'` claims success with no file present. */
   stagedReport?: string;
-  /** Bytes the STORE ends up holding, when they differ from the staged size —
-   *  the deployed shape, where a mid-write stat read short and the copy landed
-   *  the whole archive. */
+  /** Bytes the store ends up holding when they differ from the staged size: a mid-write
+   *  stat can read short while the copy lands the whole archive. */
   landedBytes?: number;
-  /** Bytes the MOUNT reports after the flush, when they differ from what the
-   *  store took. Two readings of one finished upload: a difference is a flush
-   *  that did not carry every byte, and the publication must refuse it. */
+  /** Mount-reported size after the flush; a mismatch with the store's size means the flush
+   *  did not carry every byte, and the publication must refuse it. */
   flushedBytes?: number;
-  /** The copy reports success and the store ends up holding NOTHING under the
-   *  key. s3fs answers a flush from its own view, so a publication can report
-   *  a clean exit over an object the store never took. */
+  /** The copy reports success but the store holds nothing under the key: s3fs answers a
+   *  flush from its own view, so a clean exit can cover an object the store never took. */
   publishLandsNothing?: boolean;
-  /** The digest the upload reports, when a test needs to pin it. */
   landedDigest?: string;
-  /** The upload version the store reports, when a test needs to pin it. */
   landedVersion?: string;
   refuseStoreMount?: boolean;
   extractLands?: boolean;
   allowExtraction?: boolean;
   archiveExcludes?: readonly string[];
-  /** Bytes the staging filesystem reports free. Default: room for anything. */
   freeBytes?: number;
   /** A caller-owned array to record into, so a staged `mounts` closure can read
    *  the calls made so far without a forward reference to the harness. */
@@ -508,26 +404,21 @@ function harness(overrides: {
   /** The seed stamp this container's disk already carries: which delta the upper
    *  beside it holds. A replaced container has none, which is the default. */
   seedStamp?: string;
-  /** The SDK's mount registry, SHARED across the harnesses one test builds so
-   *  two isolates on the same container see the one binding's one mount —
-   *  which is exactly what a stop and a wake are. Omitted means this harness
-   *  owns a private registry, which is a container nothing else has touched. */
+  /** The SDK mount registry, shared across a test's harnesses so two isolates on one container
+   *  see the binding's one mount, as a stop and wake do. Omitted: a private, untouched container. */
   registry?: SdkMountRegistry;
-  /** The container's mount table, shared for the same reason: a fresh harness
-   *  is a fresh isolate, not a fresh container, and `/proc/mounts` does not
-   *  reset with it. */
+  /** Shared across harnesses: a fresh harness is a fresh isolate, not a fresh container,
+   *  and `/proc/mounts` does not reset with it. */
   mountsTable?: ContainerMounts;
 } = {}): Harness {
   const generations = [...(overrides.generations ?? [])];
   const calls = overrides.calls ?? [];
   const objects = new Map<string, number>();
-  /** What the STORE reports as an object's own digest. A key absent here is an
-   *  object R2 was never handed a checksum for — every multipart upload — which
-   *  reads as unknown, not as unsound. */
+  /** A key absent here is an object R2 was never handed a checksum for (every multipart
+   *  upload); it reads as unknown, not as unsound. */
   const digests = new Map<string, string>();
-  /** What the STORE reports as an object's own upload version. R2 always has
-   *  one; a key absent here is this fake saying otherwise, which is how a
-   *  pre-version record is expressed. */
+  /** What the store reports as an object's upload version; R2 always has one.
+   *  A key absent here expresses a pre-version record. */
   const versions = new Map<string, string>();
   let state = overrides.state ?? null;
   const staged = overrides.mounts ?? NOT_MOUNTED;
@@ -537,41 +428,18 @@ function harness(overrides: {
   let deltaLayerDied = false;
   let liveMark = overrides.upperMark ?? '7:4096:1700000000';
   let writes = 0;
-  /** Every object-store write attempt a publication makes, in order — what
-   *  the live run's publication meter reads, so a test can assert the shape
-   *  the meter would count: three `put`s under s3fs's `dd`, one under the
-   *  egress publisher. */
+  /** Every object-store write attempt a publication makes, in order, as the publication meter
+   *  counts them: three `put`s under s3fs's `dd`, one under the egress publisher. */
   const attempts: { operation: 'put' | 'uploadPart' | 'complete'; key: string; bytes: number }[] = [];
-  /** The generation whose subtree is mounted right now, and the prefix a flush
-   *  through it lands under. The ONE mount, one setting, held for the
-   *  container's life — the shape the SDK's own registry forces, because it
-   *  admits a second mount of a binding only at the same prefix with the same
-   *  setting. Shared with the harness's siblings when the caller says so, so a
-   *  stop-and-wake sees one container. */
+  /** One mount, one setting, for the container's life: the SDK admits a second mount of a
+   *  binding only at the same prefix and setting. Shared when asked, so stop-and-wake sees one. */
   const table: ContainerMounts = overrides.mountsTable ?? {};
-  /**
-   * The SDK's own registry: what it last mounted for the one binding.
-   *
-   * THE RULE THE DEPLOYED RUN DIED ON, stated as the fake's behaviour rather
-   * than as a comment: `@cloudflare/sandbox` admits a second mount of a binding
-   * only at the SAME prefix with the SAME setting, and it says so with
-   * `R2 binding "BACKUP_BUCKET" is already mounted at <path> with a different
-   * readOnly setting` (measured live, runs e2e20260902032038 and
-   * e2e20260902032318, on the second checkpoint after a wake). A fake without
-   * the rule cannot hold the one-mount design, because two settings look fine
-   * to it. SHARED when the caller says so, because the registry belongs to the
-   * SDK — one per container, whichever isolate asks.
-   */
+  /** Models the SDK registry: a second mount of a binding is admitted only at the same prefix
+   *  with the same setting. Shared when asked, since the SDK holds one per container. */
   const sdk: SdkMountRegistry = overrides.registry ?? {};
 
-  /**
-   * The container's publication, as the container performs it.
-   *
-   * THE ONLY WAY AN OBJECT GETS INTO THIS STORE. No port carries a payload
-   * byte, so a test that sees an object appear is watching the container write
-   * it through the mount — and one that sees none is watching a checkpoint
-   * that never published.
-   */
+  /** The only way an object enters this store: no port carries a payload byte, so an
+   *  appearing object is the container writing through the mount; none means no publication. */
   const publish = (mountedPath: string) => {
     const mount = table.mounted;
 
@@ -586,14 +454,11 @@ function harness(overrides: {
     const key = `${mount.prefix}${mountedPath.slice(mount.at.length + 1)}`;
     calls.push(`publishArchive:${key}`);
     const landed = overrides.landedBytes ?? DELTA_BYTES;
-    // The mount's own reading after the flush. Equal to what the store took
-    // unless a test says otherwise, which is the lost-tail shape.
+    // The mount's own byte count after the flush; a value differing from `landed` models a lost tail.
     const flushed = overrides.flushedBytes ?? landed;
 
-    // THREE ATTEMPTS, in s3fs's own order — the generation's directory
-    // marker on `mkdir -p`, an empty object on `create`, and the payload on
-    // the fsync flush (the measured shape of `b20260914045438`, and the
-    // floor that made the egress publisher necessary):
+    // Models s3fs's three PUTs in its order: directory marker on `mkdir -p`, empty object on
+    // `create`, payload on the fsync flush; this floor is why the egress publisher exists (D15).
     const parent = key.slice(0, key.lastIndexOf('/') + 1);
 
     attempts.push({ operation: 'put', key: parent, bytes: 0 });
@@ -616,11 +481,8 @@ function harness(overrides: {
     return { stdout: `0 ${flushed}`, stderr: '', exitCode: 0 };
   };
 
-  /** The same publication through the mount's own egress host: ONE PUT. The
-   *  URL the strategy PUTs to is relative to the mount's prefix — the SDK's
-   *  `r2EgressHandler` prepends it — so the fake lands the object at
-   *  `${prefix}/${key}` exactly as the handler would. An unheld mount is the
-   *  handler's 403, and a missing archive is the publisher's own refusal. */
+  /** The PUT URL is relative to the mount's prefix: the SDK's `r2EgressHandler` prepends it,
+   *  so the fake lands at `${prefix}/${key}`. An unheld mount answers the handler's 403. */
   const publishEgress = (objectUrl: string) => {
     const mount = table.mounted;
 
@@ -656,9 +518,8 @@ function harness(overrides: {
       versions.set(key, overrides.landedVersion ?? versionOf(key, landed));
     }
 
-    // The publisher's own HEAD afterwards: what the store reports holding,
-    // which is `landed` when it landed and `flushed` when a test wants the
-    // lost-tail shape — the same two readings the s3fs flush compared.
+    // Models the publisher's HEAD after the PUT: the store reports `landed`, or `flushed`
+    // for the lost-tail shape.
     const reported = overrides.publishLandsNothing === true
       ? 0
       : (overrides.flushedBytes ?? landed);
@@ -702,10 +563,9 @@ function harness(overrides: {
         + `${next.lastFailure === undefined ? '' : ':failed'}${rejected ? ':rejected' : ''}`,
       );
 
-      // A rejected put changes nothing durable, which is the whole point: the
-      // record a reader would find next is still the one before this call.
+      // A rejected put changes nothing durable: the next reader still finds the prior record.
       if (rejected) return Promise.reject(new Error('durable storage unreachable'));
-      // The fence, as the Durable Object's transaction holds it.
+      // Models the Durable Object transaction's compare-and-set fence on `rev`.
       const stored = state?.rev ?? null;
 
       if (stored !== expectedRev) return Promise.reject(new ChainRecordAdvanced(expectedRev, stored));
@@ -728,17 +588,8 @@ function harness(overrides: {
 
       return Promise.resolve(change);
     },
-    // ONE PORT, so the fake is a container rather than a set of intentions. The
-    // strategy builds its own commands now, and this reads them: an assertion
-    // below about `overlayAttach:…` is an assertion about the fuse-overlayfs
-    // command line the production image would really receive.
-    //
-    // AND IT IS A PERSISTENT SHELL, which is the fact two deployed runs turned
-    // on: a command that says `exit` ends the session rather than the script,
-    // and a command the shell cannot parse ends it too. Both are modelled here
-    // rather than asserted anywhere, so the defect is unrepresentable — any
-    // command template that grows an `exit` or loses a separator fails every
-    // test that runs it. See `support/session-shell.ts`.
+    // The fake execs the strategy's real commands and models the SDK's persistent shell: `exit`
+    // or an unparseable command ends the session, failing any test that runs it (D18).
     exec: (command) => {
       const refused = sessionShellRefusal(command);
 
@@ -748,31 +599,22 @@ function harness(overrides: {
         return Promise.reject(refused);
       }
 
-      // THE PUBLICATION IS A COMMAND, which is the whole change: the archive
-      // moves because the container was told to write it to the store, not
-      // because a port handed bytes to the isolate.
-      // THE EGRESS PUT: the publisher runs `bun <runtime>/devbox-publish.mjs
-      // <archive> <object-url> <partBytes>` and lands one object attempt.
+      // The archive moves because the container writes it to the store, not via bytes to the isolate.
+      // The publisher runs `bun <runtime>/devbox-publish.mjs` and lands one object attempt (D15).
       const egress = /bun '(?<script>[^']*devbox-publish\.mjs)' '(?<archive>[^']+)' '(?<url>[^']+)' \d+/
         .exec(command)?.groups;
 
       if (egress !== undefined) return Promise.resolve(publishEgress(egress.url));
 
-      // THE S3FS COPY, whatever precedes it in the same command: the
-      // publication creates the generation's directory on the mount first
-      // (s3fs shows no parent for a key nothing lives under yet), so the
-      // matcher reads the `dd` rather than the start of the line. Kept so
-      // the three-attempt shape stays a possible fixture answer.
+      // The publication creates the generation's directory first (s3fs shows no parent for an
+      // empty prefix), so the matcher reads the `dd` rather than the start of the line.
       const published = /dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
         .exec(command)?.groups;
 
       if (published !== undefined) return Promise.resolve(publish(published.mounted));
 
-      // THE CONTAINER'S OWN VIEW: the strategy's `mountStoreOnce` reads
-      // `/proc/mounts`, so the store mount has to appear there exactly as a real
-      // s3fs mount does — one line at the path, for exactly as long as the fake
-      // holds it mounted. That is what makes the one-mount design observable to
-      // the code rather than remembered by it.
+      // `mountStoreOnce` reads `/proc/mounts`, so the fake lists the store mount there as real s3fs
+      // does: one line at the path, only while the fake holds it mounted.
       const procMounts = () => table.mounted === undefined
         ? mounts()
         : `${mounts()}\ns3fs ${table.mounted.at} fuse.s3fs rw,nosuid,nodev,relatime 0 0\n`;
@@ -790,9 +632,8 @@ function harness(overrides: {
 
       if (label.call.startsWith('mountLayer:') && label.call.includes('/lower-delta/')
         && overrides.failDeltaLayer === true && !deltaLayerDied) {
-        // ONE-SHOT: the first mount dies, a retry on the same container
-        // succeeds. That is the sequence a transient layer failure lives in, so
-        // the fake has to be able to express it rather than failing forever.
+        // One-shot: only the first delta mount fails, so a same-container retry can succeed,
+        // modelling a transient layer failure rather than a permanent one.
         deltaLayerDied = true;
 
         return Promise.resolve({
@@ -807,9 +648,8 @@ function harness(overrides: {
       }
 
       if (label.call.startsWith('makeSquashfs') && overrides.refuseStoreMount === true) {
-        // The real local failure: the container has no FUSE device. Deliberately
-        // NOT the interception wording, so the degrade cannot be passing because
-        // it recognised one particular sentence.
+        // Models the real local failure (no FUSE device), not the interception wording, so the
+        // degrade cannot pass merely by recognising one particular sentence.
         return Promise.reject(new Error('S3FS mount failed: fuse: device not found'));
       }
 
@@ -836,24 +676,14 @@ function harness(overrides: {
       calls.push(`mountStore:${at}`);
 
       if (overrides.refuseStoreMount === true) {
-        // The real local failure: the container has no FUSE device. Deliberately
-        // NOT the interception wording, so the degrade cannot be passing because
-        // it recognised one particular sentence.
+        // A container without a FUSE device; deliberately not the interception wording, so the
+        // degrade cannot pass by recognising one particular sentence.
         return Promise.reject(new Error('S3FS mount failed: fuse: device not found'));
       }
 
-      // THE SDK'S OWN REFUSAL, not a test's opinion: a second mount of this
-      // binding is admitted only at the same prefix with the same setting, which
-      // under the one-mount design is the SAME mount asked for again. Anything
-      // else is the shape that killed the deployed second checkpoint.
       const prefix = `${STORE_ROOT}/`;
-      // TWO REGISTRIES, because the SDK holds two. The BINDING registry admits a
-      // second mount only at the same prefix with the same setting; the PATH
-      // registry refuses a second mount at one path UNCONDITIONALLY
-      // (`activeMounts.has(mountPath)`, sandbox-CPj2jsbz.js:8369 — measured live
-      // as `Mount path "/backups" is already in use by bucket "BACKUP_BUCKET"`,
-      // run e2e20260902060426). Together they say: one mount call, at one path,
-      // with one setting — asking again is not idempotent.
+      // Models the SDK's two registries: binding admits a re-mount only at same prefix and setting;
+      // path registry refuses any second mount at one path, so a repeat mount is not idempotent.
       const held = sdk.held;
 
       if (held !== undefined && (held.prefix !== prefix || held.readOnly !== false)) {
@@ -879,11 +709,8 @@ function harness(overrides: {
     unmountStore: (at) => {
       calls.push(`unmountStore:${at}`);
 
-      // THE PRODUCT PORT, not the SDK's raw call: the strategy's ports go
-      // through `#chainPorts.unmountStore`, which catches the SDK's
-      // "nothing is mounted here" refusal and survives it, so this fake answers
-      // the same way — resolved, with the mount and the registry entry gone
-      // when the path was the one being held.
+      // Models the product port `#chainPorts.unmountStore`, which survives the SDK's "nothing is
+      // mounted here" refusal: always resolves, clearing the mount and registry entry if held.
       if (table.mounted?.at === at) table.mounted = undefined;
       sdk.held = undefined;
 
@@ -895,10 +722,8 @@ function harness(overrides: {
 
       if (bytes === undefined) return Promise.resolve(undefined);
 
-      // The STORE's own answers. An absent digest is what R2 gives for an
-      // object it was never handed a checksum for, which is every multipart
-      // upload; an absent version is only how this fake expresses a store that
-      // has none, which R2 never is.
+      // R2 omits the digest for any object stored without a checksum, i.e. every multipart upload.
+      // An absent version models a store without versions; R2 always has one.
       return Promise.resolve({
         bytes,
         digest: digests.get(key),
@@ -936,12 +761,8 @@ function harness(overrides: {
     log: (message) => calls.push(`log:${message}`),
   };
 
-  // Pre-seed whatever layers the starting state references — both roles, since
-  // a restore verifies the fallback the same way it verifies the current
-  // generation — so an integrity probe passes unless a test deliberately breaks
-  // it. The store agrees with the record about both identities too: a test that
-  // wants a same-length replacement sets `digests` or `versions` to something
-  // else.
+  // Seeds current and fallback layers, since restore verifies both, so integrity probes pass
+  // by default; a same-length replacement test overrides `digests` or `versions`.
   const seed = (key: string, layer: ChainLayer): void => {
     objects.set(key, layer.bytes);
 
@@ -969,8 +790,8 @@ function harness(overrides: {
     versions,
     get state() { return state; },
     set state(next) { state = next; },
-    /** What the changed set fingerprints to RIGHT NOW. Setting it is how a test
-     *  says "the caller wrote something" between two checkpoints. */
+    /** Fingerprint of the changed set now; setting it simulates a caller write between two
+     *  checkpoints. */
     get upperMark() { return liveMark; },
     set upperMark(next) { liveMark = next; },
   };
@@ -996,11 +817,8 @@ type StateLiteral = Omit<Partial<ChainState>, 'base' | 'delta' | 'fallback'> & {
   readonly fallback?: GenerationLiteral | undefined;
 };
 
-/** Fill in the identities the upload would have recorded, so a test only spells
- *  one when that identity is what it is about. Spelling `digest: undefined` or
- *  `objectVersion: undefined` explicitly means what it says — the row of a box
- *  that checkpointed before those fields existed — so it is honoured rather
- *  than defaulted. */
+/** Defaults `digest`/`objectVersion` to what the upload records; an explicit `undefined` is
+ *  honoured, modelling a row checkpointed before those fields existed. */
 function generationLiteral(literal: GenerationLiteral): ChainGeneration {
   const layer = (key: string, spelled: LayerLiteral): ChainLayer => ({
     bytes: spelled.bytes,
@@ -1041,9 +859,8 @@ function chainState(over: StateLiteral = {}): ChainState {
   };
 }
 
-/** Mounts that flip to attached once `overlayAttach` has been called, so a
- *  postcondition observes a world the code actually changed rather than one the
- *  test staged in advance. */
+/** Mounts flip to attached only after `overlayAttach` is called, so a postcondition observes
+ *  a change the code made rather than one the test staged in advance. */
 function mountsAfterAttach(calls: readonly string[], mounted = MOUNTED): () => string {
   return () => (calls.some(call => call.startsWith('overlayAttach')) ? mounted : NOT_MOUNTED);
 }
@@ -1062,29 +879,15 @@ async function checkpointOf(record: Harness, kind: CheckpointKind): Promise<Chec
   return outcome;
 }
 
-/** The mount points one production attach chose for one generation. */
 interface Chosen {
   readonly chainId: string;
-  /** Where it mounted the box's chain root — the one mount. */
   readonly store: string;
-  /** Where it mounted the base layer, and the generation's own delta layer. */
   readonly base: string;
   readonly delta: string;
 }
 
-/**
- * Run one production attach and read back the paths it chose.
- *
- * OBSERVED BEFORE THE CASES THAT NEED THEM. A case that composes a
- * `/proc/mounts` line has to know the layer path BEFORE it can run its own
- * scenario, and restating that path is what made this file's mirrors: the test
- * and the strategy then both read the test's copy. An attach that already ran
- * answers the same question with the strategy's own choice.
- *
- * `snapshotChainStorage(...).attach()` directly rather than `attachOf`, so an
- * observation does not pad the outcome-kind denominator at the end of this
- * file.
- */
+/** Paths come from a real attach so cases never restate the strategy's layer choice.
+ *  Calls `attach()` directly, not `attachOf`, so observations skip the outcome-kind tally. */
 async function observeAttach(chainId: string): Promise<Chosen> {
   const calls: string[] = [];
 
@@ -1108,19 +911,12 @@ async function observeAttach(chainId: string): Promise<Chosen> {
   };
 }
 
-/**
- * TWO generations, because one cannot show that a path is scoped by
- * generation. The collapse rule turns on the layer belonging to THIS
- * generation and not another, and two observations can tell those apart where
- * a mirror on both sides never could.
- */
+/** Two generations: only two observations show a mount path is scoped by generation,
+ *  which the collapse rule depends on. */
 const CHOSEN = await observeAttach(CHAIN_ID);
 
 const CHOSEN_FALLBACK = await observeAttach(FALLBACK_ID);
 
-/** Mounts that hold the composed shape a wake leaves: an overlay over the base
- *  and the generation's own delta layer, at the paths the strategy CHOSE for
- *  that generation. */
 function composedMounts(chosen: Chosen): string {
   return [
     'sysfs /sys sysfs rw,relatime 0 0',
@@ -1130,28 +926,23 @@ function composedMounts(chosen: Chosen): string {
   ].join('\n');
 }
 
-// ── attach ──────────────────────────────────────────────────────────────────
-
 describe('attach — the mount must be observed to have landed', () => {
   test('a box with no history restores nothing, and is still born with an overlay', async () => {
     const calls: string[] = [];
     const record = harness({ state: null, mounts: mountsAfterAttach(calls), calls });
     const outcome = await attachOf(record);
     expect(outcome.kind).toBe('empty');
-    // Nothing was RESTORED: no store mount, no layer, no bytes.
     expect(record.calls.filter(call => call.startsWith('mountStore'))).toEqual([]);
     expect(record.calls.filter(call => call.startsWith('mountLayer'))).toEqual([]);
     expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
-    // But the overlay exists, over an empty lower, so the changed set has
-    // somewhere to accumulate from the very first write.
+    // The overlay exists over an empty lower so the changed set accumulates from the first write.
     expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:1`);
   });
 
   test('a host that cannot attach an overlay stays plain instead of failing the start',
     async () => {
-      // A plain local `wrangler dev` has no fuse-overlayfs. That host is the one
-      // extraction exists for, so the box is born plain and the first checkpoint
-      // decides its mode as before — rather than refusing to start.
+      // Models a plain local `wrangler dev` with no fuse-overlayfs: the box starts plain and
+      // the first checkpoint decides its mode, rather than refusing to start.
       const record = harness({ state: null, refuseOverlay: true });
       const outcome = await attachOf(record);
       expect(outcome.kind).toBe('empty');
@@ -1171,31 +962,25 @@ describe('attach — the mount must be observed to have landed', () => {
       const outcome = await attachOf(record);
       expect(outcome.kind).toBe('attached');
 
-      // A BOUNDED number of layers, whatever the chain's history: two archives
-      // mounted, and the overlay composed over BOTH with a fresh upper on top.
+      // Layer count is bounded whatever the chain's history: two archives, overlay over both
+      // with a fresh upper on top.
       expect(record.calls.filter(call => call.startsWith('mountLayer'))).toHaveLength(2);
       expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:2`);
-      // ZERO bytes moved: no stream is opened, no object is downloaded, and —
-      // the point of this change — nothing is copied into the upper.
       expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
       expect(record.calls.filter(call => call.startsWith('exec:cp'))).toEqual([]);
-      // BOTH LAYERS EXIST BEFORE THE OVERLAY TAKES THEM. An overlay is composed
-      // from mount points it is handed; a mounted overlay therefore proves the
-      // whole composition landed, which is what the `already-attached` early
-      // return assumes.
+      // Both layers must be mounted before the overlay: a mounted overlay is taken as proof the
+      // whole composition landed, which the `already-attached` early return assumes.
       const store = storeMountOf(record.calls);
       const base = layerMountOf(record.calls, baseObjectKey(STORE_ROOT, CHAIN_ID));
       const delta = layerMountOf(record.calls, deltaObjectKey(STORE_ROOT, CHAIN_ID));
       const mounted = record.calls.indexOf(`overlayAttach:${DEVBOX_WORKDIR}:2`);
-      // Both archives were read THROUGH the store mount this attach made, which
-      // is what makes them lazy reads rather than downloads.
+      // Archives read through this attach's store mount are lazy reads, not downloads.
       expect(base.archive.startsWith(`${store}/`)).toBe(true);
       expect(delta.archive.startsWith(`${store}/`)).toBe(true);
       expect(mounted).toBeGreaterThan(delta.index);
       expect(mounted).toBeGreaterThan(base.index);
-      // The delta layer is NOT released after the overlay: it is one of its
-      // lowers now, and releasing it would empty the merged view of everything
-      // the changed set holds.
+      // The delta layer stays mounted after the overlay: it is a lower, and releasing it
+      // would empty the merged view of everything the changed set holds.
       expect(record.calls.slice(mounted)).not.toContain('releaseDeltaLayers');
       expect(outcome.detail).toContain(`${BASE_BYTES + DELTA_BYTES}B`);
       expect(outcome.detail).toContain('base+delta layered');
@@ -1203,10 +988,8 @@ describe('attach — the mount must be observed to have landed', () => {
 
   test('NEWEST LOWER FIRST: the delta precedes the base, or the base would win every path',
     async () => {
-      // `lowerdir` resolves left to right, so the order IS the composition. With
-      // the base first, every path the delta rewrote would resolve to its
-      // pre-delta content and every file the delta deleted would come back —
-      // a workspace silently rolled back to its last rebase.
+      // `lowerdir` resolves left to right; base-first would revert delta rewrites and resurrect
+      // files the delta deleted, rolling the workspace back to its last rebase.
       const calls: string[] = [];
       const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
       const raw: string[] = [];
@@ -1262,9 +1045,8 @@ describe('attach — the mount must be observed to have landed', () => {
 
   test('a complete unreferenced delta is adopted despite a negative mounted stat',
     async () => {
-      // A previous run crashed between the atomic PUT and the state write. The
-      // PUT was all-or-nothing and squashfs verifies its own superblock, so the
-      // bytes are sound and dropping them would lose real work.
+      // An unreferenced delta comes from a crash between the atomic PUT and the state write;
+      // the PUT is all-or-nothing and squashfs verifies its superblock, so adopting keeps real work.
       const calls: string[] = [];
 
       const record = harness({
@@ -1276,10 +1058,6 @@ describe('attach — the mount must be observed to have landed', () => {
 
       record.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), DELTA_BYTES);
       expect((await attachOf(record)).kind).toBe('attached');
-      // Adopted means COMPOSED: the orphan delta becomes a layer under the fresh
-      // upper, exactly like a referenced one.
-      // The delta became a LAYER: its archive is read through the store mount this
-      // attach made, and its point is scoped by the generation it belongs to.
       const delta = layerMountOf(record.calls, deltaObjectKey(STORE_ROOT, CHAIN_ID));
       expect(delta.archive.startsWith(`${storeMountOf(record.calls)}/`)).toBe(true);
       expect(delta.point).toContain(CHAIN_ID);
@@ -1288,12 +1066,8 @@ describe('attach — the mount must be observed to have landed', () => {
 
   test('LIVE WINDOW: a delta layer that will not mount leaves no overlay behind',
     async () => {
-      // THE WINDOW THE COMPOSITION INHERITS. Both layers are mounted before the
-      // overlay takes them, so a delta that will not mount means no overlay was
-      // ever composed — the retry cannot mistake a half-composed restoration for
-      // a finished one, because a mounted overlay is the proof that both lowers
-      // existed. Killed AT the delta mount, the container is still plain and the
-      // attach refuses in the container's own words.
+      // Both layers mount before the overlay composes them, so a failed delta mount leaves no
+      // overlay: a mounted overlay proves both lowers existed and the retry cannot trust less.
       const calls: string[] = [];
 
       const record = harness({
@@ -1309,21 +1083,14 @@ describe('attach — the mount must be observed to have landed', () => {
       expect(record.calls.filter(call => call.startsWith('overlayAttach'))).toEqual([]);
       expect(mountsAfterAttach(calls)()).toBe(NOT_MOUNTED);
 
-      // And the retry, on the same container, completes the whole restoration.
       const retry = await snapshotChainStorage(record.ports).attach();
       expect(retry.kind).toBe('attached');
     });
 
   test('P1 CONSEQUENCE: a checkpoint cannot launder a half-restored upper into the chain',
     async () => {
-      // What made the old defect permanent rather than transient: after a
-      // partial attach the box looked ready, and the NEXT checkpoint archived
-      // that partial upper as the new delta — so content that was merely
-      // unrestored became content the durable chain no longer holds.
-      //
-      // The refusal that prevents it is the overlay gate. A work directory that
-      // is not an overlay has no changed set to archive, so a checkpoint on a
-      // box whose attach did not finish reports FAILED and writes nothing.
+      // A checkpoint after a partial attach must not archive the partial upper as the new delta;
+      // the overlay gate refuses it: a non-overlay work directory has no changed set to archive.
       const calls: string[] = [];
 
       const record = harness({
@@ -1338,20 +1105,14 @@ describe('attach — the mount must be observed to have landed', () => {
       const outcome = await checkpointOf(record, 'quiesce');
       expect(outcome.kind).toBe('failed');
       expect(outcome.reason).toContain('not an overlay mount');
-      // The delta the chain already holds is untouched: nothing was archived
-      // over it, so the content the attach failed to restore is still there.
       expect(record.calls).not.toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
       expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, DELTA_BYTES));
     });
 
   test('an already-mounted box does NOT seed again, because the mount proves it happened',
     async () => {
-      // The CONSEQUENCE of the ordering, pinned so it stays legible. Once the
-      // seed precedes the overlay, a mounted overlay is proof the copy
-      // finished, and the `already-attached` early return needs no re-check.
-      // If someone later adds a defensive re-seed to that path, this says why
-      // it is redundant rather than silently tolerating a second mechanism
-      // maintaining an invariant the ordering already guarantees.
+      // Seeding precedes the overlay mount, so a mounted overlay proves the copy finished;
+      // the `already-attached` return needs no re-seed.
       const record = harness({ state: chainState(), mounts: MOUNTED });
       expect((await attachOf(record)).kind).toBe('already-attached');
       expect(record.calls.filter(call => call.startsWith('seedUpper'))).toEqual([]);
@@ -1359,11 +1120,8 @@ describe('attach — the mount must be observed to have landed', () => {
     });
 
   test('DEPLOYED DEFECT: a kernel overlay with dir options reads as attached too', async () => {
-    // A deployed container answered "produced an overlay whose upper directory
-    // (unnamed) does not exist" because an earlier version parsed `upperdir`
-    // out of the mount line and fuse-overlayfs never publishes it. The mount
-    // fact is the MECHANISM: both overlay families read as attached, and a
-    // mountpoint with an octal-escaped space still resolves to its path.
+    // fuse-overlayfs never publishes `upperdir` in the mount line, so attach reads the mount fact:
+    // both overlay families count as attached; an octal-escaped mountpoint resolves to its path.
     const kernelOverlay = [
       'sysfs /sys sysfs rw,relatime 0 0',
       `overlay ${DEVBOX_WORKDIR.replace(/ /g, '\\040')} overlay rw,lowerdir=/a:/b,upperdir=/c,workdir=/d 0 0`,
@@ -1383,9 +1141,6 @@ describe('attach — the mount must be observed to have landed', () => {
   });
 
   test('a tick inside the minimum interval is skipped; on the boundary it commits', async () => {
-    // The interval gate applies to ticks only: an unchanged tick never
-    // archives however long it has been, a changed tick waits out the
-    // interval, and a quiesce ignores the clock.
     const early = harness({
       state: chainState({ at: 1_000 }), mounts: MOUNTED, upperMark: 'written',
       now: 1_000 + INTERVAL_MS - 1,
@@ -1412,20 +1167,13 @@ describe('attach — the mount must be observed to have landed', () => {
 
   test('movedBytes: a skip says 0, a failure says undefined, because those differ',
     async () => {
-      // Adopted from a review that drew the distinction I had missed: my
-      // skips reported `undefined`, which conflates "moved nothing" with
-      // "cannot say". A skip KNOWS it moved nothing — no PUT was attempted —
-      // and that is measurable. A failure cannot know: a checkpoint that threw
-      // mid-flight may have landed an object before it failed, so 0 there would
-      // assert something the path cannot establish.
+      // A skip attempted no PUT, so 0 is known; a failure may have landed an object before
+      // throwing, so it cannot claim 0.
       const idle = harness({ state: chainState(), mounts: MOUNTED, running: false });
       const skipped = await checkpointOf(idle, 'tick');
       expect(skipped.kind).toBe('skipped');
       expect(skipped.movedBytes).toBe(0);
 
-      // EVERY skip, not just that one. The others come from a shared literal,
-      // and a mutant proved this assertion missed them: reverting that literal
-      // to `undefined` failed nothing until this case existed.
       const unchanged = harness({
         state: chainState({ upperMark: 'm1', at: 1 }),
         mounts: MOUNTED,
@@ -1448,10 +1196,8 @@ describe('attach — the mount must be observed to have landed', () => {
 
   test('movedBytes: a commit reports what IT moved, which held bytes cannot give you',
     async () => {
-      // The reason the field exists: a caller was differencing consecutive held
-      // readings and getting NEGATIVE per-tick costs, because a rebase
-      // supersedes a generation so held bytes fall while the tick moved a whole
-      // fresh archive. Here the two numbers genuinely disagree.
+      // A rebase supersedes a generation, so held bytes fall while the tick moves a whole
+      // fresh archive; this setup makes the two numbers disagree.
       const record = harness({
         state: chainState({ base: { id: CHAIN_ID, bytes: 20_000 }, delta: undefined, at: 1 }),
         mounts: MOUNTED, now: 10 * INTERVAL_MS,
@@ -1471,17 +1217,8 @@ describe('attach — the mount must be observed to have landed', () => {
 
   test('RUN abc-4: a delta whose recorded size went stale is ADOPTED, not refused',
     async () => {
-      // Pinning the opposite is a terminal brick. Measured across two deployed
-      // runs: `archive 506834944, state declares 506494976`, and twice more,
-      // every difference an exact multiple of 4096 — the padding every squashfs
-      // archive carries, so the signature of two DIFFERENT archives rather than
-      // one archive measured twice. The cause is a crash between the atomic PUT
-      // and the state write, which this file's header already says an attach
-      // should ADOPT because the mount is the validator. A probe that refuses
-      // on the byte count refuses before the mount can validate anything, and
-      // the object never shrinks back to the declared number, so every later
-      // operation fails for the rest of the run. One occurrence cost an arm
-      // fourteen of its twenty segments.
+      // Refusing on the byte count bricks the run: the mount is the validator, and a crash between
+      // the PUT and the state write leaves a larger object that never shrinks back.
       const calls: string[] = [];
       const drifted = DELTA_BYTES + 4096;
 
@@ -1500,27 +1237,22 @@ describe('attach — the mount must be observed to have landed', () => {
       const outcome = await attachOf(record);
 
       expect(outcome.kind).toBe('attached');
-      // And the record is corrected, so the disagreement cannot outlive the
-      // attach that adopted it — the digest with the size, because the record
-      // must describe the archive it just served.
+      // The record must describe the archive the attach just served, so the digest is
+      // corrected with the size and the disagreement cannot outlive the attach.
       expect(record.state?.delta)
         .toEqual({ bytes: drifted, digest: landed, objectVersion: landedVersion });
       expect(record.calls.some(call => call.startsWith('log:delta record was stale'))).toBe(true);
     });
 
   test('a delta the record names and the store does NOT hold is still refused', async () => {
-    // The other half, and it must stay a refusal: a missing changed set is real
-    // content loss, not a stale number. Serving the base alone would hand the
-    // caller a workspace missing everything since it.
+    // A missing changed set is content loss, not a stale number: serving the base alone
+    // would drop everything written since it, so this must stay a refusal.
     const record = harness({ state: chainState() });
     record.objects.delete(deltaObjectKey(STORE_ROOT, CHAIN_ID));
     await expect(attachOf(record)).rejects.toThrow(/delta archive is missing/);
   });
 
   test('LIVE DEFECT: every step succeeding with no overlay line FAILS the start', async () => {
-    // Run 9cdda407: the chain reported success and the work directory was never
-    // an overlay, so the box served the container's own blank disk and called it
-    // a restore. The postcondition is the only thing that catches this.
     const record = harness({ state: chainState(), mounts: NOT_MOUNTED });
     await expect(attachOf(record)).rejects.toThrow(/is not an overlay mount/);
   });
@@ -1542,11 +1274,8 @@ describe('attach — the mount must be observed to have landed', () => {
 
   test('DEPLOYED DEFECT: the store mount is released through the SDK, never the kernel',
     async () => {
-      // The SDK keeps its own registry of bucket mounts and refuses a mount whose
-      // path it still believes is in use. A raw `fusermount3` unmounts the
-      // filesystem and leaves that claim standing forever, so the next attach is
-      // refused for a mount that no longer exists. Deployed symptom: a chain
-      // written once and never attachable again, every operation refused.
+      // The SDK tracks bucket mounts and refuses a path it believes in use; a raw `fusermount3`
+      // unmounts but leaves that claim standing, so every later attach is refused.
       const calls: string[] = [];
       const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
       expect((await attachOf(record)).kind).toBe('attached');
@@ -1554,10 +1283,7 @@ describe('attach — the mount must be observed to have landed', () => {
       // the release cannot be checked against a path the strategy never used.
       const store = storeMountOf(record.calls);
       expect(record.calls).toContain(`unmountStore:${store}`);
-      // And the store path is never released by path, which would bypass the
-      // registry.
       expect(record.calls).not.toContain(`unmountPath:${store}`);
-      // A stale claim from a previous generation is cleared BEFORE the mount.
       expect(record.calls.indexOf(`unmountStore:${store}`))
         .toBeLessThan(record.calls.findIndex(call => call.startsWith('mountStore:')));
     });
@@ -1607,28 +1333,8 @@ describe('attach — the mount must be observed to have landed', () => {
   });
 });
 
-// ── checkpoint ──────────────────────────────────────────────────────────────
-
-// ── the delta across a stop, and what serves it ─────────────────────────────
-//
-// MEASURED. The deployed `snapshot-chain` arm died with
-//
-//   ContainerStartOverrun: Devbox.attach exceeded its 300000ms budget
-//
-// on the wake after a stop, while the COLD attach of the same box passed.
-// Copying the cumulative changed set into a fresh upper would distinguish a wake
-// from a cold attach and require a full archive read through squashfuse over the
-// store mount — the only full read of an archive anywhere on this path. That work
-// violates the no-payload-copy attach contract the header states as "an attach
-// moves NO bytes"; the measured wake overrun of 300000 ms is the evidence for
-// composing the delta as a layer.
-//
-// So the delta is a LAYER, and there are exactly two shapes. A stop does not
-// necessarily take the container with it: when the same instance comes back its
-// upper already holds what the last publication archived, the stamp proves it,
-// and the base alone is mounted under it. When the instance CHANGED — a blank
-// disk, no stamp — the delta is composed as a lower and nothing is copied at
-// all.
+// The delta is composed as a layer, never copied into a fresh upper (D2). A wake whose
+// upper carries the matching stamp mounts the base alone; a blank disk mounts the delta.
 
 describe('a wake whose upper already holds this delta', () => {
   const stampFor = (chainId = CHAIN_ID, bytes = DELTA_BYTES): string =>
@@ -1675,14 +1381,12 @@ describe('a wake whose upper already holds this delta', () => {
       state: chainState(),
       mounts: mountsAfterAttach(calls),
       calls,
-      // Same generation, same length, a DIFFERENT upload — the shape a replaced
-      // delta has, and the reason the stamp carries the store's own version.
+      // Same generation and length, different upload: a replaced delta's shape, which is why
+      // the stamp carries the store's own version.
       seedStamp: `${CHAIN_ID}:${DELTA_BYTES}:another-upload`,
     });
 
     expect((await attachOf(record)).kind).toBe('attached');
-    // The delta became a LAYER: its archive is read through the store mount this
-    // attach made, and its point is scoped by the generation it belongs to.
     const delta = layerMountOf(record.calls, deltaObjectKey(STORE_ROOT, CHAIN_ID));
     expect(delta.archive.startsWith(`${storeMountOf(record.calls)}/`)).toBe(true);
     expect(delta.point).toContain(CHAIN_ID);
@@ -1690,14 +1394,8 @@ describe('a wake whose upper already holds this delta', () => {
   });
 });
 
-// ── THE WAKE THAT COST THE BUDGET ───────────────────────────────────────────
-//
-// A stop yields a FRESH container instance often enough that this is the
-// ordinary wake, not the exotic one: a blank disk carries no upper and no stamp,
-// so nothing about the previous instance can be claimed. What that wake must NOT
-// do is copy the changed set: the copy is proportional to everything written
-// since the base, it runs against the container-start budget, and at the size a
-// deployed ladder leaves it does not finish.
+// A stop often yields a fresh container: a blank disk with no upper and no stamp. That wake
+// must not copy the changed set: the copy grows with all writes since base, against start budget.
 
 describe('a wake whose container instance changed', () => {
   test('composes the delta as a layer and copies NOTHING', async () => {
@@ -1714,15 +1412,10 @@ describe('a wake whose container instance changed', () => {
     const outcome = await attachOf(record);
 
     expect(outcome.kind).toBe('attached');
-    // THE ASSERTION THIS DESCRIBE EXISTS FOR: no copy, in any spelling. The
-    // strategy's shell has no seeding command at all now, so a `cp` would reach
-    // the container as a raw command and be recorded as one.
+    // The strategy's shell has no seeding command, so any `cp` would reach the container
+    // as a raw command and be recorded as one.
     expect(record.calls.filter(call => call.startsWith('exec:cp'))).toEqual([]);
     expect(record.calls.filter(call => call.startsWith('seedUpper'))).toEqual([]);
-    // What replaced it: the delta mounted at its own generation's layer path,
-    // and an overlay composed over two lowers.
-    // The delta became a LAYER: its archive is read through the store mount this
-    // attach made, and its point is scoped by the generation it belongs to.
     const delta = layerMountOf(record.calls, deltaObjectKey(STORE_ROOT, CHAIN_ID));
     expect(delta.archive.startsWith(`${storeMountOf(record.calls)}/`)).toBe(true);
     expect(delta.point).toContain(CHAIN_ID);
@@ -1731,10 +1424,8 @@ describe('a wake whose container instance changed', () => {
   });
 
   test('claims nothing about the upper: an attach writes no seed stamp', async () => {
-    // The stamp means "this upper HOLDS that delta", and after a composed attach
-    // it does not: the layer does. A stamp written here would tell the next
-    // commit it may archive the upper as the whole changed set, which is exactly
-    // the publication that would drop everything the layer holds.
+    // A seed stamp claims the upper holds the delta; after a composed attach the layer does,
+    // so a stamp would let the next commit publish the upper alone and drop the layer's data.
     const calls: string[] = [];
     const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
 
@@ -1744,28 +1435,15 @@ describe('a wake whose container instance changed', () => {
   });
 
   test('the layer path names its own generation, so a later commit can see it', async () => {
-    // OBSERVED, AND ASSERTED AS PROPERTIES. Building a `/proc/mounts` line from
-    // a test-local copy of the strategy's layer path and handing it to a
-    // test-local copy of the strategy's own probe has both sides reading the
-    // test's copy, so nothing the strategy did could turn it red.
-    //
-    // The paths here are the ones a real attach mounted at, and what they have
-    // to satisfy is: inside the box's own runtime directory, so nothing a caller
-    // writes can reach them, and scoped by the generation, so two generations
-    // cannot share one mount point.
+    // Paths come from a real attach: inside the box's runtime directory so no caller write
+    // reaches them, and scoped by generation so two generations never share a mount point.
     expect(CHOSEN.delta.startsWith(`${DEVBOX_RUNTIME_DIR}/`)).toBe(true);
     expect(CHOSEN.delta).toContain(CHAIN_ID);
     expect(CHOSEN_FALLBACK.delta).toContain(FALLBACK_ID);
     expect(CHOSEN_FALLBACK.delta).not.toBe(CHOSEN.delta);
 
-    // AND THE COMMIT LOOKS THERE, which is the half a restatement on both sides
-    // could never reach:
-    // a commit reads `/proc/mounts` for its own generation's layer, so composing
-    // the mount line from the path the ATTACH chose proves the two halves of the
-    // strategy agree. Both directions — this generation's layer collapses the
-    // chain, another generation's does not — because reading a foreign layer as
-    // this one's changed set is what would make every commit after a collapse
-    // collapse again.
+    // Mounts are composed from the attach's chosen path so commit and attach must agree; a foreign
+    // generation's layer read as this one's changed set would make every later commit collapse.
     const own = harness({
       state: chainState({ at: 1 }),
       mounts: composedMounts(CHOSEN),
@@ -1789,19 +1467,8 @@ describe('a wake whose container instance changed', () => {
   });
 });
 
-// ── the collapse that keeps a delta object whole ────────────────────────────
-//
-// THE INVARIANT THE COMPOSITION PUTS AT RISK, and the rule that keeps it. Every
-// delta commit archives the upper, and that is the whole cumulative changed set
-// only while nothing else is holding part of it. A composed attach breaks that:
-// the layer holds everything up to the last publication and the upper holds
-// everything since. Archiving the upper THERE would replace the one delta object
-// the next attach reads with a fragment of itself — silent, durable loss of
-// every byte the layer was serving.
-//
-// So a commit that finds a layer serving its own generation's delta collapses
-// the chain onto a fresh base instead. The merged view is the one tree that
-// expresses both, and archiving it is an operation this file already had.
+// With a composed attach the upper holds only changes since the last publication; archiving
+// it as the delta would overwrite the served delta with a fragment, so the chain collapses.
 
 describe('a commit whose upper is not the whole changed set collapses the chain', () => {
 
@@ -1816,11 +1483,10 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     const outcome = await checkpointOf(record, 'tick');
 
     expect(outcome.kind).toBe('committed');
-    // THE ARCHIVE IS THE WORK DIRECTORY, not the upper: the merged view is what
-    // holds the layer and the upper together.
+    // The archive is the work directory, not the upper: only the merged view holds the layer
+    // and the upper together.
     expect(record.calls.some(call => call.startsWith(`makeSquashfs:${DEVBOX_WORKDIR}:`))).toBe(true);
     expect(record.calls.some(call => call.startsWith(`makeSquashfs:${UPPER}:`))).toBe(false);
-    // A FRESH GENERATION with no delta, so the next attach mounts one layer.
     expect(record.state?.base.id).not.toBe(CHAIN_ID);
     expect(record.state?.delta).toBeUndefined();
     // And the delta object of the generation being served is never rewritten,
@@ -1845,24 +1511,20 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     const collapsed = publishedState(record).base.id;
     record.upperMark = 'written-after-the-collapse';
 
-    // A quiesce, so the interval gate the collapse just reset is not what this
-    // case is about: the question is which SHAPE the second commit takes.
+    // A quiesce, so the interval gate the collapse just reset does not decide this commit;
+    // the case tests which shape the second commit takes.
     expect((await storage.checkpoint('quiesce')).kind).toBe('committed');
 
-    // The layer is STILL mounted — it is a lower of a live overlay and cannot be
-    // released — but it serves a generation the record no longer names, so it is
-    // no longer a reason to collapse. A rule keyed on a fixed mount path rather
-    // than on the generation would rebase here forever.
+    // The layer stays mounted as a live overlay lower but serves a generation the record no
+    // longer names, so it forces no collapse; keying on mount path would rebase forever.
     expect(record.state?.base.id).toBe(collapsed);
     expect(record.state?.delta).toBeDefined();
     expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
   });
 
   test('an ORPHAN delta the record does not name still forces the collapse', async () => {
-    // The crash-window delta: a previous run landed the object and died before
-    // the state write, so the record names none and the attach adopts it as a
-    // layer. Archiving the upper here would PUT over that object — the one copy
-    // of a changed set nothing else holds.
+    // Crash-window delta: the object landed but the state write did not, so attach adopts it.
+    // Archiving the upper would PUT over that object, the only copy of its changed set.
     const record = harness({
       state: chainState({ delta: undefined, at: 1 }),
       mounts: composedMounts(CHOSEN),
@@ -1880,11 +1542,8 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
   });
 
   test('a wake that wrote nothing pays for nothing', async () => {
-    // The collapse archives the whole workspace, so a box that woke and did
-    // nothing must not trigger one: the durable chain already holds every byte
-    // the layers serve. An empty upper is the proof — a deletion leaves a
-    // whiteout in it and a metadata change copies its file up, so "empty"
-    // cannot hide a change.
+    // An empty upper proves nothing changed: a deletion leaves a whiteout and a metadata change
+    // copies the file up, so skipping the whole-workspace collapse loses no bytes.
     const record = harness({
       state: chainState({ at: 1 }),
       mounts: composedMounts(CHOSEN),
@@ -1920,12 +1579,8 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
   });
 });
 
-// ── waits that end ──────────────────────────────────────────────────────────
-//
-// Both of these are BOUNDED, because an unbounded loop on the attach path
-// spends the whole container-start budget and reports nothing: the restoration
-// is abandoned mid-mount, the box records an overrun, and nobody learns which
-// step never finished.
+// Attach-path waits are bounded: an unbounded loop spends the whole start budget and
+// abandons the restore mid-mount without naming the step that never finished.
 
 describe('an attach that cannot see or cannot release says so', () => {
   test('a store subtree that never exposes the base refuses by count, naming what it holds',
@@ -1945,13 +1600,10 @@ describe('an attach that cannot see or cannot release says so', () => {
       };
 
       const refusal = attachOf(record);
-      // The attach has to RUN before its commands can be read back off the fake.
       await expect(refusal).rejects.toThrow(/does not expose /);
 
-      // THE PATH AND THE COUNT both come off the command the strategy composed,
-      // never off a number restated here. The probe names the store mount it
-      // lists and the path it waits for, and its own bound is what the refusal
-      // repeats — so the message cannot disagree with the wait that produced it.
+      // Path and bound are parsed from the composed probe command, never restated here, so the
+      // refusal message cannot disagree with the wait that produced it.
       const probe = raw.find((command) => command.includes('printf ready'));
       expect(probe).toBeDefined();
       const listed = /ls -1A '(?<path>[^']+)'/.exec(probe ?? '')?.groups?.path ?? '';
@@ -1963,14 +1615,11 @@ describe('an attach that cannot see or cannot release says so', () => {
       await expect(refusal).rejects.toThrow(
         `does not expose ${awaited} after ${String(bound)} probes`,
       );
-      // THE PACE LIVES IN ONE COMMAND. The loop is a single shell statement, so
-      // the count of probe COMMANDS the fake received is exactly one, whatever
-      // the bound inside it — the pacing that made the deployed probe kill the
-      // session stays where it was put.
+      // The probe loop is one shell statement, so the fake sees one probe command whatever the
+      // bound: the pacing must stay inside that command, not spread across execs.
       expect(raw.filter((command) => command.includes('printf ready'))).toHaveLength(1);
-      // WHAT THE SUBTREE DOES HOLD travels with the refusal: an operator reading
-      // it can tell "the mount is empty" from "the mount holds another
-      // generation's archives" without a second deployment.
+      // The refusal lists what the subtree holds, so an operator can tell an empty mount from
+      // one holding another generation's archives without a second deployment.
       await expect(refusal).rejects.toThrow(/holds: data.sqsh delta.sqsh/);
     });
 
@@ -1990,7 +1639,6 @@ describe('an attach that cannot see or cannot release says so', () => {
     };
 
     await expect(attachOf(record)).rejects.toThrow(/releasing the mount at .*lower-base/);
-    // Nothing was mounted on top of a mount this attach could not release.
     expect(record.calls.filter(call => call.startsWith('mountLayer'))).toEqual([]);
   });
 });
@@ -1998,9 +1646,8 @@ describe('an attach that cannot see or cannot release says so', () => {
 describe('checkpoint — gated on real change, proportional to it', () => {
   test('LIVE DEFECT: an unattached chain can answer neither skipped nor committed',
     async () => {
-      // Run 9cdda407 answered a FORCED checkpoint "unchanged" while the work
-      // directory was not attached. Attachment is therefore asked BEFORE the
-      // change gate, so a broken box reports a failure instead of health.
+      // Attachment is checked before the change gate, so an unattached box reports a failure
+      // instead of answering "unchanged".
       const record = harness({
         state: chainState(),
         mounts: NOT_MOUNTED,
@@ -2010,8 +1657,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const outcome = await checkpointOf(record, 'quiesce');
       expect(outcome.kind).toBe('failed');
       expect(outcome.reason).toContain('is not an overlay mount');
-      // And it never even asked about changes: the question would be about the
-      // wrong directory.
+      // Unattached, `checkChanges` would compare the wrong directory, so it is never asked.
       expect(record.calls).not.toContain('checkChanges');
       // The failure is durable, because a thrown scheduled callback is only a
       // console line.
@@ -2020,34 +1666,23 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('LIVE DEFECT: a box with no baseline commits, though checkChanges says unchanged',
     async () => {
-      // `checkChanges` answers "changed since the version you hold". A box that
-      // has never checkpointed holds none, and the SDK's documented answer to a
-      // call with no `since` is `unchanged` — it is establishing a baseline.
-      //
-      // Reproduced against the real thing before this test existed: a fresh box
-      // execed a file into the work directory, `/stop` answered
-      // `skipped: work directory is unchanged`, and nothing was ever stored.
-      // Every call reported success.
+      // With no `since`, the SDK's `checkChanges` answers `unchanged` because it is establishing
+      // a baseline; a box that never checkpointed must not read that as "no changes".
       const calls: string[] = [];
       const record = harness({ state: null, change: { status: 'unchanged', version: 'v1' }, calls, mounts: mountsAfterAttach(calls) });
       const outcome = await checkpointOf(record, 'quiesce');
       expect(outcome.kind).toBe('committed');
       expect(outcome.bytes).toBeGreaterThan(0);
-      // And the baseline is recorded, so the NEXT tick is a real comparison.
       expect(record.state?.changeVersion).toBe('v1');
     });
 
   test('a periodic tick is not blocked by the same missing baseline', async () => {
-    // The interval gate reads the change status, and `unchanged` fails it. With
-    // no baseline that status is meaningless, so a tick would have been declined
-    // too — for a different stated reason and the same lost bytes.
+    // The interval gate declines on `unchanged`; with no baseline that status is meaningless.
     const record = harness({ state: null, change: { status: 'unchanged', version: 'v1' } });
     expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
   });
 
   test('with no baseline, an EMPTY work directory is still declined', async () => {
-    // Content is the change only when there is content. Archiving an empty
-    // directory would make `committed` mean nothing.
     const record = harness({
       state: null, change: { status: 'unchanged', version: 'v1' }, entriesAfterExtract: 0,
     });
@@ -2083,16 +1718,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('LIVE DEFECT: a fresh box can tick and quiesce in its FIRST generation',
     async () => {
-      // The whole lifecycle of one container generation, in order, against ONE
-      // container — which is what the per-test fixtures could not express, and
-      // is why this shipped. A box was born with a plain `/workspace`; its
-      // first checkpoint wrote `mode:'chain'` and attached nothing; and from
-      // that moment the "not an overlay mount" gate refused every later
-      // checkpoint AND the quiesce. So the box filed a checkpoint incident
-      // every interval, could not stop gracefully, and lost everything written
-      // after the base when the platform finally evicted the container.
-      //
-      // Being born with an overlay is what makes that state unrepresentable.
+      // Runs one generation's whole lifecycle, in order, against ONE container;
+      // per-test fixtures cannot express that sequence.
       const calls: string[] = [];
 
       const record = harness({
@@ -2109,8 +1736,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(base.kind).toBe('committed');
       expect(record.state?.mode).toBe('chain');
 
-      // The tick this case turns on. The caller wrote between the two calls,
-      // which the changed set reflects — without this mark the upper is
+      // Setting `upperMark` simulates a write between the checkpoints; without it the upper is
       // untouched and the tick correctly skips, proving nothing.
       record.upperMark = '9:8192:1700000900';
       record.state = { ...publishedState(record), at: 0 };
@@ -2119,25 +1745,20 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         kind: 'committed', reason: undefined,
       });
 
-      // And the final one, which is what a graceful stop depends on: `quiesce()`
-      // refuses to stop the container when this fails.
+      // A graceful stop depends on this final checkpoint: `quiesce()` refuses to stop the
+      // container when it fails.
       record.upperMark = '11:12288:1700001800';
       const final = await storage.checkpoint('quiesce');
       expect({ kind: final.kind, reason: final.reason }).toEqual({
         kind: 'committed', reason: undefined,
       });
-      // The writes after the base landed in a delta, rather than being lost —
-      // under the generation this box minted for itself.
       expect(record.state?.delta).toEqual(publishedDeltaLayer(record.state, DELTA_BYTES));
     });
 
   test('a delta that outgrew its base collapses onto a fresh generation at the stop',
     async () => {
-      // The chain uploads the WHOLE cumulative delta every checkpoint, so once
-      // the delta passes the base every later commit moves more bytes than a
-      // fresh base would cost. The collapse writes a NEW generation id, and the
-      // outgoing generation is RETAINED as the restore fallback — so a crash
-      // here leaves two generations and never zero.
+      // Every checkpoint uploads the whole cumulative delta, so past the base size a fresh base is cheaper.
+      // The outgoing generation stays as restore fallback: a crash here leaves two generations, never zero.
       const record = harness({
         state: chainState({
           base: { id: CHAIN_ID, bytes: 100 },
@@ -2154,10 +1775,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const collapsed = publishedState(record);
       expect(collapsed.base.id).not.toBe(CHAIN_ID);
       expect(collapsed.delta).toBeUndefined();
-      // The whole merged tree, with the box's exclude policy applied.
       expect(record.calls.some(c => c.startsWith(`makeSquashfs:${DEVBOX_WORKDIR}:`))).toBe(true);
-      // ORDER: the record naming the new generation lands, and the old one is
-      // still there afterwards under the fallback role.
       expect(record.calls.findIndex(c => c.startsWith('writeState:'))).toBeGreaterThan(-1);
       expect(record.calls.filter(c => c.startsWith('deleteObjects'))).toEqual([]);
       expect(collapsed.fallback?.base.id).toBe(CHAIN_ID);
@@ -2165,12 +1783,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('a superseded generation is RETAINED as the restore fallback, not deleted',
     async () => {
-      // KINU-015: a rebase sweep that deleted the outgoing generation in the
-      // SAME commit would leave the box holding exactly one copy of itself from
-      // that moment — and a base object that went missing bricks every later
-      // attach with nothing left to try. The outgoing generation is the
-      // fallback a restore falls back to, and it goes only once a newer
-      // generation has been proven by an attach.
+      // Deleting the outgoing generation in the rebase commit leaves one copy; a missing base
+      // bricks every later attach. It stays as the restore fallback until an attach proves a newer one.
       const record = harness({
         state: chainState({
           base: { id: CHAIN_ID, bytes: 100 }, delta: { bytes: 4_000 }, at: 1,
@@ -2184,7 +1798,6 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(record.state?.fallback)
         .toEqual(generationLiteral({ base: { id: CHAIN_ID, bytes: 100 }, delta: { bytes: 4_000 } }));
       expect(record.state?.orphans).toBeUndefined();
-      // NOTHING was deleted, so both generations are whole and both are named.
       expect(record.calls.filter(c => c.startsWith('deleteObjects'))).toEqual([]);
       expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
       expect(record.objects.has(baseObjectKey(STORE_ROOT, publishedState(record).base.id))).toBe(true);
@@ -2192,12 +1805,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('a second unproven publication orphans the UNPROVEN generation, never the proven one',
     async () => {
-      // The bound is the two roles, not the traffic: however many publications
-      // land with no restart between them, the record keeps one proven
-      // generation and one current one. The proven fallback is all a restore has
-      // left, so it is never the one evicted — and the unproven generation this
-      // rebase supersedes loses no work, because the new base archives the same
-      // live work directory.
+      // The record keeps one proven and one current generation; the proven fallback is never evicted.
+      // Dropping the superseded unproven one loses no work: the new base archives the same work dir.
       const record = harness({
         state: chainState({
           base: { id: CHAIN_ID, bytes: 100 },
@@ -2212,23 +1821,21 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       await checkpointOf(record, 'quiesce');
 
       expect(record.state?.fallback?.base.id).toBe(FALLBACK_ID);
-      // NAMED BEFORE DELETED, and forgotten only once the delete is done: a
-      // crash mid-sweep leaves the id for the next run, and `backups/<uuid>/` is
-      // shared by every box, so an id no record carries can never be swept.
+      // Orphan ids are recorded before the delete so a crash mid-sweep leaves them for the next run;
+      // `backups/<uuid>/` is shared by every box, so an id no record carries can never be swept.
       const named = record.calls.findIndex(c => c.startsWith('writeState:'));
       const deleted = record.calls.findIndex(c => c.startsWith('deleteObjects'));
       expect(named).toBeGreaterThan(-1);
       expect(named).toBeLessThan(deleted);
       expect(record.state?.orphans).toBeUndefined();
       expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(false);
-      // The proven fallback and the new generation both survived it.
       expect(record.objects.has(baseObjectKey(STORE_ROOT, FALLBACK_ID))).toBe(true);
       expect(record.objects.has(baseObjectKey(STORE_ROOT, publishedState(record).base.id))).toBe(true);
     });
 
   test('a crash before the sweep leaves an id the NEXT checkpoint cleans up', async () => {
-    // Re-runnable is the property: the ids sit in the record until a run
-    // finishes deleting them, and the referenced generation is never among them.
+    // Orphan ids stay in the record until a sweep finishes deleting them, so a crashed sweep
+    // re-runs; the referenced generation is never among them.
     const stranded = 'a1b2c3d4-0000-4000-8000-0000000000ff';
 
     const record = harness({
@@ -2241,21 +1848,13 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
     expect(record.objects.has(baseObjectKey(STORE_ROOT, stranded))).toBe(false);
     expect(record.state?.orphans).toBeUndefined();
-    // The live generation survived the sweep that removed the stranded one.
     expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
   });
 
   test('a sweep that fails AFTER publication never restores the superseded pointer',
     async () => {
-      // Every step after the record's write deletes bytes the new record no
-      // longer names, and a failure there travelling to the checkpoint's catch
-      // would stamp it on the PRE-COMMIT record and write that over the
-      // committed pointer. After a rebase that is a record naming the
-      // generation the sweep was in the middle of deleting, so every later
-      // attach refuses on a base the store no longer holds; and the generation
-      // this commit had just written loses the only name it ever had, which in
-      // a `backups/<uuid>/` namespace shared by every box means it can never be
-      // swept.
+      // A post-publication sweep failure must not reach the checkpoint's catch: stamping it on the
+      // pre-commit record would overwrite the committed pointer and strand both generations.
       const record = harness({
         state: chainState({
           base: { id: CHAIN_ID, bytes: 100 },
@@ -2272,22 +1871,17 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
       const outcome = await checkpointOf(record, 'quiesce');
 
-      // The archive landed and the pointer is published, so that is what it
-      // reports. A `failed` here would also refuse the quiesce this ran under,
-      // holding a box open over work that is already durable.
+      // The archive landed and the pointer is published, so it reports `committed`; a `failed`
+      // would refuse the enclosing quiesce, holding the box open over already-durable work.
       expect(outcome.kind).toBe('committed');
       const committed = publishedState(record);
       expect(committed.rev).toBe(2);
       expect(committed.base.id).not.toBe(CHAIN_ID);
       expect(record.objects.has(baseObjectKey(STORE_ROOT, committed.base.id))).toBe(true);
-      // The failure is stamped on the COMMITTED revision, and the generation
-      // the sweep could not delete is still named, so the next commit retries
-      // it and nothing reachable was dropped.
+      // The undeleted generation stays named in `orphans` so the next commit retries its sweep.
       expect(committed.lastFailure?.reason).toContain('store unreachable');
       expect(committed.orphans).toEqual([CHAIN_ID]);
       expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
-      // No write went backwards: every record this checkpoint wrote names the
-      // new generation.
       const writes = record.calls.filter(call => call.startsWith('writeState:'));
       expect(writes.length).toBeGreaterThan(0);
       expect(writes.every(call => call.includes(committed.base.id))).toBe(true);
@@ -2295,25 +1889,15 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('KINU-N030: a failure stamp that cannot be written leaves the COMMITTED record',
     async () => {
-      // The residual the test above left open. Its stamp is itself a durable
-      // write, so it can fail too — and when it did, the throw travelled to the
-      // checkpoint's catch, which stamped the PRE-COMMIT record and wrote that
-      // over the committed pointer. One storage failure was handled; two
-      // reverted the publication, which is the outcome the whole boundary
-      // exists to make unrepresentable.
-      //
-      // Both writes this commit performs are therefore bound to the committed
-      // revision, and the second one failing is a console line: the note is
-      // about bytes that are already durable, and the only writer that could
-      // carry it is the one that just failed.
+      // The failure stamp is itself a durable write bound to the committed revision; if it fails,
+      // only a console line remains: the bytes are durable and the only carrier just failed.
       const record = harness({
         state: chainState({
           base: { id: CHAIN_ID, bytes: 100 },
           delta: { bytes: 4_000 },
           at: 1,
-          // The slot is already full, so this rebase orphans the outgoing
-          // generation instead of retaining it — which is what gives the sweep
-          // below something to fail at.
+          // The fallback slot is already full, so this rebase orphans the outgoing generation
+          // instead of retaining it, giving the failing sweep something to delete.
           fallback: { base: { id: FALLBACK_ID, bytes: 64 }, delta: undefined },
         }),
         mounts: MOUNTED,
@@ -2326,24 +1910,17 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
       expect(outcome.kind).toBe('committed');
       const committed = publishedState(record);
-      // The published pointer, unchanged by either failure.
       expect(committed.rev).toBe(2);
       expect(committed.base.id).not.toBe(CHAIN_ID);
-      // The stamp is the ONLY thing lost, and losing it costs no bytes: the
-      // generation the sweep could not delete is still named, so the next
-      // commit retries it.
+      // Only the failure stamp is lost, at no byte cost: the undeleted generation stays
+      // named in `orphans`, so the next commit retries its deletion.
       expect(committed.lastFailure).toBeUndefined();
       expect(committed.orphans).toEqual([CHAIN_ID]);
-      // Everything either record names is still reachable.
       expect(record.objects.has(baseObjectKey(STORE_ROOT, committed.base.id))).toBe(true);
       expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
-      // TWO writes, both naming the new generation, and no third attempt that
-      // could have carried the pre-commit record.
       const writes = record.calls.filter(call => call.startsWith('writeState:'));
       expect(writes).toHaveLength(2);
       expect(writes.every(call => call.includes(committed.base.id))).toBe(true);
-      // Both lines are still there, on the one channel that still works: the
-      // cleanup failure in full, and the fact that it never reached the record.
       expect(record.calls.some(call => call.startsWith('log:')
         && call.includes('is committed and its cleanup is not'))).toBe(true);
       expect(record.calls).toContain(
@@ -2353,11 +1930,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('a commit whose record another writer advanced is refused, and the loser is stamped on the record as it stands',
     async () => {
-      // Two boots read one record at rev 1. The other one commits rev 2 while
-      // this one is still archiving, which the harness models by advancing the
-      // record after this checkpoint's read. The fence refuses this commit's
-      // pointer write; the failure is reported AND recorded, and it lands on
-      // the winner's record, because the stale copy cannot be written either.
+      // Swapping the record in `checkChanges` models a rival committing rev 2 after this read.
+      // The stamp lands on the winner's record because the stale copy cannot be written either.
       const record = harness({
         state: chainState({ base: { id: CHAIN_ID, bytes: 100 }, at: 1 }),
         mounts: MOUNTED,
@@ -2388,16 +1962,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('VERDICT-2: excludes shrink BOTH archives, so they cannot trip the rebase ratio',
     async () => {
-      // The measured defect: excludes applied to the base only. `shouldRebase`
-      // asks `delta > k * base`, so a small excludes-applied base against a
-      // delta measured WITHOUT them is satisfied essentially always — a full
-      // re-archive at every quiesce that the unexcluded arm never performs.
-      // Verdict-2 measured the excluded chain arm at 1.42x tick time and 1.34x
-      // class-A of the plain one, so the policy was costing where it was meant
-      // to save, and paying for rebases rather than for filtering.
-      //
-      // The invariant that prevents it: both archives are measured under the
-      // same excludes, so the ratio compares like with like.
+      // Both archives are measured under the same excludes: `shouldRebase` asks `delta > k * base`,
+      // so an excluded base against an unexcluded delta would rebase at every quiesce.
       const record = harness({
         state: chainState({ base: { id: CHAIN_ID, bytes: 20_000 }, delta: undefined, at: 1 }),
         mounts: MOUNTED,
@@ -2408,35 +1974,22 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
       const staged = record.calls.filter(call => call.startsWith('makeSquashfs:'));
       const excluded = staged.filter(call => call.endsWith(`:${CHAIN_EXCLUDES.length}`));
-      // Every archive this commit staged applied the policy. A single `:0`
-      // among them is the half-application that was measured.
       expect(staged.length).toBeGreaterThan(0);
       expect(excluded).toEqual(staged);
     });
 
   test('VERDICT-2: the rebase ratio reads two numbers gathered the same way', () => {
-    // Stated as the property rather than as a scenario, because the defect was
-    // never a bad threshold — k is fine. It was that the two sides of the
-    // comparison were measured under different rules, which no value of k can
-    // repair.
     const tiny = chainState({ base: { id: CHAIN_ID, bytes: 20_000 }, delta: { bytes: 400_000 } });
     const whole = chainState({ base: { id: CHAIN_ID, bytes: 420_000 }, delta: { bytes: 400_000 } });
-    // Under the OLD half-applied policy these two were the SAME workspace: an
-    // excluded base of 20k against an unexcluded delta of 400k, versus an
-    // unexcluded base of 420k against the same delta. One rebased at every
-    // quiesce and the other never did.
     expect(shouldRebase(tiny, 'quiesce')).toBe(true);
     expect(shouldRebase(whole, 'quiesce')).toBe(false);
-    // With both sides measured alike, that workspace has one description, and
-    // its delta is the small one — which is the saving the policy promised.
     const alike = chainState({ base: { id: CHAIN_ID, bytes: 20_000 }, delta: { bytes: 4_000 } });
     expect(shouldRebase(alike, 'quiesce')).toBe(false);
   });
 
   test('a tick never rebases, however far the delta has run ahead', async () => {
-    // Collapsing means the upper must end up empty, and emptying a live upper
-    // races every writer in the container. A tick therefore appends; the stop
-    // is what collapses.
+    // Collapsing must leave the upper empty, and emptying a live upper races every writer
+    // in the container, so a tick appends and only the stop collapses.
     const record = harness({
       state: chainState({ base: { id: CHAIN_ID, bytes: 100 }, delta: { bytes: 9_000 }, at: 1 }),
       mounts: MOUNTED,
@@ -2450,13 +2003,11 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('disk full stages in memory and commits, never a crash',
     async () => {
-      // A disk archiver that fills the container disk would take the box down
-      // with it, so a disk gate that refuses stages in memory instead, where
-      // tmpfs costs no disk quota. The checkpoint commits rather than refuses.
+      // A disk archiver that fills the container disk takes the box down; a refusing disk gate
+      // stages in memory instead, where tmpfs costs no disk quota.
       const record = harness({ state: chainState(), mounts: MOUNTED, freeBytes: 1 });
       const outcome = await checkpointOf(record, 'quiesce');
       expect(outcome.kind).toBe('committed');
-      // The archiver ran (to memory, safe) and the layer landed.
       expect(record.calls.filter(c => c.startsWith('makeSquashfs'))).not.toEqual([]);
     });
 
@@ -2465,43 +2016,21 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const record = harness({ state: chainState(), mounts: MOUNTED });
       const outcome = await checkpointOf(record, 'tick');
       expect(outcome.kind).toBe('committed');
-      // ONE MEANING FOR `bytes`: what this box durably holds after the commit,
-      // which is base plus delta. The delta's own size is not the same
-      // quantity, and reporting it here made this field mean layer-size where
-      // the caller compares held bytes — two measurements under one name.
+      // `bytes` is what the box durably holds after the commit (base plus delta), not the
+      // delta's own size: the caller compares it against held bytes.
       expect(outcome.bytes).toBe(BASE_BYTES + DELTA_BYTES);
-      // The changed set, not the tree — under the SAME excludes as the base.
-      // See the commit path: applying them to one side only delivered no saving
-      // and made the rebase ratio compare incommensurable quantities.
+      // Archives the changed set, not the tree, under the SAME excludes as the base;
+      // excludes on one side only make the rebase ratio compare incommensurable quantities.
       expect(record.calls).toContain(`makeSquashfs:${UPPER}:${CHAIN_EXCLUDES.length}`);
       expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
-      // The base is untouched: same id, same bytes, and nothing published to it.
       expect(record.state?.base).toEqual(baseLayer(CHAIN_ID, BASE_BYTES));
       expect(record.calls).not.toContain(`publishArchive:${baseObjectKey(STORE_ROOT, CHAIN_ID)}`);
     });
 
-  // ── the byte plane ────────────────────────────────────────────────────────
-  //
-  // MEASURED DEFECT THESE HOLD. An archive that leaves the container as base64
-  // SSE frames, crosses the owning Durable Object's isolate, and goes back out
-  // to the store through the Workers R2 binding is the defect. On a live
-  // container against a real store that relay moved 3.34 MiB/s at 64 MiB and
-  // 3.64 at 256 MiB, against 23.22 and 39.00 for the same bytes moved by the
-  // container itself — and it was the ONLY arm that got slower as the archive
-  // grew, which is what says the cost is the isolate rather than a constant
-  // overhead.
-  //
-  // THE PORT SURFACE IS THE PROOF. `SnapshotChainPorts` has no entry that can
-  // carry a payload byte in either direction: no stream out, no object in. The
-  // first case below puts both of the deleted ones BACK as refusals, so the
-  // property is a postcondition of a real commit rather than an argument about
-  // an interface; the rest assert the mechanism that replaced them.
+  // `SnapshotChainPorts` carries no payload byte in either direction: a relay through the
+  // isolate slows as the archive grows. The first case restores both removed ports as refusals.
 
   test('a commit lands with every payload-carrying port wired to REFUSE', async () => {
-    // The two entries the relay used, restored as throws. A strategy that still
-    // reached for either — a stream out of the container, or an object into the
-    // store from this side — fails here with the sentence it was refused with.
-    // This commits because nothing on this side is on the byte path.
     const record = harness({ state: chainState(), mounts: MOUNTED });
 
     const refusing = Object.assign(record.ports, {
@@ -2517,8 +2046,6 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
     expect(outcome.kind).toBe('committed');
     expect(outcome.movedBytes).toBe(DELTA_BYTES);
-    // It moved the bytes the way it now moves them: the container copied the
-    // archive onto a writable mount, and this side read the store's metadata.
     expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
     expect(record.calls).toContain(`objectFacts:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
   });
@@ -2528,32 +2055,18 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const record = harness({ state: chainState(), mounts: MOUNTED });
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
 
-      // ONE MOUNT, ONE SETTING, ONE MOUNT POINT: the chain's subtree, at
-      // /backups, held writable for the container's life — its registration
-      // is what routes the egress PUT, and its reads serve the layers. A
-      // second path mounted writable for one publication cannot work: the
-      // SDK refuses one binding mounted twice under different settings,
-      // measured live on the second checkpoint after a wake (runs
-      // e2e20260902032038, e2e20260902032318).
+      // One writable mount of the chain's subtree at /backups, held for the container's life: the SDK
+      // refuses one binding mounted twice under different settings, so no per-publication mount.
       expect(record.calls).toContain(`mountStore:${storeMountOf(record.calls)}`);
-      // The archive went in through that mount's egress host, under the key
-      // the record names — ONE object attempt, not s3fs's three.
       expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
       expect(record.objects.get(deltaObjectKey(STORE_ROOT, CHAIN_ID))).toBe(DELTA_BYTES);
-      // And the ONLY thing this side learned about it is metadata.
       expect(record.calls).toContain(`objectFacts:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
     });
 
   test('the upload is verified through the held mount\'s registration, before the record',
     async () => {
-      // The one way this step could lose committed data: a record that names
-      // an object the store never fully took. The publisher's own HEAD after
-      // the PUT is the first check — the egress host answers it, so bytes
-      // that did not land are a non-zero exit HERE — and `objectFacts` is
-      // the second, read from the store rather than the mount. The mount is
-      // still the one the box HOLDS: its registration is what routes
-      // `r2.internal`, and releasing it is impossible while squashfuse reads
-      // layer files through it, which is why the one-mount design exists.
+      // A record must never name an object the store did not fully take: the publisher's HEAD
+      // fails the PUT, then `objectFacts` rechecks the store; the held mount routes `r2.internal`.
       const record = harness({ state: chainState(), mounts: MOUNTED });
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
 
@@ -2567,8 +2080,6 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // The store is asked what it holds only after the upload answered, so
       // the answer describes the object rather than a filesystem's view of it.
       expect(read).toBeLessThan(wrote);
-      // THE EGRESS COMMAND IS THE PUBLISHER: `bun <runtime>/devbox-publish.mjs
-      // <archive> <object-url> <partBytes>`, not a `dd` through the mount.
       const store = storeMountOf(record.calls);
 
       const command = publishCommand({
@@ -2579,21 +2090,15 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(command).toContain('devbox-publish.mjs');
       expect(command).toContain(`'http://r2.internal/BACKUP_BUCKET/${CHAIN_ID}/data.sqsh'`);
       expect(command).toContain('/stage/layer.sqsh');
-      // And no byte goes through the mount path any more.
       expect(command).not.toContain('conv=fsync');
-      // AND THE MOUNT IS STILL HELD: nothing releases the store path once it
-      // is taken, because the attach's layers are reading through it and the
-      // publication's URL only resolves while its registration stands. A
-      // release BEFORE the mount is the registry entry a replaced container
-      // left.
+      // The store mount stays held: the attach's layers read through it and the publication URL
+      // resolves only while its registration stands; a release before the mount is a stale entry.
       expect(record.calls.lastIndexOf(`unmountStore:${store}`)).toBeLessThan(mounted);
     });
 
   test('a checkpoint publishes in exactly ONE object attempt', async () => {
-    // The C3 contract the live meter enforces: `put` attempts on the box's
-    // keys plus one multipart upload. Under the s3fs `dd` shape this is three
-    // (marker, empty, payload — `b20260914045438`); under the egress PUT it
-    // is one. The fixture's `attempts` row is what the meter counts.
+    // The fixture's `attempts` row is what the live meter counts: `put` attempts on the
+    // box's keys plus one multipart upload (D15).
     const record = harness({ state: chainState(), mounts: MOUNTED });
     expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
 
@@ -2601,10 +2106,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
     expect(record.attempts).toEqual([{ operation: 'put', key, bytes: DELTA_BYTES }]);
 
-    // THE CONTROL, in the same fake: the s3fs shape the product no longer
-    // issues is still answerable, and the meter-equivalent row has to see
-    // its three attempts — a fixture that could not see three could not
-    // prove one.
+    // Control: the fake still answers the s3fs `dd` shape and must count its three attempts;
+    // a fixture that could not see three could not prove one.
     const store = storeMountOf(record.calls);
     await record.ports.exec(
       `mkdir -p '${store}/${CHAIN_ID}'; dd if='/stage/layer.sqsh' of='${store}/${CHAIN_ID}/data.sqsh' `
@@ -2621,22 +2124,17 @@ describe('checkpoint — gated on real change, proportional to it', () => {
   });
 
   test('a writable mount is released even when the publication fails', async () => {
-    // A mount left behind is refused by the SDK's own registry on the next
-    // publication — one binding cannot be mounted twice under different access —
-    // so a failure that kept it would turn one bad checkpoint into every later
-    // one.
+    // The SDK registry refuses a binding mounted twice under different access, so a leaked
+    // mount would make every later publication fail after one bad checkpoint.
     const record = harness({ state: chainState(), mounts: MOUNTED, failPublish: true });
     expect((await checkpointOf(record, 'tick')).kind).toBe('failed');
-    // Nothing landed, and the record still describes what the box can attach.
     expect(record.objects.get(deltaObjectKey(STORE_ROOT, CHAIN_ID))).toBe(DELTA_BYTES);
     expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, DELTA_BYTES));
   });
 
   test('a flush the store did not fully take is REFUSED, not recorded', async () => {
-    // The one failure a mount publication has that a relay did not: the copy
-    // reports what it wrote, the store reports what it holds, and a difference
-    // between two readings of one finished upload is a lost tail. Recording it
-    // would commit a head over an archive that cannot mount.
+    // The copy's written count and the store's held count for one finished upload differ only
+    // on a lost tail; recording it would commit a head over an archive that cannot mount.
     const record = harness({
       state: chainState(),
       mounts: MOUNTED,
@@ -2648,20 +2146,13 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     expect(outcome.kind).toBe('failed');
     expect(outcome.reason).toContain('where 512 were sent');
     expect(outcome.reason).toContain('700000');
-    // The record still names the generation the box can still attach from.
     expect(record.state?.rev).toBe(1);
     expect(record.state?.lastFailure?.reason).toContain('the store reports');
   });
 
   test('a publication the store has no object for is REFUSED, not recorded', async () => {
-    // The other half of the cross-check, and the reason the store is asked at
-    // all. s3fs answers a flush from its own view of the mount, so a clean exit
-    // is not evidence the store took anything — and a record written on that
-    // exit alone would name an object no attach can ever find.
-    //
-    // A FIRST BASE, because that is where the absence is observable: a fresh
-    // generation's prefix holds nothing, so a publication that lands nothing
-    // leaves the store with nothing to answer for the key.
+    // s3fs answers a flush from its own view of the mount, so a clean exit proves nothing stored.
+    // A first base is used because its fresh prefix makes an absent object observable.
     const record = harness({ state: null, mounts: MOUNTED, publishLandsNothing: true });
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('failed');
@@ -2670,10 +2161,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
   });
 
   test('an attach moves no payload either: mounts and metadata, nothing else', async () => {
-    // THE OTHER DIRECTION. Reading a chain back was already container-side —
-    // squashfuse parses the archive through the store mount and the bytes arrive
-    // when something touches them — and this is what keeps it that way. An
-    // attach that published, copied or streamed anything would show up here.
+    // squashfuse reads the archive through the store mount, so bytes arrive only on access (D2).
     const calls: string[] = [];
 
     const record = harness({
@@ -2685,23 +2173,14 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     expect((await attachOf(record)).kind).toBe('attached');
     expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
     expect(record.calls.filter(call => call.startsWith('exec:cp'))).toEqual([]);
-    // What it DID ask the store for: metadata, and only metadata.
     expect(record.calls).toContain(`objectFacts:${baseObjectKey(STORE_ROOT, CHAIN_ID)}`);
-    // The layers were mounted, which is where the bytes come from.
     expect(record.calls.filter(call => call.startsWith('mountLayer'))).toHaveLength(2);
   });
 
   test('ONE MOUNT: every mount of the binding is the chain subtree at /backups',
     async () => {
-      // THE RULE THE SDK ITSELF ENFORCES, asserted rather than remembered: one
-      // binding admits one mount, at one prefix, in one setting, and the
-      // deployed consequence of violating it was the second checkpoint after a
-      // wake refusing with `R2 binding "BACKUP_BUCKET" is already mounted at
-      // /backups with a different readOnly setting` (runs e2e20260902032038 and
-      // e2e20260902032318). So both roles — the attach that reads its layers
-      // through it and the checkpoint that writes its archive through it — use
-      // the same mount, and what keeps the archives out of the attach's `rm -rf`
-      // is that the reset lists its own layout paths and excludes this one.
+      // The SDK admits one mount per binding (one prefix, one readOnly setting), so attach and
+      // checkpoint share it; the attach's `rm -rf` lists its own layout paths and excludes it.
       const checkpointCalls: string[] = [];
 
       const committed = harness({
@@ -2723,12 +2202,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         .filter(call => call.startsWith('mountStore:'));
 
       expect(mounts.length).toBeGreaterThan(0);
-      // THE ONE MOUNT POINT, in both roles. The fake's own registry holds the
-      // rule — a second mount with a different setting or prefix is refused
-      // with the SDK's own sentence — so these assertions are the reader's view
-      // of a constraint the fake would have failed on.
-      // THE ONE MOUNT POINT, read off the calls rather than restated: every
-      // mount either role made names the same path.
+      // The fake refuses a second mount with a different setting or prefix, with the SDK's own
+      // sentence; every mount in either role must name the same path.
       const at = [...new Set(mounts.map((mount) => mount.split(':')[1]))];
       expect(at).toHaveLength(1);
       // And a wake that re-attaches releases the store mount first, so a new
@@ -2752,17 +2227,15 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     const put = record.calls.indexOf(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
     const wrote = record.calls.findIndex(call => call.startsWith('writeState:2:'));
     const cleaned = record.calls.lastIndexOf('exec:rm');
-    // PUT, then record, then clean up. A crash between the PUT and the record
-    // leaves a complete delta that the next attach adopts; the other order
-    // could delete the only copy of it.
+    // A crash between PUT and record leaves a complete delta that the next attach adopts;
+    // cleaning up before the record could delete its only copy.
     expect(put).toBeLessThan(wrote);
     expect(wrote).toBeLessThan(cleaned);
   });
 
   test('an unchanged CHANGED SET costs nothing, and only an exact match counts', async () => {
-    // The gate compares the upper's own fingerprint against the one recorded at
-    // the last commit, because the upper IS what a delta archives. Asking the
-    // merged mount instead is what let five ticks skip over 400 MiB of npm.
+    // The gate compares the upper's own fingerprint with the one recorded at the last commit,
+    // because the upper is what a delta archives; the merged mount can read unchanged.
     const settled = '7:4096:1700000000';
 
     const record = harness({
@@ -2779,12 +2252,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('RUN abc-3: a workspace that CHANGED never reads as unchanged',
     async () => {
-      // THE DATA-LOSS WINDOW, verbatim from the deployed A/B/C. Five consecutive
-      // chain ticks answered `skipped (work directory is unchanged)` while npm
-      // wrote 400 MiB, and the next workload's first tick then committed 487
-      // MiB of it — the work survived only because a later tick happened to
-      // catch it. The gate had been asking the SDK about the merged
-      // `/workspace` while a delta archives `upperDir`.
+      // The change gate must fingerprint `upperDir`, which a delta archives, not the merged
+      // `/workspace`.
       const settled = '120:4096:1700000000';
 
       const record = harness({
@@ -2793,7 +2262,6 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         now: 10 * INTERVAL_MS,
       });
 
-      // npm lands in the upper. Nothing else about the box changes.
       record.upperMark = '48000:419430400:1700000900';
 
       const outcome = await checkpointOf(record, 'tick');
@@ -2802,16 +2270,12 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         kind: 'committed', reason: undefined,
       });
       expect(record.calls).toContain(`makeSquashfs:${UPPER}:${CHAIN_EXCLUDES.length}`);
-      // And the record now carries what it archived, so the NEXT tick over an
-      // untouched upper is the one that skips.
       expect(record.state?.upperMark).toBe('48000:419430400:1700000900');
     });
 
   test('a tick that CANNOT decide commits rather than skipping', async () => {
-    // "Unreadable" is not "unchanged". If the fingerprint probe fails — the
-    // container is mid-replacement, find is unavailable, the upper is gone —
-    // the honest answer is to archive, because the alternative is the window
-    // above with no evidence that anything was lost.
+    // A failed fingerprint probe (mid-replacement, no `find`, upper gone) means archive, not skip:
+    // "unreadable" is not "unchanged".
     const record = harness({
       state: chainState({ upperMark: '120:4096:1700000000', at: 1 }),
       mounts: MOUNTED,
@@ -2824,8 +2288,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
   });
 
   test('an empty fingerprint is never recorded as a match, so it cannot latch', async () => {
-    // The corollary: a failed probe must not be WRITTEN as the new mark, or the
-    // next failed probe would compare equal to it and skip forever.
+    // A failed probe must not be written as the new mark, or the next failed probe
+    // compares equal to it and skips forever.
     const record = harness({
       state: chainState({ upperMark: '', at: 1 }),
       mounts: MOUNTED,
@@ -2838,11 +2302,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('RUN abc-3: the record carries what LANDED, so the next wake is not refused',
     async () => {
-      // `delta archive is 702791680 bytes, state declares 700387328` — every arm,
-      // every wake refused, no arm measured one. The staged size is taken before
-      // the bytes are read and a file still settling reads short, so the record
-      // described something the store did not hold and the integrity probe
-      // correctly refused every attach afterwards.
+      // The staged size is taken before the bytes are read, and a file still settling reads
+      // short; the fixture's staged and landed sizes differ to model that.
       const record = harness({
         state: chainState({ upperMark: 'stale', at: 1 }),
         mounts: MOUNTED,
@@ -2854,18 +2315,12 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const outcome = await checkpointOf(record, 'tick');
       expect(outcome.kind).toBe('committed');
 
-      // The record agrees with the object, which is the whole point.
       expect(record.state?.delta).toEqual(publishedDeltaLayer(record.state, 702791680));
       expect(record.objects.get(deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state)))).toBe(702791680);
-      // EVERY STATE SIZE COMES FROM A COMPLETED UPLOAD. There are four writers
-      // of a size into the record — the commit's own layer, the extract path's
-      // stored base, and the adoption below — and each one's provenance is an R2
-      // head of a finished object: the publication reads the store back rather
-      // than counting bytes it never saw. None is a mid-write stat, which is the
-      // measurement that read 4096-multiples low on the deployed runs.
+      // Every recorded size comes from an R2 head of a finished object, never a mid-write stat,
+      // which reads low by whole 4096-byte blocks.
       expect(record.state?.delta?.bytes).toBe(702791680);
       expect(record.state?.delta?.bytes).not.toBe(700387328);
-      // And the consequence that was actually measured: the wake attaches.
       const wokenCalls: string[] = [];
 
       const woken = harness({
@@ -2880,12 +2335,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('RUN abc-4: an archive that settles larger than ANY mid-write stat still attaches',
     async () => {
-      // Main's extension of the consequence test, and the sharpest form of it:
-      // the staged measurement is short by whole 4096-blocks — 83 of them, the
-      // smallest real instance — and the upload lands the true size. The record
-      // must carry the landed number, and the wake that reads it must attach
-      // rather than refuse. A record wired to the stat instead of the upload
-      // fails here with the exact production message.
+      // The staged stat is short by whole 4096-byte blocks; the record must carry the landed size,
+      // not the stat, or the wake refuses to attach.
       const staged = 506494976;
       const landed = 506834944;
       expect((landed - staged) % 4096).toBe(0);
@@ -2914,11 +2365,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('RUN abc-3: an archiver that claims success and leaves no file FAILS by name',
     async () => {
-      // `staged archive /var/tmp/devbox/stage/layer.sqsh has no size; the
-      // archiver did not land`, three times in one run. mksquashfs reported exit
-      // 0 and a separate stat exec found nothing — a container replaced between
-      // two RPCs. Build and measure are one command now, so a success with no
-      // file is the archiver's own contradiction and is reported as such.
+      // Build and measure run as one command, so exit 0 with no file is the archiver's own
+      // contradiction, not a container replaced between two RPCs.
       const record = harness({
         state: chainState({ upperMark: 'stale', at: 1 }),
         mounts: MOUNTED,
@@ -2929,19 +2377,11 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const outcome = await checkpointOf(record, 'tick');
       expect(outcome.kind).toBe('failed');
       expect(outcome.reason).toContain('mksquashfs reported success');
-      // Nothing was recorded over the delta the chain already holds.
       expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, DELTA_BYTES));
     });
 
   test('a publication failure the stamp cannot record is still a classified failure',
     async () => {
-      // The pre-commit half of the same storage hazard. Nothing was published
-      // here, so the record the caller read is the right one to stamp — but the
-      // stamp is a durable write and can fail exactly as the publication did.
-      // Letting that rejection travel replaced the answer a scheduled callback
-      // needs with a throw, and the throw carried the STORAGE failure rather
-      // than the publication's reason: the caller lost both the classification
-      // and the cause.
       const record = harness({
         state: chainState({ upperMark: 'stale', at: 1 }),
         mounts: MOUNTED,
@@ -2953,15 +2393,11 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const outcome = await checkpointOf(record, 'tick');
 
       expect(outcome.kind).toBe('failed');
-      // THE OPERATION's reason, carrying the container's own words, and not the
-      // durable-storage failure that swallowed it.
       expect(outcome.reason).toContain('PUT answered 500');
       expect(outcome.reason).not.toContain('durable storage unreachable');
       expect(outcome.bytes).toBeUndefined();
-      // Nothing durable moved in either direction: no layer landed, and the
-      // record still describes the generation the box can still attach from.
       expect(record.state).toEqual(chainState({ upperMark: 'stale', at: 1 }));
-      // Both lines are on the console, which is the only record left.
+      // Both lines are on the console, the only record left once durable storage is unreachable.
       expect(record.calls.some(call => call.startsWith(`log:${DEVBOX_WORKDIR} checkpoint failed:`)
         && call.includes('PUT answered 500'))).toBe(true);
       expect(record.calls).toContain(
@@ -3006,12 +2442,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
   });
 
   test('an unchanged skip whose watermark cannot be advanced still skips', async () => {
-    // The watermark is ADVISORY, so a rejection cannot change the answer. Not
-    // advancing it makes the next check ask about a wider window, which can only
-    // over-report change, and over-reporting archives — so nothing is at risk
-    // and `failed` would be a false claim about work. It would also refuse the
-    // quiesce this may be running under, holding open a box whose work
-    // directory has nothing to archive.
+    // The watermark is advisory: an unadvanced one only widens the next window and over-reports,
+    // so `failed` would misreport work and refuse a quiesce with nothing to archive.
     const record = harness({
       state: chainState({ mode: 'extract', delta: undefined, changeVersion: 'v1' }),
       change: { status: 'unchanged', version: 'v2' },
@@ -3022,8 +2454,6 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
     expect(outcome.kind).toBe('skipped');
     expect(outcome.reason).toBe('work directory is unchanged');
-    // The write was attempted and changed nothing, so the next check is still
-    // relative to the version the box already held.
     expect(record.calls.some(call => call.endsWith(':rejected'))).toBe(true);
     expect(record.state?.changeVersion).toBe('v1');
     expect(record.calls.some(call => call.startsWith('log:')
@@ -3058,10 +2488,6 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('DEPLOYED DEFECT: a refused mount where extraction is not permitted FAILS',
     async () => {
-      // Measured on a deployed probe: a failed mount was converted into
-      // extraction, the box archived a base, and every write after it was lost.
-      // The loss surfaced two phases later as "delta content lost across
-      // restore". A failure has to be a failure, carrying the mount's reason.
       const record = harness({
         state: null, refuseStoreMount: true, allowExtraction: false,
       });
@@ -3070,14 +2496,13 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(outcome.kind).toBe('failed');
       expect(outcome.reason).toContain('extraction is not permitted');
       expect(outcome.reason).toContain('fuse: device not found');
-      // And nothing was archived, so no record can claim otherwise.
       expect(record.state).toBeNull();
     });
 
   test('DEPLOYED DEFECT: an extract record is refused where extraction is not permitted',
     async () => {
-      // Such a record can only have come from a host that allowed it. Serving it
-      // on a host that does not would hide the silent fallback a second time.
+      // Such a record comes only from a host that allowed extraction; serving it on a host that
+      // does not would hide the silent fallback.
       const record = harness({
         state: chainState({
           mode: 'extract', base: { id: EXTRACT_ID, bytes: DELTA_BYTES }, delta: undefined,
@@ -3094,12 +2519,9 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const outcome = await checkpointOf(record, 'tick');
       expect(outcome.kind).toBe('committed');
       expect(record.state?.mode).toBe('extract');
-      // The mount was PROVEN, not predicted: the proof ran before anything was
-      // written. Matched on the call's prefix because the chain id is minted
-      // inside the commit and then discarded when the degrade happens.
+      // Matched on the call's prefix: the chain id is minted inside the commit and discarded
+      // when the degrade happens.
       expect(record.calls.some(call => call.startsWith('mountStore:'))).toBe(true);
-      // And the reason travels: a degrade nobody can explain is a degrade
-      // nobody notices.
       expect(record.calls.some(call =>
         call.startsWith('log:extraction is permitted')
         && call.includes('fuse: device not found'))).toBe(true);
@@ -3116,15 +2538,13 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('committed');
     expect(record.calls.findIndex(call => call.startsWith('writeState:'))).toBeGreaterThan(-1);
-    // ONE POLICY FOR BOTH MODES. The superseded archive is the fallback now, so
-    // nothing is deleted here and a crash leaves two archives, never zero.
+    // The superseded archive becomes the fallback, so nothing is deleted: a crash leaves two
+    // archives, never zero.
     expect(record.state?.fallback?.base).toEqual(baseLayer(EXTRACT_ID, 1));
     expect(record.calls.filter(call => call.startsWith('deleteObjects:'))).toEqual([]);
     expect(record.objects.has(baseObjectKey(STORE_ROOT, EXTRACT_ID))).toBe(true);
   });
 });
-
-// ── discard ─────────────────────────────────────────────────────────────────
 
 describe('discard — objects before the pointer', () => {
   test('a committed base whose reseat is busy is a named checkpoint refusal', async () => {
@@ -3165,11 +2585,8 @@ describe('discard — objects before the pointer', () => {
   });
 });
 
-// ── the denominator ─────────────────────────────────────────────────────────
-//
-// The suite's own coverage of the implementation's enumerations. Adding an
-// outcome kind without exercising it here turns these red, so the suite cannot
-// quietly stop covering a decision it exists to guard.
+// Fails when an outcome kind is added but never exercised above, so coverage of each
+// decision the suite guards cannot silently lapse.
 
 describe('denominator', () => {
   test('every attach outcome kind was produced above', () => {
@@ -3181,14 +2598,10 @@ describe('denominator', () => {
   });
 });
 
-// ── accepted review findings ────────────────────────────────────────────────
-
 describe('discard sweeps every generation the record still names', () => {
   test('orphaned generations go with the referenced one, before clearState', async () => {
-    // A rebase crash between the state flip and the sweep leaves ids in
-    // `orphans`. clearState erases the only record naming them and
-    // `backups/<uuid>/` is shared by every box — so a discard that ignored the
-    // list leaked those objects permanently.
+    // A rebase crash between state flip and sweep leaves ids in `orphans`; clearState erases the
+    // only record naming them and `backups/<uuid>/` is shared, so discard must sweep them first.
     const stranded = 'a1b2c3d4-0000-4000-8000-0000000000ff';
     const record = harness({ state: chainState({ orphans: [stranded] }) });
 
@@ -3231,8 +2644,8 @@ describe('attachChain resets only its OWN directories', () => {
 
     const resets = raw.filter(command => command.startsWith('rm -rf'));
     expect(resets.length).toBeGreaterThan(0);
-    // Against the path this attach really mounted — read back from its own
-    // call — rather than a path restated beside the strategy.
+    // Checks against the path this attach actually mounted, read back from its own calls,
+    // not a path restated beside the strategy.
     const store = storeMountOf(record.calls);
 
     for (const command of resets) {
@@ -3253,7 +2666,6 @@ describe('attachChain resets only its OWN directories', () => {
     };
 
     await expect(attachOf(record)).rejects.toThrow(/resetting directories/);
-    // And nothing ran on top of an unreset container: no layer was mounted.
     expect(calls.filter(call => call.startsWith('mountLayer'))).toEqual([]);
   });
 });
@@ -3261,7 +2673,6 @@ describe('attachChain resets only its OWN directories', () => {
 /** The whole second both fingerprint marks land in. */
 const T_SAME = 1_700_000_000;
 
-/** The skip gate's own fingerprint for `dir`, read through the real command. */
 function fingerprintOf(dir: string): string {
   const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
 
@@ -3286,9 +2697,6 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
   });
 
   test('a same-size same-second rewrite changes the mark', () => {
-    // THE ORIGINAL RED PROOF. The old `%d` format truncated both marks below
-    // to the same whole second and matched — the narrow unchanged-lie window
-    // this gate exists to keep shut.
     const dir = devboxScratchDir('devbox-fingerprint');
 
     const file = join(dir, 'w.txt');
@@ -3304,11 +2712,8 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
   });
 
   test('a same-path rewrite with the mtime RESTORED still changes the mark', () => {
-    // THE METADATA COLLISION Main named. Same path, same size, and the writer
-    // restores the old mtime after the write — every field the summary
-    // fingerprint hashed agreed, so the gate skipped forever while content
-    // drifted. The write itself moved ctime, which the per-path record hashes;
-    // only an mtime restoration cannot undo that.
+    // The write moves ctime, which the per-path record hashes; restoring mtime cannot undo it,
+    // so a same-size rewrite with the old mtime still changes the fingerprint.
     const dir = devboxScratchDir('devbox-fingerprint-restored-mtime');
 
     const file = join(dir, 'w.txt');
@@ -3343,10 +2748,7 @@ describe('container replacement during chain attach', () => {
   });
 });
 
-// ── KINU-014: the archive carries the repository ─────────────────────────────
-
 describe('archive scope keeps what no build can rebuild', () => {
-  /** The whole archiver command one commit really ran for `source`. */
   function archiverCommand(commands: readonly string[], source: string): string {
     const line = commands.find(command => command.includes(`mksquashfs '${source}'`));
 
@@ -3355,7 +2757,6 @@ describe('archive scope keeps what no build can rebuild', () => {
     return line;
   }
 
-  /** The archiver command one commit ran for its own archive. */
   async function commandFor(state: ChainState | null, source: string): Promise<string> {
     const record = harness({ state, mounts: state === null ? NOT_MOUNTED : MOUNTED });
     const raw: string[] = [];
@@ -3373,16 +2774,8 @@ describe('archive scope keeps what no build can rebuild', () => {
 
   test('a commit that was never pushed survives, because no archive drops .git',
     async () => {
-      // MEASURED, not argued: an anchored `.git` exclude dropped a top-level
-      // `.git` whether it was the repository's own directory or a linked
-      // worktree's pointer FILE. So an agent that committed without pushing
-      // restored the work with no history to explain it, and a worktree restored
-      // as a tree git no longer recognised as a repository. Nothing under `.git`
-      // is reproducible from a lockfile or a build, which is the only test the
-      // exclude list applies.
-      //
-      // Both archives are checked: the base is the whole tree, and the delta is
-      // the changed set that carries the repository's later commits.
+      // No pattern may drop `.git` (repo dir or worktree pointer FILE): nothing under it is reproducible.
+      // Checks both archives: the base is the whole tree; the delta carries later commits.
       for (const command of [
         await commandFor(null, DEVBOX_WORKDIR),
         await commandFor(chainState(), UPPER),
@@ -3394,23 +2787,16 @@ describe('archive scope keeps what no build can rebuild', () => {
           expect(pattern.startsWith('.git')).toBe(false);
         }
 
-        // The policy travels as a FILE with wildcards enabled, which is what
-        // makes a glob a glob and a pattern match at any depth. Nothing is
-        // spelled as an argument, so no pattern can reach the shell as syntax.
+        // The policy goes as a `-wildcards -ef` file so globs match at any depth; no pattern
+        // is passed as an argument, so none can reach the shell as syntax.
         expect(command).toContain('-wildcards -ef ');
         expect(command).not.toContain(" -e '");
       }
     });
 });
 
-// ── the real archiver ───────────────────────────────────────────────────────
-//
-// Everything above asks what command the strategy builds. These run it. The
-// exclude policy is only as good as what mksquashfs does with it, and this file
-// has twice recorded a policy that meant something different from what its
-// comment claimed: `*.log` matched nothing without `-wildcards`, and an
-// anchored pattern dropped `<source>/node_modules` while keeping
-// `<source>/sub/deep/node_modules`. A fake shell cannot catch either.
+// These run the real mksquashfs: the exclude policy means only what the archiver does
+// with it, which a fake shell cannot check.
 
 /** One byte size per fixture path, so a byte total identifies its files. */
 const FIXTURE = new Map<string, number>([
@@ -3445,8 +2831,7 @@ function fixtureTree(label: string): string {
   return dir;
 }
 
-/** Run the strategy's OWN archiver command, and answer what the archive holds
- *  and how many bytes of source it took. */
+/** Runs the strategy's own archiver command, so the test exercises the production excludes. */
 function archiveOf(source: string, excludes: readonly string[]) {
   const archivePath = join(source, '..', `${basename(source)}.sqsh`);
   rmSync(archivePath, { force: true });
@@ -3479,7 +2864,6 @@ function archiveOf(source: string, excludes: readonly string[]) {
   return { entries, bytes };
 }
 
-/** What the staging estimate would require for the same tree and policy. */
 function estimateOf(source: string, excludes: readonly string[]): number {
   const measured = Bun.spawnSync(['sh', '-c', archiveSizeCommand(source, excludes)]);
 
@@ -3502,9 +2886,7 @@ describe('the real archiver applies the policy this file claims', () => {
   });
 
   test('a regenerable tree goes at EVERY depth, not only the top level', () => {
-    // The anchored form kept `sub/deep/node_modules`, `sub/b.log`, `sub/dist`
-    // and `sub/.cache` on every archive this strategy has ever written, and
-    // `a.log` too, because a glob without `-wildcards` matches nothing.
+    // `a.log` is checked too: a glob without `-wildcards` matches nothing.
     const dir = fixtureTree('devbox-archive-depth');
 
     const { entries } = archiveOf(dir, CHAIN_EXCLUDES);
@@ -3518,11 +2900,8 @@ describe('the real archiver applies the policy this file claims', () => {
   });
 
   test('globstar patterns mean what the SDK makes them mean', () => {
-    // The extraction path normalises these before mksquashfs ever sees them, so
-    // the chain path normalises identically: a leading globstar segment is
-    // stripped, an interior one collapses, a trailing one is dropped, and a bare
-    // globstar means nothing at all — if it meant "everything", this archive
-    // would be empty.
+    // The chain path normalises globstars as the extraction path does before mksquashfs.
+    // A bare `**` means nothing; if it meant everything this archive would be empty.
     const dir = fixtureTree('devbox-archive-globstar');
 
     const { entries } = archiveOf(dir, ['**/node_modules', 'dist/**', '**', 'a/**/b']);
@@ -3536,15 +2915,13 @@ describe('the real archiver applies the policy this file claims', () => {
       expect(entries).not.toContain(gone);
     }
 
-    // Nothing this policy does not name is touched.
     expect(entries).toContain('a.log');
     expect(entries).toContain('sub/.cache/x');
   });
 
   test('the extraction options and the direct command are one policy', () => {
-    // Two modes, one question. `chainBackupOptions` spelling the policy itself
-    // while the chain path asks the box for it would obey a box that replaced
-    // the policy in one mode and ignore it in the other.
+    // If `chainBackupOptions` spelled the policy itself, a box that replaced it would be
+    // obeyed in the chain path and ignored in the extraction path.
     const dir = fixtureTree('devbox-archive-parity');
 
     const declared = chainBackupOptions(true, CHAIN_EXCLUDES).excludes ?? [];
@@ -3554,12 +2931,8 @@ describe('the real archiver applies the policy this file claims', () => {
   });
 
   test('the staging estimate measures exactly the bytes the archive takes', () => {
-    // The estimate is the archive's worst case only while the two agree about
-    // which files travel. They did not: the estimate pruned at every depth while
-    // the archive excluded the top level only, so it was UNDER the truth for
-    // exactly the trees that dominate a work directory — and a checkpoint that
-    // underestimates fills the container disk, which is the one failure the
-    // probe exists to prevent.
+    // The estimate is the archive's worst case only while both agree which files travel;
+    // an underestimate lets a checkpoint fill the container disk.
     const dir = fixtureTree('devbox-archive-estimate');
 
     for (const policy of [CHAIN_EXCLUDES, ['**/node_modules', 'dist/**', '**', 'a/**/b'], []]) {
@@ -3568,11 +2941,8 @@ describe('the real archiver applies the policy this file claims', () => {
   });
 });
 
-// ── KINU-015: a restore is never down to one hope ────────────────────────────
-
-/** A record that retains one older generation, which is every record between a
- *  publication that superseded a generation and the attach that proves the new
- *  one. */
+/** A record retaining one older generation: every record between a publication that
+ *  superseded a generation and the attach that proves the new one. */
 function withFallback(over: StateLiteral = {}): ChainState {
   return chainState({
     fallback: { base: { id: FALLBACK_ID, bytes: FALLBACK_BYTES }, delta: undefined },
@@ -3583,21 +2953,8 @@ function withFallback(over: StateLiteral = {}): ChainState {
 describe('the binding has ONE mount for the container\'s life', () => {
   test('checkpoint -> stop -> wake-attach -> checkpoint commits, one mount, one setting',
     async () => {
-      // THE DEPLOYED FAILURE, reproduced as a lifecycle rather than as an
-      // assertion. Runs e2e20260902032038 and e2e20260902032318 both died at
-      // their second checkpoint after a wake, with the SDK's own sentence:
-      // `R2 binding "BACKUP_BUCKET" is already mounted at /backups with a
-      // different readOnly setting`. The wake's attach had mounted the chain
-      // subtree READ-ONLY, could not release it — squashfuse reads each layer's
-      // archive through it — and left the SDK's registry holding the read-only
-      // entry; the publication then asked for the same binding WRITABLE and was
-      // refused.
-      //
-      // The registry AND the container's mount table are both SHARED across the
-      // three harnesses, because neither belongs to the isolate: the SDK keeps
-      // one registry per container, and `/proc/mounts` is the container's own
-      // file. A stop and a wake are two isolates on one container, which is
-      // exactly the sequence that killed the live run.
+      // The SDK mount registry and `/proc/mounts` are shared across harnesses: both belong to the
+      // container, not the isolate, and a stop then wake is two isolates on one container.
       const registry: SdkMountRegistry = {};
       const container: ContainerMounts = {};
       const firstCalls: string[] = [];
@@ -3612,11 +2969,8 @@ describe('the binding has ONE mount for the container\'s life', () => {
 
       expect((await checkpointOf(first, 'tick')).kind).toBe('committed');
 
-      // The stop, then the wake: a fresh isolate on the SAME container, so the
-      // registry still holds whatever the first checkpoint left. The wake's
-      // attach is where a read-only mount of the same binding would enter the
-      // registry under a two-setting design; here it takes the same writable
-      // store mount the publication uses.
+      // A fresh isolate on the SAME container: the registry keeps what the first checkpoint left,
+      // so the wake's attach must take the same writable store mount the publication uses.
       const wakeCalls: string[] = [];
 
       const woken = harness({
@@ -3628,10 +2982,8 @@ describe('the binding has ONE mount for the container\'s life', () => {
       woken.objects.set(deltaObjectKey(STORE_ROOT, publishedDeltaId(first.state)), DELTA_BYTES);
       expect((await attachOf(woken)).kind).toBe('attached');
 
-      // THE SECOND CHECKPOINT, and it commits. Under the two-setting design it
-      // is refused by the registry with the SDK's own sentence. Its upper is a
-      // DIFFERENT fingerprint from the one the first commit recorded, so there
-      // is a delta to publish rather than a skip.
+      // `upperMark` differs from the fingerprint the first commit recorded, so there is a delta
+      // to publish rather than a skip.
       const secondCalls: string[] = [];
 
       const second = harness({
@@ -3645,29 +2997,18 @@ describe('the binding has ONE mount for the container\'s life', () => {
 
       expect((await checkpointOf(second, 'tick')).kind).toBe('committed');
 
-      // AND EVERY MOUNT IS THE ONE MOUNT: the chain's subtree, at the one mount
-      // point, in the one setting — across the checkpoint that wrote a base, the
-      // attach that read it back, and the checkpoint that wrote a delta after
-      // the wake.
       const one = [...new Set([...firstCalls, ...wakeCalls, ...secondCalls]
         .filter(call => call.startsWith('mountStore:'))
         .map(call => call.split(':')[1]))];
 
       expect(one).toHaveLength(1);
-      // Both publications landed, and the wake's attach proved the first one.
       expect(second.objects.get(deltaObjectKey(STORE_ROOT, publishedDeltaId(second.state)))).toBe(DELTA_BYTES);
     });
 
   test('a REBASE across a container life mounts nothing new, and the fold commits',
     async () => {
-      // THE LATENT HAZARD THE PER-BOX ROOT CLOSES. A rebase mints a NEW
-      // generation id while the old generation's layers are still mounted as the
-      // live overlay's lowers — squashfuse reads them through the store mount, so
-      // that mount cannot be released. Under a per-GENERATION prefix the fold's
-      // publication needed a different subtree at the same path, which the SDK
-      // refuses ('already mounted at … with a different prefix'), and the box
-      // could never collapse its chain again. Under the box's own root the fold
-      // writes through the mount it already holds.
+      // A rebase keeps the old generation's layers mounted as overlay lowers, so the fold must
+      // publish through the box-root store mount; the SDK refuses a second prefix at that path.
       const registry: SdkMountRegistry = {};
       const container: ContainerMounts = {};
       const wakeCalls: string[] = [];
@@ -3682,17 +3023,12 @@ describe('the binding has ONE mount for the container\'s life', () => {
       expect((await attachOf(woken)).kind).toBe('attached');
       const mountsAfterWake = wakeCalls.filter(call => call.startsWith('mountStore:')).length;
 
-      // The upper is NOT the whole changed set — the delta is a layer — so this
-      // commit collapses the chain onto a fresh generation.
       const foldCalls: string[] = [];
 
       const fold = harness({
         state: woken.state,
-        // The composed shape the wake left, at the paths THAT attach chose —
-        // read back from its own calls rather than restated here, so the fold
-        // cannot be handed a mount line the strategy disagrees with. The layer
-        // paths are what make the upper less than the whole changed set and
-        // force the collapse.
+        // Mount paths are read back from the wake's own calls, so the fold never gets a mount line
+        // the strategy disagrees with.
         mounts: composedMounts({
           chainId: CHAIN_ID,
           store: storeMountOf(wakeCalls),
@@ -3708,23 +3044,17 @@ describe('the binding has ONE mount for the container\'s life', () => {
       const folded = await checkpointOf(fold, 'quiesce');
 
       expect(folded.kind).toBe('committed');
-      // A FRESH generation, published through the mount the wake already held.
       expect(fold.state?.base.id).not.toBe(CHAIN_ID);
       expect(foldCalls.filter(call => call.startsWith('mountStore:'))).toEqual([]);
       expect(mountsAfterWake).toBe(1);
-      // And the registry still holds exactly the box's root, unchanged by a
-      // generation that did not exist when it was mounted.
       expect(registry.held).toEqual({ prefix: `${STORE_ROOT}/`, readOnly: false });
       expect(fold.objects.has(baseObjectKey(STORE_ROOT, publishedState(fold).base.id))).toBe(true);
     });
 
   test('a generation that changes releases the one mount before the next takes it',
     async () => {
-      // The other half of one-mount: a NEW chain id needs a different prefix,
-      // and the SDK refuses a second mount of a binding at a different prefix.
-      // So the attach that changes generation releases the mount FIRST — the
-      // call is unconditional, on a path nothing holds, which the product port
-      // survives when there is nothing to release.
+      // The SDK refuses a second mount of a binding at a different prefix, so a generation change
+      // unmounts first, unconditionally; the product port survives an unmount of nothing held.
       const registry: SdkMountRegistry = {};
       const firstCalls: string[] = [];
 
@@ -3754,10 +3084,8 @@ describe('the binding has ONE mount for the container\'s life', () => {
 describe('the generation lifecycle, against ONE box', () => {
   test('a publication retains, the next start proves, and only then does the old '
     + 'generation go', async () => {
-    // The whole cycle in order, which is the only place the invariant is
-    // visible: between a publication and the start that proves it the box holds
-    // TWO generations, and it drops to one only when that one has been served.
-    // A restore is therefore never down to a single unproven copy.
+    // Between a publication and the start that proves it the box holds two generations,
+    // so a restore is never down to a single unproven copy.
     let attached = true;
 
     const record = harness({
@@ -3770,8 +3098,8 @@ describe('the generation lifecycle, against ONE box', () => {
 
     const inner = record.ports.exec;
     record.ports.exec = async (command) => {
-      // The overlay lands when the attach really mounts one, so the
-      // postcondition reads a world this box changed.
+      // Mount state flips only when the attach runs the overlay mount, so the postcondition
+      // observes a change this attach made.
       if (command.includes('fuse-overlayfs -o lowerdir=')) attached = true;
 
       return await inner(command);
@@ -3779,15 +3107,14 @@ describe('the generation lifecycle, against ONE box', () => {
 
     const storage = snapshotChainStorage(record.ports);
 
-    // The stop collapses the chain onto a fresh generation and keeps the old one.
     expect((await storage.checkpoint('quiesce')).kind).toBe('committed');
     const rebased = publishedState(record).base.id;
     expect(rebased).not.toBe(CHAIN_ID);
     expect(record.state?.fallback?.base.id).toBe(CHAIN_ID);
     expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
 
-    // The container is replaced, so the next start attaches for real. THAT is
-    // the proof, and it is what retires the fallback — named, not deleted.
+    // `attached = false` models a replaced container, so the next start attaches for real;
+    // only that real attach retires the fallback, which becomes an orphan rather than deleted.
     attached = false;
     expect((await storage.attach()).kind).toBe('attached');
     expect(record.state?.base.id).toBe(rebased);
@@ -3795,13 +3122,10 @@ describe('the generation lifecycle, against ONE box', () => {
     expect(record.state?.orphans).toEqual([CHAIN_ID]);
     expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
 
-    // The next publication is what finally deletes it, through the sweep that
-    // has always run there.
     record.upperMark = 'restarted-and-wrote';
     expect((await storage.checkpoint('quiesce')).kind).toBe('committed');
     expect(record.state?.orphans).toBeUndefined();
     expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(false);
-    // One generation left, and it is the one an attach has served.
     expect(record.state?.base.id).toBe(rebased);
     expect(record.state?.fallback).toBeUndefined();
     expect(record.objects.has(baseObjectKey(STORE_ROOT, rebased))).toBe(true);
@@ -3826,8 +3150,8 @@ describe('a legacy delta publication carries its fallback evidence', () => {
 
   const DELTA_PROBE_FAILURES = ['upper-probe-failed', 'upper-empty', 'whiteout-probe-failed', 'base-probe-failed', 'block-hash-failed', 'stage-failed'] as const;
 
-  /** What `# devbox-probe-v1` answers under `reason`: the two upper reasons are
-   *  the refusal itself, and every other reason reads a well-formed upper. */
+  /** The two upper reasons are the refusal itself; every other reason needs a well-formed upper
+   *  so its failure happens at a later probe. */
   function upperProbeReply(reason: (typeof DELTA_PROBE_FAILURES)[number], encoded: string): string {
     if (reason === 'upper-probe-failed') return '1 failed';
 
@@ -3876,10 +3200,8 @@ describe('a legacy delta publication carries its fallback evidence', () => {
 
 describe('the retained fallback', () => {
   test('is bounded by the two roles, not by how many publications happen', () => {
-    // A publication with an empty slot retains its outgoing generation, because
-    // an attach proved it. Every publication after it with no attach in between
-    // orphans its OWN outgoing generation instead, so the proven one is never
-    // the one evicted and the record never names a third.
+    // An empty slot retains the outgoing (attach-proven) generation; later publications with no
+    // attach between orphan their own outgoing one, so the proven one is never evicted.
     let state = chainState();
     const retained: string[] = [];
 
@@ -3894,18 +3216,15 @@ describe('the retained fallback', () => {
       retained.push(retainedFallback(state).base.id);
     }
 
-    // The first outgoing generation is the proven one, and it is still the
-    // slot's occupant five publications later.
     expect(retained).toEqual([CHAIN_ID, CHAIN_ID, CHAIN_ID, CHAIN_ID, CHAIN_ID]);
-    // Everything else is named for deletion rather than retained, so storage is
-    // bounded by the roles and the sweep can still find every id.
+    // Non-retained generations are listed as orphans, not dropped, so storage stays bounded
+    // by the roles and the sweep can still find every id.
     expect(state.orphans).toHaveLength(4);
   });
 
   test('does not move until the pointer that moves it is durable', async () => {
-    // The roles move in the SAME write as the pointer, so a publication whose
-    // record cannot be written moves neither: the box still names the generation
-    // it can still attach from, and the slot is exactly as it was.
+    // The roles move in the same write as the pointer, so a publication whose record cannot be
+    // written moves neither: the box still names the generation it can attach from.
     const record = harness({
       state: chainState({
         base: { id: CHAIN_ID, bytes: 100 }, delta: { bytes: 4_000 }, at: 1,
@@ -3922,7 +3241,6 @@ describe('the retained fallback', () => {
     expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, 4_000));
     expect(record.state?.fallback).toBeUndefined();
     expect(record.state?.orphans).toBeUndefined();
-    // And nothing was deleted on the way out.
     expect(record.calls.filter(call => call.startsWith('deleteObjects'))).toEqual([]);
   });
 
@@ -3933,7 +3251,7 @@ describe('the retained fallback', () => {
     expect((await attachOf(record)).kind).toBe('attached');
 
     expect(record.state?.fallback).toBeUndefined();
-    // NAMED, NOT DELETED. An attach publishes nothing, so it deletes nothing:
+    // An attach publishes nothing, so it deletes nothing: the fallback is only named an orphan;
     // the sweep belongs to the next commit and is re-runnable.
     expect(record.state?.orphans).toEqual([FALLBACK_ID]);
     expect(record.calls.filter(call => call.startsWith('deleteObjects'))).toEqual([]);
@@ -3941,9 +3259,8 @@ describe('the retained fallback', () => {
   });
 
   test('survives an already-attached container, which proves nothing', async () => {
-    // The overlay may have been mounted from the generation a later rebase
-    // superseded, so a mount that is already up says nothing about what the
-    // record names now.
+    // A mount already up may come from a generation a later rebase superseded, so it proves
+    // nothing about what the record names now.
     const record = harness({ state: withFallback(), mounts: MOUNTED });
 
     expect((await attachOf(record)).kind).toBe('already-attached');
@@ -3953,9 +3270,8 @@ describe('the retained fallback', () => {
   });
 
   test('is not spent on a host that cannot mount the store at all', async () => {
-    // A host with no FUSE says nothing about any generation's bytes. Trying the
-    // fallback there would fail identically, cost the record a promotion, and
-    // bury the platform's own reason under a recovery that never had a chance.
+    // A host with no FUSE says nothing about any generation's bytes: the fallback would fail
+    // identically, spend the record's promotion, and bury the platform's own reason.
     const record = harness({ state: withFallback(), refuseStoreMount: true });
 
     await expect(attachOf(record)).rejects.toThrow(/could not be mounted here/);
@@ -3971,37 +3287,24 @@ describe('a restore that refuses the newest generation recovers from the older o
     async () => {
       const calls: string[] = [];
       const record = harness({ state: withFallback(), mounts: mountsAfterAttach(calls), calls });
-      // The newest generation's base is gone from the store. Before KINU-015
-      // this was terminal: the record named one generation, the sweep had
-      // already deleted the one before it, and the only advice on offer was to
-      // discard the box's state — which is the whole workspace.
       record.objects.delete(baseObjectKey(STORE_ROOT, CHAIN_ID));
 
       const outcome = await attachOf(record);
 
       expect(outcome.kind).toBe('attached');
       expect(outcome.detail).toContain('recovered');
-      // The FALLBACK's layers are what mounted, and the refused generation's
-      // store subtree was never even mounted.
-      // ONE mount, whichever generation it ends up serving: the recovery
-      // mounts the box's root once and reads the fallback's layers through it.
-      // The path is the strategy's own choice, read back off its call.
+      // Recovery mounts the box's root once and reads the fallback's layers through it;
+      // the mount path is the strategy's own choice, read back off its call.
       const store = storeMountOf(record.calls);
       expect(record.calls.filter(call => call.startsWith('mountStore:')))
         .toEqual([`mountStore:${store}`]);
-      // And what it READ is the fallback's objects, never the refused one's.
       expect(record.calls).toContain(`awaitLayer:${store}/${FALLBACK_ID}/data.sqsh`);
-      // PROMOTED BEFORE SERVED: a crash after the mount must never leave the box
-      // running on these bytes under a record that still names what it refused,
-      // because the next checkpoint would write a delta into a generation whose
-      // base is gone.
+      // The record is promoted before the mount: a crash after mounting must not leave it naming
+      // the refused generation, or the next checkpoint writes a delta onto a missing base.
       const promoted = record.calls.findIndex(call => call.startsWith('writeState:'));
       const mounted = record.calls.findIndex(call => call.startsWith('mountStore:'));
       expect(promoted).toBeGreaterThan(-1);
       expect(promoted).toBeLessThan(mounted);
-      // The record now names the recovered generation, says what it lost on the
-      // failure field it already had, and names the refused generation for the
-      // next sweep — after the replacement was proven, never before.
       const state = publishedState(record);
       expect(state.base).toEqual(baseLayer(FALLBACK_ID, FALLBACK_BYTES));
       expect(state.delta).toBeUndefined();
@@ -4010,19 +3313,16 @@ describe('a restore that refuses the newest generation recovers from the older o
       expect(state.lastFailure?.reason).toContain('missing from the store');
       expect(state.orphans).toEqual([CHAIN_ID]);
       expect(state.fallback).toBeUndefined();
-      // The fingerprint described the changed set of a generation this box is
-      // not serving, and a mark that cannot describe the upper must never be
-      // able to match it, or the next tick would skip the archive.
+      // The mark described an upper this box no longer serves; a stale mark could match it
+      // and the next tick would skip the archive.
       expect(state.upperMark).toBeUndefined();
-      // A RESTORE DELETES NOTHING, whatever it finds.
       expect(record.calls.filter(call => call.startsWith('deleteObjects'))).toEqual([]);
     });
 
   test('a base whose size disagrees is refused rather than adopted, and the fallback serves',
     async () => {
-      // The base is written ONCE and never rewritten, so a size that disagrees
-      // means the object is not the archive the record describes. That asymmetry
-      // with the delta is deliberate — see `probe` — and it stays a refusal.
+      // The base is written once and never rewritten, so a disagreeing size means a different object;
+      // unlike the delta (see `probe`), this stays a refusal.
       const calls: string[] = [];
       const record = harness({ state: withFallback(), mounts: mountsAfterAttach(calls), calls });
       record.objects.set(baseObjectKey(STORE_ROOT, CHAIN_ID), BASE_BYTES + 4_096);
@@ -4036,9 +3336,8 @@ describe('a restore that refuses the newest generation recovers from the older o
 
   test('a base that will not read is that generation own failure, so the fallback serves',
     async () => {
-      // The integrity probe cannot see rot: it compares two sizes. The mount is
-      // the read, so a squashfuse refusal on this generation's own archive is
-      // this generation's refusal — not the host's.
+      // The integrity probe compares only sizes, so the mount is the real read: a squashfuse
+      // refusal on this generation's own archive is its own failure, not the host's.
       const calls: string[] = [];
       const record = harness({ state: withFallback(), mounts: mountsAfterAttach(calls), calls });
       let mounts = 0;
@@ -4074,9 +3373,7 @@ describe('a restore that refuses the newest generation recovers from the older o
     await expect(failure).rejects.toThrow(/was refused at attach/);
     await expect(failure).rejects.toThrow(/cannot be served either/);
 
-    // Both generations are still named and still there. Two broken generations
-    // are two chances for an operator; one broken generation and a tidy bucket
-    // is none.
+    // Neither broken generation is deleted: each remains a recovery chance for an operator.
     expect(record.state?.base.id).toBe(FALLBACK_ID);
     expect(record.state?.fallback?.base.id).toBe(CHAIN_ID);
     expect(record.calls.filter(call => call.startsWith('deleteObjects'))).toEqual([]);
@@ -4093,9 +3390,8 @@ describe('a restore that refuses the newest generation recovers from the older o
     });
 
   test('a promotion that cannot be written serves nothing', async () => {
-    // The promotion is the only durable write a recovery makes before it mounts
-    // anything, so its failure is pre-commit and travels: the box does not
-    // start, and the record still names exactly what it named before.
+    // The promotion is a recovery's only durable write before it mounts anything, so its
+    // failure is pre-commit: the box does not start and the record is unchanged.
     const record = harness({ state: withFallback(), mounts: NOT_MOUNTED, rejectWrites: [1] });
     record.objects.delete(baseObjectKey(STORE_ROOT, CHAIN_ID));
 
@@ -4108,11 +3404,8 @@ describe('a restore that refuses the newest generation recovers from the older o
 
   test('a proof that cannot be written leaves the box ATTACHED and the id still named',
     async () => {
-      // Retiring the fallback is a note about something that already happened.
-      // The workspace is mounted by the time it is written, so a failed write
-      // must not fail the start — the retry would find the overlay up and take
-      // the already-attached path anyway. The id stays named, so the next attach
-      // repeats the retirement.
+      // The fallback-retirement write happens after the workspace is mounted, so its failure must
+      // not fail the start; the id stays named and the next attach repeats the retirement.
       const calls: string[] = [];
 
       const record = harness({
@@ -4129,17 +3422,8 @@ describe('a restore that refuses the newest generation recovers from the older o
 
 describe('a restore stays inside the tree it is restoring', () => {
   test('nothing is copied out of an archive at all, and the upper is emptied first', async () => {
-    // WHAT CARRIES THIS PROPERTY: the absence of a copy, not a careful copy. A
-    // restore whose only write into the workspace is `cp -a` out of a mounted
-    // squashfs has to argue containment about that copy — `-a` recreates
-    // symlinks instead of following them, and the reset in the same attach has
-    // to guarantee no symlink is already sitting at a path the copy walks.
-    //
-    // A composed attach writes NO archive content anywhere. An archive is
-    // reachable only through its own mount point, which is inside this
-    // strategy's private runtime directory, and the overlay's upper starts
-    // empty. There is no copy to escape through, which is a stronger statement
-    // than a careful copy — so this pins the absence.
+    // Containment rests on the absence of a copy: archives are reachable only via mounts under
+    // the private runtime directory and the upper starts empty, so no copy exists to escape.
     const calls: string[] = [];
     const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
     const raw: string[] = [];
@@ -4152,7 +3436,6 @@ describe('a restore stays inside the tree it is restoring', () => {
 
     expect((await attachOf(record)).kind).toBe('attached');
 
-    // No extraction, in any spelling the image offers.
     expect(raw.filter(command => /^(cp|tar|rsync|unsquashfs)\b/.test(command))).toEqual([]);
 
     // The upper is emptied BEFORE anything is mounted over it, so a composed
@@ -4164,9 +3447,8 @@ describe('a restore stays inside the tree it is restoring', () => {
     expect(emptied).toBeGreaterThan(-1);
     expect(mounted).toBeGreaterThan(emptied);
 
-    // And every archive is reachable only under this strategy's own runtime
-    // directory: a layer cannot be mounted over the workspace or anywhere a
-    // caller writes.
+    // Every archive is mounted only under this strategy's runtime directory, so a layer never
+    // lands over the workspace or anywhere a caller writes.
     for (const command of raw.filter(line => line.includes('squashfuse'))) {
       expect(command).toContain(`${DEVBOX_RUNTIME_DIR}/`);
       expect(command).not.toContain(`${DEVBOX_WORKDIR} `);
@@ -4174,12 +3456,8 @@ describe('a restore stays inside the tree it is restoring', () => {
   });
 });
 
-// ── KINU-N025: a same-length archive is not the same archive ─────────────────
-
-/** A different archive of IDENTICAL length, expressed the only way it can be:
- *  the store's digest disagrees with the record's while every byte count
- *  agrees. A valid squashfs image in this state mounts and serves the wrong
- *  workspace, which is exactly what a count cannot see. */
+/** A same-length replacement: the store's digest disagrees while every byte count agrees.
+ *  A valid squashfs image here mounts the wrong workspace, which a count cannot detect. */
 const REPLACED_DIGEST = 'f'.repeat(64);
 
 /** The version the store reports for that replacement upload. R2 mints one per
@@ -4209,18 +3487,14 @@ describe('an archive replaced at the same length is refused', () => {
     expect(outcome.detail).toContain('recovered');
     expect(record.state?.base.id).toBe(FALLBACK_ID);
     expect(record.state?.lastFailure?.reason).toContain('different archive of the same length');
-    // The SIZE never disagreed, so nothing but the digest could have caught it,
-    // and nothing was deleted on the way through.
     expect(record.objects.get(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(BASE_BYTES);
     expect(record.calls.filter(call => call.startsWith('deleteObjects'))).toEqual([]);
   });
 
   test('a delta replaced at the same length is refused, while a delta of a different '
     + 'length is still adopted', async () => {
-      // The two halves of the same rule. A size that disagrees is the
-      // crash-window delta this file's header describes — a complete archive the
-      // record does not mention yet — and it is adopted. A size that agrees
-      // while the identity does not is corruption, and it is refused.
+      // A size mismatch is the crash-window delta (complete, not yet recorded) and is adopted;
+      // a matching size with a different identity is corruption and is refused.
       const refusing: string[] = [];
 
       const corrupt = harness({
@@ -4262,7 +3536,6 @@ describe('an archive replaced at the same length is refused', () => {
       await expect(failure).rejects.toThrow(/different archive of the same length/);
       await expect(failure).rejects.toThrow(/cannot be served either/);
 
-      // Both generations are still named and still there.
       expect(record.state?.base.id).toBe(FALLBACK_ID);
       expect(record.state?.fallback?.base.id).toBe(CHAIN_ID);
       expect(record.calls.filter(call => call.startsWith('deleteObjects'))).toEqual([]);
@@ -4271,10 +3544,8 @@ describe('an archive replaced at the same length is refused', () => {
     });
 
   test('a record written before layer digests existed still attaches', async () => {
-    // Those rows are live: `Devbox.strategy` defaults to the chain and the
-    // product's own sandbox class is deployed on it. An absent digest is
-    // UNKNOWN, so the size check stands alone and the box starts — refusing it
-    // would be the data loss the chain exists to prevent.
+    // An absent digest is UNKNOWN, so only the size check applies and the box starts;
+    // refusing it would lose data on live rows (`Devbox.strategy` defaults to the chain).
     const calls: string[] = [];
 
     const record = harness({
@@ -4286,7 +3557,7 @@ describe('an archive replaced at the same length is refused', () => {
       calls,
     });
 
-    // The store has answers; the record has neither. Nothing to compare.
+    // The store reports a digest and version, but the record holds neither, so nothing is compared.
     record.digests.set(baseObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_DIGEST);
     record.versions.set(baseObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_VERSION);
 
@@ -4296,12 +3567,8 @@ describe('an archive replaced at the same length is refused', () => {
 
   test('a MULTIPART archive replaced at the same length is refused on the store version, '
     + 'even when the replacement copies the digest', async () => {
-      // The case no checksum can reach. A large archive goes up in parts, and
-      // the Workers multipart API takes no checksum, so R2 reports no digest for
-      // it however carefully the record kept one. Here the record has no digest
-      // either — which is what a multipart layer's record looks like — and the
-      // replacement even carries the same digest metadata. What it cannot carry
-      // is the version R2 minted for the upload the record describes.
+      // The Workers multipart API takes no checksum, so R2 reports no digest for a multipart
+      // archive; only the version R2 minted for the recorded upload can detect a replacement.
       const calls: string[] = [];
 
       const record = harness({
@@ -4323,18 +3590,14 @@ describe('an archive replaced at the same length is refused', () => {
       expect(record.state?.base.id).toBe(FALLBACK_ID);
       expect(record.state?.lastFailure?.reason).toContain('written by a different upload');
       expect(record.state?.lastFailure?.reason).toContain('no checksum');
-      // Size never disagreed and no digest existed on either side, so the
-      // version is the only thing that could have caught it.
       expect(record.objects.get(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(BASE_BYTES);
       expect(record.calls.filter(call => call.startsWith('deleteObjects'))).toEqual([]);
     });
 
   test('the SAME multipart object attaches, so the version check is not a false alarm',
     async () => {
-      // The other half of the discriminator: identical size, no digest either
-      // side, and the version the record already names. A box whose archive was
-      // never touched must start normally, or the check above would refuse every
-      // large archive on every boot.
+      // Same size, no digest, and the recorded version must attach normally, or the version
+      // check would refuse every large archive on every boot.
       const calls: string[] = [];
 
       const record = harness({
@@ -4355,9 +3618,8 @@ describe('an archive replaced at the same length is refused', () => {
 
   test('the record carries the digest the upload reported, for the base and for the delta',
     async () => {
-      // The identity is only knowable while the bytes move, so if the commit
-      // does not record it nothing can afterwards without reading the object
-      // back. Both layers, because both are uploaded by the same path.
+      // The digest is only knowable while the bytes move; unrecorded at commit, it needs a read-back.
+      // Both layers, because both are uploaded by the same path.
       const born: string[] = [];
       const fresh = harness({ state: null, mounts: mountsAfterAttach(born), calls: born });
       expect((await checkpointOf(fresh, 'tick')).kind).toBe('committed');
@@ -4368,8 +3630,8 @@ describe('an archive replaced at the same length is refused', () => {
       const record = harness({ state: chainState(), mounts: MOUNTED });
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
       expect(record.state?.delta).toEqual(publishedDeltaLayer(record.state, DELTA_BYTES));
-      // And the store was asked to verify it, which is what makes the pre-attach
-      // comparison possible at all.
+      // The store records the digest it verified; that record is what makes the pre-attach
+      // comparison possible.
       expect(record.digests.get(deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))))
         .toBe(record.state?.delta?.digest);
     });
@@ -4377,15 +3639,8 @@ describe('an archive replaced at the same length is refused', () => {
 
 describe('the patched sandbox SDK: the container is the authority for a mount', () => {
   test('unmount releases a registry entry the container no longer backs', () => {
-    // This repo owns patches/@cloudflare%2Fsandbox@0.12.8.patch. Measured live
-    // (kinu.run, hardy-stone, 2026-09-03): a store mount stood in the SDK's
-    // registry while the container held no mount at /backups; `fusermount -u`
-    // failed "not mounted", the SDK rethrew WITHOUT clearing its entry, and the
-    // next `mountBucket` refused with "already in use by bucket BACKUP_BUCKET"
-    // on every attach. The patch guards the unmount with `mountpoint -q` — the
-    // SDK's own idiom on its mount-failure path — so a path the container holds
-    // no mount at releases its entry the way a successful unmount does. Pinned
-    // against the INSTALLED dist so a repin that drops the guard fails by name.
+    // Pins patches/@cloudflare%2Fsandbox@0.12.8.patch in the installed dist: `mountpoint -q` guards
+    // `fusermount -u`, so a path with no container mount releases its SDK registry entry.
     const dist = readFileSync(
       join(import.meta.dir, '../../../node_modules/@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js'),
       'utf8',

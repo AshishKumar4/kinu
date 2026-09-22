@@ -1,27 +1,5 @@
-/**
- * The incident ledger: a lifecycle failure is written down BEFORE anyone is
- * told, and delivery retries until the host accepts it.
- *
- * Its own module because it is its own subject. The class it came from is about
- * a container's lifecycle; this is a durable outbox with a retry policy and
- * three terminal states, and none of that needs a container. Here it is also
- * reachable from a test, which it was not while it lived on a Durable Object.
- *
- * THE THREE STATES, and why a rejection is not a retry:
- *
- *   Accepted (`queued`) — marked delivered, kept readable.
- *   Refused (`rejected`) — the host says the SHAPE is wrong. That is a defect in
- *   the producer, and no number of retries fixes a defect, so the row is frozen.
- *   Thrown — the host could not be reached, or failed while trying. That is
- *   transient, so the row keeps its place and the next pass is armed with the
- *   next backoff step.
- *
- * The rejection arm is only safe while the two sides share ONE stage
- * vocabulary. They did not, once: the container emitted `attach` and
- * `checkpoint`, the host's schema admitted neither, and every restore failure
- * and checkpoint failure was frozen here as a caller defect and never seen.
- * `INCIDENT_STAGES` is that one vocabulary.
- */
+/** Incident ledger: a failure is stored before delivery. A thrown delivery retries with backoff;
+ *  a `rejected` one is frozen, which is safe only while both sides share `INCIDENT_STAGES`. */
 
 import {
   describeThrown as describe,
@@ -35,32 +13,20 @@ import {
  *  can tell at a glance which rows belong to the box machinery. */
 export const INCIDENT_PREFIX = 'devbox:incident:';
 
-/** Longest reason a row may carry. Past this it is not a reason, it is a
- *  payload wearing one. Exported: the cf host truncates to the same bound
- *  before its schema, so producer and validator cannot drift. */
+/** Exported because the cf host truncates to this bound before its schema,
+ *  so producer and validator cannot drift. */
 export const INCIDENT_REASON_MAX_CHARS = 2_000;
 
-/** An incident as stored: the incident plus its delivery state. */
 export interface IncidentRow extends DevboxIncident {
   readonly attempts: number;
   readonly deliveredAt?: number;
   readonly rejectedAt?: number;
 }
 
-/** How many rows the ledger may hold.
- *
- * A broken box records roughly one incident per heartbeat-armed retry, so an
- * uncapped ledger grows without bound on exactly the box that fails most —
- * and every delivery pass and every `devboxState()` materializes all of it.
- * One hundred rows is several days of a persistently failing stage at the
- * heartbeat cadence, which is far more history than a reader can act on, and
- * it bounds each pass to a few hundred kilobytes of rows. Only DELIVERED rows
- * are reaped, oldest first; pending ones are never dropped, because they are
- * the reason the ledger exists.
- */
+/** Caps the ledger: a failing box records an incident per retry and every pass reads all rows.
+ *  Only settled rows are reaped, oldest first; pending rows are never dropped. */
 export const INCIDENT_LEDGER_MAX_ROWS = 100;
 
-/** The exact durable operations and value type this ledger owns. */
 export interface IncidentStore {
   get(key: string): Promise<IncidentRow | undefined>;
   put(key: string, value: IncidentRow): Promise<void>;
@@ -88,13 +54,8 @@ export async function recordIncident(
   } satisfies IncidentRow);
 }
 
-/**
- * One delivery pass over the ledger.
- *
- * Answers the seconds until the next pass, or `null` when nothing is left
- * undelivered — there is then nothing to wake for, and the next `recordIncident`
- * is what starts a chain again.
- */
+/** Returns the delay until the next pass, or `null` when nothing is undelivered;
+ *  then nothing wakes, and the next `recordIncident` starts a chain again. */
 export async function deliverIncidents(
   store: IncidentStore,
   deliver: (incident: DevboxIncident, attempt: number) => Promise<IncidentDisposition>,
@@ -114,16 +75,12 @@ export async function deliverIncidents(
         processId: row.processId,
         port: row.port,
         at: row.at,
-      // WHICH ATTEMPT THIS DELIVERY IS, which the row cannot answer on its own:
-      // it still holds the count from before this pass, and the increment
-      // happens after the handler returns. A host that announces an incident
-      // needs the ordinal of the announcement it is making, not of the last one
-      // that failed.
+      // `row.attempts` is only incremented after the handler returns, so this delivery's ordinal is
+      // `+ 1`: the host needs the ordinal of the announcement it is making.
       }, row.attempts + 1);
     } catch (error) {
-      // A THROWN HANDLER IS `undelivered`, which is what the disposition's own
-      // contract says, so it takes the same path rather than a copy of it. The
-      // reason is recorded here because nothing downstream will see it.
+      // A thrown handler is `undelivered` per the disposition contract, so it takes the same path.
+      // The error is logged here because nothing downstream sees it.
       console.error(
         `[devbox] incident ${row.incidentId} was not delivered, retrying: `
         + describe({ cause: error }),
@@ -132,10 +89,8 @@ export async function deliverIncidents(
     }
 
     if (disposition === 'undelivered') {
-      // TOOK IT, DID NOT ANNOUNCE IT. Stamping `deliveredAt` here is how a box
-      // stopped retrying an incident nobody had seen: the host's own ledger
-      // still held it as re-deliverable while this side had written it off. The
-      // row stays pending, the attempt is counted, and the schedule retries.
+      // An `undelivered` row must not get `deliveredAt`: the host still holds it re-deliverable,
+      // so the row stays pending, the attempt is counted, and the schedule retries.
       nextDelayMs = incidentRetryDelayMs(row.attempts + 1);
       await store.put(key, { ...row, attempts: row.attempts + 1 });
       continue;
@@ -153,13 +108,8 @@ export async function deliverIncidents(
   return nextDelayMs === undefined ? null : Math.max(1, Math.ceil(nextDelayMs / 1000));
 }
 
-/**
- * Hold the ledger to {@link INCIDENT_LEDGER_MAX_ROWS}.
- *
- * Delivered and rejected rows go oldest-settled first; a pending row is never
- * reaped, so a host that is slow to accept loses nothing it has not seen.
- * Answers how many rows were deleted.
- */
+/** Reaps settled rows oldest-settled first; a pending row is never reaped, so a host
+ *  slow to accept loses nothing it has not seen. */
 export async function reapDeliveredIncidents(store: IncidentStore): Promise<number> {
   const rows = await store.list({ prefix: INCIDENT_PREFIX });
 
@@ -177,9 +127,8 @@ export async function reapDeliveredIncidents(store: IncidentStore): Promise<numb
   return excess;
 }
 
-/** What the ledger holds, for a box's own report. `undelivered` is the number
- *  that matters: a box whose incidents are piling up is a box whose host is not
- *  listening. */
+/** Ledger totals for a box's own report. A growing `undelivered` count means the host
+ *  is not listening. */
 export interface IncidentTotals {
   total: number;
   undelivered: number;

@@ -1,28 +1,5 @@
-// Lifecycle ownership, honest readiness, and the recovery ladder — driven
-// through the real Devbox class against the platform stand-in in
-// `support/devbox-harness.ts`, which holds the one SDK substitution and explains
-// why it exists.
-//
-// Every defect here is about ORDER and OWNERSHIP across awaits: which of two
-// overlapping startup attempts may write, whether a port may be exposed after
-// its listener said nothing, and what a box does the second time one container
-// identity fails. The pure halves — the taxonomy, the ladder, the plan — are
-// pinned in `decisions.test.ts`; what is pinned here is the shipped methods
-// acting on them.
-//
-// The four defects this suite pins against:
-//   * a startup attempt abandoned by a container replacement keeps running,
-//     then publishes readiness for a generation that no longer exists, files
-//     that generation's attach failure, and RELEASES ITS SUCCESSOR'S
-//     single-flight entry — after which the next caller starts a second
-//     concurrent restoration against the same container;
-//   * a restored process whose start threw, and a port whose listener stayed
-//     silent, are recorded and stepped over — straight into exposing that very
-//     port, and then reporting the box ready;
-//   * one generic retry policy re-arms the same identity for every failure,
-//     spending retries on configuration that cannot change and repeating copies
-//     into a filesystem that is already full;
-//   * and no number of failures ever escalates to replacing the identity.
+// Lifecycle ownership, readiness and the recovery ladder, driven through the real `Devbox`
+// against `support/devbox-harness.ts`; the pure halves are pinned in `decisions.test.ts`.
 import { beforeEach, describe, expect, test, vi } from 'bun:test';
 
 import * as v from 'valibot';
@@ -48,13 +25,11 @@ const INCIDENT_PREFIX = 'devbox:incident:';
 const failure = (code: string): SandboxFailure =>
   new SandboxFailure({ code, message: `the container reported ${code}` });
 
-/** A start that throws having created nothing, which is what a container
- *  refusing a command does. The harness owns the shape. */
+/** A start that throws having created nothing, as when a container refuses a command. */
 const refused = (code: string): StartFault => ({ error: failure(code), created: false });
 
-/** The probe windows are milliseconds so a silent listener is a fast fact
- *  rather than a thirty-second one. Every other number is the shipped policy:
- *  this box is the production box with a test-length probe. */
+/** Only the port-probe windows are shortened so a silent listener fails fast;
+ *  every other number is the shipped policy. */
 const TEST_POLICY: DevboxPolicy = {
   ...DEFAULT_DEVBOX_POLICY,
   portWaitMs: 4,
@@ -67,15 +42,8 @@ const HEARTBEAT_POLICY: DevboxPolicy = {
   quietConfirmMs: 1,
 };
 
-/**
- * The same box on a budget short enough for a test to exhaust, and with a port
- * cap far LONGER than that budget.
- *
- * Both numbers matter. The cap is thirty seconds, so any test that waited a
- * port's full cap would outlast the runner's timeout many times over — which is
- * exactly what the clamp is asked to prevent. The budget is milliseconds, so the
- * one end-to-end deadline is reachable without sleeping.
- */
+/** The port cap far exceeds the attach budget: a test that waited the full cap would outlast
+ *  the runner's timeout, which is what the clamp must prevent. */
 const TIGHT_POLICY: DevboxPolicy = {
   ...DEFAULT_DEVBOX_POLICY,
   attachBudgetMs: 20,
@@ -130,11 +98,7 @@ class HeartbeatBox extends TestBox {
 
 
 
-/** The incidents the box filed, by stage. Read from durable rows, because that
- *  is where the class writes them before anyone is told. */
-/** The two fields every assertion here reads off a filed incident. Parsed
- *  rather than asserted: a row the box wrote that carries no stage or no reason
- *  is a defect worth failing on, not one to cast past. */
+/** Parsed, not cast: a filed row missing a stage or reason is a defect to fail on. */
 const FiledIncidentSchema = v.object({ stage: v.string(), reason: v.string() });
 
 type FiledIncident = v.InferOutput<typeof FiledIncidentSchema>;
@@ -145,44 +109,25 @@ function incidents(rows: Map<string, StoredValue>): readonly FiledIncident[] {
     .map(([, row]) => v.parse(FiledIncidentSchema, row));
 }
 
-/** Startup rows the box is actually holding.
- *
- *  THE LIVE TABLE, not the log of arm calls, and the difference is the property.
- *  The container-start hook arms a startup row for a box with nothing restored
- *  yet, and the SDK runs that hook on every admission probe — so "was an arm
- *  ever issued" stopped being the question. What matters is whether a row
- *  survives to wake this box: a terminal ladder deletes it (`#recover`), and a
- *  retry leaves exactly one. */
+/** Counts the live schedule table, not arm calls: the start hook arms a row on every admission
+ *  probe, so what matters is whether one survives (`#recover` deletes it; a retry leaves one). */
 const armed = (container: FakeSandbox): number =>
   container.scheduleRows.filter(row => row.callback === 'devboxStartup').length;
 
-/** The ladder row as stored, read raw so a test sees the owner as well as the
- *  stage. */
 function ladder(rows: Map<string, StoredValue>): RecoveryRow | undefined {
-  // The production parser, not a cast: it is the one authority on this row's
-  // shape, and a test that read the row more loosely than the box does could
-  // assert a stage the box would have refused.
+  // Parse with the production parser, not a cast: a looser read could assert a stage
+  // the box would have refused.
   const held = parseRecoveryRow(rows.get(RECOVERY_KEY));
 
   return held.kind === 'row' ? held.row : undefined;
 }
 
-/**
- * Make the next attempt FAIL AS AN ATTEMPT, with the class the taxonomy should
- * read, by failing its first durable write.
- *
- * An ephemeral box's `attach()` cannot fail — it has nowhere to attach from —
- * and a container fault cannot stand in either: every step AFTER the attach
- * reports its exhaustion instead of throwing, so a faulted process start or
- * boot stamp produces an INCOMPLETE restoration rather than an attach failure.
- * The attempt's first durable write is the nearest honest stand-in: it
- * propagates exactly as a real attach failure does, into the recovery ladder.
- */
+/** Faults the attempt's first durable write: ephemeral `attach()` cannot fail, and container
+ *  faults after attach yield an incomplete restoration, not an attach failure. */
 function failAttempt(harnessed: { readonly storage: FakeStorage }, code: string): void {
   harnessed.storage.faultOn('devbox:last-attach', failure(code));
 }
 
-/** A durable process spec, as `startSupervised` would have left one. */
 function proc(
   rows: Map<string, StoredValue>, processId: string, command = 'bun run server.ts',
 ): void {
@@ -192,8 +137,6 @@ function proc(
 function port(rows: Map<string, StoredValue>, value: number, token: string): void {
   rows.set(`devbox:port:${value}`, { port: value, name: 'web', token, createdAt: 1 });
 }
-
-// ── asynchronous startup kick ───────────────────────────────────────────────
 
 describe('the startup kick arms restoration without attaching inline', () => {
   test('a stopped box starts only enough to arm the existing startup callback', async () => {
@@ -233,13 +176,8 @@ describe('the startup kick arms restoration without attaching inline', () => {
     expect(container.startWaitOptions).toHaveLength(1);
     expect(container.startWaitOptions[0]).toMatchObject({
       portToCheck: 3000,
-      // THE ADMISSION THAT MAKES IN-GATE WORK, expressed as the SDK's own
-      // retry shape. The patched `start()` marks the container healthy BEFORE
-      // the hook, so a command the restore issues routes straight to the
-      // container instead of opening a nested start — and it waits for the
-      // instance, never for an app port the restore has not started yet.
-      // `retries` is the window divided by the interval: `retries: 1` made
-      // the SDK give up after ONE poll, so the abort below could never fire.
+      // `retries` is the port window divided by the interval; fewer retries make the SDK give up
+      // before the abort can fire. The wait targets the instance, not an app port restore starts.
       retries: Math.ceil(TEST_POLICY.portWaitMs / 100),
       waitInterval: 100,
       signal: expect.any(AbortSignal),
@@ -247,10 +185,8 @@ describe('the startup kick arms restoration without attaching inline', () => {
     const state = await box.devboxState();
     expect({
       starts: container.containerStarts,
-      // NO ROW SURVIVES A SETTLED RESTORATION. The container-start hook arms one
-      // for a box with nothing restored yet; the attempt that settles retires it,
-      // because a row firing on an attached box is a wake, a port probe and a
-      // boot-id read that nothing asked for.
+      // The start hook arms a row for an unrestored box; the settling attempt retires it, since
+      // a row firing on an attached box costs an unrequested wake, port probe and boot-id read.
       startupArms: armed(container),
       restoration: state.restoration,
       attach: state.lastAttach?.kind,
@@ -265,8 +201,6 @@ describe('the startup kick arms restoration without attaching inline', () => {
   });
 
   test('a capacity refusal — no container ever ran — records its class and arms one successor', async () => {
-    // The container was never admitted, so no start hook ran and nothing
-    // restored: the incident and the successor row are the whole answer.
     const { box, container, rows } = harness(TestBox);
     await container.stop();
     container.startFaultBeforeRunning = new SandboxFailure({
@@ -288,11 +222,8 @@ describe('the startup kick arms restoration without attaching inline', () => {
   });
 
   test('an app-port wait refuses a dark box — admission waits for the instance', async () => {
-    // THE FIDELITY THE BENCH PROOF BOUGHT. A port the box has not restored yet
-    // answers nothing, so the SDK's port wait never breaks on a fresh box and
-    // the hook behind it never runs. Production admits through `start()` for
-    // exactly this reason; this test pins the fake to the platform so a future
-    // admission through the port wait fails here instead of hanging a deploy.
+    // An unrestored port answers nothing, so the SDK port wait never breaks on a fresh box.
+    // Production admits through `start()`; this pins the fake so port-wait admission fails here.
     const { box, container } = harness(TestBox);
     await container.stop();
 
@@ -302,10 +233,8 @@ describe('the startup kick arms restoration without attaching inline', () => {
   });
 
   test('a dark box admits through the instance probe and restores', async () => {
-    // THE SHAPE PRODUCTION DEPENDS ON. No listener, no specs, nothing exposed:
-    // the instance probe asks the platform, the patched hook marks healthy,
-    // and the restore settles an empty box. A fresh box that could not do this
-    // could never bootstrap.
+    // Dark means no listener, no specs, nothing exposed: the instance probe asks the platform.
+    // A fresh box that cannot admit and restore this way can never bootstrap.
     const { box, container } = harness(TestBox);
     await container.stop();
 
@@ -316,13 +245,8 @@ describe('the startup kick arms restoration without attaching inline', () => {
   });
 
   test('an unhealthy answer AFTER the container ran is a transient refusal the next drive heals', async () => {
-    // `startFaultAfterRunning` fires once the platform has an instance, so the
-    // container really is up — but this attempt cannot know that, because the
-    // admission probe it asked threw. The restore does not happen inside the
-    // container-start hook (see restore-after-start.test.ts for why), so what
-    // this box owes is the honest sequence: the refusal is recorded as
-    // transient, a successor is armed, and the next drive — one second later
-    // on the schedule, or the next operation — attaches.
+    // `startFaultAfterRunning` fires after the platform has an instance: the container is up,
+    // but this attempt cannot know it because its admission probe threw.
     const { box, container, rows } = harness(TestBox);
     await container.stop();
     container.startFaultAfterRunning = new SandboxFailure({
@@ -341,8 +265,8 @@ describe('the startup kick arms restoration without attaching inline', () => {
     ]);
     expect(armed(container)).toBe(1);
 
-    // THE HEAL, on the row that refusal armed. The fault was one-shot, as a
-    // transient one is, so the same identity attaches.
+    // Runs on the row the refusal armed; the fault is one-shot like a transient one,
+    // so the same identity attaches.
     await box.devboxStartup();
 
     const state = await box.devboxState();
@@ -380,17 +304,13 @@ describe('the startup kick arms restoration without attaching inline', () => {
   });
 });
 
-// ── one attempt, one generation ─────────────────────────────────────────────
-
 describe('a startup attempt owns a generation, and a superseded one is inert', () => {
   const stamps = (container: FakeSandbox): number =>
     container.execs.filter(command => command.includes(STAMP_COMMAND)).length;
 
   test('a superseded attempt cannot publish readiness for a generation that is gone', async () => {
-    // KINU-030. The attempt is parked at its LAST await — the boot-id stamp —
-    // and the container is replaced underneath it. Unfenced it goes on to set
-    // readiness, and the box then reports itself restored while the instance it
-    // restored no longer exists.
+    // The boot-id stamp is the attempt's last await, so parking there and replacing the
+    // container tests the latest point a superseded attempt could still publish readiness.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
     const parked = gate();
@@ -410,9 +330,8 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
   });
 
   test('a superseded attempt admitted before the turnover attaches nothing', async () => {
-    // The claim is the attempt's first act, and the fence is checked the moment
-    // it returns: an attempt whose generation turned over while it was claiming
-    // must not go on to attach against a container that is gone.
+    // The fence is checked as soon as the claim returns: an attempt whose generation turned over
+    // while claiming must not attach against a container that is gone.
     const harnessed = harness(TestBox);
     const { box, container, rows, storage } = harnessed;
     const claiming = gate();
@@ -429,22 +348,13 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
   });
 
   test('a superseded FAILING attempt files nothing, arms nothing and stores no stage', async () => {
-    // The other half of the ownership defect: this attempt is already in its
-    // RECOVERY path when the generation turns over. Unfenced, it records the
-    // attach failure of a generation that has been replaced, publishes that
-    // generation's refusal, and re-arms a startup nobody asked for.
-    //
-    // Parked INSIDE the conditional write, which is where both tokens are
-    // compared. The row still names this attempt — nothing deleted it — so the
-    // durable owner alone would let the write through; the generation is what
-    // refuses it.
+    // Parked inside the conditional write: the row still names this attempt, so only the
+    // generation token, not the durable owner, refuses the stale recovery write.
     const harnessed = harness(TestBox);
     const { box, container, rows, storage } = harnessed;
     failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
-    // Two gates on the same key, in the order the attempt reads it: the CLAIM
-    // first, then the conditional write inside the recovery. Parking the claim is
-    // how the second gate is armed at a point the attempt has not reached yet,
-    // without guessing at microtasks.
+    // Two gates on `RECOVERY_KEY`, in read order: the claim, then the recovery's conditional write.
+    // Parking the claim arms the second gate before the attempt reaches it, without microtask guessing.
     const claiming = gate();
     storage.gateOn(RECOVERY_KEY, claiming);
     const stale = box.devboxStartup();
@@ -463,14 +373,10 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     expect(armed(container)).toBe(armsBefore);
     expect(ladder(rows)).toBeUndefined();
     expect(container.destroys).toBe(0);
-    // And the refusal was not published either: the new generation is untouched.
     expect((await box.devboxState()).unready).toBeUndefined();
   });
 
   test('a superseded attempt does not release its successor\'s single-flight entry', async () => {
-    // THE CONCURRENCY DEFECT. The stale attempt cleared the tracked startup in
-    // its `finally`, so the next caller found no attempt in flight and started
-    // a SECOND restoration against the same container.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
     const stalled = gate();
@@ -489,15 +395,13 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     const joined = box.devboxStartup();
     successorGate.release();
     await Promise.all([successor, joined]);
-    // Two attempts ran: the abandoned one and its successor. The third caller
-    // joined the successor instead of opening a third restoration.
     expect(stamps(container)).toBe(2);
     expect((await box.devboxState()).ready).toBe(true);
   });
 
   test('a caller does not JOIN a superseded attempt, it starts the new generation\'s', async () => {
-    // The mirror of the rule above: joining an attempt whose result is already
-    // discarded would hand the caller a restoration that never happened.
+    // Joining an attempt whose result is already discarded would hand the caller
+    // a restoration that never happened.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
     const stalled = gate();
@@ -513,8 +417,7 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
   });
 
   test('a superseded restoration exposes no port', async () => {
-    // The fence is checked before the outward-facing act as well as before the
-    // state write: a port exposed by an attempt whose container is gone
+    // The fence is checked before exposing a port too: a port exposed by a superseded attempt
     // publishes a URL into a dead instance.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
@@ -534,31 +437,20 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
   });
 
   test('a superseded ADMISSION refusal arms nothing and files nothing', async () => {
-    // The window before an attempt owns anything. `start()` is the admission
-    // probe every attempt awaits, and it is the longest await on the path — a
-    // whole `portWaitMs`. A quiesce can land inside it, because an attempt
-    // parked there holds no resource lane, no checkpoint lane and no
-    // single-flight entry, so the heartbeat's own busy check cannot see it.
-    //
-    // What the refusal then did was arm a startup one second out and file an
-    // attach incident. Both outlive the deliberate stop: `quiesce` arms NOTHING
-    // on purpose, so the armed row wakes a box that was put to sleep and starts
-    // its container again, and the incident reaches the agent as a live blocker
-    // about a container nobody asked to exist.
+    // An attempt parked in the `start()` admission probe holds no lane or single-flight entry,
+    // so the heartbeat's busy check cannot see it and a quiesce can land inside that wait.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     await container.stop();
     const admitting = gate();
     container.containerStartGate = admitting;
-    // Refused WITHOUT an instance, which is what a capacity refusal is: the
-    // container never comes up, so the class's own start hook never runs and the
-    // only thing that could arm a row here is the refusal itself.
+    // A capacity refusal fails before running: the start hook never runs, so only the
+    // refusal itself could arm a row here.
     container.startFaultBeforeRunning = failure('CONTAINER_UNAVAILABLE');
     const stale = box.devboxStartup();
     await admitting.reached;
 
-    // The box is deliberately quiesced while that probe is parked: the
-    // generation turns over, the container stops, and nothing is armed.
+    // Quiesce while the start is parked so the generation turns over before the refusal lands.
     await box.quiesce();
     const armedByQuiesce = armed(container);
 
@@ -567,13 +459,9 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
 
     expect(armed(container)).toBe(armedByQuiesce);
     expect(incidents(rows)).toEqual([]);
-    // And the box is still asleep: nothing woke it to serve an attempt whose
-    // generation is gone.
     expect(container.running.running).toBe(false);
   });
 });
-
-// ── readiness is attach plus complete restoration ───────────────────────────
 
 describe('a failed restored service is never exposed and never reported ready', () => {
   test('an answering listener is exposed with its persisted token, and the box is ready', async () => {
@@ -592,9 +480,6 @@ describe('a failed restored service is never exposed and never reported ready', 
   });
 
   test('a silent listener is NOT exposed, and the box says why it is not ready', async () => {
-    // KINU-029. The probe found nothing, the incident was filed, and the walk
-    // continued into exposing that very port — so the box handed back a preview
-    // URL that answers 502 and called itself ready.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     port(rows, 3000, 'tok3000');
@@ -624,9 +509,6 @@ describe('a failed restored service is never exposed and never reported ready', 
   });
 
   test('every failed spec reaches the ledger, so one dead spec does not hide the others', async () => {
-    // The phase still runs to its end. Stopping at the first failure would file
-    // one incident for a box with two broken servers, and the second would be
-    // discovered only after the first was fixed.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     proc(rows, 'p1');
@@ -639,9 +521,8 @@ describe('a failed restored service is never exposed and never reported ready', 
   });
 
   test('operations stay permitted while a restored service is down, so it can be repaired', async () => {
-    // The attach landed, so the work directory is there. Refusing `exec` would
-    // deny the agent the one way it has to fix its own server — and `ready`
-    // already tells the truth.
+    // A landed attach means the work directory exists; refusing `exec` would block the agent
+    // from repairing its own server, and `ready` already reports the outage.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     proc(rows, 'p1');
@@ -664,12 +545,6 @@ describe('a failed restored service is never exposed and never reported ready', 
   });
 
   test('a stop on a box whose attach was refused stops the container with nothing to commit', async () => {
-    // The deployed release of run 20260905075659: the attach was
-    // abandoned at its budget and classified terminal, and the stop's final
-    // checkpoint then waited on the container the abandoned restore was still
-    // running in, past the driver's 120 s release deadline. A box that
-    // admitted no caller holds no work to commit, so the stop skips straight
-    // to the container.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
     failAttempt(harnessed, 'MISSING_CREDENTIALS');
@@ -686,19 +561,13 @@ describe('a failed restored service is never exposed and never reported ready', 
   });
 });
 
-// ── the recovery ladder ─────────────────────────────────────────────────────
-
 describe('one container identity is retried, then replaced, then refused', () => {
-  /** A ladder row left by an earlier attempt: a foreign owner, and how far the
-   *  ladder had gone. Every attempt claims the row and preserves that stage. */
   const seeded = (stage?: RecoveryStage): StoredValue =>
     (stage === undefined ? { owner: PREVIOUS } : { owner: PREVIOUS, stage });
 
   test('an attempt CLAIMS the row, taking ownership and preserving the stage', async () => {
-    // The reset case, and the reason the owner is durable: a container start, an
-    // eviction and a replacement all mint a new attempt, and none of them may
-    // forget how far the ladder has gone. The in-memory generation cannot carry
-    // this — a rebuilt object starts counting at zero again.
+    // The ladder owner and stage are durable: a start, eviction or replacement mints a new attempt,
+    // and in-memory generation restarts at zero on a rebuilt object.
     for (const stage of [undefined, 'retry', 'replace'] as const) {
       const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
@@ -713,7 +582,6 @@ describe('one container identity is retried, then replaced, then refused', () =>
       expect(claimed?.owner).toBeString();
       parked.release();
       await attempt;
-      // The attempt landed, so the claim goes with it.
       expect(rows.has(RECOVERY_KEY)).toBe(false);
     }
   });
@@ -729,9 +597,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
   });
 
   test('the SECOND failure of that identity destroys it, and proves it gone', async () => {
-    // KINU-032. Re-arming the same identity forever is how a persistently
-    // unhealthy container kept a box trapped. The bound is the ladder's length,
-    // not a tuned count: each stage is a DIFFERENT action.
+    // The bound is the ladder's length, not a tuned count: each stage is a different action.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     rows.set(RECOVERY_KEY, seeded('retry'));
@@ -740,14 +606,12 @@ describe('one container identity is retried, then replaced, then refused', () =>
     expect(container.destroys).toBe(0);
     await box.devboxStartup();
     expect(container.destroys).toBe(1);
-    // The stage is persisted BEFORE the destruction, so a failure that strikes
-    // while `replace` is current is terminal instead of the second turn of a
-    // destroy loop.
+    // The stage is persisted before the destruction, so a failure while `replace` is current
+    // is terminal, not the second turn of a destroy loop.
     expect(ladder(rows)?.stage).toBe('replace');
     // Proved absent rather than assumed: `destroy` acknowledges the signal
     // before `container.running` flips.
     expect(container.running.running).toBe(false);
-    // And nothing was armed against an identity that no longer exists.
     expect(armed(container)).toBe(0);
   });
 
@@ -768,8 +632,6 @@ describe('one container identity is retried, then replaced, then refused', () =>
     });
 
   test('storage exhaustion refuses at once: it repeats no work and moves no ladder', async () => {
-    // KINU-028. Under one generic policy this spent the retry budget copying a
-    // base into a filesystem that was already full.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     failAttempt(harnessed, 'NO_SPACE');
@@ -793,9 +655,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
   });
 
   test('a reset does not advance the container-fault ladder', async () => {
-    // The identity it failed on is already gone, so it is no evidence against
-    // the one that replaced it. Under a single policy this counted towards
-    // destroying a container that had done nothing wrong.
+    // The identity a reset failed on is already gone, so it is no evidence against its replacement.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     rows.set(RECOVERY_KEY, seeded('retry'));
@@ -808,9 +668,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
 
   test('an unreadable row refuses the attempt BEFORE it attaches, and normalises itself',
     async () => {
-      // Strict schema: there is no evidence to act on, so nothing attaches and
-      // nothing is destroyed. The refusal is finite because the row is left
-      // readable at its terminal stage instead of unreadable for ever.
+      // The refusal is finite: the row is left readable at its terminal stage, not unreadable.
       const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
       rows.set(RECOVERY_KEY, { owner: 'x', stage: 'destroy-everything' });
@@ -818,7 +676,6 @@ describe('one container identity is retried, then replaced, then refused', () =>
       expect({ armed: armed(container), destroys: container.destroys })
         .toEqual({ armed: 0, destroys: 0 });
       expect(ladder(rows)?.stage).toBe('replace');
-      // Nothing was attached, and the attach was never even attempted.
       expect(container.execs.filter(command => command.includes(STAMP_COMMAND))).toEqual([]);
       expect(rows.has('devbox:last-attach')).toBe(false);
       await expect(box.exec('ls')).rejects.toMatchObject(
@@ -835,22 +692,13 @@ describe('one container identity is retried, then replaced, then refused', () =>
   });
 
   test('a stage write that raced a newer success changes ZERO rows and stays inert', async () => {
-    // THE RACE THE OWNER TOKEN EXISTS FOR, and the in-memory generation cannot
-    // close it: an evicted and rebuilt object counts from zero again, so two
-    // attempts can hold the same number while only one still matters.
-    //
-    // The older attempt is parked INSIDE its conditional write, between reading
-    // the row and writing its stage. A newer attempt then attaches successfully
-    // and deletes the row. When the older one resumes it must find the row gone,
-    // write nothing, and act on nothing — otherwise it resurrects a ladder the
-    // success had cleared and arms the replacement of a container that works.
+    // The owner token, not the in-memory generation, closes this race: a rebuilt object counts
+    // from zero, so a parked older attempt can hold the same number as the one that matters.
     const harnessed = harness(TestBox);
     const { box, container, rows, storage } = harnessed;
     failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
-    // Park at the CLAIM's read first, then arm the second gate while the attempt
-    // cannot advance, so it can only catch the conditional write's read.
-    // Guessing that with a microtask count would be a race pretending to be a
-    // test.
+    // Arm the second gate only while parked at the claim's read, so it can catch only the
+    // conditional write's read; a microtask count would make the ordering a race.
     const claiming = gate();
     storage.gateOn(RECOVERY_KEY, claiming);
     const stale = box.devboxStartup();
@@ -869,9 +717,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
     settling.release();
     await stale; // The hook recorded no stale failure; the successor owns admission.
 
-    // Zero rows changed: no stage came back.
     expect(rows.has(RECOVERY_KEY)).toBe(false);
-    // And nothing downstream of the write ran either.
     expect(armed(container)).toBe(armsAfterSuccess);
     expect(container.destroys).toBe(0);
     expect(incidents(rows)).toEqual([]);
@@ -879,8 +725,8 @@ describe('one container identity is retried, then replaced, then refused', () =>
   });
 
   test('a destruction that did not land keeps refusing, and attaches over nothing', async () => {
-    // The abandoned work is still inside that container. Looking ready for a
-    // fresh start here is exactly the overlap the replacement exists to prevent.
+    // The abandoned work is still inside that container; looking ready for a fresh start
+    // is the overlap the replacement exists to prevent.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     rows.set(RECOVERY_KEY, seeded('retry'));
@@ -896,9 +742,6 @@ describe('one container identity is retried, then replaced, then refused', () =>
   });
 
   test('a destroyed identity is replaced by the next operation, not left refusing', async () => {
-    // The whole point of replacing an identity is that something attaches
-    // again. The readiness gate finds the container down, turns the
-    // generation over, starts a fresh one and restores it.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     rows.set(RECOVERY_KEY, seeded('retry'));
@@ -906,21 +749,16 @@ describe('one container identity is retried, then replaced, then refused', () =>
     await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
     await box.devboxStartup();
     expect(container.running.running).toBe(false);
-    // A caller arrives. `resolveReadiness` starts a container, its drive turns the
-    // generation over, and this attach lands.
     await box.resolveReadiness();
     expect(container.containerStarts).toBe(2);
     expect((await box.devboxState()).ready).toBe(true);
-    // The success is what clears the ladder.
     expect(rows.has(RECOVERY_KEY)).toBe(false);
   });
 
   test('attachNow is the explicit repair for a terminal refusal, and destroys nothing',
     async () => {
-      // A terminal refusal keeps its `replace` stage on purpose, so no eviction
-      // can restart a destructive ladder. That leaves one question: how does the
-      // box ever come back? By a caller asking for the attach by name. It
-      // re-attempts, it does not destroy, and a success clears the row.
+      // A terminal refusal keeps its `replace` stage so no eviction can restart a destructive ladder;
+      // only a caller asking for the attach by name brings the box back.
       const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
       rows.set(RECOVERY_KEY, seeded('replace'));
@@ -929,13 +767,11 @@ describe('one container identity is retried, then replaced, then refused', () =>
       await expect(box.exec('ls')).rejects.toMatchObject(
         { message: expect.stringContaining('no attached work directory') });
 
-      // Repair attempt one still fails: refused again, and STILL no destruction.
       failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
       await expect(box.attachNow()).rejects.toThrow('RPC_TRANSPORT_ERROR');
       expect(container.destroys).toBe(0);
       expect(ladder(rows)?.stage).toBe('replace');
 
-      // Repair attempt two lands, and the box is back.
       const outcome = await box.attachNow();
       expect(outcome.kind).toBe('empty');
       expect(container.destroys).toBe(0);
@@ -946,29 +782,19 @@ describe('one container identity is retried, then replaced, then refused', () =>
     });
 });
 
-// ── the retry the ladder promised ───────────────────────────────────────────
-
 describe('a promised retry is delivered even when the row carrying it is gone', () => {
-  /** The one command a landed attach ends on, so a test can say whether an
-   *  attach was attempted at all rather than only what state it left. */
+  /** A landed attach ends on this command, so a test can tell whether an attach was attempted
+   *  at all, not only what state it left. */
   const stamps = (container: FakeSandbox): number =>
     container.execs.filter(command => command.includes(STAMP_COMMAND)).length;
 
-  /** The isolate reset that made this defect permanent: the ladder decided
-   *  `retry` and its arming write never landed, so the box holds a promise with
-   *  nothing keeping it. The fake's rows ARE the schedule, so dropping them is
-   *  the same world the reset leaves behind. */
+  /** Models an isolate reset after the ladder decided `retry` but before its arming write landed.
+   *  The fake's rows ARE the schedule, so dropping them is the world the reset leaves. */
   const loseTheArmedRow = (container: FakeSandbox): void => {
     container.scheduleRows.length = 0;
   };
 
   test('the next operation re-arms the only coordinator when its retry row was lost', async () => {
-    // The deployed shape: a box failed its attach with
-    // OPERATION_INTERRUPTED, the taxonomy answered `stale-owner → retry`, and
-    // the ONE schedule row that answer armed was the only thing that could
-    // re-drive it — the readiness gate answered `pending` on `unattached` and
-    // `kickStartup` no-opped on any phase but `unstarted`. Lose that write and
-    // /create, /wake and every operation are inert for ever.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     failAttempt(harnessed, 'OPERATION_INTERRUPTED');
@@ -987,14 +813,12 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     expect({ exitCode: result.exitCode, stamps: stamps(container) })
       .toEqual({ exitCode: 0, stamps: 2 });
     expect((await box.devboxState()).restoration).toBe('attached');
-    // The attach that landed is what clears the ladder row.
     expect(rows.has(RECOVERY_KEY)).toBe(false);
   });
 
   test('a retry that IS scheduled refuses the caller and attaches nothing', async () => {
-    // The rate limit is the schedule, not a counter: while a row is pending,
-    // one broken box answers every caller from the same decision instead of
-    // filing an incident per call.
+    // The pending schedule row is the rate limit: every caller gets the same refusal
+    // instead of each call filing an incident.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
     failAttempt(harnessed, 'OPERATION_INTERRUPTED');
@@ -1008,9 +832,8 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
   });
 
   test('a terminal class is never re-driven, and its refusal names the repair', async () => {
-    // The complement, and the reason this is a promise rather than a retry
-    // loop: exhaustion armed nothing, so there is no row in the way — and the
-    // box must still refuse instead of repeating work the ladder refused.
+    // Exhaustion arms no row, so nothing blocks a re-drive; the box must still refuse
+    // rather than repeat work the ladder refused.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
     failAttempt(harnessed, 'NO_SPACE');
@@ -1025,9 +848,8 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
   });
 
   test('an idle box with no caller gets its lost retry armed by the state poll', async () => {
-    // `devboxState` is the only thing that touches an idle box, and it kicks
-    // the startup row. A retryable unattach is pending work, so the kick arms
-    // it; a terminal one is left alone.
+    // `devboxState` is the only thing that touches an idle box; it kicks the startup row,
+    // arming a pending retryable unattach and leaving a terminal one alone.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
     failAttempt(harnessed, 'OPERATION_INTERRUPTED');
@@ -1037,7 +859,6 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     await box.devboxState();
 
     expect(container.scheduleRows.filter(row => row.callback === 'devboxStartup')).toHaveLength(1);
-    // And the arm is idempotent: a second poll finds the row it just wrote.
     await box.devboxState();
     expect(container.scheduleRows.filter(row => row.callback === 'devboxStartup')).toHaveLength(1);
   });
@@ -1055,15 +876,8 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
   });
 
   test('a poll after the armed row comes due leaves that row and its alarm alone', async () => {
-    // MEASURED on b20260914070552, cycles 2, 3, 5 and 6: one admission
-    // refusal armed the retry row a second out, the driver read `/state`
-    // every 300 ms, and once the row was due each reading re-armed it. The
-    // SDK's `schedule()` resets the object's one platform alarm a second out
-    // on every call, so the alarm was moved out of reach faster than the
-    // platform could deliver it: 50 s of `unstarted`, the incident never
-    // delivered, the heartbeat silent, and the platform reporting the alarm
-    // `Canceled`. A due row the alarm loop has not run yet is pending work;
-    // only its own dispatch may look past it.
+    // The SDK's `schedule()` resets the object's one alarm on every call, so re-arming a due row
+    // on each poll starves the alarm; only the row's own dispatch may look past it (D14).
     let now = Date.now();
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
 
@@ -1093,9 +907,8 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
   });
 
   test('a callback dispatching its own due row still arms its successor', async () => {
-    // The direction the guard was first written for, kept red: the SDK
-    // deletes a fired row only after the callback returns, so the heartbeat
-    // sees its own due row and must look past it or the chain dies.
+    // The SDK deletes a fired row only after the callback returns, so the heartbeat sees its
+    // own due row and must look past it or the chain dies.
     let now = Date.now();
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
 
@@ -1116,39 +929,27 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
   });
 });
 
-// ── one budget for the whole restoration ────────────────────────────────────
-
 describe('one budget, two policies: the attach may replace, the phases after it may not', () => {
   test('silent ports share the remaining budget instead of one window each', async () => {
-    // KINU-N014. A thirty-second window per port makes three silent ports cost
-    // about ninety seconds while every caller sits in the readiness gate.
-    // WITHOUT THE ALLOWANCE THIS TEST CANNOT PASS: three thirty-second windows
-    // outlast the runner's timeout many times over.
+    // Silent ports share one remaining budget; a window per port would hold every caller
+    // in the readiness gate for the sum of the windows.
     const harnessed = harness(TightBox);
     const { box, container, rows } = harnessed;
 
     for (const value of [3000, 8080, 9000]) port(rows, value, `tok${String(value)}`);
     await box.devboxStartup();
-    // ATTACHED, AND HONEST ABOUT NOT BEING READY. No port answered, so none was
-    // exposed; the container is untouched because a slow app is no reason to
-    // destroy a working box.
+    // A slow app is no reason to destroy a working box: no port answered, so none is exposed.
     expect(container.exposures).toEqual([]);
     expect(container.destroys).toBe(0);
     expect(container.running.running).toBe(true);
     const state = await box.devboxState();
     expect(state.ready).toBe(false);
     expect(state.unready).toContain('port 3000');
-    // The specs all survive, so the ports can be proved again later.
     expect(state.ports.map(spec => spec.port)).toEqual([3000, 8080, 9000]);
   });
 
   test('ONE SLOW SERVER costs readiness and nothing else, and the next explicit try succeeds',
     async () => {
-      // The regression this split exists for. Under one throwing deadline a
-      // process that outran the budget abandoned the restoration, which the
-      // taxonomy read as unfenceable work and answered by destroying a container
-      // that was working perfectly. A slow `npm run dev` must never cost the box
-      // its identity.
       const harnessed = harness(TightBox);
     const { box, container, rows } = harnessed;
       proc(rows, 'p1');
@@ -1168,15 +969,11 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       const stalled = await box.devboxState();
       expect(stalled.ready).toBe(false);
       expect(stalled.unready).toContain('process p1');
-      // The ladder is untouched: this is not an attach failure.
       expect(rows.has(RECOVERY_KEY)).toBe(false);
       expect(armed(container)).toBe(0);
       // Operations still work, which is the point of leaving the box attached.
       expect((await box.exec('ls')).exitCode).toBe(0);
 
-      // THE EXPLICIT RETRY. The server has come up in the meantime, so the
-      // repair finds it and the box goes ready. Nothing was destroyed and no
-      // timer did this: a caller asked.
       slow.release();
       container.listening.add(3000);
       const outcome = await box.attachNow();
@@ -1189,9 +986,8 @@ describe('one budget, two policies: the attach may replace, the phases after it 
     });
 
   test('a process the container already holds is not started twice by the retry', async () => {
-    // What makes the explicit retry safe: the walk asks the container before it
-    // starts anything, so one spec cannot become two servers fighting over one
-    // port.
+    // The walk asks the container before starting anything, so one spec cannot become two
+    // servers fighting over one port.
     const harnessed = harness(TightBox);
     const { box, container, rows } = harnessed;
     proc(rows, 'p1');
@@ -1226,11 +1022,8 @@ describe('one budget, two policies: the attach may replace, the phases after it 
 
   test('the exposure verdict does not depend on how slowly the container answers',
     async () => {
-      // The deploy wave's shape, made deterministic: every command takes longer
-      // in real time than the whole 20 ms budget. On a wall-clock budget the
-      // restore outran the hook before the exposure was reached and the box
-      // settled as `[deadline → repair]` (main `bea156897`, 2026-09-15). On the
-      // test's own clock only the exposure's allowance elapses.
+      // Every command takes longer in real time than the whole 20 ms budget; on the test's
+      // own clock (D19) only the exposure's allowance elapses.
       const harnessed = harness(TightBox);
     const { box, container, rows } = harnessed;
       port(rows, 3000, 'tok3000');
@@ -1244,8 +1037,6 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       await attempt;
       expect(container.destroys).toBe(0);
       const state = await box.devboxState();
-      // The exposure's own report, not the hook's: `[deadline → repair]` would
-      // name the budget and file its incident at the `process` stage.
       expect(state.unready).toContain('port 3000');
       expect(state.unready).not.toContain('hook budget');
       expect(incidents(rows).map(row => row.stage)).toEqual(['port']);
@@ -1254,18 +1045,14 @@ describe('one budget, two policies: the attach may replace, the phases after it 
 
   test('an initial boot stamp that exceeds the hook budget leaves the box unattached',
     async () => {
-      // The last phase, and the one furthest from the attach that opened the
-      // bound. It is a step like the others: reported, never replaced.
       const harnessed = harness(TightBox);
     const { box, container, rows } = harnessed;
       const slow = gate();
       container.stampGate = slow;
       const attempt = box.devboxStartup();
       await slow.reached;
-      // The whole hook budget elapses with the stamp still parked. The
-      // rejection is asserted AFTER the clock moves: bun's `expect(promise)
-      // .rejects` blocks the test until the promise settles, and nothing can
-      // advance a test-driven clock while it does.
+      // Assert the rejection only after the clock moves: `expect(promise).rejects` blocks until
+      // settlement, and nothing can advance the test-driven clock meanwhile.
       box.clock.advance(TIGHT_POLICY.attachBudgetMs);
       await expect(attempt).rejects.toThrow('[abandoned → replace]');
       expect(container.destroys).toBe(0);
@@ -1280,10 +1067,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
 
   test('a STALLED ATTACH still replaces the identity, because that work is unfenceable',
     async () => {
-      // The other half of the split, and it must not regress: an attach
-      // abandoned mid-mount leaves work a retry would collide with, so the
-      // identity goes. `snapshot-chain.test.ts` drives the real strategy
-      // attach; this pins the class-level consequence through the ladder.
+      // An attach abandoned mid-mount leaves work a retry would collide with, so the identity goes.
       const harnessed = harness(TightBox);
     const { box, container, rows } = harnessed;
       rows.set(RECOVERY_KEY, { owner: PREVIOUS, stage: 'retry' });
@@ -1322,7 +1106,7 @@ describe('the heartbeat does not quiesce active caller work', () => {
       running.release();
       await command;
 
-      // The heartbeat that observes the settled command starts a fresh quiet
+      // The heartbeat that observes the settled command starts a fresh quiet period.
       now += 3;
       await box.devboxHeartbeat();
       expect(container.stops).toBe(0);
@@ -1348,8 +1132,6 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
   });
 
   test('a faulted initial boot stamp leaves the box unattached and unready', async () => {
-    // The other half of the split, proved on the fake: a container fault after
-    // the attach must NOT reject the attempt.
     fixture.container.stampFaults.push(new Error('the stamp refused'));
     await expect(fixture.box.devboxStartup()).rejects.toThrow('the stamp refused');
     const state = await fixture.box.devboxState();
@@ -1376,10 +1158,6 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
   });
 
   test('the durable owner check really refuses a write, so the fence is not vacuous', async () => {
-    // Proof that the conditional write is load-bearing rather than decorative:
-    // the row is taken over by another owner while the attempt is parked, and
-    // the attempt's stage write must then change nothing at all. Without the
-    // comparison this write lands and the assertion below fails.
     failAttempt(fixture, 'RPC_TRANSPORT_ERROR');
     const claiming = gate();
     fixture.storage.gateOn(RECOVERY_KEY, claiming);
@@ -1389,11 +1167,8 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
     fixture.storage.gateOn(RECOVERY_KEY, settling);
     claiming.release();
     await settling.reached;
-    // Another owner takes the row while this attempt is inside its conditional
-    // write. Without the comparison the write lands and the assertion fails.
     fixture.rows.set(RECOVERY_KEY, { owner: 'another-attempt' });
-    // What the superseded attempt is measured against: whatever the container
-    // start had already armed. An inert attempt may not ADD to it.
+    // Baseline is whatever the container start already armed; a superseded attempt may not add.
     const armedBeforeSettling = armed(fixture.container);
     settling.release();
     await attempt;

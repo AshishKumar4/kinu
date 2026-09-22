@@ -1,28 +1,5 @@
-/**
- * Trees for the conformance battery: generated, held live, and compared.
- *
- * WHAT AN ARM SERVES IS A STATE, NOT A LOG: a set of paths, each with bytes, a
- * mode, an owner, times, xattrs, a symlink target or an inode shared with
- * another path. The battery needs to WRITE such a state into an arm's
- * workspace, read the state the arm serves after a wake, and say WHICH
- * PROPERTY differs. So this module holds a live tree, generates trees from a
- * seed so a 1e5-file tree is a number rather than a fixture file, and compares
- * two trees property by property, so a restore that split a hardlink, filled a
- * hole or dropped an xattr is named by that word.
- *
- * THE NODE VOCABULARY IS OWNED HERE. It used to be imported from a capture
- * model that the shipped strategy never used — the strategy archives an
- * overlay upper, so there is no manifest of rows in the product at all — and a
- * test model borrowing a shape from code it does not exercise is a shape
- * nobody keeps honest. What the battery needs is exactly what is below: a
- * file's logical content as dense bytes or sparse runs, POSIX identity, and a
- * canonical serialization to compare two trees by.
- *
- * SPARSE FILES ARE NEVER EXPANDED HERE. A 1 GiB file with 1 MiB of data is
- * held as its runs, digested over its runs, and compared over its runs; the
- * zeros between them are arithmetic. That is what lets the 1 GiB cell run
- * in-process in a few MiB.
- */
+/** Live trees for the conformance battery: seeded generation and property-by-property compare.
+ *  Sparse files stay as runs (never expanded), so a 1 GiB cell runs in a few MiB. */
 
 import { createHash } from 'node:crypto';
 import { Seeded } from '../../bench/seeded';
@@ -38,8 +15,6 @@ export interface SparseRun {
   readonly bytes: Uint8Array;
 }
 
-/** A file's logical content: every byte held, or the runs that are held with
- *  holes between them. */
 export type FileContent =
   | { readonly kind: 'dense'; readonly bytes: Uint8Array }
   | { readonly kind: 'sparse'; readonly size: number; readonly runs: readonly SparseRun[] };
@@ -49,7 +24,6 @@ export function contentSize(content: FileContent): number {
   return content.kind === 'dense' ? content.bytes.byteLength : content.size;
 }
 
-/** POSIX metadata that affects restore semantics independently of file bytes. */
 export interface PosixMetadata {
   readonly uid: number;
   readonly gid: number;
@@ -92,7 +66,6 @@ type Segment =
   | { readonly zeros: true; readonly start: number; readonly end: number }
   | { readonly zeros: false; readonly start: number; readonly end: number; readonly view: Uint8Array };
 
-/** A file's logical bytes as an ordered segment list, plus the logical size. */
 interface LogicalLayout {
   readonly segments: Segment[];
   readonly size: number;
@@ -121,13 +94,8 @@ function subtract(pieces: Array<[number, number]>, start: number, end: number): 
   return out;
 }
 
-/**
- * Canonical segment layout of a sparse file. Runs are applied LAST-WRITER-WINS
- * in array order — exactly the semantics of `out.set(run.bytes, run.offset)` —
- * so the painted result matches a plain expansion byte for byte even when runs
- * overlap or arrive unsorted. Unpainted gaps become explicit zero segments,
- * which is what keeps hole handling O(runs).
- */
+/** Runs apply last-writer-wins in array order, matching `out.set(run.bytes, run.offset)`,
+ *  even when overlapping or unsorted; gaps become explicit zero segments to keep holes O(runs). */
 export function paintedSegments(content: FileContent): LogicalLayout {
   if (content.kind === 'dense') {
     return {
@@ -171,10 +139,8 @@ export function paintedSegments(content: FileContent): LogicalLayout {
   return { segments, size: content.size };
 }
 
-// ── entries ─────────────────────────────────────────────────────────────────
-
-/** The metadata every generated entry carries: real values, never zeros, so a
- *  restore that zeroes a field cannot pass by matching a zero fixture. */
+/** Metadata values are never zero, so a restore that zeroes a field cannot pass by
+ *  matching a zero fixture. */
 export function metadataOf(seed: Seeded, xattrs: Record<string, string> = {}): PosixMetadata {
   return {
     uid: 1000 + seed.below(1000),
@@ -186,8 +152,6 @@ export function metadataOf(seed: Seeded, xattrs: Record<string, string> = {}): P
   };
 }
 
-/** A dense file entry at the default mode; a fixture wanting another one
- *  overrides `mode` on the result. */
 export function fileEntry(path: string, bytes: Uint8Array, ino: number, metadata: PosixMetadata): NodeEntry {
   return { path, kind: 'file', mode: 0o644, ino, metadata, content: { kind: 'dense', bytes } };
 }
@@ -205,9 +169,8 @@ export function xattrValue(text: string): string {
   return Buffer.from(text, 'utf8').toString('base64');
 }
 
-/** A path-to-text record as a complete tree of entries: every ancestor is a
- *  directory row, every file is dense, inodes are distinct. Text fixtures stay
- *  text; this is how they enter a full-fidelity workspace. */
+/** Converts a path-to-text record into a complete tree: every ancestor is a directory row,
+ *  every file is dense, inodes are distinct. */
 export function textTree(rows: Record<string, string>, seed = new Seeded(7)): NodeEntry[] {
   const entries = new Map<string, NodeEntry>();
   let ino = 1;
@@ -227,17 +190,11 @@ export function textTree(rows: Record<string, string>, seed = new Seeded(7)): No
 export interface GeneratedTreeSpec {
   readonly seed: number;
   readonly files: number;
-  /** Bytes per file; every file gets exactly this many pseudo-random bytes. */
   readonly bytesPerFile: number;
   /** Files per directory before a new sibling directory is opened. */
   readonly fanout?: number;
 }
 
-/**
- * A generated tree: `files` dense files of `bytesPerFile` bytes under a
- * balanced directory layout, names and bytes from `seed`. Two calls with the
- * same spec produce byte-identical trees.
- */
 export function generatedTree(spec: GeneratedTreeSpec): NodeEntry[] {
   const seed = new Seeded(spec.seed);
   const fanout = spec.fanout ?? 64;
@@ -266,10 +223,8 @@ export function generatedTree(spec: GeneratedTreeSpec): NodeEntry[] {
   return sortedByPath(entries);
 }
 
-/**
- * The full-fidelity fixture: every property the byte-for-byte cell compares,
- * present at least once, with values a lossy restore would change.
- */
+/** The full-fidelity fixture: every property the byte-for-byte cell compares,
+ *  present at least once, with values a lossy restore would change. */
 export function fidelityTree(seedValue = 11): NodeEntry[] {
   const seed = new Seeded(seedValue);
   const encoder = new TextEncoder();
@@ -284,8 +239,7 @@ export function fidelityTree(seedValue = 11): NodeEntry[] {
       'user.mime': xattrValue('text/x-shellscript'),
       'security.selinux': xattrValue('unconfined_u:object_r:user_home_t:s0'),
     })), mode: 0o755 },
-    // ONE INODE, TWO NAMES: a restore that copies them apart changes the
-    // partition, not the bytes.
+    // One inode, two names: a restore that copies them apart changes the partition, not bytes.
     fileEntry('src/shared.bin', shared, 5, metadataOf(seed)),
     fileEntry('src/deep/alias.bin', shared, 5, metadataOf(seed)),
     symlinkEntry('src/link', 'deep/script.sh', 6, metadataOf(seed)),
@@ -309,7 +263,6 @@ export function fidelityTree(seedValue = 11): NodeEntry[] {
   return sortedByPath(entries);
 }
 
-/** One 1 GiB sparse file with 1 MiB of data and one 64 MiB dense file. */
 export function gigabyteTree(seedValue = 13, denseBytes = 64 * 1024 * 1024): NodeEntry[] {
   const seed = new Seeded(seedValue);
   const dataRun = seed.fill(new Uint8Array(1024 * 1024));
@@ -360,11 +313,8 @@ function expandSmall(content: FileContent): Uint8Array {
   return out;
 }
 
-// ── digests over logical bytes, holes arithmetic ────────────────────────────
-
 const ZEROS = new Uint8Array(1024 * 1024);
 
-/** sha256 of the logical bytes, hashing holes from one shared zero buffer. */
 export function logicalDigest(content: FileContent): string {
   const hash = createHash('sha256');
 
@@ -382,7 +332,6 @@ export function logicalDigest(content: FileContent): string {
   return hash.digest('hex');
 }
 
-/** The hole geometry: `[start, end)` of every all-zero segment, in order. */
 export function holesOf(content: FileContent): readonly [number, number][] {
   return paintedSegments(content).segments
     .filter((segment) => segment.zeros)
@@ -417,13 +366,8 @@ function runBytesOfRuns(runs: readonly SparseRun[]): number {
   return total;
 }
 
-/**
- * One run list with overlaps and adjacencies resolved, later runs winning.
- *
- * A page-in that re-reads a range it already holds must not leave the file
- * holding it twice: the disk charge is the sum of the run lengths, so a
- * duplicate run would charge a byte the file does not have.
- */
+/** Merges overlaps so a re-read range is held once: disk charge sums run lengths,
+ *  so a duplicate run would charge bytes the file does not have. */
 function mergeRuns(runs: readonly SparseRun[]): SparseRun[] {
   const painted: { offset: number; bytes: Uint8Array }[] = [];
 
@@ -453,8 +397,6 @@ function mergeRuns(runs: readonly SparseRun[]): SparseRun[] {
   return painted;
 }
 
-// ── the live tree ───────────────────────────────────────────────────────────
-
 /** One inode, shared by every hardlinked path. Mutable: a write lands here. */
 export interface LiveInode {
   readonly kind: 'file' | 'dir' | 'symlink';
@@ -464,21 +406,14 @@ export interface LiveInode {
   content?: FileContent;
 }
 
-/**
- * A live filesystem tree at full fidelity, as a container holds one.
- *
- * Paths map to inodes; two paths may map to ONE inode, which is a hardlink.
- * `charge` is the disk budget hook: every byte that lands is charged and every
- * byte released is refunded, and a charge that refuses (ENOSPC) leaves the
- * tree exactly as it was — the effect never happens without the room for it.
- */
+/** Two paths may share ONE inode (a hardlink); every byte landed is charged, every release refunded.
+ *  A refused `charge` (ENOSPC) leaves the tree exactly as it was. */
 export class LiveTree {
   readonly #paths = new Map<string, LiveInode>();
   readonly #inos = new Map<LiveInode, number>();
   #nextIno = 1;
 
   constructor(
-    /** Charge `delta` bytes against the disk; throws to refuse. */
     private readonly charge: (delta: number) => void = () => undefined,
   ) {}
 
@@ -490,7 +425,6 @@ export class LiveTree {
     return [...this.#paths.keys()].sort();
   }
 
-  /** File paths only, sorted: the listing the text workspace exposes. */
   filePaths(): string[] {
     return [...this.#paths].filter(([, inode]) => inode.kind === 'file').map(([path]) => path).sort();
   }
@@ -503,7 +437,6 @@ export class LiveTree {
     return this.#paths.has(path);
   }
 
-  /** Bytes charged to the disk for this tree's content. */
   bytesHeld(): number {
     let total = 0;
 
@@ -514,12 +447,8 @@ export class LiveTree {
     return total;
   }
 
-  /**
-   * Plant a complete tree: directories, files, symlinks, hardlinks (entries
-   * sharing an `ino` share one inode), sparse content as runs. Existing paths
-   * are replaced; a missing ancestor becomes a directory, as it must on any
-   * filesystem. Charges every byte before it lands.
-   */
+  /** Entries sharing an `ino` share one inode (hardlinks); existing paths are replaced.
+   *  A missing ancestor becomes a directory; every byte is charged before it lands. */
   plant(entries: readonly NodeEntry[]): void {
     const byIno = new Map<number, LiveInode>();
 
@@ -553,8 +482,6 @@ export class LiveTree {
     }
   }
 
-  /** `mkdir -p`: `path` and every ancestor become directories where absent;
-   *  an existing node keeps its inode and attributes. */
   mkdirp(path: string): void {
     for (const step of [...ancestorsOf(path), path]) {
       if (!this.#paths.has(step)) {
@@ -563,9 +490,8 @@ export class LiveTree {
     }
   }
 
-  /** Write dense bytes at `path`, creating ancestors as directories. A write
-   *  advances mtime by one tick, as the kernel would, so a metadata-only
-   *  change detector sees it; `plant` alone sets times verbatim. */
+  /** A write advances mtime one tick, as the kernel would, so a metadata-only change detector
+   *  sees it; `plant` alone sets times verbatim. */
   writeFile(path: string, bytes: Uint8Array, metadata?: PosixMetadata, mode = 0o644): void {
     const slash = path.lastIndexOf('/');
 
@@ -591,11 +517,8 @@ export class LiveTree {
     });
   }
 
-  /**
-   * `pwrite(2)`: overwrite `bytes` at `offset` without changing the length or
-   * the sparse geometry outside the written window. A dense file stays dense;
-   * a sparse file gains one run. Past-EOF writes extend the file.
-   */
+  /** `pwrite(2)` semantics: sparse geometry outside the written window is preserved;
+   *  a sparse file gains one run. Past-EOF writes extend the file. */
   pwrite(path: string, offset: number, bytes: Uint8Array): void {
     const inode = this.#paths.get(path);
 
@@ -629,10 +552,7 @@ export class LiveTree {
     inode.metadata = touched(inode.metadata);
   }
 
-  /**
-   * `truncate(2)`: the file takes length `size`. Bytes past it are released;
-   * a longer file gains a hole, which is what the kernel leaves there.
-   */
+  /** Extending leaves a hole, not written zeros, as the kernel's `truncate(2)` does. */
   truncate(path: string, size: number): void {
     const inode = this.#paths.get(path);
 
@@ -664,15 +584,8 @@ export class LiveTree {
     inode.metadata = touched(inode.metadata);
   }
 
-  /**
-   * Page bytes into a file without touching anything a reader can observe
-   * except the bytes: the fault-in half of a lazy restore.
-   *
-   * NOT A WRITE, and the difference is the whole point. A write advances
-   * mtime, because the kernel does; a page-in restores bytes the head already
-   * declared for this file at times it already recorded, so a metadata
-   * comparison after a lazy wake must see exactly what a publish wrote.
-   */
+  /** Page-in for a lazy restore, not a write: mtime and metadata stay untouched so a
+   *  metadata comparison after a lazy wake sees exactly what a publish wrote. */
   hydrate(path: string, offset: number, bytes: Uint8Array): void {
     const inode = this.#paths.get(path);
 
@@ -697,10 +610,8 @@ export class LiveTree {
     inode.content = { kind: 'sparse', size: content.size, runs: merged };
   }
 
-  /**
-   * Release a resident range. The file keeps its length and reads as zeros
-   * there until it is paged back in, which is what an evicted page is.
-   */
+  /** The file keeps its length and reads as zeros in the range until paged back in,
+   *  which models an evicted page. */
   dehydrate(path: string, offset: number, length: number): void {
     const inode = this.#paths.get(path);
 
@@ -735,8 +646,8 @@ export class LiveTree {
     inode.content = { kind: 'sparse', size, runs: kept };
   }
 
-  /** `link(2)`: a second name for one inode. What a restore does when the
-   *  head gives two paths the same inode id and it meets them separately. */
+  /** A restore does this when the head gives two paths the same inode id and it meets them
+   *  separately. */
   link(existing: string, path: string): void {
     const inode = this.#paths.get(existing);
 
@@ -790,9 +701,8 @@ export class LiveTree {
     this.#inos.clear();
   }
 
-  /** The tree as capture-model entries, with inode ids that share exactly
-   *  where the live inodes share. Content is shared by reference: a snapshot
-   *  is read, never written. */
+  /** Inode ids share exactly where live inodes share (hard links).
+   *  Content is shared by reference: a snapshot is read, never written. */
   snapshot(): NodeEntry[] {
     const out: NodeEntry[] = [];
 
@@ -842,8 +752,7 @@ export function cloneMetadata(metadata: PosixMetadata): PosixMetadata {
   return { ...metadata, xattrs: { ...metadata.xattrs } };
 }
 
-/** The metadata after a write: mtime and ctime one tick later. There is no
- *  clock in this model, so a tick is one nanosecond past the old value. */
+/** The model has no clock: a write advances mtime and ctime one nanosecond past the old mtime. */
 function touched(metadata: PosixMetadata): PosixMetadata {
   const next = String(BigInt(metadata.mtimeNs) + 1n);
 
@@ -856,13 +765,8 @@ export function cloneContent(content: FileContent): FileContent {
   return { kind: 'sparse', size: content.size, runs: content.runs.map((run) => ({ offset: run.offset, bytes: run.bytes.slice() })) };
 }
 
-// ── comparison ──────────────────────────────────────────────────────────────
-
-/**
- * The properties a restore can lose, each named. `paths` is the set of names
- * and their kinds; the rest are per-entry facts. An arm declares the ones its
- * format does not carry; the cell compares every other one.
- */
+/** Properties a restore can lose. `paths` is the name/kind set; the rest are per-entry facts.
+ *  An arm declares the ones its format does not carry; the cell compares every other one. */
 export const TREE_PROPERTIES = [
   'paths', 'bytes', 'mode', 'owner', 'times', 'xattrs', 'symlink', 'hardlink', 'sparse',
 ] as const;
@@ -875,11 +779,8 @@ export interface TreeMismatch {
   readonly detail: string;
 }
 
-/**
- * Every property of `expected` that `served` does not reproduce, except the
- * ones in `refused`. Inode NUMBERS are never compared — no restore keeps
- * them — only their PARTITION: which paths share one.
- */
+/** Inode NUMBERS are never compared, since no restore keeps them; only their PARTITION is:
+ *  which paths share one. */
 export function compareTrees(
   expected: readonly NodeEntry[],
   served: readonly NodeEntry[],
@@ -946,7 +847,6 @@ export function compareTrees(
     if (!want.has(path)) check('paths', path, 'present after restore, never written');
   }
 
-  // The hardlink partition: the set of path-groups sharing an inode.
   const groups = (entries: readonly NodeEntry[]): string => {
     const byIno = new Map<number, string[]>();
 
@@ -971,13 +871,8 @@ export function compareTrees(
   return mismatches;
 }
 
-/**
- * Canonical manifest bytes for one served tree, with inode numbers normalized
- * to the hardlink partition and declared-refused fields neutralized. The
- * capture encoder is the product's own; {@link compareTrees} remains the
- * separate sparse-geometry check because canonical logical bytes deliberately
- * make a dense file and a sparse-but-byte-equal file the same.
- */
+/** Canonical bytes make dense and sparse-but-byte-equal files identical, so sparse geometry
+ *  stays a separate check in {@link compareTrees}. */
 export function canonicalTreeBytes(
   entries: readonly NodeEntry[],
   refused: ReadonlySet<TreeProperty> = new Set(),
@@ -1036,7 +931,6 @@ function sameXattrs(a: Readonly<Record<string, string>>, b: Readonly<Record<stri
   return names.length === Object.keys(b).length && names.every((name) => a[name] === b[name]);
 }
 
-/** One line per mismatch, for an assertion message. */
 export function describeMismatches(mismatches: readonly TreeMismatch[]): string {
   return mismatches.map((row) => `${row.property}@${row.path}: ${row.detail}`).join('; ');
 }

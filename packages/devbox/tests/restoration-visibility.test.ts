@@ -1,31 +1,5 @@
-// A restoration in flight is a restoration the box admits to.
-//
-// MEASURED DEFECT THIS HOLDS, and it is the reason a deployed box read as one
-// that never attached rather than as one that was slow. On that box
-// (probe `blp1`: one Worker, one container, `wrangler tail` open across the
-// whole attempt) the sequence was:
-//
-//   t+0     `/create`, container not yet admitted
-//   t+~5s   two admission refusals recorded as incidents
-//   t+15s   the container comes up; the scheduled callback drives the attach
-//   t+15s…  `#startup` holds that attempt, `kickStartup` returns early on it,
-//           so nothing re-arms and nothing else runs
-//   t+300s  still `running=true restoration=unstarted`, still two incidents,
-//           `/state` still answering in ~300 ms
-//
-// For 285 of those seconds the box answered `unready: no restoration has run
-// for this container yet` while one was in flight. That sentence is not merely
-// unhelpful, it is the wrong sentence: the driver's own classifier reads
-// `running=true` plus `unstarted` as `pending` — its `stopped` arm requires
-// `running === false` — so it never drives, never gives up early, and reports
-// a ceiling refusal that names no cause. `e2ecal0901002202` recorded 900,001 ms
-// of exactly that reading.
-//
-// THE PROPERTY, stated so it survives a rewrite of the state model: at every
-// moment, a box that is not attached must either be VISIBLY WORKING or be
-// RE-ARMABLE. Never both silent and pinned. A model in which an attempt can be
-// held with no observable trace reintroduces this defect whatever its phases
-// are called.
+// An unattached box must always be either visibly working or re-armable, never silent
+// and pinned: an in-flight restoration must not read as `unstarted`.
 import { describe, expect, test } from 'bun:test';
 
 import { Devbox, gate, harness } from './support/devbox-harness';
@@ -44,9 +18,8 @@ class TestBox extends Devbox<unknown> {
 describe('a box that is not attached is either visibly working or re-armable', () => {
   test('a restoration in flight is reported as one, not as a restoration nobody ran', async () => {
     const { box, container } = harness(TestBox);
-    // Parked at the boot-id stamp: the last await of the restoration, so the
-    // attempt is registered, its single-flight entry is held, and every later
-    // caller joins it. This is `blp1`'s state exactly.
+    // Parked at the boot-id stamp, the restoration's last await: the attempt is registered,
+    // its single-flight entry is held, and every later caller joins it.
     const stamp = gate();
     container.stampGate = stamp;
     const restoring = box.devboxStartup();
@@ -54,9 +27,7 @@ describe('a box that is not attached is either visibly working or re-armable', (
 
     const state = await box.devboxState();
 
-    // THE ASSERTION THE DEPLOYED BOX FAILED. The attempt is on the record as
-    // work in flight, never as work nobody started. Read off the phase rather
-    // than the sentence, so a rewording cannot pass against a reworded lie.
+    // Asserts the phase rather than the message text, so a rewording cannot pass.
     expect(state.ready).toBe(false);
     expect(state.restoration).toBe('restoring');
 
@@ -66,9 +37,6 @@ describe('a box that is not attached is either visibly working or re-armable', (
   });
 
   test('a restoration nobody started still says so', async () => {
-    // The other half of the property, so the fix above cannot be "always claim
-    // to be working": a box that genuinely has not begun must still be
-    // distinguishable from one that has.
     const { box } = harness(TestBox);
 
     const state = await box.devboxState();
@@ -85,9 +53,6 @@ describe('a box that is not attached is either visibly working or re-armable', (
 
     await box.devboxStartup();
 
-    // Nothing is in flight, so the OTHER arm of the property applies: something
-    // must be scheduled to try again. A refusal that armed nothing is the
-    // permanent wedge with an incident attached.
     expect(container.schedules).toContain('devboxStartup');
     expect((await box.devboxState()).ready).toBe(false);
   });

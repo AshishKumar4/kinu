@@ -1,60 +1,13 @@
-// What the container's ONE persistent shell does with a command, for every fake
-// that stands in for it.
-//
-// TWO DEPLOYED DEFECTS, ONE CLASS. Both were commands this package composes,
-// both were accepted by a fake that answered them by string matching, and both
-// killed the session shell on a real deployment:
-//
-//   1. `exit` ON A SUCCESS BRANCH. The chain's store-visibility probe said
-//      `printf ready; exit 0`, which ended the shell rather than the script:
-//      `SessionTerminatedError: Session 'sandbox-default' shell exited (exit
-//      code: 0)`, 1,054 times over one wake in probe `wakeprobe09010702`.
-//   2. A COMMAND THE SHELL CANNOT PARSE. `releaseWorkdirHoldersCommand` joined
-//      its lines with a SPACE, so the container received `… fi done if [ -z …`
-//      — no separator before `done`. `sh` answered `Syntax error: "do"
-//      unexpected` and exited 2, so every stop in run `e2e20260901140445` died
-//      as `Session 'sandbox-default' shell exited (exit code: 2)`:
-//      two deployed boxes lost `stop-small` to it.
-//   3. A TOP-LEVEL `set -e`. The chain's delta batches began with `set -e`
-//      so a failed `cp` could not hide behind the `chmod` after it; the flag
-//      outlived the batch in the persistent shell, and the next failing
-//      command from ANY caller ended the session with that command's status.
-//      Settlement `20260915012040` lost G3's read-only probe — a `touch` that
-//      is meant to fail with EROFS — as `shell exited (exit code: 1)`, and
-//      D5's G3 died the same way on 2026-09-13. Measured on the pinned
-//      image's container server on 2026-09-15: `set -e` at the top level,
-//      then `false`, and the session is gone; the same inside `( … )` and
-//      the session survives.
-//
-// The second one is why this module runs a REAL PARSE rather than another
-// pattern. A fake that matches `startsWith('holders=""')` accepts a command no
-// shell would run, so the suite was green on a command the deployment refused —
-// and no assertion anybody thought to write would have caught it, because the
-// defect was in the shape of the string rather than in the decisions around it.
-// `sh -n` is the same question the container asks, asked by the same kind of
-// program.
-//
-// POSIX, NOT BASH. The sandbox image is Alpine, so the shell behind a session is
-// a POSIX one; a command that needs bash has to say `bash -c` and carry its own
-// dependency. Checking against `sh` therefore holds every composed command to
-// the contract the container really offers.
+// Models the container's one persistent session shell for every fake: `sh -n` parses each
+// command, since a string-matching fake accepts commands the real POSIX shell refuses.
 import { spawnSync } from 'node:child_process';
 
-/**
- * A command that tells the container's one session shell to exit.
- *
- * `exit` in a command string is not a way to end a script: the SDK feeds every
- * command to a PERSISTENT shell, so it ends that shell, and the SDK answers the
- * command that said it with `SessionTerminatedError`.
- */
+/** `exit` ends the SDK's persistent session shell, not the script; the SDK answers that
+ *  command with `SessionTerminatedError`. */
 const SHELL_EXIT = /(?:^|[\s;&|(])exit(?:\s+\d+)?\s*(?:$|[;&|)])/;
 
-/**
- * A `set -e` (or `set -o errexit`) the persistent shell would keep after the
- * command: one at the top level of the command, outside any `( … )` subshell.
- * Bash keeps the flag for the life of the session, so the command that sets it
- * ends the session at the next failing command from anyone.
- */
+/** Only a top-level `set -e`/`set -o errexit` counts: bash keeps it for the session (D18),
+ *  so the next failing command from any caller ends the persistent shell. */
 function leavesErrexitSet(command: string): boolean {
   let depth = 0;
 
@@ -72,10 +25,8 @@ function leavesErrexitSet(command: string): boolean {
   return false;
 }
 
-/**
- * What the SDK throws when a command ends the shell it was running in. The
- * `code` is the SDK's own, which is what the recovery taxonomy classifies.
- */
+/** Mirrors the SDK error for a command that ends its shell; the recovery taxonomy
+ *  classifies on the SDK's own `code`, so it must match. */
 function sessionTerminated(exitCode: number): Error {
   return Object.assign(
     new Error(`Session 'sandbox-default' shell exited (exit code: ${String(exitCode)})`),
@@ -87,8 +38,6 @@ function sessionTerminated(exitCode: number): Error {
  *  templates thousands of times, and the parse of a string cannot change. */
 const parsed = new Map<string, string | undefined>();
 
-/** The shell's own complaint about a command it will not run, or `undefined`
- *  when it parses. */
 function syntaxRefusal(command: string): string | undefined {
   const held = parsed.get(command);
 
@@ -96,9 +45,8 @@ function syntaxRefusal(command: string): string | undefined {
   const checked = spawnSync('sh', ['-n', '-c', command], { encoding: 'utf8' });
 
   if (checked.error !== undefined) {
-    // No `sh` means this check cannot be made, and a check that quietly stops
-    // checking is how the defect above survived a green suite in the first
-    // place. Refusing loudly is the only honest answer.
+    // Missing `sh` throws rather than skipping: a parse gate that silently stops checking
+    // lets broken command templates pass a green suite.
     throw new Error(`the session-shell parse gate could not run sh: ${checked.error.message}`);
   }
 
@@ -111,19 +59,13 @@ function syntaxRefusal(command: string): string | undefined {
   return refusal;
 }
 
-/**
- * The failure a container's session shell answers a command with, or
- * `undefined` when the shell would run it.
- *
- * Every fake exec seam in this package calls this FIRST, so a command template
- * that grows an `exit` or loses a separator fails every test that runs it
- * rather than every deployment that runs it.
- */
+/** Every fake exec seam calls this first, so a command template that grows an `exit` or
+ *  loses a separator fails the tests that run it, not the deployments. */
 export function sessionShellRefusal(command: string): Error | undefined {
   if (SHELL_EXIT.test(command)) return sessionTerminated(0);
 
-  // The status the session dies with is the NEXT failing command's, not this
-  // one's; 1 is what the deployed probe reported.
+  // The session dies with the next failing command's status, not this one's; the deployed
+  // probe reported 1.
   if (leavesErrexitSet(command)) {
     return Object.assign(sessionTerminated(1), { shellRefusal: 'a top-level set -e outlives this command in the persistent session' });
   }
@@ -132,13 +74,10 @@ export function sessionShellRefusal(command: string): Error | undefined {
 
   if (refusal === undefined) return undefined;
 
-  // The exit code a POSIX shell answers a parse failure with, and the code the
-  // deployed stops really reported.
+  // 2 is the POSIX shell's exit code for a parse failure, and what deployed stops reported.
   return Object.assign(sessionTerminated(2), { shellRefusal: refusal });
 }
 
-/** The same verdict as an assertion, for a test that reads one command
- *  template directly rather than running it through a fake. */
 export function requireSessionShellAccepts(command: string): void {
   const refused = sessionShellRefusal(command);
 

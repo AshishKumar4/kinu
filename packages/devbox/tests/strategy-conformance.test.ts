@@ -1,30 +1,5 @@
-// One contract, one strategy, every point a container can die.
-//
-// WHY THIS FILE EXISTS, AND WHY IT IS NOT PART OF `snapshot-chain.test.ts`.
-// Four classes of defect reached deployed benchmark runs with 15k lines of
-// local tests already green, and every one of them was a property of the
-// CONTRACT rather than of an implementation detail:
-//
-//   1. Control-plane records written under the container's own mount subtree,
-//      so replacing the mount took the head with it.
-//   2. A wake refusing forever because a recorded delta size drifted from the
-//      object the store actually held.
-//   3. A container replacement arriving between any two operations, including
-//      between the two durable writes of one commit.
-//   4. Teardown racing a container that had already stopped.
-//
-// `snapshot-chain.test.ts` models the store as key-to-SIZE, so no byte ever
-// travels through it, and it cannot ask "does the strategy hand back the bytes
-// it was given, from a blank disk, after dying at each of its own commit
-// sub-steps". That question is asked here, through
-// `tests/support/strategy-machine.ts` — which drives the SHIPPED adapter
-// through its own production ports over a durable store and a container disk
-// that a replacement blanks.
-//
-// THE DENOMINATOR IS TYPE-CHECKED. `CONFORMANCE_ARMS` is keyed by
-// `DevboxStrategyName`, so a second strategy cannot be added to the union
-// without this battery failing to compile, and `every declared seam is reached`
-// below refuses a seam list that has drifted from the code it names.
+// Contract tests: the shipped strategy returns the bytes it was given, from a blank disk,
+// after a container replacement at each commit sub-step, through a byte-carrying store.
 import { afterAll, describe, expect, test } from 'bun:test';
 
 import { KNOWN_RED, type KnownRed } from './support/conformance-bug-list';
@@ -58,25 +33,15 @@ import {
   type CheckpointOutcome,
 } from '../src/storage';
 
-/**
- * A commit that did not commit, as an assertion that says WHY.
- *
- * `CheckpointOutcome` carries its refusal as a value rather than throwing, so a
- * bare `expect(kind).toBe('committed')` reports the one word and drops the
- * sentence explaining it — which is the whole diagnosis.
- */
+/** `CheckpointOutcome` returns its refusal as a value, so a bare `kind` check would drop
+ *  the reason; this throws with it. */
 function expectCommitted(outcome: CheckpointOutcome, what: string): void {
   if (outcome.kind === 'committed') return;
   throw new Error(`${what} did not commit: ${outcome.kind} — ${outcome.reason ?? 'no reason given'}`);
 }
 
-/**
- * The served tree is EXACTLY one of the two committed generations.
- *
- * The whole crash contract in one assertion: not blank, not blended, not a
- * generation nobody committed. It throws rather than matching so the message
- * carries the tree that was actually served — the diagnosis is the difference.
- */
+/** The crash contract: the served tree is exactly one committed generation, never blank or
+ *  blended. Throws rather than matching so the message carries the tree actually served. */
 async function expectOneGeneration(arm: ConformanceArm, what: string): Promise<void> {
   const served = canonical(await tree(arm));
 
@@ -87,18 +52,15 @@ async function expectOneGeneration(arm: ConformanceArm, what: string): Promise<v
   );
 }
 
-/** One tree as one comparable line. Path order is the strategy's own business:
- *  it lists the merged overlay, and a difference in order is not a difference
- *  in content. */
+/** Sorts paths: listing order is the strategy's own business, not a difference in content. */
 function canonical(rows: Record<string, string | undefined>): string {
   return JSON.stringify(
     Object.fromEntries(Object.entries(rows).sort(([left], [right]) => left < right ? -1 : 1)),
   );
 }
 
-/** The tree a caller sees, as comparable data: path to file text, `undefined`
- *  for a path the workspace lists but cannot read. Inferred, not annotated —
- *  the entries ARE the contract. */
+/** Path to file text; `undefined` marks a path the workspace lists but cannot read.
+ *  Return type is inferred, not annotated: the entries are the contract. */
 async function tree(arm: ConformanceArm) {
   const paths = await arm.workspace.paths();
   const rows = await Promise.all(paths.map(async (path) => [path, await arm.workspace.read(path)] as const));
@@ -106,7 +68,6 @@ async function tree(arm: ConformanceArm) {
   return Object.fromEntries(rows);
 }
 
-/** Attach a box, and answer what it said. */
 async function attach(arm: ConformanceArm) {
   const outcome = await arm.storage().attach();
   expect(ATTACH_OUTCOME_KINDS).toContain(outcome.kind);
@@ -114,14 +75,8 @@ async function attach(arm: ConformanceArm) {
   return outcome;
 }
 
-/**
- * Wake on a REPLACEMENT: a blank container disk, the same durable store, the
- * same durable rows.
- *
- * One re-drive is permitted and no more. A refusal a retry clears is recovery;
- * a refusal that survives its own retry is the brick this battery exists to
- * catch, so the second attempt's failure is the assertion.
- */
+/** Wake on a replacement: blank container disk, same durable store and rows. One re-drive only:
+ *  a refusal that survives its own retry is the brick this battery catches. */
 async function wake(arm: ConformanceArm) {
   arm.replaceContainer();
 
@@ -140,23 +95,18 @@ async function wake(arm: ConformanceArm) {
   }
 }
 
-/** Whatever an operation threw, parsed at this boundary, or null when it
- *  returned. Callers assert on the CLASS and the words, so the domain type is
- *  the caught value narrowed to Error-or-null — a non-Error throw is itself a
- *  finding family 6 forbids, reported here as the assertion-visible value. */
+/** Returns what the operation threw, or null when it returned. A non-Error throw becomes a
+ *  `TypeError` so callers asserting on class and message still see it as a finding. */
 async function thrownBy(run: () => Promise<void>): Promise<Error | null> {
   try {
     await run();
 
     return null;
   } catch (error) {
-    // KEPT, NEVER SWALLOWED: every caller below asserts on what came back, and
-    // an interruption that reports nothing is the defect, not the test's noise.
     return error instanceof Error ? error : new TypeError(`non-Error thrown: ${describeThrown({ cause: error })}`);
   }
 }
 
-/** Write a generation of content and commit it. */
 async function commit(
   arm: ConformanceArm,
   content: Record<string, string>,
@@ -170,14 +120,12 @@ const OLD = { 'notes.txt': 'generation one', 'src.txt': 'export const one = 1;' 
 
 const NEW = { 'notes.txt': 'generation two', 'extra.txt': 'added by the second commit' };
 
-/** What the tree holds once both generations have been written. */
 const MERGED = { ...OLD, ...NEW };
 
 const THIRD = { 'third.txt': 'written by the third generation' };
 
-// `Object.entries` widens the key to `string` because its lib signature cannot
-// carry a literal union, so each key is parsed back to the strategy name the
-// record already declares rather than asserted into it.
+// `Object.entries` widens keys to `string`, so each key is parsed back to its strategy
+// name rather than asserted into it.
 const armEntries = Object.entries(CONFORMANCE_ARMS).map(([key, open]) => {
   const name = parseDevboxStrategyName(key);
 
@@ -187,17 +135,14 @@ const armEntries = Object.entries(CONFORMANCE_ARMS).map(([key, open]) => {
 });
 
 test('every strategy name has an arm, and every arm names a strategy', () => {
-  // The record's KEY TYPE is the denominator: a name added to
-  // `DevboxStrategyName` breaks this file's types. This asserts the other
-  // direction — that no key here is a name the package does not know.
+  // The record's key type forces an arm per `DevboxStrategyName`; this checks the converse:
+  // no key here is a name the package does not know.
   for (const [name] of armEntries) expect(parseDevboxStrategyName(name)).toBe(name);
   expect(armEntries.length).toBe(1);
 });
 
 for (const [name, open] of armEntries) {
   describe(`${name} — durability contract`, () => {
-    // ── 1. the fundamental durability loop ──────────────────────────────────
-
     test('attach empty, write, commit, REPLACE the container, attach — exact bytes', async () => {
       const arm = open();
       const first = await attach(arm);
@@ -206,8 +151,7 @@ for (const [name, open] of armEntries) {
       expectCommitted(await commit(arm, OLD), 'the first commit');
 
       const woken = await wake(arm);
-      // NEVER `empty`: a box that has committed and reports an empty attach is
-      // the silent-blank-workspace defect wearing a success.
+      // Must not be `empty`: after a commit, an empty attach is a blank workspace posing as success.
       expect(woken.kind).toBe('attached');
       expect(await tree(arm)).toEqual(OLD);
     });
@@ -253,13 +197,8 @@ for (const [name, open] of armEntries) {
     });
 
     test('a quiesce with pending changes publishes exactly once and returns', async () => {
-      // THE CASE THAT FOUND THE STALL, and the reason it is its own test rather
-      // than a consequence of the loop above. A commit loop that compared its
-      // operation's kind (`barrier`) against the checkpoint's kind (`quiesce`)
-      // before returning took the `continue` on every published quiesce, so a
-      // stop published a fresh generation forever. A bounded-work budget makes
-      // that a NAMED failure at the second publication rather than a suite that
-      // hangs and gets its timeout raised.
+      // Limiting `publishSeam` to one visit turns a quiesce that republishes forever
+      // into a named failure at the second publication instead of a hanging suite.
       const arm = open();
       await attach(arm);
 
@@ -277,12 +216,8 @@ for (const [name, open] of armEntries) {
     });
 
     test('generation after generation, each replacement carries every commit before it', async () => {
-      // THREE GENERATIONS, NOT TWO, and the third is the point. An incremental
-      // format's Nth generation is the first thing ever to READ the (N-1)th as
-      // a parent — a restore reads the tree, not the closure — so a closure a
-      // generation declares wrongly stays invisible until the generation after
-      // it. An index that declared only the objects its own build staged made
-      // every third commit fail while two commits passed forever.
+      // Three generations: the Nth is the first to read the (N-1)th as a parent, so a wrongly
+      // declared closure stays invisible until the generation after it.
       const arm = open();
       await attach(arm);
       const seen: Record<string, string> = {};
@@ -295,8 +230,6 @@ for (const [name, open] of armEntries) {
         expect(await tree(arm)).toEqual(seen);
       }
     });
-
-    // ── 2. a death at every commit sub-step ─────────────────────────────────
 
     test('every declared commit seam is reached by an ordinary commit', async () => {
       const arm = open();
@@ -316,9 +249,8 @@ for (const [name, open] of armEntries) {
 
         arm.dieAt(seam);
 
-        // The commit may report its failure as a value or throw it: both are
-        // ordinary for an interrupted operation, and neither is what this case
-        // is about. What it may never do is claim to have committed.
+        // An interrupted commit may fail as a value or a throw; both are ordinary.
+        // It must never report `committed`.
         const interrupted = await thrownBy(async () => {
           const outcome = await commit(arm, NEW);
           expect(outcome.kind).not.toBe('committed');
@@ -330,14 +262,11 @@ for (const [name, open] of armEntries) {
 
         const woken = await wake(arm);
         expect(woken.kind).toBe('attached');
-        // Named rather than matched, so a failure reports the tree that was
-        // actually served: a blank tree, a blended tree and a lost generation
-        // are three different defects and a bare `toContain` names none of them.
+        // Named rather than matched so a failure reports the served tree: blank, blended and
+        // lost-generation trees are distinct defects that a bare `toContain` cannot name.
         await expectOneGeneration(arm, `a death at ${seam}`);
       });
     }
-
-    // ── 3. where the control plane lives ───────────────────────────────────
 
     test('control metadata lives outside every payload and mount prefix', async () => {
       const arm = open();
@@ -350,8 +279,7 @@ for (const [name, open] of armEntries) {
 
       for (const key of placement.objectKeys) {
         for (const prefix of prefixes) {
-          // THE DEFECT, AS ONE LINE. An envelope under the prefix the
-          // container's mount owns is an envelope a mount replacement can eat.
+          // An envelope under a prefix the container's mount owns can be eaten by a mount replacement.
           expect(key.startsWith(prefix)).toBe(false);
         }
       }
@@ -375,11 +303,8 @@ for (const [name, open] of armEntries) {
       const after = await arm.controlPlane();
 
       if (before.objectKeys.length === 0 && before.rows.length === 0) {
-        // NO CONTROL PLANE AT ALL is a real design: where the object store IS
-        // the filesystem, the payload subtree is the box and wiping it wipes
-        // everything. The obligation is the opposite one and it is
-        // still real — a box with nothing left must stop claiming a head, or it
-        // would serve a workspace it cannot fill while reporting success.
+        // With no control plane, wiping the payload subtree wipes the box; it must then stop
+        // claiming a head, or it would serve a workspace it cannot fill while reporting success.
         expect(after.head).toBe(null);
         const woken = await wake(arm);
         expect(woken.detail).toContain('0 objects');
@@ -388,8 +313,7 @@ for (const [name, open] of armEntries) {
         return;
       }
 
-      // The head is still named, and it is the same head: the control plane
-      // does not live in the subtree the container owns.
+      // The control plane does not live in the subtree the container owns, so the head survives.
       expect(after.head).toBe(before.head);
 
       for (const key of before.objectKeys) expect(arm.durable.head(key)).not.toBe(null);
@@ -399,9 +323,8 @@ for (const [name, open] of armEntries) {
 
       if (refusal === null) return;
       expect(refusal).toBeInstanceOf(Error);
-      // A refusal after payload loss must be about PAYLOAD. Naming a control
-      // object instead would mean the control plane went with the mount, which
-      // is the first defect class.
+      // A refusal after payload loss must name payload, not a control object; naming one means
+      // the control plane was lost with the mount.
       const message = describeThrown({ cause: refusal });
 
       for (const key of before.objectKeys) {
@@ -409,34 +332,26 @@ for (const [name, open] of armEntries) {
       }
     });
 
-    // ── 4. size and integrity drift ────────────────────────────────────────
-
     test('a corrupted committed payload object is refused by name, and discard recovers', async () => {
       const arm = open();
       await attach(arm);
 
-      // A TICK, DELIBERATELY. A tick is the commit that leaves a strategy's
-      // pending state where its OWN read path still has to verify it; a quiesce
-      // folds that away into a materialized tree the mount serves unverified.
-      // Corrupting what nothing verifies would test nothing.
+      // A tick, not a quiesce: only a tick leaves pending state its own read path must verify;
+      // a quiesce materializes a tree the mount serves unverified, so corrupting it tests nothing.
       for (const [path, text] of Object.entries(OLD)) await arm.workspace.write(path, text);
       expectCommitted(await arm.storage().checkpoint('tick'), 'the tick before the corruption');
 
       const declared = await arm.declaredPayload();
-      // THE DECLARATION IS THE CONTRACT, so it is asserted rather than sniffed:
-      // an arm that quietly stopped declaring payload identities would corrupt
-      // nothing below and pass while doing it.
+      // The non-empty declaration is asserted: an arm declaring no payload identities would
+      // corrupt nothing below and still pass.
       expect(declared.length).toBeGreaterThan(0);
 
       const target = declared[0];
       arm.durable.corrupt(target.key, 'flip');
 
       arm.replaceContainer();
-      // NAMED, WHEREVER IT IS CAUGHT. An eager arm refuses inside attach,
-      // because attach is the read. A lazy arm's attach touches only the
-      // root and the ledger — that is the whole of this lane — so a
-      // corruption anywhere else surfaces at the first read that needs
-      // those bytes, which a full-tree read forces without picking a path.
+      // An eager arm refuses inside attach; a lazy arm's attach touches only root and ledger,
+      // so corruption surfaces at the first read needing those bytes, which a full-tree read forces.
       let refusal = await thrownBy(async () => { await arm.storage().attach(); });
       refusal ??= await thrownBy(async () => { await tree(arm); });
       expect(refusal).toBeInstanceOf(Error);
@@ -445,8 +360,6 @@ for (const [name, open] of armEntries) {
       const message = describeThrown({ cause: refusal });
       expect(target.names.some(named => message.includes(named))).toBe(true);
 
-      // And it is not a dead end: dropping the box's bytes lets a fresh one
-      // start from nothing.
       await arm.storage().discard();
       arm.replaceContainer();
       const fresh = await attach(arm);
@@ -456,8 +369,6 @@ for (const [name, open] of armEntries) {
       expect(woken.kind).toBe('attached');
       expect(await tree(arm)).toEqual(NEW);
     });
-
-    // ── 5. a commit racing a replacement ───────────────────────────────────
 
     test('a commit interrupted by a replacement converges on exactly one head', async () => {
       const arm = open();
@@ -482,8 +393,6 @@ for (const [name, open] of armEntries) {
       await expectOneGeneration(arm, 'a commit that raced a replacement');
     });
 
-    // ── 6. teardown after the container stopped ────────────────────────────
-
     test('teardown on a stopped container completes or refuses in a classified way', async () => {
       const arm = open();
       await attach(arm);
@@ -498,9 +407,8 @@ for (const [name, open] of armEntries) {
         const thrown = await thrownBy(async () => { await run.call(storage); });
 
         if (thrown === null) continue;
-        // CLASSIFIED means an Error a caller can report as an incident. A
-        // TypeError is a property read on something that is no longer there,
-        // which is what teardown racing a stopped container looked like.
+        // A classified failure is an Error a caller can report as an incident; a TypeError
+        // is a property read on something no longer there, so it does not count.
         expect(thrown).toBeInstanceOf(Error);
         expect(thrown).not.toBeInstanceOf(TypeError);
         expect(thrown).not.toBeInstanceOf(ReferenceError);
@@ -527,29 +435,8 @@ for (const [name, open] of armEntries) {
   });
 }
 
-// ── the smart-container bar: design § 6 cells, per arm, as one matrix ───────
-//
-// WHICH CELLS THIS FILE ALREADY HAD. The tests above are design § 6 cells 6.1
-// (attach empty, write, commit, replace, attach), 6.2 (quiesce publishes once),
-// 6.3 (three generations), 6.4 (a death at every commit seam), 6.6 (control
-// metadata outside every payload prefix, plus the payload wipe), 6.7 (corrupt
-// payload refused by name), 6.8 (commit interrupted by a replacement) and 6.16
-// (teardown and checkpoint on a stopped container). They stay as they are: the
-// matrix below names them as `existing` rows. Cell 6.19 (stop then wake on the
-// SAME instance) needs the Devbox class and lives in the harness suites.
-//
-// EVERY OTHER CELL IS NEW AND RED-CAPABLE. A cell is a function of an arm; the
-// matrix runs each cell against each of the five arms and records one of three
-// outcomes: pass, fail with the assertion's words, or refused — the arm named
-// the cell (or the tree property) in its own declaration with a reason. A
-// failure is a BUG LIST entry, never a retirement: `KNOWN_RED` in
-// `support/conformance-bug-list.ts` locks the set of reds, in both directions.
-//
-// RED DIRECTION. Every new cell is shown red before it is green anywhere: the
-// matrix on the current tree IS that proof for the cells the current arms
-// fail, and `red direction` tests below prove the remaining cells against a
-// deliberately broken arm (a wake that serves a blank tree, a store that lost
-// a reachable key, a counter that lies).
+// Runs every design § 6 cell against each arm; a failure is a `KNOWN_RED` entry, never a retirement.
+// `KNOWN_RED` in `support/conformance-bug-list.ts` locks the set of reds in both directions.
 
 
 
@@ -579,8 +466,6 @@ function refusedProperties(arm: ConformanceArm): Set<TreeProperty> {
   return new Set(TREE_PROPERTIES.filter((property) => arm.refusedProperties[property] !== undefined));
 }
 
-/** The served tree must be the planted tree, property by property, then byte
- *  for byte through the product's own canonical manifest encoder. */
 async function expectTreeExact(arm: ConformanceArm, expected: readonly NodeEntry[], what: string): Promise<void> {
   const refused = refusedProperties(arm);
   const served = await arm.workspace.snapshot();
@@ -602,7 +487,6 @@ async function settledCheckpoint(run: Promise<CheckpointOutcome>): Promise<Check
   try {
     return await run;
   } catch (error) {
-    // KEPT, NEVER SWALLOWED: the words are what the cell asserts on.
     return { kind: 'threw', reason: describeThrown({ cause: error }) };
   }
 }
@@ -612,8 +496,8 @@ async function commitTree(arm: ConformanceArm, entries: readonly NodeEntry[], wh
   expectCommitted(await arm.storage().checkpoint('quiesce'), what);
 }
 
-/** One measured tree size in cell 6.21: wall ms beside the counted work rows.
- *  Times are recorded, never asserted; the assertion reads only the counts. */
+/** One tree size in cell 6.21: wall times are recorded, never asserted;
+ *  the assertion reads only the counted work rows. */
 interface ComplexitySample {
   readonly files: number;
   readonly bytes: number;
@@ -627,9 +511,8 @@ interface ComplexitySample {
   restorePayloadBytes: number;
 }
 
-/** Cell 6.21 leaves one row per tree size per arm; the afterAll block below
- *  prints them beside the matrix. Set as each size lands, so a red arm still
- *  shows what it measured before the assertion fired. */
+/** One row per tree size per arm, printed by `afterAll` beside the matrix. Rows are set as
+ *  each size lands, so a failing arm still shows what it measured before the assertion fired. */
 const complexitySamples = new Map<string, ComplexitySample[]>();
 
 const publicationSamples = new Map<string, { bytesPut: number; objectsPut: number }>();
@@ -652,7 +535,6 @@ const CELLS: readonly Cell[] = [
       const fixture = textTree(OLD);
       await attach(arm);
       await commitTree(arm, fixture, 'the commit before the resets');
-      // The baseline: an uninterrupted wake, and what it costs the container.
       arm.replaceContainer();
       const before = arm.disk().mountCalls;
       await arm.storage().attach();
@@ -710,13 +592,8 @@ const CELLS: readonly Cell[] = [
 
       if (heads.length !== 1) problems.push(`${heads.length} heads`);
 
-      // THE WINNER IS MEASURED, NEVER ASSUMED: the tree the new boot served
-      // after its own commit. A new boot may legitimately adopt a COMPLETE
-      // unreferenced delta the old boot left (the crash-window rule cell 6.4
-      // accepts at `after-payload`) and publish OLD+NEW+THIRD; what it may
-      // never do is let the old boot's late finalize move the head, or serve
-      // after a wake anything but what it served before it. The new boot's
-      // own commit must be in that tree, or the race lost a committed write.
+      // The new boot may adopt a complete orphan delta (6.4 `after-payload`), so the expected tree
+      // is measured, not assumed: it must contain the new commit and survive the wake unchanged.
       if (!served.includes(JSON.stringify(Object.entries(THIRD)[0][1]))) problems.push(`the new boot's commit is absent from the tree it served: ${served}`);
       const afterWake = await wake(arm);
 
@@ -806,10 +683,8 @@ const CELLS: readonly Cell[] = [
         if (woken.kind !== 'attached') throw new Error(`${files} files: wake answered ${woken.kind}`);
         await expectTreeExact(fresh, fixture, `${files} files after the wake`);
         const restore = fresh.work().restore;
-        // EVICT, RE-READ, BYTES IDENTICAL. A page an eviction sweep can reach
-        // came out of an immutable object and is held to the digest the head
-        // declares for it, so dropping it can risk nothing but a re-read —
-        // and this is that re-read, at both tree sizes.
+        // Evictable pages come from immutable objects and are checked against the head's digest,
+        // so eviction can cost only a re-read; this re-read checks bytes stay identical.
         fresh.evictCleanBytes?.();
         await expectTreeExact(fresh, fixture, `${files} files after eviction and re-read`);
 
@@ -846,8 +721,6 @@ const CELLS: readonly Cell[] = [
       const restore = arm.work().restore;
 
       if (restore.totalRemoteOps > 3) problems.push(`wake made ${restore.totalRemoteOps} remote ops; O(1) is 3`);
-      // EVICT, RE-READ, BYTES IDENTICAL — on the 1 GiB sparse file and the
-      // 64 MiB dense one, the pair this cell exists to bound.
       arm.evictCleanBytes?.();
       await expectTreeExact(arm, fixture, 'after eviction and re-read');
       const patch = new Seeded(21).fill(new Uint8Array(64 * 1024));
@@ -1002,9 +875,7 @@ const CELLS: readonly Cell[] = [
     id: '6.21',
     title: 'restore and backup time versus tree size at three sizes',
     async run(arm) {
-      // Three tree sizes on a fresh arm each: 100, 1,000 and 10,000 files of
-      // 4 KiB. The largest holds 40 MiB, so the whole cell stays inside the
-      // 120 s per-test budget on every arm. Measured 2026-09-05.
+      // The largest tree (40 MiB) keeps the whole cell inside the 120 s per-test budget on every arm.
       const probe = 'x'.repeat(64 * 1024);
       const rows: ComplexitySample[] = [];
 
@@ -1049,9 +920,8 @@ const CELLS: readonly Cell[] = [
         complexitySamples.set(arm.name, [...rows]);
       }
 
-      // THE ONLY ASSERTION: the deterministic shape, never the wall clock. A
-      // 64 KiB backup and a restore cost the same counted work at 1,000 files
-      // and at 10,000 — the same ratio rule cell 6.12 uses.
+      // Assert only counted work, never wall clock: a 64 KiB backup and a restore cost the same
+      // at 1,000 and 10,000 files, under the ratio rule cell 6.12 uses.
       const middle = rows[1];
       const large = rows[2];
       const problems: string[] = [];
@@ -1074,12 +944,8 @@ const CELLS: readonly Cell[] = [
     id: '6.22',
     title: 'C3 overwrite: a 64 KiB edit publishes below 196,608 bytes in exactly one object',
     async run(arm) {
-      // The C3 cell from scripts/bench-c3-overwrite-cell.ts, driven through
-      // this battery instead of the matched-chain harness: a 64 KiB overwrite
-      // inside a 64 MiB file must publish at most three times the edit size
-      // (64 KiB touches at most two 64 KiB blocks, plus manifest and image
-      // skeleton: 196,608 bytes), and it must not buy those bytes with
-      // objects: the bytes and the one-object bound must hold together.
+      // The bound is three times the edit: at most two 64 KiB blocks plus manifest and image skeleton.
+      // Bytes and the one-object bound must hold together, so neither is bought with the other.
       const C3_BOUND = 196_608;
       const seed = new Seeded(61);
       const bytes = seed.fill(new Uint8Array(64 * 1024 * 1024));
@@ -1113,10 +979,8 @@ const CELLS: readonly Cell[] = [
     id: '6.23',
     title: 'many small changed files: one object per checkpoint, bytes near the change',
     async run(arm) {
-      // The REGIME-1 guard: a chunked design must not buy fewer bytes with
-      // more objects. Fifty changed small files still publish as ONE object,
-      // the floor snapshot-chain already holds, with bytes near the change
-      // rather than near the tree.
+      // A chunked design must not trade fewer bytes for more objects: fifty changed small
+      // files still publish as ONE object (D4), with bytes near the change, not the tree.
       await attach(arm);
       await commitTree(arm, generatedTree({ seed: 63, files: 200, bytesPerFile: 4096 }), 'the 200-file base commit');
 
@@ -1145,12 +1009,8 @@ const CELLS: readonly Cell[] = [
     id: '6.24',
     title: 'per-file maps: a one-file change costs the same at 1,000 and 5,000 files',
     async run(arm) {
-      // The merkle-pack failure mode, mechanically refused: no read path may
-      // fetch an index whose size grows with the tree. Both halves at two tree
-      // sizes: one changed small file PUBLISHES the same bytes, and the wake
-      // that serves it READS the same index bytes and objects. Only the base
-      // image's body is excluded: an index fetched under any other key must
-      // count, whether or not the record declares it as part of the delta.
+      // No read path may fetch an index that grows with the tree; only the base body is excluded,
+      // so any other fetched key counts even if the record does not declare it part of the delta.
       const samples: IndexSample[] = [];
 
       for (const files of [1_000, 5_000]) {
@@ -1219,7 +1079,6 @@ async function runCell(cell: Cell, arm: ConformanceArm): Promise<Outcome> {
 
 const matrix = new Map<string, Map<string, Outcome>>();
 
-/** The battery cell `id` names, or a failure naming the id nothing answered. */
 function cellById(id: string): Cell {
   const found = CELLS.find((row) => row.id === id);
 
@@ -1228,8 +1087,6 @@ function cellById(id: string): Cell {
   return found;
 }
 
-/** A declared refusal and a bug-list row each say why a cell is not expected
- *  green; a plain title says neither does. */
 function cellLabel(cell: Cell, refusal: Refusal | undefined, known: KnownRed | undefined): string {
   if (refusal !== undefined) return `${cell.id} ${cell.title} [refused: ${refusal.reason.slice(0, 60)}]`;
 
@@ -1291,13 +1148,9 @@ test('every bug-list row names a live arm and a live cell', () => {
   }
 });
 
-// ── red direction ────────────────────────────────────────────────────────────
-//
-// A cell green on every arm proves nothing until it has been red once. The
-// cells below are those the matrix may show green everywhere on some tree;
-// each is run against a deliberately broken arm and must FAIL.
+// A cell green on every arm proves nothing until it has been red once; each cell below
+// runs against a deliberately broken arm and must FAIL.
 
-/** An arm whose wake serves a blank workspace: the silent-blank defect. */
 function blankWakeArm(): ConformanceArm {
   const arm = CONFORMANCE_ARMS['snapshot-chain']();
   const broken: ConformanceArm = Object.create(arm);
@@ -1342,10 +1195,8 @@ describe('red direction — every new cell fails against a deliberately broken a
   });
 
   test('6.13 fails when the wake serves a blank tree', async () => {
-    // runCellOn, NOT runCell: 6.13's restoreOf opens a FRESH arm per trial
-    // through CONFORMANCE_ARMS[arm.name](), never the arm this test hands
-    // it, so only overriding the factory (what runCellOn does) puts the
-    // blank-wake wrapper in the loop the cell actually drives.
+    // `runCellOn`, not `runCell`: 6.13's restoreOf opens a fresh arm per trial via
+    // `CONFORMANCE_ARMS[arm.name]()`, so only overriding the factory puts the broken arm in the loop.
     const cell = cellById('6.13');
     const broken = blankWakeArm();
     const outcome = await runCellOn(cell, () => broken);
@@ -1388,12 +1239,8 @@ describe('red direction — every new cell fails against a deliberately broken a
   });
 
   test('6.13 fails when eviction cannot be trusted for the re-read', async () => {
-    // THE EVICTION DIRECTION. Dropping a clean page is safe only because the
-    // re-read that follows is a digest-verified fetch of the SAME bytes; a
-    // broken transport that returns something else after the drop is the one
-    // failure mode the whole bet depends on never happening. This corrupts
-    // every payload object right after the sweep runs, so the drop already
-    // happened when the bytes underneath it stop matching what was dropped.
+    // Dropping a clean page is safe only because its re-read is a digest-verified fetch of the
+    // same bytes; corrupting payloads after the sweep breaks exactly that after the drop.
     const cell = cellById('6.13');
     const arm = CONFORMANCE_ARMS['snapshot-chain']();
     const broken: ConformanceArm = Object.create(arm);
@@ -1633,8 +1480,6 @@ afterAll(() => {
     }
   }
 
-  // Cell 6.21 leaves numbers, not just a verdict: one table per arm beside
-  // the matrix, with the measured sizes in the header. Measured 2026-09-05.
   lines.push('6.21 restore and backup time versus tree size — 100, 1,000 and 10,000 files of 4 KiB', '');
 
   for (const name of arms) {

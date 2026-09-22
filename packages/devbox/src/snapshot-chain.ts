@@ -1,27 +1,5 @@
-/**
- * Immutable base plus one cumulative delta, published at a fresh UUID key.
- *
- * V2 attach mounts the store and both squashfs archives lazily, then serves
- * chunked inodes through a read-only block lower above the delta's whole-file
- * tree and the base. Namespace preparation creates only directories and
- * whiteouts. No payload or override-index page is read on the attach path.
- * See docs/DEVBOX-DECISIONS.md D2/D7 for the bound and its workload limitation.
- *
- * The upper is cumulative relative to the mounted lower, not necessarily the
- * base. Publication merges retained delta metadata with that upper. It never
- * overwrites an archive a live mount may still read. CAS publishes the new
- * pointer before cleanup; retirement preserves current/fallback references
- * and mounted sources. A legacy-only delta keeps delta:base and collapses at
- * its next changed checkpoint. The formats never share an overlay stack.
- *
- * A seed stamp permits reusing a complete cumulative upper on the same live
- * container. Replacement loses the upper and stamp. A successful restore
- * proves every composed mount and its container generation before returning.
- *
- * A fallback retains the newest generation already proven readable.
- * Extraction remains an explicitly permitted local-development path only;
- * an existing lazy chain never silently degrades to extraction.
- */
+/** Snapshot chain: immutable squashfs base plus one cumulative delta at a fresh UUID key.
+ *  Attach reads no payload bytes (D2); CAS publishes the pointer before cleanup (D7). */
 
 import type { BackupOptions, DirectoryBackup } from '@cloudflare/sandbox';
 import * as v from 'valibot';
@@ -67,39 +45,16 @@ import {
   stampFailure,
 } from './storage';
 
-/**
- * Where this box's chain subtree is mounted inside the container: ONE mount,
- * one setting, held for the container's life. The SDK refuses one binding
- * mounted twice under different settings (`@cloudflare/sandbox`,
- * `dist/sandbox-CPj2jsbz.js:8058`; measured in runs e2e20260902032038 and
- * e2e20260902032318 as `R2 binding "BACKUP_BUCKET" is already mounted at
- * /backups with a different readOnly setting`), and squashfuse holds the
- * layer files under the attach's mount, so it cannot be released for a
- * writable one. The one mount is therefore writable, and the prefix is the
- * boundary. PRIVATE, like every path in this layout: the host is handed it as
- * an argument, and the suites that assert these paths fail on drift.
- */
+/** One writable mount for the container's life: the SDK refuses a binding remounted with a
+ *  different readOnly setting, and squashfuse holds layer files under it; the prefix bounds. */
 const CHAIN_STORE_MOUNT = '/backups';
 
-/** The multipart part size the publisher uses above it. R2's floor for a
- *  part is 5 MiB and only the LAST part may run short, so a smaller part is
- *  refused mid-upload rather than merely slower. */
+/** R2 refuses a multipart part under 5 MiB unless it is the last, so a smaller part size
+ *  fails mid-upload rather than running slower. */
 const PUBLISH_PART_BYTES = 5 * 1024 * 1024;
 
-/** The publisher run container-side by {@link publishCommand}. One staged
- *  archive becomes ONE store object through the mount's own credential-less
- *  egress host: a single PUT at or below the part size, one multipart upload
- *  above it. s3fs cannot publish in one attempt — `mkdir` PUTs a directory
- *  marker and `create` PUTs an empty object before the flush, measured live
- *  (`b20260914045438`) and with no option to skip either — so the archive
- *  never goes through the mount; the mount stays for reads and for the
- *  egress route its registration opens.
- *
- *  Prints `<bytes> <etag>` on success; every refusal is its own exit code
- *  with the store's words on stderr. A `Bun.file` SLICE is a fetch body that
- *  sends nothing under the pinned image's Bun 1.3.12 (measured 2026-09-14,
- *  `/tmp/o1-publisher/`): parts therefore send `slice.stream()` with an
- *  explicit Content-Length, and the whole archive sends the file itself. */
+/** s3fs PUTs a directory marker and an empty object before flush, so publishing bypasses the
+ *  mount (D15); a `Bun.file` slice sends no body, so parts send `slice.stream()` (Bun 1.3.12). */
 const PUBLISH_SCRIPT = `// devbox-publish-v1
 const [archive, url, partArg] = process.argv.slice(2);
 const partBytes = Number(partArg);
@@ -184,12 +139,8 @@ class ContainerChangedDuringAttach extends Error {
   }
 }
 
-/** One of a generation's OWN archives would not mount, or would not read.
- *  TYPED, because the caller has a decision to make: the record may still
- *  name an older generation that can be served. Every other attach failure (a
- *  host with no FUSE, a store subtree that will not mount, a container
- *  replaced mid-attach) says nothing about a generation's bytes and must never
- *  cost the record a promotion. */
+/** Only a generation's own archive failing to mount or read; the caller may fall back to an
+ *  older generation. Other attach failures say nothing about its bytes and never cost a promotion. */
 class LayerUnreadable extends Error {
   constructor(layer: string, generation: string, thrown: { readonly cause: unknown }) {
     super(`the ${layer} layer of generation ${generation} could not be read`, {
@@ -199,37 +150,19 @@ class LayerUnreadable extends Error {
   }
 }
 
-/** Archive lifetime for the EXTRACTION path only: the SDK enforces it at
- *  restore time on archives its own backup API wrote. NEVER put a lifecycle
- *  rule on the chain's prefix: a rule deletes by age since upload, the base is
- *  written once, so an active box would lose its base on the rule's birthday.
- *  `discard` reclaims chain objects; a box whose Durable Object is destroyed
- *  without that call leaks them, and no sweep exists for that. */
+/** Extraction-path archive lifetime only; never put a lifecycle rule on the chain prefix:
+ *  it deletes by upload age and the once-written base would vanish from an active box. */
 export const EXTRACT_TTL_SECONDS = 30 * 24 * 60 * 60;
 
-/**
- * Regenerable trees never travel: they dominate the byte count, and every
- * byte is paid on upload and on every attach. LOCKFILES ARE NEVER EXCLUDED;
- * they are what makes the excluded trees regenerable, and the sandbox tool
- * doctrine tells the agent a restored workspace may need one `bun install`.
- *
- * `.git` IS NOT REGENERABLE: the only copy of every unpushed commit, plus the
- * index, config, hooks, reflog and refs, and for a linked worktree a FILE.
- * Measured: `mksquashfs -e '.git'` dropped both forms, so a restored tree had
- * the work and no history, and a worktree `git` no longer recognised.
- *
- * A box may replace this list through `SnapshotChainPorts.archiveExcludes`.
- * {@link archiveExcludeFile} states what a pattern matches.
- */
+/** Excluded trees must be regenerable from kept lockfiles; never exclude a lockfile or `.git`,
+ *  which holds unpushed commits and refs (a linked worktree's `.git` is a file). */
 export const CHAIN_EXCLUDES = [
   'node_modules', '*.log', '.cache',
   '.bun', '__pycache__', '.venv', 'target', '.next', '.turbo', 'dist',
 ] as const;
 
-/** One pattern, as mksquashfs and the SDK both read it, or null when it means
- *  nothing. This is the SDK's own normalisation (`@cloudflare/sandbox`
- *  `BackupService`), to the letter: a chain-mode archive that normalised
- *  differently would exclude a different set of files from the same policy. */
+/** Mirrors `@cloudflare/sandbox` `BackupService` normalisation exactly: a different one would
+ *  exclude a different file set from the same policy; null means the pattern matches nothing. */
 export function normalizeArchiveExclude(pattern: string): string | null {
   let normalized = pattern;
 
@@ -244,13 +177,8 @@ export function normalizeArchiveExclude(pattern: string): string | null {
   return normalized;
 }
 
-/** The exclude policy as an exclude FILE, TWO LINES PER PATTERN: mksquashfs
- *  anchors an exclude to the source directory unless the line is prefixed
- *  with `... `. Measured on the real archiver: anchored lines alone dropped
- *  `<source>/node_modules` and KEPT `<source>/sub/deep/node_modules`, and
- *  `*.log` matched nothing without `-wildcards`. Both lines plus `-wildcards`
- *  exclude every depth, as the SDK's own path does. {@link archiveCommand}
- *  carries the file into the container. */
+/** Two lines per pattern: mksquashfs anchors an exclude to the source dir unless prefixed `... `;
+ *  with `-wildcards`, both lines exclude the pattern at every depth. */
 export function archiveExcludeFile(patterns: readonly string[]): string {
   const lines: string[] = [];
 
@@ -264,25 +192,12 @@ export function archiveExcludeFile(patterns: readonly string[]): string {
   return lines.map(line => `${line}\n`).join('');
 }
 
-/** Rebase when the delta has outgrown the base by this factor. Once the
- *  delta exceeds the base, every checkpoint moves more bytes than a fresh
- *  base would cost.
- *
- *  MEASURED on the whole-delta publisher, cohort `C0-growth-7e4a7d9a-9ce15c72`
- *  (2026-09-09, module at `7f27576ca`): one new 32 KiB file per generation
- *  over 4/8/16/32/64 publications on a 2-file and a 1000-file tree fired this
- *  ratio 22 times in 64, every third publication, identically in both trees,
- *  holding per-publication upload to about one base and stored bytes to the
- *  live tree size (`bench/measure-first/COST-2026-09-09-chain-publication.md`).
- *  Under the chunked delta a checkpoint uploads changed blocks, not the whole
- *  delta, and the ratio's firing rate there is unmeasured. */
+/** Rebase once the delta outgrows the base by this factor: beyond it, every checkpoint
+ *  moves more bytes than a fresh base would cost. */
 export const REBASE_DELTA_RATIO = 1;
 
-/** Should this checkpoint collapse the chain onto a fresh base? ONLY AT A
- *  QUIESCE: a rebase pays for itself only if the upper is then empty, and
- *  emptying a live upper races every writer in the container. At a quiesce
- *  there are no writers, and the next attach mounts the new base under a
- *  fresh upper anyway. A tick keeps appending however large the delta grows. */
+/** Rebase only at a quiesce: it pays only if the upper is then empty, and emptying a live
+ *  upper races every writer. A tick keeps appending however large the delta grows. */
 export function shouldRebase(state: ChainState | null, kind: CheckpointKind): boolean {
   if (kind !== 'quiesce' || state === null || state.mode !== 'chain') return false;
 
@@ -291,17 +206,8 @@ export function shouldRebase(state: ChainState | null, kind: CheckpointKind): bo
   return state.delta.bytes > REBASE_DELTA_RATIO * state.base.bytes;
 }
 
-/**
- * The two generation roles after a publication supersedes the one the record
- * names. THE WHOLE RETENTION POLICY, and no number in it. An empty slot means
- * an attach has PROVEN the current generation ({@link ChainState.fallback}),
- * so the outgoing one is the newest proven and takes the slot. A full slot
- * means the outgoing generation was never proven: the proven occupant stays
- * and the outgoing one becomes an orphan, which loses no work, because the
- * superseding publication archived the same live work directory. The second
- * arm stops a run of publications with no restart between them from evicting
- * the only proven copy.
- */
+/** Empty `fallback` means an attach proved the current generation, so the outgoing one takes it;
+ *  else the proven copy stays and the outgoing base is orphaned, losing no work. */
 export function supersedeGeneration(
   previous: ChainState,
 ): Pick<ChainState, 'fallback' | 'orphans'> {
@@ -318,8 +224,6 @@ export function supersedeGeneration(
   };
 }
 
-// ── identity and keys ───────────────────────────────────────────────────────
-
 /** Every object key is built from a chain id, so anything that is not a UUID
  *  (`..`, a path separator, another box's guess) dies before it becomes a key. */
 const CHAIN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -328,7 +232,6 @@ export function isChainId(id: string): boolean {
   return CHAIN_ID_RE.test(id);
 }
 
-/** Validate a chain id or refuse the operation, naming the refusal. */
 function assertChainId(id: string): string {
   if (!isChainId(id)) {
     throw new Error(
@@ -340,18 +243,12 @@ function assertChainId(id: string): string {
   return id;
 }
 
-/** Where THIS BOX's chains live. ONE MOUNT PER CONTAINER LIFE NEEDS ONE PREFIX
- *  PER BOX: the SDK admits a second mount of a binding only at the same prefix
- *  (`@cloudflare/sandbox`, `dist/sandbox-CPj2jsbz.js`, the r2-egress prefix
- *  check), and a prefix scoped to one GENERATION cannot survive a rebase,
- *  which mints a new generation while the old layers are still mounted as the
- *  live overlay's lowers. The box's own prefix absorbs every generation, and
- *  it is the convention every other strategy here uses (`boxes/<id>/…`). */
+/** Per-box prefix: the SDK admits a second mount of a binding only at the same prefix, and
+ *  a rebase mints a new generation while the old layers stay mounted as the overlay's lowers. */
 export function chainStoreRoot(boxPrefix: string): string {
   return `${boxPrefix}/backups`;
 }
 
-/** The immutable full base layer. */
 export function baseObjectKey(root: string, chainId: string): string {
   assertChainId(chainId);
 
@@ -373,41 +270,18 @@ export function metadataObjectKey(root: string, chainId: string): string {
   return `${root}/${chainId}/meta.json`;
 }
 
-// ── mount facts ─────────────────────────────────────────────────────────────
-
-/** Is `dir` an overlay mount? MECHANISM, NOT OPTIONS: the production image
- *  attaches with `fuse-overlayfs`, which does NOT publish `lowerdir`,
- *  `upperdir` or `workdir` in `/proc/mounts` (kernel overlay does), and parsing
- *  them failed on a deployed container with "produced an overlay whose upper
- *  directory (unnamed) does not exist". So this asks only whether an
- *  overlay-family filesystem is mounted at `dir`; the upper is the path this
- *  strategy passed to the mount command, verified by an existence probe. */
+/** Checks fstype only: `fuse-overlayfs` does not publish `lowerdir`/`upperdir`/`workdir`
+ *  in `/proc/mounts`; the upper is the path passed to the mount, verified by a probe. */
 function isOverlayMounted(procMounts: string, dir: string): boolean {
   const line = findMount(procMounts, dir);
 
   return line !== undefined && line.fstype.includes('overlay');
 }
 
-// ── integrity ───────────────────────────────────────────────────────────────
-
-/**
- * Why a stored layer must not be attached from, or null when it is sound.
- *
- * A SIZE IS NOT AN IDENTITY: two archives of one length pass every byte-count
- * check, and a valid squashfs of the wrong content mounts. So two identities
- * fail over for each other. `digest` is the SHA-256 of the stored bytes,
- * which the store confirms only for a single-request PUT it was handed a
- * checksum for. `objectVersion` is the store's OWN name for the upload: R2
- * mints one per upload, returns it from `put` and multipart `complete`, and
- * reports it from `head` forever after, so an archive the multipart API will
- * not checksum still has an identity, and a replacement written to look
- * identical is a different upload. Either may be absent on either side, and
- * absent means UNKNOWN: that comparison is skipped and the size check stands.
- */
+/** Size is not identity: `digest` (SHA-256, store-confirmed only for checksummed single PUTs)
+ *  and per-upload `objectVersion` both check it; an absent side is unknown and skipped. */
 export function layerIntegrityFailure(input: {
-  /** What the record says this layer is, or undefined when it names none. */
   declared: ChainLayer | undefined;
-  /** What the store answers for the object, or undefined when it holds none. */
   stored: ChainLayer | undefined;
   label: string;
 }): string | null {
@@ -423,12 +297,8 @@ export function layerIntegrityFailure(input: {
     return `${label} archive is ${stored.bytes} bytes, state declares ${declared.bytes}`;
   }
 
-  // THE DIGEST DECIDES WHEN BOTH SIDES HAVE ONE. A store version is minted per
-  // UPLOAD, not per content: this chain can re-put byte-identical content (a
-  // change under an excluded path moves the fingerprint while the archive
-  // stays the same), and a crash that loses that commit's state write leaves
-  // the record naming the old version. Refusing on version alone would burn
-  // the fallback on a healthy object.
+  // Digest wins when both sides have one: versions are minted per upload, so identical
+  // re-puts or a lost state write change the version; refusing on it burns the fallback.
   if (declared.digest !== undefined && stored.digest !== undefined) {
     if (stored.digest === declared.digest) return null;
 
@@ -449,27 +319,16 @@ export function layerIntegrityFailure(input: {
   return null;
 }
 
-// ── the box's own chain record ──────────────────────────────────────────────
-
-/** How a chain's bytes move. `chain` is the production lazy-mount path;
- *  `extract` is local development. Persisted: a box always attaches the way
- *  it was checkpointed. */
+/** `chain` is the production lazy-mount path; `extract` is local development.
+ *  Persisted: a box always attaches the way it was checkpointed. */
 export type ChainMode = 'chain' | 'extract';
 
 /** Mirrors the SDK's `CheckChangesResult.status`. `resync` means the retained
  *  change state was lost, so the directory counts as changed. */
 export type ChangeStatus = 'unchanged' | 'changed' | 'resync';
 
-/**
- * ONE LAYER, as the record declares it and as the store answers for it. One
- * type for both sides, so {@link layerIntegrityFailure} compares whole layers.
- *
- * `digest` and `objectVersion` mean UNKNOWN when absent, never "sound". A
- * record written before they existed carries neither, deployed boxes hold
- * such rows, and nothing backfills by re-reading an object: recovering a
- * digest means reading every byte back. Each delta commit records both; a
- * base's pair arrives with the next rebase.
- */
+/** One type for record and store sides, so {@link layerIntegrityFailure} compares whole layers.
+ *  Absent `digest`/`objectVersion` mean UNKNOWN, never sound; backfill would re-read every byte. */
 export interface ChainLayer {
   readonly bytes: number;
   /** Lowercase hex SHA-256 of the bytes that landed, when it is known. */
@@ -492,26 +351,18 @@ interface ChainDeltaLayer extends ChainLayer {
 
 type DeltaPublication = { kind: 'chunked'; layer: ChainLayer } | { kind: 'whole-upper'; fallback: DeltaFallback };
 
-/** An immutable base and its cumulative changed set. A retained fallback
- * carries the same format and fallback evidence as the current generation. */
+/** A retained fallback carries the same format and fallback evidence as the current generation. */
 export interface ChainGeneration {
   /** The full base. Immutable once written. */
   readonly base: ChainBaseLayer;
-  /** The cumulative changed set, or undefined until the first delta lands. */
   readonly delta: ChainDeltaLayer | undefined;
-  /** How the delta's bytes are laid out. `chunked` is a sidecar of changed
-  *  extents plus per-file indexes, served through composed lazy lowers.
-  *  Absent means the legacy layout: a full squashfs of the upper, composed
-  *  as an overlay lower. Absent is the only legacy value because every
-  *  record written before chunked deltas existed holds a full delta; a box
-  *  that wrote one keeps serving it until its next delta commit replaces it. */
+  /** `chunked`: changed extents plus per-file indexes, served through composed lazy lowers.
+   *  Absent: a full squashfs of the upper composed as an overlay lower, served until replaced. */
   readonly deltaFormat?: 'chunked' | undefined;
-  /** Evidence for publishing a legacy whole-upper delta instead of chunked. */
   readonly deltaFallback?: DeltaFallback | undefined;
 }
 
-/** Everything a box knows about its own chain. One record, one writer,
- *  replaced whole. */
+/** One record, one writer, replaced whole. */
 export interface ChainState extends ChainGeneration {
   /** Superseded immutable deltas, retained while a fallback or live mount uses them. */
   readonly retiredDeltas?: readonly string[];
@@ -521,37 +372,25 @@ export interface ChainState extends ChainGeneration {
   readonly rev: number;
   /** Epoch ms the checkpoint completed. The interval gate reads this. */
   readonly at: number;
-  /** The change version this checkpoint is relative to. Advanced when a
-   *  checkpoint succeeds or the directory was reported unchanged. NEVER
-   *  advanced after a change that was not archived: the next tick would
-   *  believe it was already saved. */
+  /** Advanced only on a successful checkpoint or an unchanged report, never after an unarchived
+   *  change: the next tick would believe it was already saved. */
   readonly changeVersion: string | undefined;
   /** The upper's fingerprint at the last successful commit; the skip gate
    *  compares against it. */
   readonly upperMark: string | undefined;
-  /** The generation a restore falls back to, or undefined when the current one
-   *  is proven. A publication that supersedes a generation fills the slot; the
-   *  attach that PROVES the current generation moves the occupant to `orphans`
-   *  and clears it ({@link supersedeGeneration}). Its sizes are here because
-   *  a fallback the integrity probe cannot check is not a fallback. */
+  /** Undefined once the current generation is proven; that attach moves the occupant to `orphans`.
+   *  Carries sizes because a fallback the integrity probe cannot check is not a fallback. */
   readonly fallback: ChainGeneration | undefined;
-  /** Generations this box has superseded and no longer retains. Named here
-   *  BEFORE the delete and cleared after it, so a crash between a rebase's
-   *  state flip and the deletion cannot orphan a generation nothing names. See
-   *  `sweepOrphans` for why the ids are remembered rather than listed. */
+  /** Named BEFORE the delete and cleared after it, so a crash between a rebase's state flip
+   *  and the deletion cannot orphan an unnamed generation; see `sweepOrphans`. */
   readonly orphans: readonly string[] | undefined;
-  /** The last attempt that failed. The alarm loop reduces a thrown scheduled
-   *  callback to a console line, so durable state is the only way a repeatedly
-   *  failing checkpoint stays visible. A restore that refused a generation
-   *  records it here too: nothing else would say what the box lost. */
+  /** The alarm loop reduces a thrown scheduled callback to a console line, so durable state keeps
+   *  a failing checkpoint visible; a restore that refused a generation records it here too. */
   readonly lastFailure: { readonly at: number; readonly reason: string } | undefined;
 }
 
-/** The stored record, as a schema. A durable row is untrusted input: a row this
- *  code did not write reads as ABSENT (a fresh box) rather than as a chain
- *  whose base cannot be found (a box that refuses to start forever). The
- *  generation's fields are spread in, so the schema and the types share one
- *  authority for a generation's shape. */
+/** A durable row is untrusted: a row this code did not write reads as absent (a fresh box),
+ *  not as a chain whose base cannot be found (a box that refuses to start forever). */
 const DigestSchema = v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)));
 
 /** The store's own version string. Its FORM is the store's business, so this
@@ -629,8 +468,6 @@ export function normalizeChainState(raw: StoredValue): ChainState | null {
   };
 }
 
-/** Commit only when the directory changed AND the period elapsed. An
- *  unchanged tick costs no archive, no upload and no new object. */
 function shouldCheckpoint(
   change: ChangeStatus,
   lastCheckpointAt: number,
@@ -642,9 +479,6 @@ function shouldCheckpoint(
   return now - lastCheckpointAt >= minIntervalMs;
 }
 
-// ── ports ───────────────────────────────────────────────────────────────────
-
-/** The record was advanced since this writer read it, so its write is refused. */
 export class ChainRecordAdvanced extends Error {
   constructor(expectedRev: number | null, storedRev: number | null) {
     super(`another writer advanced the chain record to rev ${storedRev ?? 'none'} after this one read rev ${expectedRev ?? 'none'}`);
@@ -652,30 +486,20 @@ export class ChainRecordAdvanced extends Error {
   }
 }
 
-/** Everything the strategy needs from the world. The adapter implements it and
- *  decides nothing: every entry maps to one public Sandbox SDK primitive, one
- *  object-store binding call, or the box's own durable storage. */
+/** The adapter decides nothing: each entry maps to one public Sandbox SDK primitive,
+ *  one object-store binding call, or the box's own durable storage. */
 export interface SnapshotChainPorts {
-  /** Is the container up right now? Waking a sleeping container to ask
-   *  whether it changed would keep it alive forever. */
+  /** Must not wake a sleeping container: asking it whether it changed would keep it alive forever. */
   containerRunning(): boolean;
-  /** May this box archive and extract whole trees instead of mounting layers?
-   *  DECLARED BY THE HOST, never discovered: a deployed box that quietly took
-   *  extraction has a plain `/workspace`, no upper to capture, and loses every
-   *  write after the base on the next restore. Measured on a deployed probe,
-   *  where a failed mount was converted into extraction and the loss surfaced
-   *  as "delta content lost across restore" two phases later. So a mount
-   *  failure where extraction is not permitted is a FAILURE carrying the
-   *  mount's own reason. */
+  /** Declared by the host, never discovered: extraction leaves no upper, so writes after the
+   *  base are lost on restore. A mount failure where extraction is not permitted is a failure. */
   allowExtraction(): boolean;
   /** What a whole-tree base leaves behind, for THIS box. Defaults to
    *  {@link CHAIN_EXCLUDES}. */
   archiveExcludes(): readonly string[];
   readState(): Promise<ChainState | null>;
-  /** Persist `state` while the stored record's `rev` is still `expectedRev`
-   *  (`null`: no record), else throw {@link ChainRecordAdvanced}. Read,
-   *  compare and put are ONE transaction, so two boots that read one record
-   *  cannot both advance it. */
+  /** `null` means no record. Read, compare and put are ONE transaction, so two boots that
+   *  read one record cannot both advance it. */
   writeState(state: ChainState, expectedRev: number | null): Promise<void>;
   clearState(): Promise<void>;
   /** Minimum gap between two commits, from the host's policy: one place
@@ -685,57 +509,31 @@ export interface SnapshotChainPorts {
    *  retained change state? */
   checkChanges(dir: string, since: string | undefined):
     Promise<{ status: ChangeStatus; version: string }>;
-  /** Run one shell command container-side. THE ONLY CONTAINER-SHELL PORT: the
-   *  mount flags, the squashfs options and the mount probes are this
-   *  strategy's own vocabulary, so it builds every command itself. A property,
-   *  not a method: the suites read it off the record to wrap it. */
+  /** The only container-shell port: the strategy builds every command (mount flags, squashfs
+   *  options, probes) itself. A property, not a method: the suites read it off the record to wrap it. */
   exec: (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
-  /** Ephemeral generation id, when the host can observe one. */
   containerGeneration?(): Promise<string | undefined>;
   /** This box's chain root in the store, see {@link chainStoreRoot}. A port
    *  because the box's identity is the host's. */
   storeRoot(): string;
-  /** The object URL the store mount's own egress host answers for `key`: the
-   *  SDK's credential-less `r2.internal` handler resolves the bucket out of
-   *  the mount's binding name and prepends the mount's prefix, so the host
-   *  hands the strategy a URL the publisher PUTs to directly — one object
-   *  attempt where `dd` through s3fs could not do better than three (see
-   *  `PUBLISH_SCRIPT`). A key outside the mount's prefix has no URL: the host
-   *  refuses it rather than minting an address the handler would write under
-   *  a different object. */
+  /** URL the store mount's egress host serves for `key`; the publisher PUTs to it directly (D15).
+   *  A key outside the mount's prefix has no URL: the handler would write a different object. */
   storeObjectUrl(key: string): string;
-  /** Mount THIS BOX's chain root at `at`, writable. ONE MOUNT, ONE SETTING, ONE
-   *  PREFIX ({@link CHAIN_STORE_MOUNT}), so the host has no choice to make.
-   *  CREDENTIALS NEVER LEAVE THE DURABLE OBJECT: the container's s3fs holds a
-   *  dummy password file and a Worker entrypoint resolves its intercepted
-   *  requests against the binding, so writable hands the container nothing it
-   *  can read or replay. Writable is required twice over: the mount serves
-   *  reads, and the egress route it registers is what `storeObjectUrl` PUTs
-   *  through. */
+  /** Writable, yet credentials never leave the DO: s3fs holds a dummy password and a Worker
+   *  resolves its requests. The mount serves reads and registers the route `storeObjectUrl` uses. */
   mountStore(at: string): Promise<void>;
-  /** Release the mount at `at` THROUGH THE SDK, not the kernel: a raw
-   *  `fusermount3` leaves the SDK's registry claiming the path forever. Called
-   *  only on a bare path, to drop the entry a replaced container's mount left
-   *  (`mountStoreOnce`). A RELEASE IS NOT A FLUSH: a lazy unmount returns as
-   *  the mount leaves the namespace, and no publication relies on one — the
-   *  publisher's own HEAD and `objectFacts` read the store, not the mount. */
+  /** Release through the SDK: a raw `fusermount3` leaves the SDK registry claiming the path.
+   *  A release is not a flush; publication reads the store (HEAD, `objectFacts`), not the mount. */
   unmountStore(at: string): Promise<void>;
-  /** A phase of the attach landed: the store mount, the base layer. The host
-   *  keeps the clock; the strategy owes the call because only it knows which
-   *  of its commands was the mount. */
+  /** A phase of the attach landed. The host keeps the clock; the strategy must call this
+   *  because only it knows which of its commands was the mount. */
   stamp(phase: StoragePhase): void;
-  /** What the store holds for one object, or undefined. `digest` and
-   *  `objectVersion` are the store's OWN answers, either of which may be
-   *  undefined ({@link layerIntegrityFailure}). One metadata read, and the only
-   *  way a publication learns what landed: the container writes through a
-   *  mount, so this side never sees the bytes. */
+  /** The store's own `digest`/`objectVersion` (either may be undefined): the only way a
+   *  publication learns what landed, since the container writes through a mount. */
   objectFacts(key: string): Promise<ChainLayer | undefined>;
-  /** Delete objects: discard, and the orphan sweep. */
   deleteObjects(keys: readonly string[]): Promise<void>;
-  /** The seed stamp: which delta the upper on THIS container disk holds. Beside
-   *  the upper, so no archive carries it, and on the container's own disk
-   *  rather than in durable storage, because the fact it records dies with the
-   *  disk: a replaced container has no stamp. */
+  /** Records which delta the upper on this container disk holds; lives beside the upper so no archive
+   *  carries it, and off durable storage because the fact dies with the disk (P1). */
   readSeedStamp(): Promise<string | undefined>;
   writeSeedStamp(stamp: string): Promise<void>;
   /** Entry count of the work directory. The extraction-mode postcondition. */
@@ -750,11 +548,8 @@ export interface SnapshotChainPorts {
   log: (message: string) => void;
 }
 
-/** Canonical archive options for the extraction path. The TTL is HERE only:
- *  the SDK enforces it at restore time on archives its own backup API wrote.
- *  The excludes are the caller's, so a box that replaces the policy is obeyed
- *  in both modes, and they are passed RAW because the SDK normalises them
- *  exactly as {@link normalizeArchiveExclude} does. */
+/** TTL lives only here: the SDK enforces it at restore on archives its backup API wrote.
+ *  Excludes are the caller's, passed raw: the SDK normalises them like `normalizeArchiveExclude`. */
 export function chainBackupOptions(
   localBucket: boolean,
   excludes: readonly string[],
@@ -770,25 +565,16 @@ export function chainBackupOptions(
   };
 }
 
-// ── the layout inside the container ─────────────────────────────────────────
-//
-// Module scope because the shell builds commands from these paths and the
-// strategy reasons about them: no path spelled twice.
-
 /** The overlay's writable upper: the whole changed set since the base. */
 const upperDir = `${DEVBOX_RUNTIME_DIR}/upper`;
 
 /** fuse-overlayfs's own scratch directory. Not readable as content. */
 const workDir = `${DEVBOX_RUNTIME_DIR}/work`;
 
-/** Where an archive is built before it is streamed into the store. */
 const stageDir = `${DEVBOX_RUNTIME_DIR}/stage`;
 
-/** Memory-backed staging for a checkpoint the disk cannot stage. tmpfs lives
- *  in memory rather than on the container disk, so an archive built here
- *  costs no disk quota. Used only when the disk gate refuses, never by
- *  default: memory is smaller than disk, and a large tree that fits on disk
- *  must not be forced through it. */
+/** tmpfs staging costs no disk quota; used only when the disk gate refuses, since memory
+ *  is smaller than disk and a large tree that fits on disk must not be forced through it. */
 const tmpStageDir = `/dev/shm/devbox-stage`;
 
 /** Mount point for the base layer: the overlay's bottom lower, mounted for
@@ -799,37 +585,28 @@ const blockLower = `${DEVBOX_RUNTIME_DIR}/block-lower`;
 
 const blockStats = `${DEVBOX_RUNTIME_DIR}/block-lower-stats.json`;
 
-/** Where delta layers are mounted, one directory per generation. */
 const lowerDeltaRoot = `${DEVBOX_RUNTIME_DIR}/lower-delta`;
 
-/** The lower a box with no chain yet attaches over: an empty directory, so
- *  that "chain mode" and "`/workspace` is a plain directory" can never both
- *  be true. See `attachFresh`. */
+/** An empty lower for a box with no chain yet, so "chain mode" and "`/workspace` is a plain
+ *  directory" can never both be true. See `attachFresh`. */
 const lowerEmpty = `${DEVBOX_RUNTIME_DIR}/lower-empty`;
 
-/** Where THIS generation's delta layer is mounted. NAMED AFTER THE GENERATION,
- *  because a later checkpoint reads the name to ask whether the changed set
- *  the record names is served as a layer. One fixed path could not tell that
- *  apart from a mount left by the generation a collapse superseded, and every
- *  commit afterwards would collapse again. */
+/** Named per generation: a later checkpoint checks this path to tell its own layer from a
+ *  mount left by a superseded generation; one fixed path would make every commit collapse. */
 function deltaLayerMountPoint(chainId: string): string {
   return `${lowerDeltaRoot}/${assertChainId(chainId)}`;
 }
 
-/** Where one generation's object appears under the store mount. The read
- *  path's `squashfuse` source and the write path's `dd` target are the same
- *  question, asked once so they cannot drift apart. */
+/** The read path's `squashfuse` source and the write path's `dd` target share this one answer
+ *  so they cannot drift apart. */
 function mountedLayerPath(mountPoint: string, root: string, objectKey: string): string {
   const relative = objectKey.startsWith(`${root}/`) ? objectKey.slice(root.length + 1) : objectKey;
 
   return `${mountPoint}/${relative}`;
 }
 
-/** Is `chainId`'s delta served as a layer under this container's overlay? True
- *  means the changed set is spread across the layer and the upper, so a commit
- *  must collapse rather than archive the upper (see the header). Asked of
- *  `/proc/mounts` because the mount is the fact, and a note about it can
- *  outlive the container that made it true. */
+/** True means the changed set spans the layer and the upper, so a commit must collapse, not archive.
+ *  Reads `/proc/mounts`: a recorded note can outlive the container that mounted the layer. */
 function deltaLayerServed(procMounts: string, chainId: string): boolean {
   return findMount(procMounts, deltaLayerMountPoint(chainId)) !== undefined;
 }
@@ -843,29 +620,17 @@ function retirementAfter(previous: ChainState | null): string[] {
   return [...ids];
 }
 
-/** How many times an attach asks the store mount for a layer it cannot see
- *  yet. A COUNT, NEVER A DEADLINE: the SDK proves the FUSE mount before
- *  returning, so only the store's first metadata answer for one key is
- *  outstanding, and that arrives promptly or comes from a negative cache.
- *  Neither improves by waiting against a budget that belongs to the whole
- *  restoration. */
+/** A count, not a deadline: the FUSE mount is proven, so only the store's first metadata
+ *  answer is outstanding; waiting against the restoration budget does not improve it. */
 const LAYER_VISIBILITY_PROBES = 20;
 
-/** How many times a release is attempted before the mount is called stuck. A
- *  release either succeeds or is refused by something holding the mount, and
- *  more attempts do not fix a holder; an unbounded loop turned that into a
- *  hang with no diagnosis. */
+/** A count, not a timer: a release succeeds or is refused by a holder, and retrying never
+ *  frees a holder; the bound turns a stuck mount into a diagnosis instead of a hang. */
 const MOUNT_RELEASE_ATTEMPTS = 20;
-
-// ── the container shell ─────────────────────────────────────────────────────
-//
-// Every command this strategy runs, in this file.
 
 type ContainerExec = SnapshotChainPorts['exec'];
 
 function chainShell(exec: ContainerExec, root: string) {
-  /** Run a command and refuse on a non-zero exit. The container's own words
-   *  are the diagnosis. */
   const must = async (doing: string, command: string): Promise<string> => {
     const result = await exec(command);
 
@@ -877,19 +642,12 @@ function chainShell(exec: ContainerExec, root: string) {
   };
 
   return {
-    /** `/proc/mounts` as the container sees it. */
     readMounts: async (): Promise<string> => await must('reading the mount table', 'cat /proc/mounts'),
-    /** Does this container path exist? A mount line without a usable upper is
-     *  a box whose writes have nowhere to land. */
+    /** A mount line without a usable upper is a box whose writes have nowhere to land. */
     pathExists: async (path: string): Promise<boolean> =>
       (await exec(`test -e ${shellPath(path)} && echo yes || echo no`)).stdout.trim() === 'yes',
-    /** Release a FUSE mount this strategy made itself, or say it is stuck.
-     *
-     *  The squashfuse layers only: the SDK has no registry entry for them, and
-     *  releasing an SDK mount this way leaves its registry claiming the path.
-     *  BOUNDED by {@link MOUNT_RELEASE_ATTEMPTS}: still mounted after the last
-     *  attempt is a NAMED failure, because an attach that proceeds would mount
-     *  on top of it. NOT ONE `exit`, see {@link awaitLayer}. */
+    /** Only for squashfuse layers: releasing an SDK mount this way leaves its registry claiming it.
+     *  Still mounted after the last attempt fails, since an attach would mount on top; no `exit`. */
     unmountPath: async (path: string): Promise<void> => {
       await must(`releasing the mount at ${path}`,
         `for _ in $(seq 1 ${String(MOUNT_RELEASE_ATTEMPTS)}); do `
@@ -899,11 +657,8 @@ function chainShell(exec: ContainerExec, root: string) {
           + `echo "still mounted after ${String(MOUNT_RELEASE_ATTEMPTS)} release attempts" >&2; `
           + 'false; fi');
     },
-    /** Release every delta layer this container still serves, whichever
-     *  generation mounted it: a re-driven container can hold one this attach
-     *  did not make. Deepest first. Reached only where `/workspace` is NOT an
-     *  overlay, so nothing can still be reading them. EVERY stuck layer is
-     *  named, not the first. */
+    /** Unmount every delta layer, deepest first, even ones another generation mounted; safe only
+     *  where `/workspace` is not an overlay. Every stuck layer is named, not just the first. */
     releaseDeltaLayers: async (): Promise<void> => {
       await must('releasing delta layers',
         `stuck=; for p in $(awk -v r=${shellPath(`${lowerDeltaRoot}/`)} `
@@ -914,18 +669,8 @@ function chainShell(exec: ContainerExec, root: string) {
           + `if grep -qs " $p " /proc/mounts; then `
           + `echo "delta layer $p is still mounted" >&2; stuck=1; fi; done; [ -z "$stuck" ]`);
     },
-    /**
-     * Wait for one layer to become visible through the store mount, BY COUNT
-     * ({@link LAYER_VISIBILITY_PROBES}), in ONE container command. Each probe
-     * re-lists the subtree, because a listing repopulates a stat cache that
-     * answered "no such object" once; when the layer never appears, the
-     * answer is what the subtree DOES hold.
-     *
-     * IT MUST NEVER SAY `exit`. Every command runs in the SDK's PERSISTENT
-     * shell session, and `exit 0` ended the shell: the attach died on its own
-     * success as `SessionTerminatedError: Session 'sandbox-default' shell
-     * exited (exit code: 0)`, 1,054 times in probe wakeprobe09010702.
-     */
+    /** Each probe re-lists the store subtree: a listing repopulates a stat cache that said ENOENT.
+     *  Never `exit`: every command shares the SDK's persistent shell, and `exit` kills the session. */
     awaitLayer: async (path: string): Promise<{ ready: boolean; holds: string }> => {
       const probed = await exec(
         `seen=; for _ in $(seq 1 ${String(LAYER_VISIBILITY_PROBES)}); do `
@@ -942,12 +687,8 @@ function chainShell(exec: ContainerExec, root: string) {
         holds: answer.startsWith('missing') ? answer.slice('missing'.length).trim() : answer,
       };
     },
-    /** Mount one squashfs layer read-only; squashfuse reads lazily THROUGH the
-     *  store subtree. THE MOUNTPOINT IS CREATED IN THE SAME COMMAND: a spot
-     *  container can be replaced between two RPCs (measured live at roughly
-     *  once per phase under churn), and fuse refuses a mountpoint an earlier
-     *  exec prepared with `bad mount point`. `nonempty` is safe because this
-     *  private runtime directory is reset before every mount. */
+    /** Mountpoint is created in the same command: a spot container can be replaced between RPCs,
+     *  and fuse refuses a mountpoint an earlier exec prepared (`bad mount point`). */
     mountLayer: async (objectKey: string, mountPoint: string): Promise<void> => {
       const source = mountedLayerPath(CHAIN_STORE_MOUNT, root, objectKey);
       await must('squashfuse mount', `mkdir -p ${shellPath(mountPoint)} && /usr/local/bin/devbox-squashfuse `
@@ -973,8 +714,7 @@ function chainShell(exec: ContainerExec, root: string) {
         + `-o lowerdir=${lowers.map(shellPath).join(':')}`
         + `,upperdir=${shellPath(upperDir)},workdir=${shellPath(workDir)} ${shellPath(dir)}`);
     },
-    /** Build a squashfs of `sourceDir` at `archivePath` and answer its size.
-     *  {@link archiveCommand} states why build and measure are one command. */
+    /** Build and measure stay one command for the reason {@link archiveCommand} states. */
     makeSquashfs: async (
       sourceDir: string, archivePath: string, excludes: readonly string[],
     ): Promise<number> => {
@@ -1004,13 +744,8 @@ function chainShell(exec: ContainerExec, root: string) {
 
       return bytes;
     },
-    /** Move one staged archive into the store as ONE object attempt, and
-     *  answer what the store then holds for it. {@link publishCommand} states
-     *  why the write is an HTTP PUT to the mount's egress host rather than a
-     *  `dd` through s3fs. WRITTEN STRAIGHT TO THE FINAL NAME: a temporary
-     *  name plus a rename is a server-side COPY of every byte, and the object
-     *  becomes visible only when the PUT completes, so a reader never sees a
-     *  partial. The publisher's stderr stays this path's diagnostics. */
+    /** Writes to the final name: a temp name plus rename is a server-side COPY of every byte,
+     *  and the object is visible only once the PUT completes, so no reader sees a partial (D15). */
     publishArchive: async (archivePath: string, objectUrl: string): Promise<number> => {
       const result = await exec(publishCommand({ archivePath, objectUrl }));
       const [code, size, etag] = result.stdout.trim().split(/\s+/);
@@ -1034,12 +769,8 @@ function chainShell(exec: ContainerExec, root: string) {
 
       return bytes;
     },
-    /** Why there is not room to stage an archive of `sourceDir` on the disk, or
-     *  null. THE ESTIMATE WALKS WHAT THE ARCHIVE WILL WALK: squashfs never
-     *  exceeds its uncompressed input, and {@link archiveSizeCommand} and
-     *  {@link archiveExcludeFile} come off one policy list. Both readings are
-     *  in one command, so a container replacement cannot make them describe
-     *  different disks. */
+    /** Upper bound: squashfs never exceeds its input; size and exclude come off one policy list.
+     *  Both readings run in one command so a container replacement cannot split them. */
     stagingShortfall: async (
       sourceDir: string,
       excludes: readonly string[],
@@ -1061,22 +792,19 @@ function chainShell(exec: ContainerExec, root: string) {
 
       return `staging ${sourceDir} needs up to ${need} bytes and ${stageDir} has ${free} free.`;
     },
-    /** The skip-gate fingerprint of the upper, or empty when it cannot be
-     *  taken. Walks metadata, not content: O(entries). The gate in
-     *  `checkpoint` states why the SDK's change check is not the question. */
+    /** Skip-gate fingerprint of the upper: walks metadata, not content, O(entries).
+     *  The gate in `checkpoint` states why the SDK's change check is not the question. */
     upperFingerprint: async (): Promise<string> => {
       const measured = await exec(upperFingerprintCommand(upperDir));
 
       return measured.exitCode === 0 ? measured.stdout.trim() : '';
     },
-    /** Byte length of a container file, or undefined when it does not exist. */
     statBytes: async (path: string): Promise<number | undefined> => {
       const raw = (await exec(`stat -c %s ${shellPath(path)} 2>/dev/null || echo ''`)).stdout.trim();
 
       return raw.length > 0 ? Number.parseInt(raw, 10) : undefined;
     },
-    /** Reset a set of directories to empty. THROUGH must(): a reset that fails
-     *  silently leaves the attach running against a stale tree. */
+    /** Runs through `must()`: a reset that fails silently leaves the attach on a stale tree. */
     resetDirs: async (paths: readonly string[]): Promise<void> => {
       await must('resetting directories',
         `rm -rf ${shellPaths(paths)} && mkdir -p ${shellPaths(paths)}`);
@@ -1084,25 +812,6 @@ function chainShell(exec: ContainerExec, root: string) {
   };
 }
 
-// ── the strategy ────────────────────────────────────────────────────────────
-
-/**
- * One batch of generated operations as the command the session shell runs.
- *
- * A shell's exit is its LAST command's, so without `set -e` a failed `cp` in
- * the middle of a batch would be reported as success by the `chmod` after it.
- * The flag is set INSIDE A SUBSHELL, because the SDK runs every command of a
- * box in one persistent `bash --norc` session and a top-level `set -e`
- * outlives the command that set it: from then on the first failing command
- * from any caller ends the session with that command's status. Measured on
- * the pinned image's container server 2026-09-15; in the settlement run
- * `20260915012040` the fault-cut cell's read-only probe, a `touch` that is
- * meant to fail with EROFS, answered `SessionTerminatedError: Session
- * 'sandbox-default' shell exited (exit code: 1)` after the wake's
- * delta-namespace batch, and D5's G3 recorded the same death on 2026-09-13.
- * `tests/support/session-shell.ts` refuses the unscoped form in every fake.
- */
-/** What a chain commit is beyond the record it advances. */
 interface ChainCommitOptions {
   /** Archive the merged work directory as a new base under a new generation. */
   readonly rebasing?: boolean;
@@ -1110,7 +819,6 @@ interface ChainCommitOptions {
   readonly kind?: CheckpointKind;
 }
 
-/** The mounts one composed attach must show, as the attach itself names them. */
 interface ComposedMounts {
   readonly mounts: string;
   readonly token: string;
@@ -1119,7 +827,6 @@ interface ComposedMounts {
   readonly deltaLayer: string;
 }
 
-/** What the attach log says the upper was restored from. */
 function restoredFrom(haveDelta: boolean, held: boolean, chunked: boolean): ChainServedWord {
   if (!haveDelta) return CHAIN_SERVED_WORDS.base;
 
@@ -1128,44 +835,31 @@ function restoredFrom(haveDelta: boolean, held: boolean, chunked: boolean): Chai
   return chunked ? CHAIN_SERVED_WORDS.chunked : CHAIN_SERVED_WORDS.layered;
 }
 
-/** What a commit is, for its log line. */
 function commitWord(rebasing: boolean, first: boolean): string {
   if (rebasing) return 'rebase';
 
   return first ? 'base' : 'delta';
 }
 
+/** `set -e` stays inside the batch's own subshell: the SDK runs all commands in one persistent
+ *  bash session, where a top-level `set -e` ends it on any later failure (D18). */
 function opsBatchCommand(header: string, ops: readonly string[]): string {
   return [header, '(', 'set -e', ...ops, ')'].join('\n');
 }
 
 export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   const shell = chainShell(ports.exec, ports.storeRoot());
-  /** This box's chain root: every key below it, one mount over it. */
   const root = ports.storeRoot();
 
-  /** The record's in-place writers: a stamp lands on the revision it read, or not at all. */
+  /** A stamp lands on the revision it read, or not at all. */
   const stamps: FailureStampDeps<ChainState> = {
     writeState: async (next) => await ports.writeState(next, next.rev),
     log: ports.log,
     now: ports.now,
   };
 
-  /**
-   * Why a stored generation must not be attached from, or null when sound.
-   *
-   * THE BASE AND THE DELTA ARE JUDGED DIFFERENTLY. A base is written ONCE, so
-   * a size that disagrees is a different object: refuse. A delta is REPLACED
-   * by an atomic PUT on every checkpoint, so a size that disagrees is the
-   * crash-window delta the header describes: adopt it whole, size, digest and
-   * version together. Measured across two deployed runs as `archive
-   * 506834944, state declares 506494976` and twice more, each difference a
-   * multiple of 4096 (the squashfs padding); refusing on it cost an arm
-   * fourteen of its twenty segments. A delta the record names and the store
-   * does NOT hold is content loss: refuse. A delta of EXACTLY the recorded
-   * size whose digest or version differs is a different archive of the same
-   * length: refuse, and the retained fallback makes that a recovery.
-   */
+  /** A base is written once, so a size mismatch is refused; a size-mismatched delta is the
+   *  crash-window PUT, adopted whole. A missing delta, or same-size digest mismatch, is refused. */
   const probe = async (
     mode: ChainMode,
     generation: ChainGeneration,
@@ -1232,13 +926,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return { kind: 'attached', detail: `extract ${generation.base.id}` };
   };
 
-  /** The identity of the delta an upper holds: generation, size and the
-   *  store's version of the object. All three are load-bearing: a generation
-   *  alone matches after a rebase, a size alone matches a different archive of
-   *  the same length, and only the version tells a replaced delta of identical
-   *  size from its predecessor. THE DIGEST IS DELIBERATELY ABSENT: R2 reports
-   *  no checksum for an archive written through the mount, so a stamp carrying
-   *  one would never match. */
+  /** Generation, size and object version are all needed: generation matches after a rebase,
+   *  size matches another archive; no digest, as R2 reports none for mount-written archives. */
   const seedStampOf = (chainId: string, delta: ChainLayer): string =>
     `${chainId}:${delta.bytes}:${delta.objectVersion ?? 'no-version'}`;
 
@@ -1256,22 +945,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
   };
 
-  /**
-   * Take the chain's store mount, or adopt the one already standing. THE
-   * CONTAINER IS THE AUTHORITY: the SDK's PATH registry refuses a second
-   * mount at one path unconditionally (`activeMounts.has(mountPath)`,
-   * `sandbox-CPj2jsbz.js:8369`; measured live as `Mount path "/backups" is
-   * already in use by bucket "BACKUP_BUCKET"`, run e2e20260902060426), it
-   * cannot be read, and it resets with the isolate, while `/proc/mounts` is
-   * true across Durable Object resets. A bare-path unmount releases the entry a
-   * replaced container's mount may have left — by the patched SDK
-   * (patches/@cloudflare%2Fsandbox@0.12.8.patch), which checks `mountpoint -q`
-   * before `fusermount -u`; unpatched, a failed fusermount rethrew with the
-   * entry standing, and every attach after a container swap refused with
-   * "already in use" (kinu.run, hardy-stone, 2026-09-03). Then mounts. Answers
-   * the `/proc/mounts` it found the store standing in, or undefined after a new
-   * mount.
-   */
+  /** The container's `/proc/mounts` is the authority: the SDK path registry is unreadable, resets
+   *  with the isolate, and refuses a second mount; a bare-path unmount clears a stale entry. */
   const mountStoreOnce = async (): Promise<string | undefined> => {
     const mounts = await shell.readMounts();
 
@@ -1283,13 +958,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return undefined;
   };
 
-  /**
-   * The manifest a mounted delta layer serves, validated, or null for a
-   * legacy full delta. A record naming a chunked delta whose mount serves no
-   * manifest is a failed layer; so is a manifest whose overrides are not
-   * block-aligned, ascending and inside the file, because `dd seek` over
-   * such a map writes past what the manifest declares.
-   */
+  /** Overrides must be block-aligned, ascending and inside the file: `dd seek` over any other
+   *  map writes past what the manifest declares. A chunked record with no manifest fails. */
   const readSidecarManifest = async (
     deltaLayer: string,
     generation: ChainGeneration,
@@ -1308,9 +978,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
         if (read.success) manifest = read.output;
       } catch (error) {
-        // Not JSON: a legacy full delta whose tree happens to hold this
-        // path, served as a lower. Logged, because a chunked record over
-        // such bytes is refused just after.
+        // Non-JSON here is a legacy full delta whose tree holds this path; log it, since a
+        // chunked record over such bytes is refused just after.
         ports.log(`${deltaLayer}/${DELTA_MANIFEST_NAME} is not a delta manifest: ${describe({ cause: error })}`);
       }
     }
@@ -1342,16 +1011,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return indexes;
   };
 
-  /** Two generation readings name the same container when the earlier one was
-   *  never observed (no baseline to differ from) or they agree — the ONLY two
-   *  shapes a mid-attach container replacement is distinguishable from. */
+  /** An unobserved earlier reading counts as the same container: it has no baseline to differ from. */
   const containerReplaced = (pinned: string | undefined, observed: string | undefined): boolean =>
     pinned !== undefined && observed !== pinned;
 
   const attachChainOnce = async (generation: ChainGeneration): Promise<AttachOutcome> => {
     const containerGeneration = await ports.containerGeneration?.();
-    // A chain whose layers EXIST cannot be served by extraction, so a mount
-    // failure fails the start. The thrown reason travels as it came.
+    // A chain whose layers EXIST cannot be served by extraction,
+    // so a mount failure fails the start.
     let standing: string | undefined;
 
     try {
@@ -1370,9 +1037,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       throw new ContainerChangedDuringAttach();
     }
 
-    /** A layer that will not mount or read is THIS generation's failure,
-     *  unless the container was replaced underneath: that is the attach's
-     *  failure, retried on the replacement. */
+    /** An unmountable or unreadable layer fails this generation, unless the container was
+     *  replaced underneath: then the attach fails and is retried on the replacement. */
     const layerFailed = async (
       layer: string,
       thrown: { readonly cause: unknown },
@@ -1387,8 +1053,6 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     };
 
     const mountedBase = mountedLayerPath(CHAIN_STORE_MOUNT, root, baseObjectKey(root, generation.base.id));
-    // Bounded, and a store subtree that never exposes the base says what it
-    // holds instead: see {@link LAYER_VISIBILITY_PROBES}.
     const visible = await shell.awaitLayer(mountedBase);
 
     if (!visible.ready) {
@@ -1403,32 +1067,24 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       );
     }
 
-    // The delta as the STORE describes it, because the layer is mounted from
-    // the stored object. A delta the record names was probed and adopted by
-    // `serve` a moment ago, so it is not asked for twice; an unreferenced but
-    // complete delta is adopted here (header, "Ordering under crash"). A
-    // mounted negative may be cached or a stat error, never proof of absence.
+    // The layer mounts from the stored object; a delta the record names was already adopted by
+    // `serve`. A mounted negative may be cached or a stat error, never proof of absence.
     const storedDelta: ChainDeltaLayer | undefined = generation.delta ?? await ports.objectFacts(deltaObjectKey(root, generation.base.id));
     const deltaId = storedDelta?.id ?? generation.base.id;
     const deltaSource = mountedLayerPath(CHAIN_STORE_MOUNT, root, deltaObjectKey(root, deltaId));
     const blockToken = `${generation.base.id}:${deltaId}:${mountedGeneration ?? 'unobserved'}`;
     const haveDelta = storedDelta !== undefined;
 
-    // IS THIS UPPER ALREADY THIS DELTA? The stamp is written only by the
-    // commit that archived this upper, and it names the delta object, so a
-    // superseded delta never matches and a replaced container has no stamp.
-    // The upper is asked for as well, because a stamp beside a missing upper
-    // claims nothing. A match is the only way the upper survives an attach,
-    // and the only shape in which the delta needs no layer of its own.
+    // The seed stamp names the delta and is written only by the commit archiving this upper;
+    // a stamp beside a missing upper claims nothing. Only a match keeps the upper on attach.
     const held = storedDelta !== undefined
       && (await ports.readSeedStamp()) === seedStampOf(generation.base.id, storedDelta)
       && (await shell.pathExists(upperDir));
 
     const composing = haveDelta && !held;
 
-    // A base layer an earlier attach on this container mounted from THIS
-    // archive is adopted with the store mount it reads through: a base is
-    // written once, so a Durable Object reset mid-attach re-mounts nothing.
+    // A base an earlier attach on this container mounted from THIS archive is kept with its
+    // store mount: a base is written once, so a Durable Object reset mid-attach re-mounts nothing.
     const baseHeld = standing !== undefined && findMount(standing, lowerBase)?.source === mountedBase;
 
     await shell.unmountPath(DEVBOX_WORKDIR);
@@ -1436,12 +1092,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
     if (!baseHeld) await shell.unmountPath(lowerBase);
     await shell.releaseDeltaLayers();
-    // CHAIN_STORE_MOUNT is deliberately NOT here: `rm -rf` on it exits
-    // non-zero, and a writable mount would lose the chain's archives through
-    // it. THE UPPER IS EMPTIED before anything is mounted over it, so the
-    // writable layer of a composed attach holds exactly what is written after
-    // it, with ONE exception: an upper that holds this delta, which emptying
-    // would throw away along with every change since the stamp.
+    // `CHAIN_STORE_MOUNT` is excluded: `rm -rf` on it exits non-zero and would destroy archives.
+    // The upper is emptied before mounting, except when `held`: it holds this delta's changes.
     await shell.resetDirs([
       ...(baseHeld ? [] : [lowerBase]), lowerDeltaRoot, blockLower, ...(held ? [] : [upperDir]), workDir,
     ]);
@@ -1455,9 +1107,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       }
     }
 
-    // The delta is mounted before the overlay, like the base: the overlay
-    // takes its lowers as parameters, and a mounted overlay then proves the
-    // whole composition landed, which the `already-attached` return relies on.
+    // Mount the delta before the overlay: a mounted overlay then proves the whole composition
+    // landed, which the `already-attached` return relies on.
     const deltaLayer = deltaLayerMountPoint(generation.base.id);
     const lowerLayers = [lowerBase];
     let chunked = false;
@@ -1488,9 +1139,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       }
     }
 
-    // NEWEST LOWER FIRST. fuse-overlayfs resolves `lowerdir` left to right, so
-    // a legacy delta precedes the base: it holds the newer version of every
-    // path it names, and the whiteouts that hide what the base still has.
+    // fuse-overlayfs resolves `lowerdir` left to right, so a delta precedes the base: it holds
+    // the newer version of every path it names and the whiteouts hiding base entries.
     await shell.overlayAttach(DEVBOX_WORKDIR, lowerLayers);
     await assertOverlayLanded(`chain ${generation.base.id}`);
 
@@ -1501,9 +1151,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
 
     if (containerReplaced(mountedGeneration, await ports.containerGeneration?.())) throw new ContainerChangedDuringAttach();
-    // THE STORE MOUNT STAYS: squashfuse reads each layer through it for as
-    // long as the overlay serves the work directory, so a release here is
-    // refused EBUSY. The publication writes through this same mount.
+    // The store mount stays: squashfuse reads each layer through it while the overlay serves
+    // the work directory, so a release is refused EBUSY; publication writes through it too.
 
     const bytes = generation.base.bytes + (generation.delta?.bytes ?? 0);
 
@@ -1531,8 +1180,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       baseSourceMatches: base?.source === baseSource, baseType: base?.fstype,
       deltaSourceMatches: delta?.source === deltaSource, deltaType: delta?.fstype }));
 
-    // Cloud b20260913141100 and the same pinned image in Docker report
-    // plain fuse. The exact source token still fences all three identities.
+    // The block mount reports plain `fuse` (D11); the exact source token fences all three identities.
     if (block?.source !== `devbox-block:${token}` || block.fstype !== 'fuse'
       || findMount(mounts, CHAIN_STORE_MOUNT) === undefined
       || base?.source !== baseSource || !base.fstype.includes('squashfuse')
@@ -1577,20 +1225,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
   };
 
-  /**
-   * A box with no chain yet still gets an overlay, over an empty lower, so
-   * chain mode with a plain `/workspace` is unrepresentable. A box born plain
-   * whose first checkpoint wrote `mode:'chain'` hit the "not an overlay
-   * mount" gate on every later checkpoint and quiesce, filed an incident
-   * every interval, could not stop gracefully, and lost everything after the
-   * base when the platform evicted the container. Born with the overlay, a
-   * re-driven attach (a Durable Object can be evicted while its container
-   * keeps running) also cannot mount the base OVER the caller's live tree.
-   *
-   * A host with no fuse-overlayfs (a plain local `wrangler dev`) says so by
-   * failing; that is the host extraction exists for, so the box stays plain
-   * and the first checkpoint decides its mode.
-   */
+  /** A box with no chain still gets an overlay over an empty lower, so chain mode with a plain
+   *  `/workspace` is unrepresentable; a host without fuse-overlayfs stays plain until checkpoint. */
   const attachFresh = async (): Promise<AttachOutcome> => {
     await shell.resetDirs([lowerEmpty, upperDir, workDir]);
 
@@ -1609,9 +1245,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return { kind: 'empty', detail: 'no chain recorded; an empty overlay is attached' };
   };
 
-  /** A successful call is not a landed mount: a live container once reported
-   *  every attach step as fine while /proc/mounts held no overlay line. The
-   *  mount line answers for the mount, an existence probe for the upper. */
+  /** A successful attach call is not a landed mount: /proc/mounts answers for the overlay,
+   *  an existence probe for the upper directory. */
   const assertOverlayLanded = async (what: string): Promise<void> => {
     if (!isOverlayMounted(await shell.readMounts(), DEVBOX_WORKDIR)) {
       throw new Error(
@@ -1628,12 +1263,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
   };
 
-  /** Serve one offered generation, or answer why its own bytes cannot be
-   *  served. A refusal is always about THIS generation ({@link LayerUnreadable});
-   *  everything else travels as a throw, because trying an older generation
-   *  against a broken host would fail twice and hide the reason. The probe and
-   *  the mount are not a content digest: hashing every byte on every start is
-   *  the cost this strategy exists to avoid. */
+  /** A refusal concerns only THIS generation; other failures throw, since retrying an older
+   *  generation on a broken host fails twice and hides why. Probe+mount is no content digest. */
   const serve = async (
     mode: ChainMode,
     offered: ChainGeneration,
@@ -1641,9 +1272,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const sound = await probe(mode, offered);
 
     if (sound.refusal !== null) return { refusal: sound.refusal };
-    // ADOPT a delta whose recorded size went stale, digest included: a size
-    // that disagrees is the crash-window delta. Same size with a different
-    // digest never reaches here; `probe` refuses it as corruption.
+    // A size mismatch is the crash-window delta: adopt the stored size and digest.
+    // Same size with a different digest never reaches here; `probe` refuses it as corruption.
     let generation = offered;
 
     if (offered.delta !== undefined && sound.delta !== undefined
@@ -1669,12 +1299,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
   };
 
-  /** The attach landed, so the generation the record names is PROVEN: the
-   *  retained fallback becomes garbage, named before deleted, and the slot is
-   *  cleared. One write, and only when there is something to write. BEST
-   *  EFFORT: the workspace is mounted by the time this runs, so a failed write
-   *  must not fail the start, and the ids are still named, so the next attach
-   *  repeats it. */
+  /** Best effort: the workspace is already mounted, so a failed write must not fail the start;
+   *  the fallback ids stay named, so the next attach repeats the write. */
   const recordProven = async (record: ChainState, served: ChainGeneration): Promise<void> => {
     const adopted = served.delta?.bytes !== record.delta?.bytes
       || served.delta?.digest !== record.delta?.digest;
@@ -1699,24 +1325,11 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
   };
 
-  /**
-   * Serve the newest generation this record can prove, and publish which one
-   * it was. A refused generation is stamped on the record's failure field,
-   * and the promotion is ONE state write that swaps the two roles. The
-   * refused one takes the fallback slot rather than the bin: its objects have
-   * exactly one name, and the sweep that removes it runs only after its
-   * replacement is proven, the ordinary transition.
-   *
-   * PROMOTED BEFORE SERVED. Serving first leaves a window where a crash has
-   * the box running on the fallback's bytes under a record that names the
-   * refused generation, and the next checkpoint would write a delta into a
-   * generation whose base is gone. When both refuse, the start fails carrying
-   * both causes and NOTHING is deleted: two bad generations are two chances
-   * for an operator.
-   */
+  /** Promote the fallback in one state write before serving it: serving first lets a crash
+   *  leave a record naming the refused generation. If both refuse, nothing is deleted. */
   const attachStored = async (state: ChainState): Promise<AttachOutcome> => {
-    // THE PERSISTED MODE IS THE CONTRACT. A deployed box holding an extract
-    // record took a silent fallback, and serving it would hide that twice.
+    // The persisted mode is the contract: an `extract` record on a deployed box means a silent
+    // fallback, and serving it would hide that twice.
     if (state.mode === 'extract' && !ports.allowExtraction()) {
       throw new Error(
         `chain ${state.base.id} was archived by extraction, which is not permitted here. `
@@ -1781,12 +1394,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   const attach = async (): Promise<AttachOutcome> => {
     const state = await ports.readState();
 
-    // Idempotence without a marker: the container-start hook fires at least
-    // once per start, and a stored "attached" marker is exactly what latched
-    // last time. An overlay that landed is visible in /proc/mounts. It is NOT
-    // a proof of the current generation: the overlay may serve the generation
-    // a later rebase superseded, so the fallback stays until an attach mounts
-    // what the record now names.
+    // Idempotence reads /proc/mounts, not a stored marker: the start hook fires at least once.
+    // A standing overlay may serve a superseded generation; the fallback stays until attach.
     const mounts = await shell.readMounts();
 
     if (isOverlayMounted(mounts, DEVBOX_WORKDIR)) {
@@ -1805,22 +1414,16 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return await attachStored(state);
   };
 
-  /**
-   * Move a staged archive into the store through the mount's egress host and
-   * return what the store then holds: the second half of every publication,
-   * shared by whole-tree and chunked stages. `tmpStaged` says the archive
-   * sits on tmpfs, which is returned whether or not the record below is
-   * written.
-   */
+  /** Publishes via the mount's egress host (D15) and returns what the store then holds.
+   *  `tmpStaged` means the archive sits on tmpfs, returned whether or not the record is written. */
   const publishStagedArchive = async (
     key: string,
     staged: string,
     storeHeld: boolean,
     tmpStaged: boolean,
   ): Promise<ChainLayer> => {
-    // The mount is still taken here even though no byte goes through s3fs:
-    // its registration is what routes `r2.internal` to the bucket, and the
-    // same mount serves the layers' reads for the container's life.
+    // The mount is required though no byte goes through s3fs: its registration routes
+    // `r2.internal` to the bucket, and it serves the layers' reads for the container's life.
     if (!storeHeld) await mountStoreOnce();
     const objectUrl = ports.storeObjectUrl(key);
     const published = await shell.publishArchive(staged, objectUrl);
@@ -1853,46 +1456,19 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return landed;
   };
 
-  /**
-   * Build a squashfs of `sourceDir`, publish it as `key`, and return what the
-   * store then holds for it.
-   *
-   * THE BYTES NEVER REACH THIS ISOLATE. The container stages the archive on
-   * its own disk and PUTs it to the store through the mount's egress host.
-   * Relaying it through this isolate (base64 SSE frames in, the R2 binding
-   * out) measured 3.34 MiB/s at 64 MiB and 3.64 at 256 MiB on a live
-   * container against a real store, against 23.22 and 39.00 MiB/s for the
-   * same bytes moved by the container; the relay was the only arm that got
-   * SLOWER as the archive grew.
-   *
-   * THE RECORD DESCRIBES WHAT THE STORE HOLDS, checked against the
-   * container's reading of the same object after the upload: two independent
-   * measurements of one upload, so a disagreement is an upload that lost
-   * bytes. The staged
-   * count is NOT the comparison: it is taken before the copy, and a deployed
-   * run recorded that drift as `delta archive is 702791680 bytes, state
-   * declares 700387328`, after which every wake refused. NO CONTENT DIGEST
-   * IS COMPUTED HERE: a `sha256sum` over the staged archive is a full CPU
-   * pass over every byte of every checkpoint. The record carries the identity
-   * the STORE has, which for an egress-written archive is its upload version.
-   */
+  /** Bytes never reach this isolate: the container stages the archive and PUTs it via egress.
+   *  Record what the store holds, checked against the container's re-read, not the staged count. */
   const stageAndPut = async (
     key: string,
     sourceDir: string,
     excludes: readonly string[],
-    /** The store mount is already held by THIS checkpoint (the first
-     *  checkpoint's proof). The SDK's PATH registry refuses a second mount at
-     *  one path, see {@link mountStoreOnce}. */
+    /** The store mount is already held by this checkpoint; the SDK refuses a second mount
+     *  at one path (see {@link mountStoreOnce}). */
     storeHeld = false,
   ): Promise<ChainLayer> => {
     const archivePath = `${stageDir}/layer.sqsh`;
-    // ROOM TO WRITE IT, ASKED BEFORE WRITING IT. An archiver that fills the
-    // container's disk takes the box down mid-checkpoint. The requirement is
-    // the tree's own worst case. A disk without that room stages in tmpfs,
-    // which lives in memory and costs no disk quota, so a full disk keeps a
-    // checkpoint rather than refusing it. The archive is staged on a
-    // filesystem because mksquashfs seeks back to its superblock at the end,
-    // which an object store's filesystem cannot do.
+    // Check room before archiving: a full disk kills the box mid-checkpoint; short disks stage in tmpfs.
+    // Staging stays on a filesystem because mksquashfs seeks back to its superblock at the end.
     const short = await shell.stagingShortfall(sourceDir, excludes);
     const staged = short === null ? archivePath : `${tmpStageDir}/layer.sqsh`;
 
@@ -1902,12 +1478,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return await publishStagedArchive(key, staged, storeHeld, short !== null);
   };
 
-  /** Run generated shell operations — a `# devbox-…` header line then one
-   *  operation per line — in batches of {@link DELTA_OPS_PER_COMMAND}, so a
-   *  many-file checkpoint costs round trips in the hundreds, not files. Every
-   *  batch carries the header and runs under {@link opsBatchCommand}'s scoped
-   *  `set -e`. A non-zero exit names the batch; the container's own stderr
-   *  carries the operation. */
+  /** Batches of {@link DELTA_OPS_PER_COMMAND} keep round trips per checkpoint far below one per file;
+   *  each batch repeats the `# devbox-…` header and runs under a scoped `set -e` (D18). */
   const runOpsBatched = async (doing: string, [header = '', ...ops]: readonly string[]): Promise<void> => {
     for (let at = 0; at < ops.length; at += DELTA_OPS_PER_COMMAND) {
       const result = await ports.exec(opsBatchCommand(header, ops.slice(at, at + DELTA_OPS_PER_COMMAND)));
@@ -1918,15 +1490,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
   };
 
-  /**
-   * Stage the upper as a CHUNKED delta and publish it under the delta key, or
-   * report the evidence that requires a whole-upper publication. The caller
-   * persists that reason beside the published pointer. A retained chunked
-   * delta refuses fallback because the upper alone no longer holds its data.
-   *
-   * ONLY WHOLE OBJECT: the package is one squashfs, so the object count per
-   * checkpoint stays at one whatever the changed set holds.
-   */
+  /** A retained chunked delta refuses whole-upper fallback: the upper alone no longer holds its data.
+   *  The package is one squashfs, so each checkpoint publishes exactly one object (D4). */
   const stageChunkedDelta = async (chainId: string, deltaId: string, storeHeld: boolean, retained?: DeltaManifest): Promise<DeltaPublication> => {
     const fallback = (reason: DeltaFallback['reason'], detail: string) => {
       if (retained !== undefined) throw new Error(`refusing to lose the retained delta: ${reason}: ${detail}`);
@@ -1955,9 +1520,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
 
     if (upperProbe.length === 0) return fallback('upper-empty', 'the probe listed nothing');
-    // ROOM TO STAGE IT, asked before staging: the package and the hash
-    // scratch are bounded by the upper's own bytes, so a disk short of those
-    // stages in tmpfs exactly as the whole-tree archive does.
+    // The package and hash scratch are bounded by the upper's own bytes, so a disk short of
+    // those stages in tmpfs, as the whole-tree archive does.
     const short = await shell.stagingShortfall(upperDir, ports.archiveExcludes());
     const stageRoot = short === null ? stageDir : tmpStageDir;
 
@@ -2080,16 +1644,15 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const committed: ChainState = {
       mode: 'extract',
       rev: (previous?.rev ?? 0) + 1,
-      // THE SDK WROTE THIS ARCHIVE, so its identity is whatever the store
-      // reports: no digest when the SDK uploaded in parts, and absent means
-      // unknown.
+      // The SDK wrote this archive, so its identity is what the store reports: multipart uploads
+      // carry no digest, and an absent digest means unknown.
       base: { id: backup.id, ...stored },
       delta: undefined,
       at: ports.now(),
       changeVersion: version,
       upperMark: undefined,
-      // The superseded archive is NAMED before anything deletes it, and
-      // RETAINED as the fallback by the same policy the chain path uses.
+      // The superseded archive is recorded before anything deletes it and kept as the fallback,
+      // by the same policy as the chain path.
       ...(previous !== null && previous.base.id !== backup.id
         ? supersedeGeneration(previous)
         : { fallback: previous?.fallback, orphans: previous?.orphans }),
@@ -2102,11 +1665,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return { kind: 'committed', reason: undefined, bytes: storedBytes, movedBytes: storedBytes };
   };
 
-  /** Delete every generation this box has superseded, then forget them. THE
-   *  STATE ROW IS THE TRUTH: the ids were recorded before the delete, the
-   *  referenced generation is never among them, and a crash mid-sweep leaves
-   *  the remainder for the next run. A listing of the chain root would name
-   *  the live generations too. */
+  /** The state row is the truth: ids are recorded before the delete and a crash leaves the rest
+   *  for the next sweep; listing the chain root would also name live generations. */
   const sweepOrphans = async (state: ChainState): Promise<void> => {
     const orphans = state.orphans ?? [];
     const retained = new Set([state.delta?.id, state.fallback?.delta?.id]);
@@ -2135,13 +1695,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     ports.log(`${orphans.length} superseded generation(s) deleted`);
   };
 
-  /** Write the record, then delete everything the new record supersedes. THE
-   *  POINTER IS THE COMMIT: the fenced `writeState(committed)` is the ONLY step
-   *  that may throw, and the caller stamps that as a failure. Every step below
-   *  it deletes bytes the committed record no longer names and NONE MAY THROW:
-   *  after a rebase the pre-commit record names the generation the sweep began
-   *  deleting, so a cleanup failure is stamped on the PUBLISHED revision, best
-   *  effort, and the next commit's sweep finishes it. */
+  /** The fenced `writeState(committed)` is the commit and the only step that may throw;
+   *  cleanup after it must not throw: failures stamp the published revision; next sweep finishes. */
   const publish = async (
     previous: ChainState | null,
     committed: ChainState,
@@ -2164,17 +1719,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     await stampFailure(stamps, committed, reason);
   };
 
-  /** Seat a first base as the overlay's sole lower with an empty upper, so the
-   *  next delta archives only what was written since the base. A first base
-   *  archives the merged view while the overlay still stands over an empty
-   *  lower, so the upper holds the base files too and every later delta would
-   *  carry them again. The reseat mounts the new base as the lower and clears
-   *  the upper, which keeps the live view while making the changed set small.
-   *  Quiesce only: clearing a live upper races writers, and a tick appends.
-   *  After the record is durable, and without a second record write: the
-   *  empty-upper skip in `checkpoint` covers the idle tick that follows, and
-   *  the first write into the fresh upper moves the mark. A failed reseat
-   *  refuses the checkpoint even though the base archive is already durable. */
+  /** Quiesce only, after the record is durable: seats the base as sole lower, clears the upper
+   *  so later deltas skip base files; clearing a live upper races writers. Failure refuses (D10). */
   const reseatAfterFirstBase = async (chainId: string): Promise<void> => {
     const startedAt = Date.now();
     const cwd = await ports.exec('pwd');
@@ -2195,9 +1741,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
   };
 
-  /** Commit a delta, a first base, or a REBASE onto a fresh generation: the
-   *  merged work directory archived as a new base under a NEW generation id,
-   *  the old generation deleted only after the new record is durable. */
+  /** A rebase archives the merged work directory as a base under a new generation id;
+   *  the old generation is deleted only after the new record is durable. */
   const commitChain = async (
     previous: ChainState | null,
     version: string,
@@ -2207,14 +1752,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const fresh = first || rebasing;
     const chainId = fresh ? crypto.randomUUID() : previous.base.id;
 
-    // PROVE IT BEFORE WRITING IT. A chain the platform cannot mount is worse
-    // than extraction: written, recorded, then unreadable for the rest of the
-    // box's life, because a box attaches the way it was checkpointed. The mode
-    // is decided once, here, by performing the mount rather than by asking
-    // the platform whether it could: a capability that reported itself
-    // present and then refused produced a silent no-op on a live container.
-    // This is the ONLY mount call the checkpoint makes ({@link mountStoreOnce});
-    // `storeHeld` carries it to the publication below.
+    // A box attaches the way it was checkpointed, so an unmountable chain is unreadable forever;
+    // prove the mode by performing the mount, not by asking whether the platform could.
     let storeHeld = false;
 
     if (first) {
@@ -2222,9 +1761,6 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         await mountStoreOnce();
         storeHeld = true;
       } catch (error) {
-        // Where extraction is not permitted, a failed proof is a FAILED
-        // CHECKPOINT carrying the platform's own reason
-        // (`SnapshotChainPorts.allowExtraction`).
         if (!ports.allowExtraction()) {
           throw new Error(
             'this box cannot serve a lazy layer chain and extraction is not permitted here, '
@@ -2253,8 +1789,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         baseObjectKey(root, chainId), DEVBOX_WORKDIR, ports.archiveExcludes(), storeHeld,
       );
     } else {
-      // The mount line proves an overlay exists to have a changed set at all;
-      // the upper is the path this strategy passed ({@link isOverlayMounted}).
+      // The mount line proves an overlay exists, so a changed set exists at all; the upper is
+      // the path this strategy passed ({@link isOverlayMounted}).
       if (!isOverlayMounted(await shell.readMounts(), DEVBOX_WORKDIR)) {
         throw new Error(
           `${DEVBOX_WORKDIR} is not an overlay mount, so there is no changed set to archive. `
@@ -2262,16 +1798,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         );
       }
 
-      // THE SAME EXCLUDES AS THE BASE, measured. Applied to the base only, the
-      // delta carried `node_modules` again on EVERY tick, and `shouldRebase`
-      // compared a small excluded base against a large unexcluded delta, so it
-      // fired at nearly every quiesce: Verdict-2 measured that arm at 1.42x
-      // tick time and 1.34x class-A of the plain one. Applied to both, the
-      // archives are commensurable, and durability is HONEST: a tree the base
-      // drops was only ever "durable in the delta" until the next rebase.
-      // CHUNKED FIRST: changed extents plus a per-file map in one object; a
-      // host that cannot stage one archives the whole upper exactly as before
-      // (`stageChunkedDelta` returns a named format decision).
+      // Delta and base share `archiveExcludes()` so `shouldRebase` compares commensurable sizes;
+      // chunked first, else the whole upper (`stageChunkedDelta` returns the format decision).
       const mounted = deltaLayerServed(await shell.readMounts(), chainId);
 
       const retained = mounted && previous.deltaFormat === 'chunked'
@@ -2304,8 +1832,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       at: ports.now(),
       changeVersion: version,
       upperMark,
-      // A REBASE SUPERSEDES A GENERATION ({@link supersedeGeneration}); a
-      // delta commit stays inside its generation and moves neither role.
+      // A rebase supersedes a generation; a delta commit stays inside its generation and
+      // moves neither role.
       ...(rebasing && previous !== null
         ? supersedeGeneration(previous)
         : { fallback: previous?.fallback, orphans: previous?.orphans }),
@@ -2317,17 +1845,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     });
     ports.log(JSON.stringify({ event: 'devbox.checkpoint.published', chainId, deltaId, deltaFormat, deltaFallback }));
 
-    // THIS UPPER *IS* THE DELTA JUST PUBLISHED, so the stamp says so where the
-    // next attach reads it. A base or a rebase stamps nothing: its generation
-    // has no delta object, and the next attach resets the upper.
+    // The upper now equals the just-published delta; the stamp tells the next attach so.
+    // A base or rebase stamps nothing: no delta object, and the next attach resets the upper.
     if (!fresh && committed.delta !== undefined && !deltaLayerServed(await shell.readMounts(), chainId)) {
       await stampSeededUpper(chainId, committed.delta);
     }
 
-    // A first base leaves its files in the upper, so the next delta would carry
-    // the base again. Seating the new base as the lower with an empty upper
-    // keeps the live view while making that delta small. Quiesce only, and only
-    // a first base: a rebase keeps its layers until the next wake proves them.
+    // Reseat a first base as the lower with an empty upper, or the next delta re-carries it.
+    // Quiesce only: a rebase keeps its layers until the next wake proves them.
     if (first && kind === 'quiesce') {
       await reseatAfterFirstBase(chainId);
     }
@@ -2347,9 +1872,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     };
   };
 
-  /** A commit that did not commit, stamped. When the fence refused it,
-   *  another writer advanced the record, so the stamp goes on the record as
-   *  it stands. */
+  /** When the fence refused the commit, another writer advanced the record,
+   *  so the failure stamp goes on the freshly read record, not the stale `state`. */
   const commitFailed = async (
     state: ChainState | null,
     thrown: { readonly cause: unknown },
@@ -2368,11 +1892,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
     const state = await ports.readState();
 
-    // ATTACHMENT COMES FIRST, ahead of the change gate. With no overlay there
-    // is no changed set, so every later answer would be about the wrong
-    // thing: a live container answered a forced checkpoint 'unchanged' while
-    // its work directory was not attached at all. Asked here, that box
-    // reports a failure.
+    // Attachment is checked before the change gate: without an overlay there is no changed set,
+    // so a chain box must report failure rather than 'unchanged'.
     const procMounts = await shell.readMounts();
     const overlayMounted = isOverlayMounted(procMounts, DEVBOX_WORKDIR);
 
@@ -2397,35 +1918,21 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       return await recordCheckpointFailure(stamps, state, `checkChanges failed: ${describe({ cause: error })}`);
     }
 
-    // THE CHANGE GATE NEEDS SOMETHING TO BE RELATIVE TO. The SDK's answer to
-    // `checkChanges` with no `since` is `unchanged`: it is ESTABLISHING a
-    // baseline. Consulting it there is how a fresh box writes files, stops,
-    // and saves nothing while every call reports success, which a live
-    // container did. With no baseline, content IS the change.
-    //
-    // THE CHANGED SET IS THE UPPER, so the skip gate asks about it. The SDK's
-    // change check, asked about the merged `/workspace`, answered `unchanged`
-    // for five consecutive ticks on a deployed run while npm wrote 400 MiB
-    // into the upper; the next workload's first tick committed 487 MiB of it.
-    // A tick that CANNOT DECIDE must commit: an unreadable fingerprint is
-    // empty, and an empty fingerprint never matches.
+    // `checkChanges` with no `since` answers `unchanged` while establishing a baseline; skip on the
+    // upper fingerprint instead, and an unreadable (empty) fingerprint never matches, so it commits.
     const mark = overlayMounted ? await shell.upperFingerprint() : '';
 
     if (overlayMounted) {
-      // Is the changed set spread across the layer and the upper? The layer's
-      // mount point names its generation, so this is the same `/proc/mounts`
-      // read the overlay gate above made.
+      // The layer's mount point names its generation, so `/proc/mounts` shows whether a delta
+      // layer is served; this reuses the read the overlay gate above made.
       const layered = state !== null && deltaLayerServed(procMounts, state.base.id);
 
       if (mark !== '' && mark === state?.upperMark) {
         return { kind: 'skipped', ...idle, reason: 'work directory is unchanged' };
       }
 
-      // AN EMPTY UPPER IS NOTHING TO SAY. Every lower is durable already: the
-      // base, the base plus its delta layer, or the empty lower a fresh box
-      // attaches over. A deletion leaves a whiteout in the upper and a
-      // metadata change copies its file up, so an empty upper proves that
-      // nothing was written since the attach or the reseat.
+      // Every lower is already durable, and deletions (whiteouts) and metadata changes land in the
+      // upper, so an empty upper proves nothing was written since the attach or the reseat.
       if ((await ports.countEntries(upperDir)) === 0) {
         return { kind: 'skipped', ...idle, reason: 'nothing has been written since the attach' };
       }
@@ -2452,13 +1959,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const effective: ChangeStatus = comparable ? change : 'changed';
 
     if (comparable && change === 'unchanged') {
-      // ADVANCE THE WATERMARK, ADVISORY BY CONSTRUCTION: a change this code
-      // DECLINED to archive must never advance it. A rejected write here is a
-      // console line and the skip stands, because an unadvanced watermark
-      // widens the next window, which can only over-report change, the safe
-      // direction. Answering `failed` would be a false claim about work at
-      // risk, and `Devbox.quiesce` declines to stop a box on a failed
-      // checkpoint, so a flaky durable write would hold a box open.
+      // A failed watermark write only logs: an unadvanced watermark over-reports change (safe),
+      // while `failed` would make `Devbox.quiesce` refuse to stop the box.
       try {
         await ports.writeState({ ...state, changeVersion: version }, state.rev);
       } catch (error) {
@@ -2497,9 +1999,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const state = await ports.readState();
 
     if (state === null) return;
-    // Objects first, then the pointer: reversed, a crash orphans both. Every
-    // generation the record NAMES goes, the retained fallback and the orphans
-    // included, because clearState erases the only record naming them.
+    // Objects before the pointer: reversed, a crash orphans both. Delete every generation the
+    // record names (fallback and orphans too): `clearState` erases the only record naming them.
     await ports.deleteObjects([
       state.base.id,
       ...(state.fallback === undefined ? [] : [state.fallback.base.id]),
@@ -2530,20 +2031,8 @@ function shellPaths(paths: readonly string[]): string {
   return paths.map(shellPath).join(' ');
 }
 
-/**
- * The archiver command: stage the exclude list, build the squashfs, and report
- * `<exit> <bytes>`.
- *
- * ONE COMMAND. A spot container can be replaced between two RPCs: as two
- * execs, the build reported exit 0 on one container and the stat found no
- * file on the next, "the archiver did not land" three times in one deployed
- * run while mksquashfs had succeeded. The exclude list is staged here for
- * the same reason. PATTERNS ARE DATA: the list travels as base64 and is
- * decoded container-side, so no quote, space or semicolon in a pattern can
- * become shell syntax. `-wildcards` makes a glob a glob, and `-ef` is the only
- * exclude form that carries the non-anchored lines {@link archiveExcludeFile}
- * writes. STDERR IS KEPT by the caller: it is mksquashfs's only explanation.
- */
+/** One command: a spot container can be replaced between execs, so build and stat must share one.
+ *  Patterns travel as base64 so none becomes shell syntax; `-ef` carries non-anchored lines. */
 export function archiveCommand(input: {
   sourceDir: string;
   archivePath: string;
@@ -2566,24 +2055,8 @@ export function archiveCommand(input: {
     + `"$(stat -c %s ${shellPath(input.archivePath)} 2>/dev/null || echo 0)"`;
 }
 
-/**
- * Publish a staged archive to the store mount's egress host and print
- * `<exit> <bytes> <etag>`. ONE COMMAND, for the reason {@link archiveCommand}
- * states: it writes the publisher script into the runtime directory (the
- * container's disk is ephemeral, so nothing remembers it from one generation
- * to the next) and runs it under bun, the runtime the image already carries.
- *
- * THE WRITE DOES NOT GO THROUGH s3fs. s3fs cannot publish in one attempt —
- * `mkdir` PUTs a directory marker and `create` PUTs an empty object before
- * the flush's own PUT, measured live as the three attempts of
- * `b20260914045438` with no option to skip either. The mount's egress host
- * answers the SDK's credential-less `r2.internal` handler instead: one PUT
- * at or below the part size, one multipart upload above it. The script's own
- * HEAD afterwards is the flush check the mount used to owe `conv=fsync`; a
- * store that did not take the bytes is a non-zero exit HERE, before the
- * record names the object. The mount itself is still held for the layers'
- * reads, and its registration is what makes the URL route at all.
- */
+/** Publishes via the mount's egress host, not s3fs, which cannot PUT in one attempt (D15).
+ *  The script's HEAD fails the command before the record names an unstored object. */
 export function publishCommand(input: { archivePath: string; objectUrl: string }): string {
   const script = `${DEVBOX_RUNTIME_DIR}/devbox-publish.mjs`;
 
@@ -2592,14 +2065,8 @@ export function publishCommand(input: { archivePath: string; objectUrl: string }
     + `rc=$?; printf '%s %s' "$rc" "$out"`;
 }
 
-/** The uncompressed size of what an archive of `sourceDir` would hold, as a
- *  command that prints one number. THE SAME MATCHER AS THE ARCHIVE, in `find`'s
- *  vocabulary: two `-path` predicates per pattern, one anchored at `<source>`
- *  and one under a wildcard segment, which crosses directory separators and so
- *  covers every depth as the exclude file does. `-prune` keeps the walk out of
- *  an excluded tree, which makes the number the archive's worst case. A failed
- *  walk prints 0, "no requirement": refusing every checkpoint because a probe
- *  could not walk would lose more than a full disk. */
+// Must match the archive's excludes: the `*/` `-path` form covers every depth; `-prune` skips
+// excluded trees. A failed walk prints 0 so a probe failure never refuses a checkpoint.
 export function archiveSizeCommand(sourceDir: string, excludes: readonly string[]): string {
   const pruned: string[] = [];
 
@@ -2617,13 +2084,8 @@ export function archiveSizeCommand(sourceDir: string, excludes: readonly string[
     + `| awk '{t+=$1} END {print t+0}'`;
 }
 
-/** The skip-gate fingerprint command over `sourceDir`: a hash of one record
- *  per path (inode, type, mode, size, sub-second mtime and CHANGE time, symlink
- *  target, path). A count/bytes/newest-mtime summary collided on a rename and
- *  on a rewrite with its mtime restored; the write itself moves ctime.
- *  O(entries), not O(bytes). A failed walk returns no mark, which callers
- *  treat as undecidable; `pipefail` stops `sort` or `sha256sum` hiding `find`'s
- *  failure. */
+/** Includes inode and ctime: a rewrite with restored mtime still moves ctime. O(entries).
+ *  A failed walk yields no mark (undecidable); `pipefail` keeps `sort`/`sha256sum` from hiding it. */
 export function upperFingerprintCommand(sourceDir: string): string {
   const walk = `find ${shellPath(sourceDir)} -mindepth 1 `
     + `-printf '%i\\0%y\\0%m\\0%s\\0%T@\\0%C@\\0%l\\0%p\\0' 2>/dev/null `
