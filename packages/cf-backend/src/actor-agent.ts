@@ -2056,15 +2056,6 @@ export abstract class ActorAgent extends Agent<Env> {
    *  assembly — the length the turn's prompt-token measurement is bound to. */
   protected _turnDurableLength = 0;
 
-  /** `agent.compactNow()` — the agent folding a finished phase itself instead
-   *  of waiting for the token trigger. It rides the SAME one-shot flag
-   *  overflow recovery arms, so there is one forced-rebuild path and a repeat
-   *  call can never loop the ladder. The in-flight turn's context is already
-   *  assembled, so the fold lands on the next one. */
-  armCompactNow(): void {
-    this.compactionState.armForceCompaction(this.name);
-  }
-
   /** One compaction logger for both compaction entries — the per-turn extension and the
    *  swarm shared-prefix ladder — so the two cannot drift into different outcome names. */
   private readonly compactionLogger: CompactionLogger = {

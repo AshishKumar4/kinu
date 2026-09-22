@@ -27,6 +27,7 @@ import type { RunEndReason } from './turn-lifecycle';
 import type { TurnContinuity } from './agent-orchestrator';
 import type { OwedEffect } from './terminal-effects';
 import type { SubordinateReportStatus } from '../events/hub/types';
+import { isPlaceholderMission } from '../identity/soul';
 
 /**
  * What every settled response knows about itself.
@@ -128,8 +129,9 @@ export interface TerminalTurnParts {
   /** Whether this actor runs the memory-compression lane at all. The lane
    *  reads its evidence from the transcript, so the row carries no input. */
   readonly sleepTime?: boolean;
-  /** What this actor should name itself from, when it is unnamed. */
-  readonly autoTitle?: { readonly subject: string };
+  /** The actor's recorded mission, which the roster turns into the subject an
+   *  unnamed actor names itself from. */
+  readonly autoTitle?: { readonly mission: string | null };
   /** Whether this actor runs the cadence optimisation lanes at all. */
   readonly autoGepa?: boolean;
   /**
@@ -313,7 +315,7 @@ export function declareTerminalRoster(
   // aborted or Plan turn is evidence about nothing.
   if (!completed || facts.workMode === 'plan') return owed;
 
-  if (parts.shadowTrial) {
+  if (parts.shadowTrial && owesShadowTrial(facts)) {
     owed.push({
       name: 'shadow_trial', scope: messageId, lane: 'inline',
       input: {
@@ -334,7 +336,7 @@ export function declareTerminalRoster(
   if (parts.autoTitle) {
     owed.push({
       name: 'auto_title', scope: messageId, lane: 'detached',
-      input: { subject: parts.autoTitle.subject },
+      input: { subject: autoTitleSubject(parts.autoTitle.mission, facts.userText) },
     });
   }
 
@@ -343,4 +345,19 @@ export function declareTerminalRoster(
   }
 
   return owed;
+}
+
+/**
+ * Whether a turn owes its candidate scaffold a shadow trial: a completed Build
+ * turn of a session whose evolution lanes are on. The roster's own gate, asked
+ * by a host before it reads the sampling plan at all.
+ */
+export function owesShadowTrial(facts: Pick<TerminalTurnFacts, 'completed' | 'workMode' | 'evolutionEnabled'>): boolean {
+  return facts.completed && facts.workMode !== 'plan' && facts.evolutionEnabled;
+}
+
+/** What an unnamed actor names itself from: its mission, unless that is still
+ *  a placeholder that names nothing yet, and then the owner's own words. */
+function autoTitleSubject(mission: string | null, userText: string): string {
+  return mission !== null && !isPlaceholderMission(mission) ? mission : userText;
 }

@@ -148,10 +148,6 @@ const SHARED_TRANSPORTS = {
   listFileCheckpoints: 'fileCheckpointListing',
   planFileRestore: '.plan',
   restoreFileCheckpoint: '.restore',
-  // Three lines each over ONE core store (CompactionStateStore). No duplicated
-  // logic — only the session key differs, which is what a backend knows and
-  // core does not.
-  armCompactNow: '.armForceCompaction',
   cancelBackgroundJob: 'cancelBackgroundJob',
   cancelTrigger: 'cancelTrigger',
   decideDeferredApprovals: '.decide',
@@ -189,7 +185,6 @@ const SHARED_TRANSPORTS = {
   getAlwaysActiveSkills: 'getAlwaysActiveSkills',
   getEvolutionChangelog: 'getEvolutionChangelog',
   getReasoningEffort: 'getReasoningEffort',
-  getReplayEvals: 'listReplayEvals',
   getRunEvents: 'getRunEvents',
   getShadowStatus: 'getShadowStatus',
   // Both are one-line delegations to read-models/config-plane.ts, exactly like
@@ -210,10 +205,8 @@ const SHARED_TRANSPORTS = {
   latestAlternateTakes: 'latestAlternateTakeSet',
   listBackgroundJobs: 'listBackgroundJobs',
   listDeferredApprovals: '.list',
-  listCurriculumTasks: 'listProposedTasks',
   listRuns: 'listRuns',
   logActivity: 'writeActivityLog',
-  listScaffoldVersions: 'listScaffoldVersions',
   listRefinements: 'listRefinements',
 
   makeScaffoldHistory: 'createScaffoldHistory',
@@ -228,8 +221,6 @@ const SHARED_TRANSPORTS = {
   decidePlanReview: '.decideAndHandOff',
   turnWorkMode: 'workModeUnderReview',
   pickAlternateTake: 'pickAlternateTake',
-  proposeCurriculumTasks: 'proposeCurriculumTasks',
-  proposeScaffold: 'proposeScaffold',
   requestRefinement: 'requestOwnerRefinement',
   recordSystemPromptHash: 'observeSystemPromptHash',
   resumeBackgroundJob: 'resumeBackgroundJob',
@@ -251,7 +242,6 @@ const SHARED_TRANSPORTS = {
   // enqueueTurn, the CLI's session-queue pump.
   send: '.send',
   setAlwaysActiveSkills: 'setAlwaysActiveSkills',
-  setCurriculumTaskStatus: 'updateProposedTaskStatus',
   setModel: 'setModel',
   setRole: 'changeRoleAsOwner',
   setReasoningEffort: 'setReasoningEffort',
