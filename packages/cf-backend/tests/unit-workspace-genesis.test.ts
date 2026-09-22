@@ -13,7 +13,9 @@
 import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { SIGNAL_ID_METADATA_KEY, WORKSPACE_CREATED_EVENT, renderSoulMarkdown, summarizeSoul } from '@kinu.run/core';
+import { SIGNAL_ID_METADATA_KEY, TERMINAL_EFFECT_RETRY_CEILING_MS, WORKSPACE_CREATED_EVENT, renderSoulMarkdown, summarizeSoul } from '@kinu.run/core';
+import { MockLanguageModelV3 } from 'ai/test';
+import { createTestUserDO, testOwner } from './helpers/user-do';
 import type { ModelMessage } from 'ai';
 import { orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
@@ -202,5 +204,89 @@ describe('the workspace takes its own first turn', () => {
     expect(ran[1].text).toBe('Late but admitted.');
     expect((await harness.agent.harnessTranscript.history()).filter((message) => message.role === 'assistant')).toHaveLength(2);
     harness.db.close();
+  });
+});
+
+/**
+ * The naming a mission-only create leaves to the genesis turn (#18). The
+ * create stores the mission's first line as an 'auto' stand-in; only the
+ * genesis turn's `auto_title` row may replace it, and it keeps that right
+ * through the ledger's retries, so a failed naming call is asked again.
+ */
+describe('the genesis turn names the workspace over its stand-in', () => {
+  const STAND_IN = 'Audit the OAuth callback flow';
+
+  const USAGE = {
+    inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+    outputTokens: { total: 1, text: 1, reasoning: undefined },
+  };
+
+  async function createdWorkspace(nameOrigin: 'auto' | 'user') {
+    const user = createTestUserDO();
+    const owner = await testOwner();
+    const workspace = 'quiet-maple-a1b2c3d4';
+    await user.userDO.registerWorkspace(owner, workspace, STAND_IN, { purpose: MISSION, nameOrigin });
+    await user.userDO.ensureWorkspaceCapability(workspace, null);
+    const capability = user.installed.get(workspace);
+
+    if (capability === undefined) throw new Error('the workspace has no capability');
+    const harness = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId: '0123456789abcdef0123456789abcdef' });
+    await harness.agent.installWorkspaceCapability(capability);
+    await harness.agent.setSoul(renderSoulMarkdown({ name: STAND_IN, mission: MISSION }));
+    const namingCalls: string[] = [];
+
+    harness.agent.sideModelFactory = () => new MockLanguageModelV3({
+      doGenerate: async () => {
+        namingCalls.push('naming');
+
+        if (namingCalls.length === 1) throw new Error('the naming model is unavailable');
+
+        return {
+          content: [{ type: 'text', text: '{"title":"OAuth Callback Audit"}' }],
+          finishReason: { unified: 'stop', raw: undefined }, usage: USAGE, warnings: [],
+        };
+      },
+    });
+
+    return { user, owner, workspace, harness, namingCalls };
+  }
+
+  test('a failed naming call is retried by the ledger, and a later turn asks no model', async () => {
+    const { user, owner, workspace, harness, namingCalls } = await createdWorkspace('auto');
+    const turns = chatSessionTurns(harness.agent);
+    const next = turns.park();
+    expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
+    await next;
+    await turns.settle({ messageId: 'a-genesis', text: 'ok' });
+    await harness.agent.harnessTerminalReported();
+
+    expect(namingCalls).toHaveLength(1);
+    expect(await user.userDO.getWorkspaceTitle(owner, workspace)).toEqual({ displayName: STAND_IN, nameOrigin: 'auto' });
+
+    harness.agent.harnessAdvanceTerminalClock(TERMINAL_EFFECT_RETRY_CEILING_MS);
+    await harness.agent.harnessResumeTerminalTransitions();
+    expect(await user.userDO.getWorkspaceTitle(owner, workspace)).toEqual({ displayName: 'OAuth Callback Audit', nameOrigin: 'auto' });
+
+    await turns.run('What did you find?');
+    await harness.agent.harnessTerminalReported();
+    expect(namingCalls).toHaveLength(2);
+    expect(await user.userDO.getWorkspaceTitle(owner, workspace)).toEqual({ displayName: 'OAuth Callback Audit', nameOrigin: 'auto' });
+    harness.db.close();
+    user.close();
+  });
+
+  test('a title the owner chose is never replaced by the genesis naming', async () => {
+    const { user, owner, workspace, harness, namingCalls } = await createdWorkspace('user');
+    const turns = chatSessionTurns(harness.agent);
+    const next = turns.park();
+    await harness.agent.beginGenesisTurn();
+    await next;
+    await turns.settle({ messageId: 'a-genesis', text: 'ok' });
+    await harness.agent.harnessTerminalReported();
+
+    expect(namingCalls).toEqual([]);
+    expect(await user.userDO.getWorkspaceTitle(owner, workspace)).toEqual({ displayName: STAND_IN, nameOrigin: 'user' });
+    harness.db.close();
+    user.close();
   });
 });

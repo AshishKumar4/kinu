@@ -2944,12 +2944,12 @@ describe('LocalAgentSession — mission-derived auto-titling', () => {
     await session.end();
 
     expect(asked.some((prompt) => prompt.includes('Title a Kinu workspace'))).toBe(true);
-    // PROVISIONAL, because no model answered: the stand-in is what the
-    // workspace shows and it is still owed its upgrade, so the next turn asks
-    // again instead of freezing the first line of the request as the name.
+    // No model answered, so the stand-in is the title, recorded as the
+    // system's. Nothing on this backend asks again: a later turn reads a title
+    // that is not a placeholder as named.
     expect(naming(db)).toEqual({
       displayName: 'Audit the OAuth callback flow',
-      origin: 'provisional',
+      origin: 'auto',
     });
   });
 

@@ -7,7 +7,7 @@
 // The store is a deep module (small interface, real behavior): typed getters
 // for known keys, generic get/set/delete for everything else, all() for fork.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
-import type { NameOrigin } from '../identity/naming';
+import { nameOriginOf, type NameOrigin } from '../identity/naming';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
 import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../profiles/catalog';
 import {
@@ -402,7 +402,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     getNameOrigin() {
       const v = get(AGENT_CONFIG_KEYS.nameOrigin);
 
-      return v === 'user' || v === 'auto' || v === 'provisional' ? v : null;
+      return v === null ? null : nameOriginOf(v);
     },
     setNameOrigin(origin) { set(AGENT_CONFIG_KEYS.nameOrigin, origin); },
     setDisplayNameOrigin(name, origin) {
