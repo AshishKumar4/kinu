@@ -13,7 +13,7 @@ import {
   WORKSPACE_RUN_ID,
   type RunEvent,
 } from '../src/index';
-import { testActorHandle } from '@kinu.run/test-utils';
+import { present, testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 
 function setup() {
@@ -39,7 +39,7 @@ describe('beginModelOperation — the start row exists while the call runs', () 
 
     const rows = operationsOf(recorder, 'run-1');
     expect(rows).toHaveLength(1);
-    const start = rows[0]!;
+    const start = rows[0];
     expect(start.phase).toBe('start');
     expect(start.source).toBe('fast');
     expect(start.op).toBe('complete');
@@ -64,8 +64,8 @@ describe('beginModelOperation — the start row exists while the call runs', () 
 
     const rows = operationsOf(recorder, 'run-1');
     expect(rows.map((row) => row.phase)).toEqual(['start', 'end']);
-    expect(rows[0]!.operationId).toBe(rows[1]!.operationId);
-    const end = rows[1]!;
+    expect(rows[0].operationId).toBe(rows[1].operationId);
+    const end = rows[1];
     expect(end.outcome).toBe('ok');
     expect(end.usage).toEqual({ input: 41, output: 7 });
     expect(end.modelId).toBe('claude-x');
@@ -84,10 +84,10 @@ describe('beginModelOperation — the start row exists while the call runs', () 
     op.failed({ cause: new Error(`provider boom ${'x'.repeat(500)}`) });
 
     const rows = operationsOf(recorder, 'run-1');
-    const end = rows[1]!;
+    const end = rows[1];
     expect(end.outcome).toBe('failed');
     expect(end.error).toContain('provider boom');
-    expect(end.error!.length).toBeLessThanOrEqual(300);
+    expect(present(end.error, 'the failed operation error text').length).toBeLessThanOrEqual(300);
     expect(end.usage).toBeUndefined();
     expect(recorder.unterminatedModelOperations()).toEqual([]);
   });
@@ -172,7 +172,7 @@ describe('the production seams open the frame before the request', () => {
     const rows = operationsOf(recorder, WORKSPACE_RUN_ID);
     expect(rows.map((row) => row.phase)).toEqual(['start', 'end']);
     expect(rows.every((row) => row.spec === 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813')).toBe(true);
-    expect(rows[1]!.usage).toEqual({ input: 41, output: 7 });
+    expect(rows[1].usage).toEqual({ input: 41, output: 7 });
   });
   test('createVercelAILLM.complete closes the frame as failed when the endpoint dies', async () => {
     // This factory really dials its baseURL, so the honest stub is an unroutable
@@ -193,7 +193,7 @@ describe('the production seams open the frame before the request', () => {
 
     const rows = operationsOf(recorder, WORKSPACE_RUN_ID);
     expect(rows.map((row) => row.phase)).toEqual(['start', 'end']);
-    expect(rows[1]!.outcome).toBe('failed');
+    expect(rows[1].outcome).toBe('failed');
     expect(recorder.unterminatedModelOperations()).toEqual([]);
   });
 
@@ -211,8 +211,8 @@ describe('the production seams open the frame before the request', () => {
     await expect(llm.complete('classify')).rejects.toThrow('socket hung up');
 
     const rows = operationsOf(recorder, WORKSPACE_RUN_ID);
-    expect(rows[0]!.phase).toBe('start');
-    expect(rows[1]!.outcome).toBe('failed');
-    expect(rows[1]!.error).toContain('socket hung up');
+    expect(rows[0].phase).toBe('start');
+    expect(rows[1].outcome).toBe('failed');
+    expect(rows[1].error).toContain('socket hung up');
   });
 });

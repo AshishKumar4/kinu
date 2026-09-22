@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestFactsStore } from '@kinu.run/test-utils';
+import { createTestFactsStore, present } from '@kinu.run/test-utils';
 import {
   hybridSearch,
   memorySnippetRehydrator,
@@ -88,7 +88,7 @@ describe('hybridSearch', () => {
 
   test('enriches with snippet from lexical when available', async () => {
     const out = await hybridSearch('q', lexicalFn, vectorStore(semanticCorpus));
-    const shared = out.find((h) => h.id === 'shared')!;
+    const shared = present(out.find((h) => h.id === 'shared'), "the 'shared' hit");
     expect(shared.snippet).toBe('shared snippet');
   });
 
@@ -133,7 +133,7 @@ describe('hybridSearch', () => {
       rehydrate: memorySnippetRehydrator(memory),
     });
 
-    expect(out.find((h) => h.id === 'shared')!.snippet).toBe('shared snippet');
+    expect(present(out.find((h) => h.id === 'shared'), "the 'shared' hit").snippet).toBe('shared snippet');
   });
 
   test('fuses lexical + semantic hits keyed on the canonical chunk id', async () => {
@@ -205,12 +205,11 @@ describe('hybridSearch', () => {
 
     const out = await hybridSearch('deploy target', lexicalFn, vectorStore(semanticCorpus), { facts });
 
-    const hit = out.find((h) => h.id === 'fact:deploy.target');
+    const hit = present(out.find((h) => h.id === 'fact:deploy.target'), 'the deploy.target fact hit');
 
-    expect(hit).toBeDefined();
-    expect(hit!.sources).toEqual(['fact']);
-    expect(hit!.label).toBe('fact: deploy.target');
-    expect(hit!.snippet).toBe('staging');
+    expect(hit.sources).toEqual(['fact']);
+    expect(hit.label).toBe('fact: deploy.target');
+    expect(hit.snippet).toBe('staging');
   });
 
   test('a fact hit never reaches the rehydrator — it carries its own text', async () => {

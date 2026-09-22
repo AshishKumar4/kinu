@@ -19,22 +19,32 @@ describe('modelVendorFamily', () => {
     expect(modelVendorFamily('workers-ai/@cf/openai/gpt-oss-120b')).toBe('openai');
   });
 
-  test('falls back to the provider id when the model id names no vendor', () => {
-    expect(modelVendorFamily('openai/gpt-5.5')).toBe('openai');
-    expect(modelVendorFamily('anthropic/claude-opus-4-7')).toBe('anthropic');
-  });
+  const FAMILIES = [
+    {
+      name: 'falls back to the provider id when the model id names no vendor',
+      routes: [['openai/gpt-5.5', 'openai'], ['anthropic/claude-opus-4-7', 'anthropic']],
+    },
+    {
+      // Each route pinned to the literal family, so a provider-keyed reader that
+      // reports workers-ai for one route and openrouter for the other fails.
+      name: 'two routes to the same build are the same family',
+      routes: [
+        ['workers-ai/@cf/moonshotai/kimi-k2.6', 'moonshotai'],
+        ['openrouter/moonshotai/kimi-k2.6', 'moonshotai'],
+      ],
+    },
+  ];
+
+  for (const family of FAMILIES) {
+    test(family.name, () => {
+      for (const [id, vendor] of family.routes) expect(modelVendorFamily(id)).toBe(vendor);
+    });
+  }
 
   test('resellers report the vendor they resell, not their own id', () => {
     // Codex is OpenAI's own OAuth endpoint — judging GPT with GPT is not a
     // cross-family pair however the two are billed.
     expect(modelVendorFamily('codex/gpt-5.5')).toBe('openai');
-  });
-
-  test('two routes to the same build are the same family', () => {
-    // Each route pinned to the literal family, so a provider-keyed reader
-    // that reports workers-ai for one route and openrouter for the other fails.
-    expect(modelVendorFamily('workers-ai/@cf/moonshotai/kimi-k2.6')).toBe('moonshotai');
-    expect(modelVendorFamily('openrouter/moonshotai/kimi-k2.6')).toBe('moonshotai');
   });
 });
 

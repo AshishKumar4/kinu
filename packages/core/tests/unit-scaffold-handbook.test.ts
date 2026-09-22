@@ -5,6 +5,7 @@
 // (never a second copy of it), it is deterministic, and its scan of the live
 // scaffold source reads code rather than prose.
 import { describe, expect, test } from 'bun:test';
+import { present } from '@kinu.run/test-utils';
 import { indexScaffoldSites, renderScaffoldHandbook } from '../src/evolution/scaffold-handbook';
 import { LAYERS } from '../src/layergate/layers';
 import { SUBJECT_SOURCE } from '../src/layergate/subjects';
@@ -34,7 +35,7 @@ describe('the handbook renders the layer gate’s taxonomy, not a second one', (
         expect(handbook).toContain(`L1 ${layer.id} [${layer.probes.length} probe`);
       } else {
         expect(handbook).toContain(`L1 ${layer.id} [NOT SCORED]`);
-        expect(handbook).toContain(layer.unmeasuredBecause!.slice(0, 40));
+        expect(handbook).toContain(present(layer.unmeasuredBecause, `the reason ${layer.id} is unmeasured`).slice(0, 40));
       }
     }
   });
@@ -76,7 +77,7 @@ describe('indexScaffoldSites — the L2 scan of the live scaffold', () => {
     );
 
     expect(sites).toHaveLength(1);
-    expect(sites[0]!.bridgeCalls).toEqual(['defaultInference']);
+    expect(sites[0].bridgeCalls).toEqual(['defaultInference']);
   });
 
   test('a `//` inside a string literal stays code', () => {
@@ -86,7 +87,7 @@ describe('indexScaffoldSites — the L2 scan of the live scaffold', () => {
       '  await host.callTool("web_fetch", { url });\n}\n',
     );
 
-    expect(sites[0]!.bridgeCalls).toEqual(['callTool']);
+    expect(sites[0].bridgeCalls).toEqual(['callTool']);
   });
 
   test('several declarations each get their own span, in source order', () => {
@@ -104,7 +105,7 @@ describe('indexScaffoldSites — the L2 scan of the live scaffold', () => {
       ['REVIEW', 'binding', []],
       ['run', 'generator', ['llmStream', 'emit']],
     ]);
-    expect(sites[0]!.note).toBe('Plan the turn.');
+    expect(sites[0].note).toBe('Plan the turn.');
   });
 
   test('top-level statements that reach the bridge are their own site', () => {
@@ -114,7 +115,7 @@ describe('indexScaffoldSites — the L2 scan of the live scaffold', () => {
     );
 
     expect(sites.map((s) => s.name)).toEqual(['<module>', 'run']);
-    expect(sites[0]!.kind).toBe('module');
+    expect(sites[0].kind).toBe('module');
   });
 
   test('a source with nothing top-level indexes to nothing, and still renders', () => {

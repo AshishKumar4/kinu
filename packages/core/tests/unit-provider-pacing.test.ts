@@ -58,7 +58,7 @@ describe('the lane bound is the platform\'s, not a number of ours', () => {
     await Promise.resolve();
     expect(admitted).toBe(false);
 
-    held[0]!();
+    held[0]();
     expect(await extra).toBeInstanceOf(Function);
 
     for (const release of held.slice(1)) release();
@@ -102,10 +102,10 @@ describe('request starts are paced against one provider', () => {
     const held = await pacer.admit(HOST);
     let admitted = false;
 
-    const third = pacer.admit(HOST).then((release) => {
+    const third = pacer.admit(HOST).then((releaseThird) => {
       admitted = true;
 
-      return release;
+      return releaseThird;
     });
 
     await Promise.resolve();

@@ -240,11 +240,11 @@ describe('mission budget — USD at catalog prices', () => {
     const [row] = governor.snapshot();
     // (2k × $3 + 8k × $0.30 + 2k × $15) / 1M
     const expected = (2_000 * 3 + 8_000 * 0.3 + 2_000 * 15) / 1_000_000;
-    expect(row!.spent.usd).toBeCloseTo(expected, 10);
-    expect(row!.spent.tokens).toBe(12_000);
-    expect(row!.pricing).toEqual({ blendedTokens: 0, source: 'catalog' });
+    expect(row.spent.usd).toBeCloseTo(expected, 10);
+    expect(row.spent.tokens).toBe(12_000);
+    expect(row.pricing).toEqual({ blendedTokens: 0, source: 'catalog' });
     // The blended rate would have been wrong by more than 2x here.
-    expect(row!.spent.usd).not.toBeCloseTo(estimateUsdCost(12_000), 4);
+    expect(row.spent.usd).not.toBeCloseTo(estimateUsdCost(12_000), 4);
   });
 
   test('no cache-read rate published: cached input is charged at the input rate', () => {
@@ -252,7 +252,7 @@ describe('mission budget — USD at catalog prices', () => {
     governor.declare('m', {});
     governor.activate(['m']);
     governor.debit(1_500, { usage: { input: 1_000, output: 500, cacheRead: 900 } });
-    expect(governor.snapshot()[0]!.spent.usd).toBeCloseTo((1_000 * 3 + 500 * 15) / 1_000_000, 10);
+    expect(governor.snapshot()[0].spent.usd).toBeCloseTo((1_000 * 3 + 500 * 15) / 1_000_000, 10);
   });
 
   test('spend the catalog cannot price falls back to the blended rate AND says so', () => {
@@ -263,8 +263,8 @@ describe('mission budget — USD at catalog prices', () => {
     governor.debit(4_000, { spawns: 1 });
 
     const [row] = governor.snapshot();
-    expect(row!.spent.usd).toBeCloseTo(estimateUsdCost(4_000), 10);
-    expect(row!.pricing).toEqual({ blendedTokens: 4_000, source: 'blended' });
+    expect(row.spent.usd).toBeCloseTo(estimateUsdCost(4_000), 10);
+    expect(row.pricing).toEqual({ blendedTokens: 4_000, source: 'blended' });
   });
 
   test('a catalog that has not landed yet blends, and the ledger reads mixed once it does', () => {
@@ -273,13 +273,13 @@ describe('mission budget — USD at catalog prices', () => {
     governor.declare('m', {});
     governor.activate(['m']);
     governor.debit(1_000, { usage: { input: 800, output: 200 } });
-    expect(governor.snapshot()[0]!.pricing).toEqual({ blendedTokens: 1_000, source: 'blended' });
+    expect(governor.snapshot()[0].pricing).toEqual({ blendedTokens: 1_000, source: 'blended' });
 
     pricing = SONNET;
     governor.debit(1_000, { usage: { input: 800, output: 200 } });
     const [row] = governor.snapshot();
-    expect(row!.pricing).toEqual({ blendedTokens: 1_000, source: 'mixed' });
-    expect(row!.spent.usd).toBeCloseTo(
+    expect(row.pricing).toEqual({ blendedTokens: 1_000, source: 'mixed' });
+    expect(row.spent.usd).toBeCloseTo(
       estimateUsdCost(1_000) + (800 * 3 + 200 * 15) / 1_000_000, 10);
   });
 
@@ -297,7 +297,7 @@ describe('mission budget — USD at catalog prices', () => {
     expect(refusal?.spent.usd).toBeCloseTo(3, 10);
     // Catalog-priced spend is stated as a measurement, not an approximation.
     expect(refusal?.note).toContain('= $3.0000');
-    expect(governor.snapshot()[0]!.remaining.usd).toBe(0);
+    expect(governor.snapshot()[0].remaining.usd).toBe(0);
   });
 
   test('a usage report the catalog cannot price blends the tokens AND says so', () => {
@@ -309,8 +309,8 @@ describe('mission budget — USD at catalog prices', () => {
     // so the spend is recorded — at the blended rate, stated as blended.
     governor.debit(1_000, { calls: 1, usage: {} });
     const [row] = governor.snapshot();
-    expect(row!.spent.usd).toBeCloseTo(estimateUsdCost(1_000), 10);
-    expect(row!.pricing).toEqual({ blendedTokens: 1_000, source: 'blended' });
+    expect(row.spent.usd).toBeCloseTo(estimateUsdCost(1_000), 10);
+    expect(row.pricing).toEqual({ blendedTokens: 1_000, source: 'blended' });
   });
 });
 

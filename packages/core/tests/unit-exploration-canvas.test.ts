@@ -31,7 +31,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, present } from '@kinu.run/test-utils';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { initHeadsTables } from '../src/heads/schema';
@@ -136,36 +136,37 @@ describe('readForkRunParams', () => {
   // shares one per-evaluation call pool with check generation, so a request the
   // pool cannot fund runs smaller. A surface showing only the request hides
   // that entirely.
-  test('a search that asked for 20 judges and was seen running 3 says both numbers', () => {
-    const { db, sql, actor, actorId } = freshDb();
-    seedSearch(db, actorId, {
-      rootId: 'clamped', task: 'twenty judges please', at: 1_000, nodes: 1,
-      config: { budget: 4, branches: 2, judgeSamples: 20, mode: 'build' },
-      realised: 3,
-    });
-    expect(readForkRunParams(sql, actor, ['clamped'])[0]?.search).toMatchObject({
-      judgeSamplesRequested: 20,
-      judgeSamplesRealised: 3,
-    });
-  });
+  const ENSEMBLES = [
+    {
+      name: 'a search that asked for 20 judges and was seen running 3 says both numbers',
+      rootId: 'clamped', task: 'twenty judges please', realised: 3,
+    },
+    {
+      // The realised size is OBSERVED, never predicted. The pool arithmetic gives
+      // the CEILING a request is clamped to (mcts/evaluation.ts judgeCallBudget,
+      // pinned in unit-mcts-evaluation.test.ts), and an evaluation that
+      // short-circuits before judging never reaches it — so a run whose knobs
+      // imply three and whose only candidate sampled one reports one.
+      name: 'the realised ensemble is what was seen, not what the knobs imply',
+      rootId: 'observed', task: 'short-circuited', realised: 1,
+    },
+  ];
 
-  // The realised size is OBSERVED, never predicted. The pool arithmetic gives the
-  // CEILING a request is clamped to (mcts/evaluation.ts judgeCallBudget, pinned in
-  // unit-mcts-evaluation.test.ts), and an evaluation that short-circuits before
-  // judging never reaches it — so a run whose knobs imply three and whose only
-  // candidate sampled one reports one.
-  test('the realised ensemble is what was seen, not what the knobs imply', () => {
-    const { db, sql, actor, actorId } = freshDb();
-    seedSearch(db, actorId, {
-      rootId: 'observed', task: 'short-circuited', at: 1_000, nodes: 1,
-      config: { budget: 4, branches: 2, judgeSamples: 20, mode: 'build' },
-      realised: 1,
+  for (const ensemble of ENSEMBLES) {
+    test(ensemble.name, () => {
+      const { db, sql, actor, actorId } = freshDb();
+      seedSearch(db, actorId, {
+        rootId: ensemble.rootId, task: ensemble.task, at: 1_000, nodes: 1,
+        config: { budget: 4, branches: 2, judgeSamples: 20, mode: 'build' },
+        realised: ensemble.realised,
+      });
+
+      expect(readForkRunParams(sql, actor, [ensemble.rootId])[0]?.search).toMatchObject({
+        judgeSamplesRequested: 20,
+        judgeSamplesRealised: ensemble.realised,
+      });
     });
-    expect(readForkRunParams(sql, actor, ['observed'])[0]?.search).toMatchObject({
-      judgeSamplesRequested: 20,
-      judgeSamplesRealised: 1,
-    });
-  });
+  }
 
   test('a journalled run reports its strategy and node count, and no budget at all', () => {
     const { db, sql, actor, actorId } = freshDb();
@@ -255,13 +256,13 @@ describe('readExplorationCanvas', () => {
     // A journal-only run keeps its branches in the journal, so it carries no tree
     // rows — and carries the journalled run instead. Empty on BOTH halves is what
     // "this run recorded nothing" means, so the two must not be confusable.
-    const journalled = page.items.find((entry) => entry.run.id === 'm1')!;
+    const journalled = present(page.items.find((entry) => entry.run.id === 'm1'), 'the m1 run on the canvas');
     expect(journalled.tree).toEqual([]);
     expect(journalled.head?.heads.map((head) => head.task)).toEqual(['angle 0', 'angle 1']);
     // A search-only run's branches ARE its tree; there is no journalled run to fetch.
     expect(page.items.filter((entry) => entry.run.hasSearchTree).map((entry) => entry.head))
       .toEqual([null, null]);
-    expect(page.items.find((entry) => entry.run.id === 's1')!.tree).toHaveLength(4);
+    expect(present(page.items.find((entry) => entry.run.id === 's1'), 'the s1 run on the canvas').tree).toHaveLength(4);
   });
 
   // THE DEFECT THIS READ MODEL WAS REWRITTEN FOR. One swarm root, both stores
@@ -284,7 +285,7 @@ describe('readExplorationCanvas', () => {
 
     const page = readExplorationCanvas(sql, actor);
     expect(page.items).toHaveLength(1);
-    const entry = page.items[0]!;
+    const entry = page.items[0];
     expect(entry.run).toMatchObject({
       id: 'swarm-1',
       task: 'cut p99 latency',
@@ -367,7 +368,7 @@ describe('readExplorationCanvas', () => {
     expect(page.status).toBe('more');
     // The page bounds RUNS. Asking for one still delivers that run whole.
     expect(readExplorationCanvas(sql, actor, page.status === 'more' ? page.next : null, 1)
-      .items[0]!.tree).toHaveLength(41);
+      .items[0].tree).toHaveLength(41);
   });
 
   test('a search still being written cannot displace the run the page shows', () => {
@@ -386,7 +387,7 @@ describe('readExplorationCanvas', () => {
 
     const page = readExplorationCanvas(sql, actor, null, 1);
     expect(page.items.map((entry) => entry.run.id)).toEqual(['settled']);
-    expect(page.items[0]!.tree.every((row) => row.root_id === 'settled')).toBe(true);
+    expect(page.items[0].tree.every((row) => row.root_id === 'settled')).toBe(true);
   });
 
   test('a run whose parameters are gone says so instead of inventing them', () => {
@@ -397,8 +398,8 @@ describe('readExplorationCanvas', () => {
 
     const page = readExplorationCanvas(sql, actor);
     expect(page.items).toHaveLength(1);
-    expect(page.items[0]!.params).toBeNull();
-    expect(page.items[0]!.tree).toHaveLength(2);
+    expect(page.items[0].params).toBeNull();
+    expect(page.items[0].tree).toHaveLength(2);
   });
 
   test('an empty workspace is an exhausted page, not an error and not "more"', () => {
@@ -511,7 +512,7 @@ describe('readExplorationRun', () => {
     seedSearch(db, actorId, { rootId: 's1', task: 'one run', at: 1_000, nodes: 2 });
     const page = readExplorationCanvas(sql, actor);
     expect(page.items).toHaveLength(1);
-    expect(readExplorationRun(sql, actor, 's1')).toEqual(page.items[0]!);
+    expect(readExplorationRun(sql, actor, 's1')).toEqual(page.items[0]);
   });
 
   test('a root nothing wrote is null, not an empty row', () => {

@@ -90,19 +90,20 @@ function compileFixtures(): CompileReport {
 function markedLines(file: string): ReadonlyMap<number, number> {
   const source = readFileSync(join(fixtureProject, file), 'utf8').split('\n');
   const byCase = new Map<number, number>();
-  source.forEach((text, index) => {
+
+  for (const [index, text] of source.entries()) {
     const marker = /^\/\/ \[(\d+)\]/u.exec(text);
 
     // The call is the first line after the marker's comment block, which the
     // fixture keeps to a fixed shape: `// [n] …` then optional `//` continuation
     // lines, then the statement. Resolved by scanning forward to the first line
     // that is not a comment.
-    if (!marker?.[1]) return;
+    if (!marker?.[1]) continue;
     let cursor = index + 1;
 
     while (cursor < source.length && source[cursor]?.trimStart().startsWith('//')) cursor += 1;
     byCase.set(Number.parseInt(marker[1], 10), cursor + 1);
-  });
+  }
 
   return byCase;
 }

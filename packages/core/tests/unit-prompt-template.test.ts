@@ -15,6 +15,13 @@ import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS, type BuiltinToolName } from '../src/
 import { createTestRuntime } from '../../test-utils/src/runtime';
 
 /** Longest common prefix of two strings, in code units — the cache measurement. */
+/** A section source as it arrives at runtime — a store row, or a template GEPA
+ *  rewrote. The `string` parameter erases the slot contract the compiler infers
+ *  from an inline literal, which is the door these tests come through. */
+function storedSource(source: string): string {
+  return source;
+}
+
 function commonPrefixLength(a: string, b: string): number {
   const limit = Math.min(a.length, b.length);
   let i = 0;
@@ -35,10 +42,25 @@ describe('definePromptSection — rendering', () => {
     expect(definePromptSection('t/static', source).render({})).toBe(source);
   });
 
-  test('a repeated slot is one contract entry and renders at every position', () => {
-    const section = definePromptSection('t/repeat', '{{v}}-{{v}}-{{v}}');
-    expect(section.render({ v: 'q' })).toBe('q-q-q');
-  });
+  const RENDERS = [
+    {
+      name: 'a repeated slot is one contract entry and renders at every position',
+      id: 't/repeat', template: '{{v}}-{{v}}-{{v}}', value: 'q', text: 'q-q-q',
+    },
+    {
+      // The distinction that matters: absent is a bug, empty is a decision.
+      name: 'an empty string is a legal value and renders empty',
+      id: 't/empty', template: 'A{{v}}B', value: '', text: 'AB',
+    },
+  ];
+
+  for (const rendered of RENDERS) {
+    test(rendered.name, () => {
+      const section = definePromptSection(rendered.id, rendered.template);
+
+      expect(section.render({ v: rendered.value })).toBe(rendered.text);
+    });
+  }
 
   test('interpolated content is never rewritten — no whitespace normalisation', () => {
     // OpenSeal's engine ends compile() with .replace(/\n{3,}/g,'\n\n') plus an
@@ -70,7 +92,7 @@ describe('definePromptSection — a missing slot fails loudly', () => {
   // exists to enable (a section loaded from a store, or rewritten by GEPA). So
   // the runtime check is the one that has to hold, and it is tested through that
   // same door: `source` typed as `string` erases the slot contract.
-  const fromStore: string = 'A {{present}} B {{absent}} C';
+  const fromStore = storedSource('A {{present}} B {{absent}} C');
 
   test('throws, naming the section and the slot, instead of rendering empty', () => {
     const section = definePromptSection('t/store', fromStore);
@@ -85,12 +107,6 @@ describe('definePromptSection — a missing slot fails loudly', () => {
     expect(() => { rendered = section.render({ present: 'x' }); })
       .toThrow(/prompt template "t\/store2": slot \{\{absent\}\} has no value/);
     expect(rendered).toBeNull();
-  });
-
-  test('an empty string is a legal value and renders empty', () => {
-    // The distinction that matters: absent is a bug, empty is a decision.
-    const section = definePromptSection('t/empty', 'A{{v}}B');
-    expect(section.render({ v: '' })).toBe('AB');
   });
 });
 
@@ -182,22 +198,22 @@ describe('TemplateSlots — the typed boundary', () => {
     expect(exact).toBe(true);
   });
 
-  test('a flag used twice is one required key, and never leaks in as a text slot', () => {
-    const exact = true satisfies Exact<
+  // One test, because the contract is type-level: `TemplateSlots<…>` takes its
+  // template as a literal type, so a table cannot drive these the way it drives
+  // a rendering case.
+  test('a flag is one required key however it is written, and no block token joins it', () => {
+    const usedTwice = true satisfies Exact<
       TemplateSlots<'{{#if on}}a{{/if}}{{#if on}}b{{/if}}'>,
       { readonly on: boolean }
     >;
 
-    expect(exact).toBe(true);
-  });
-
-  test('{{else}} and {{/if}} are block syntax, never contract entries', () => {
-    const exact = true satisfies Exact<
+    const withElse = true satisfies Exact<
       TemplateSlots<'{{#if on}}a{{else}}b{{/if}}'>,
       { readonly on: boolean }
     >;
 
-    expect(exact).toBe(true);
+    expect(usedTwice).toBe(true);
+    expect(withElse).toBe(true);
   });
 });
 
@@ -253,7 +269,7 @@ describe('{{#if}} — prose that branches on one declared boolean', () => {
 describe('{{#if}} — a flag with no value fails loudly, like every other slot', () => {
   // Same door as the missing-slot tests above: `string` erases the compile-time
   // contract, which is exactly the shape a promoted candidate arrives in.
-  const fromStore: string = 'A{{#if flag}}B{{/if}}';
+  const fromStore = storedSource('A{{#if flag}}B{{/if}}');
 
   test('an absent flag throws naming it — the section never silently vanishes', () => {
     const section = definePromptSection('t/flag-absent', fromStore);
@@ -273,7 +289,7 @@ describe('{{#if}} — a flag with no value fails loudly, like every other slot',
   });
 
   test('a boolean where a text slot belongs throws the mirror of that', () => {
-    const source: string = 'A{{value}}B';
+    const source = storedSource('A{{value}}B');
     const section = definePromptSection('t/slot-typed', source);
     const booleanWhereTextBelongs = { value: true };
     expect(() => section.render(booleanWhereTextBelongs)).toThrow(

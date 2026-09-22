@@ -10,7 +10,7 @@ import {
   USAGE_FIELDS, WORKSPACE_RUN_ID,
   type RunEvent, type Usage,
 } from '../src/index';
-import { testActorHandle } from '@kinu.run/test-utils';
+import { present, testActorHandle } from '@kinu.run/test-utils';
 import { isBackgroundHandle } from '../src/jobs/threshold';
 import { makeSql, makeExecRaw } from './helpers';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/log';
@@ -499,7 +499,7 @@ describe('RunEventRecorder.listRunsBefore / runSeq / count', () => {
 
     // The bucket has a position like anything else — it is a run id to `runSeq`,
     // which is keyed explicitly and therefore not the list's business.
-    expect(recorder.runSeq(WORKSPACE_RUN_ID)).toBeGreaterThan(recorder.runSeq('run-B')!);
+    expect(recorder.runSeq(WORKSPACE_RUN_ID)).toBeGreaterThan(present(recorder.runSeq('run-B'), "run-B's sequence"));
   });
 });
 

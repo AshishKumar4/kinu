@@ -16,7 +16,7 @@
 // asserts the defect itself so the others cannot pass vacuously.
 
 import { describe, expect, test } from 'bun:test';
-import { createTestSql, createTestActorsOver } from '@kinu.run/test-utils';
+import { createTestSql, createTestActorsOver, present } from '@kinu.run/test-utils';
 import {
   HeadController,
   HeadJournal,
@@ -188,7 +188,7 @@ describe('C2 — a depth-2 head is readable from the root', () => {
 
     // Denominator: the recursion actually happened.
     expect(depth2Ids.length).toBe(1);
-    const depth2Id = depth2Ids[0]!;
+    const depth2Id = depth2Ids[0];
 
     // The journal row exists on the root...
     const row = journal.readHead(depth2Id);
@@ -216,22 +216,21 @@ describe('C2 — a depth-2 head is readable from the root', () => {
     // satisfy every assertion below vacuously, and "STEPS 0" is exactly what a
     // vacuous pass looks like.
     expect(depth2Ids.length).toBe(1);
-    const depth2Id = depth2Ids[0]!;
+    const depth2Id = depth2Ids[0];
 
     // readRun is what the Exploration surface renders — the real reader, not a
     // hand-rolled query, so this asserts the user-visible outcome.
-    const run = journal.readRun('root-run');
-    expect(run).not.toBeNull();
-    const rendered = run!.heads.find((h) => h.id === depth2Id);
-    expect(rendered).toBeDefined();
+    const run = present(journal.readRun('root-run'), 'the root-run record');
+    const rendered = present(run.heads.find((h) => h.id === depth2Id), 'the depth-2 head in the run');
+
     expect(journal.readSteps(depth2Id).length).toBe(2);
     // `lastStepAt` is `MAX(head_steps.created_at)` over the LEFT JOIN in
     // assembleRun. It is the field that reads null — and renders as "STEPS 0",
     // no progress, a branch that looks dead — whenever the head row and its
     // steps are in different stores. Non-null AND positive: a LEFT JOIN that
     // matched nothing yields null here, never 0.
-    expect(rendered!.lastStepAt).not.toBeNull();
-    expect(rendered!.lastStepAt!).toBeGreaterThan(0);
+    expect(rendered.lastStepAt).not.toBeNull();
+    expect(present(rendered.lastStepAt, 'the depth-2 head last step time')).toBeGreaterThan(0);
   });
 
   test('journalling the nested split elsewhere is what made a depth-2 head unreadable', async () => {
@@ -248,7 +247,7 @@ describe('C2 — a depth-2 head is readable from the root', () => {
       stepSink: (id, seq, step) => rootJournal.appendStep(id, seq, step),
     });
 
-    const depth2Id = depth2Ids[0]!;
+    const depth2Id = depth2Ids[0];
 
     // Same denominator: the depth-2 head really was spawned and really did report.
     expect(depth2Ids.length).toBe(1);
@@ -258,7 +257,7 @@ describe('C2 — a depth-2 head is readable from the root', () => {
     // has no row to hang them on, so the head is absent from the rendered run.
     expect(rootJournal.readSteps(depth2Id).length).toBe(2);
     expect(rootJournal.readHead(depth2Id)).toBeNull();
-    expect(rootJournal.readRun('root-run')!.heads.map((h) => h.id)).not.toContain(depth2Id);
+    expect(present(rootJournal.readRun('root-run'), 'the root-run record').heads.map((h) => h.id)).not.toContain(depth2Id);
 
     // And the head row is not lost either, merely stranded one store away —
     // which is why this never surfaced as an error.

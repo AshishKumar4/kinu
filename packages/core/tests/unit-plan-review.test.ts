@@ -245,7 +245,7 @@ describe('submit_plan native tool', () => {
     });
 
     expect(tools.submit_plan).toBeDefined();
-    const submitPlan = toolExecute<{ edits: PlanEdit[] }, JsonValue>(tools.submit_plan!);
+    const submitPlan = toolExecute<{ edits: PlanEdit[] }, JsonValue>(tools.submit_plan);
 
     const result = await submitPlan({
       edits: [{ start: 1, content: '# Plan' }],

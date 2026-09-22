@@ -13,7 +13,7 @@ import type { SeekCursor } from '../src/session/page';
 import type { SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { describe, expect, test } from 'bun:test';
-import { createTestActors, createTestSql } from '@kinu.run/test-utils';
+import { createTestActors, createTestSql, present } from '@kinu.run/test-utils';
 import { createTestWorkspace } from './helpers';
 import {
   HeadJournal, initHeadsTables, type HeadInput,
@@ -58,12 +58,11 @@ function walkSteps(sql: SqlExecutor, actor: ActorHandle, limit: number): string[
   let cursor: SeekCursor | undefined;
 
   for (;;) {
-    const view = readNodeTranscript(sql, actor, { runId: RUN, nodeId: NODE }, { limit, cursor });
-    expect(view).not.toBeNull();
-    texts.unshift(...view!.steps.items.map((s) => s.text));
+    const view = present(readNodeTranscript(sql, actor, { runId: RUN, nodeId: NODE }, { limit, cursor }), 'the node transcript page');
+    texts.unshift(...view.steps.items.map((s) => s.text));
 
-    if (view!.steps.status === 'end') return texts;
-    cursor = view!.steps.next;
+    if (view.steps.status === 'end') return texts;
+    cursor = view.steps.next;
   }
 }
 
@@ -76,8 +75,8 @@ describe('node transcript paging', () => {
 
   test('the first page is the newest work, oldest-first inside the page', () => {
     const { sql, actor } = seeded(7);
-    const view = readNodeTranscript(sql, actor, { runId: RUN, nodeId: NODE }, { limit: 3 });
-    const steps = view!.steps;
+    const view = present(readNodeTranscript(sql, actor, { runId: RUN, nodeId: NODE }, { limit: 3 }), 'the first transcript page');
+    const steps = view.steps;
     expect(steps.status).toBe('more');
     // Newest PAGE first; within it, reading order.
     expect(steps.items.map((s) => s.text)).toEqual(['step 4', 'step 5', 'step 6']);
@@ -88,16 +87,18 @@ describe('node transcript paging', () => {
 
   test('stepCount is the whole trace, not the page', () => {
     const { sql, actor } = seeded(7);
-    const view = readNodeTranscript(sql, actor, { runId: RUN, nodeId: NODE }, { limit: 3 });
-    expect(view!.stepCount).toBe(7);
+    const view = present(readNodeTranscript(sql, actor, { runId: RUN, nodeId: NODE }, { limit: 3 }), 'the first transcript page');
+
+    expect(view.stepCount).toBe(7);
   });
 
   test('a short trace answers end, and the count still agrees', () => {
     const { sql, actor } = seeded(2);
-    const view = readNodeTranscript(sql, actor, { runId: RUN, nodeId: NODE }, { limit: 8 });
-    expect(view!.steps.status).toBe('end');
-    expect(view!.steps.items.map((s) => s.text)).toEqual(['step 0', 'step 1']);
-    expect(view!.stepCount).toBe(2);
+    const view = present(readNodeTranscript(sql, actor, { runId: RUN, nodeId: NODE }, { limit: 8 }), 'the short trace page');
+
+    expect(view.steps.status).toBe('end');
+    expect(view.steps.items.map((s) => s.text)).toEqual(['step 0', 'step 1']);
+    expect(view.stepCount).toBe(2);
   });
 
   test('a stale cursor is named, not silently answered from nothing', () => {
@@ -110,11 +111,12 @@ describe('node transcript paging', () => {
     const wsActor = createTestActors(ws.sql, ws.execRaw).main;
     void ws.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, action, observation, value, visits, depth, status)
       VALUES (${wsActor.actorId}, 'r', 'roll-1', null, ${'the task'}, ${'proposal one'}, ${'a proposal'}, 0.5, 1, 1, 'open')`;
-    const view = readNodeTranscript(ws.sql, wsActor, { runId: 'r', nodeId: 'roll-1' });
-    expect(view!.origin).toBe('rollout');
-    expect(view!.steps).toEqual({ status: 'end', items: [] });
-    expect(view!.stepCount).toBe(0);
-    expect(view!.toolCount).toBe(0);
+    const view = present(readNodeTranscript(ws.sql, wsActor, 'r', 'roll-1'), 'the rollout transcript');
+
+    expect(view.origin).toBe('rollout');
+    expect(view.steps).toEqual({ status: 'end', items: [] });
+    expect(view.stepCount).toBe(0);
+    expect(view.toolCount).toBe(0);
   });
 });
 
@@ -141,14 +143,16 @@ describe('the search path names the run it belongs to', () => {
 
   test('an unlabelled root wears the name the run list shows', () => {
     const { sql, actor } = seedSearch('');
-    const view = readNodeTranscript(sql, actor, { runId: 'r', nodeId: 'n1' });
-    expect(view!.path.map((crumb) => crumb.label))
+    const view = present(readNodeTranscript(sql, actor, 'r', 'n1'), 'the branch transcript');
+
+    expect(view.path.map((crumb) => crumb.label))
       .toEqual(['Audit every reader of coupon.kind', 'Walk the cart serializer']);
   });
 
   test('a root the caller named keeps that name', () => {
     const { sql, actor } = seedSearch('coupon.kind readers');
-    const view = readNodeTranscript(sql, actor, { runId: 'r', nodeId: 'n1' });
-    expect(view!.path[0]!.label).toBe('coupon.kind readers');
+    const view = present(readNodeTranscript(sql, actor, 'r', 'n1'), 'the branch transcript');
+
+    expect(view.path[0].label).toBe('coupon.kind readers');
   });
 });

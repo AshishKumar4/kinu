@@ -251,6 +251,17 @@ type UnsealedForkSectionFrame =
   & { kind: ForkRowSection; rows: ForkRowValue[] };
 
 /**
+ * One frame as it arrives, before the schema has seen it.
+ *
+ * {@link ForkFrame} except for the protocol version, which here is the sender's
+ * claim rather than this tree's literal: a receiver that refuses a version it
+ * does not implement has to be able to hold the frame it is refusing.
+ */
+export type ForkFrameWire = ForkFrame extends infer F
+  ? F extends { version: number } ? Omit<F, 'version'> & { version: number } : never
+  : never;
+
+/**
  * The canonical preimage of one frame: everything it carries except its own
  * digest, serialized deterministically.
  *
@@ -733,7 +744,7 @@ export class ForkTransferReceiver {
    * not continue, and a temp nobody will ever commit must not outlive it. The
    * destination the temp shadows is untouched either way.
    */
-  async accept(wire: ForkFrame): Promise<ForkFrameOutcome> {
+  async accept(wire: ForkFrameWire): Promise<ForkFrameOutcome> {
     try {
       return await this.acceptFrame(wire);
     } catch (cause) {
@@ -751,7 +762,7 @@ export class ForkTransferReceiver {
     }
   }
 
-  private async acceptFrame(wire: ForkFrame): Promise<ForkFrameOutcome> {
+  private async acceptFrame(wire: ForkFrameWire): Promise<ForkFrameOutcome> {
     const frame = parseForkFrame(wire);
 
     if (frame.kind === 'begin') {
@@ -963,7 +974,7 @@ export class ForkTransferReceiver {
 
 /** Apply the wire schema to one frame, naming the transfer in any failure so an
  * operator is not left reading a bare valibot issue path. */
-function parseForkFrame(frame: ForkFrame): ForkFrame {
+function parseForkFrame(frame: ForkFrameWire): ForkFrame {
   const parsed = v.safeParse(ForkFrameSchema, frame);
 
   if (!parsed.success) {

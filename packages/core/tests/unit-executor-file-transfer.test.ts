@@ -4,6 +4,7 @@
 // RPC payload ceiling, and nothing here trusts a caller-supplied offset or
 // length.
 import { describe, expect, test } from "bun:test";
+import { present } from "@kinu.run/test-utils";
 import {
   ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
   statExecutorFile, writeExecutorFileOp, type VFS,
@@ -82,7 +83,7 @@ describe("ExecutorFileUpload", () => {
     }
 
     expect(upload.done).toBe(true);
-    expect([...plane.files.get("/home/user/big.bin")!]).toEqual([...whole]);
+    expect([...present(plane.files.get("/home/user/big.bin"), "the transferred big.bin")]).toEqual([...whole]);
   });
 
   test("an out-of-order chunk is refused with the expected offset, and the stream recovers", async () => {

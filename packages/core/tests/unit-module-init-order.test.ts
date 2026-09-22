@@ -105,7 +105,7 @@ describe('module initialisation order', () => {
   // barrel in its own process and must itself initialise successfully, so a
   // broken reference fails explicitly instead of making the comparisons below
   // vacuously true.
-  const [, referenceSpecifier] = ENTRY_POINTS[3]!;
+  const [, referenceSpecifier] = ENTRY_POINTS[3];
   const reference = observeAfterLoading(referenceSpecifier);
 
   test('the constants under test are non-empty and related as documented', () => {

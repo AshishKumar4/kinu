@@ -37,7 +37,7 @@ describe('pruneLowValueBranches — population + config-honoring gate', () => {
     await pruneLowValueBranches(rt, 'r', 0.25, 2);
 
     const row = sql<{ status: string; branch_agent_key: string | null }>`
-      SELECT status, branch_agent_key FROM search_nodes WHERE id = 'doomed'`[0]!;
+      SELECT status, branch_agent_key FROM search_nodes WHERE id = 'doomed'`[0];
 
     expect(row.status).toBe('pruned');
     expect(row.branch_agent_key).toBeNull();
@@ -49,25 +49,33 @@ describe('pruneLowValueBranches — population + config-honoring gate', () => {
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
         VALUES (${rt.actor.actorId}, 'r', 'fresh', 't', 0.05, 1, 'open')`;
     await pruneLowValueBranches(rt, 'r', 0.25, 2);
-    expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'fresh'`[0]!.status).toBe('open');
+    expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'fresh'`[0].status).toBe('open');
     expect(aborted).toHaveLength(0);
   });
 
-  test('honors the minVisitsForPrune argument (was hardcoded 2)', async () => {
-    const { sql, rt } = setup();
-    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
-        VALUES (${rt.actor.actorId}, 'r', 'n', 't', 0.05, 1, 'open')`;
-    await pruneLowValueBranches(rt, 'r', 0.25, 1); // config says one visit is enough
-    expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'n'`[0]!.status).toBe('pruned');
-  });
+  const ONE_NODE = [
+    {
+      name: 'honors the minVisitsForPrune argument (was hardcoded 2)',
+      // config says one visit is enough
+      id: 'n', value: 0.05, visits: 1, minVisits: 1, status: 'pruned',
+    },
+    {
+      name: 'a healthy above-threshold node is never pruned, however many visits',
+      id: 'good', value: 0.9, visits: 50, minVisits: 2, status: 'open',
+    },
+  ];
 
-  test('a healthy above-threshold node is never pruned, however many visits', async () => {
-    const { sql, rt } = setup();
-    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
-        VALUES (${rt.actor.actorId}, 'r', 'good', 't', 0.9, 50, 'open')`;
-    await pruneLowValueBranches(rt, 'r', 0.25, 2);
-    expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'good'`[0]!.status).toBe('open');
-  });
+  for (const node of ONE_NODE) {
+    test(node.name, async () => {
+      const { sql, rt } = setup();
+      void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+          VALUES (${rt.actor.actorId}, 'r', ${node.id}, 't', ${node.value}, ${node.visits}, 'open')`;
+      await pruneLowValueBranches(rt, 'r', 0.25, node.minVisits);
+
+      expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = ${node.id}`[0].status)
+        .toBe(node.status);
+    });
+  }
 
   test('never touches already-pruned or failed nodes', async () => {
     const { sql, rt } = setup();
@@ -76,8 +84,8 @@ describe('pruneLowValueBranches — population + config-honoring gate', () => {
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
         VALUES (${rt.actor.actorId}, 'r', 'failed', 't', 0.01, 9, 'failed')`;
     await pruneLowValueBranches(rt, 'r', 0.25, 2);
-    expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'already'`[0]!.status).toBe('pruned');
-    expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'failed'`[0]!.status).toBe('failed');
+    expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'already'`[0].status).toBe('pruned');
+    expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'failed'`[0].status).toBe('failed');
   });
 });
 

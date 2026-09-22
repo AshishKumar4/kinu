@@ -50,7 +50,8 @@ function runningStart(overrides: Partial<NimbusStartResult> = {}): NimbusStartRe
 describe("nimbus startProcess — the process is alive when the call returns", () => {
   test("a running server reports pid, long-running state, and the observe/stop calls", async () => {
     const nimbus = createNimbusExecutor({ box: handleWith(async () => runningStart()) });
-    const out = String(await nimbus.tools.startProcess!.execute("node server.js"));
+    const out = await nimbus.tools.startProcess.execute("node server.js");
+
     expect(out).toContain("started (long-running) pid=3000002");
     expect(out).toContain("nimbus.logs(3000002)");
     expect(out).toContain("nimbus.killProcess(3000002)");
@@ -63,7 +64,8 @@ describe("nimbus startProcess — the process is alive when the call returns", (
       box: handleWith(async () => runningStart({ ports: [{ port: 3000, pid: 3000002 }] })),
     });
 
-    const out = String(await nimbus.tools.startProcess!.execute("node server.js"));
+    const out = await nimbus.tools.startProcess.execute("node server.js");
+
     expect(out).toContain("listening on port 3000");
     expect(out).toContain("exposePort");
   });
@@ -77,7 +79,8 @@ describe("nimbus startProcess — the process is alive when the call returns", (
       })),
     });
 
-    const out = String(await nimbus.tools.startProcess!.execute("echo hi"));
+    const out = await nimbus.tools.startProcess.execute("echo hi");
+
     expect(out).toContain("already exited (exit 0)");
     expect(out).toContain("nimbus.logs(7)");
   });

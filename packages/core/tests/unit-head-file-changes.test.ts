@@ -34,7 +34,9 @@ function memVfs(seed: Record<string, string> = {}): VFS & { reads: number; files
     },
     async readdir() { return [...files.keys()]; },
     async stat(path: string) {
-      return files.has(path) ? { size: files.get(path)!.length, mtimeMs: 0, isDir: false } : null;
+      const content = files.get(path);
+
+      return content === undefined ? null : { size: content.length, mtimeMs: 0, isDir: false };
     },
     async unlink(path: string) { files.delete(path); },
     async mkdir() {},

@@ -20,6 +20,7 @@ import {
 } from '../src/index';
 import { clusterPathologies } from '../src/evolution/pathology';
 import type { AgentRuntime } from '../src/types/agent-runtime';
+import { present } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
 
@@ -60,38 +61,45 @@ describe('archive lineage + branch-from-archived round-trip', () => {
     // and is rolled back — it becomes an archived stepping stone.
     const v1 = await modifyScaffold(rt, RATIONALE, scaffoldSrc('v1'));
     expect(v1.ok).toBe(true);
+
+    const v1Version = present(v1.version, 'the accepted v1 version');
+
     recordShadowEvaluation(rt.storage.sql, rt.actor, {
-      currentVersion: 0, pendingVersion: v1.version!, task: 't1',
+      currentVersion: 0, pendingVersion: v1Version, task: 't1',
       currentOutput: 'c', pendingOutput: 'p',
       judgeResult: { winner: 'current', rationale: 'regressed', currentScore: 0.8, pendingScore: 0.3 },
     });
-    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
+    await applyPromotionDecision(rt, present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending v1 proposal'), 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
 
     // v2 explicitly BRANCHES FROM the rolled-back v1, not the live current v0.
-    const v2 = await modifyScaffold(rt, RATIONALE, scaffoldSrc('v2'), { baseVersion: v1.version });
+    const v2 = await modifyScaffold(rt, RATIONALE, scaffoldSrc('v2'), { baseVersion: v1Version });
     expect(v2.ok).toBe(true);
 
+    const v2Version = present(v2.version, 'the accepted v2 version');
     const archive = listScaffoldArchive(rt.storage.sql, rt.actor);
     const byVersion = new Map(archive.map((e) => [e.version, e]));
-    expect(byVersion.get(v1.version!)!.parentVersion).toBe(0);
-    expect(byVersion.get(v1.version!)!.status).toBe('rolled_back');
-    expect(byVersion.get(v1.version!)!.losses).toBe(1);
-    expect(byVersion.get(v1.version!)!.winRate).toBe(0);
-    expect(byVersion.get(v2.version!)!.parentVersion).toBe(v1.version!);
-    expect(byVersion.get(v2.version!)!.status).toBe('pending');
-    expect(byVersion.get(0)!.parentVersion).toBeNull();
+    const archivedV1 = present(byVersion.get(v1Version), 'the archived v1 row');
+    const archivedV2 = present(byVersion.get(v2Version), 'the archived v2 row');
+
+    expect(archivedV1.parentVersion).toBe(0);
+    expect(archivedV1.status).toBe('rolled_back');
+    expect(archivedV1.losses).toBe(1);
+    expect(archivedV1.winRate).toBe(0);
+    expect(archivedV2.parentVersion).toBe(v1Version);
+    expect(archivedV2.status).toBe('pending');
+    expect(present(byVersion.get(0), 'the archived v0 row').parentVersion).toBeNull();
 
     // The branch base's code is still recoverable from the single source of
     // truth (the agent.js.vN file) — the full DGM round-trip.
-    expect(await readScaffoldVersion(rt, v1.version!)).toBe(scaffoldSrc('v1'));
+    expect(await readScaffoldVersion(rt, v1Version)).toBe(scaffoldSrc('v1'));
 
     // And the v2 pending can win + promote like any trunk proposal.
     recordShadowEvaluation(rt.storage.sql, rt.actor, {
-      currentVersion: 0, pendingVersion: v2.version!, task: 't2',
+      currentVersion: 0, pendingVersion: v2Version, task: 't2',
       currentOutput: 'c', pendingOutput: 'p',
       judgeResult: { winner: 'pending', rationale: 'better', currentScore: 0.4, pendingScore: 0.9 },
     });
-    const outcome = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
+    const outcome = await applyPromotionDecision(rt, present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending v2 proposal'), 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(outcome.action).toBe('promote');
     expect(await rt.identity.scaffold.read()).toBe(scaffoldSrc('v2'));
   });
@@ -120,16 +128,17 @@ describe('selectEvolutionBase — the exploration-share policy', () => {
   });
 
   test('explores an archived variant inside the exploration share', () => {
-    const pick = selectEvolutionBase(archive, { exploreShare: 0.2, random: () => 0.1 });
-    expect(pick!.mode).toBe('explore');
-    expect(pick!.version).not.toBe(3); // never the current on an explore roll
-    expect([2, 1, 0]).toContain(pick!.version);
+    const pick = present(selectEvolutionBase(archive, { exploreShare: 0.2, random: () => 0.1 }), 'the explore-roll base');
+
+    expect(pick.mode).toBe('explore');
+    expect(pick.version).not.toBe(3); // never the current on an explore roll
+    expect([2, 1, 0]).toContain(pick.version);
   });
 
   test('exploreShare=0 always picks current; =1 always explores', () => {
     for (const roll of [0, 0.3, 0.7, 0.999]) {
-      expect(selectEvolutionBase(archive, { exploreShare: 0, random: () => roll })!.mode).toBe('current');
-      expect(selectEvolutionBase(archive, { exploreShare: 1, random: () => roll })!.mode).toBe('explore');
+      expect(present(selectEvolutionBase(archive, { exploreShare: 0, random: () => roll }), 'the exploit-only base').mode).toBe('current');
+      expect(present(selectEvolutionBase(archive, { exploreShare: 1, random: () => roll }), 'the explore-only base').mode).toBe('explore');
     }
   });
 
@@ -148,7 +157,7 @@ describe('selectEvolutionBase — the exploration-share policy', () => {
     const picks = new Map([[0, 0], [1, 0], [2, 0]]);
 
     for (let i = 0; i < 600; i++) {
-      const pick = selectEvolutionBase(archive, { exploreShare: 1, random: rng })!;
+      const pick = present(selectEvolutionBase(archive, { exploreShare: 1, random: rng }), 'the sampled explore base');
       picks.set(pick.version, (picks.get(pick.version) ?? 0) + 1);
     }
 
@@ -210,7 +219,7 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
       if (r <= 0) return e.version;
     }
 
-    return explorable[explorable.length - 1]!.version;
+    return explorable[explorable.length - 1].version;
   }
 
   // v1 is the archive's best-scoring variant (0.9 over 10 observations) and a
@@ -245,7 +254,7 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
     const ownScore = new Map([[1, 0], [2, 0], [3, 0], [4, 0]]);
 
     for (let i = 0; i < 800; i++) {
-      const cladeVersion = selectEvolutionBase(lineage, { exploreShare: 1, random: rng })!.version;
+      const cladeVersion = present(selectEvolutionBase(lineage, { exploreShare: 1, random: rng }), 'the clade-weighted base').version;
       clade.set(cladeVersion, (clade.get(cladeVersion) ?? 0) + 1);
       const ownScoreVersion = ownScorePick(lineage, rng());
       ownScore.set(ownScoreVersion, (ownScore.get(ownScoreVersion) ?? 0) + 1);
@@ -277,7 +286,7 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
 
     for (const archive of [flat, untriedChild]) {
       for (const roll of [0, 0.05, 0.2, 0.37, 0.5, 0.63, 0.8, 0.99]) {
-        expect(selectEvolutionBase(archive, { exploreShare: 1, random: seq(0, roll) })!.version)
+        expect(present(selectEvolutionBase(archive, { exploreShare: 1, random: seq(0, roll) }), 'the cold-start base').version)
           .toBe(ownScorePick(archive, roll));
       }
     }
@@ -286,8 +295,9 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
   test('the same injected RNG always yields the same base', () => {
     const first = selectEvolutionBase(lineage, { exploreShare: 0.5, random: seq(0.1, 0.42) });
     const second = selectEvolutionBase(lineage, { exploreShare: 0.5, random: seq(0.1, 0.42) });
+
     expect(first).toEqual(second);
-    expect(first!.mode).toBe('explore');
+    expect(present(first, 'the first replayed base').mode).toBe('explore');
   });
 });
 
@@ -301,10 +311,10 @@ describe('pathology coverage — the diversity signal beside the clade score', (
   /** The policy WITHOUT the diversity term — clade + novelty only. The
    *  reference a pathology-free archive has to reproduce exactly. */
   function noDiversityPick(archive: ReadonlyArray<ScaffoldArchiveEntry>, roll: number): number {
-    return selectEvolutionBase(
+    return present(selectEvolutionBase(
       archive.map((e) => ({ ...e, pathology: null })),
       { exploreShare: 1, random: seq(0, roll) },
-    )!.version;
+    ), 'the pathology-free base').version;
   }
 
   test('a pathology-free archive reproduces the pre-pathology policy exactly', () => {
@@ -315,7 +325,7 @@ describe('pathology coverage — the diversity signal beside the clade score', (
     ];
 
     for (const roll of [0, 0.05, 0.2, 0.37, 0.5, 0.63, 0.8, 0.99]) {
-      expect(selectEvolutionBase(archive, { exploreShare: 1, random: seq(0, roll) })!.version)
+      expect(present(selectEvolutionBase(archive, { exploreShare: 1, random: seq(0, roll) }), 'the pathology-free archive base').version)
         .toBe(noDiversityPick(archive, roll));
     }
   });
@@ -341,7 +351,7 @@ describe('pathology coverage — the diversity signal beside the clade score', (
     const picks = new Map([[1, 0], [2, 0], [3, 0]]);
 
     for (let i = 0; i < 600; i++) {
-      const version = selectEvolutionBase(crowded, { exploreShare: 1, random: rng })!.version;
+      const version = present(selectEvolutionBase(crowded, { exploreShare: 1, random: rng }), 'the coverage-weighted base').version;
       picks.set(version, (picks.get(version) ?? 0) + 1);
     }
 
@@ -373,7 +383,7 @@ describe('pathology coverage — the diversity signal beside the clade score', (
     const picks = new Map([[1, 0], [2, 0], [3, 0]]);
 
     for (let i = 0; i < 600; i++) {
-      const version = selectEvolutionBase(archive, { exploreShare: 1, random: rng })!.version;
+      const version = present(selectEvolutionBase(archive, { exploreShare: 1, random: rng }), 'the clade-over-diversity base').version;
       picks.set(version, (picks.get(version) ?? 0) + 1);
     }
 
@@ -391,7 +401,7 @@ describe('pathology coverage — the diversity signal beside the clade score', (
     ];
 
     for (const roll of [0.1, 0.4, 0.9]) {
-      expect(selectEvolutionBase(archive, { exploreShare: 1, random: seq(0, roll) })!.version)
+      expect(present(selectEvolutionBase(archive, { exploreShare: 1, random: seq(0, roll) }), 'the unlabelled-archive base').version)
         .toBe(noDiversityPick(archive, roll));
     }
   });
@@ -406,33 +416,35 @@ describe('rejected proposals are queryable evidence', () => {
     const result = await modifyScaffold(rt, RATIONALE, proposal);
     expect(result.ok).toBe(true);
 
+    const proposedVersion = present(result.version, 'the accepted proposal version');
+
     for (const winner of ['current', 'current', 'pending'] as const) {
       recordShadowEvaluation(rt.storage.sql, rt.actor, {
-        currentVersion: 0, pendingVersion: result.version!, task: 't',
+        currentVersion: 0, pendingVersion: proposedVersion, task: 't',
         currentOutput: 'a', pendingOutput: 'b',
         judgeResult: { winner, rationale: `${winner} was clearer`, currentScore: 1, pendingScore: 0 },
       });
     }
 
-    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
+    await applyPromotionDecision(rt, present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending proposal'), 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
 
     const [rejected] = listRejectedProposals(rt.storage.sql, rt.actor);
-    expect(rejected!.kind).toBe('rolled_back');
-    expect(rejected!.version).toBe(result.version!);
-    expect(rejected!.reason).toBe('lost 2 of 3 decisive shadow trials');
-    expect(rejected!.pathology).toBe('error/code');
-    expect(rejected!.judgeRationales).toEqual(['current was clearer', 'current was clearer']);
+    expect(rejected.kind).toBe('rolled_back');
+    expect(rejected.version).toBe(proposedVersion);
+    expect(rejected.reason).toBe('lost 2 of 3 decisive shadow trials');
+    expect(rejected.pathology).toBe('error/code');
+    expect(rejected.judgeRationales).toEqual(['current was clearer', 'current was clearer']);
   });
 
   test('a proposal discarded before any decisive trial says so', async () => {
     const rt = setupRt();
     await seedV0(rt);
     await modifyScaffold(rt, RATIONALE, scaffoldSrc('v1'));
-    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
+    await applyPromotionDecision(rt, present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending proposal'), 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
 
     const [rejected] = listRejectedProposals(rt.storage.sql, rt.actor);
-    expect(rejected!.reason).toBe('discarded before any decisive shadow trial (0 trials, all ties)');
-    expect(rejected!.pathology).toBeNull();
+    expect(rejected.reason).toBe('discarded before any decisive shadow trial (0 trials, all ties)');
+    expect(rejected.pathology).toBeNull();
   });
 
   test('a misevolution veto is rejection evidence too, with no version behind it', async () => {
@@ -445,10 +457,10 @@ describe('rejected proposals are queryable evidence', () => {
     expect((await modifyScaffold(rt, RATIONALE, vetoed)).ok).toBe(false);
 
     const [rejected] = listRejectedProposals(rt.storage.sql, rt.actor);
-    expect(rejected!.kind).toBe('misevolution_veto');
-    expect(rejected!.version).toBeNull();
-    expect(rejected!.reason).toContain('network-egress');
-    expect(rejected!.rationale).toBe(RATIONALE);
+    expect(rejected.kind).toBe('misevolution_veto');
+    expect(rejected.version).toBeNull();
+    expect(rejected.reason).toContain('network-egress');
+    expect(rejected.rationale).toBe(RATIONALE);
   });
 
   test('an archive with nothing refused answers with nothing', async () => {
@@ -505,7 +517,7 @@ describe('proposal prompt requires a named pathology when cells exist', () => {
   test('the cells and the tag requirement both appear', () => {
     const prompt = buildScaffoldProposalPrompt(scaffoldSrc('v0'), 'be terser', undefined, cells);
     expect(prompt).toContain('Failure pathologies mined from turns');
-    expect(prompt).toContain(cells[0]!.id);
+    expect(prompt).toContain(cells[0].id);
     expect(prompt).toContain('6. Name the failure pathology');
     expect(prompt).toContain('// pathology: <id>');
   });
@@ -525,7 +537,7 @@ describe('the named pathology is stamped on the version it belongs to', () => {
     const result = await modifyScaffold(rt, RATIONALE, tagged);
 
     const [row] = listScaffoldArchive(rt.storage.sql, rt.actor).filter((e) => e.version === result.version);
-    expect(row!.pathology).toBe('no_action/prose');
+    expect(row.pathology).toBe('no_action/prose');
   });
 
   test('an untagged or invented pathology stamps nothing rather than a guess', async () => {
@@ -534,7 +546,7 @@ describe('the named pathology is stamped on the version it belongs to', () => {
       await seedV0(rt);
       const result = await modifyScaffold(rt, RATIONALE, code);
       const [row] = listScaffoldArchive(rt.storage.sql, rt.actor).filter((e) => e.version === result.version);
-      expect(row!.pathology).toBeNull();
+      expect(row.pathology).toBeNull();
     }
   });
 });

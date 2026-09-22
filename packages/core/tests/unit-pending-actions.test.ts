@@ -71,7 +71,7 @@ describe('buildPendingActions', () => {
     expect(action).toMatchObject({
       id: 'scaffold-v8', kind: 'scaffold_version', detail: 'shorter tool preamble', at: 9000,
     });
-    expect(action!.title).toContain('v8');
+    expect(action.title).toContain('v8');
   });
 
   test('a failed background job is the agent\'s to fix and never reaches the owner queue', () => {
@@ -89,9 +89,9 @@ describe('buildPendingActions', () => {
     });
 
     expect(actions).toHaveLength(1);
-    expect(actions[0]!.kind).toBe('unseen_changes');
-    expect(actions[0]!.title).toBe('3 self-changes you have not seen');
-    expect(actions[0]!.detail).toBe('Keep or revert them in the journal below.');
+    expect(actions[0].kind).toBe('unseen_changes');
+    expect(actions[0].title).toBe('3 self-changes you have not seen');
+    expect(actions[0].detail).toBe('Keep or revert them in the journal below.');
   });
 
   test('one unseen change is singular', () => {
@@ -99,28 +99,33 @@ describe('buildPendingActions', () => {
       ...EMPTY, unseenChanges: { count: 1, revertable: 1, latestAt: 1 },
     });
 
-    expect(action!.title).toBe('1 self-change you have not seen');
+    expect(action.title).toBe('1 self-change you have not seen');
   });
 
   // The row a brand-new workspace gets after its very first turn: the digest's
   // first entry is a graded turn, which is a measurement with no keep and no
   // revert. Promising a decision over a card that offers none is the same lie
   // as pointing at the wrong tab.
-  test('an unseen window of pure measurements is offered as a read, not a decision', () => {
-    const [action] = buildPendingActions({
-      ...EMPTY, unseenChanges: { count: 1, revertable: 0, latestAt: 1 },
+  const UNSEEN_WINDOWS = [
+    {
+      name: 'an unseen window of pure measurements is offered as a read, not a decision',
+      unseenChanges: { count: 1, revertable: 0, latestAt: 1 },
+      detail: 'Read them in the journal below.',
+    },
+    {
+      name: 'a mixed window says how many of them can actually be decided',
+      unseenChanges: { count: 4, revertable: 1, latestAt: 1 },
+      detail: 'Keep or revert 1 of them in the journal below.',
+    },
+  ];
+
+  for (const window of UNSEEN_WINDOWS) {
+    test(window.name, () => {
+      const [action] = buildPendingActions({ ...EMPTY, unseenChanges: window.unseenChanges });
+
+      expect(action.detail).toBe(window.detail);
     });
-
-    expect(action!.detail).toBe('Read them in the journal below.');
-  });
-
-  test('a mixed window says how many of them can actually be decided', () => {
-    const [action] = buildPendingActions({
-      ...EMPTY, unseenChanges: { count: 4, revertable: 1, latestAt: 1 },
-    });
-
-    expect(action!.detail).toBe('Keep or revert 1 of them in the journal below.');
-  });
+  }
 
   test('only pending curriculum proposals are the owner\'s call', () => {
     const actions = buildPendingActions({

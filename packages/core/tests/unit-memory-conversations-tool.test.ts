@@ -70,8 +70,8 @@ describe('memory tool — conversations action', () => {
 
     expect(res.mode).toBe('search');
     expect(res.hits.length).toBe(1);
-    expect(res.hits[0]!.messageId).toBe(id);
-    expect(res.hits[0]!.conversationId).toBe('proj');
+    expect(res.hits[0].messageId).toBe(id);
+    expect(res.hits[0].conversationId).toBe('proj');
   });
 
   test('scrolls a window around a hit when around_message_id is set', async () => {
@@ -87,7 +87,7 @@ describe('memory tool — conversations action', () => {
 
     expect(res.mode).toBe('scroll');
     expect(res.messages.map((m) => m.content)).toEqual(['before', 'anchor message', 'after']);
-    expect(res.messages[1]!.anchor).toBe(true);
+    expect(res.messages[1].anchor).toBe(true);
   });
 
   test('browses archived conversation roots when no query or anchor is given', async () => {
@@ -97,7 +97,7 @@ describe('memory tool — conversations action', () => {
     const res = v.parse(BrowseResultSchema, await memoryExec({ action: 'conversations' }));
     expect(res.mode).toBe('browse');
     expect(res.conversations.map((conversation) => conversation.conversationId)).toEqual(['b', 'a']);
-    expect(res.conversations[1]!.preview).toBe('first conversation kickoff');
+    expect(res.conversations[1].preview).toBe('first conversation kickoff');
   });
 
   test('returns a clean error for an unknown anchor id', async () => {

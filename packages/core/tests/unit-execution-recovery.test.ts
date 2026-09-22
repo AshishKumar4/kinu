@@ -62,7 +62,7 @@ function ledgerDb() {
   initTurnOutcomeTables(execRaw);
   const actors = createTestActors(sql, execRaw);
 
-  return { sql, db, actor: actors.main, sibling: actors.sibling };
+  return { sql, db, actor: actors.main, sibling: (name: string) => actors.sibling(name) };
 }
 
 describe('the ledger', () => {
@@ -113,7 +113,7 @@ describe('the ledger', () => {
     const { sql, actor } = ledgerDb();
     recordRecoveryFinding(sql, actor, finding());
     expect(corroborateLessonsForTurn(sql, actor, 'turn-1')).toEqual([]);
-    expect(listLessons(sql, actor, { source: 'execution_recovery' })[0]!.status).toBe('provisional');
+    expect(listLessons(sql, actor, { source: 'execution_recovery' })[0].status).toBe('provisional');
   });
 
   test('an empty ledger reads as empty, never as a throw', () => {
@@ -171,18 +171,18 @@ function eventLog(): EventLog {
  *  the finding exists for. Driven through the same turn extension both
  *  backends register. */
 async function grindThenRecover(orch: AgentOrchestrator): Promise<void> {
-  const onToolResult = orch.turnExtension.onToolResult;
+  const extension = orch.turnExtension;
 
-  if (!onToolResult) throw new Error('Expected an onToolResult extension');
+  if (!extension.onToolResult) throw new Error('Expected an onToolResult extension');
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    await onToolResult({
+    await extension.onToolResult({
       toolName: 'shell', args: { command: 'npm test', attempt }, result: 'Error (exit 1): npm not found',
       success: false, reason: 'io', execution: { exitCode: 1 },
     });
   }
 
-  await onToolResult({
+  await extension.onToolResult({
     toolName: 'shell', args: { command: 'bun test' }, result: '12 tests passed', success: true,
   });
 }

@@ -191,7 +191,7 @@ describe('an undeclared run is never governed', () => {
 
     const { report } = await runHead(localMissionScope(governor, ['audit']), { stopAfter: 6 });
     expect(report.status).toBe('completed');
-    const snap = governor.snapshot('audit')[0]!;
+    const snap = governor.snapshot('audit')[0];
     expect(snap.spent.tokens).toBe(1_200 * 7);
     expect(snap.exhausted).toBe(false);
     ledger.db.close();
@@ -215,7 +215,7 @@ describe('a declared budget reaches the head mid-flight', () => {
 
     // One debit per step, each the provider's own report for that step.
     expect(seen).toEqual([1_200, 1_200, 1_200, 1_200]);
-    expect(governor.snapshot('mission')[0]!.calls).toBe(4);
+    expect(governor.snapshot('mission')[0].calls).toBe(4);
     ledger.db.close();
   });
 
@@ -233,7 +233,7 @@ describe('a declared budget reaches the head mid-flight', () => {
     // Stopped where the ledger ran out, nowhere near the 50 steps the model
     // was willing to take or the 500-step envelope it had.
     expect(report.stepCount).toBeLessThan(5);
-    expect(governor.snapshot('mission')[0]!.exhausted).toBe(true);
+    expect(governor.snapshot('mission')[0].exhausted).toBe(true);
     ledger.db.close();
   });
 
@@ -291,7 +291,7 @@ describe('a declared budget reaches the head mid-flight', () => {
     governor.declare('inner', { tokens: 1_000_000 }, { parent: 'outer' });
 
     await runHead(localMissionScope(governor, ['inner']), { stopAfter: 3 });
-    expect(governor.snapshot('outer')[0]!.spent.tokens).toBe(1_200 * 4);
+    expect(governor.snapshot('outer')[0].spent.tokens).toBe(1_200 * 4);
     ledger.db.close();
   });
 });

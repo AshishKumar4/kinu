@@ -24,6 +24,27 @@ import { createRecordingLogger, setDiagnosticsSink, KinuError } from '../src/obs
 /** A v2 language-model stub that requests the `ping` tool on step 1, then
  *  answers with text on step 2. Captures the tool names it was handed so a test
  *  can assert an extension-contributed tool reached the model. */
+/** One text answer, streamed the way the SDK delivers it. */
+function textStream(text: string): ReadableStream<LanguageModelV3StreamPart> {
+  return new ReadableStream<LanguageModelV3StreamPart>({
+    start(c) {
+      c.enqueue({ type: 'stream-start', warnings: [] });
+      c.enqueue({ type: 'text-start', id: 't1' });
+      c.enqueue({ type: 'text-delta', id: 't1', delta: text });
+      c.enqueue({ type: 'text-end', id: 't1' });
+      c.enqueue({
+        type: 'finish',
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
+      });
+      c.close();
+    },
+  });
+}
+
 function toolThenTextModel() {
   let step = 0;
   let toolNames: string[] = [];
@@ -50,23 +71,7 @@ function toolThenTextModel() {
               c.close();
             },
           })
-        : new ReadableStream<LanguageModelV3StreamPart>({
-            start(c) {
-              c.enqueue({ type: 'stream-start', warnings: [] });
-              c.enqueue({ type: 'text-start', id: 't1' });
-              c.enqueue({ type: 'text-delta', id: 't1', delta: 'all done' });
-              c.enqueue({ type: 'text-end', id: 't1' });
-              c.enqueue({
-                type: 'finish',
-                finishReason: { unified: 'stop', raw: undefined },
-                usage: {
-                  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-                  outputTokens: { total: 1, text: 1, reasoning: undefined },
-                },
-              });
-              c.close();
-            },
-          });
+        : textStream('all done');
 
       return { stream, response: { headers: {} } };
     },
@@ -151,23 +156,7 @@ function promptCapturingModel() {
       prompt = parsePrompt({ value: options.prompt });
 
       return {
-        stream: new ReadableStream<LanguageModelV3StreamPart>({
-          start(c) {
-            c.enqueue({ type: 'stream-start', warnings: [] });
-            c.enqueue({ type: 'text-start', id: 't1' });
-            c.enqueue({ type: 'text-delta', id: 't1', delta: 'ok' });
-            c.enqueue({ type: 'text-end', id: 't1' });
-            c.enqueue({
-              type: 'finish',
-              finishReason: { unified: 'stop', raw: undefined },
-              usage: {
-                inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-                outputTokens: { total: 1, text: 1, reasoning: undefined },
-              },
-            });
-            c.close();
-          },
-        }),
+        stream: textStream('ok'),
         response: { headers: {} },
       };
     },
@@ -213,7 +202,7 @@ describe('transformContext through runChat', () => {
     const compactor: KinuExtension = {
       name: 'compactor',
       transformContext: async ({ messages }) => {
-        transformSaw = messages.map((m) => String(m.content));
+        transformSaw = messages.map((m) => v.parse(v.string(), m.content));
 
         return [{ role: 'user', content: 'summary-of-history' }];
       },
@@ -491,7 +480,7 @@ describe('ExtensionHost', () => {
       .register({
         name: 'appender',
         transformContext: async ({ messages }) => {
-          seen.push(messages.map((m) => String(m.content)));
+          seen.push(messages.map((m) => v.parse(v.string(), m.content)));
           await Promise.resolve(); // genuinely async
 
           return [...messages, { role: 'user', content: 'from-appender' }];
@@ -504,7 +493,7 @@ describe('ExtensionHost', () => {
       .register({
         name: 'chained',
         transformContext: async ({ messages }) => {
-          seen.push(messages.map((m) => String(m.content)));
+          seen.push(messages.map((m) => v.parse(v.string(), m.content)));
 
           return [...messages, { role: 'user', content: 'from-chained' }];
         },
@@ -623,7 +612,7 @@ describe('ExtensionHost', () => {
       .register({
         name: 'observer',
         prepareStep: ({ messages }) => {
-          seen.push(messages.map((message) => String(message.content)));
+          seen.push(messages.map((message) => v.parse(v.string(), message.content)));
 
           return undefined;
         },

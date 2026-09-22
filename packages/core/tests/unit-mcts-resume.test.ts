@@ -11,6 +11,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { present } from '@kinu.run/test-utils';
 import { createTestRuntime, createMockSession, makeSql, captureConsole } from './helpers';
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
@@ -48,12 +49,12 @@ describe('MCTS evict-resume (B6)', () => {
     })).rejects.toThrow();
 
     expect(run1Iters).toBe(2);
-    const mid = store.findResumable(TASK);
-    expect(mid).not.toBeNull();
-    expect(mid!.iteration).toBe(2);
-    expect(mid!.budget).toBe(2);          // 2 of 4 consumed, 2 remaining
-    expect(mid!.epoch).toBe(0);
-    const rootId = mid!.rootId;
+    const mid = present(store.findResumable(TASK), 'the interrupted checkpoint');
+
+    expect(mid.iteration).toBe(2);
+    expect(mid.budget).toBe(2);          // 2 of 4 consumed, 2 remaining
+    expect(mid.epoch).toBe(0);
+    const rootId = mid.rootId;
 
     // ── Run 2: fresh call (restarted DO) resumes the SAME search ────────────
     let run2Iters = 0;
@@ -126,8 +127,8 @@ describe('MCTS per-iteration checkpoint logging', () => {
     expect(checkpointLines).toHaveLength(3);
     // Fields, not prose: `iteration`/`total`/`remaining` are scalars a query can
     // filter and order on, which an interpolated `iteration=1/3` string is not.
-    expect(JSON.parse(checkpointLines[0]!).fields).toMatchObject({ iteration: 1, total: 3, remaining: 2 });
-    expect(JSON.parse(checkpointLines[2]!).fields).toMatchObject({ iteration: 3, total: 3, remaining: 0 });
+    expect(JSON.parse(checkpointLines[0]).fields).toMatchObject({ iteration: 1, total: 3, remaining: 2 });
+    expect(JSON.parse(checkpointLines[2]).fields).toMatchObject({ iteration: 3, total: 3, remaining: 0 });
   });
 
   // Regression: a heartbeat on stdout lands in what `kinu exec --json` uses as

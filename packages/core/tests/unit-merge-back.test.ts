@@ -30,6 +30,7 @@
 // property the suite takes on trust.
 import { describe, test, expect } from 'bun:test';
 import { MAX_TX_BLOB_BYTES, MAX_TX_LOGICAL_ROWS } from '@nimbus-sh/core/constants.js';
+import { present } from '@kinu.run/test-utils';
 import { createRecordingLogger, type RecordingLogger } from '../src/obs/index';
 import {
   MERGE_POLICIES, SETTLE_RULES, APPLY_PRECONDITIONS, TRANSACTION_BOUNDS,
@@ -127,6 +128,15 @@ interface Harness {
       readonly settled?: readonly string[];
     },
   ) => Promise<MergeBackReport>;
+}
+
+/** A re-verification that records which member was asked and answers clean. */
+function recordClean(asked: string[]) {
+  return async ({ member, baseDigest }: { member: { nodeId: string; diff: Parameters<typeof memberDigestOf>[0] }; baseDigest: string }) => {
+    asked.push(member.nodeId);
+
+    return { memberDigest: memberDigestOf(member.diff), baseDigest, clean: true };
+  };
 }
 
 function harness(initial: Record<string, string> = {}): Harness {
@@ -242,7 +252,7 @@ describe('apply-winner', () => {
     const loser = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }]);
 
     const report = await h.run('apply-winner', [{
-      ...winner, verdict: { ...winner.verdict!, clean: false },
+      ...winner, verdict: { ...present(winner.verdict, "winner's verdict"), clean: false },
     }, loser]);
 
     expect(report.outcomes.map((o) => o.kind)).toEqual(['refused']);
@@ -327,11 +337,7 @@ describe('sequential-rebase', () => {
     const asked: string[] = [];
 
     const report = await h.run('sequential-rebase', [first, second], {
-      reverify: async ({ member, baseDigest }) => {
-        asked.push(member.nodeId);
-
-        return { memberDigest: memberDigestOf(member.diff), baseDigest, clean: true };
-      },
+      reverify: recordClean(asked),
     });
 
     // Re-verified, and then applied — the rebase is licensed by the re-check, not by
@@ -348,11 +354,7 @@ describe('sequential-rebase', () => {
 
     const asked: string[] = [];
     await h.run('sequential-rebase', [first, second], {
-      reverify: async ({ member, baseDigest }) => {
-        asked.push(member.nodeId);
-
-        return { memberDigest: memberDigestOf(member.diff), baseDigest, clean: true };
-      },
+      reverify: recordClean(asked),
     });
 
     // A sibling that touched no path this member touches does not invalidate its
@@ -457,7 +459,7 @@ describe('a refused member is skipped, not stopped at', () => {
     const clean = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }]);
 
     const report = await h.run('sequential-rebase', [{
-      ...dirty, verdict: { ...dirty.verdict!, clean: false },
+      ...dirty, verdict: { ...present(dirty.verdict, "dirty's verdict"), clean: false },
     }, clean]);
 
     // RED on the old break: the second outcome did not exist and `b.ts` never landed.
@@ -473,7 +475,7 @@ describe('a refused member is skipped, not stopped at', () => {
     const clean = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }]);
 
     const report = await h.run('sequential-rebase', [{
-      ...dirty, verdict: { ...dirty.verdict!, clean: false },
+      ...dirty, verdict: { ...present(dirty.verdict, "dirty's verdict"), clean: false },
     }, clean]);
 
     // The settle record names the refusal beside the apply that followed it...
@@ -495,7 +497,7 @@ describe('a refused member is skipped, not stopped at', () => {
     const onTop = await memberOf(h.origin, 'n2', [{ path: 'a.ts', base: 'A1\n', after: 'A2\n' }]);
 
     const report = await h.run('sequential-rebase', [{
-      ...skipped, verdict: { ...skipped.verdict!, clean: false },
+      ...skipped, verdict: { ...present(skipped.verdict, "skipped's verdict"), clean: false },
     }, onTop]);
 
     // n1 never landed and never joined the rebase frontier, so n2's divergence at
@@ -519,7 +521,7 @@ describe('a refused member is skipped, not stopped at', () => {
     });
 
     const report = await h.run('sequential-rebase', [{
-      ...skipped, verdict: { ...skipped.verdict!, clean: false },
+      ...skipped, verdict: { ...present(skipped.verdict, "skipped's verdict"), clean: false },
     }, dependent]);
 
     // Dependency order still places n2 after n1, and n1 never lands, so rule 1 names
@@ -1171,7 +1173,7 @@ describe('the settle gate', () => {
     const first = await h.run('apply-winner', [unchecked]);
 
     const second = await h.run('apply-winner', [{
-      ...failed, verdict: { ...failed.verdict!, clean: false },
+      ...failed, verdict: { ...present(failed.verdict, "failed's verdict"), clean: false },
     }]);
 
     const one = first.outcomes[0];

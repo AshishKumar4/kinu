@@ -98,8 +98,8 @@ function store(): RecordStore {
 }
 
 /** The store pair as the leading `(sql, actor)` arguments every read takes. */
-function spread(store: RecordStore): [SqlExecutor, ActorHandle] {
-  return [store.sql, store.actor];
+function spread(records: RecordStore): [SqlExecutor, ActorHandle] {
+  return [records.sql, records.actor];
 }
 
 function write(over: Partial<ExplorationWrite>): ExplorationWrite {

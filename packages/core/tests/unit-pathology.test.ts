@@ -134,11 +134,11 @@ describe('clustering', () => {
 
   test('a cell carries its evidence: turns, severity, versions, examples', () => {
     const [errors] = clusterPathologies(rows);
-    expect(errors!.turnIds).toEqual(['a', 'b']); // the null-id row contributes size, not an id
-    expect(errors!.frustrated).toBe(1);
-    expect(errors!.scaffoldVersions).toEqual([2, 3]);
-    expect(errors!.examples).toHaveLength(2);
-    expect(errors!.title).toBe(describePathology('error/code'));
+    expect(errors.turnIds).toEqual(['a', 'b']); // the null-id row contributes size, not an id
+    expect(errors.frustrated).toBe(1);
+    expect(errors.scaffoldVersions).toEqual([2, 3]);
+    expect(errors.examples).toHaveLength(2);
+    expect(errors.title).toBe(describePathology('error/code'));
   });
 
   test('it leaves the input untouched', () => {
@@ -170,14 +170,14 @@ describe('LLM labelling can only change a title', () => {
       clusters,
     );
 
-    expect(labelled!.title).toBe('claims success without running anything');
-    expect({ ...labelled, title: '' }).toEqual({ ...clusters[0]!, title: '' });
+    expect(labelled.title).toBe('claims success without running anything');
+    expect({ ...labelled, title: '' }).toEqual({ ...clusters[0], title: '' });
   });
 
   test('a thrown call, junk output, or unknown ids leave the deterministic titles', async () => {
     for (const reply of [new Error('offline'), 'not json at all', '{"made_up/code":"x"}', '{"error/terse":"  "}']) {
       const [labelled] = await labelPathologyClusters(stubLLM(reply), clusters);
-      expect(labelled!.title).toBe(clusters[0]!.title);
+      expect(labelled.title).toBe(clusters[0].title);
     }
   });
 

@@ -137,18 +137,27 @@ describe('the merged timeline is closed against every caller value', () => {
     expect(getRunTimeline(deps, { limit: 2.7 }).length).toBe(2);
   });
 
-  test('an oversized limit clamps rather than merging four unbounded reads', () => {
-    const { deps } = timelineDeps(450);
-    // 450 run events + 450 evolution rows would merge to 900 spans unbounded.
-    expect(getRunTimeline(deps, { limit: 1e9 }).length).toBe(400);
-  });
+  const ASKS = [
+    {
+      // 450 run events + 450 evolution rows would merge to 900 spans unbounded.
+      name: 'an oversized limit clamps rather than merging four unbounded reads',
+      seeded: 450, limit: 1e9, spans: 400,
+    },
+    {
+      // The chat seed's removed `getRunTimeline({ limit: 250 })` is the widest ask
+      // the product ever made of this surface; the ceiling must not cut it.
+      name: 'the recorded widest legitimate ask is still honoured exactly',
+      seeded: 300, limit: 250, spans: 250,
+    },
+  ];
 
-  test('the recorded widest legitimate ask is still honoured exactly', () => {
-    // The chat seed's removed `getRunTimeline({ limit: 250 })` is the widest ask
-    // the product ever made of this surface; the ceiling must not cut it.
-    const { deps } = timelineDeps(300);
-    expect(getRunTimeline(deps, { limit: 250 }).length).toBe(250);
-  });
+  for (const ask of ASKS) {
+    test(ask.name, () => {
+      const { deps } = timelineDeps(ask.seeded);
+
+      expect(getRunTimeline(deps, { limit: ask.limit }).length).toBe(ask.spans);
+    });
+  }
 
   test('an absent limit takes the default', () => {
     const { deps } = timelineDeps(300);

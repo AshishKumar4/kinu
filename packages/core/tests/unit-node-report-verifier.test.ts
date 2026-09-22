@@ -46,6 +46,16 @@ const UNRUNNABLE = 'the candidate did not parse: unexpected token at line 1';
  * fixture cannot get out of step with the loop: the refusal it is answering is in the
  * transcript, and its presence IS the signal to try again.
  */
+/** Which of the three prompts this call is looking at: the first attempt, the
+ *  refusal it came back with, or the acceptance that ends the node. */
+function promptStage(refused: boolean, accepted: boolean): string {
+  if (refused) return 'saw-refusal';
+
+  if (accepted) return 'saw-acceptance';
+
+  return 'first';
+}
+
 function reportTwice(seen: string[]): NodeAgentDeps['model'] {
   return scriptedTurnModel({
     modelId: 'fake-reporter',
@@ -53,7 +63,7 @@ function reportTwice(seen: string[]): NodeAgentDeps['model'] {
       const text = JSON.stringify(prompt);
       const refused = text.includes(UNRUNNABLE);
       const accepted = text.includes('"received":true');
-      seen.push(refused ? 'saw-refusal' : accepted ? 'saw-acceptance' : 'first');
+      seen.push(promptStage(refused, accepted));
 
       const content: LanguageModelV3Content[] = accepted
         ? [{ type: 'text', text: 'Reported.' }]

@@ -608,7 +608,10 @@ describe('engine.rollback', () => {
         return {};
       })
       .onDynamic(/reset --hard '([0-9a-f]+)'/, (cmd) => {
-        head = /reset --hard '([0-9a-f]+)'/.exec(cmd)![1];
+        const reset = /reset --hard '(?<sha>[0-9a-f]+)'/.exec(cmd)?.groups?.sha;
+
+        if (reset === undefined) throw new Error(`a reset command with no sha: ${cmd}`);
+        head = reset;
 
         return {};
       })
