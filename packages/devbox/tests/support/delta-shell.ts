@@ -29,10 +29,22 @@ import {
   type LiveInode,
   type LiveTree,
   type NodeEntry,
+  type NodeKind,
   type PosixMetadata,
 } from './tree-model';
 
 export type ShellReply = { stdout: string; stderr: string; exitCode: number };
+
+/** One `dd` line as the chunked delta writes it. */
+interface DdCommand {
+  /** The file read, or null for `/dev/zero`. */
+  readonly source: string | null;
+  readonly path: string;
+  readonly blockBytes: number;
+  /** `skip=`: read block `block` of the source. `seek=`: write it in the target. */
+  readonly skip: boolean;
+  readonly block: number;
+}
 
 /** The package root's own directory: the manifest's first path segment. A
  *  path naming it is a stage or a sidecar, and its root is a tree. */
@@ -162,11 +174,42 @@ function splitSuffix(index: number): string {
   return out;
 }
 
+/** One fnmatch character: `*` crosses `/` because FNM_PATHNAME is not set. */
+function patternChar(char: string): string {
+  if (char === '*') return '.*';
+
+  if (char === '?') return '.';
+
+  return char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+}
+
 /** `find -path` matching: fnmatch without FNM_PATHNAME, so `*` crosses `/`. */
 function pathPattern(pattern: string): RegExp {
-  const source = pattern.split('').map((char) => (char === '*' ? '.*' : char === '?' ? '.' : char.replace(/[.+^${}()|[\]\\]/g, '\\$&'))).join('');
+  return new RegExp(`^${pattern.split('').map(patternChar).join('')}$`);
+}
 
-  return new RegExp(`^${source}$`);
+/** `find -printf '%y'`, plus `o` for a directory carrying an opaque marker. */
+function findType(kind: NodeKind, opaque: boolean): string {
+  if (kind === 'file') return 'f';
+
+  if (kind === 'symlink') return 'l';
+
+  return opaque ? 'o' : 'd';
+}
+
+/** `%s`: a file's logical length, a directory's fixed 4096, a symlink's target
+ *  length. An absent content or target is the empty one, as `plant` reads it. */
+function entrySize(entry: NodeEntry): number {
+  if (entry.kind === 'dir') return 4096;
+
+  if (entry.kind === 'symlink') return (entry.target ?? '').length;
+
+  return entry.content === undefined ? 0 : contentSize(entry.content);
+}
+
+/** A live node's logical length, an absent content being an empty file. */
+function nodeSize(node: LiveInode): number {
+  return node.content === undefined ? 0 : contentSize(node.content);
 }
 
 /** A node's logical bytes, holes read as zeros. */
@@ -272,7 +315,13 @@ class DeltaShell {
     if ((m = OP.cpOrEmpty.exec(line)) !== null) return this.#cpOrEmpty(unquote(m[1]), unquote(m[2]));
 
     if ((m = OP.dd.exec(line)) !== null) {
-      return this.#dd(m[2] === undefined ? unquote(m[1]) : null, unquote(m[3]), Number(m[4]), m[5] === 'skip', Number(m[6]));
+      return this.#dd({
+        source: m[2] === undefined ? unquote(m[1]) : null,
+        path: unquote(m[3]),
+        blockBytes: Number(m[4]),
+        skip: m[5] === 'skip',
+        block: Number(m[6]),
+      });
     }
 
     if ((m = OP.truncate.exec(line)) !== null) return this.#truncate(Number(m[1]), unquote(m[2]));
@@ -328,8 +377,11 @@ class DeltaShell {
 
     if (at <= 0) throw new Error(`no tree serves ${path}`);
     this.disk.tree(path.slice(0, at));
+    const made = this.disk.writable(path);
 
-    return this.disk.writable(path)!;
+    if (made === undefined) throw new Error(`the tree made for ${path} does not serve it`);
+
+    return made;
   }
 
   // ── facts ────────────────────────────────────────────────────────────────
@@ -344,6 +396,7 @@ class DeltaShell {
     const opaque = new Set(rows.filter(row => row.path.split('/').at(-1) === '.wh..wh..opq')
       .map(row => row.path.slice(0, Math.max(0, row.path.lastIndexOf('/')))));
 
+    /** `%n`: names per inode counted over these rows, so a row is never below one. */
     const names = new Map<number, number>();
 
     for (const row of rows) names.set(row.ino, (names.get(row.ino) ?? 0) + 1);
@@ -363,16 +416,17 @@ class DeltaShell {
 
     for (const row of rows) {
       if (excluded(row.path)) continue;
-      const meta = row.metadata!;
+      const meta = row.metadata;
+
+      if (meta === undefined) throw new Error(`find: ${row.path} carries no metadata to print`);
       const isOpaque = opaque.has(row.path) || ['trusted.overlay.opaque', 'user.overlay.opaque', 'user.fuseoverlayfs.opaque'].some(key => meta.xattrs[key] === 'y');
-      const type = row.kind === 'file' ? 'f' : row.kind === 'dir' ? isOpaque ? 'o' : 'd' : 'l';
 
       const nlink = row.kind === 'dir'
         ? 2 + rows.filter((child) => child.kind === 'dir' && child.path.startsWith(`${row.path}/`) && !child.path.slice(row.path.length + 1).includes('/')).length
-        : names.get(row.ino)!;
+        : names.get(row.ino) ?? 1;
 
-      const size = row.kind === 'file' ? contentSize(row.content!) : row.kind === 'dir' ? 4096 : row.target!.length;
-      fields.push(type, String(row.ino), String(nlink), row.mode.toString(8), String(meta.uid), String(meta.gid), String(size),
+      fields.push(findType(row.kind, isOpaque), String(row.ino), String(nlink), row.mode.toString(8),
+        String(meta.uid), String(meta.gid), String(entrySize(row)),
         findTime(meta.mtimeNs), findTime(meta.ctimeNs), row.target ?? '', row.path);
     }
 
@@ -416,8 +470,8 @@ class DeltaShell {
 
     if (node.kind === 'dir') return this.#say('directory 4096\n');
 
-    if (node.kind === 'symlink') return this.#say(`symbolic link ${node.target!.length}\n`);
-    const size = contentSize(node.content!);
+    if (node.kind === 'symlink') return this.#say(`symbolic link ${(node.target ?? '').length}\n`);
+    const size = nodeSize(node);
 
     return this.#say(`${size === 0 ? 'regular empty file' : 'regular file'} ${size}\n`);
   }
@@ -440,11 +494,11 @@ class DeltaShell {
   }
 
   #sha256sum(dir: string): number {
-    const names = [...this.#pieces.keys()].filter((name) => name.startsWith(dir)).sort();
+    const pieces = [...this.#pieces].filter(([name]) => name.startsWith(dir)).sort(([a], [b]) => (a < b ? -1 : 1));
 
-    if (names.length === 0) return 1;
+    if (pieces.length === 0) return 1;
 
-    for (const name of names) this.#out.push(`${createHash('sha256').update(this.#pieces.get(name)!).digest('hex')}  ${name}\n`);
+    for (const [name, bytes] of pieces) this.#out.push(`${createHash('sha256').update(bytes).digest('hex')}  ${name}\n`);
 
     return 0;
   }
@@ -452,7 +506,7 @@ class DeltaShell {
   #ifBase(base: string, then: string, index: number): number {
     const node = this.disk.node(base);
 
-    if (node === undefined || node.kind !== 'file' || contentSize(node.content!) === 0) return this.#say(`BEMPTY ${index}\n`);
+    if (node === undefined || node.kind !== 'file' || nodeSize(node) === 0) return this.#say(`BEMPTY ${index}\n`);
     let status = 0;
 
     for (const statement of then.split('; ')) status = this.#line(statement);
@@ -557,7 +611,7 @@ class DeltaShell {
     return 0;
   }
 
-  #dd(source: string | null, path: string, blockBytes: number, skip: boolean, block: number): number {
+  #dd({ source, path, blockBytes, skip, block }: DdCommand): number {
     let bytes: Uint8Array;
 
     if (source === null) {

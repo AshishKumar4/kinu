@@ -27,13 +27,14 @@
 // below refuses a seam list that has drifted from the code it names.
 import { afterAll, describe, expect, test } from 'bun:test';
 
-import { KNOWN_RED } from './support/conformance-bug-list';
+import { KNOWN_RED, type KnownRed } from './support/conformance-bug-list';
 import {
   ArmRefused,
   CONFORMANCE_ARMS,
   DiskFull,
   type ArmBoot,
   type ConformanceArm,
+  type Refusal,
   type RestoreWork,
 } from './support/strategy-machine';
 import {
@@ -55,7 +56,6 @@ import {
   ATTACH_OUTCOME_KINDS,
   parseDevboxStrategyName,
   type CheckpointOutcome,
-  type DevboxStrategyName,
 } from '../src/storage';
 
 /**
@@ -175,16 +175,16 @@ const MERGED = { ...OLD, ...NEW };
 
 const THIRD = { 'third.txt': 'written by the third generation' };
 
-// SAFETY: `CONFORMANCE_ARMS` declares `Record<DevboxStrategyName, () =>
-// ConformanceArm>`, so its own type guarantees every key is a strategy name and
-// every value that factory; `Object.entries` widens the key to `string` because
-// its lib signature cannot carry a literal union, and this narrows it back to
-// what the record already declares. The test below re-checks each key through
-// `parseDevboxStrategyName` at runtime.
-const armEntries = Object.entries(CONFORMANCE_ARMS) as readonly [
-  DevboxStrategyName,
-  () => ConformanceArm,
-][];
+// `Object.entries` widens the key to `string` because its lib signature cannot
+// carry a literal union, so each key is parsed back to the strategy name the
+// record already declares rather than asserted into it.
+const armEntries = Object.entries(CONFORMANCE_ARMS).map(([key, open]) => {
+  const name = parseDevboxStrategyName(key);
+
+  if (name === null) throw new Error(`the conformance arms name ${key}, which is not a strategy`);
+
+  return [name, open] as const;
+});
 
 test('every strategy name has an arm, and every arm names a strategy', () => {
   // The record's KEY TYPE is the denominator: a name added to
@@ -438,8 +438,7 @@ for (const [name, open] of armEntries) {
       // corruption anywhere else surfaces at the first read that needs
       // those bytes, which a full-tree read forces without picking a path.
       let refusal = await thrownBy(async () => { await arm.storage().attach(); });
-
-      if (refusal === null) refusal = await thrownBy(async () => { await tree(arm); });
+      refusal ??= await thrownBy(async () => { await tree(arm); });
       expect(refusal).toBeInstanceOf(Error);
       // NAMED. A refusal that cannot say which object is unsound is a refusal
       // nobody can act on.
@@ -769,10 +768,12 @@ const CELLS: readonly Cell[] = [
       const problems: string[] = [];
       const kBytes = 4096;
       const c = 16 * 1024;
+      const p = 1;
+      const d = 1;
 
       if (small.seal.bytesStaged > 2 * kBytes + 4 * c) problems.push(`bytesStaged ${small.seal.bytesStaged} > 2k + 4c for k=4 KiB`);
 
-      if (small.seal.nodesRewritten > 1 * (1 + 2)) problems.push(`nodesRewritten ${small.seal.nodesRewritten} > p(d+2) = 3`);
+      if (small.seal.nodesRewritten > p * (d + 2)) problems.push(`nodesRewritten ${small.seal.nodesRewritten} > p(d+2) = 3`);
 
       if (small.publish.objectsPut > Math.ceil(kBytes / P) + 2) problems.push(`objectsPut ${small.publish.objectsPut} > ceil(k/P)+2 = 3`);
       const ratio = (a: number, b: number): boolean => a === b || Math.abs(a - b) / Math.max(a, b, 1) <= 0.1;
@@ -1218,17 +1219,32 @@ async function runCell(cell: Cell, arm: ConformanceArm): Promise<Outcome> {
 
 const matrix = new Map<string, Map<string, Outcome>>();
 
+/** The battery cell `id` names, or a failure naming the id nothing answered. */
+function cellById(id: string): Cell {
+  const found = CELLS.find((row) => row.id === id);
+
+  if (found === undefined) throw new Error(`the battery holds no cell ${id}`);
+
+  return found;
+}
+
+/** A declared refusal and a bug-list row each say why a cell is not expected
+ *  green; a plain title says neither does. */
+function cellLabel(cell: Cell, refusal: Refusal | undefined, known: KnownRed | undefined): string {
+  if (refusal !== undefined) return `${cell.id} ${cell.title} [refused: ${refusal.reason.slice(0, 60)}]`;
+
+  if (known !== undefined) return `${cell.id} ${cell.title} [bug list since ${known.since}]`;
+
+  return `${cell.id} ${cell.title}`;
+}
+
 for (const [name, open] of armEntries) {
   describe(`${name} — the smart-container bar`, () => {
     for (const cell of CELLS) {
       const known = KNOWN_RED.find((row) => row.arm === name && row.cell === cell.id);
       const declaredRefusal = open().refusedCells[cell.id];
 
-      const label = declaredRefusal !== undefined
-        ? `${cell.id} ${cell.title} [refused: ${declaredRefusal.reason.slice(0, 60)}]`
-        : known !== undefined
-          ? `${cell.id} ${cell.title} [bug list since ${known.since}]`
-          : `${cell.id} ${cell.title}`;
+      const label = cellLabel(cell, declaredRefusal, known);
 
       test(label, async () => {
         const arm = open();
@@ -1320,7 +1336,7 @@ async function runCellOn(cell: Cell, makeBroken: () => ConformanceArm): Promise<
 
 describe('red direction — every new cell fails against a deliberately broken arm', () => {
   test('6.11 fails when the wake serves a blank tree', async () => {
-    const cell = CELLS.find((row) => row.id === '6.11')!;
+    const cell = cellById('6.11');
     const outcome = await runCell(cell, blankWakeArm());
     expect(outcome.kind).toBe('fail');
   });
@@ -1330,7 +1346,7 @@ describe('red direction — every new cell fails against a deliberately broken a
     // through CONFORMANCE_ARMS[arm.name](), never the arm this test hands
     // it, so only overriding the factory (what runCellOn does) puts the
     // blank-wake wrapper in the loop the cell actually drives.
-    const cell = CELLS.find((row) => row.id === '6.13')!;
+    const cell = cellById('6.13');
     const broken = blankWakeArm();
     const outcome = await runCellOn(cell, () => broken);
     expect(outcome.kind).toBe('fail');
@@ -1338,7 +1354,7 @@ describe('red direction — every new cell fails against a deliberately broken a
 
   test('6.20 fails when the store loses a reachable key', async () => {
     const arm = CONFORMANCE_ARMS['snapshot-chain']();
-    const cell = CELLS.find((row) => row.id === '6.20')!;
+    const cell = cellById('6.20');
     const broken: ConformanceArm = Object.create(arm);
     Object.defineProperty(broken, 'declaredPayload', {
       value: async () => {
@@ -1356,7 +1372,7 @@ describe('red direction — every new cell fails against a deliberately broken a
 
   test('6.12 fails when the publish counter lies about the store', async () => {
     const arm = CONFORMANCE_ARMS['snapshot-chain']();
-    const cell = CELLS.find((row) => row.id === '6.12')!;
+    const cell = cellById('6.12');
     const broken: ConformanceArm = Object.create(arm);
     Object.defineProperty(broken, 'work', {
       value: () => ({ ...arm.work(), publish: { objectsPut: 0, bytesPut: 0, casAttempts: 0 } }),
@@ -1378,7 +1394,7 @@ describe('red direction — every new cell fails against a deliberately broken a
     // failure mode the whole bet depends on never happening. This corrupts
     // every payload object right after the sweep runs, so the drop already
     // happened when the bytes underneath it stop matching what was dropped.
-    const cell = CELLS.find((row) => row.id === '6.13')!;
+    const cell = cellById('6.13');
     const arm = CONFORMANCE_ARMS['snapshot-chain']();
     const broken: ConformanceArm = Object.create(arm);
     Object.defineProperty(broken, 'evictCleanBytes', {
@@ -1406,7 +1422,7 @@ describe('red direction — every new cell fails against a deliberately broken a
     Object.defineProperty(broken, 'work', {
       value: () => ({ ...arm.work(), publish: { ...arm.work().publish, ...mutation } }),
     });
-    const outcome = await runCell(CELLS.find((row) => row.id === '6.22')!, broken);
+    const outcome = await runCell(cellById('6.22'), broken);
     expect(outcome.kind).toBe('fail');
     expect(outcome.kind === 'fail' ? outcome.reason : '').toContain(reason);
   });
@@ -1415,7 +1431,7 @@ describe('red direction — every new cell fails against a deliberately broken a
     '6.24 fails when %s grow with the tree', async (direction) => {
       const open = CONFORMANCE_ARMS['snapshot-chain'];
 
-      const outcome = await runCellOn(CELLS.find((row) => row.id === '6.24')!, () => {
+      const outcome = await runCellOn(cellById('6.24'), () => {
         const arm = open();
         const broken: ConformanceArm = Object.create(arm);
         const largeTree = () => arm.disk().snapshot('/workspace').length > 5_000;

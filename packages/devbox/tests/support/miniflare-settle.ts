@@ -38,9 +38,7 @@ function miniflareFootprint(): string {
       // ENOENT is the change being watched for: the root was removed between
       // the two readdirs, and disappearance IS activity. Anything else means
       // the snapshot cannot be trusted, so it propagates.
-      // SAFETY: a thrown filesystem call is a Node errno error by contract;
-      // the check narrows on `.code` and anything else propagates.
-      if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
+      if (!(cause instanceof Error) || !('code' in cause) || cause.code !== 'ENOENT') throw cause;
       parts.push(`${root}:gone`);
       continue;
     }
@@ -51,9 +49,7 @@ function miniflareFootprint(): string {
       try {
         parts.push(`${path}:${String(statSync(path).mtimeMs)}`);
       } catch (cause) {
-        // SAFETY: a thrown filesystem call is a Node errno error by contract;
-        // the check narrows on `.code` and anything else propagates.
-        if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
+        if (!(cause instanceof Error) || !('code' in cause) || cause.code !== 'ENOENT') throw cause;
         parts.push(`${path}:gone`);
       }
     }
