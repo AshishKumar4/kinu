@@ -118,7 +118,7 @@ function jobPlane() {
 
   const runner: BackgroundJobControl = {
     cancel: () => Promise.resolve(true),
-    createRetry: (sourceId, kind, input, mode) => {
+    createRetry: ({ sourceId, kind, input, mode }) => {
       const id = `retry-${++created}`;
 
       return jobs.createRetry({
@@ -630,7 +630,7 @@ describe('executor file plane', () => {
   test("a write round-trips through the same environment's own paths", async () => {
     const { rt, db } = createTestRuntime();
     const r = router(rt.storage.vfs);
-    expect(await writeExecutorFileOp(r, 'workspace', 'up.txt', new TextEncoder().encode('hi')))
+    expect(await writeExecutorFileOp(r, 'workspace', 'up.txt', { bytes: new TextEncoder().encode('hi') }))
       .toEqual({ ok: true });
     // The test plane declares no compare-and-write, so the read carries the
     // reason the viewer shows instead of an edit token. A plane that HAS one is
@@ -640,7 +640,7 @@ describe('executor file plane', () => {
       readOnlyReason:
         'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.',
     });
-    expect(await writeExecutorFileOp(r, 'workspace', 'dir/', new Uint8Array()))
+    expect(await writeExecutorFileOp(r, 'workspace', 'dir/', { bytes: new Uint8Array() }))
       .toEqual({ error: 'file path required' });
     db.close();
   });

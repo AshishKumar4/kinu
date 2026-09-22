@@ -152,7 +152,7 @@ describe("ExecutorFileUpload", () => {
   test("writeExecutorFileOp round-trips what finalize assembled (the plane contract)", async () => {
     const plane = makePlane();
     const bytes = patternBytes(2 * MiB);
-    expect(await writeExecutorFileOp(plane.router, "workspace", "/g.bin", bytes)).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(plane.router, "workspace", "/g.bin", { bytes: bytes })).toEqual({ ok: true });
     expect(await statExecutorFile(plane.router, "workspace", "/g.bin")).toEqual({ size: bytes.byteLength });
   });
 });

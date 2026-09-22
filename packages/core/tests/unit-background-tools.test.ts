@@ -46,7 +46,7 @@ function fakeJobRunner(
 /** A fork tool shaped like the real `agents` tool's execute: it announces its
  *  spawn (readSpawnStarted) right after "validating" input, then the
  *  exploration itself runs long. Mirrors agents-tool.ts's own call to
- *  readSpawnStarted(toolOptions)?.() before strat.explore(). */
+ *  readSpawnStarted({ toolOptions: toolOptions })?.() before strat.explore(). */
 function fakeForkTool(exploration: Promise<void>, onExplored?: () => void): ToolSet[string] {
   return tool({
     description: 'agents',
@@ -55,7 +55,7 @@ function fakeForkTool(exploration: Promise<void>, onExplored?: () => void): Tool
       required: ['action'],
     }),
     execute: async (_input, options) => {
-      readSpawnStarted(options)?.();
+      readSpawnStarted({ toolOptions: options })?.();
       await exploration;
       onExplored?.();
 

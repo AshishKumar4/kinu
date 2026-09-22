@@ -53,31 +53,31 @@ function envelopeWith(
   catalogInput: ProfileCatalog,
   overrides: EnvelopeOverrides = {},
 ): ProfileCatalogEnvelope {
-  return validateProfileCatalogEnvelope({
+  return validateProfileCatalogEnvelope({ value: {
     authority: { kind: 'local' },
     version: 0,
     digest: profileCatalogDigest(VALID_CATALOG),
     catalog: catalogInput,
     ...overrides,
-  });
+  } });
 }
 
 describe('catalog validation', () => {
   test('a minimal valid catalog parses', () => {
-    expect(validateProfileCatalog(VALID_CATALOG)).toEqual(VALID_CATALOG);
+    expect(validateProfileCatalog({ value: VALID_CATALOG })).toEqual(VALID_CATALOG);
   });
 
   test('unknown tier, unnamed preset and empty prose all refuse', () => {
-    expect(() => validateProfileCatalog({ ...VALID_CATALOG, roles: { x: { ...VALID_CATALOG.roles.scout, tier: 'ultra' } } }))
+    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, roles: { x: { ...VALID_CATALOG.roles.scout, tier: 'ultra' } } } }))
       .toThrow(/invalid profile catalog/);
     // `custom` is deliberately NOT a named preset: it means "no preset".
-    expect(() => validateProfileCatalog({ ...VALID_CATALOG, roles: { x: { ...VALID_CATALOG.roles.scout, preset: 'custom' } } }))
+    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, roles: { x: { ...VALID_CATALOG.roles.scout, preset: 'custom' } } } }))
       .toThrow(/invalid profile catalog/);
-    expect(() => validateProfileCatalog({ ...VALID_CATALOG, roles: { x: { ...VALID_CATALOG.roles.scout, description: '' } } }))
+    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, roles: { x: { ...VALID_CATALOG.roles.scout, description: '' } } } }))
       .toThrow(/description/);
-    expect(() => validateProfileCatalog({ ...VALID_CATALOG, roles: { x: { ...SCOUT, skills: ['ok', ''] } } }))
+    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, roles: { x: { ...SCOUT, skills: ['ok', ''] } } } }))
       .toThrow(/skills/);
-    expect(() => validateProfileCatalog({ ...VALID_CATALOG, tiers: { default: { model: '' } } }))
+    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, tiers: { default: { model: '' } } } }))
       .toThrow(/model/);
   });
 
@@ -88,61 +88,61 @@ describe('catalog validation', () => {
     // first turn, because aliasing silently moves the model the role was
     // pinned to.
     const withReview = { ...VALID_CATALOG, tiers: { ...VALID_CATALOG.tiers, review: { model: 'm-review' } } };
-    expect(validateProfileCatalog(withReview).tiers.review).toEqual({ model: 'm-review' });
-    expect(validateProfileCatalog({ ...withReview, roles: { x: { ...SCOUT, tier: 'review' } } }).roles.x?.tier).toBe('review');
-    expect(() => validateProfileCatalog({ ...VALID_CATALOG, roles: { x: { ...SCOUT, tier: 'review' } } }))
+    expect(validateProfileCatalog({ value: withReview }).tiers.review).toEqual({ model: 'm-review' });
+    expect(validateProfileCatalog({ value: { ...withReview, roles: { x: { ...SCOUT, tier: 'review' } } } }).roles.x?.tier).toBe('review');
+    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, roles: { x: { ...SCOUT, tier: 'review' } } } }))
       .toThrow(/every role tier must name a built-in tier or a tier in this catalog/);
     // An unconfigured BUILTIN is fine: it aliases default at resolve.
-    expect(validateProfileCatalog({ ...VALID_CATALOG, tiers: { default: VALID_CATALOG.tiers.default }, roles: { x: { ...SCOUT, tier: 'deep' } } }).roles.x?.tier).toBe('deep');
+    expect(validateProfileCatalog({ value: { ...VALID_CATALOG, tiers: { default: VALID_CATALOG.tiers.default }, roles: { x: { ...SCOUT, tier: 'deep' } } } }).roles.x?.tier).toBe('deep');
   });
 
   test('tier keys must be kebab-case ids within the length cap, and default must be present', () => {
     for (const bad of ['Bad', '-x', 'x-', 'has_underscore', 'a'.repeat(33)]) {
-      expect(() => validateProfileCatalog({ ...VALID_CATALOG, tiers: { ...VALID_CATALOG.tiers, [bad]: { model: 'm' } } }))
+      expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, tiers: { ...VALID_CATALOG.tiers, [bad]: { model: 'm' } } } }))
         .toThrow(/invalid profile catalog/);
     }
 
-    expect(() => validateProfileCatalog({ ...VALID_CATALOG, tiers: { fast: { model: 'm' } } })).toThrow(/default/);
+    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, tiers: { fast: { model: 'm' } } } })).toThrow(/default/);
   });
 
   test('role keys must be kebab-case ids within the length cap', () => {
     for (const bad of ['Bad', '-lead', 'ok-', 'has_underscore', `${'a'.repeat(65)}`]) {
       const roles = { [bad]: VALID_CATALOG.roles.scout };
-      expect(() => validateProfileCatalog({ ...VALID_CATALOG, roles })).toThrow(/invalid profile catalog/);
+      expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, roles } })).toThrow(/invalid profile catalog/);
     }
   });
 
   test('a definition carrying its own id is rejected, not stripped', () => {
     // Ids live only as record keys; a second copy invites the two drifting.
     const roles = { scout: { id: 'scout', ...VALID_CATALOG.roles.scout } };
-    expect(() => validateProfileCatalog({ ...VALID_CATALOG, roles })).toThrow(/id/);
+    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, roles } })).toThrow(/id/);
   });
 
   test('a catalog carrying envelope version is rejected', () => {
-    expect(() => validateProfileCatalog({ ...VALID_CATALOG, version: 4 })).toThrow(/version/);
+    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, version: 4 } })).toThrow(/version/);
   });
 
   test('spawns accepts wildcard, built-ins and roles in the same catalog only', () => {
     const base = VALID_CATALOG.roles.scout;
-    expect(() => validateProfileCatalog({
+    expect(() => validateProfileCatalog({ value: {
       ...VALID_CATALOG,
       roles: {
         a: { ...base, spawns: '*' },
         b: { ...base, spawns: ['a', 'task'] },
       },
-    })).not.toThrow();
-    expect(() => validateProfileCatalog({ ...VALID_CATALOG, roles: { b: { ...base, spawns: ['NOPE'] } } }))
+    } })).not.toThrow();
+    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, roles: { b: { ...base, spawns: ['NOPE'] } } } }))
       .toThrow(/invalid profile catalog/);
     // `not-there` is well-formed but resolves to no current role.
-    expect(() => validateProfileCatalog({ ...VALID_CATALOG, roles: { b: { ...base, spawns: ['not-there'] } } }))
+    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, roles: { b: { ...base, spawns: ['not-there'] } } } }))
       .toThrow(/spawns/);
   });
 
   test('plan narrows only: false is not `true`', () => {
     const roles = { p: { ...VALID_CATALOG.roles.scout, plan: true } };
-    expect(() => validateProfileCatalog({ ...VALID_CATALOG, roles })).not.toThrow();
+    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, roles } })).not.toThrow();
     const roles2 = { p: { ...VALID_CATALOG.roles.scout, plan: false } };
-    expect(() => validateProfileCatalog({ ...VALID_CATALOG, roles: roles2 })).toThrow(/invalid profile catalog/);
+    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, roles: roles2 } })).toThrow(/invalid profile catalog/);
   });
 });
 
@@ -226,7 +226,7 @@ describe('built-in defaults', () => {
   });
 
   test('the builtin catalog validates, pins the platform default model, and digests stably', () => {
-    expect(() => validateProfileCatalog(BUILTIN_PROFILE_CATALOG)).not.toThrow();
+    expect(() => validateProfileCatalog({ value: BUILTIN_PROFILE_CATALOG })).not.toThrow();
     expect(Object.keys(BUILTIN_PROFILE_CATALOG.tiers)).toEqual(['default']);
     expect(BUILTIN_PROFILE_CATALOG.tiers.default.model).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
     expect(profileCatalogDigest(BUILTIN_PROFILE_CATALOG))

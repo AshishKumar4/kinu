@@ -212,33 +212,33 @@ describe('BackgroundJobStore', () => {
 
 describe('serializeJobResult', () => {
   test('serializes plain values to JSON', () => {
-    expect(serializeJobResult({ ok: true, n: 3 })).toBe('{"ok":true,"n":3}');
-    expect(serializeJobResult('hi')).toBe('"hi"');
-    expect(serializeJobResult(null)).toBe('null');
-    expect(serializeJobResult(undefined)).toBe('null');
+    expect(serializeJobResult({ value: { ok: true, n: 3 } })).toBe('{"ok":true,"n":3}');
+    expect(serializeJobResult({ value: 'hi' })).toBe('"hi"');
+    expect(serializeJobResult({ value: null })).toBe('null');
+    expect(serializeJobResult({ value: undefined })).toBe('null');
   });
 
   test('non-serializable success (BigInt) degrades to a named reason, never thrown', () => {
     // A backgrounded eval can resolve a BigInt — JSON.stringify throws
     // on it; the helper must degrade to a string that says so and carries the
     // thrown reason, so settle() still records it.
-    expect(serializeJobResult(10n)).toMatch(/^unserializable job result: /);
+    expect(serializeJobResult({ value: 10n })).toMatch(/^unserializable job result: /);
 
     interface CircularValue { self?: CircularValue }
 
     const circular: CircularValue = {};
     circular.self = circular;
-    expect(serializeJobResult(circular)).toMatch(/^unserializable job result: /);
+    expect(serializeJobResult({ value: circular })).toMatch(/^unserializable job result: /);
   });
 
   test('an oversize result is stored whole — the wake message promises the full result', () => {
     const big = 'x'.repeat(40_000);
-    expect(serializeJobResult(big)).toBe(JSON.stringify(big));
+    expect(serializeJobResult({ value: big })).toBe(JSON.stringify(big));
   });
 
   test('an oversize input survives a JSON.parse round-trip — resume depends on it', () => {
     const input = { code: 'y'.repeat(20_000) };
-    expect(JSON.parse(serializeJobResult(input))).toEqual(input);
+    expect(JSON.parse(serializeJobResult({ value: input }))).toEqual(input);
   });
 });
 
@@ -456,16 +456,16 @@ describe('readSpawnStarted — the announce callback the background wrapper arms
     let fired = false;
     const announce = () => { fired = true; };
 
-    const fn = readSpawnStarted({ [SPAWN_STARTED_OPTION]: announce });
+    const fn = readSpawnStarted({ toolOptions: { [SPAWN_STARTED_OPTION]: announce } });
     expect(fn).toBe(announce);
     fn?.();
     expect(fired).toBe(true);
   });
 
   test('is undefined on an inline surface that armed nothing — codemode, resume, eval', () => {
-    expect(readSpawnStarted(undefined)).toBeUndefined();
-    expect(readSpawnStarted({})).toBeUndefined();
-    expect(readSpawnStarted({ toolCallId: 'call-1', messages: [] })).toBeUndefined();
-    expect(readSpawnStarted(null)).toBeUndefined();
+    expect(readSpawnStarted({ toolOptions: undefined })).toBeUndefined();
+    expect(readSpawnStarted({ toolOptions: {} })).toBeUndefined();
+    expect(readSpawnStarted({ toolOptions: { toolCallId: 'call-1', messages: [] } })).toBeUndefined();
+    expect(readSpawnStarted({ toolOptions: null })).toBeUndefined();
   });
 });
