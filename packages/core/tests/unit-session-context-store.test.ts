@@ -162,7 +162,64 @@ test('VFS-backed image payloads fail explicitly after file corruption', async ()
     const stored = await s.messages.materializeParts(reference);
     const external = v.parse(v.object({ image: v.object({ $sessionAttachment: v.object({ path: v.string() }) }) }), stored[0]?.value);
     await s.rt.storage.vfs.writeFile(external.image.$sessionAttachment.path, 'corrupt');
-    await expect(s.messages.materialize(reference)).rejects.toThrow('digest differs');
+    // The reader that verified these bytes keeps serving them; a reader that
+    // has not, as after a restart, finds the corruption.
+    expect(await s.messages.materialize(reference)).toEqual({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] });
+    await expect(new SessionMessages(s.rt.storage.sql, s.rt.actor, s.payloads).materialize(reference)).rejects.toThrow('digest differs');
+  } finally { s.testSql.close(); }
+});
+
+test('a sealed row that is JSON but not a message is refused on read', async () => {
+  // The stored text is the trust boundary: parsing it as JSON is not enough
+  // for a reader to serve it as a message a provider will be handed.
+  const corruptions = [
+    { content: '{"parts":[]}', layer: 'the part list' },
+    { content: '[{"partNo":0,"kind":"text","streamOrder":0,"replyTo":null,"value":{"type":"text","text":7}}]', layer: 'the SDK message schema' },
+  ];
+
+  for (const { content, layer } of corruptions) {
+    const s = setup();
+
+    try {
+      const prepared = await s.messages.prepare({ role: 'user', content: [{ type: 'text', text: 'hello' }] }, 'input');
+      const selected = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
+      const reference = present(s.context.entries(selected)[0], 'the input entry');
+      s.testSql.db.run("UPDATE session_messages SET content_json = ? WHERE message_id = 'input'", [content]);
+      await expect(s.messages.materialize(reference), layer).rejects.toThrow(KinuError);
+    } finally { s.testSql.close(); }
+  }
+});
+
+test('a sealed message read back cannot be edited in place, and a later read is the stored one', async () => {
+  // Every step shares the object a sealed row reads back as; a consumer that
+  // edited it would change what the next step sends without a new revision.
+  const s = setup();
+
+  try {
+    const prepared = await s.messages.prepare({ role: 'assistant', content: [{ type: 'text', text: 'stored' }] }, 'answer');
+    s.messages.insert(prepared, 'output');
+    const read = await s.messages.materialize({ messageId: 'answer' });
+    const part = Array.isArray(read.content) ? read.content[0] : undefined;
+
+    if (part?.type !== 'text') throw new Error('the stored answer must read back as one text part');
+    expect(() => { part.text = 'edited'; }).toThrow(TypeError);
+    expect(() => { read.providerOptions = { test: { marked: true } }; }).toThrow(TypeError);
+    expect(await s.messages.materialize({ messageId: 'answer' })).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'stored' }] });
+  } finally { s.testSql.close(); }
+});
+
+test('a reader holds only the sealed messages its last context read named', async () => {
+  const s = setup();
+
+  try {
+    for (const [id, text] of [['first', 'one'], ['second', 'two']]) s.messages.insert(await s.messages.prepare({ role: 'user', content: text }, id), 'input');
+    await s.messages.materializeAll([{ messageId: 'first' }, { messageId: 'second' }]);
+    await s.messages.materializeAll([{ messageId: 'second' }]);
+    s.testSql.db.run("UPDATE session_messages SET content_json = '{}'");
+
+    // `first` left the context, so reading it goes back to its row, now corrupt.
+    await expect(s.messages.materialize({ messageId: 'first' })).rejects.toThrow(KinuError);
+    expect(await s.messages.materialize({ messageId: 'second' })).toEqual({ role: 'user', content: 'two' });
   } finally { s.testSql.close(); }
 });
 

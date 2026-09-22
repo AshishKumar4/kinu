@@ -33,6 +33,7 @@ export class SessionRequests {
   }
 
   async prepareRendered(input: Omit<PreparedRequest, 'metadata' | 'messages'> & { readonly metadata: JsonValue; readonly messages: readonly ModelMessage[] }): Promise<PreparedRequestBundle> {
+    this.actor.assertCurrent();
     const references: MessageReference[] = [];
     const rendered: PreparedMessage[] = [];
 
