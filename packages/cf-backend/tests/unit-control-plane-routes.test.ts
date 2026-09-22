@@ -24,9 +24,15 @@ import * as store from '@kinu.run/core/control-plane';
 import * as feedbackStore from '@kinu.run/core/control-plane';
 import type { ControlCapability, PresentedCaller } from '@kinu.run/core/control-plane';
 import * as v from 'valibot';
-import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import {
+  CACHE_HIT_EMA_ALPHA, JsonValueSchema,
+  type ActivitySnapshot, type ApprovalGrant, type DeferredApprovalAnswer, type JsonValue,
+  type UserCaller,
+} from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { sqlExec } from './helpers/user-do';
+import type { ControlEnv } from '../src/control-plane/routes';
+import type { WorkspaceEntry } from '../src/user/user-do';
 
 mockAgentsSdk();
 
@@ -37,8 +43,9 @@ const { handleControlRequest: routeControlRequest } = await import('../src/contr
 const { requireControl } = await import('@kinu.run/core/control-plane');
 
 /** The bindings the route reads. Named for its role rather than its structure:
- *  it is the environment these routes run in. */
-type ControlRoutesEnv = Parameters<typeof routeControlRequest>[1];
+ *  it is the environment these routes run in. Its ids are the names this
+ *  harness mints, which is what a namespace here resolves by. */
+type ControlRoutesEnv = ControlEnv<string>;
 
 const SECRET = 'routes-test-secret-0123456789';
 
@@ -67,18 +74,10 @@ interface Harness {
 interface WorkspaceBehaviour {
   cancel?: { ok: boolean };
   retry?: { ok: boolean; jobId?: string; error?: string };
-  grants?: { grants: { kind: string }[] };
+  grants?: { grants: ApprovalGrant[] };
   clear?: { ok: boolean };
   decided?: string[];
   throws?: string;
-}
-
-/** One roster row, as a UserDO holds it. */
-interface RosterRow {
-  name: string;
-  displayName: string;
-  createdAt: number;
-  lastVisited: number;
 }
 
 /** Which phase of the two-phase audit write is broken, when a test breaks one.
@@ -91,17 +90,49 @@ interface World {
   behaviour?: WorkspaceBehaviour;
   rosterError?: string;
   /** Each account's roster. An account absent here owns nothing. */
-  rosters?: Record<string, RosterRow[]>;
+  rosters?: Record<string, WorkspaceEntry[]>;
   /** Each workspace's own identity row: the account its Durable Object believes
    *  owns it. A name absent here is an unclaimed workspace. */
   owners?: Record<string, string>;
   audit?: AuditFault;
 }
 
-function roster(...names: string[]): RosterRow[] {
+function roster(...names: string[]): WorkspaceEntry[] {
   return names.map((name, index) => ({
-    name, displayName: name, createdAt: 100 + index, lastVisited: 900 - index,
+    name, displayName: name, createdAt: 100 + index, lastVisited: 900 - index, archivedAt: null,
   }));
+}
+
+/** What `getActivitySnapshot` answers for a workspace that has run nothing: the
+ *  real shape, at the values an empty log produces. The drilldown hands it back
+ *  whole, so a stand-in of some other shape would let the panel's contract drift
+ *  from the object's. */
+function unrunActivity(): ActivitySnapshot {
+  return {
+    latest: null,
+    contextWindow: null,
+    telemetry: {
+      steps: 0,
+      windowLimit: 0,
+      tokens: {},
+      cacheHit: {
+        samples: 0, last: null, mean: null, p95: null, p99: null, ema: null,
+        emaAlpha: CACHE_HIT_EMA_ALPHA, warms: 0,
+      },
+      usd: 0,
+      pricedSteps: 0,
+      unpricedSteps: 0,
+      stepsWithoutUsage: 0,
+    },
+    spend: {
+      producers: [],
+      total: { calls: 0, callsWithoutUsage: 0, usage: {}, unpricedCalls: 0, floorPricedCalls: 0 },
+      coverage: { calls: 0, measured: 0, reported: null, silent: [], partial: [] },
+      offTurnShare: null,
+      missions: [],
+    },
+    log: [],
+  };
 }
 
 function harness(options: World = {}): Harness {
@@ -184,6 +215,11 @@ function harness(options: World = {}): Harness {
 
       return row;
     },
+    /** The index feed's fourth row, which no admin route writes: the feed is
+     *  reached from the Worker's ownership gate, never from here. */
+    touchWorkspace(): Promise<void> {
+      throw new Error('ControlPlaneDO.touchWorkspace: not reachable in this test');
+    },
   };
 
   /** A list read that records the call and answers with nothing — the three
@@ -238,7 +274,7 @@ function harness(options: World = {}): Harness {
 
       return behaviour.clear ?? { ok: true };
     },
-    async decideDeferredApprovals(ids: string[], decision: string) {
+    async decideDeferredApprovals(ids: string[], decision: DeferredApprovalAnswer) {
       rpc.calls.push({ workspace: name, method: 'decideDeferredApprovals', args: [ids, decision] });
 
       return { decided: behaviour.decided ?? ids };
@@ -246,9 +282,9 @@ function harness(options: World = {}): Harness {
     async getShellApprovalGrants() {
       rpc.calls.push({ workspace: name, method: 'getShellApprovalGrants', args: [] });
 
-      return behaviour.grants ?? { grants: [{ kind: 'git' }] };
+      return behaviour.grants ?? { grants: [{ rule: 'git', executor: 'workspace' }] };
     },
-    async revokeShellApprovalGrants(grants: unknown[]) {
+    async revokeShellApprovalGrants(grants: ApprovalGrant[]) {
       rpc.calls.push({ workspace: name, method: 'revokeShellApprovalGrants', args: [grants] });
 
       return { grants: [] };
@@ -256,12 +292,12 @@ function harness(options: World = {}): Harness {
     async getRunSummaries() {
       rpc.calls.push({ workspace: name, method: 'getRunSummaries', args: [] });
 
-      return { status: 'end', items: [] };
+      return { status: 'end' as const, items: [] };
     },
     async getActivitySnapshot() {
       rpc.calls.push({ workspace: name, method: 'getActivitySnapshot', args: [] });
 
-      return { spend: { usd: 0 } };
+      return unrunActivity();
     },
     listBackgroundJobs: emptyListStub(name, 'listBackgroundJobs'),
     listDeferredApprovals: emptyListStub(name, 'listDeferredApprovals'),
@@ -273,7 +309,7 @@ function harness(options: World = {}): Harness {
   });
 
   const userStub = (userId: string) => ({
-    async hasWorkspace(_caller: PresentedCaller, name: string) {
+    async hasWorkspace(_caller: UserCaller, name: string) {
       return (rosters.get(userId) ?? []).some((row) => row.name === name);
     },
     async ensureWorkspaceCapability(name: string, _hash: string | null) {
@@ -287,7 +323,7 @@ function harness(options: World = {}): Harness {
 
       return { entries, total: entries.length, nextCursor: null };
     },
-    async removeWorkspace(_caller: PresentedCaller, workspace: string, owner: string) {
+    async removeWorkspace(_caller: UserCaller, workspace: string, owner: string) {
       // `UserDO.removeWorkspace` tears the object down FIRST, and
       // `destroyAgent` refuses unless the stored owner is this account. A
       // teardown failure keeps the registry row, which is what fail-closed
@@ -307,7 +343,7 @@ function harness(options: World = {}): Harness {
     get: (name: string) => resolve(name),
   });
 
-  const raw = {
+  const env: ControlRoutesEnv = {
     CREDENTIAL_ENCRYPTION_KEY: SECRET,
     CONTROL_PLANE_ADMINS: options.admins ?? OPERATOR,
     ControlPlaneDO: namespace(() => controlPlane),
@@ -319,15 +355,6 @@ function harness(options: World = {}): Harness {
       },
     })),
   };
-
-  const partialEnv: Partial<ControlRoutesEnv> = {};
-  Object.assign(partialEnv, raw);
-  // SAFETY: the control-plane route contract reads only the locally constructed
-  // CREDENTIAL_ENCRYPTION_KEY, CONTROL_PLANE_ADMINS, ControlPlaneDO,
-  // OrchestratorAgent, UserDO and MonitorDO members in this harness. The
-  // namespaces carry the platform's nominal DurableObjectNamespace brand, which
-  // no locally built object can hold and which no route path reads.
-  const env = partialEnv as ControlRoutesEnv;
 
   return { env, sql, rpc, removed, close: () => db.close() };
 }
@@ -595,7 +622,8 @@ describe('mutations', () => {
   });
 
   test('revoking shell grants reads them first, so the audited count is real', async () => {
-    const h = harness({ behaviour: { grants: { grants: [{ kind: 'git' }, { kind: 'npm' }] } } });
+    const grants = [{ rule: 'git', executor: 'workspace' }, { rule: 'npm', executor: 'sandbox' }];
+    const h = harness({ behaviour: { grants: { grants } } });
     await handleControlRequest(
       post('/actions', { action: 'shell_grants.revoke', userId: USER_ID, workspace: 'alpha' }),
       h.env, identity(),

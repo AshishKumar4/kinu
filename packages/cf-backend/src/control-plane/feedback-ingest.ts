@@ -19,8 +19,6 @@ import { controlPlaneStub, hasControlPlane, type ControlPlaneEnv } from './stub'
 import type { ControlPlaneDO } from './control-plane-do';
 import { internalCaller } from './admin-caller';
 
-export type { ControlPlaneEnv } from './stub';
-
 /** The one row this ingest writes on the fleet index. */
 export type FeedbackSink = Pick<ControlPlaneDO, 'recordFeedback'>;
 

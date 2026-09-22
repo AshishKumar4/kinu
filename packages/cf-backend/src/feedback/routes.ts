@@ -12,29 +12,41 @@
 
 import type { AuthIdentity } from '../auth/session';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { writeFeedbackMarker } from '@kinu.run/core/analytics';
-import { recordFeedback, type ControlPlaneEnv } from '../control-plane/feedback-ingest';
+import { writeFeedbackMarker, type AnalyticsEnv } from '@kinu.run/core/analytics';
+import { recordFeedback, type FeedbackIngestEnv } from '../control-plane/feedback-ingest';
 import { retryTransientDO } from '@kinu.run/core';
 import type { UserDO } from '../user/user-do';
 import { isWorkspaceName } from '@kinu.run/core';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { FEEDBACK_SCREENSHOT_TYPE } from '@kinu.run/core';
+import type { ObjectNamespace } from '../bindings';
 import { routeFeedback, type WorkspaceAttribution } from './submit';
+
+/** The one registry call an attribution makes on the reporter's own account
+ *  object. */
+export type FeedbackRegistry = Pick<UserDO, 'hasWorkspace'>;
+
+/** What the screenshot path does to the bucket: the write, and the delete that
+ *  removes an object no row ever pointed at. */
+export type FeedbackBucket = Pick<R2Bucket, 'put' | 'delete'>;
 
 /**
  * The bindings this endpoint reaches, stated structurally: the generated `Env`
  * satisfies it without this module editing that type, and the shape says
  * exactly which bindings a feedback request can touch.
+ *
+ * Three of them are OPTIONAL, and each absence is a state this endpoint
+ * answers rather than a binding it assumes: the ingest door reports a missing
+ * control plane to the reporter (`FeedbackIngestEnv`), a deployment with no
+ * bucket refuses a screenshot and still takes note-only reports, and an
+ * unbound analytics dataset makes the marker a no-op (`AnalyticsEnv`).
  */
-export interface FeedbackEnv extends ControlPlaneEnv, OwnerCapabilityEnv {
+export interface FeedbackEnv<Id> extends FeedbackIngestEnv<Id>, OwnerCapabilityEnv, AnalyticsEnv {
   /** The reporter's own registry — the authority on which workspaces are
-   *  theirs. Required, unlike the two below: a deployment that cannot answer
+   *  theirs. Required, unlike the three above: a deployment that cannot answer
    *  that question refuses a workspace attribution rather than guessing it. */
-  UserDO: DurableObjectNamespace<UserDO>;
-  /** Optional on purpose. A deployment with no bucket answers a clean 503 for a
-   *  screenshot and still takes note-only reports. */
-  FEEDBACK_BUCKET?: R2Bucket;
-  FEEDBACK_MARKERS?: AnalyticsEngineDataset;
+  UserDO: ObjectNamespace<Id, FeedbackRegistry>;
+  FEEDBACK_BUCKET?: FeedbackBucket;
 }
 
 /**
@@ -54,8 +66,8 @@ export interface FeedbackEnv extends ControlPlaneEnv, OwnerCapabilityEnv {
  * indistinguishable from the platform dropping the call — the one thing this
  * function must never confuse.
  */
-async function attributeWorkspace(
-  env: FeedbackEnv,
+async function attributeWorkspace<Id>(
+  env: FeedbackEnv<Id>,
   userId: string,
   workspace: string,
 ): Promise<WorkspaceAttribution> {
@@ -78,9 +90,9 @@ async function attributeWorkspace(
 
 /** What server.ts calls. Returns null for any other path, so the route table
  *  reads the same as every other module's hook. */
-export async function handleFeedbackRequest(
+export async function handleFeedbackRequest<Id>(
   request: Request,
-  env: FeedbackEnv,
+  env: FeedbackEnv<Id>,
   identity: AuthIdentity | null,
 ): Promise<Response | null> {
   const bucket = env.FEEDBACK_BUCKET;

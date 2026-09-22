@@ -5,18 +5,55 @@ import {
   type ProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
   type ProviderWaitInfo,
   type WebSearchProvider,
+  type ProviderEnv, type WorkersAIBinding,
 } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { buildCfWebSearchProvider } from '@kinu.run/core';
 import {
   createAgentProviderRegistry,
-  type AgentProviderRegistry,
+  type AgentProviderRegistry, type UserCredentialClient,
 } from './providers/agent-registry';
 import { resolveReviewingModelSelection } from './providers/judge-model';
 import type { UserCaller } from '@kinu.run/core';
+import type { ObjectNamespace } from './bindings';
 
-export interface OwnedModelServicesOptions {
-  readonly env: Env;
+/** The HTML→markdown call the web provider makes on the AI binding, taken from
+ *  the factory that consumes it so the two cannot drift. */
+type MarkdownConversion = NonNullable<Parameters<typeof buildCfWebSearchProvider>[0]['AI']>['toMarkdown'];
+
+/**
+ * The `env.AI` binding these services reach.
+ *
+ * Two consumers declare two surfaces of it: the gateway seam every provider
+ * runs on (`ProviderEnv`), and the HTML→markdown conversion the web provider
+ * uses. The conversion is OPTIONAL because core already answers for its
+ * absence — a web provider built without it keeps the page's raw HTML — and
+ * because demanding both surfaces here would leave a binding that offers only
+ * the gateway unusable for the gateway.
+ */
+export interface OwnedAiBinding extends WorkersAIBinding {
+  toMarkdown?: MarkdownConversion;
+}
+
+/** A binding that does convert, so the view handed to the web factory names the
+ *  surface it was proven to have. */
+interface ConvertingAiBinding extends OwnedAiBinding {
+  toMarkdown: MarkdownConversion;
+}
+
+function convertsHtml(ai: OwnedAiBinding | undefined): ai is ConvertingAiBinding {
+  return ai?.toMarkdown !== undefined;
+}
+
+/** Every binding these services read: the provider seam core declares, plus the
+ *  account object that owns this owner's credentials. */
+export interface OwnedModelEnv<Id> extends ProviderEnv {
+  AI?: OwnedAiBinding;
+  UserDO: ObjectNamespace<Id, UserCredentialClient>;
+}
+
+export interface OwnedModelServicesOptions<Id> {
+  readonly env: OwnedModelEnv<Id>;
   /** Resolved lazily: a facet's logical name is only set by the async
    *  _cf_initAsFacet after construction, so this must not be read eagerly. */
   readonly agentName: () => string;
@@ -40,7 +77,7 @@ export interface OwnedModelServicesOptions {
 }
 
 /** Owner-scoped provider, model, affinity, and web services shared by CF agents. */
-export class OwnedModelServices {
+export class OwnedModelServices<Id = DurableObjectId> {
   private providerRegistryCache: AgentProviderRegistry | null = null;
   private webSearchProviderCache: WebSearchProvider | null = null;
   private judgeSpecCache: { key: string; spec: string } | null = null;
@@ -69,7 +106,7 @@ export class OwnedModelServices {
     () => this.sweepProviderListing(),
   );
 
-  constructor(private readonly options: OwnedModelServicesOptions) {}
+  constructor(private readonly options: OwnedModelServicesOptions<Id>) {}
 
   /** Workers-AI session-affinity key. Computed lazily so it reads the facet's
    *  logical name at call time, not the unresolved construction-time value. */
@@ -219,8 +256,9 @@ export class OwnedModelServices {
 
   getWebSearchProvider(): WebSearchProvider {
     if (this.webSearchProviderCache) return this.webSearchProviderCache;
+    const ai = this.options.env.AI;
     this.webSearchProviderCache = buildCfWebSearchProvider(
-      this.options.env,
+      convertsHtml(ai) ? { AI: ai } : {},
       () => this.options.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined,
     );
 
