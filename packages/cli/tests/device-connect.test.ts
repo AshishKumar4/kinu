@@ -268,6 +268,37 @@ async function waitForDaemonPid(home: string, timeoutMs = 10_000): Promise<numbe
   throw new Error(`no daemon claimed ${pidfile} within ${timeoutMs}ms`);
 }
 
+interface ProcessOutput {
+  /** Settles when the child closed its stdout. */
+  drained: Promise<void>;
+  output: () => string;
+  waitFor: (text: string, timeoutMs?: number) => Promise<void>;
+}
+
+/** A spawned child's stdout, buffered as it arrives. Another process writes
+ *  these lines and there is no event to await, so `waitFor` polls the buffer
+ *  this reader fills. */
+function readProcessOutput(stdout: ReadableStream<Uint8Array>): ProcessOutput {
+  let output = '';
+
+  const drained = (async () => {
+    for await (const chunk of stdout) output += new TextDecoder().decode(chunk);
+  })();
+
+  return {
+    drained,
+    output: () => output,
+    waitFor: async (text, timeoutMs = 10_000) => {
+      const deadline = Date.now() + timeoutMs;
+
+      while (!output.includes(text)) {
+        if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in:\n${output}`);
+        await Bun.sleep(25);
+      }
+    },
+  };
+}
+
 /** Every live process running the installed daemon at `script`. */
 function liveDaemons(script: string): number[] {
   const found = Bun.spawnSync({ cmd: ['pgrep', '-f', script] });
@@ -964,27 +995,8 @@ describe('device daemon single-instance lock', () => {
     });
 
     if (proc.pid) deviceDaemonPids.push(proc.pid);
-    let output = '';
 
-    const drained = (async () => {
-      for await (const chunk of proc.stdout) output += new TextDecoder().decode(chunk);
-    })();
-
-    return {
-      proc,
-      drained,
-      output: () => output,
-      // Another process writes these lines; there is no event to await, so the
-      // wait polls the buffer the reader above fills.
-      async waitFor(text: string, timeoutMs = 10_000): Promise<void> {
-        const deadline = Date.now() + timeoutMs;
-
-        while (!output.includes(text)) {
-          if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in:\n${output}`);
-          await Bun.sleep(25);
-        }
-      },
-    };
+    return { proc, ...readProcessOutput(proc.stdout) };
   }
 
   test('a second daemon on the same KINU_HOME exits instead of connecting', async () => {
@@ -1090,24 +1102,9 @@ describe('classic cloud chat connect prompt', () => {
       env: process.env,
     });
 
-    let output = '';
-
-    const drained = (async () => {
-      for await (const chunk of proc.stdout) output += new TextDecoder().decode(chunk);
-    })();
-
     return {
       proc,
-      output: () => output,
-      drained,
-      async waitFor(text: string, timeoutMs = 10_000): Promise<void> {
-        const deadline = Date.now() + timeoutMs;
-
-        while (!output.includes(text)) {
-          if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in:\n${output}`);
-          await Bun.sleep(25);
-        }
-      },
+      ...readProcessOutput(proc.stdout),
       async send(line: string): Promise<void> {
         await proc.stdin.write(`${line}\n`);
         await proc.stdin.flush();
