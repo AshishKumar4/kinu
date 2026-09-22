@@ -26,28 +26,17 @@
 #     Writing downloads there publishes nothing.
 # Step 3 asserts this from wrangler's own output rather than trusting it.
 #
-# ONE SCRIPT FOR BOTH ENVIRONMENTS, and that is the whole reason staging is
-# trustworthy. Staging existed and served for days with nothing deploying it:
-# every push went to production and staging drifted. A second script would have
-# been a second place for the asset check and the smoke gate to be absent from,
-# and their absence is what shipped production assetless once. Here the two
-# environments differ in four values — the route, the wrangler `--env` flag, the
-# infrastructure scope and the label — and share every gate, the build, the asset
-# assertion and all six smoke checks by construction.
-#
 # Usage:
-#   bun run deploy                           # production
-#   bun run deploy:staging                   # staging
-#   bash scripts/deploy.sh [--bootstrap]
-#   CLOUDFLARE_ACCOUNT_ID=... scripts/deploy.sh staging
+#   bun run deploy
+#   bash scripts/deploy.sh [--bootstrap] [--gates-only] [--all]
 #
 # `--bootstrap` is for the deploy that DECLARES something only a deploy can
 # create — a Durable Object class new to `migrations`, a new container, a new
 # route. It moves the pre-deploy infrastructure phase to `bootstrap`, which
 # defers exactly those and nothing else. It skips no verification: every
 # external prerequisite still refuses the deploy before the upload, and step 5
-# below re-checks everything with no tolerance whatever, in both environments,
-# whether this flag was passed or not.
+# below re-checks everything with no tolerance whatever, whether this flag was
+# passed or not.
 #
 # Idempotent: safe to re-run. Exits on first failure.
 set -uo pipefail
@@ -69,7 +58,6 @@ export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-f44999d1ddda7012e9a87729e
 # worker IS the test target: every gate below, the first-run tier included,
 # drives https://kinu.run. The landing carries the app behind auth, so the
 # smoke marker is one value.
-KINU_ENV="production"
 KINU_APP_ROOT="landing-root"
 KINU_URL="https://kinu.run/"
 KINU_WRANGLER_ARGS=()
@@ -82,7 +70,7 @@ KINU_WRANGLER_ARGS=()
 # pre-deploy check demanding that resource already exist, and no provisioning
 # command can close the gap: wrangler has no verb that creates a Durable Object
 # namespace, a container application or a route. Measured: `ControlPlaneDO` was
-# added to `migrations`, staging's pre-deploy gates (55 at the time) passed, and `gate:infra`
+# added to `migrations`, the pre-deploy gates (55 at the time) passed, and `gate:infra`
 # then refused the only deploy that could have created the namespace — naming
 # `bun run infra:provision` as the fix, which cannot.
 #
@@ -91,8 +79,8 @@ KINU_WRANGLER_ARGS=()
 # infrastructure manifest marks `wrangler-deploy`; every external prerequisite —
 # secrets, KV, R2, Vectorize, DNS, the AI Gateway — still refuses the deploy
 # before the upload, and so does any lookup that merely failed. Step 5 below
-# runs the full phase with no tolerance at all, unconditionally, in both
-# environments, and its findings fail the deployment.
+# runs the full phase with no tolerance at all, unconditionally, and its
+# findings fail the deployment.
 KINU_BOOTSTRAP=0
 # `--gates-only` runs every pre-publish wave exactly as a deploy would — same
 # gates, same barriers, same cost caps — and stops before the build. It is how
@@ -119,11 +107,9 @@ for option in "$@"; do
       ;;
   esac
 done
-# Read by scripts/infra-verify.ts when no environment is given on its argv, so
-# the `bun run gate:infra` line below stays one string for scripts/ladder.ts to
-# parse while still checking the environment being deployed.
-export KINU_DEPLOY_ENV="$KINU_ENV"
-# The pre-deploy phase, travelling beside that same line for that same reason.
+# The pre-deploy phase, read by scripts/infra-verify.ts, travels in the
+# environment so the `bun run gate:infra` line below stays one string for
+# scripts/ladder.ts to parse.
 # ALWAYS ASSIGNED, in both arms: an ambient KINU_INFRA_PHASE from whatever shell
 # launched this must never decide how strictly a deploy nobody asked to
 # bootstrap is checked. There is no third value, and no value of it reaches the
@@ -151,7 +137,7 @@ KINU_SHA="$(git -C "$KINU_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
 # produced it is somebody's terminal scrollback. Afterwards the pair is readable
 # from `npx wrangler versions list`, and /api/health reports the same sha back out
 # of the asset bundle — which is the other half of the same join.
-KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu $KINU_ENV $KINU_SHA")
+KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu production $KINU_SHA")
 
 # Temp log file — trap cleans up on any exit.
 KINU_DEPLOY_LOG=""
@@ -526,7 +512,7 @@ flush_gates() {
 
 echo -e "${BOLD}Kinu Deploy Pipeline${NC}"
 echo "========================"
-echo "Environment:  $KINU_ENV"
+echo "Environment:  production"
 echo "Target:       $KINU_URL"
 echo "Kinu root: $KINU_ROOT"
 echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
@@ -598,9 +584,8 @@ run_phase hammer
 
 
 # Alone, and last before the build. Everything above proves the SOURCE is
-# deployable; this proves the ACCOUNT is. Scoped to the environment being
-# deployed (KINU_DEPLOY_ENV) and the phase KINU_INFRA_PHASE names (`full`
-# normally, `bootstrap` under `--bootstrap`), both travelling in the
+# deployable; this proves the ACCOUNT is, in the phase KINU_INFRA_PHASE names
+# (`full` normally, `bootstrap` under `--bootstrap`), travelling in the
 # environment so the gate's command stays one string in the plan.
 run_phase infra
 
@@ -648,7 +633,7 @@ bun "$KINU_ROOT/scripts/build-worker-release.ts" "$KINU_RELEASE_VERSION" "$KINU_
 echo "Building the CLI distribution"
 bash "$KINU_ROOT/scripts/build-cli-dist.sh" || { echo -e "${RED}CLI distribution build failed${NC}"; exit 1; }
 
-# Neither environment may ship without every CLI download asset sitting in the
+# No deploy may ship without every CLI download asset sitting in the
 # directory wrangler publishes. A deploy missing one bricks every fresh install
 # and update on the platform it belongs to.
 KINU_CLI_ARTIFACTS=(kinu-runtime-cpython.tar.gz)
@@ -739,7 +724,7 @@ sleep 10
 
 SMOKE_FAIL=0
 
-# The environment's own route.
+# The production route.
 LIVE_STATUS=$(curl -so /dev/null -w '%{http_code}' --max-time 15 "$KINU_URL" 2>/dev/null || echo "000")
 if [ "$LIVE_STATUS" = "200" ]; then
   echo -e "${GREEN}✅ Kinu live site returns 200${NC} ($KINU_URL)"
@@ -904,7 +889,7 @@ run_phase post-publish
 
 # ── Step 5: Post-deploy infrastructure verification ──────────────
 #
-# UNCONDITIONAL, IN BOTH ENVIRONMENTS, AND RELAXED BY NOTHING. This is the other
+# UNCONDITIONAL AND RELAXED BY NOTHING. This is the other
 # half of the pre-deploy phase and the reason `--bootstrap` is allowed to defer
 # anything at all: the upload has run, so every resource the deployed version
 # declares — Durable Object namespaces, the container application, the routes,
@@ -922,11 +907,11 @@ run_phase post-publish
 # no public route touches.
 echo ""
 echo -e "${BOLD}Step 5: Post-deploy infrastructure verification${NC}"
-if bun scripts/infra-verify.ts "$KINU_ENV" --phase=post-deploy; then
+if bun scripts/infra-verify.ts --phase=post-deploy; then
   echo -e "${GREEN}✅ Every declared resource exists and is bound${NC}"
 else
   echo ""
-  echo -e "${RED}❌ Post-deploy infrastructure verification failed for $KINU_ENV.${NC}"
+  echo -e "${RED}❌ Post-deploy infrastructure verification failed for production.${NC}"
   echo "   The Worker uploaded and the smoke test passed, and a resource the deployed version"
   echo "   declares is not in this account. The findings above name each one. Whatever the"
   echo "   public route answers, this deployment is not good."
@@ -935,7 +920,7 @@ fi
 
 # ── Step 6: Summary ──────────────────────────────────────────────
 echo ""
-echo -e "${BOLD}Deploy complete — $KINU_ENV.${NC}"
+echo -e "${BOLD}Deploy complete — production.${NC}"
 echo "================================="
 echo "Kinu:  $KINU_URL"
 echo "          version ${KINU_VERSION:-unknown}"

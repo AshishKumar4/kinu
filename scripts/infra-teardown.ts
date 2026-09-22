@@ -1,24 +1,18 @@
 /**
  * `bun run infra:teardown` — delete what provisioning created, in reverse
  * dependency order, and refuse without a typed acknowledgement naming the
- * environment.
+ * Worker.
  *
  * THIS PROGRAM IS A LEAF. Nothing imports it. It is not reachable from
  * `infra-provision.ts`, from `infra-verify.ts`, or from `deploy.sh`, and it must
  * stay that way: a destructive path that can be reached by a wrong flag on a
  * constructive command is a destructive path that will be.
  *
- * THE CONFIRMATION IS A SENTENCE, NOT A `-y`. It names the worker and the
- * environment, so it cannot be pasted out of a runbook for a different
- * deployment, and it cannot be produced by a shell that answers yes to
+ * THE CONFIRMATION IS A SENTENCE, NOT A `-y`. It names the Worker, so it
+ * cannot be pasted out of a runbook for a different deployment, and it cannot be produced by a shell that answers yes to
  * everything. It is printed only after the report of WHAT IS INSIDE each
  * data-bearing resource — a list of names tells an operator nothing about what
  * they are about to lose.
- *
- * IT REFUSES TO DELETE SHARED RESOURCES. `nimbus-runtime-cache` is bound by
- * production AND staging, so tearing down one environment must not take it: it is
- * reported as retained, with the environment that still holds it. `exclusiveTo`
- * is the whole of that rule and it comes from the manifest, not from a list here.
  *
  * ORDER IS THE REVERSE OF PROVISIONING, and the Worker goes first for a reason:
  * deleting it releases every Durable Object namespace and all their storage,
@@ -27,9 +21,7 @@
  */
 
 import { createInterface } from 'node:readline/promises';
-import {
-  type Resource, deriveInfrastructure, exclusiveTo,
-} from './infra-manifest';
+import { type Resource, deriveInfrastructure } from './infra-manifest';
 import { authenticated, why, wrangler } from './infra-cloudflare';
 
 const BOLD = '\u001B[1m';
@@ -40,13 +32,13 @@ const NC = '\u001B[0m';
 
 /** Set instead of typing the phrase, for the one case where a terminal is not
  *  available. It carries the SAME phrase — the guard is the sentence, not the
- *  channel, so an automation still has to name the exact environment it means. */
+ *  channel, so an automation still has to name the exact Worker it means. */
 export const CONFIRM_VAR = 'KINU_TEARDOWN_CONFIRM';
 
 /** The sentence the operator must produce. Derived from the target, so it can
  *  never be right for a deployment other than the one being destroyed. */
-export function confirmationPhrase(workerName: string, environment: string): string {
-  return `destroy ${workerName} ${environment}`;
+export function confirmationPhrase(workerName: string): string {
+  return `destroy ${workerName}`;
 }
 
 /**
@@ -124,18 +116,14 @@ function describe(deleted: readonly Resource[], swept: readonly Resource[]): voi
 }
 
 async function main(): Promise<number> {
-  const target = process.argv[2];
-  const infrastructure = deriveInfrastructure();
-  const keys = infrastructure.environments.map((environment) => environment.key);
-  const environment = infrastructure.environments.find((entry) => entry.key === target);
-
-  if (environment === undefined) {
-    console.error('infra:teardown: name the environment to destroy.\n'
-      + `  usage: bun run infra:teardown <${keys.join('|')}>\n`
-      + '  There is no default and there will not be one.');
+  if (process.argv.length > 2) {
+    console.error('infra:teardown: takes no arguments; there is one Worker.\n'
+      + '  usage: bun run infra:teardown');
 
     return 1;
   }
+
+  const { worker, resources } = deriveInfrastructure();
 
   const session = authenticated();
 
@@ -145,24 +133,11 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const shared = infrastructure.resources.filter((resource) =>
-    resource.environments.includes(environment.key)
-    && resource.environments.some((key) => key !== environment.key));
-
-  const fate = partition(exclusiveTo(infrastructure, environment.key));
+  const fate = partition(resources);
   const doomed = fate.deleted;
 
-  console.log(`${BOLD}Kinu infrastructure teardown — ${environment.key} (${environment.workerName})${NC}`);
+  console.log(`${BOLD}Kinu infrastructure teardown — ${worker.workerName}${NC}`);
   describe(doomed, fate.swept);
-
-  if (shared.length > 0) {
-    console.log(`\n${BOLD}RETAINED${NC} — bound by another environment, so this teardown will not touch them:`);
-
-    for (const resource of shared) {
-      const others = resource.environments.filter((key) => key !== environment.key);
-      console.log(`  ${resource.id} — still held by ${others.join(', ')}`);
-    }
-  }
 
   if (fate.outlives.length > 0) {
     console.log(`\n${BOLD}SURVIVES${NC} — nothing here created these and nothing here removes them:`);
@@ -170,7 +145,7 @@ async function main(): Promise<number> {
     for (const resource of fate.outlives) console.log(`  ${resource.id} — ${resource.purpose}`);
   }
 
-  const phrase = confirmationPhrase(environment.workerName, environment.key);
+  const phrase = confirmationPhrase(worker.workerName);
   const supplied = (process.env[CONFIRM_VAR] ?? '').trim();
   let typed = supplied;
 
@@ -204,12 +179,7 @@ async function main(): Promise<number> {
   let failures = 0;
 
   for (const resource of doomed) {
-    const argv = [
-      ...(resource.destroy ?? []),
-      ...(environment.wranglerEnv === undefined || resource.kind !== 'worker'
-        ? []
-        : ['--env', environment.wranglerEnv]),
-    ];
+    const argv = resource.destroy ?? [];
 
     const run = wrangler(argv, 300_000);
 
@@ -222,8 +192,7 @@ async function main(): Promise<number> {
     console.error(`  FAILED   ${resource.id}: \`wrangler ${argv.join(' ')}\` — ${why(run)}`);
   }
 
-  console.log(`\ninfra:teardown: ${String(doomed.length - failures)} deleted, ${String(failures)} failed, `
-    + `${String(shared.length)} retained because another environment binds them.`);
+  console.log(`\ninfra:teardown: ${String(doomed.length - failures)} deleted, ${String(failures)} failed.`);
   console.log('  Rebuild with: bun run infra:provision && bun run deploy && bun run gate:infra');
 
   return failures > 0 ? 1 : 0;

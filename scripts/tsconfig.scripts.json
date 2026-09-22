@@ -32,7 +32,6 @@
     "fixtures/payload-transport/worker.ts",
     "fixtures/payload-transport/isolate-relay.ts",
     "fixtures/fuse-probe/worker.ts",
-    "fixtures/kinu-durability/worker.ts",
-    "fixtures/hardening-runtime/worker.ts"
+    "fixtures/kinu-durability/worker.ts"
   ]
 }

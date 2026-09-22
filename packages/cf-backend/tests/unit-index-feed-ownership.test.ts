@@ -40,7 +40,7 @@ const SECRET = 'index-feed-test-secret-0123456789';
 
 /** What a caller presents to act as `DEV_USER_EMAIL` on a host that is not
  *  localhost. The fixture drives a published host, so it holds the secret the
- *  way the staging eval harness does. */
+ *  way the eval harness does. */
 const DEV_IDENTITY_SECRET = 'index-feed-dev-identity-secret';
 
 /** A signed-in request to the app host, authenticated the one way this

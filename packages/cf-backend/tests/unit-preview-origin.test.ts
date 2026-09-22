@@ -1094,7 +1094,6 @@ describe('worker wiring', () => {
     // it must not be mistaken for the configured one.
     const wrangler = source('wrangler.jsonc').replace(/^\s*\/\/.*$/gm, '');
 
-    // Production is the first of each — the staging environment follows.
     const first = (key: string): string =>
       present(wrangler.match(new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`)), `the "${key}" entry in wrangler.jsonc`)[1];
 

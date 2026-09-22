@@ -99,10 +99,10 @@ describe('who may reach the control plane', () => {
   });
 
   test('a dev-synthesized identity is refused even with its email on the list', () => {
-    // `env.staging` sets DEV_USER_EMAIL, so `authenticateRequest` answers every
-    // request there with ONE identity carrying a fresh authTime. If the allowlist
-    // alone decided, that would be permanent operator authority for any
-    // unauthenticated caller who can reach the staging origin.
+    // The deployment sets DEV_USER_EMAIL, so `authenticateRequest` answers every
+    // request holding the identity secret with ONE identity carrying a fresh
+    // authTime. If the allowlist alone decided, that would be permanent operator
+    // authority for the eval harness.
     const answer = authorizeAdmin(
       { ...ENV, CONTROL_PLANE_ADMINS: 'eval-service@kinu.run' },
       identity({ email: 'eval-service@kinu.run', provider: 'dev' }),
