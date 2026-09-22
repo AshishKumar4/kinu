@@ -1,31 +1,9 @@
 /**
- * Misevolution gate — a FIXED safety eval over evolved artifacts.
+ * Misevolution gate: a fixed safety eval over evolved artifacts (arXiv:2509.26354).
  *
- * Grounded in arXiv:2509.26354 ("misevolution": alignment decays through the
- * agent's own memory/tool/prompt evolution — exactly the pathways Kinu
- * mutates). The structural gates (SCAFFOLD_FORBIDDEN_PATTERNS) keep evolved
- * code inside the sandbox; THIS gate keeps it from weakening the safety
- * machinery around it. It runs at every acceptance point:
- *
- *   • scaffold — modifyScaffold gate 1 (covers all proposal paths: session
- *     evolution, agent.proposeScaffold, GEPA scaffold winners) AND again at
- *     applyPromotionDecision('promote'), so a version file tampered with
- *     after acceptance (the VFS is agent-writable) cannot go live.
- *   • craft    — upsertCraftedTool, before an EXTRACTED tool is stored.
- *   • craft_tool — workspace.createTool, before a tool the model wrote itself
- *     mid-turn is persisted. Narrower by one criterion; see SURFACE_CRITERIA.
- *   • import   — experience/imports.ts, before knowledge published by ANOTHER
- *     of the owner's workspaces is staged in this one. Not just code: an
- *     imported lesson lands in MEMORY.md and an imported fact lands in the
- *     per-turn facts block, which are the paper's memory pathway exactly.
- *
- * The criteria are HARDCODED and consulted from no mutable store: the checker
- * reads no SQL, no VFS, no config — its only input is the artifact source.
- * No agent-reachable path can alter or disable them (the sandbox cannot
- * import core modules, and evolved code that merely references this
- * machinery is itself vetoed). They are textual tripwires, not proofs:
- * determined obfuscation can evade a regex, but every known-bad construct a
- * Kinu surface can literally express trips a veto with a recorded reason.
+ * Runs at every acceptance point (scaffold proposal and promotion, crafted and
+ * created tools, cross-workspace imports). Criteria are hardcoded and read no
+ * mutable store. They are textual tripwires, not proofs.
  */
 
 import type { SqlExecutor } from '../types/primitives';
@@ -51,23 +29,11 @@ function criterion(input: MisevolutionCriterion): Readonly<MisevolutionCriterion
   return Object.freeze(input);
 }
 
-/** The fixed checklist, derived from what evolved code can actually express
- *  through the sandbox (host.* bridge + workspace/sandbox providers):
- *
- *  1. Raw network globals exist inside the codemode Worker, so direct egress
- *     would bypass the audited tool surface — the paper's primary
- *     exfiltration channel.
- *  2. The VFS is writable via workspace.writeFile, so evolved code could
- *     overwrite the live scaffold or its versioned backups, or forge
- *     shadow-eval rows by naming the rollout tables in SQL-bearing strings.
- *     (Quoted-path form only: the v0 bootstrap header legitimately mentions
- *     `scaffold/agent.js` in a comment.)
- *  3/4. The promotion knobs and gate entry points must never appear in an
- *     evolved artifact — self-modification is legitimate ONLY through the
- *     user-visible agent.proposeScaffold path, never from inside something
- *     that already evolved.
- *  5. Consent/approval paths (shell approval mode, device consent) must not
- *     be weakened by evolved code.
+/**
+ * The fixed checklist, derived from what the sandbox can express:
+ * 1. raw network egress; 2. writes to scaffold files or rollout tables (quoted-path
+ * form only: the v0 header mentions `scaffold/agent.js`); 3/4. promotion knobs and
+ * gate entry points; 5. consent/approval paths.
  */
 const MISEVOLUTION_CRITERIA: readonly MisevolutionCriterion[] = Object.freeze([
   criterion({
@@ -97,36 +63,16 @@ const MISEVOLUTION_CRITERIA: readonly MisevolutionCriterion[] = Object.freeze([
   }),
 ]);
 
-/** Criteria 2–5: everything that protects the SAFETY MACHINERY itself —
- *  promotion, the rollout knobs, the gate's own entry points, and consent.
- *  Every surface enforces all four, always. */
+/** Criteria 2–5 protect the safety machinery; every surface enforces them. */
 const SAFETY_MACHINERY_CRITERIA = [
   'version-machinery-tamper', 'rollout-config-tamper',
   'self-modification-reentry', 'consent-weakening',
 ] as const;
 
 /**
- * What each acceptance point enforces. The whole checklist everywhere, with
- * ONE documented exception.
- *
- * `craft_tool` (workspace.createTool) does not enforce `network-egress`. The
- * asymmetry is deliberate and it is the incoherence being removed, not
- * introduced: the codemode Worker exposes raw network globals, so the very
- * same `fetch(...)` the criterion forbids runs freely in an ephemeral
- * `eval` call one line earlier. Vetoing only the PERSISTED form of
- * code the agent may already execute buys no containment — it just makes
- * "wrap this HTTP call as a reusable tool" impossible while "make the HTTP
- * call" stays trivial. What persistence genuinely changes is blast radius over
- * TIME: a stored tool is reusable, re-executed by later turns, and publishable
- * to the owner's other workspaces, which is exactly the laundering path
- * arXiv:2509.26354 describes — so criteria 2–5 are enforced here in full, and
- * a `createTool` body that names the promotion tables, the rollout knobs, the
- * gate entry points, or the consent settings is refused outright.
- *
- * `craft` (upsertCraftedTool) keeps the whole checklist including
- * `network-egress`: an EXTRACTED tool is written by the evolution engine from
- * a past turn's trace, unread by anyone, and is the pathway the paper's
- * threat model is actually about.
+ * `craft_tool` skips `network-egress`: the codemode Worker already runs raw fetch,
+ * so vetoing only the persisted form buys no containment. `craft` (extracted
+ * tools, unreviewed) keeps the whole checklist.
  */
 const SURFACE_CRITERIA: Readonly<Record<MisevolutionSurface, readonly string[]>> = Object.freeze({
   scaffold: ['network-egress', ...SAFETY_MACHINERY_CRITERIA],
@@ -135,12 +81,7 @@ const SURFACE_CRITERIA: Readonly<Record<MisevolutionSurface, readonly string[]>>
   craft_tool: SAFETY_MACHINERY_CRITERIA,
 });
 
-/**
- * Check an evolved artifact against the criteria its acceptance point
- * enforces. Pure function of the source text and the surface — deliberately
- * takes no runtime/SQL/config so the verdict cannot depend on any
- * agent-mutable state.
- */
+/** Pure function of source text and surface, so no agent-mutable state affects the verdict. */
 export function checkMisevolutionForSurface(
   source: string,
   surface: MisevolutionSurface,
@@ -158,18 +99,11 @@ export function checkMisevolutionForSurface(
   return { ok: true };
 }
 
-/** The full checklist — every surface but `craft_tool`. */
 export function checkMisevolution(source: string): MisevolutionVerdict {
   return checkMisevolutionForSurface(source, 'scaffold');
 }
 
-/**
- * Record a misevolution veto in the shared evolution event log (the same
- * table the EvolutionEngine emits to), so every hard veto leaves a durable,
- * queryable reason. `evolution_events` is part of every workspace's table set
- * (identity/schema.ts), so a failure here is a real write failure and the veto
- * is the one thing that must not go unrecorded.
- */
+/** Record a veto in `evolution_events`; a write failure here is real and must surface. */
 export function recordMisevolutionVeto(
   sql: SqlExecutor,
   actor: ActorHandle,

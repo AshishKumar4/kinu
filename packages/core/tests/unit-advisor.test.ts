@@ -1,16 +1,12 @@
-/**
- * The advisor's decision half.
- *
- * Every suppression rule is tested on its own, because the point of putting the
- * guard in code was that each rule is separately checkable. The lane is tested
- * as a whole against a two-line fake reviewer, so what it DOES with a verdict —
- * speak it, record it, or drop it — is pinned to observable calls rather than to
- * a branch count.
- */
+/** The advisor's decision half: each suppression rule alone, and the lane
+ *  against a fake reviewer, asserted on observable calls. */
 
 import { describe, test, expect } from 'bun:test';
+import { createTestWorkspace } from './helpers';
+import { ADVISOR_LANE_FIBER, startAdvisorLane, type AdvisorLaneStart } from '../src/advisor/review';
+import { initEffectTombstoneTable } from '../src/identity/effect-tombstones';
 import { createHash } from 'node:crypto';
-import { createMemoryVfs } from '@kinu.run/test-utils';
+import { createMemoryVfs, testActorHandle } from '@kinu.run/test-utils';
 import { stepContextLimit } from '../src/prompting/step-prune';
 import { CHARS_PER_TOKEN } from '../src/llm';
 import { advisorWorkspaceGuidance, renderInstructionOmission } from '../src/prompting/agents-md';
@@ -28,6 +24,7 @@ import {
 import type { AgentSignal } from '../src/types/signals';
 import type { CompletedTurn } from '../src/evolution/types';
 import type { LLM } from '../src/types/primitives';
+import type { JsonValue } from '../src/utils/json';
 
 const aTurn = (over: Partial<CompletedTurn> = {}): CompletedTurn => ({
   userMessage: 'rotate the staging keys',
@@ -41,7 +38,6 @@ const aTurn = (over: Partial<CompletedTurn> = {}): CompletedTurn => ({
   ...over,
 });
 
-/** A reviewer that answers exactly what a test hands it. */
 const saying = (raw: string): LLM => ({
   async *stream() { yield ''; },
   complete: async () => raw,
@@ -53,7 +49,6 @@ const NOTE: AdvisorNote = {
   class: 'wrong-work',
 };
 
-/** One lane run, with everything it touched recorded. */
 async function lane(over: {
   llm?: LLM | undefined;
   minSeverity?: AdvisorSeverity;
@@ -142,7 +137,7 @@ describe('workspace advisor guidance', () => {
     const { prompt, reads } = await promptWith();
     expect(reads).toEqual([]);
     expect(prompt).toBe(buildAdvisorPrompt(aTurn()));
-    // Captured on main 078ec61d7, before adding workspace guidance.
+    // Bytes of the prompt before workspace guidance existed.
     expect(new TextEncoder().encode(prompt)).toHaveLength(3424);
     expect(createHash('sha256').update(prompt).digest('hex'))
       .toBe('e2ff4713972fd72cd5914694089a52b97a1fdaf379a4575d46a382e22ec3eb2e');
@@ -170,8 +165,6 @@ describe('workspace advisor guidance', () => {
   });
 });
 
-// ── The switch ──────────────────────────────────────────────────────────────
-
 describe('the owner’s switch', () => {
   test('the default floor is `concern`, which keeps the conversation quiet', () => {
     expect(DEFAULT_ADVISOR_MIN_SEVERITY).toBe('concern');
@@ -182,8 +175,6 @@ describe('the owner’s switch', () => {
     expect(run).toMatchObject({ disposition: null, delivered: [], recorded: [] });
   });
 });
-
-// ── Severity ────────────────────────────────────────────────────────────────
 
 describe('severity decides where a note goes', () => {
   test('below the floor it is a Changelog row and never a card', async () => {
@@ -233,8 +224,6 @@ describe('severity decides where a note goes', () => {
     expect(signal?.text).toContain(NOTE.note);
   });
 });
-
-// ── Suppression, one rule at a time ─────────────────────────────────────────
 
 describe('normalizeNote', () => {
   test('collapses case and punctuation, so "Stop." and "Stop!" are one note', () => {
@@ -339,8 +328,6 @@ describe('rule precedence', () => {
   });
 });
 
-// ── The model's answer ──────────────────────────────────────────────────────
-
 describe('what the model is allowed to answer', () => {
   test('silence is an empty object, and the expected answer', () => {
     expect(parseAdvisorReply('{}')).toBeNull();
@@ -356,9 +343,7 @@ describe('what the model is allowed to answer', () => {
     expect(parseAdvisorReply('{"note":"   ","severity":"concern"}')).toBeNull();
   });
 
-  // The class is held to the severity's standard for the same reason: an
-  // unlabeled note reaches the eval split as an instance whose kind nobody can
-  // name, and a judge cannot be told what it is grading.
+  // An unlabeled class leaves eval-split instances whose kind a judge cannot be told.
   const refusedLabels = [
     { name: 'an unknown severity is refused rather than coerced to a default',
       replies: ['{"note":"x","severity":"critical","class":"wrong-work"}', '{"note":"x","class":"wrong-work"}'] },
@@ -423,12 +408,9 @@ describe('the prompt', () => {
   });
 
   test('enumerates the classes it must stay silent on, each with the reason it exists', () => {
-    // The gap this closes. The suppression rules in review.ts stop a note being
-    // REPEATED; nothing stopped it being about scope, backwards compatibility or
-    // a request for clarification, which is what a turn-end reviewer reaches for
-    // when the turn was fine. Ported from oh-my-pi's watchdog prompt
-    // (prompts/advisor/system.md), whose emission-guard mechanism this file
-    // already cites — the mechanism came over, the negative space did not.
+    // Suppression stops repeats, not notes about scope, compatibility or
+    // clarification; this negative space is ported from oh-my-pi's
+    // prompts/advisor/system.md.
     expect(prompt).toContain('Stay silent on these, however plainly you notice them:');
     expect(prompt).toContain('is usually what was asked for');
     expect(prompt).toContain('quote the instruction when you do');
@@ -440,9 +422,8 @@ describe('the prompt', () => {
   });
 
   test('the windowed record is named UNKNOWN rather than inferred from', () => {
-    // renderToolCall bounds every argument and result at patternToolCall (800
-    // chars). A reviewer that treats a window's tail as absence asserts values
-    // the record never showed it.
+    // renderToolCall bounds args/results at patternToolCall (800 chars); a
+    // truncated tail is not absence.
     expect(prompt).toContain('what a window drops is');
     expect(prompt).toContain('never assert a value the record does not show');
   });
@@ -496,12 +477,9 @@ describe('the missed-capability class', () => {
   });
 });
 
-// R6, advisor half. THE MEASURED COUNTERFACTUAL. On the production turn, all 12
-// native calls were `eval` and 5 of them ran `agents.swarm`. Reading
-// native names alone, this prompt would have listed `agents` among 14 unused
-// capabilities — so the likeliest note told the agent to delegate, which it had
-// just done five times. A note naming a capability the agent used is worse than
-// no note, for the same reason one naming a capability it never had is.
+// R6, advisor half: on the production turn all 12 native calls were `eval`,
+// 5 running `agents.swarm`; native names alone would have listed `agents` as
+// unused and prompted a note to delegate.
 describe('a capability reached through codemode counts as used', () => {
   const swarmed = (code: string): CompletedTurn => aTurn({
     toolCalls: [{ name: 'eval', args: { code }, result: 'ok' }],
@@ -535,14 +513,11 @@ describe('a capability reached through codemode counts as used', () => {
   }
 
   test('a shared namespace reports both its capabilities reached, never neither', () => {
-    // `shell` and `file` both reach `workspace`, and over-reporting reach cannot
-    // produce the note this exists to stop. Stated so the behaviour is a
-    // decision rather than a surprise.
+    // `shell` and `file` both reach `workspace`; over-reporting reach is harmless here.
     const prompt = buildAdvisorPrompt(swarmed('await workspace.exec("ls")'), ['shell', 'file']);
     expect(prompt).toContain('did not use: (none recorded)');
   });
 });
-
 
 describe('the user-dissatisfaction class', () => {
   const prompt = buildAdvisorPrompt(aTurn());
@@ -584,11 +559,8 @@ describe('a turn with no durable id', () => {
   });
 });
 
-// ── The recorded review both backends run ───────────────────────────────────
-//
-// The live lane and its recovery, on both backends, review a turn from ONE
-// snapshot through ONE body. What that body decides for itself is which client
-// reviews: the turn's own labels govern it, never the mission active later.
+// Both backends review from one snapshot through one body; the turn's own
+// labels choose the reviewing client, never the mission active later.
 
 describe('reviewRecordedTurn', () => {
   const snapshot = (over: Partial<CompletedTurn> = {}) => ({
@@ -662,11 +634,8 @@ describe('reviewRecordedTurn', () => {
 
 });
 
-// ── Transient retry ─────────────────────────────────────────────────────────
-// One provider failure must not lose the turn's only review: a transient
-// failure earns another attempt, up to three, and every attempt's failure is
-// recorded on `advisor.review_failed` with its number. A definitive failure
-// is recorded once and thrown, as before.
+// Transient failures retry up to three attempts, each recorded on
+// `advisor.review_failed`; a definitive failure is recorded once and thrown.
 
 describe('advisor review retries', () => {
   const snapshot = (over: Partial<CompletedTurn> = {}) => ({
@@ -685,8 +654,7 @@ describe('advisor review retries', () => {
       complete: async () => {
         calls++;
 
-        // What a 429 has become by this seam: `toProviderError` maps 429 and
-        // 5xx to `unavailable`, so the lane retries on the code, not the status.
+        // `toProviderError` maps 429 and 5xx to `unavailable`; retry keys on the code.
         if (calls <= 2) throw new KinuError('unavailable', 'advisor model rate-limited (HTTP 429)');
 
         return JSON.stringify(NOTE);
@@ -744,8 +712,7 @@ describe('advisor review retries', () => {
     }
 
     expect(calls).toBe(1);
-    // Just the one attempt: `reviewRecordedTurn` rethrows a definitive
-    // failure without a second line, exactly as before.
+    // A definitive failure is rethrown after one attempt.
     expect(attempts(rec)).toEqual([{ attempt: 1 }]);
   });
 
@@ -797,8 +764,7 @@ describe('advisor review retries', () => {
       complete: async () => {
         calls++;
 
-        // A bare Error carries no code: retrying it would guess 'transient'
-        // for a failure nothing recognised.
+        // A bare Error has no code, so it is not guessed transient.
         throw new Error('reviewer is on fire');
       },
     };
@@ -822,13 +788,9 @@ describe('advisor review retries', () => {
   });
 });
 
-// ── Secret obfuscation ────────────────────────────────────────────────────
-// The deep lane may resolve to a different vendor than the turn model, so
-// credential-shaped values in tool args and results are obfuscated before
-// they enter the advisor prompt. Every fixture below is assembled at runtime:
-// a real-shaped literal in source is a secret-scan finding
-// (`scripts/secret-scan.ts`) and a push-protection block, so no fixture
-// spells its shape contiguously.
+// The deep lane may use another vendor, so credential-shaped values are
+// obfuscated before the advisor prompt. Fixtures are assembled at runtime: a
+// contiguous real-shaped literal trips `scripts/secret-scan.ts` and push protection.
 
 describe('advisor prompt secret obfuscation', () => {
   const bearer = 'Bearer ' + 't'.repeat(40);
@@ -873,5 +835,45 @@ describe('advisor prompt secret obfuscation', () => {
     expect(prompt).toContain('Bearer token');
     expect(prompt).toContain('exit 1');
     expect(prompt).not.toContain('[redacted');
+  });
+});
+
+describe('an advisor lane is started once per turn, from its checkpoint', () => {
+  /** Both backends start the lane through this rule. A lane with no checkpoint
+   *  must reject, and one with a checkpoint must never be opened beside it. */
+  test('a lane with no checkpoint is carried again; a replay after the checkpoint opens no second review', async () => {
+    const workspace = createTestWorkspace();
+    initEffectTombstoneTable(workspace.execRaw);
+    const store = { sql: workspace.sql, actor: testActorHandle(workspace.sql) };
+    const carried: string[] = [];
+    const stashed: JsonValue[] = [];
+    const reviewed: string[] = [];
+
+    const start = (carry: AdvisorLaneStart['carry']): Promise<void> => startAdvisorLane(store, {
+      turn: { turnId: 'msg-1' }, snapshot: { turnId: 'msg-1' }, carry,
+      review: async () => { reviewed.push('msg-1'); },
+    });
+
+    const carrier: AdvisorLaneStart['carry'] = async (name, body) => {
+      carried.push(name);
+      await body({ stash: (data) => { stashed.push(data); } });
+    };
+
+    try {
+      // Neither failure left a recoverable lane, so each keeps the row owed.
+      await expect(start(async () => { throw new Error('the fiber never started'); })).rejects.toThrow();
+      await expect(start(async (_name, body) => {
+        await body({ stash: () => { throw new Error('storage is full'); } });
+      })).rejects.toThrow();
+
+      await start(carrier);
+      await start(carrier);
+
+      expect(carried).toEqual([ADVISOR_LANE_FIBER]);
+      expect(stashed).toEqual([{ turnId: 'msg-1' }]);
+      expect(reviewed).toEqual(['msg-1']);
+    } finally {
+      workspace.db.close();
+    }
   });
 });

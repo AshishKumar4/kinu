@@ -1,21 +1,12 @@
 /**
- * Scaffold cold-start bootstrap and activation refresh.
- *
- * On a fresh workspace the canonical `.v0` source lands first, its metadata
- * row second, and the live `scaffold/agent.js` view last. On a preserved
- * workspace the one-shot seed copies the live source into `.v{current}` so
- * the archive becomes canonical without inventing content. Every run then
- * converges the rebuildable live view onto the current pointer's version
- * file — the heal for a crash that landed between a pointer flip and the
- * view write.
+ * Scaffold cold-start bootstrap and activation refresh. Fresh workspaces write
+ * `.v0` source, then its row, then the live view; every run converges the live
+ * view onto the current pointer's version file.
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
 
-// Re-exported, not re-declared: the DATA lives in a module with no value
-// import so a type-only reference to it cannot drag this file's own imports
-// onto a caller's graph. See `loop-origin.ts` for the nine layer-gate
-// violations that taught us the difference.
+// Re-exported so a type-only import of the data avoids this file's value imports (see `loop-origin.ts`).
 export { defaultLoopOrigin, type LoopOrigin } from './loop-origin';
 
 import type { LoopOrigin } from './loop-origin';
@@ -64,7 +55,6 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
   const liveExists = await vfs.exists(path);
 
   if (current === null && !liveExists) {
-    // Fresh workspace: canonical source, then its row, then the view.
     await vfs.writeFile(versionedPath(0), INITIAL_SCAFFOLD_SOURCE);
     insertV0Row(rt);
     await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
@@ -72,12 +62,11 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
     return;
   }
 
-  // Preserved workspace — seed the pointer's version file from the live
-  // source exactly once; the view is the only source such a workspace has.
+  // Preserved workspace: seed the pointer's version file from the live source once.
   const seededVersion = current ?? 0;
 
   if (!(await vfs.exists(versionedPath(seededVersion)))) {
-    if (!liveExists) return; // no source anywhere — surfaces at execution read
+    if (!liveExists) return;
     await vfs.writeFile(versionedPath(seededVersion), await readScaffoldFileText(vfs, path));
   }
 
@@ -86,7 +75,6 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
     current = getCurrentScaffoldVersion(sql, rt.actor);
   }
 
-  // Activation refresh: converge the live view onto the current pointer.
   const activeVersion = current;
 
   if (activeVersion === null || !(await vfs.exists(versionedPath(activeVersion)))) return;
@@ -99,18 +87,11 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
 
 
 /**
- * Seed a child actor's loop in the ONE workspace store, and say which version
- * it now points at.
+ * Seed a child actor's loop and return the version it points at. Idempotent:
+ * an existing pointer is kept.
  *
- * Idempotent: an actor that already has a pointer keeps it, so a re-acquired
- * actor is not re-seeded and a promotion it has since made is not undone.
- *
- * `inherit` and `version` COPY the parent's retained source as this actor's v1
- * and record `parent_version`, rather than pointing at the parent's row: the
- * pointer is per actor (`scaffold_versions` PK is `(actor_id, version)`), a
- * turn's claim names the digest of the source its own actor retains, and a
- * child that read its parent's row would run bytes its own claim could not
- * verify after the parent promoted again.
+ * `inherit`/`version` copy the parent's source as the child's v1 rather than
+ * pointing at the parent's row, since pointers and claim digests are per actor.
  */
 export async function seedActorLoop(
   child: AgentRuntime,
@@ -146,8 +127,6 @@ export async function seedActorLoop(
   return { version };
 }
 
-/** The parent bytes an inheriting child starts from, or a refusal naming what
- *  the parent does not retain. */
 async function inheritedSource(
   parent: AgentRuntime,
   origin: Extract<LoopOrigin, { kind: 'inherit' | 'version' }>,
@@ -173,19 +152,8 @@ async function inheritedSource(
 
   if (source !== null) return { version, source };
 
-  // A PARENT AT v0 IS ON THE SHIPPED LOOP, and inheriting from it means
-  // starting there — not refusing. The row and the file only appear once the
-  // parent has been bootstrapped, so a workspace whose root has never taken a
-  // turn retains no v0 bytes to read, and a head or node created before that
-  // first turn was refused with "retains no source for its current version 0".
-  // That refusal named a real absence and drew the wrong conclusion: v0 IS
-  // {@link INITIAL_SCAFFOLD_SOURCE}, the same bytes `bootstrapScaffold` would
-  // write, so the honest answer is the shipped loop rather than an error.
-  //
-  // A NON-ZERO version whose bytes are gone still refuses, and must: the parent
-  // promoted to something this child cannot read, so what it would inherit
-  // cannot be established, and a claim naming a digest of bytes nobody has is
-  // exactly what recovery refuses to verify later.
+  // v0 is INITIAL_SCAFFOLD_SOURCE even before the parent bootstraps, so inherit it.
+  // A non-zero version with missing bytes must refuse: its digest cannot be verified.
   if (version === 0) return { version: 0, source: INITIAL_SCAFFOLD_SOURCE };
   throw new KinuError('missing', `the parent actor retains no source for its current version ${version}`);
 }

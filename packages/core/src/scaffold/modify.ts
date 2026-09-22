@@ -20,8 +20,7 @@ import type { ModifyResult } from '../types/scaffold';
 export type { ModifyResult } from '../types/scaffold';
 
 export interface ModifyScaffoldOpts {
-  /** The archive version this proposal branches from (DGM stepping stone).
-   *  Recorded as the new row's parent_version. Default: the live current. */
+  /** Archive version to branch from; defaults to the current one. */
   baseVersion?: number;
 }
 
@@ -35,7 +34,6 @@ export async function modifyScaffold(
   const actorId = rt.actor.actorId;
   const minRationaleLength = DEFAULT_CONFIG.scaffold.minRationaleLength;
 
-  // Gate 1: structural validation
   if (rationale.length < minRationaleLength) {
     return { ok: false, stage: 1, error: `Rationale must be ≥${minRationaleLength} chars` };
   }
@@ -50,10 +48,7 @@ export async function modifyScaffold(
     return { ok: false, stage: 1, error: 'Must export async function* run(rt, task)' };
   }
 
-  // Misevolution gate (fixed criteria, hardcoded in core): a proposal that
-  // touches the safety machinery, opens raw egress, or weakens consent paths
-  // is a hard veto with a recorded reason. Re-checked at promotion time in
-  // applyPromotionDecision against the on-disk pending file.
+  // Misevolution veto; re-checked at promotion against the on-disk pending file.
   const misevolution = checkMisevolution(code);
 
   if (!misevolution.ok) {
@@ -64,7 +59,6 @@ export async function modifyScaffold(
     return { ok: false, stage: 1, error: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
   }
 
-  // Gate 2: parse check
   const { error: parseError } = await rt.executor.execute(
     `async () => { new Function(${JSON.stringify(`"use strict";\n${code}`)}); return true; }`,
     [],
@@ -74,12 +68,7 @@ export async function modifyScaffold(
     return { ok: false, stage: 2, error: `Parse error: ${parseError}` };
   }
 
-  // Gate 3: version checkpoint.
-  //
-  // Single-pending invariant: shadow rollout scores ONE pending at a time
-  // (getPendingScaffold returns the single status='pending' row). Refuse to
-  // stack a second pending — doing so would back up the live content over the
-  // first pending's versioned file and corrupt it.
+  // Only one pending at a time: a second would overwrite the first pending's version file.
   const pendingRows = rt.storage.sql<{ version: number }>`
     SELECT version FROM scaffold_versions
     WHERE actor_id = ${actorId} AND status = 'pending'
@@ -92,10 +81,7 @@ export async function modifyScaffold(
     };
   }
 
-  // Base the rollout on the live ('current') version — NOT MAX(version), which
-  // can point at a higher-numbered rolled_back/historical row after a rollback
-  // cycle. Number the new pending above any existing row so its PK never
-  // collides with a stale row.
+  // Base on the current row, not MAX(version), which may be a rolled_back row.
   const currentVersion = getCurrentScaffoldVersion(rt.storage.sql, rt.actor) ?? 0;
 
   const maxRows = rt.storage.sql<{ v: number }>`
@@ -104,8 +90,6 @@ export async function modifyScaffold(
 
   const newVersion = (maxRows[0]?.v ?? 0) + 1;
 
-  // Lineage: a proposal may branch from ANY archived version (DGM stepping
-  // stones), not only the current. The base must be a real archive row.
   const baseVersion = opts?.baseVersion ?? currentVersion;
 
   if (baseVersion !== currentVersion) {
@@ -118,9 +102,7 @@ export async function modifyScaffold(
     }
   }
 
-  // Ensure the current content is archived at its own version file so
-  // rollback can restore it. The archive file is canonical — only seed it
-  // when missing, never overwrite from the live view.
+  // The archive file is canonical: seed it only when missing.
   const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
   const currentPath = `${rt.identity.scaffold.path}.v${currentVersion}`;
 
@@ -130,14 +112,8 @@ export async function modifyScaffold(
     if (current !== null) await scaffoldVfs.writeFile(currentPath, current);
   }
 
-  // Gate 4: source before metadata. Both version files are on disk before
-  // the pending row exists, so a crash at any point leaves either no
-  // proposal or a complete one — never a row whose source is missing.
+  // Source files land before the pending row, so a crash never leaves a row without source.
   await scaffoldVfs.writeFile(`${rt.identity.scaffold.path}.v${newVersion}`, code);
-  // The failure cell the proposal claims to target, read off the code's own
-  // `// pathology: <id>` tag. Parsed HERE rather than at each call site so
-  // every proposal path — session evolution, agent.proposeScaffold, a GEPA
-  // scaffold winner — stamps it the same way or not at all.
   void rt.storage.sql`
     INSERT INTO scaffold_versions
       (actor_id, version, written_at, rationale, status, parent_version, pathology)

@@ -1,14 +1,4 @@
-/**
- * Unit tests for runScaffold — the scaffold execution closure.
- *
- * Uses a mock Executor that interprets the wrapper code naively: it parses
- * out the scaffold's `shell` function body and emits canned events via the
- * host provider. This validates the contract that:
- *   • emits flow through to the callback
- *   • doneEmitted is true iff scaffold called host.emit({type:'done'})
- *   • errors are captured and ok=false
- *   • a slow scaffold runs to completion — nothing races an elapsed deadline
- */
+/** runScaffold with a mock Executor that runs the scaffold's `shell` body and emits canned events. */
 
 import { describe, test, expect } from 'bun:test';
 import {
@@ -48,7 +38,6 @@ describe('runScaffold', () => {
     const events: ScaffoldEvent[] = [];
     const emit: ScaffoldEmitFn = (e) => { events.push(e); };
 
-    // Mock executor that calls the host provider's emit fn directly.
     const rt = makeRtWithMockedExecutor(async (_code, providers) => {
       const host = hostProvider(providers);
       await host.fns.emit({ type: 'text_delta', text: 'hello ' });
@@ -58,8 +47,6 @@ describe('runScaffold', () => {
       return { result: undefined };
     });
 
-    // Scaffold code must pass modifyScaffold's signature gate or runScaffold
-    // would refuse — but for tests we override via rt.identity.scaffold.read.
     rt.identity.scaffold.read = async () => 'async function run() { /* mocked */ }';
 
     const result = await runScaffold({
@@ -119,8 +106,7 @@ describe('runScaffold', () => {
     });
 
     expect(result.ok).toBe(true);
-    // The synthesizing 'done' fires through emit but is NOT captured in
-    // result.events (it happens after exec completion in the host wrapper).
+    // The synthesized 'done' fires after exec completes, so it is not in result.events.
     expect(events.some((e) => e.type === 'done')).toBe(true);
   });
 
@@ -197,8 +183,6 @@ describe('runScaffold', () => {
 
   test('a scaffold run stays pending until the executor completes — no elapsed deadline cuts it', async () => {
     const events: ScaffoldEvent[] = [];
-    // The executor settles only when this test releases it, so "still pending"
-    // is observed directly instead of guessed from a wall-clock window.
     const gate = Promise.withResolvers<void>();
     let released = false;
 
@@ -217,9 +201,7 @@ describe('runScaffold', () => {
       rt, task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
     });
 
-    // The run is still pending while the executor works — nothing raced a
-    // deadline against it. A microtask turn is enough to prove no timer path
-    // has resolved it behind our back.
+    // No elapsed deadline races the run.
     await Promise.resolve();
     expect(released).toBe(false);
 

@@ -1,57 +1,22 @@
 /**
  * Prompt-section templating: prose is data, control flow stays in TypeScript.
- *
- * Why this exists. GEPA optimises any string candidate (`evolution/gepa/types.ts`
- * names "a system-prompt section" as a target), but prose written as
- * `lines.push('...')` is not addressable — it is compiled into the bundle, so the
- * agent cannot rewrite a section without a deploy, and the only self-artifact the
- * runtime exposes as data is `identity.scaffold`. A section defined as a template
- * string is a VALUE: readable, scorable, replaceable. That is the whole point.
- *
- * Why `{{#if}}` is typed rather than absent. A section is only addressable if the
- * WHOLE section is one string, and nine of Kinu's are conditional — plan mode,
- * the model family, whether `hire` is wired. Building those with `lines.push` put
- * the prose back in the bundle and left GEPA a fragment to optimise. So the
- * conditional is here, and the standing objection to one ("an untyped string
- * lookup that renders empty when it misses — the failure mode that already left
- * two mode overlays dead in the live prompt") is answered rather than avoided:
- * `{{#if flag}}` DECLARES a boolean slot exactly as `{{slot}}` declares a string
- * one. Omitting it does not compile; supplying it at runtime from a source the
- * type system never saw throws, like every other slot. There are no expressions —
- * a flag is one declared boolean and nothing else, so the branch condition is a
- * TypeScript expression at the call site where the unions are exhaustive.
- *
- * Why there is still no `{{#each}}`. Iteration stays in TypeScript: the caller
- * maps over a typed list and renders one line per item (`BUILTIN_TOOL_LINE`). A
- * loop needs a per-item scope, which needs paths, which needs an expression
- * language — and none of that can be checked against a literal type. Prose is
- * data; logic is code.
- *
- * Why a missing slot throws. A prompt section that silently renders empty is
- * invisible — the model simply behaves differently and nothing reports it. Every
- * slot must be supplied; an empty string is a legal value, an absent key is not.
+ * A section defined as one template string is addressable by GEPA and
+ * replaceable at runtime. `{{#if flag}}` declares a typed boolean slot like
+ * `{{slot}}` declares a string; there is no `{{#each}}` (iteration needs an
+ * expression language). A missing slot throws: a silently empty section is
+ * invisible. An empty string is legal, an absent key is not.
  */
 
 import * as v from 'valibot';
 
-/**
- * Every `{{…}}` tag in a source, read off its literal type.
- *
- * Recursive over the source: each tag contributes its inner text and the tail is
- * re-matched, so the union is exact and duplicates collapse. Value slots and
- * block tags are separated from this one union below, so the two extractions
- * cannot disagree about what a tag is.
- */
 type Tag<Source extends string> =
   Source extends `${string}{{${infer Name}}}${infer Rest}`
     ? Name | Tag<Rest>
     : never;
 
-/** A tag that substitutes text. Distributes, so block tags drop out. */
 type ValueTag<Name extends string> =
   Name extends `#${string}` | `/${string}` | 'else' ? never : Name;
 
-/** A tag that opens a conditional, reduced to the boolean it declares. */
 type BlockFlag<Name extends string> = Name extends `#if ${infer Flag}` ? Flag : never;
 
 type SlotName<Source extends string> = ValueTag<Tag<Source>>;
@@ -59,32 +24,21 @@ type SlotName<Source extends string> = ValueTag<Tag<Source>>;
 type FlagName<Source extends string> = BlockFlag<Tag<Source>>;
 
 /**
- * Exactly the data a template needs. The template declares its own contract:
- * `{{slot}}` requires a string, `{{#if flag}}` requires a boolean, omitting
- * either fails to compile, and an invented name is an excess property.
- * A source that is not a literal type (one loaded at runtime) yields no slots,
- * and its render is checked at runtime instead — see `renderNodes`.
+ * Exactly the data a template needs: `{{slot}}` requires a string, `{{#if flag}}`
+ * a boolean; omissions fail to compile and invented names are excess properties.
+ * A non-literal source yields no slots and is checked at runtime (`renderNodes`).
  */
 export type TemplateSlots<Source extends string> =
   & { readonly [Name in SlotName<Source>]: string }
   & { readonly [Name in FlagName<Source>]: boolean };
 
-/** What a rendered template reads its values from. Two kinds, kept in one map
- *  so a call site writes one object literal against one typed contract. */
 type SlotValues = Readonly<Record<string, string | boolean>>;
 
-/** Which kind a value actually is. The compile-time contract answers this for
- *  every source the compiler can see; these answer it for the sources it
- *  cannot — a promoted candidate read out of a table. */
+// Runtime kind checks for sources the compiler cannot see (promoted candidates).
 const TEXT_VALUE = v.string();
 
 const FLAG_VALUE = v.boolean();
 
-/**
- * A template as a node list. Text and slots are flat; a conditional owns its two
- * branches, so nesting costs a recursion and nothing else. Rendering walks the
- * list once, in source order, and allocates nothing beyond the output.
- */
 type TemplateNode =
   | { readonly kind: 'text'; readonly text: string }
   | { readonly kind: 'slot'; readonly name: string }
@@ -95,23 +49,11 @@ type TemplateNode =
       readonly whenFalse: readonly TemplateNode[];
     };
 
-/**
- * A slot is `{{name}}` with no inner spaces.
- *
- * The strictness is load-bearing, not fussiness: `Tag` above infers whatever sits
- * between the braces, so a runtime parser that trimmed `{{ name }}` to `name`
- * would disagree with a type that inferred `" name "` — the contract and the
- * lookup would diverge silently. One grammar, checked in both places. `{{#if x}}`
- * is the one tag with an inner space, and its flag name is matched against this
- * same pattern for the same reason.
- */
+/** No inner spaces: the runtime grammar must match what `Tag` infers, or contract and lookup diverge. */
 const SLOT_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 
-/** The conditional's open tag, spelled with exactly one space. */
 const IF_PREFIX = '#if ';
 
-/** One open `{{#if}}` while parsing: where its two branches collect, and which
- *  one is filling right now. */
 interface OpenBlock {
   readonly flag: string;
   readonly whenTrue: TemplateNode[];
@@ -198,8 +140,7 @@ function compileTemplate(id: string, source: string): TemplateNode[] {
     }
 
     if (name.startsWith('#') || name.startsWith('/')) {
-      // Named rather than swept into "malformed slot": `{{#each}}` is the tag a
-      // writer reaches for next, and the answer is a design decision, not a typo.
+      // Named rather than "malformed slot": `{{#each}}` is a design decision, not a typo.
       fail(id, `unknown block tag "{{${name}}}" at index ${start} — `
         + `{{${IF_PREFIX}flag}} / {{else}} / {{/if}} are the only blocks; iteration stays in TypeScript`);
     }
@@ -219,12 +160,7 @@ function supplied(values: SlotValues): string {
   return keys.length === 0 ? '(none)' : keys.join(', ');
 }
 
-/**
- * Render in source order, one node at a time. Order is positional and never
- * derived from the data, so the output is byte-stable: identical data renders
- * identical bytes, and changing one slot cannot disturb anything ahead of it.
- * That is what keeps the cacheable prompt prefix intact.
- */
+/** Render in source order so output is byte-stable, keeping the cacheable prompt prefix intact. */
 function renderNodes(
   id: string,
   nodes: readonly TemplateNode[],
@@ -275,14 +211,7 @@ function renderNodes(
   return acc;
 }
 
-/**
- * One addressable piece of prompt prose.
- *
- * `id` is what an optimiser or an editor names this section by; `source` is the
- * evolvable artifact itself. `renderFrom` renders a REPLACEMENT source against
- * the same slot contract — the door a promoted candidate comes through, and the
- * reason the contract is checked at runtime as well as at compile time.
- */
+/** `renderFrom` renders a replacement source (a promoted candidate) against the same slot contract, checked at runtime. */
 export interface PromptSection<Source extends string> {
   readonly id: string;
   readonly source: string;
@@ -291,13 +220,9 @@ export interface PromptSection<Source extends string> {
 }
 
 /**
- * Compile a section once, at module load. A malformed template throws on import
- * rather than on the turn that happens to render it.
- *
- * `renderFrom` memoises exactly one replacement per section. A promoted override
- * is one string that changes only when the operator or the promotion gate moves
- * it, so a single slot is a hit on every turn between promotions and the cache
- * cannot grow with traffic.
+ * Compile at module load so a malformed template throws on import. `renderFrom`
+ * memoises one replacement per section: overrides change only on promotion,
+ * so the cache cannot grow with traffic.
  */
 export function definePromptSection<const Source extends string>(
   id: string,
@@ -330,21 +255,13 @@ export function definePromptSection<const Source extends string>(
   };
 }
 
-/** What a source declares it needs: the text slots and the boolean flags, each
- *  sorted and deduped so two contracts compare by value. */
+/** Sorted and deduped so two contracts compare by value. */
 export interface TemplateContract {
   readonly slots: readonly string[];
   readonly flags: readonly string[];
 }
 
-/**
- * The slot and flag names a source declares, read at RUNTIME.
- *
- * The compile-time contract covers sources the compiler can see. A promoted
- * candidate is a string from a table, so the gate that accepts it has to compare
- * contracts itself — a candidate that drops `{{workspaceRoot}}` renders a prompt
- * missing a fact, and one that invents a slot throws on the next turn.
- */
+/** Runtime slot/flag contract, for the gate comparing a promoted candidate against the compiled one. */
 export function templateContract(id: string, source: string): TemplateContract {
   const slots = new Set<string>();
   const flags = new Set<string>();

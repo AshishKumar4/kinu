@@ -18,11 +18,8 @@ export function initSessionContextTables(exec: RawSqlExec): void {
       OR (sealed_at IS NOT NULL AND ((content_json IS NOT NULL AND content_path IS NULL AND content_digest IS NULL)
         OR (content_json IS NULL AND content_path IS NOT NULL AND content_digest IS NOT NULL)))))`);
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS session_message_ingress ON session_messages(actor_id,ingress_id) WHERE ingress_id IS NOT NULL`);
-  // An open message's parts while its answer streams: one row per part,
-  // extended in place, deleted when the message seals into `content_*`. A
-  // part whose text outgrows one row continues in the next segment, so no
-  // row reaches the platform's row limit; segment 0 carries the descriptor,
-  // through the payload spill rule.
+  // An open message's parts while its answer streams, deleted when it seals into `content_*`. Long text
+  // continues in the next segment so no row reaches the platform row limit.
   exec(`CREATE TABLE IF NOT EXISTS stream_parts (
     actor_id TEXT NOT NULL, message_id TEXT NOT NULL, part_no INTEGER NOT NULL, segment INTEGER NOT NULL,
     kind TEXT NOT NULL, stream_order INTEGER NOT NULL,

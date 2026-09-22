@@ -9,7 +9,6 @@ export interface ContextEntry extends MessageReference { readonly entryId: strin
 
 interface MemberRow { entry_id: string; position: number; message_id: string }
 
-/** One revision of a context's membership. */
 export interface ContextCommitRequest {
   /** What the revision is recorded as: `input`, `output`, `edit`, `context_transform`. */
   readonly cause: string;
@@ -108,8 +107,7 @@ export class SessionContext {
         if (old !== undefined && old.position === entry.position && old.messageId === entry.messageId) retained.add(entry.entryId);
       }
 
-      // An authored edit is recorded even when it changes nothing: an explicitly
-      // empty history is a statement, not an unborn context.
+      // An empty authored edit is still recorded: an explicitly empty history is a statement.
       if (proposal === undefined && cause !== 'edit' && retained.size === current.length && current.length === next.length) return expected;
       const revision = expected.revision + 1;
       const actorId = this.actor.actorId;

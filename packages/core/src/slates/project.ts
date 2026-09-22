@@ -48,9 +48,7 @@ export type SlateProject = v.InferOutput<typeof Project>;
 
 export type SlateBinding = v.InferOutput<typeof Binding>;
 
-/** A `package.json` document as a caller holds it before it is validated:
- *  `JSON.parse` output, or a literal written in place — `as const` makes those
- *  arrays readonly, and a parse boundary has no reason to refuse one. */
+/** Pre-validation input; accepts readonly arrays from `as const` literals. */
 type PackageDocument = JsonPrimitive | readonly PackageDocument[] | { readonly [key: string]: PackageDocument };
 
 export function parseSlateProject(input: PackageDocument): SlateProject {
@@ -76,25 +74,19 @@ export function parseSlateProject(input: PackageDocument): SlateProject {
 
 export type SlateBindingKind = SlateBinding['kind'];
 
-/** Every binding kind the variant admits, in declaration order, read off the
- *  variant itself so a kind added there reaches every schema that lists
- *  kinds. An option wrapped in a pipe (the workspace namespace carries a
- *  check) is read through its first schema. */
+/** Read off the variant so new kinds reach every schema; piped options are read through their first schema. */
 export const SLATE_BINDING_KINDS: readonly SlateBindingKind[] = Binding.options.map(
   (option) => ('pipe' in option ? option.pipe[0] : option).entries.kind.literal,
 );
 
-/** One declared binding as a page or a forker reads it: its name, its kind and
- *  what it names on the other side. `credentialed` is the section-3 rule. */
+/** `credentialed` is the section-3 rule. */
 export interface SlateBindingDeclaration {
   readonly name: string;
   readonly kind: SlateBindingKind;
-  /** The server, tool, namespace, slate or member list the binding names. */
   readonly target: string;
   readonly credentialed: boolean;
 }
 
-/** What one binding reaches on the other side, for a reader. */
 function bindingTarget(binding: SlateBinding): string {
   switch (binding.kind) {
     case 'namespace': return binding.namespace;
@@ -110,27 +102,18 @@ function bindingTarget(binding: SlateBinding): string {
   }
 }
 
-/**
- * A binding that acts with the owner's connections or reads the owner's
- * workspace: `mcp`, `tool`, `web` and `namespace` spend the owner's
- * credentials; `memory`, `tasks` and `rpc` read the owner's data; `agent`
- * reaches the owner's own agent and `ai` runs on the owner's model access. An
- * `app` binding is credentialed exactly when its callee is, and the callee is
- * another slate's own declaration, so it is not counted here.
- */
+/** `mcp`/`tool`/`web`/`namespace` spend owner credentials; `memory`/`tasks`/`rpc` read owner data; `agent`/`ai` use owner access. `app` is excluded: its callee declares its own. */
 function isCredentialedBinding(binding: SlateBinding): boolean {
   return binding.kind !== 'app';
 }
 
-/** Every declared binding, in declaration order. */
 export function describeBindings(project: SlateProject): SlateBindingDeclaration[] {
   return Object.entries(project.slate.bindings).map(([name, binding]) => ({
     name, kind: binding.kind, target: bindingTarget(binding), credentialed: isCredentialedBinding(binding),
   }));
 }
 
-/** The bindings a viewer or a forker must be told about (S4): non-empty exactly
- *  when the slate reaches something of the owner's. */
+/** Non-empty exactly when the slate reaches something of the owner's (S4). */
 export function credentialedBindings(project: SlateProject): SlateBindingDeclaration[] {
   return describeBindings(project).filter((binding) => binding.credentialed);
 }

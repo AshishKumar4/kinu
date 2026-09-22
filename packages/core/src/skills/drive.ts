@@ -1,21 +1,11 @@
 /**
- * The Drive's rules — what the hosted Drive UI does when a user lists a
- * folder, uploads into it, marks a folder as a skill, or adds one.
+ * Hosted Drive rules: listing, uploads, marking and adding skills. Paths are
+ * tenant-relative (`/skills` is `/shared/skills` on every workspace plane).
  *
- * Every rule here is stated against the TENANT-relative tree (`/skills`, not
- * `/shared/skills`): the Drive UI reads the tenant directly, and the same
- * folder is `/shared/skills` on every workspace plane (vfs/shared-drive.ts).
- *
- * Indexing needs no action: discovery scans `/shared/skills` every turn, so
- * anything landing under it — an upload, a pasted SKILL.md, a symlink — is a
- * skill in every workspace from the next turn. A skill added ANYWHERE ELSE on
- * the Drive is symlinked into `/skills` when the user marks it, so the
- * folder the user organises stays where they put it.
- *
- * Failures leave as values: the Durable Object that hosts these rules answers
- * over an RPC boundary that carries no error class, so {@link driveFailure}
- * folds a thrown Kinu or VFS error into the closed `code` the route maps to a
- * status and the UI shows as the reason.
+ * Discovery scans `/shared/skills` every turn, so anything landing there is a
+ * skill from the next turn; skills elsewhere are symlinked in when marked.
+ * Failures are values: the DO's RPC boundary carries no error class, so
+ * {@link driveFailure} folds errors into a closed `code`.
  */
 import * as v from 'valibot';
 import { classifyErrorCode, KinuError, renderThrownChain, type ErrorCode } from '../obs/error';
@@ -27,17 +17,13 @@ import { looksLikeZip, packZip, unpackZip, type ZipEntry } from '../utils/zip';
 import { SKILL_FOLDER_FILE } from './discover';
 import { parseSkillFile, skillNameProblem } from './parse';
 
-/** One Drive entry as the UI lists it. */
 export interface DriveEntry {
   readonly name: string;
   readonly kind: 'file' | 'folder' | 'symlink';
   readonly size: number;
   readonly mtimeMs: number;
-  /** A symlink's target, tenant-relative. */
   readonly target?: string;
-  /** True for a folder that is a skill: it carries `SKILL.md` and its name is legal. */
   readonly skill: boolean;
-  /** Why a folder is not a skill, for the UI to say beside a disabled "Mark as skill". */
   readonly skillProblem?: string;
 }
 
@@ -58,7 +44,6 @@ const DriveEntrySchema = v.object({
 
 export const DriveListingSchema = v.object({ path: v.string(), entries: v.array(DriveEntrySchema) });
 
-/** Where marking `folder` as a skill puts its link, and what it is called. */
 export interface MarkedSkill {
   readonly name: string;
   /** The link under `/skills`, or the folder itself when it already lives there. */
@@ -67,14 +52,11 @@ export interface MarkedSkill {
 
 export const MarkedSkillSchema = v.object({ name: v.string(), linked: v.string() });
 
-/** A refusal or failure as the Drive answers it over the wire. */
 export interface DriveFailure {
   readonly code: ErrorCode;
   readonly error: string;
 }
 
-/** What one upload's bytes become once assembled: a file, an unpacked
- *  folder, or a skill. */
 export type DriveUploadTarget =
   | { readonly kind: 'file'; readonly path: string }
   | { readonly kind: 'zip'; readonly folder: string }
@@ -100,7 +82,6 @@ const VFS_FAILURE_CODES: Readonly<Record<VfsErrorCode, ErrorCode>> = {
   EROFS: 'denied',
 };
 
-/** A thrown Drive failure as the value the wire carries. */
 export function driveFailure(input: { cause: unknown }): DriveFailure {
   if (isVfsError(input.cause)) return { code: VFS_FAILURE_CODES[input.cause.code], error: input.cause.message };
   const code = classifyErrorCode(input);
@@ -108,9 +89,7 @@ export function driveFailure(input: { cause: unknown }): DriveFailure {
   return { code: code ?? 'io', error: renderThrownChain(input) };
 }
 
-/** Does this segment hold a C0 control, which no path a UI can spell does?
- *  Read by code unit: a surrogate pair's halves are both far above the control
- *  range, so a name holding an emoji is never refused for one. */
+/** Checked by code unit: surrogate halves are above the control range, so emoji pass. */
 function hasControlCharacter(segment: string): boolean {
   for (let i = 0; i < segment.length; i++) {
     if (segment.charCodeAt(i) < 0x20) return true;
@@ -120,9 +99,8 @@ function hasControlCharacter(segment: string): boolean {
 }
 
 /**
- * A tenant path as the Drive accepts it: absolute, no `.`/`..` segments, no
- * empty segments, no control characters. `/` is the root. Refused rather than
- * repaired — a path the UI cannot spell is a bug there, not a request here.
+ * Absolute, no `.`/`..`/empty segments, no control characters. Refused rather
+ * than repaired: a path the UI cannot spell is a UI bug.
  */
 export function normalizeDrivePath(raw: string): string {
   if (!raw.startsWith('/')) throw new KinuError('bad_input', `drive path must be absolute: ${JSON.stringify(raw)}`);
@@ -139,28 +117,22 @@ export function normalizeDrivePath(raw: string): string {
   return `/${segments.join('/')}`;
 }
 
-/** True for `/skills`, `/blueprints` and the root: never renamed or deleted from the UI. */
+/** `/skills`, `/blueprints` and the root are never renamed or deleted from the UI. */
 function isReservedDrivePath(path: string): boolean {
   return path === '/' || DRIVE_RESERVED_DIRS.includes(path);
 }
 
-/** The folder name at the end of a path. */
 function leafOf(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
 }
 
-/** The folder a path sits in; `/` for a root entry. */
 function parentOf(path: string): string {
   const cut = path.lastIndexOf('/');
 
   return cut <= 0 ? '/' : path.slice(0, cut);
 }
 
-/**
- * Whether a folder is a skill: it carries `SKILL.md` whose front matter parses
- * and names the folder (or names nothing, in which case the folder's name is
- * the skill's). The problem is the reason it is not, for the UI to show.
- */
+/** A folder is a skill when its `SKILL.md` parses and names the folder or nothing. */
 async function skillFolderProblem(drive: MossaicVfs, folder: string, name = leafOf(folder)): Promise<string | null> {
   const problem = skillNameProblem(name);
 
@@ -178,7 +150,6 @@ async function skillFolderProblem(drive: MossaicVfs, folder: string, name = leaf
   return null;
 }
 
-/** A link's target, or undefined for an entry that is not a link. */
 async function linkTarget(drive: MossaicVfs, path: string): Promise<string | undefined> {
   try {
     return await drive.readlink(path);
@@ -188,8 +159,7 @@ async function linkTarget(drive: MossaicVfs, path: string): Promise<string | und
   }
 }
 
-/** A reserved folder's stats listing: empty until something lands in it,
- *  never absent — the folder exists by definition, and the root shows it. */
+/** A reserved folder lists as empty until something lands, never absent. */
 async function reservedTolerant(drive: MossaicVfs, path: string): Promise<VfsListedEntry[]> {
   try {
     return await drive.readdirStats(path);
@@ -199,8 +169,7 @@ async function reservedTolerant(drive: MossaicVfs, path: string): Promise<VfsLis
   }
 }
 
-/** One folder of the tenant, every entry with its stat, skills flagged. The
- *  root always lists the reserved folders, present on the tenant or not. */
+/** The root always lists the reserved folders, whether present on the tenant or not. */
 export async function listDrive(drive: MossaicVfs, rawPath: string): Promise<DriveListing> {
   const path = normalizeDrivePath(rawPath);
   const listed = await reservedTolerant(drive, path);
@@ -216,8 +185,7 @@ export async function listDrive(drive: MossaicVfs, rawPath: string): Promise<Dri
 
   for (const { name, stat } of listed) {
     const full = path === '/' ? `/${name}` : `${path}/${name}`;
-    // `readdirStats` follows a link for its stat; the link itself is what the
-    // UI shows, so the kind comes from `readlink` answering at all.
+    // `readdirStats` follows links; the kind comes from whether `readlink` answers.
     const target = await linkTarget(drive, full);
     const isDir = stat?.isDir ?? false;
 
@@ -251,8 +219,7 @@ export async function listDrive(drive: MossaicVfs, rawPath: string): Promise<Dri
   return { path, entries };
 }
 
-/** One listed entry's kind: a link is shown as the link it is, whatever it
- *  points at, because that is what the user put there. */
+/** A link shows as a link whatever it points at. */
 function listedKind(isDir: boolean, target: string | undefined): DriveEntry['kind'] {
   if (target !== undefined) return 'symlink';
 
@@ -261,9 +228,7 @@ function listedKind(isDir: boolean, target: string | undefined): DriveEntry['kin
   return 'file';
 }
 
-/** Why a listed entry is not a skill, or null when it is one. A link is a skill
- *  when what it points at is one UNDER THE LINK'S NAME — the name discovery
- *  will read it by. */
+/** A link is a skill when its target is one under the link's name. */
 async function listedSkillProblem(
   drive: MossaicVfs,
   entry: { path: string; name: string; isDir: boolean; target: string | undefined },
@@ -277,7 +242,7 @@ async function listedSkillProblem(
   return 'not a folder';
 }
 
-/** A new, empty folder; an existing entry of that name is refused, never reused. */
+/** An existing entry of that name is refused, never reused. */
 export async function makeDriveFolder(drive: MossaicVfs, rawPath: string): Promise<void> {
   const path = normalizeDrivePath(rawPath);
 
@@ -287,11 +252,7 @@ export async function makeDriveFolder(drive: MossaicVfs, rawPath: string): Promi
   await drive.mkdir(path, { recursive: true });
 }
 
-/**
- * Move an entry. A reserved folder never moves, nothing is overwritten, and
- * the destination's folder must already exist: a rename that silently created
- * a tree would be a mkdir the user did not ask for.
- */
+/** Reserved folders never move, nothing is overwritten, and the destination folder must exist. */
 export async function renameDriveEntry(drive: MossaicVfs, rawFrom: string, rawTo: string): Promise<void> {
   const from = normalizeDrivePath(rawFrom);
   const to = normalizeDrivePath(rawTo);
@@ -309,7 +270,7 @@ export async function renameDriveEntry(drive: MossaicVfs, rawFrom: string, rawTo
   await drive.rename(from, to);
 }
 
-/** Remove a file, a link, or a whole folder. A reserved folder stays. */
+/** Remove a file, link, or folder; reserved folders stay. */
 export async function deleteDriveEntry(drive: MossaicVfs, rawPath: string): Promise<void> {
   const path = normalizeDrivePath(rawPath);
 
@@ -330,14 +291,8 @@ export async function deleteDriveEntry(drive: MossaicVfs, rawPath: string): Prom
 }
 
 /**
- * Make a folder anywhere on the Drive a user-level skill.
- *
- * A folder already under `/skills` is a skill by position; anything else gets
- * a symlink `/skills/<name>` → folder, so discovery finds it without the
- * user moving it. The folder must BE a skill first (`skillFolderProblem`), and
- * a name already taken under `/skills` is refused rather than replaced: two
- * skills with one name is exactly the ambiguity discovery's clash rule exists
- * to prevent.
+ * Mark a folder as a skill: under `/skills` by position, otherwise via a
+ * `/skills/<name>` symlink. A taken name is refused, not replaced.
  */
 export async function markAsSkill(drive: MossaicVfs, rawPath: string): Promise<MarkedSkill> {
   const folder = normalizeDrivePath(rawPath);
@@ -358,7 +313,6 @@ export async function markAsSkill(drive: MossaicVfs, rawPath: string): Promise<M
   return { name, linked };
 }
 
-/** Land `files` (archive-relative names) under `folder`, creating each parent. */
 async function putDriveFiles(drive: MossaicVfs, folder: string, files: readonly ZipEntry[]): Promise<void> {
   await drive.mkdir(folder, { recursive: true });
 
@@ -372,11 +326,9 @@ async function putDriveFiles(drive: MossaicVfs, folder: string, files: readonly 
 }
 
 /**
- * Add a skill from its files: a pasted `SKILL.md`, or a folder/zip the UI
- * unpacked into `(relative path, bytes)` pairs. The name is what the front
- * matter says — or, absent one, `fallbackName` (the uploaded folder's name) —
- * and the files land under `/skills/<name>/`. An existing skill of that name
- * is refused, never overwritten.
+ * Add a skill from a pasted `SKILL.md` or unpacked folder/zip, under
+ * `/skills/<name>/`. Name from front matter, else `fallbackName`; an existing
+ * skill is refused.
  */
 export async function addSkill(
   drive: MossaicVfs,
@@ -386,8 +338,7 @@ export async function addSkill(
   const skillFile = files.find((file) => file.path === SKILL_FOLDER_FILE || file.path.endsWith(`/${SKILL_FOLDER_FILE}`));
 
   if (skillFile === undefined) throw new KinuError('bad_input', `a skill needs a ${SKILL_FOLDER_FILE}`);
-  // Files are rooted at the SKILL.md's own folder: an uploaded folder `deploy/`
-  // arrives as `deploy/SKILL.md`, `deploy/scripts/x`, and lands as `/skills/deploy/…`.
+  // Files are rooted at the SKILL.md's own folder.
   const root = skillFile.path.slice(0, skillFile.path.length - SKILL_FOLDER_FILE.length);
   const parsed = parseSkillFile(new TextDecoder().decode(skillFile.bytes), 'shared', fallbackName ?? undefined);
 
@@ -403,11 +354,9 @@ export async function addSkill(
   return { name, linked: folder };
 }
 
-/** What an upload became once its bytes were assembled and landed. */
 export type DriveUploadOutcome = { readonly ok: true; readonly skill?: MarkedSkill };
 
-/** Land one assembled upload where its target says. A skill arrives as a zip
- *  (a folder the browser packed) or as the bare text of one `SKILL.md`. */
+/** A skill arrives as a zip or as the bare text of one `SKILL.md`. */
 export async function receiveDriveUpload(drive: MossaicVfs, target: DriveUploadTarget, bytes: Uint8Array): Promise<DriveUploadOutcome> {
   switch (target.kind) {
     case 'file': {
@@ -438,7 +387,6 @@ export async function receiveDriveUpload(drive: MossaicVfs, target: DriveUploadT
   }
 }
 
-/** A folder and everything under it, as one stored zip named from the folder. */
 export async function packDriveFolder(drive: MossaicVfs, rawPath: string, limit: number): Promise<Uint8Array> {
   const folder = normalizeDrivePath(rawPath);
   const files: ZipEntry[] = [];

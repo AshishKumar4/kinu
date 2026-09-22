@@ -19,10 +19,7 @@ const full = PROMPT_MATRIX.find(({ name }) => name === 'cf-full-surface');
 
 if (!full) throw new Error('Full prompt proof surface is missing');
 
-// Upper-bound system fixture: the longest role, static mode policy, external tools,
-// all executor/preview branches, both instruction trust tiers, active skills,
-// every delegation action and root doctrine. Mutually exclusive arms retain
-// their independent coverage in PROMPT_MATRIX.
+// Upper-bound fixture; mutually exclusive arms are covered in PROMPT_MATRIX.
 const ALL_SECTIONS: SystemPromptOptions = {
   ...full.opts,
   identity: { workspace: 'Budget workspace', agent: 'Budget actor' },
@@ -95,7 +92,7 @@ describe('family wording is a delta over the same typed sections', () => {
 test('every full family prompt stays within 10,000 context-budget tokens', () => {
   const { rt } = createTestRuntime();
 
-  // Context budgets use estimateTokens: ceil(chars / 4), not a model tokenizer.
+  // estimateTokens is ceil(chars / 4), not a model tokenizer.
   const totals = Object.entries(MODELS).map(([family, model]) => {
     const prompt = buildSystemPromptSync(rt, { ...ALL_SECTIONS, model });
 

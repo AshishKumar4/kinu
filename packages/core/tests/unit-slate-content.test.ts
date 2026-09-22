@@ -5,8 +5,7 @@ import { WorkspaceSlateContentStore } from '../src/slates/content';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createTestWorkspace, createWorkspaceBundle } from './helpers';
 
-/** Where the store keeps a retained object: found under the kernel's /etc by
- *  its digest, rather than restated from the store's own constant. */
+/** Found under the kernel's /etc by digest, not restated from the store's constant. */
 function retainedPath(kernel: { readdir(path: string): readonly { name: string }[]; exists(path: string): boolean }, digest: string) {
   for (const { name } of kernel.readdir('/etc')) {
     const root = `/etc/${name}`;

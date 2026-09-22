@@ -1,14 +1,5 @@
-// MEMORY.md's `### Note (<date>[ · <actor>])` heading has one owner:
-// `appendMemoryNote` writes it and `parseMemoryNotes` reads it. So does the
-// FILE they agree on, which is why no row here spells that path: the rows read
-// the note back through `readMemoryTail`, the module's own reader, and then
-// check the path each note carries against the workspace that holds it. A file
-// restating either fact agrees with the writer by construction and cannot catch
-// it being wrong.
-//
-// Every row that has a heading to assert about goes through the writer to get
-// one. What is typed in below is the one thing the writer never produces: a
-// hand-edited document whose headings have no body under them.
+// MEMORY.md note headings: `appendMemoryNote` writes them, `parseMemoryNotes` reads
+// them. Rows go through the writer; only headingless hand-edited documents are typed in.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createWorkspaceBundle, createMemoryMemory } from './helpers';
@@ -23,9 +14,7 @@ function store() {
   return { memory: createMemoryMemory(db, vfs), vfs };
 }
 
-/** Each note names a file the workspace really holds, and that file is indexed
- *  memory rather than some other document — the two facts the path on a note
- *  claims, asked of the writer's own filesystem instead of restated. */
+/** The note's path is a real, indexed memory file, asked of the writer's filesystem. */
 async function namesTheWrittenFile(vfs: VFS, path: string): Promise<boolean> {
   return await vfs.exists(path) && memoryIndexPath(path) !== null;
 }
@@ -47,10 +36,7 @@ describe('parseMemoryNotes', () => {
   });
 
   test('a heading with no body under it is not a note', async () => {
-    // Three headings, one note: the document title and the stamped-but-empty
-    // heading are both dropped, and the unstamped one keeps its heading text as
-    // the only "when" the file gave it. Hand-written, because a document nobody
-    // appended through is exactly what this row is about.
+    // The title and the stamped-but-empty heading are dropped; the unstamped one keeps its text.
     const { memory, vfs } = store();
     await memory.write((await memoryWritablePath(memory, vfs)), [
       '# Memory', '',
@@ -68,9 +54,7 @@ describe('parseMemoryNotes', () => {
   });
 
   test('the stamp is the last parenthesised span, not the first', async () => {
-    // Through the writer, because a heading with parentheses in its TITLE is a
-    // heading `appendMemoryNote` really produces: the row hands it one and the
-    // reader must still take the stamp from the end.
+    // Parentheses in the title: the stamp is still taken from the end.
     const { memory, vfs } = store();
     await appendMemoryNote(memory, 'the second pass stands', {
       heading: 'Note (rev 2)', date: '2026-09-18', by: 'ana',
@@ -86,9 +70,7 @@ describe('parseMemoryNotes', () => {
   });
 });
 
-/** The file the writer writes, learnt from the writer: one append, then the one
- *  path the note it wrote carries. A row that wants to hand-write that document
- *  asks for it here instead of spelling it. */
+/** The file path learnt from one writer append, not spelled. */
 async function memoryWritablePath(memory: Memory, vfs: VFS): Promise<string> {
   await appendMemoryNote(memory, 'seed', { date: '2026-09-18' });
   const [seeded] = parseMemoryNotes(await readMemoryTail(memory) ?? '');

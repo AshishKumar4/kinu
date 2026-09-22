@@ -1,8 +1,4 @@
-/**
- * One flow, four doors (docs/SELF-DEPLOY.md). The plan of idempotent steps,
- * their inputs, their progress and their ledger live here; the guided page,
- * the deploy Durable Object, the CLI and the local installer are adapters.
- */
+// One flow, four doors (docs/SELF-DEPLOY.md); page, DO, CLI and local installer are adapters.
 export {
   RELEASE_ARTIFACT_ROUTE, RELEASE_MANIFEST_PATH, ReleaseManifestSchema, parseReleaseManifest,
   workerArtifactPath,

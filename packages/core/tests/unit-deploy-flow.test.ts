@@ -1,14 +1,4 @@
-/**
- * The self-deploy flow against a fake Cloudflare (docs/SELF-DEPLOY.md, order of
- * work step 2).
- *
- * What these rows hold, each of which is a way a real run goes wrong:
- * a second sitting on the same account must create nothing twice; a refusal
- * must stop the run at the step that refused and keep Cloudflare's own
- * sentence; a retry must re-run that step and nothing before it; an eviction
- * in the middle of a step must resume from the ledger rather than from the
- * top; and the run must end holding no secret at all.
- */
+/** The self-deploy flow against a fake Cloudflare (docs/SELF-DEPLOY.md): idempotent reruns, refusals, retries, eviction resume, no secret held at the end. */
 import { beforeEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -92,9 +82,7 @@ interface Recorded {
   readonly bearer: string | undefined;
 }
 
-/** A Cloudflare that remembers what it was told to create, so a second run
- *  over the same account finds what the first one made. */
-/** The string a Cloudflare request carried under `key`; an absent field reads as ''. */
+/** Remembers what it created, so a second run finds the first run's resources. */
 function bodyText(body: JsonObject, key: string): string {
   return v.parse(v.nullish(v.string(), ''), body[key]);
 }
@@ -127,8 +115,7 @@ class FakeCloudflare implements CloudflareTransport {
 
     if (refusal !== null) return refusal;
 
-    // What Cloudflare answers for a script nobody has uploaded yet, which is
-    // how the flow tells a first deployment from an update.
+    // How the flow tells a first deployment from an update.
     if (call.path.endsWith('/settings') && !this.scriptExists) {
       return {
         status: 404,
@@ -136,8 +123,6 @@ class FakeCloudflare implements CloudflareTransport {
       };
     }
 
-    // An R2 object nobody has put yet. The seed step looks before it uploads,
-    // so a second run over a seeded bucket must find its own keys there.
     if (call.method === 'HEAD') {
       if (this.objects.includes(call.path)) return { status: 200, body: null };
 
@@ -313,8 +298,7 @@ class ArrayLedger implements DeployLedger {
     this.patch(id, { state: 'failed', failure });
   }
 
-  /** What an eviction looks like from outside: the row says `running` and the
-   *  activation that wrote it is gone. */
+  /** An eviction: the row says `running` and its activation is gone. */
   markRunning(id: string): void {
     this.patch(id, { state: 'running' });
   }
@@ -344,12 +328,7 @@ class MemoryVault implements DeploySecretVault {
   }
 }
 
-/**
- * The artifact as the reader hands it over: one walk, each member in the
- * pieces the decompressor produced, assets before modules — the order
- * `scripts/build-worker-release.ts` writes and the order that lets the upload
- * step let go of the archive before it holds the module set.
- */
+/** Members in decompressor pieces, assets before modules, as `scripts/build-worker-release.ts` writes. */
 function artifactFor(manifest: ReleaseManifest): ArtifactSource {
   const encoder = new TextEncoder();
 
@@ -366,8 +345,7 @@ function artifactFor(manifest: ReleaseManifest): ArtifactSource {
         yield {
           path: file.path,
           size: body.length,
-          // Two pieces on purpose: a member arrives in whatever pieces the
-          // decompressor made, and a reader that assumed one is wrong.
+          // Two pieces: a member arrives in whatever pieces the decompressor made.
           async *chunks(): AsyncIterable<Uint8Array> {
             yield body.subarray(0, 3);
             yield body.subarray(3);
@@ -388,9 +366,6 @@ const UploadedBindingSchema = v.object({
   class_name: v.optional(v.string()),
 });
 
-/** The bindings the upload carried, parsed rather than asserted: the fake
- *  records what the step sent, and a row that reads it must fail when the
- *  shape changes instead of reading a wrong field as undefined. */
 function uploadedBindings(call: Recorded | undefined): readonly v.InferOutput<typeof UploadedBindingSchema>[] {
   return v.parse(v.array(UploadedBindingSchema), call?.body?.bindings ?? []);
 }
@@ -405,18 +380,14 @@ let progress: DeployProgress[];
 
 let health: number;
 
-/** Whether the run under construction is an update. A first sitting by
- *  default; the rows that are an update say so. */
 let updating = false;
 
-/** Which build the new address answers with. The release's own by default; a
- *  row that is measuring the smoke check sets the previous one. */
 let served: UpdateBuild;
 
 const healthFetch: HttpGet = async (url) => {
   if (!url.endsWith('/api/health')) throw new Error(`unexpected fetch ${url}`);
 
-  // The product's own body: the stamp under `build` (core/src/http/health-route.ts).
+  // The stamp under `build` (core/src/http/health-route.ts).
   return new Response(JSON.stringify({ ok: true, build: served }), {
     status: health,
     headers: { 'content-type': 'application/json' },
@@ -481,9 +452,6 @@ describe('a guided run', () => {
   });
 
   test('a random secret is minted, never asked of a person', () => {
-    // The Drive's cursor-signing secret joined the census as a required prompt;
-    // the door mints it like the two root secrets, so a self-hoster is blocked
-    // on nothing they could not have typed.
     expect(promptedSecrets(MANIFEST)).toEqual([]);
   });
 
@@ -514,8 +482,7 @@ describe('a guided run', () => {
     expect(named).toContain('AUTH_KV');
     expect(named).toContain('ASSETS');
     expect(named).toContain('LOADER');
-    // The sandbox is off by default and needs Workers Paid; its class must not
-    // be bound into a deployment that did not ask for it.
+    // The sandbox needs Workers Paid; unrequested, its class must not be bound.
     expect(named).not.toContain('Sandbox');
     expect(bindings.find((binding) => binding.name === 'AUTH_KV')).toMatchObject({
       type: 'kv_namespace', namespace_id: 'id-kinu-auth-kv',
@@ -569,8 +536,6 @@ describe('a second sitting on the same account', () => {
     expect(cloudflare.indexes).toEqual(['kinu-memory']);
     expect(cloudflare.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/storage/kv/namespaces')))
       .toEqual([]);
-    // What makes a second run an update: the largest thing the flow moves is
-    // already in the bucket, so it is looked at and not sent again.
     expect(cloudflare.calls.filter((call) => call.method === 'PUT' && call.path.includes('/r2/buckets/')))
       .toEqual([]);
   });
@@ -637,8 +602,6 @@ describe('an eviction in the middle of a step', () => {
       message: 'internal error',
     };
     await run();
-    // The activation died with the row still saying `running`, which is what a
-    // Durable Object eviction leaves behind.
     ledger.markRunning('ai-gateway');
     cloudflare.calls.length = 0;
 
@@ -670,10 +633,7 @@ describe('an eviction in the middle of a step', () => {
   });
 });
 
-/** The one call layer the page and the CLI share. What a caller of either door
- *  observes: the run key in the `authorization` header of every call and in NO
- *  URL, `wss` on a secure origin, and the door's own sentence when it
- *  refuses. */
+/** The call layer the page and CLI share: the run key rides only the `authorization` header. */
 describe('the door client', () => {
   test('carries the run key in a header, never in a URL, and upgrades the socket with the origin', async () => {
     const seen: { url: string; authorization: string }[] = [];
@@ -702,8 +662,6 @@ describe('the door client', () => {
       .toEqual(['https://kinu.run/api/deploy/runs/run-1/accounts', 'https://kinu.run/api/deploy/runs/run-1/keys']);
     expect(seen.map((call) => call.authorization)).toEqual([`Bearer ${key}`, `Bearer ${key}`]);
 
-    // The whole point of the header: the key is in nothing that a browser
-    // history, a referrer or an invocation log records.
     const urls = [...seen.map((call) => call.url), door.socketUrl()];
 
     expect(urls.filter((url) => url.includes(key))).toEqual([]);
@@ -731,12 +689,7 @@ describe('the door client', () => {
   });
 });
 
-/**
- * The manifest a channel publishes, as the thing that decides where bytes
- * land. `install()` on the local door writes `join(releaseDir(version), path)`
- * for every file the manifest names, so a path or a version the channel chose
- * is a host file write — and a channel is chosen with `--origin`.
- */
+/** Manifest paths and versions become host file writes via `install()`, and the channel is caller-chosen. */
 describe('a release manifest a channel publishes', () => {
   const manifestWith = (over: JsonObject): string =>
     JSON.stringify({ ...parseJsonObject(JSON.stringify(MANIFEST)), ...over });
@@ -769,25 +722,14 @@ describe('a release manifest a channel publishes', () => {
       worker: { ...parseJsonObject(JSON.stringify(MANIFEST.worker)), modules: ['../../../etc/passwd'] },
     }))).toThrow('a release file path must stay inside its release');
 
-    // The build stamps a real release carries: `+` and `.` are the two
-    // characters a version is allowed to be interesting with.
     expect(parseReleaseManifest(manifestWith({ version: '0.4.0+abc1234' })).version).toBe('0.4.0+abc1234');
   });
 });
 
-/**
- * The local door's rendered configuration. What a reader of the capnp must be
- * able to trust: every module is embedded from the release that `current`
- * names, a KV namespace is a directory under `state/` and is bound as a KV
- * namespace rather than as a Fetcher, the Durable Object classes are
- * SQL-backed with a key that does not move between renders, and a binding
- * workerd cannot host is named rather than rendered as something else.
- */
+/** The local door's rendered workerd config. */
 describe('the workerd configuration for a local instance', () => {
   test('a compiled member is a WebAssembly module, not JavaScript', () => {
-    // Measured 2026-09-21 on the published release: rendered as `esModule`,
-    // workerd read the one `esbuild-*.wasm` member as JavaScript and exited on
-    // its first byte, so `kinu deploy local` never served.
+    // Rendered as `esModule`, workerd read the `esbuild-*.wasm` member as JavaScript and exited.
     const manifest = { ...MANIFEST, worker: { ...MANIFEST.worker, modules: [...MANIFEST.worker.modules, 'assets/esbuild-abc.wasm'] } };
     const config = renderWorkerdConfig({ manifest, version: manifest.version, port: 8787 });
 
@@ -805,47 +747,33 @@ describe('the workerd configuration for a local instance', () => {
     expect(config).toContain('compatibilityDate = "2025-12-01",');
     expect(config).toContain('compatibilityFlags = ["nodejs_compat"],');
 
-    // A KV namespace is a directory, bound with `kvNamespace` so the Worker
-    // gets a KvNamespace and not a Fetcher: `env.AUTH_KV.get` is a function
-    // only under this spelling (workerd 2026-09-03, measured 2026-09-18).
+    // `kvNamespace` gives a KvNamespace, not a Fetcher.
     expect(config).toContain('(name = "kv-AUTH_KV", disk = (path = "state/kv/kinu-auth-kv", writable = true)),');
     expect(config).toContain('(name = "AUTH_KV", kvNamespace = "kv-AUTH_KV"),');
 
-    // R2 is not hosted: `r2Bucket` speaks R2's own protocol over the service,
-    // which a disk directory does not implement, so the bucket is named as
-    // absent rather than rendered as a directory a Worker cannot read.
+    // R2 is not hosted: a disk directory does not speak R2's protocol.
     expect(config).not.toContain('BACKUP_BUCKET');
     expect(config).not.toContain('state/r2');
 
-    // The assets directory is the release's own and is never written to.
     expect(config).toContain('(name = "assets", disk = (path = "releases/0.4.0+abc1234/client", writable = false)),');
     expect(config).toContain('(name = "ASSETS", service = "assets"),');
 
-    // Both classes the migrations declare, SQL-backed, under one storage
-    // directory; the key is derived from the class name, because workerd keys a
-    // class's on-disk database by it.
+    // workerd keys a class's on-disk database by the derived key.
     expect(config).toContain('(className = "OrchestratorAgent", uniqueKey = "kinu-local-OrchestratorAgent", enableSql = true),');
     expect(config).toContain('(className = "KinuSandbox", uniqueKey = "kinu-local-KinuSandbox", enableSql = true),');
     expect(config).toContain('durableObjectStorage = (localDisk = "do-state"),');
     expect(config).toContain('(name = "OrchestratorAgent", durableObjectNamespace = "OrchestratorAgent"),');
     expect(config).toContain('(name = "Sandbox", durableObjectNamespace = "KinuSandbox"),');
 
-    // A carried var travels; a derived or `ours` var never reaches a local
-    // instance's config.
     expect(config).toContain('(name = "SANDBOX_TRANSPORT", text = "rpc"),');
     expect(config).not.toContain('CLI_PUBLIC_ORIGIN');
     expect(config).not.toContain('DEV_USER_EMAIL');
 
-    // Nothing workerd cannot host is rendered as a binding, and all of it is
-    // reported by name.
     expect(config).not.toContain('MEMORY_VECTORS');
     expect(config).not.toContain('LOADER');
     expect(unhostedBindings(MANIFEST)).toEqual(['BACKUP_BUCKET', 'MEMORY_VECTORS', 'AGENT_METRICS', 'AI', 'LOADER']);
 
-    // Every writable directory the config names, because workerd refuses to
-    // start on a disk service whose directory is absent: it answered
-    // `Directory named "do-state" not found: state/do` (workerd 2026-09-03,
-    // measured 2026-09-18) until the installer created them.
+    // workerd refuses to start on a disk service whose directory is absent.
     expect(workerdDirectories(MANIFEST)).toEqual(['state/do', 'state/kv/kinu-auth-kv']);
   });
 
@@ -872,10 +800,6 @@ describe('the workerd configuration for a local instance', () => {
   });
 });
 
-/**
- * The two answers a step must read rather than assume: Cloudflare's reply to
- * the pointer move, and which build the new address serves.
- */
 describe('what the address and smoke steps check', () => {
   test('a refused deployment pointer fails the address step', async () => {
     cloudflare.refuseOnce = {
@@ -889,7 +813,6 @@ describe('what the address and smoke steps check', () => {
 
     expect(rows.find((row) => row.id === 'address')?.state).toBe('failed');
     expect(rows.find((row) => row.id === 'address')?.failure?.code).toBe(10_026);
-    // Nothing after it ran, so the run never claims an address it did not bind.
     expect(rows.find((row) => row.id === 'smoke')?.state).toBe('pending');
   });
 
@@ -902,14 +825,10 @@ describe('what the address and smoke steps check', () => {
     expect(smoke?.state).toBe('failed');
     expect(smoke?.failure?.detail).toContain('0.3.9+old0000');
     expect(smoke?.failure?.detail).toContain(MANIFEST.version);
-    // A failed smoke keeps the run's authorization: this is the case the
-    // deployment pointer is rolled back from, by hand or by a retry.
     expect(await vault.read(REFRESH_TOKEN_KEY)).toBe('refresh-token-value');
   });
 
   test('an update mints no root secret and keeps the running version\'s', async () => {
-    // A self-update's vault holds the token pair and nothing else: it reads
-    // through to no live binding, so "absent here" is the ordinary state.
     updating = true;
     cloudflare.scriptExists = true;
 
@@ -919,12 +838,10 @@ describe('what the address and smoke steps check', () => {
 
     expect(rows.every((row) => row.state === 'done')).toBe(true);
     expect(rows.find((row) => row.id === 'secrets')?.detail).toContain('kept from the running version');
-    // Nothing minted, and nothing sent: what keeps the live keys is
-    // `keep_bindings`, and what would destroy them is a fresh one in this list.
+    // `keep_bindings` keeps the live keys; a fresh entry here would destroy them.
     expect(await vault.read('CREDENTIAL_ENCRYPTION_KEY')).toBeNull();
     expect(bindings.map((binding) => binding.name)).not.toContain('CREDENTIAL_ENCRYPTION_KEY');
     expect(upload?.body?.keep_bindings).toEqual(['secret_text', 'secret_key']);
-    // And no migration is re-declared onto a script that already applied it.
     expect(upload?.body?.migrations).toBeUndefined();
   });
 });

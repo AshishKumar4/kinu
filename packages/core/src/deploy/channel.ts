@@ -1,15 +1,5 @@
-/**
- * Reading a release channel (docs/SELF-DEPLOY.md § The release artifact).
- *
- * ONE READER FOR EVERY DOOR. The guided run inside `DeployRunDO`, a
- * deployment updating itself and `kinu deploy local` all install the same two
- * objects: the manifest a channel publishes and the tarball it names. The
- * digest is verified against the channel's own `.sha256` before a byte of the
- * archive is decompressed, so an artifact that does not match is never
- * unpacked, never uploaded and never written to disk. The compressed bytes
- * are the one whole copy the run holds; everything after that is a walk
- * (`artifact.ts`).
- */
+// Release channel reader for every door (docs/SELF-DEPLOY.md). The digest is checked
+// against the channel's `.sha256` before any byte is decompressed.
 import { TarArtifact } from './artifact';
 import { sha256Hex } from '../safety/argument-digest';
 import { RELEASE_MANIFEST_PATH, parseReleaseManifest, workerArtifactPath, type ReleaseManifest } from './manifest';

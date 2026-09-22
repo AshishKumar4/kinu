@@ -114,11 +114,10 @@ import {
   advancePromptSectionLane,
   // Continual refinement — `/refine` opens a request; the lane that runs it
   // lives on the actor beside the other cadence passes.
-  createRefinementStore, decideRefinementRoute, refinementDebt, refinementRequestView,
-  requestRefinement, showRefinementRoute,
+  decideRefinementRoute, listRefinements, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
-  type RefinementRequestView, type RefinementScope, type RequestRefinementInput,
+  type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
   type GepaOptimizationResult, type ScaffoldDecisionResult,
   type ScaffoldVersionView, type ShadowStatus,
@@ -687,7 +686,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation,
       ),
       deferrals: () => this.deferralChannel(),
-      refinementLane: () => () => this.runRefinementLane(),
+      refinementLane: () => async () => { await refinementPass(this.refinementDeps); },
       chosenLoopOrigin: (record: WorkspaceActor) => this._chosenLoopOrigins.get(record.actorId) ?? null,
       chosenWriteObserver: (record: WorkspaceActor) => this._actorWriteObservers.get(record.actorId) ?? null,
     };
@@ -5368,7 +5367,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         },
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.
-      contextWindow: this.sessionContextWindow() || null,
+      contextWindow: this.modelCatalog.contextWindow() || null,
       // Every step in the window, reporting or not: `summarizeSteps` counts the
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.
@@ -6924,8 +6923,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *
    * Returns the DURABLE request immediately, at `requested`: no model has run
    * and no artifact has moved. The refiner runs on the off-turn cadence pass
-   * (`ActorAgent.runRefinementLane`, driven by AgentOrchestrator), where it can
-   * be re-driven for free.
+   * (core `refinementPass`, driven by AgentOrchestrator), where it can be
+   * re-driven for free.
    *
    * The nudge below is DETACHED for the reason the section and GEPA passes
    * beside it are: an owner asking explicitly should not wait for the next
@@ -6938,14 +6937,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async requestRefinement(opts?: {
     turnIds?: string[]; scope?: RefinementScope;
   }): Promise<RefinementRequestView> {
-    let request: RequestRefinementInput = {
-      trigger: 'explicit',
-      scope: opts?.scope ?? 'workspace',
-    };
-
-    if (opts?.turnIds !== undefined) request = { ...request, turnIds: opts.turnIds };
-    const view = await requestRefinement(this.refinementDeps, request);
-    void this.runRefinementLane()
+    const view = await requestOwnerRefinement(this.refinementDeps, opts);
+    void refinementPass(this.refinementDeps)
       .catch((...rejection: [unknown]) => diagnostics.failure('refinement.lane_failed', toKinuError({
         doing: 'advancing the continual-refinement lane',
         cause: rejection[0],
@@ -6999,10 +6992,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async listRefinements(limit = 20): Promise<{
     requests: RefinementRequestView[]; debt: EvolutionDebt;
   }> {
-    return {
-      requests: createRefinementStore(this.boundSql, this.actorHandle()).list(limit).map(refinementRequestView),
-      debt: refinementDebt(this.refinementDeps),
-    };
+    return listRefinements(this.refinementDeps, limit);
   }
 
   /** Run a webhook delivery through the hub from within the agent DO. This

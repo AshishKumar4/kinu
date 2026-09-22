@@ -1,29 +1,6 @@
-/**
- * Reading the release artifact: gzip, then tar, then each member handed to the
- * caller as it comes out of the stream.
- *
- * WHY THIS IS HERE AND NOT A LIBRARY. The deploy Durable Object has to open a
- * `.tar.gz` and hand out its members, and the platform gives half of it —
- * `DecompressionStream('gzip')` — while the other half is a 512-byte header
- * format. A dependency for that would be a dependency the Worker bundle
- * carries for one call site.
- *
- * WHY IT IS A STREAM AND NOT AN INDEX. The object that installs a release is a
- * Durable Object, and a transient allocation near 128 MiB resets it
- * (`do.isolate.transient_alloc_reset` in `platform-catalog.ts`; measured
- * 2026-09-18, the reset lands about 1.7 s after the request already answered
- * 200). The release this tree publishes unpacks to 107.99 MiB, so an index
- * over the unpacked archive — which is what this file held until
- * 2026-09-18 — could not be built inside that object at all. One pass, one
- * member at a time, and the caller decides what it keeps.
- *
- * WHAT IS HELD, AND BY WHOM. `HeldBytes` is the run's one accountant: every
- * holder charges its own retention and releases it when it lets go, so the
- * peak is a measurement rather than an argument. This reader charges the
- * compressed buffer it was opened on. A caller that keeps a member's bytes —
- * the upload step keeps the module set, because a version upload is one
- * multipart request — charges those itself.
- */
+// Streaming .tar.gz reader, one member at a time: a DO transient allocation near 128 MiB
+// resets it (`do.isolate.transient_alloc_reset`), so the unpacked archive is never indexed.
+// Every holder charges `HeldBytes` for what it retains.
 
 const BLOCK = 512;
 
@@ -35,14 +12,6 @@ const TYPE_FLAG = 156;
 
 const PREFIX = { offset: 345, length: 155 } as const;
 
-/**
- * What the run is holding out of the artifact, and the most it ever held.
- *
- * Not a debug counter: the Cloudflare door's whole shape is decided by this
- * number, the upload step records it as a fact on its ledger row, and
- * `packages/cf-backend/tests/workerd/deploy-ledger.test.ts` holds a release
- * shaped like the real one against it.
- */
 export class HeldBytes {
   private current = 0;
 
@@ -58,19 +27,12 @@ export class HeldBytes {
     this.current -= bytes;
   }
 
-  /** The high-water mark, in bytes. */
   peak(): number {
     return this.highest;
   }
 }
 
-/**
- * One file in the archive, while the stream is on it.
- *
- * A member is live only until the walk moves to the next one: `chunks` is the
- * stream itself, and `bytes` is the caller asking for the whole thing in
- * memory — which is the caller deciding to hold `size` bytes and charge them.
- */
+/** Live only until the walk moves on. A caller calling `bytes` must charge `size`. */
 export interface ArtifactMember {
   readonly path: string;
   readonly size: number;
@@ -85,8 +47,7 @@ function text(bytes: Uint8Array, offset: number, length: number): string {
   return new TextDecoder().decode(end === -1 ? slice : slice.subarray(0, end)).trim();
 }
 
-/** Tar stores sizes in octal ASCII. GNU's base-256 form is not produced by the
- *  `tar` that writes this artifact and is refused rather than misread. */
+// GNU base-256 sizes are refused rather than misread.
 function octal(bytes: Uint8Array, offset: number, length: number): number {
   const first = bytes[offset] ?? 0;
 
@@ -96,13 +57,7 @@ function octal(bytes: Uint8Array, offset: number, length: number): number {
   return digits === '' ? 0 : Number.parseInt(digits, 8);
 }
 
-/**
- * The decompressed archive, read forwards.
- *
- * `exact` is for the 512-byte headers, which have to be contiguous; `some`
- * hands back whatever the decompressor produced without copying it, which is
- * how a 21.5 MiB member reaches the caller in pieces instead of all at once.
- */
+// `exact` joins contiguous headers; `some` returns decompressor chunks without copying.
 class Cursor {
   private readonly reader: ReadableStreamDefaultReader<Uint8Array>;
 
@@ -161,8 +116,6 @@ class Cursor {
     return this.shave(first, Math.min(first.length, count));
   }
 
-  /** The first `count` bytes of the queue's head, as a view onto the chunk the
-   *  decompressor already allocated. */
   private shave(head: Uint8Array, count: number): Uint8Array {
     if (head.length === count) this.queue.shift();
     else this.queue[0] = head.subarray(count);
@@ -208,31 +161,14 @@ class StreamMember implements ArtifactMember {
     return whole;
   }
 
-  /** Whatever the caller did not read, stepped over, so the next header is
-   *  where the walk expects it. */
   async drain(): Promise<void> {
     for await (const piece of this.chunks()) void piece;
   }
 }
 
 /**
- * The release artifact, walked once.
- *
- * The digest is checked before anything is read out of it (`channel.ts`), so
- * an artifact that does not match is not opened at all. WHAT THAT CHECK IS
- * WORTH: the channel's `<artifact>.sha256` is a plain static file beside the
- * artifact, so the comparison is integrity over the same TLS connection — it
- * catches a truncated or swapped object, not a channel that serves two
- * matching lies. The signature lives in `kinu-version.json`
- * (`http/release-signing.ts`), which the CLI launcher verifies against its
- * pinned key and `scripts/deploy.sh` holds this sidecar against at publish
- * time; nothing in this flow verifies it yet.
- *
- * ONE WALK. The compressed bytes are held for the length of the walk and
- * released at its end, so a second walk would have to decompress an archive
- * this object no longer accounts for; it is refused instead. Every door reads
- * the artifact once — the upload step and `kinu deploy local` both take each
- * member as it arrives.
+ * Walked once; a second walk is refused because the held bytes are released at its end.
+ * The `.sha256` check (`channel.ts`) is integrity only; the release signature is not verified here.
  */
 export class TarArtifact {
   readonly held = new HeldBytes();
@@ -247,21 +183,13 @@ export class TarArtifact {
     return new TarArtifact(archive);
   }
 
-  /**
-   * Every file in the archive, in the order the archive carries them.
-   *
-   * Long-name entries (GNU `L` typeflag) carry the real path in their body and
-   * apply to the next header; an artifact whose paths exceed 100 characters is
-   * ordinary here, because the asset bundle's hashed filenames are long.
-   */
+  /** GNU `L` long-name entries apply to the next header; hashed asset names exceed 100 chars. */
   async *members(): AsyncIterable<ArtifactMember> {
     if (this.walked) throw new Error('the release artifact is read once, and this one has been read');
 
     this.walked = true;
 
-    // NOT `new Blob([archive]).stream()`: a Blob copies, and a second copy of
-    // the compressed artifact is 27 MiB of the object's allocation budget
-    // spent on bytes nobody writes to.
+    // Not `new Blob([archive]).stream()`: a Blob copies the archive.
     const source = new ReadableStream<BufferSource>({
       start: (controller) => {
         controller.enqueue(this.archive);

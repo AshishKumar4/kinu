@@ -31,18 +31,9 @@ const ExternalToolSchema = v.object({
 
 
 /**
- * Why the turn is running, from the `kinuEvent` metadata a programmatic
- * turn carries (BackendHost.enqueueTurn stamps it; a chat turn carries none).
- *
- * Read from the EVENT alone. The work mode stamped beside it answers a
- * different question, and letting that win here is what hid every wake:
- * jobs/runner.ts stamps `kinuEvent: 'background_job'` AND
- * `kinuMode: job.workMode` on the same message, and `work_mode` is never
- * null, so the resume overlay could not render in production.
- *
- * Shared by BOTH backends: the guidance that tells the agent to collect a
- * background job's result rather than start the work again has to reach the
- * model identically in a Durable Object and in a local process.
+ * Why the turn is running, from `kinuEvent` metadata alone. The `kinuMode`
+ * stamped beside it (never null for jobs) must not win, or the resume overlay
+ * never renders. Shared by both backends.
  */
 export function turnProvenanceForMetadata(metadata: JsonObject | null | undefined): TurnProvenance {
   const parsed = v.safeParse(TurnMetadataSchema, metadata);
@@ -52,10 +43,8 @@ export function turnProvenanceForMetadata(metadata: JsonObject | null | undefine
   return parsed.output.kinuEvent === 'background_job' ? 'background_resume' : 'chat';
 }
 
-/** What the turn may do. Only an explicit, recognized `kinuMode` can raise
- *  the Plan bar; everything else is ordinary unconstrained work. Delegated
- *  children inherit this same value, so a Plan parent propagates its bar and
- *  an autonomous wake never weakens one. */
+/** Only an explicit, recognized `kinuMode` raises the Plan bar. Delegated children
+ *  inherit it, so an autonomous wake never weakens one. */
 export function workModeForTurnMetadata(metadata: JsonObject | null | undefined): WorkMode {
   const parsed = v.safeParse(TurnMetadataSchema, metadata);
 
@@ -64,16 +53,7 @@ export function workModeForTurnMetadata(metadata: JsonObject | null | undefined)
   return parsed.output.kinuMode === 'plan' ? 'plan' : 'build';
 }
 
-/**
- * One executor row as the prompt reads it: the router's own row, loosened.
- *
- * DERIVED, not restated. The field list was a copy of ExecutorInfo with six
- * fields made optional and `status` widened to any string, because the prompt
- * also builds rows from bare names (`uniqueExecutors`) and renders whatever
- * word a backend's status carries. Writing that as a derivation keeps ONE
- * source for the row and lets the field-supply census see that production
- * supplies these fields at the router, which a second interface hid.
- */
+/** The router's ExecutorInfo, loosened: the prompt also builds rows from bare names. */
 export type PromptExecutorInfo =
   & Partial<Pick<ExecutorInfo, 'kind' | 'capabilities' | 'available' | 'configured' | 'active'>>
   & Omit<ExecutorInfo, 'kind' | 'capabilities' | 'available' | 'configured' | 'active' | 'status'>
@@ -86,29 +66,15 @@ export interface PromptExternalToolInfo {
 }
 
 /**
- * What a person calls this agent and the workspace it works in.
- *
- * Titles, never slugs. A workspace slug is its address — its URL, its Durable
- * Object name, its directory — and `identity/naming.ts` mints it from an id
- * precisely so that no mission text reaches those places. Handing one to a
- * model as a name is the same mistake in the other direction.
- *
- * Either field may be absent: a workspace is titled by its first prompt, so it
- * spends its first moments with no name at all, and an actor that is a
- * workspace's own chat has no subagent name to give.
+ * Titles, never slugs: a slug is an address (URL, DO name, directory).
+ * Either may be absent: a workspace is untitled until its first prompt, and a
+ * workspace's own chat has no subagent name.
  */
 export interface PromptIdentity {
-  /** The workspace's shown title. */
   readonly workspace?: string | null;
-  /** This agent's own shown title, when it is a subagent of that workspace
-   *  rather than the workspace's own chat. */
   readonly agent?: string | null;
 }
 
-/** {@link PromptIdentity} with blanks resolved to null, so the renderer asks
- *  one question per name instead of three. Required rather than optional: a
- *  compiled surface has already decided, and `undefined` would be a third
- *  state meaning the same thing as one of the two. */
 type ResolvedPromptIdentity = {
   readonly [Name in keyof PromptIdentity]-?: string | null;
 };
@@ -117,23 +83,14 @@ export interface PromptSurfaceOptions {
   registeredExecutors?: string[];
   executors?: readonly PromptExecutorInfo[];
   availableTools?: readonly BuiltinToolName[];
-  /** Which `agents` actions this actor's deps actually wire (see
-   *  agentsActionsFor). Defaults to ALL actions when the `agents` tool is on
-   *  the surface — the representative full surface — and to none otherwise. */
+  /** Wired `agents` actions (see agentsActionsFor). Defaults to all when the `agents` tool is on, else none. */
   agentsActions?: readonly AgentsToolAction[];
-  /** Whether this actor's `ask` can target a ROLE — the temporary rung, wired
-   *  wherever a backend has a child substrate. Gates the prompt's
-   *  decomposition guidance so a rung is never advertised where the action
-   *  would refuse it. */
+  /** Whether `ask` can target a role (temporary rung); gates decomposition guidance so it is never advertised where refused. */
   temporaryAsk?: boolean;
   externalTools?: readonly (PromptExternalToolInfo | string)[];
   backend?: PromptBackend;
-  /** The one Role section this turn renders, from the resolved turn profile.
-   *  Absent renders nothing — an actor resolved without a profile authority
-   *  keeps its plain surface. */
+  /** Absent renders nothing. */
   roleSection?: { id: string; label: string; instructions: string };
-  /** The names this agent and its workspace answer to. Absent, and blank
-   *  either way, render nothing. */
   identity?: PromptIdentity;
   model?: PromptModelContext;
 }
@@ -288,9 +245,7 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
     model: resolvePromptModelProfile(opts.model),
     roleSection: opts.roleSection ?? null,
     backend: opts.backend,
-    // Compared against the empty string, not `??`: the empty string is what a
-    // fresh workspace's title is until its first prompt names it, and
-    // whitespace is not a name either.
+    // Compared against '' after trim, not `??`: a fresh workspace's title is '' until its first prompt.
     identity: {
       workspace: workspaceTitle === '' ? null : workspaceTitle,
       agent: agentTitle === '' ? null : agentTitle,

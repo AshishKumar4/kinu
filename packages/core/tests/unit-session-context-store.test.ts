@@ -52,7 +52,6 @@ test('an open message reads its accumulated text and a sealed one its content', 
     const entry = { messageId: 'answer' };
     expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'ab' }] });
 
-    // A window is one statement on the part's one row.
     s.messages.streamAppend('answer', 0, 'cd');
     s.messages.streamMetadata('answer', 0, await s.messages.prepareMetadata('answer', 0, { test: { partial: true } }));
     expect(streamRows()).toBe(1);
@@ -60,7 +59,6 @@ test('an open message reads its accumulated text and a sealed one its content', 
     s.messages.streamEnd('answer', 0);
     expect(() => s.messages.streamAppend('answer', 0, 'e')).toThrow('ended');
 
-    // The seal writes the final content once, and the stream rows go with it.
     const content = await s.messages.prepareContent([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text: 'final' } }]);
     s.messages.seal('answer', content, { providerOptions: { test: { late: true } } });
     expect(streamRows()).toBe(0);
@@ -72,9 +70,7 @@ test('an open message reads its accumulated text and a sealed one its content', 
 });
 
 test('an accumulating part never puts one row over the platform limit and seals through the spill rule', async () => {
-  // `do.sqlite.row_bytes` is 2 MB and an INSERT or UPDATE over it fails: a
-  // reasoning part of a few hundred thousand tokens has to continue in the
-  // next row, not grow one row without bound.
+  // `do.sqlite.row_bytes` is 2 MB: a long reasoning part continues in the next row.
   const s = setup();
 
   try {
@@ -84,8 +80,6 @@ test('an accumulating part never puts one row over the platform limit and seals 
     const window = 'r'.repeat(300_000);
 
     for (let i = 0; i < 4; i++) s.messages.streamAppend('long', 0, window);
-    // The bound the segments protect: a row of UTF-16 units, at most three
-    // UTF-8 bytes each, stays inside the platform's row limit.
     const widest = s.testSql.db.query<{ n: number }, []>('SELECT MAX(length(text)) AS n FROM stream_parts').get()?.n ?? -1;
     expect(widest * 3).toBeLessThan(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
     expect(widest).toBeLessThan(300_000);
@@ -170,8 +164,7 @@ test('VFS-backed image payloads fail explicitly after file corruption', async ()
 });
 
 test('a sealed row that is JSON but not a message is refused on read', async () => {
-  // The stored text is the trust boundary: parsing it as JSON is not enough
-  // for a reader to serve it as a message a provider will be handed.
+  // Valid JSON is not enough; the stored text must parse as a message.
   const corruptions = [
     { content: '{"parts":[]}', layer: 'the part list' },
     { content: '[{"partNo":0,"kind":"text","streamOrder":0,"replyTo":null,"value":{"type":"text","text":7}}]', layer: 'the SDK message schema' },
@@ -191,8 +184,7 @@ test('a sealed row that is JSON but not a message is refused on read', async () 
 });
 
 test('a sealed message read back cannot be edited in place, and a later read is the stored one', async () => {
-  // Every step shares the object a sealed row reads back as; a consumer that
-  // edited it would change what the next step sends without a new revision.
+  // Steps share the sealed object, so in-place edits must fail.
   const s = setup();
 
   try {

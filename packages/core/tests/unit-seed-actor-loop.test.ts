@@ -1,11 +1,5 @@
-// seedActorLoop — every created actor has an explicit loop origin.
-//
-// The defect this closes: a branching head and a hosted swarm node opened a
-// FRESH scaffold store, found no row and ran the shipped bootstrap loop. So a
-// workspace whose owner had promoted three generations of loop still explored
-// with the first one, and nothing anywhere said so. `LoopOrigin` makes "no
-// origin" unrepresentable, and these cases prove each arm against real bytes
-// and a real pointer rather than against the words of the enum.
+// seedActorLoop: every created actor has an explicit `LoopOrigin`, checked against
+// real bytes and a real pointer.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { sqlOver, createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
@@ -18,9 +12,7 @@ import { initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/identit
 import { initAgentConfigTable } from '../src/config/store';
 import { initCodemodeStateTable } from '../src/identity/program-state';
 import type { AgentRuntime } from '../src/types/agent-runtime';
-// From the modules that own them, NOT the barrel: `core/src/index.ts` re-exports
-// the actor host, whose own imports land with the context plane, and this suite
-// must be runnable on its own before that merge.
+// Not the barrel: this suite must run without the context plane.
 import type { Identity, SqlExecutor, VFS } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
@@ -84,7 +76,6 @@ function build(): Fixture {
   };
 }
 
-/** A parent whose loop really is at v1, written through the production seed. */
 async function parentAtV1(fx: Fixture): Promise<AgentRuntime> {
   const parent = fx.actorRuntime(fx.main, 'main');
   await seedActorLoop(parent, null, { kind: 'builtin' });
@@ -127,12 +118,11 @@ describe('seedActorLoop', () => {
     const seeded = await seedActorLoop(rt, parent, defaultLoopOrigin('head'));
     expect(seeded.version).toBe(1);
     expect(getCurrentScaffoldVersion(fx.sql, child)).toBe(1);
-    // The bytes are the parent's promoted loop, not the bootstrap one.
     expect(await rt.identity.scaffold.read()).toBe(PARENT_V1);
     const versioned = rt.agentStateVfs ?? rt.storage.vfs;
     expect(await versioned.readFile(`${rt.identity.scaffold.path}.v1`, { encoding: 'utf8' })).toBe(PARENT_V1);
 
-    // Lineage is recorded, so the child's evolution has a parent to diff against.
+    // Lineage gives the child's evolution a parent to diff against.
     const row = fx.sql<{ parent_version: number | null; rationale: string }>`
       SELECT parent_version, rationale FROM scaffold_versions
       WHERE actor_id = ${child.actorId} AND version = 1`[0];
@@ -148,7 +138,6 @@ describe('seedActorLoop', () => {
     const rt = fx.actorRuntime(child, 'node-1');
     await seedActorLoop(rt, parent, defaultLoopOrigin('head'));
 
-    // The parent promotes v2 after the child was seeded.
     const parentVfs = parent.agentStateVfs ?? parent.storage.vfs;
     await parentVfs.writeFile(`${parent.identity.scaffold.path}.v2`, PARENT_V2);
     void fx.sql`UPDATE scaffold_versions SET status = 'historical'
@@ -157,7 +146,7 @@ describe('seedActorLoop', () => {
       VALUES (${parent.actor.actorId}, 2, ${Date.now()}, 'promoted again', 'current', 1)`;
 
     expect(getCurrentScaffoldVersion(fx.sql, parent.actor)).toBe(2);
-    // The pointer is PER ACTOR: the child still runs the bytes it was seeded with.
+    // The pointer is per actor.
     expect(getCurrentScaffoldVersion(fx.sql, child)).toBe(1);
     expect(await rt.identity.scaffold.read()).toBe(PARENT_V1);
   });
@@ -169,7 +158,6 @@ describe('seedActorLoop', () => {
     const rt = fx.actorRuntime(child, 'head-2');
     await seedActorLoop(rt, parent, { kind: 'inherit' });
 
-    // The child evolves its own v2 and promotes it.
     const childVfs = rt.agentStateVfs ?? rt.storage.vfs;
     const own = '// the child own loop\nasync function* run() {}\n';
     await childVfs.writeFile(`${rt.identity.scaffold.path}.v2`, own);
@@ -181,8 +169,7 @@ describe('seedActorLoop', () => {
     const again = await seedActorLoop(rt, parent, { kind: 'inherit' });
     expect(again.version).toBe(2);
     expect(getCurrentScaffoldVersion(fx.sql, child)).toBe(2);
-    // And a re-seed with a parent that is no longer hosted is still a no-op,
-    // which is what a cold activation resuming a child depends on.
+    // A cold activation resuming a child depends on this no-op.
     const cold = await seedActorLoop(rt, null, { kind: 'inherit' });
     expect(cold.version).toBe(2);
   });
@@ -200,7 +187,6 @@ describe('seedActorLoop', () => {
     const missingRt = fx.actorRuntime(missing, 'head-4');
     await expect(seedActorLoop(missingRt, parent, { kind: 'version', version: 9 }))
       .rejects.toThrow(/retains no version 9/);
-    // Refused BEFORE any row or byte landed.
     expect(getCurrentScaffoldVersion(fx.sql, missing)).toBeNull();
   });
 

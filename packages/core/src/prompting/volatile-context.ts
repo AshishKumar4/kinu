@@ -1,50 +1,18 @@
 /**
- * The volatile half of the context split.
+ * The volatile half of the context split. `buildSystemPromptSync` is a
+ * byte-stable prefix that changes only on real agent events; everything else
+ * rides in messages.
  *
- * `buildSystemPromptSync` is a byte-stable prefix: its bytes change only on
- * real agent events (soul edit, model switch, skill/tool surface change,
- * executor registration, AGENTS.md edit), so provider prefix caches survive
- * across turns. Everything that legitimately changes rides in the messages
- * array instead, split by nature:
+ * Dynamic context (DynamicContextLedger): each model step renders live state
+ * into one `<dynamic_context fingerprint="…">` block, appended at the tail only
+ * when it differs from the newest block. Blocks freeze where born and never
+ * move or change (moving a mid-array message invalidates every later cache
+ * breakpoint); only `dropSuperseded`, under measured pressure, removes any.
+ * In-memory only. Nothing clock-derived may render: it would append a block
+ * per request.
  *
- * DYNAMIC CONTEXT (facts world model, MEMORY.md tail, execution-recovery
- * findings, live executor availability, the agent's own open task list,
- * running background work, the open delegate roster, decisions parked on the
- * user) — the DynamicContextLedger. At EVERY model step the
- * current state is rendered into one `<dynamic_context fingerprint="…">`
- * block; a new block is appended at the tail ONLY when that render differs
- * from the newest block's. Every block freezes at the position where it was
- * born and never moves, changes or disappears while the activation lives —
- * moving or removing a mid-array message would invalidate every provider
- * cache breakpoint after it. The resulting invariant: the context the agent
- * sees keeps the maximum common prefix across the steps of an activation,
- * until the caches expire or the DO/CLI resets. The ledger is in-memory
- * only, never persisted: a cold start (DO reset, new CLI session) begins
- * empty, so the next step carries exactly one fresh block.
- *
- * The one exception is `dropSuperseded`, the compaction ladder's first rung:
- * under measured context pressure the superseded blocks — stale by definition
- * and re-derivable from live state — are the cheapest thing in the request to
- * give up, cheaper than any tool output. It runs only when the ladder was
- * about to rewrite the prefix anyway, never on the ordinary path.
- *
- * Only genuinely state-derived facts belong in the block. Nothing clock-
- * derived (elapsed times, "running for 4m") may render: it would re-fingerprint
- * every step and append a block per request.
- *
- * TURN-LOCAL state (skill activation reasons — they vary with THIS user
- * message's keywords — the one-turn device change notice, and the turn's
- * PROVENANCE, which flips whenever a background job lands mid-session) — one
- * trailing user message for this turn only, appended at turn assembly and
- * never fingerprinted (folding it in would defeat block stability). What
- * belongs here rather than in the prefix is anything that is an overlay
- * instead of a bar: a permission the turn is held to earns system placement,
- * a fact about the turn does not.
- *
- * Both backends assemble through the same functions so the seam cannot
- * drift: the ledger rides the shared step pipeline (prompting/prepare-step.ts),
- * the turn-local tail rides the shared turn assembly
- * (orchestrator/turn-context.ts).
+ * Turn-local state (skill activation reasons, device notice, provenance) is one
+ * trailing user message for this turn only, never fingerprinted.
  */
 
 import type { ModelMessage } from 'ai';
@@ -68,110 +36,64 @@ import { renderToolsDeclaration, type CraftedDeclaration } from '../tools/sandbo
 
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 
-/** Detached work the agent started and has not collected yet — one row of the
- *  background-job registry (jobs/store.ts), never a second copy of it. */
+/** One row of the background-job registry (jobs/store.ts). */
 export interface DynamicJob {
   readonly id: string;
-  /** The producing tool surface — `think_heads`, `eval`, … */
   readonly kind: string;
   readonly label: string | null;
 }
 
-/** One item of the agent's own task list, flattened for rendering: a subtask
- *  follows its parent and names it. One row of agent_tasks (tasks/store.ts). */
+/** One agent_tasks row (tasks/store.ts), flattened: a subtask follows its parent and names it. */
 export interface DynamicTask {
   readonly id: string;
   readonly title: string;
   readonly status: string;
-  /** The task this is a subtask of, or null when it is a task itself. */
   readonly parentId: string | null;
 }
 
-/** An agent the agent has working for it right now: a spawned subordinate
- *  (parent roster) or a running search (heads journal). */
+/** A spawned subordinate or a running search. */
 export interface DynamicDelegate {
   readonly kind: 'subordinate' | 'swarm node';
   readonly name: string;
-  /** Where it is — the roster status / head-run phase, as its own store words it. */
   readonly phase: string;
-  /** What it is working on, when its store knows. */
   readonly task?: string | null;
 }
 
-/**
- * One active roster crossing the prompt boundary: every item that passes its
- * store's open/running filter, plus the TRUE count of that filtered set. A
- * store may bound `items` for transport, but never silently — the renderer
- * states its elision from `total`, so a capped read cannot lie about what it
- * dropped (and an item behind many closed siblings can never vanish).
- */
+/** Items passing the store's open filter plus the true count; the renderer states any elision from `total`. */
 export interface ActiveRoster<T> {
   readonly items: readonly T[];
   readonly total: number;
 }
 
-/** The live state of the system at one model step. Every field is read from
- *  its existing source of truth at render time; this type owns no state.
- *
- *  List fields are rendered most-relevant-first and capped, with an honest
- *  count of what was elided — callers order them, the renderer bounds them. */
+/** Live state at one model step, read from existing sources; owns no state.
+ *  Lists arrive ordered by the caller and are capped by the renderer. */
 export interface DynamicContext {
   mode?: { readonly workMode: WorkMode; readonly planSubmission: boolean };
-  /** Live callable additions; native tool definitions remain byte-stable. An
-   *  EMPTY list still renders its section as one "none yet" line: the doctrine
-   *  has the model check `workspace.listTools()` before building, and silence
-   *  here left that check unanswered — the model probed with a call to learn
-   *  there was nothing to call. */
+  /** An empty list still renders one "none yet" line: the doctrine has the model check
+     *  `workspace.listTools()` before building, and silence left that unanswered. */
   craftedTools?: readonly CraftedDeclaration[];
-  /** Rendered recent-facts block (renderFactsBlock output). */
   factsBlock?: string;
-  /** Bounded MEMORY.md tail (newest lessons/reflections). */
   memoryTail?: string;
-  /** Execution-recovery findings, newest first (evolution/recovery.ts) — what
-   *  the episode has PROVEN by execution so far. Re-read per step from the
-   *  lessons ledger, which is what makes this the one knowledge plane that
-   *  moves DURING a long turn: facts and the memory tail are frozen at turn
-   *  assembly, a finding recorded at step 40 rides every step after it. */
+  /** Re-read per step, so a finding recorded mid-turn rides every later step
+     *  (facts and the memory tail are frozen at turn assembly). */
   recoveries?: readonly string[];
-  /** Live executor lifecycle — rendered as status labels only; the executor
-   *  doctrine itself lives in the stable prefix. */
+  /** Status labels only; executor doctrine lives in the stable prefix. */
   executors?: readonly PromptExecutorInfo[];
-  /** The user's device fleet — every registered machine by name with its
-   *  platform, liveness and, per LIVE machine, this workspace's reach on it.
-   *  Rendered as its own roster so the model is told the fleet once, by name,
-   *  and never a single "the device" that two machines take turns being.
-   *  Absent where a backend has no fleet (the CLI's own host is not one). */
+  /** Every registered machine by name, so the model never reads a single "the device".
+     *  Absent where a backend has no fleet. */
   devices?: readonly DeviceFleetEntry[];
-  /** Background work still running (newest first). */
   jobs?: ActiveRoster<DynamicJob>;
-  /** The agent's own open task list, in write order, each task followed by its
-   *  open subtasks. Settled items are omitted — they are read back with
-   *  `tasks({action:'list'})`, and carrying them here would grow the block for
-   *  the life of the workspace. */
+  /** Open items only; settled ones are read back via `tasks({action:'list'})`. */
   tasks?: ActiveRoster<DynamicTask>;
-  /** Subordinates and forked head runs still open (most recent first). */
   delegates?: ActiveRoster<DynamicDelegate>;
-  /** Approvals/consent waiting on the user (oldest first — the one that has
-   *  been blocked longest matters most). */
+  /** Oldest first: the longest-blocked matters most. */
   approvals?: ActiveRoster<DynamicApproval>;
-  /** Capabilities the agent was configured to have that are NOT on this
-   *  turn's surface — an MCP server that missed its startup budget, say.
-   *  Without this the tools are simply absent: the model plans as if a
-   *  capability it was promised does not exist and cannot explain why. */
+  /** Configured capabilities missing from this turn's surface, so the model can explain their absence. */
   missingCapabilities?: readonly MissingCapability[];
 }
 
-/** The live search roster as delegates — the ONE mapping both backends apply to
- *  `HeadJournal.listLive()`, so a search reads the same on either. Typed
- *  structurally: how a run is journalled is not this layer's business.
- *
- *  The words are the SURFACE's words, because this block is the model reading
- *  its own live state and it can only act on what the tool surface calls
- *  things. `swarm-run.ts` records every configured search into this journal,
- *  so a row here IS a search: `agents({action:'swarm'})` in the vocabulary
- *  the prompt uses, whose units are nodes. Neither `fork` nor "head" appears
- *  — the ladder has no such action and the prompt has no such word, so a row
- *  wearing either would name an operation the model cannot invoke. */
+/** The live search roster as delegates, shared by both backends. Uses the surface's words
+ *  (`agents({action:'swarm'})`, nodes); never `fork` or "head", which the model cannot invoke. */
 export function searchDelegates(
   runs: ReadonlyArray<{ rootId: string; rationale: string; running: number; total: number }>,
 ): DynamicDelegate[] {
@@ -183,10 +105,7 @@ export function searchDelegates(
   }));
 }
 
-/** The nested task list as render rows: each task, then its subtasks. Flat
- *  because the cap below counts ROWS, which is what actually rides the
- *  request — and because both backends reach it through `agentDynamicContext`,
- *  so neither can flatten it its own way. */
+/** Flat because the cap counts rows, which is what rides the request. */
 function flattenTaskList(
   tasks: ReadonlyArray<{
     id: string; title: string; status: string;
@@ -201,59 +120,35 @@ function flattenTaskList(
   ]);
 }
 
-/** Where a backend reads each plane of its live state. Typed structurally —
- *  how a backend journals a head run or registers a job is not this layer's
- *  business, only that it can be asked. */
 export interface DynamicContextSources {
   readonly mode?: DynamicContext['mode'];
   readonly craftedTools?: readonly CraftedDeclaration[];
-  /** The turn's rendered recent-facts block (renderFactsForTurn output). */
   readonly factsBlock: string | undefined;
-  /** The turn's MEMORY.md tail — read once per turn, behind the only await in
-   *  this plane, so the caller closes over it rather than re-reading per step. */
+  /** Read once per turn (the plane's only await); callers close over it. */
   readonly memoryTail: string | undefined;
-  /** The injectable execution-recovery findings — listRecoveryFindings over
-   *  the lessons ledger, synchronous like every other per-step SQL read here,
-   *  so a finding recorded mid-turn is visible on the very next step. */
+  /** Synchronous per-step read, so a mid-turn finding shows on the next step. */
   readonly recoveryFindings: readonly string[];
   readonly executors: readonly PromptExecutorInfo[];
-  /** The device fleet, off the device transport's cached snapshot — absent
-   *  on a backend with no fleet. */
   readonly devices?: readonly DeviceFleetEntry[];
-  /** The running half of the background-job registry, with its true count —
-   *  BackgroundJobStore.listRunning(). */
   readonly runningJobs: ActiveRoster<{ id: string; kind: string; label: string | null }>;
-  /** The open half of the agent's task list — TaskListStore.listOpen(), which
-   *  filters open items BEFORE its transport bound and reports both. */
+  /** TaskListStore.listOpen(): filters open items before its transport bound. */
   readonly openTasks: ActiveRoster<{
     id: string; title: string; status: string;
     subtasks: ReadonlyArray<{ id: string; title: string; status: string }>;
   }>;
-  /** Live search runs — HeadJournal.listLive(), bounded page plus true total. */
   readonly liveHeadRuns: ActiveRoster<{ rootId: string; rationale: string; running: number; total: number }>;
-  /** Subordinates THIS backend alone knows about — its own hires, listed ahead
-   *  of the search roster. A workspace roster is small and already excludes
-   *  dismissed rows, so it rides whole. Absent where a backend has no roster
-   *  store; an absent plane renders nothing rather than inventing an empty one. */
+  /** This backend's own hires, listed ahead of the search roster. Absent renders nothing. */
   readonly subordinateDelegates?: readonly DynamicDelegate[];
-  /** Decisions parked on the user — consents awaiting an answer and deferred
-   *  approvals parked for later. The plane that tells a blocked agent whether
-   *  it is stuck on itself or stuck on the human. */
   readonly approvals?: ActiveRoster<DynamicApproval>;
    readonly missingCapabilities: readonly MissingCapability[];
 }
 
 /**
- * The agent's live state for ONE model step, assembled the same way on every
- * backend.
- *
- * Which planes exist, and when a plane is omitted rather than rendered empty,
- * is the whole content of this function, and it owns that decision for both
- * backends: each hands over the sources it can read and nothing else chooses
- * a plane. Omission is meaningful — an absent plane renders nothing, never
- * "(none)" — so a backend that cannot read one passes it absent rather than
- * empty. Nothing here is clock-derived; a wall-clock field would
- * re-fingerprint the block every request and append one per step. */
+ * The agent's live state for one model step, shared by both backends. This
+ * function alone decides which planes exist; an absent plane renders nothing
+ * (never "(none)"), so a backend that cannot read one passes it absent.
+ * Nothing clock-derived.
+ */
 export function agentDynamicContext(sources: DynamicContextSources): DynamicContext {
   const subordinateDelegates = sources.subordinateDelegates ?? [];
   const headDelegates = searchDelegates(sources.liveHeadRuns.items);
@@ -261,8 +156,7 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   const context: DynamicContext = {
     mode: sources.mode,
     craftedTools: sources.craftedTools,
-    // Re-listed per step: a sandbox provisioned or a device connected mid-turn
-    // flips availability, and the whole point of the block is to say so.
+    // Re-listed per step: availability flips mid-turn.
     executors: sources.executors,
     jobs: {
       items: sources.runningJobs.items.map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
@@ -270,8 +164,7 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
     },
     tasks: {
       items: flattenTaskList(sources.openTasks.items),
-      // The store already counts flattened open rows — the same unit the cap
-      // below spends.
+      // The store counts flattened open rows, the unit the cap spends.
       total: sources.openTasks.total,
     },
     delegates: {
@@ -297,19 +190,12 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   return context;
 }
 
-/** State that only makes sense for THIS turn's user message. */
 export interface TurnLocalContext {
-  /** One-turn device change notice (deviceChangeNotice output). */
   deviceNotice?: string | null;
-  /** Skills resolved active for this turn. Bodies render in the stable
-   *  prefix; the per-turn activation reasons (keyword matches vary with the
-   *  user message) render here. */
+  /** Bodies render in the stable prefix; the per-turn activation reasons render here. */
   activeSkills?: ActiveSkillSet;
-  /** Why this turn is running. An overlay and never a bar
-   *  (prompting/surface.ts), so it has no claim on system placement — and it
-   *  flips between consecutive turns of one session whenever a background job
-   *  lands, which is exactly what the prefix must survive. `chat` renders
-   *  nothing: the overlay exists for the wake alone. */
+  /** An overlay, not a bar, so it stays out of the system prompt: it flips whenever a
+     *  background job lands. `chat` renders nothing. */
   provenance?: TurnProvenance;
 }
 
@@ -320,25 +206,14 @@ export const DYNAMIC_CONTEXT_HEADER =
 export const TURN_CONTEXT_HEADER =
   '[Turn context: live state maintained by the Kinu runtime, not written by the user.]';
 
-/**
- * The resume overlay, in the turn it belongs to.
- *
- * It rendered as a conditional bullet inside OPERATING_GUIDANCE — about 400
- * bytes into a 9.2 KB cacheable prefix — so a background job finishing
- * mid-session rewrote 8829 of 9228 bytes and the next chat turn rewrote them
- * back: an alternating full-prefix cache write on every transition, for one
- * sentence. Anthropic's own cost guidance measures the same shape at $4.24
- * per run against $0.59 for the identical work with the volatile bytes moved
- * behind the stable prefix. Here it costs its own length and nothing else.
- */
+/** Turn-local, not in OPERATING_GUIDANCE: a conditional bullet in the prefix rewrote
+ * the whole cached prefix on every wake/chat transition. */
 const BACKGROUND_RESUME_NOTICE =
   '## Why this turn is running\n'
   + 'A background job finished; the user did not type anything. Fetch the referenced job result '
   + 'first, synthesize it, then continue or close the original work.';
 
-/** Live availability label for one executor. Volatile by nature (flips on
- *  device connect/disconnect and sandbox activation), so it renders in the
- *  dynamic-context block — never in the cacheable system prefix. */
+/** Volatile, so rendered in the dynamic-context block, never the cacheable prefix. */
 export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
   if (exec.name === 'device') return exec.active || exec.status === 'active' ? 'connected' : 'available';
 
@@ -349,17 +224,8 @@ export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
   return 'available';
 }
 
-/**
- * The measured resource ceiling of an executor's environment, as a status
- * suffix — `(cpus=1 mem=2G)`.
- *
- * Volatile like the availability label (a container is provisioned mid-session,
- * a device connects), and load-bearing rather than decorative: inside a cgroup
- * `nproc` reports the HOST's cores, so a model that sizes `-j` from it forks
- * dozens of compilers into a 2GB cap. Rendered ONLY from limits the environment
- * actually declared — an executor whose environment sets no cap says nothing
- * rather than inviting a guess.
- */
+/** Declared resource ceiling as `(cpus=1 mem=2G)`. Inside a cgroup `nproc` reports host
+ * cores, so the model needs this to size `-j`. Rendered only from declared limits. */
 function executorLimitsSuffix(exec: PromptExecutorInfo): string {
   const parts: string[] = [];
   const cpus = exec.resourceLimits?.cpus;
@@ -372,21 +238,8 @@ function executorLimitsSuffix(exec: PromptExecutorInfo): string {
   return parts.length > 0 ? ` (${parts.join(' ')})` : '';
 }
 
-/**
- * What the environment declares it can run, as a status suffix.
- *
- * The `shell` tool's own description tells the model that "available binaries and
- * process features are listed in this workspace provider's capabilities"
- * (packages/core/src/execution/inline.ts). Until this rendered, that sentence pointed at a list the
- * model was never given: the field was declared on PromptExecutorInfo,
- * populated by the router, and read by nothing — so the model guessed, and a
- * clone into an environment without the headroom for it read as a mystery.
- *
- * Rendered in the canonical union order rather than the declared Set's own
- * iteration order: the workspace set is composed from a live session's
- * enumeration, and an ordering flip that means nothing must not re-fingerprint
- * this block.
- */
+/** Declared capabilities, which the `shell` description points the model at. Rendered in
+ * canonical union order so a meaningless Set-order flip cannot re-fingerprint the block. */
 function executorCapabilitySuffix(exec: PromptExecutorInfo): string {
   const declared = new Set(exec.capabilities ?? []);
   const ordered = EXECUTOR_CAPABILITIES.filter((capability) => declared.has(capability));
@@ -394,25 +247,16 @@ function executorCapabilitySuffix(exec: PromptExecutorInfo): string {
   return ordered.length > 0 ? `, runs: ${ordered.join(', ')}` : '';
 }
 
-/**
- * The mount point this executor's files are served at inside the agent's own
- * file plane, when the plane mounts that environment (`/pc`, `/sandbox` —
- * vfs/mounts.ts). Rendered only on selectable rows, which are exactly the
- * rows whose environment is live, so the suffix never promises a mount that
- * is not there.
- */
+/** Mount point in the agent's file plane (vfs/mounts.ts), only on selectable (live) rows. */
 function executorMountSuffix(exec: PromptExecutorInfo): string {
-	// Widened READ view only: an executor name outside the table simply has no
-	// mount, and the record shape keeps that lookup total.
+	// Widened read view: a name outside the table has no mount.
 	const byName: Record<string, string | undefined> = EXECUTOR_MOUNTS;
 	const mount = byName[exec.name];
 
 	return mount ? `, files at ${mount}` : '';
 }
 
-/** The row's marker and the legend's subject are the same words by
- *  construction: a legend that stops naming what it explains explains
- *  nothing. */
+/** Shared by the row marker and the legend so they cannot drift apart. */
 const NOT_MEASURED_LABEL = 'not measured here';
 
 function renderExecutorStatus(exec: PromptExecutorInfo): string {
@@ -429,15 +273,8 @@ function renderExecutionLegend(executors: readonly PromptExecutorInfo[]): string
     : [];
 }
 
-/**
- * What the environment could not answer for, as a second status suffix.
- *
- * An unknown dropped from the declared set reads to the model exactly like one
- * measured absent, and the two must not look alike: the user's tunnelled machine
- * may have been attached FOR its GPU, which nothing on its PATH can establish,
- * and an unprobed machine has said nothing about python rather than denying it.
- * Rendered in the canonical union order for the same reason the declared set is.
- */
+/** Unknowns must not read like measured absences (a machine may be attached for its GPU,
+ * which PATH cannot establish). Canonical union order. */
 function executorUnmeasuredSuffix(exec: PromptExecutorInfo): string {
   const unmeasured = new Set(exec.unmeasuredCapabilities ?? []);
   const ordered = EXECUTOR_CAPABILITIES.filter((capability) => unmeasured.has(capability));
@@ -445,8 +282,7 @@ function executorUnmeasuredSuffix(exec: PromptExecutorInfo): string {
   return ordered.length > 0 ? `, ${NOT_MEASURED_LABEL}: ${ordered.join(', ')}` : '';
 }
 
-/** Bytes as the unit a memory cap is usually written in. One decimal at most,
- *  and never a rounded-UP figure: a cap must not read as more than it is. */
+/** At most one decimal, never rounded up: a cap must not read as more than it is. */
 function formatBytes(bytes: number): string {
   for (const [unit, scale] of [['G', 1024 ** 3], ['M', 1024 ** 2], ['K', 1024]] as const) {
     if (bytes >= scale) return `${trimZero(Math.floor((bytes / scale) * 10) / 10)}${unit}`;
@@ -467,16 +303,8 @@ function describeActivationReason(r: ActivationReason): string {
   }
 }
 
-/**
- * What a command on the user's own machine actually gets, as a status suffix.
- *
- * The model cannot see the owner's Settings page, so without this line it
- * cannot tell a machine that will run its build from one that will refuse
- * every command until a human installs a package — and it cannot know which
- * directory its files survive in. Three states, three sentences, no hedging:
- * a model that has to guess whether it is sandboxed writes to the wrong place
- * and reports success.
- */
+/** What a command on the user's machine gets (sandboxing, persistent directory):
+ * three states, three sentences, so the model need not guess. */
 function executorSandboxSuffix(exec: PromptExecutorInfo): string {
   const sandbox = exec.sandbox;
 
@@ -499,17 +327,8 @@ function executorSandboxSuffix(exec: PromptExecutorInfo): string {
   }
 }
 
-/**
- * One machine of the fleet, as a status line: its name, platform and
- * liveness, and — live only — where its files sit in the agent's plane, this
- * workspace's grant on it, how it runs a command, and what it can run.
- *
- * Nothing clock-derived and nothing order-derived: the toolchain renders in
- * the canonical capability order, and `probedAt` never renders, so an
- * unchanged fleet is the same bytes on every step. The mount segment is the
- * same function the file plane routes on, so what the model reads here is
- * exactly what `/pc/<name>` resolves.
- */
+/** Live devices add mount, grant, run mode and toolchain. Nothing clock- or
+ * order-derived (`probedAt` never renders); the mount segment is the file plane's own routing. */
 function renderDeviceLine(device: DeviceFleetEntry, fleet: readonly DeviceFleetEntry[]): string {
   const platform = device.os ? ` (${device.os})` : '';
 
@@ -524,8 +343,7 @@ function renderDeviceLine(device: DeviceFleetEntry, fleet: readonly DeviceFleetE
   else if (device.granted === false) parts.push('no grant yet for this workspace: the first call asks once');
 
   if (device.sandbox !== undefined) parts.push(executorSandboxSuffix({ name: 'device', sandbox: device.sandbox }).replace(/^, /, ''));
-  // The hub re-asks a machine whose answer aged out, so what arrives here is
-  // fresh or null by the hub's clock — no clock is consulted in a render.
+  // The hub refreshes aged answers; no clock is consulted in a render.
   const present = device.toolchain?.present ?? [];
   const runs = EXECUTOR_CAPABILITIES.filter((capability) => present.includes(capability));
 
@@ -534,15 +352,10 @@ function renderDeviceLine(device: DeviceFleetEntry, fleet: readonly DeviceFleetE
   return parts.join(', ');
 }
 
-/** Per-list caps. The block rides every request of every step, so each roster
- *  states its head and an honest count of the tail rather than growing without
- *  bound. */
+/** Per-list caps: the block rides every request, so rosters state a head and an honest tail count. */
 const MAX_JOBS = 8;
 
-/** Rows, not tasks — a task and its subtasks each cost a line. Larger than the
- *  other rosters because this one is the agent's own plan: the rest are things
- *  it can re-read on demand, and a plan cut off at its fourth step stops being
- *  a plan. Anything past this is still in `tasks({action:'list'})`. */
+/** Rows, not tasks. Larger than other caps: a plan cut off early stops being a plan. */
 const MAX_TASK_ROWS = 15;
 
 const MAX_DELEGATES = 8;
@@ -551,30 +364,20 @@ const MAX_APPROVALS = 5;
 
 const MAX_MISSING_CAPABILITIES = 8;
 
-/** Render cap for recovery findings — the reader (listRecoveryFindings)
- *  already bounds what arrives to the same window; this is display policy
- *  like every other roster cap here. */
 const MAX_RECOVERIES = 5;
 
-/** A finding carries two bounded arg echoes (the failing call and the one
- *  that ran clean), so the one-line recognition budget above would cut the
- *  half that makes it usable. */
+/** Two bounded arg echoes per finding; the one-line budget would cut the useful half. */
 const RECOVERY_ENTRY_CHARS = 480;
 
-/** Free text from a store (job labels, delegate tasks, gated commands) is one
- *  line at most — the model needs to recognize the item, not re-read it. */
 const ENTRY_CHARS = 120;
 
-/** Head+tail-free one-liner: collapse whitespace, cut at the bound. */
 function clip(text: string, max = ENTRY_CHARS): string {
   const oneLine = text.replace(/\s+/g, ' ').trim();
 
   return oneLine.length > max ? `${oneLine.slice(0, max - 1).trimEnd()}…` : oneLine;
 }
 
-/** One capped roster section: `title`, the first `cap` rendered rows, and an
- *  honest elision line counted from the roster's TRUE total — never from the
- *  page a store happened to return. Null when there was nothing active. */
+/** Elision is counted from the roster's true total, never the returned page. Null when empty. */
 function rosterSection<T>(
   title: string,
   roster: ActiveRoster<T>,
@@ -590,7 +393,7 @@ function rosterSection<T>(
   return [title, ...lines].join('\n');
 }
 
-/** Shared empty page: an absent plane renders nothing, never "(none)". */
+/** An absent plane renders nothing, never "(none)". */
 const EMPTY_ROSTER: ActiveRoster<never> = { items: [], total: 0 };
 
 const DYNAMIC_SECTION_TITLES = {
@@ -608,19 +411,11 @@ const DYNAMIC_SECTION_TITLES = {
   missingCapabilities: '## Configured but not available this turn (plan without these, and say so if asked)',
 } satisfies Record<keyof DynamicContext, string>;
 
-/** What the crafted-tools section says when the source reported an empty set:
- *  the listing check is answered in-line, so it needs no call. A reported set
- *  is not the same plane as an unreported one — `undefined` stays silent. */
+/** For a reported empty set; an unreported (`undefined`) set stays silent. */
 const NO_CRAFTED_TOOLS_YET =
   'No crafted tools exist in this workspace yet. `workspace.listTools()` returns an empty list; `workspace.createTool` adds the first.';
 
-/**
- * The ledger-fed dynamic-context block (or null when there is nothing to say).
- *
- * The `fingerprint` attribute digests the block BODY, so the model can tell at
- * a glance which of two blocks is a re-statement and which is a real change,
- * and a superseded block is visibly stale rather than silently wrong.
- */
+/** `fingerprint` digests the block body, so re-statements and stale blocks are visible. */
 function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, string> {
   const sections = new Map<keyof DynamicContext, string>();
 
@@ -666,9 +461,7 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, s
   if (fleet.length > 0) {
     const live = connectedDevices(fleet);
 
-    // The rule the model has to act on, stated with the roster it applies to:
-    // one live machine needs no name; several do, and the ask says so in the
-    // same words the refusal uses.
+    // One live machine needs no name; several do, in the same words the refusal uses.
     const doctrine = live.length > 1
       ? 'Several machines are connected: name the machine each `shell { runtime: "<nickname>" }` call is for. The runtime refuses a call that names none.'
       : 'One machine is connected: `shell { runtime: "<nickname>" }` reaches it, and `shell { runtime: "device" }` reaches the sole machine.';
@@ -783,12 +576,10 @@ function renderWorkMode(mode: NonNullable<DynamicContext['mode']>): string {
   return `${DYNAMIC_SECTION_TITLES.mode}\nMode: ${mode.workMode}; submit_plan: ${mode.planSubmission ? 'available' : 'unavailable'}.`;
 }
 
-/** The per-turn tail block (or null when there is nothing to say). */
 export function renderTurnLocalContext(ctx: TurnLocalContext): string | null {
   const sections: string[] = [];
 
-  // First of the sections: it says why the turn exists at all, which frames
-  // everything the rest of the block and the user message then say.
+  // First: it frames why the turn exists.
   if (ctx.provenance === 'background_resume') sections.push(BACKGROUND_RESUME_NOTICE);
 
   const reasons = ctx.activeSkills?.reasons ?? [];
@@ -809,10 +600,8 @@ export function renderTurnLocalContext(ctx: TurnLocalContext): string | null {
   return [TURN_CONTEXT_HEADER, ...sections].join('\n\n');
 }
 
-/** The turn-local context as one user message (or null). Callers hand it to
- *  the model for THIS turn only — never persisted into durable history, and
- *  appended AFTER the extension transformContext seam, so a compaction plugin
- *  never sees turn-local state. */
+/** For this turn only: never persisted, and appended after the transformContext seam
+ *  so compaction plugins never see it. */
 export function turnLocalContextMessage(ctx: TurnLocalContext): ModelMessage | null {
   const text = renderTurnLocalContext(ctx);
 
@@ -820,40 +609,20 @@ export function turnLocalContextMessage(ctx: TurnLocalContext): ModelMessage | n
 }
 
 interface LedgerBlock {
-  /** Message count of the un-woven array when the block was born — it renders
-   *  after that many messages, forever (the cache-stability contract), except
-   *  where that slot has since become a tool result ({@link insertionPoint}). */
+  /** Un-woven message count at birth; the block renders there forever, except where that
+     *  slot has since become a tool result ({@link insertionPoint}). */
   readonly index: number;
-  /** The frozen full snapshot or delta carried by this message. */
   readonly text: string;
-  /** What this block costs the request, on the compaction ladder's chars/4
-   *  scale. Priced ONCE, here at birth: the step pruner reads the ledger's
-   *  total on every model step and `dropSuperseded` reads a slice of it, so
-   *  neither has to re-derive the scale, and there is one place that applies
-   *  it. */
+  /** Chars/4 cost, priced once at birth for the step pruner and `dropSuperseded`. */
   readonly tokens: number;
   readonly message: ModelMessage;
 }
 
 /**
- * The first position at or after `index` at which a message may legally be
- * inserted — `index` itself in every case but one.
- *
- * A `tool` message answers the assistant message before it, and the AI SDK
- * refuses to build a prompt with anything in between: it throws
- * `AI_MissingToolResultsError` client-side, before a byte reaches the provider
- * (see prompting/interrupted-tool-calls.ts). A frozen block's index is a
- * coordinate in the array of the turn it was born in, so the slot it names can
- * since have grown into the middle of such a pair — the CLI's turn-start steer
- * puts the first block at index 2, and on the next turn index 2 is the tool
- * result answering the assistant message at index 1. Every consecutive `tool`
- * message is stepped over, not just one: a turn can answer several calls in
- * separate messages, and landing between two of those breaks the prompt exactly
- * as landing before the first one does.
- *
- * `settleUnpairedToolCalls` cannot cover this. It runs at turn assembly, the
- * weave runs per step afterwards, and a synthetic result here would claim a
- * call was interrupted when its real result is sitting one message away.
+ * First legal insertion position at or after `index`: steps over consecutive
+ * `tool` messages, since nothing may sit between a call and its results
+ * (`AI_MissingToolResultsError`). A frozen index can land inside such a pair on
+ * a later turn. `settleUnpairedToolCalls` cannot cover this: it runs at assembly.
  */
 function insertionPoint(history: ReadonlyArray<ModelMessage>, index: number): number {
   let at = index;
@@ -864,25 +633,10 @@ function insertionPoint(history: ReadonlyArray<ModelMessage>, index: number): nu
 }
 
 /**
- * Per-activation ledger of dynamic-context blocks.
- *
- * `weave` is the whole interface, and the shared step pipeline calls it once
- * per model step: hand it the step's (un-woven) message array and the state
- * read at that instant. It appends a fresh block at the tail only when the
- * render differs from the newest block's, and returns the array with every
- * frozen block woven back in at its original position — an unchanged state
- * adds nothing, so the already-frozen block keeps conveying current state
- * from inside the cached prefix, and a changed one supersedes it at the tip
- * without disturbing a single byte before it.
- *
- * `history` must always be the array WITHOUT this ledger's blocks (the AI SDK
- * rebuilds every step from the original messages plus response messages, so a
- * woven array is never fed back in).
- *
- * In-memory only, never persisted: construct one per activation. Call
- * `reset()` whenever the durable stream is rewritten (compaction) — the
- * frozen positions are meaningless against the new stream, and the next
- * weave starts over with one fresh block at the tail.
+ * Per-activation ledger of dynamic-context blocks. `weave` appends a block only
+ * when the render changed and re-inserts every frozen block at its position.
+ * `history` must never include this ledger's blocks. Call `reset()` whenever the
+ * durable stream is rewritten (compaction).
  */
 export class DynamicContextLedger {
   private blocks: LedgerBlock[] = [];
@@ -892,17 +646,7 @@ export class DynamicContextLedger {
     return this.blocks.length;
   }
 
-  /**
-   * What the frozen blocks add to the next request, on the same chars/4 scale
-   * the compaction ladder prices with.
-   *
-   * The step pruner reserves it: the pipeline prunes before it weaves, so this
-   * is the part of the request the pruner would otherwise measure as absent —
-   * and it is the part that GROWS, a block per state change for the life of
-   * the activation. A step that appends a new block is still one block short
-   * until the next step freezes it, which is the residual an ordering that
-   * renders once per step can leave; the unbounded term is what this closes.
-   */
+  /** Chars/4 overhead of frozen blocks, reserved by the step pruner (pruning runs before the weave). */
   get overheadTokens(): number {
     let tokens = 0;
 
@@ -912,24 +656,10 @@ export class DynamicContextLedger {
   }
 
   /**
-   * Collapse the full base and its deltas into one fresh full block at the
-   * newest position — the ONLY thing that removes a frozen block.
-   *
-   * Re-render the stored immutable state. Keeping just the newest delta would
-   * discard every unchanged fact from its base; an empty state stays empty.
-   *
-   * Removing a mid-array message is exactly what `weave` refuses to do, because
-   * it breaks the provider's prefix cache. So this is a pressure-relief act and
-   * nothing else: only a caller that has already measured the context over the
-   * ladder's trigger may call it. Nothing else in the system ever bounds this
-   * plane — a ladder stage cannot see it (blocks are woven per step and never
-   * reach durable history) and a replayed compaction plan prices the prefix
-   * with the overhead it recorded when it was built — so without this the
-   * superseded blocks accumulate for the life of the activation.
-   *
-   * Returns the tokens freed, on the ladder's chars/4 scale, so the caller can
-   * subtract them from the pressure it measured and let the rest of the ladder
-   * stand down if this rung was enough.
+   * Collapse the base and its deltas into one fresh full block at the newest
+   * position; the only removal of frozen blocks. Breaks the prefix cache, so only
+   * a caller already over the ladder's trigger may call it. Returns tokens freed
+   * (chars/4).
    */
   dropSuperseded(): number {
     if (this.blocks.length <= 1) return 0;
@@ -993,23 +723,14 @@ export class DynamicContextLedger {
   }
 }
 
-/** What this turn's system prompt did to the cacheable prefix. `first` is the
- *  session's opening turn, which has nothing to compare against. */
+/** `first` is the session's opening turn, with nothing to compare against. */
 export interface SystemPromptObservation {
   readonly hash: string;
   readonly status: 'first' | 'stable' | 'changed';
 }
 
-/**
- * Fingerprint a turn's system prompt against the previous turn's.
- *
- * The prefix is supposed to be byte-stable across turns — that is what lets a
- * provider cache survive one — so `changed` is a claim about the agent, not
- * about the request: a soul edit, a model switch, a skill or tool surface
- * change. Anything else changing it is a cache-busting bug, and this is the
- * measurement that catches it. Backends differ only in where they report the
- * result, never in how it is derived.
- */
+/** `changed` should mean an agent event (soul, model, skill/tool surface); anything
+ * else is a cache-busting bug this catches. */
 export function observeSystemPromptHash(
   previous: string | null,
   system: string,

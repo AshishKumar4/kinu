@@ -1,74 +1,7 @@
-/**
- * The deployment, as idempotent steps (docs/SELF-DEPLOY.md § The Cloudflare
- * door, step 6).
- *
- * Every step looks before it creates, so a re-run after an eviction, a retry
- * after a refusal, and a second sitting on the same account all reach the same
- * place. Each one records what it established as a fact, because the step that
- * needs a KV namespace id runs in a different Durable Object activation than
- * the step that created it.
- *
- * API SHAPES. Endpoints and payloads are Cloudflare's published v4 reference,
- * read 2026-09-17: multipart Worker upload and version upload
- * (developers.cloudflare.com/workers/configuration/multipart-upload-metadata/,
- * .../api/resources/workers/subresources/scripts/subresources/versions/methods/create/),
- * the three-phase asset upload (.../workers/static-assets/direct-upload/, which
- * also fixes the asset hash: `sha256(base64(content) + extension)` truncated to
- * 32 hex characters), and the KV, R2, Vectorize, AI Gateway, Access, DNS and
- * Workers domains resources.
- *
- * HOW MUCH OF A RELEASE HAS TO BE IN MEMORY AT ONCE, read 2026-09-18 from the
- * same two pages:
- *   - THE MODULE SET, MEASURED. A version is created by ONE multipart request
- *     carrying `metadata` and every module part; the reference describes no
- *     second request and no resumable form, so the whole module set is held
- *     together. This tree's modules are 120 files and 29.19 MiB
- *     (`packages/cf-backend/dist/kinu` built 2026-09-16, `.map` and
- *     `wrangler.json` excluded, measured 2026-09-18). It fits: the module set
- *     plus the copy the transport makes of it is 58.4 MiB, and the whole
- *     upload holds 88.18 MiB at its peak — measured the same day in
- *     `packages/cf-backend/tests/workerd/deploy-ledger.test.ts` on a release
- *     of this size — against the `do.isolate.transient_alloc_reset` ceiling
- *     the catalog records.
- *   - THE ASSET BATCH, ASSUMED. The upload session answers with `buckets`,
- *     which the reference calls instructions on how to "optimally batch
- *     upload your files", and says the completion token comes back "once
- *     every file in the manifest has been uploaded" — a per-manifest
- *     condition, not a per-bucket one. Uploading a bucket in several smaller
- *     requests therefore reads as allowed, and this flow does it
- *     (`ASSET_BATCH_BYTES`), because one bucket of this release's assets is
- *     104 MiB of base64 in a single body. UNMEASURED against the live API:
- *     the one real run (below) never reached the upload.
- *
- * WHAT ONE REAL RUN MEASURED, 2026-09-18, account f44999d1, instance
- * `kinu-probe-202609181030`, release 0.4.0+probe-d5d744899 driven through this
- * plan with an account API token as the bearer:
- *   - `account` read the account and settled
- *     `kinu-probe-202609181030.ashishkmr472.workers.dev`.
- *   - `kv` created `kinu-probe-202609181030-auth-kv`
- *     (5a149b52d800447f9722ffc2c9d10472).
- *   - `r2` created all four buckets, prefixed by the instance name.
- *   - `vectorize` STOPPED THE RUN: `code 10000 status 403 Authentication
- *     error`, and the same refusal on a bare `GET /vectorize/v2/indexes`, so
- *     the token carries no Vectorize permission at all. Everything created was
- *     deleted and confirmed absent by listing.
- *
- * WHAT IS THEREFORE STILL UNMEASURED, because the run never reached the
- * upload (AGENTS.md: a claim about platform behaviour cites a dated
- * measurement):
- *   - `migrations` is sent only on the first upload (`PUT .../scripts/<name>`)
- *     and never on `POST .../versions`. The premise is that re-declaring
- *     `new_sqlite_classes` under a tag the script already applied is refused
- *     rather than ignored. UNMEASURED.
- *   - `keep_bindings: ['secret_text', 'secret_key']` is what carries the
- *     secrets this deployment already runs with — the ones nobody typed into
- *     this flow — into the new version. The premise is that a version upload
- *     replaces the whole binding list unless told otherwise. UNMEASURED; the
- *     `deploymentSecrets` read-through it replaced was the compensation for it.
- * Both need one credential that can reach Vectorize; nothing else was
- * missing. Everything else here is proved against the fake transport in the
- * suite.
- */
+// The deployment as idempotent steps (docs/SELF-DEPLOY.md): each looks before it creates and
+// records what it established as a fact, since steps may run in different DO activations.
+// API shapes follow Cloudflare's v4 reference. Unmeasured premises: re-declaring migrations on a
+// version upload is refused, and a version upload drops secrets not named in `keep_bindings`.
 import * as v from 'valibot';
 import { cloudflareResult, readEnvelope, type CloudflareTransport, type UploadPart } from './cloudflare';
 import {
@@ -114,25 +47,14 @@ const ASSET_CONTENT_TYPES = {
   gz: 'application/gzip', webmanifest: 'application/manifest+json',
 } satisfies Record<string, string>;
 
-/**
- * How much base64 an asset batch carries before it is sent.
- *
- * The upload session's `buckets` are Cloudflare's batching advice, and for
- * this release one bucket is every asset: 78 MiB of files, 104 MiB once
- * base64'd, in one body — over the `do.isolate.transient_alloc_reset`
- * ceiling the catalog records, so the object that installs the release
- * cannot build it. The bound is bytes rather than files because the bundle's
- * files differ by four orders of magnitude. A member larger than this is a
- * batch of its own — an asset is uploaded whole or not at all.
- */
+// One Cloudflare bucket can exceed the `do.isolate.transient_alloc_reset` ceiling, so batches
+// are bounded by bytes. A larger member travels alone; assets are uploaded whole.
 const ASSET_BATCH_BYTES = 8 * 1024 * 1024;
 
-/** Base64's alphabet as bytes, so an asset is encoded straight into the body
- *  it is sent as and never exists as a 28 MiB string on the way. */
+// As bytes, so an asset is encoded straight into its body and never exists as a string.
 const BASE64_ALPHABET = new TextEncoder()
   .encode('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/');
 
-/** The step list for one release and one set of answers. */
 export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): readonly DeployStep[] {
   return [
     accountStep(),
@@ -165,10 +87,7 @@ function accountStep(): DeployStep {
 
       context.facts.set(FACT_ACCOUNT_NAME, name);
 
-      // The address is settled here, before anything is created, because the
-      // Access application is keyed by hostname and a workers.dev hostname is
-      // not knowable until the account's subdomain is read. Binding it is the
-      // address step's job; knowing it is this one's.
+      // Settled first: the Access application is keyed by hostname.
       if (context.inputs.address.kind === 'zone') {
         context.facts.set(FACT_ADDRESS, context.inputs.address.hostname);
 
@@ -289,8 +208,6 @@ function vectorizeStep(manifest: ReleaseManifest): DeployStep {
           continue;
         }
 
-        // The geometry travels with the release: an index created at the wrong
-        // width binds and then rejects every insert.
         await cloudflareResult(
           context.transport,
           {
@@ -405,9 +322,6 @@ function seedStep(manifest: ReleaseManifest): DeployStep {
       const seed = manifest.seed;
 
       if (seed === null) {
-        // Honest absence: the hosted language runtimes live in this bucket, and
-        // without a seed they are absent. The deployment runs; `eval` in a
-        // hosted runtime answers 127 until an operator seeds it.
         return 'This release publishes no runtime cache seed; hosted runtimes stay absent.';
       }
 
@@ -428,9 +342,6 @@ function seedStep(manifest: ReleaseManifest): DeployStep {
       for (const object of objects.objects) {
         const path = `/accounts/${context.inputs.accountId}/r2/buckets/${bucket}/objects/${object.key}`;
 
-        // Looks before it uploads, like every other step: the toolchain is the
-        // largest thing the flow moves, and an update re-runs this plan over a
-        // bucket that already holds it.
         if (await objectExists(context.transport, path)) continue;
         const body = await context.http(object.url);
 
@@ -458,15 +369,9 @@ function secretsStep(manifest: ReleaseManifest): DeployStep {
     id: 'secrets',
     title: 'Mint the deployment secrets',
     async run(context: DeployContext): Promise<string> {
-      // Before the upload, not after: a version's secrets are bindings of that
-      // version, so a version uploaded without them runs a deployment whose
-      // signed-in surfaces all answer 503.
-      // A DEPLOYMENT'S ROOT KEYS ARE MINTED ONCE AND NEVER AGAIN. An update
-      // does not mint and does not need to: the live keys are bindings of the
-      // running Worker and `keep_bindings` on the version upload carries them
-      // forward untouched. Minting here would bind a fresh
-      // `CREDENTIAL_ENCRYPTION_KEY` over the one every stored credential was
-      // sealed with, which is unreadable data rather than a failed step.
+      // Runs before the upload: secrets are bindings of a version.
+      // Root keys are minted once; re-minting `CREDENTIAL_ENCRYPTION_KEY` would make stored
+      // credentials unreadable. Updates carry them via `keep_bindings`.
       if (context.update) {
         return `${MINTED_SECRETS.length} secret(s) kept from the running version.`;
       }
@@ -496,16 +401,8 @@ function secretsStep(manifest: ReleaseManifest): DeployStep {
   };
 }
 
-/**
- * The Worker, uploaded out of one walk of the artifact.
- *
- * THE ORDER IS FORCED. The asset session is opened first because it needs
- * only the manifest and it says which assets Cloudflare still wants; then the
- * archive is walked once, each asset going out in a bounded batch as it
- * arrives and each module kept, because a version is one multipart request.
- * The release is never in memory as a whole: what the run holds at its peak
- * is recorded as a fact (`FACT_UPLOAD_PEAK`) and the ledger row carries it.
- */
+/** Asset session first, then one walk: assets go out in bounded batches, modules are kept
+ *  because a version is one multipart request. */
 function uploadStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'upload',
@@ -522,9 +419,7 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
         ? `/accounts/${accountId}/workers/scripts/${script}/versions`
         : `/accounts/${accountId}/workers/scripts/${script}`;
 
-      // The transport copies every part into the multipart body
-      // (`cloudflare.ts`), so the module set exists twice while this request
-      // is in flight, and the peak has to say so.
+      // The transport copies every part, so the module set is held twice in flight.
       context.artifact.held.hold(carried.bytes);
 
       const response = await context.transport.upload({
@@ -536,7 +431,6 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
         ],
       });
 
-      // The modules and the transport's copy of them, both let go of.
       context.artifact.held.release(carried.bytes * 2);
 
       const version = readEnvelope(path, response, VersionSchema);
@@ -570,8 +464,7 @@ function addressStep(inputs: DeployInputs): DeployStep {
           v.object({ enabled: v.optional(v.boolean()) }),
         );
       } else {
-        // A Workers custom domain creates the proxied DNS record itself; that
-        // is the whole reason the flow asks for a zone rather than a hostname.
+        // A Workers custom domain creates the proxied DNS record itself.
         await cloudflareResult(
           context.transport,
           {
@@ -586,14 +479,8 @@ function addressStep(inputs: DeployInputs): DeployStep {
       const version = context.facts.get(FACT_VERSION_ID);
 
       if (version !== undefined) {
-        // A version upload does not serve traffic until a deployment points at
-        // it. The first upload (`PUT .../scripts/<name>`) already deployed, and
-        // pointing a deployment at the same version again is a no-op.
-        //
-        // Read through the same envelope as every other write here: a refused
-        // pointer move — a scope the token lacks, a version the account will
-        // not deploy — leaves the OLD build serving, and a step that discarded
-        // this answer would report the new one as live.
+        // A version serves no traffic until a deployment points at it; a refusal leaves the old
+        // build serving, so the envelope is checked.
         await cloudflareResult(
           context.transport,
           {
@@ -627,11 +514,7 @@ function smokeStep(): DeployStep {
 
       const { build } = v.parse(HealthAnswerSchema, await response.json());
 
-      // THE CHECK IS WHICH BUILD ANSWERED, not that something did. On an update
-      // the old version answers 200 from the same address, so a smoke step that
-      // only read `response.ok` would pass while the deployment still served
-      // the previous build — and the next apply, over a finished ledger, would
-      // have nothing left to repair.
+      // Checks which build answered: on an update the old version also answers 200.
       if (build === null || build.version !== context.manifest.version || build.sha !== context.manifest.sha) {
         throw new Error(
           `https://${address}/api/health answers ${build?.version ?? 'an unstamped build'}`
@@ -686,8 +569,6 @@ function handoverStep(manifest: ReleaseManifest): DeployStep {
         v.object({ name: v.optional(v.string()) }),
       );
 
-      // The last act of the run: kinu.run holds nothing about this account
-      // from here on, and the deployment updates itself by pulling.
       await context.vault.wipe();
 
       return `${script} holds its own key; this run holds nothing.`;
@@ -695,25 +576,14 @@ function handoverStep(manifest: ReleaseManifest): DeployStep {
   };
 }
 
-/* ── the upload's three phases ────────────────────────────────────────── */
-
-/** The asset upload session: the token every batch presents, and the hashes
- *  Cloudflare has not got yet. */
 interface AssetSession {
   readonly token: string;
   readonly wanted: ReadonlySet<string>;
-  /** The asset hash of every member the release serves, by archive path,
-   *  which is how a member coming off the stream is recognised. */
+  /** By archive path. */
   readonly hashes: ReadonlyMap<string, string>;
 }
 
-/**
- * Phase one: register the manifest.
- *
- * An empty token means the release carries no assets at all, which is what
- * `keep_assets` is for. A token with no wanted hashes is the completion token
- * already — every file was uploaded by an earlier version.
- */
+/** Empty token: no assets (`keep_assets`). No wanted hashes: the token is already the completion token. */
 async function openAssetSession(
   context: DeployContext,
   manifest: ReleaseManifest,
@@ -747,27 +617,13 @@ async function openAssetSession(
   return { token: session.jwt ?? '', wanted, hashes };
 }
 
-/** What one walk of the artifact produced: the assets are already uploaded,
- *  and the modules are the parts the version request still has to carry. */
 interface CarriedRelease {
   readonly token: string;
   readonly modules: readonly UploadPart[];
-  /** What the modules weigh, so the caller can account for the copy the
-   *  transport makes of them and let go of both afterwards. */
   readonly bytes: number;
 }
 
-/**
- * Phase two: one pass over the archive, uploading the assets as they arrive.
- *
- * WHAT IS HELD AND FOR HOW LONG. An asset is encoded into the body it is sent
- * as and let go of when its batch lands; a module is kept until the version
- * request, because there is only one. The artifact is ordered assets-then-
- * modules by `scripts/build-worker-release.ts` for exactly this reason: the
- * compressed archive is released when the walk ends, so the module set and
- * the compressed bytes are not both held while the largest asset is encoded.
- * An artifact in the other order still installs; it just costs more.
- */
+/** `scripts/build-worker-release.ts` orders assets before modules to lower the peak; either order installs. */
 async function carryArtifact(
   context: DeployContext,
   manifest: ReleaseManifest,
@@ -804,9 +660,7 @@ async function carryArtifact(
 
     if (hash === undefined || !session.wanted.has(hash)) continue;
 
-    // Sent BEFORE this member joins, not after it overflowed: a member larger
-    // than the bound then travels on its own, and the biggest body the object
-    // ever builds is one member's base64 rather than that plus a full batch.
+    // Flush before this member joins, so an oversized member travels alone.
     if (batchBytes > 0 && batchBytes + member.size > ASSET_BATCH_BYTES) {
       token = await sendAssets(context, batch, token, held);
       uploaded += batch.length;
@@ -840,9 +694,7 @@ async function carryArtifact(
   return { token, modules, bytes: moduleBytes };
 }
 
-/** One batch, sent. The batch exists twice while the request is in flight —
- *  the parts, and the copy the transport makes of them into the multipart
- *  body — and only the copy is released here; the parts belong to the caller. */
+/** Charges and releases only the transport's copy; the parts belong to the caller. */
 async function sendAssets(
   context: DeployContext,
   parts: readonly UploadPart[],
@@ -862,14 +714,7 @@ async function sendAssets(
   return answer.jwt ?? token;
 }
 
-/**
- * A member as the base64 the asset endpoint takes (`?base64=true`), written
- * straight out of the stream into the body it is sent as.
- *
- * NOT `btoa` OVER THE WHOLE MEMBER. That holds the member, a binary string of
- * it and its encoding at once — three copies of a file that is 21.5 MiB in
- * this release, inside an object with a 128 MiB allocation ceiling.
- */
+// Streams into the body; `btoa` over a whole member would hold three copies of it.
 async function base64Member(member: ArtifactMember, held: HeldBytes): Promise<Uint8Array<ArrayBuffer>> {
   const encoded = new Uint8Array(Math.ceil(member.size / 3) * 4);
   const carry = new Uint8Array(3);
@@ -909,8 +754,6 @@ async function base64Member(member: ArtifactMember, held: HeldBytes): Promise<Ui
   return encoded;
 }
 
-/** Three bytes to four characters, into `out` at `at`; a final group of one
- *  or two bytes is padded. Returns where the next group goes. */
 function writeBase64(out: Uint8Array, at: number, bytes: Uint8Array): number {
   let cursor = at;
 
@@ -929,7 +772,6 @@ function writeBase64(out: Uint8Array, at: number, bytes: Uint8Array): number {
   return cursor;
 }
 
-/** A byte count as a person reads it, for the one line the ledger shows. */
 function mebibytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
 }
@@ -943,30 +785,13 @@ async function scriptExists(transport: CloudflareTransport, accountId: string, s
   return response.status >= 200 && response.status < 300;
 }
 
-/** Whether an R2 object is already in the bucket. `HEAD` rather than a listing:
- *  the seed names its own keys, and a listing would page over a bucket whose
- *  other contents are the deployment's own files. */
 async function objectExists(transport: CloudflareTransport, path: string): Promise<boolean> {
   const response = await transport.request({ method: 'HEAD', path });
 
   return response.status >= 200 && response.status < 300;
 }
 
-/**
- * The upload's metadata.
- *
- * MIGRATIONS ONLY ON THE FIRST UPLOAD. `new_sqlite_classes` declares a class
- * that did not exist; re-sending the same declaration against a script that
- * already applied that tag is an error, not a no-op, so an update sends none.
- *
- * `keep_bindings` IS WHY AN UPDATE CAN BE PARTIAL. A version upload replaces the
- * whole binding list, so every secret not named here — anything the owner set
- * by hand, and the deployment's own refresh token and record — would be dropped
- * from the new version. Naming the two secret kinds keeps them, which is also
- * what lets the vault stop reading through to this Worker's live `env`.
- *
- * MEASURED: see the file header.
- */
+/** Migrations only on the first upload. `keep_bindings` keeps secrets not sent here (see file header). */
 async function versionMetadata(
   context: DeployContext,
   manifest: ReleaseManifest,
@@ -1020,9 +845,7 @@ async function versionMetadata(
   return metadata;
 }
 
-/** One binding as the upload metadata spells it, or null for a binding this
- *  deployment does not get — the container, which needs Workers Paid and an
- *  image in the user's own registry, and anything the answers turned off. */
+// Null for the container (needs Workers Paid and a user registry) and bindings turned off.
 async function wireBinding(
   context: DeployContext,
   manifest: ReleaseManifest,
@@ -1066,9 +889,7 @@ async function wireBinding(
   }
 }
 
-/** A var the deployment computes for itself. Null where this deployment has no
- *  value for it — an empty string would be a claim, and `PREVIEW_HOST_SUFFIX`
- *  empty is exactly how previews are turned off. */
+// Null means no value; empty `PREVIEW_HOST_SUFFIX` is how previews are turned off.
 function derivedVar(context: DeployContext, name: string): string | null {
   const address = context.facts.get(FACT_ADDRESS) ?? '';
 
@@ -1089,21 +910,13 @@ function derivedVar(context: DeployContext, name: string): string | null {
   }
 }
 
-/** A resource's name in this deployment. kinu.run's own names are the defaults
- *  a single-instance account gets; a second instance on the same account needs
- *  its own, so the instance name prefixes anything not already carrying it. */
+// Prefixed by instance name so several instances can share an account.
 function resourceName(inputs: DeployInputs, base: string): string {
   if (inputs.instanceName === 'kinu' || base.startsWith(inputs.instanceName)) return base;
 
   return base.startsWith('kinu-') ? `${inputs.instanceName}-${base.slice('kinu-'.length)}` : `${inputs.instanceName}-${base}`;
 }
 
-/** The `Content-Type` the asset is served with. A closed table, so an
- *  extension nobody listed falls to the byte stream rather than to a wrong
- *  claim about what the file is. */
-/** The same closed table as a lookup. The key is an arbitrary string read off
- *  a path, so `.get()` returning `string | undefined` is the honest signature —
- *  the reason `CODE_BY_ERROR_NAME` is a Map in obs/error.ts. */
 const CONTENT_TYPE_BY_EXTENSION = new Map<string, string>(Object.entries(ASSET_CONTENT_TYPES));
 
 function contentTypeOf(path: string): string {
@@ -1116,9 +929,7 @@ function extensionOf(path: string): string {
   return dot === -1 ? '' : path.slice(dot + 1).toLowerCase();
 }
 
-/** The minted root secrets, as text. Thirty-two random bytes each, which is
- *  why one `String.fromCharCode` call is enough; the asset upload encodes its
- *  members out of the archive stream instead (`base64Member`). */
+// Only for the 32-byte minted secrets; assets use `base64Member`.
 function base64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
 }

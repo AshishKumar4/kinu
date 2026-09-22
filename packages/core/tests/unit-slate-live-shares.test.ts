@@ -15,7 +15,6 @@ const grant: ShareGrant = {
   ],
 };
 
-/** The store over its own three tables and nothing else. */
 function shareDb() {
   const db = new Database(':memory:');
   initSlateLiveShareTables(makeExecRaw(db));
@@ -49,11 +48,9 @@ test('a live share round-trips its grant and refuses viewers once revoked', () =
     expect(shares.list().map((share) => share.id)).toEqual(['s2', 's1']);
 
     expect(shares.revoke('s1').revokedAt).toBe(1_002);
-    // Revoke is idempotent and the row stays readable through `get`.
     expect(shares.revoke('s1').revokedAt).toBe(1_002);
     expect(shares.get('s1')?.revokedAt).toBe(1_002);
     expect(() => shares.revoke('nope')).toThrow('No such share');
-    // Revoked: no address, no live read.
     expect(shares.byHandle('0123456789')).toBeUndefined();
     expect(() => shares.live('s1')).toThrow('This slate is no longer shared');
     expect(() => shares.live('nope')).toThrow('No such share');
@@ -69,14 +66,12 @@ test('named users land on the share and a revoked share takes no more', () => {
   try {
     const share = shares.add(liveShare());
 
-    // Equal created_at orders by email.
     const withUsers = shares.addUsers(share.id, [
       { userId: 'u2', email: 'beta@example.com' },
       { userId: 'u1', email: 'alpha@example.com' },
     ]);
 
     expect(withUsers.users).toEqual(['alpha@example.com', 'beta@example.com']);
-    // Re-adding the same user is a no-op, not a second row.
     expect(shares.addUsers(share.id, [{ userId: 'u1', email: 'alpha@example.com' }]).users).toEqual(withUsers.users);
 
     expect(shares.hasUser(share.id, 'u1')).toBe(true);
@@ -153,8 +148,6 @@ test('WorkspaceLiveShares cuts the grant the dialog approved and opens at the ho
 
     const created = await live.share('issues', 'users', [{ slate: 'issues', binding: 'FILES', member: 'writeFile' }]);
     expect(created.share.handle).toMatch(/^[a-f0-9]{10}$/);
-    // The grant the dialog cut: every read member with no click, the approved
-    // mutation, nothing the slate never bound. Forkable unless the owner said so.
     expect(grantAdmits(created.share.grant, 'issues', 'FILES', 'writeFile')?.effect).toBe('mutate');
     expect(grantAdmits(created.share.grant, 'issues', 'FILES', 'readFile')?.effect).toBe('read');
     expect(grantAdmits(created.share.grant, 'issues', 'FILES', 'exec')).toBeNull();

@@ -27,9 +27,7 @@ export interface TurnOutput {
   readonly parts: readonly MessagePartReference[];
 }
 
-/** One `context_edit` run event waiting to be written: which proposal moved the
- *  context where, and the recorder it belongs on. A null `turnId` or `events`
- *  means there is no run to file it against, so nothing is written. */
+/** Null `turnId` or `events`: no run to file against, nothing written. */
 interface ContextEditAudit {
   readonly proposalId: string;
   readonly selection: ContextSelection;
@@ -66,12 +64,7 @@ export class SessionHistory {
     this.requests = new SessionRequests(sql, actor, this.messages, payloads);
   }
 
-  /** Open messages no live stream owns: their request's turn claim is settled,
-   *  or a later admission of that turn superseded its epoch. Nothing extends
-   *  such a message again, so its accumulated parts are its content, and a
-   *  model-facing one joins the working context as the cut answer it is. A
-   *  message whose claim is admitted at its epoch is a live stream and is
-   *  never touched, whichever admission asks. */
+  /** Seals orphaned open messages (claim settled or epoch superseded); live streams are never touched. */
   async sealAbandoned(): Promise<void> {
     this.dependencies.actor.assertCurrent();
     const actorId = this.dependencies.actor.actorId;
@@ -141,10 +134,7 @@ export class SessionHistory {
       const target = this.context.fork(base);
       this.context.select(selected, target, assertIdle);
       transcript.setHead(entry.parentId);
-      // The one deliberate way the head moves BACKWARDS. Recorded because a
-      // conversation that reads shorter than it was is otherwise
-      // indistinguishable from one that lost rows, and the owner's report was
-      // exactly that ambiguity.
+      // The only backwards head move; recorded so it is distinguishable from lost rows.
       diagnostics.event('session.transcript_head_moved', { session: sessionId, from: entryId, to: entry.parentId ?? '' });
 
       return target;

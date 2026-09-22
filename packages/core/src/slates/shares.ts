@@ -1,8 +1,4 @@
-/**
- * The workspace's share rows. One table is the one home of what is shared:
- * a blueprint exists exactly while its row stands unrevoked, and every read —
- * the page, the library, a fork — asks this table again (S6 for blueprints).
- */
+/** A blueprint exists exactly while its row stands unrevoked; every read asks this table again (S6). */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
 import { KinuError } from '../obs/error';
@@ -60,7 +56,7 @@ export class SlateShareStore {
     return row === undefined ? undefined : this.record(v.parse(ShareRow, row), this.users([id]));
   }
 
-  /** The row a viewer may act on: present and unrevoked, re-read on this call. */
+  /** Present and unrevoked, re-read on this call. */
   live(id: string): SlateShareRecord {
     const share = this.get(id);
 

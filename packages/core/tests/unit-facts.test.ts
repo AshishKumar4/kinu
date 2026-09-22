@@ -75,8 +75,7 @@ describe('agent_facts', () => {
     facts.upsert('a', 1);
     facts.upsert('b', 2);
     facts.upsert('c', 3);
-    // Fixed stamps, not sleeps: the order under test is the ORDER BY, and three
-    // upserts in one millisecond would otherwise share a timestamp.
+    // Fixed stamps: three upserts in one millisecond would share a timestamp.
     void testSql.sql`UPDATE agent_facts SET last_observed_at = CASE key WHEN 'a' THEN 1000 WHEN 'b' THEN 2000 ELSE 3000 END`;
     const top = facts.recentTopK(2);
     expect(top.length).toBe(2);

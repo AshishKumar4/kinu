@@ -1,18 +1,6 @@
 /**
- * Blueprints: a committed slate version published with every binding unmapped.
- *
- * What leaves the owner's workspace is the publication's bundle — the tree
- * the content store serialised, the file bytes it names, and the requirement
- * list — and nothing else. Provider keys, MCP headers and vault ids live in
- * the owner's user object and never in a slate tree, so the export cannot
- * carry them; what it CAN carry is a secret the author pasted into source,
- * and that is why every inspection runs `secretSightings` over the included text
- * and the page warns instead of promising.
- *
- * The owner's side (`inspect`, `publish`, `unshare`, `list`, `read`, `bundle`)
- * and the forker's side (`admit`) are one class because both are the same
- * store shapes read from two workspaces; a backend supplies the stores and
- * nothing else. Admission writes records and files and starts no process.
+ * Blueprints: a committed slate version published with every binding unmapped. Provider keys, MCP headers
+ * and vault ids never live in a slate tree, but pasted secrets can, so inspection runs `secretSightings`.
  */
 import { CompatRange, ContentRef } from '@agent-core/core';
 import { BindingName, BindingRequirement, FacetPackageId } from '@agent-core/core/facets';
@@ -46,9 +34,7 @@ type Tree = v.InferOutput<typeof Tree>;
 
 type TreeEntry = v.InferOutput<typeof TreeEntry>;
 
-/** A binding name as the vendored facet plane spells it: one lowercase
- *  segment. Slate authors write `GITHUB` or `my_files`; the requirement carries
- *  `github` / `my-files`, and `package.json` keeps the authored spelling. */
+/** One lowercase segment: `GITHUB`/`my_files` become `github`/`my-files`; `package.json` keeps the authored spelling. */
 const CANONICAL_BINDING_NAME = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/u;
 
 const BLUEPRINT_FACET_PREFIX = 'kinu.slate.';
@@ -63,11 +49,7 @@ function canonicalBindingName(name: string): string {
   return canonical;
 }
 
-/**
- * The requirement list a blueprint declares: one per binding, by kind. A
- * declaration, never a grant — the forker maps each one to their own MCP
- * server, tool or executor before the slate runs.
- */
+/** A declaration, never a grant: the forker maps each requirement before the slate runs. */
 function blueprintRequirements(project: SlateProject): BindingRequirement[] {
   const requirements: BindingRequirement[] = [];
   const seen: Record<string, string> = {};
@@ -84,8 +66,7 @@ function blueprintRequirements(project: SlateProject): BindingRequirement[] {
   return requirements;
 }
 
-/** The tree with the owner's choice applied: `package.json` always, and every
- *  entry at or under an included top-level name. */
+/** `package.json` always, plus every entry under an included top-level name. */
 function includeTree(tree: Tree, included: readonly string[] | undefined): Tree {
   if (included === undefined) return tree;
   const names = new Set([...included, 'package.json']);
@@ -93,7 +74,6 @@ function includeTree(tree: Tree, included: readonly string[] | undefined): Tree 
   return { mode: tree.mode, entries: tree.entries.filter((entry) => names.has(entry.path.split('/')[0])) };
 }
 
-/** The top-level names of a tree, in tree order. */
 function topLevelNames(tree: Tree): string[] {
   const names: string[] = [];
 
@@ -106,7 +86,6 @@ function topLevelNames(tree: Tree): string[] {
   return names;
 }
 
-/** One blueprint as its owner's object answers a viewer: the row and the page. */
 export interface BlueprintReading {
   readonly record: SlateShareRecord;
   /** The page without its address: the app host signs the id. */
@@ -122,7 +101,7 @@ export interface WorkspaceBlueprintsDeps {
 export class WorkspaceBlueprints {
   constructor(private readonly deps: WorkspaceBlueprintsDeps) {}
 
-  /** What publishing `version` with `included` would export. Reads only. */
+  /** Reads only. */
   inspect(slate: string, version: string, included?: readonly string[]): BlueprintInspection {
     const record = this.deps.slates.version(new SlateVersionId(version));
 
@@ -142,18 +121,12 @@ export class WorkspaceBlueprints {
     };
   }
 
-  /**
-   * Publish `version` as a blueprint: the publication carries the included
-   * bundle and the requirement list; the share row is what makes it readable.
-   * Answers the inspection of what was written, so the dialog shows the
-   * credentialed set and the secret warning for exactly the published bytes.
-   */
+  /** Answers the inspection of exactly the published bytes. */
   async publish(slate: string, version: string, included?: readonly string[]): Promise<PublishedBlueprint> {
     const inspection = this.inspect(slate, version, included);
     const record = this.deps.slates.version(new SlateVersionId(version));
     const tree = includeTree(this.tree(record.source), included);
-    // A whole tree is the version's own source; a subset is retained as its
-    // own bundle so the skeleton names exactly what ships.
+    // A subset is retained as its own bundle so the skeleton names exactly what ships.
     const bundle = included === undefined ? record.source : this.retainTree(tree);
     const publication = await this.deps.slates.publish(record.id, blueprintRequirements(this.project(tree)), bundle);
 
@@ -176,7 +149,7 @@ export class WorkspaceBlueprints {
     return this.deps.shares.list();
   }
 
-  /** The row re-read now, and what its viewer sees. Refuses when revoked (S6). */
+  /** Refuses when revoked (S6). */
   read(share: string): BlueprintReading {
     const record = this.deps.shares.live(share);
     const publication = this.deps.slates.publication(new SlatePublicationId(record.publication));
@@ -197,7 +170,7 @@ export class WorkspaceBlueprints {
     };
   }
 
-  /** The bytes a fork carries. Re-reads the row, so a revoked blueprint refuses here too. */
+  /** Re-reads the row, so a revoked blueprint refuses here too. */
   bundle(share: string): BlueprintBundle {
     const record = this.deps.shares.live(share);
     const publication = this.deps.slates.publication(new SlatePublicationId(record.publication));
@@ -217,13 +190,7 @@ export class WorkspaceBlueprints {
       blobs,
     });
   }
-  /**
-   * The bundle a LIVE share forks: the same export as `bundle`, sourced from
-   * the running slate's current tree rather than a publication. A live share
-   * carries no publication row, so the skeleton is built directly — the
-   * synchronized source's digest, the declarations' requirements — and the
-   * blob set is the whole synchronized tree, never an included subset.
-   */
+  /** Live-share fork: the skeleton is built from the running slate's synchronized tree, never an included subset. */
   async liveBundle(slateId: string): Promise<BlueprintBundle> {
     const slate = await this.deps.slates.synchronize(new SlateId(slateId));
     const tree = this.tree(slate.source);
@@ -244,11 +211,7 @@ export class WorkspaceBlueprints {
     });
   }
 
-  /**
-   * Admit a bundle into this workspace: retain the bytes, prove they are the
-   * bytes the skeleton names, and land them as a new slate whose every
-   * requirement is unsatisfied. Nothing here starts a process.
-   */
+  /** Proves the bytes match the skeleton and lands them with every requirement unsatisfied; starts no process. */
   async admit(workspace: string, input: BlueprintBundle): Promise<BlueprintFork> {
     const bundle = v.parse(BlueprintBundleSchema, input);
     const skeleton = SlateSkeleton.fromData(bundle.skeleton);
@@ -299,7 +262,7 @@ export class WorkspaceBlueprints {
     return whole.entries.map((entry) => ({ path: entry.path, kind: entry.kind, included: included.has(entry.path) }));
   }
 
-  /** Secret shapes in the included text. Binary files (a NUL byte) are not decoded. */
+  /** Binary files (a NUL byte) are not decoded. */
   private warnings(tree: Tree): SecretSighting[] {
     const warnings: SecretSighting[] = [];
 

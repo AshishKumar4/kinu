@@ -1,15 +1,7 @@
 import type { ChatEvent } from '../src/chat';
-// GEPA selection honesty (wiring). The optimiser must be handed a train set
-// DISJOINT from the set its winner is scored on, and must refuse to run at all
-// when the ledger has no failure to optimise toward — an empty train set would
-// otherwise fall back to the eval set inside runGepa, putting us right back to
-// selecting a winner on the instances it was written against.
-//
-// Every assertion below runs the real `runScaffoldGepaOptimization` over a real
-// outcome ledger. The control plane is the production `ScaffoldControl` seam:
-// the chat model behind the reflection LM, the judge behind the metric, and the
-// scaffold surface the candidate rolls out against are all scripted, so the
-// pass is deterministic and nothing reaches a network.
+// GEPA must train on a set disjoint from the one its winner is scored on, and
+// refuse to run when the ledger has no failure to optimise toward. Real
+// `runScaffoldGepaOptimization` over a real ledger; model and judge are scripted.
 import { describe, expect, test } from 'bun:test';
 import type { LanguageModelV3Prompt } from '@ai-sdk/provider';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -28,18 +20,15 @@ import { RunEventRecorder } from '../src/events/recorder';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 
-/** Small enough to keep the pass cheap, above `clampGepaEvalBudget`'s floor of
- *  4 so the budget the test asks for is the budget the split is drawn at. */
+/** Above `clampGepaEvalBudget`'s floor of 4, so the requested budget is used. */
 const EVAL_SIZE = 8;
 
-/** The bootstrap shape: a generator that delegates to the host's default loop.
- *  Satisfies SCAFFOLD_REQUIRED_SIGNATURE, so GEPA's constraints accept it. */
+/** Satisfies SCAFFOLD_REQUIRED_SIGNATURE. */
 const SEED_SCAFFOLD = `async function* run(rt, task) {
   await host.defaultInference();
 }`;
 
-/** What the scripted reflection LM proposes — distinct from the seed, so the
- *  proposal is neither a no-change nor a duplicate rejection. */
+/** Distinct from the seed, so it is neither a no-change nor a duplicate. */
 const CANDIDATE_SCAFFOLD = `async function* run(rt, task) {
   await host.defaultInference();
   await host.emit({ type: 'text_delta', text: 'and here is the correction you asked for' });
@@ -51,8 +40,6 @@ const config: ScaffoldControl['config'] = {
   getGepaEvalBudget: () => EVAL_SIZE,
 };
 
-/** The text an ai-SDK prompt carries, flattened — `generateText({ prompt })`
- *  wraps the reflection prompt as one user text part. */
 function promptText(prompt: LanguageModelV3Prompt): string {
   const text: string[] = [];
 
@@ -65,15 +52,7 @@ function promptText(prompt: LanguageModelV3Prompt): string {
   return text.join('\n');
 }
 
-/**
- * A control plane whose every outbound call fails loudly.
- *
- * The refusal under test is only worth anything if it lands BEFORE the pass
- * spends anything: resolving the chat model, building a rollout surface, or
- * asking the judge. Recording each attempt (and throwing on it) turns a refusal
- * that moved below the optimisation call into a red test rather than a slower
- * pass that happens to return the same object.
- */
+/** Every outbound call throws, so a refusal that moves below the optimisation call goes red. */
 function refusingControl(rt: AgentRuntime) {
   const calls: string[] = [];
 
@@ -98,15 +77,11 @@ function refusingControl(rt: AgentRuntime) {
 
 interface RunnableControl {
   control: ScaffoldControl;
-  /** Every prompt the reflection LM was given — the minibatch evidence. */
   reflectionPrompts: string[];
-  /** Every prompt the metric's judge was given — one per scored instance. */
   judgePrompts: string[];
 }
 
-/** A control plane that can run a whole pass deterministically: the reflection
- *  LM always answers `CANDIDATE_SCAFFOLD`, and the judge scores everything the
- *  same, so the winner is decided by the split rather than by the script. */
+/** The judge scores everything the same, so the split decides the winner. */
 function runnableControl(rt: AgentRuntime): RunnableControl {
   const reflectionPrompts: string[] = [];
   const judgePrompts: string[] = [];
@@ -152,10 +127,6 @@ function runnableControl(rt: AgentRuntime): RunnableControl {
   };
 }
 
-/** A runtime that can execute scaffold candidates, seeded with `SEED_SCAFFOLD`
- *  as the current scaffold GEPA optimises from. */
-/** A judge that scores every instance and fails the Nth call — the shape of a
- *  provider that drops out mid-measurement. */
 function judgeFailingOnCall(count: () => number, reason: string): ScaffoldControl['judge'] {
   return async ({ schema }) => {
     if (count() === 2) throw new Error(reason);
@@ -164,7 +135,6 @@ function judgeFailingOnCall(count: () => number, reason: string): ScaffoldContro
   };
 }
 
-/** A judge that scores the incumbent and fails on the candidate's own prompt. */
 function judgeFailingOnCandidate(candidateSource: string, failure: Error): ScaffoldControl['judge'] {
   return async ({ prompt, schema }) => {
     if (prompt.includes(candidateSource)) throw failure;
@@ -181,8 +151,7 @@ async function evolvableRuntime(): Promise<AgentRuntime> {
   return rt;
 }
 
-/** Distinct, non-overlapping task text per instance, so "this prompt shows the
- *  train set and nothing from the val set" is decidable by containment. */
+/** Non-overlapping task text, so train/val separation is decidable by containment. */
 const failureTask = (i: number) => `failure #${i}: the summary skipped the conclusions`;
 
 const guardTask = (i: number) => `guard #${i}: list the files under docs`;
@@ -212,22 +181,18 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     const { rt } = createTestRuntime();
     const { control, calls } = refusingControl(rt);
 
-    // Nothing graded at all: there is neither a target nor a scoring set.
     const unlabeled = await runScaffoldGepaOptimization(control);
     expect(unlabeled.ok).toBe(false);
     expect(unlabeled.error).toBe(describeSplitDegeneracy('no_labeled_turns'));
 
-    // Graded, but accepted only: a scoring set with no failure to optimise
-    // toward. A different refusal, and it must say so rather than reuse the
-    // empty-ledger sentence.
+    // Accepted-only grading is a different refusal with its own sentence.
     seedLedger(rt, { failures: 0, guards: 4 });
     const guardsOnly = await runScaffoldGepaOptimization(control);
     expect(guardsOnly.ok).toBe(false);
     expect(guardsOnly.error).toBe(describeSplitDegeneracy('no_negatives'));
     expect(guardsOnly.error).not.toBe(unlabeled.error);
 
-    // A refusal costs nothing and leaves no lineage: it lands before the chat
-    // model, the rollout surface, the judge, and the gepa_runs row.
+    // A refusal lands before the chat model, rollout surface, judge, and gepa_runs row.
     expect(calls).toEqual([]);
     expect(unlabeled.runId).toBeUndefined();
     expect(guardsOnly.runId).toBeUndefined();
@@ -251,8 +216,6 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     expect(result.error).toBeUndefined();
     expect(result.ok).toBe(true);
 
-    // Reflection ran, and every minibatch it read came from the train set —
-    // no instance the winner is scored on was ever shown to the mutator.
     expect(reflectionPrompts.length).toBeGreaterThan(0);
 
     for (const prompt of reflectionPrompts) {
@@ -261,28 +224,23 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
       for (const scored of split.val) expect(prompt).not.toContain(scored.input);
     }
 
-    // The scoring set is the val set, whole: every val instance was judged, and
-    // the seed's interval is sized by it.
     for (const scored of split.val) {
       expect(judgePrompts.some((prompt) => prompt.includes(scored.input))).toBe(true);
     }
 
     expect(result.seedScore?.n).toBe(split.val.length);
 
-    // And the result says what the selection rested on, split by kind.
     expect(result.selection).toEqual({
       heldOutNegatives: split.heldOutNegatives,
       guards: split.val.length - split.heldOutNegatives,
     });
-    // A split that CAN support an out-of-sample selection carries no warning.
     expect(result.selectionWarning).toBeUndefined();
     expect(gepaRunCount(rt)).toBe(1);
   });
 
   test('a runnable split with nothing held out runs, and says the winner is not evidence', async () => {
     const rt = await evolvableRuntime();
-    // Exactly one failure: it has to be trained on, so the val set is guards
-    // alone and an improvement on it proves nothing.
+    // One failure must be trained on, leaving val as guards only.
     seedLedger(rt, { failures: 1, guards: 4 });
     const { control } = runnableControl(rt);
 

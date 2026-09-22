@@ -1,58 +1,24 @@
-/**
- * appendMemoryNote — the single canonical "save a note to long-term memory"
- * primitive. Three callers converge here:
- *
- *   1. workspace.saveNote(content)        — codemode inline executor
- *   2. memory({action:'save'}) builtin    — Vercel AI SDK ToolSet
- *   3. saveNoteFromMcp(content) RPC       — MCP server bridge
- *
- * All three do the same two things — append a dated `### Note` heading to
- * `memory/MEMORY.md`, then index that file — so both live here once and cannot
- * drift between callers.
- */
+/** The one note-save primitive: appends a dated `### Note` heading to `memory/MEMORY.md`, then indexes it. */
 
 import type { VFS, Memory } from '../types/primitives';
 
 const MEMORY_PATH = 'memory/MEMORY.md';
 
-/** The memory store's own directory, VFS-relative. Files under it are FTS5
- *  indexed; files anywhere else are not. */
+/** Only files under this directory are FTS5 indexed. */
 const MEMORY_DIR = 'memory/';
 
-/**
- * The indexable memory path a VFS write landed on, or null when it landed
- * outside the memory directory.
- *
- * The same file answers to three spellings — `memory/a.md`, `/memory/a.md` and
- * `memory/a.md` — relative to the workspace root,
- * whose mount root is ''. A writer that recognised only one of them left the
- * index stale for the other two, which is the one directory where that is
- * never harmless.
- */
+/** Accepts `memory/a.md` and `/memory/a.md` alike; null outside the memory directory. */
 export function memoryIndexPath(vfsPath: string): string | null {
   const relative = vfsPath.replace(/^\/+/, '').replace(/^local\//, '');
 
   return relative.startsWith(MEMORY_DIR) ? relative : null;
 }
 
-/** Default bound on the MEMORY.md tail woven into a turn — enough for the
- *  newest lessons/reflections without unbounding the prompt as the append-only
- *  file grows. */
 export const MEMORY_TAIL_MAX_CHARS = 2000;
 
 /**
- * The newest characters of the append-only MEMORY.md — the live
- * lessons/reflections tail both backends weave into the dynamic-context block
- * (never the byte-stable prefix, where every append would bust the cache).
- * Bounded to the file's END because that is where the newest entries land.
- * Undefined when memory is empty. Single source of truth for the path + bound
- * so the cf and CLI weaves cannot drift.
- *
- * Read through the port's tail, so the store hands over a window and not the
- * file: `maxChars` UTF-16 units span at most 3 bytes each, plus the up-to-3
- * continuation bytes a window opening inside a 4-byte sequence sheds. That
- * window always decodes to at least `maxChars` units when the file has them,
- * so the final slice is the same text a whole-file read would have given.
+ * Newest `maxChars` of MEMORY.md, woven into dynamic context (never the cached prefix). The tail window
+ * covers 3 bytes per UTF-16 unit plus 3 shed continuation bytes, so it decodes to at least `maxChars` units.
  */
 export async function readMemoryTail(memory: Memory, maxChars = MEMORY_TAIL_MAX_CHARS): Promise<string | undefined> {
   const tail = (await memory.tail(MEMORY_PATH, maxChars * 3 + 3))?.slice(-maxChars);
@@ -74,48 +40,24 @@ export async function appendMemoryNote(
   return 'Note saved to memory.';
 }
 
-/** A note starts at a Markdown heading of level 2 or 3, which is what
- *  {@link appendMemoryNote} writes and what a reflection or lesson appended by
- *  hand uses. Lookahead, so the heading stays with the body it introduces. */
+/** Lookahead keeps the `##`/`###` heading with its body. */
 const NOTE_BOUNDARY = /\n(?=###|##)/;
 
 const HEADING_HASHES = /^#+\s*/;
 
-/** The stamp is the LAST parenthesised span of the heading, so a title that
- *  itself contains parentheses does not shift what is read as the date. */
+/** The last parenthesised span is the stamp, so titles may contain parentheses. */
 const HEADING_STAMP = /\(([^()]*)\)\s*$/;
 
-/**
- * One note as MEMORY.md records it — what the file says, with no view fields.
- *
- * The wire shape the UI's memory pane reads ({@link MemoryEntry}) is this plus
- * a match score, which is a search concept and not something a note carries.
- */
 export interface MemoryNote {
-  /** The memory file the note was read out of, VFS-relative. */
   path: string;
-  /** The note's body, heading excluded. */
   content: string;
-  /** The heading's date, or the whole heading text when the heading carried no
-   *  stamp at all — a note is still a note. */
+  /** Falls back to the whole heading when unstamped. */
   updatedAt: string;
-  /** The actor whose turn saved the note, read out of the stamp's second half —
-   *  null on a note written before the stamp carried one. */
+  /** Null when the stamp names no actor. */
   savedBy: string | null;
 }
 
-/**
- * The notes in an append-only MEMORY.md, oldest first — the inverse of
- * {@link appendMemoryNote} and the only reader of the heading it writes.
- *
- * The `### Note (<date>[ · <actor>])` heading has one owner, and this is the
- * file that owns it: a second hand-written reader drifts the moment the stamp
- * gains a field.
- *
- * A heading with no body is dropped: `appendMemoryNote` always writes content
- * under its heading, so an empty section is the file's leading blank or a
- * document title, not a note.
- */
+/** Inverse of {@link appendMemoryNote}, oldest first, and the only reader of its heading. Empty sections are dropped. */
 export function parseMemoryNotes(content: string): MemoryNote[] {
   const notes: MemoryNote[] = [];
 
@@ -133,13 +75,7 @@ export function parseMemoryNotes(content: string): MemoryNote[] {
   return notes;
 }
 
-/**
- * Bytes the agent's memory occupies, walked through the workspace filesystem.
- *
- * A walk rather than a SUM over a storage table: the number a user is shown
- * should be the size of the files they can open, not of whatever encoding the
- * store happens to use for them.
- */
+/** Walks the filesystem so the size matches the files the user can open, not the storage encoding. */
 export async function memoryBytes(vfs: VFS, dir = 'memory'): Promise<number> {
   if (!await vfs.exists(dir)) return 0;
   let total = 0;

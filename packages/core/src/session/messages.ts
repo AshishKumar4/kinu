@@ -13,7 +13,6 @@ export type MessageOrigin = 'input' | 'output' | 'edit' | 'context_transform' | 
 
 export interface MessagePartReference { readonly messageId: string; readonly partNo: number }
 
-/** A stored part's fields besides its native value. */
 const StoredPartFieldsSchema = v.object({
   partNo: v.number(),
   kind: v.string(),
@@ -21,8 +20,7 @@ const StoredPartFieldsSchema = v.object({
   replyTo: v.nullable(v.object({ messageId: v.string(), partNo: v.number() })),
 });
 
-/** One part of a message's content, as `content_*` stores it. `value` is the
- *  native part, media externalized; `replyTo` pairs a tool result to its call. */
+/** `value` has media externalized; `replyTo` pairs a tool result to its call. */
 export type StoredPart = v.InferOutput<typeof StoredPartFieldsSchema> & { value: JsonObject };
 
 export interface PreparedContent { readonly parts: readonly StoredPart[]; readonly payload: SessionPayload }
@@ -44,9 +42,7 @@ export interface StreamPartInput {
   text?: string;
 }
 
-/** UTF-16 units one `stream_parts` row holds before the part continues in
- *  the next segment: at most three UTF-8 bytes each, so a row stays under
- *  the payload inline bound and far under the platform's row limit. */
+// UTF-16 units per segment; at most three UTF-8 bytes each keeps a row under the inline bound.
 const STREAM_SEGMENT_CHARS = 262_144;
 
 interface MessageRow { role: string; native_content_kind: 'string' | 'parts'; envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null; content_digest: string | null }
@@ -55,22 +51,17 @@ interface StreamPartRow { part_no: number; segment: number; kind: string; stream
 
 export type ToolCallIndex = ReadonlyMap<string, { messageId: string; part: number }>;
 
-/** What a streamed message's row holds before any part arrives. */
 export interface StreamedMessage {
   /** The model request that produced it; null for a scaffold-authored stream. */
   readonly requestId?: string;
-  /** Position within that request: assistant, tool, then the render-only container. */
   readonly slot?: number;
-  /** Everything the encoded message will carry besides `role` and `content`. */
   readonly envelope?: JsonObject;
 }
 
-/** One message in its native encoding, split the way a row stores it. */
 export interface NativeMessage {
   readonly id: string;
   readonly role: string;
   readonly content: JsonValue;
-  /** Everything the encoded message carries besides `role` and `content`. */
   readonly envelope: JsonObject;
   /** Where each tool call was recorded, so a result part can point back at it. */
   readonly calls?: ToolCallIndex;
@@ -84,8 +75,7 @@ function payloadOf(json: string | null, path: string | null, digest: string | nu
   throw new KinuError('io', 'invalid session payload reference');
 }
 
-/** Text in pieces no longer than one stream segment, never split inside a
- *  surrogate pair. */
+// Never splits a surrogate pair.
 function* segmented(text: string): Generator<string> {
   let at = 0;
 
@@ -99,16 +89,12 @@ function* segmented(text: string): Generator<string> {
   }
 }
 
-/** A part descriptor, off a payload the reader parsed as JSON at its boundary. */
 function descriptorObject(value: JsonValue): JsonObject {
   if (!isParsedJsonObject(value)) throw new KinuError('io', 'a stored part descriptor is not an object');
 
   return value;
 }
 
-/** A sealed content row's parts. The row is JSON already, parsed at its
- *  boundary: each part's fields are checked and its value narrowed in one
- *  step, never walked a second time. */
 function storedParts(content: JsonValue): StoredPart[] {
   const parts = jsonObjectElements(content);
 
@@ -123,15 +109,9 @@ function storedParts(content: JsonValue): StoredPart[] {
   });
 }
 
-/** A tree of objects and arrays, the shape a materialized message is made of. */
 const ObjectTreeSchema = v.record(v.string(), v.unknown());
 
-/**
- * A materialized message frozen where it stands, all the way down. Every step
- * shares the one object, so a consumer that edits it in place must fail at the
- * edit instead of changing what the next step reads. Byte carriers are left as
- * they are: a view over bytes cannot be frozen.
- */
+// Deep-frozen because every step shares the object; byte views cannot be frozen and are skipped.
 function freezeTree(node: { readonly value: unknown }): void {
   const { value } = node;
 
@@ -155,10 +135,7 @@ export interface ActorReadAuthority {
 
 /** Reads retain the caller's authorization across asynchronous payload access. */
 export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthority, P extends SessionPayloadReader = SessionPayloadReader> {
-  /** Sealed messages as the model reads them, by id. A sealed row is never
-   *  rewritten, so its text crosses the SQL boundary once per reader and every
-   *  later read shares the frozen message. Holds what the last context read
-   *  named, plus what was read since. */
+  /** Sealed rows never change, so each is read once per reader. */
   private sealed = new Map<string, ModelMessage>();
 
   constructor(protected readonly sql: SqlExecutor, protected readonly actor: A, readonly payloads: P) {}
@@ -174,9 +151,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     return row;
   }
 
-  /** An open message's parts, folded from its stream rows: segment 0 carries
-   *  the descriptor, every segment its share of the text. A text-bearing kind
-   *  reads its text back even while it is still empty. */
+  /** Segment 0 carries the descriptor; every segment carries its share of the text. */
   protected async streamed(messageId: string): Promise<StoredPart[]> {
     const rows = this.sql<StreamPartRow>`SELECT part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text FROM stream_parts
       WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} ORDER BY part_no,segment`;
@@ -202,9 +177,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     return parts;
   }
 
-  /** Whether this message's parts sit in a spilled payload: its sealed
-   *  content, or an open part's descriptor. Asked, so a reader with no file
-   *  plane can say which messages it cannot open before it tries one. */
+  /** Lets a reader without a file plane know what it cannot open. */
   spilled(messageId: string): boolean {
     const row = this.row(messageId);
 
@@ -214,8 +187,6 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
       WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND descriptor_path IS NOT NULL LIMIT 1`.length > 0;
   }
 
-  /** A sealed message reads its content row; an open one reads what its
-   *  stream has accumulated so far. */
   protected async stored(reference: MessageReference): Promise<{ readonly row: MessageRow; readonly parts: readonly StoredPart[] }> {
     const row = this.row(reference.messageId);
 
@@ -264,10 +235,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     return decoded;
   }
 
-  /** The messages a context names, in its order, as ONE read: a sealed message
-   *  this reader holds is served from memory, and the actor is asserted once,
-   *  after the read's last await. The sealed ones are then all the reader
-   *  keeps, so a message the context let go is not held. */
+  /** Asserts the actor once, after the last await; keeps only the messages this context names. */
   async materializeAll(references: readonly MessageReference[]): Promise<ModelMessage[]> {
     const messages: ModelMessage[] = [];
     const named = new Map<string, ModelMessage>();
@@ -286,28 +254,16 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   }
 }
 
-/** Native message rows. A whole message is inserted sealed; a streamed one is
- *  opened, accumulates in `stream_parts`, and seals once at its step's end.
- *  Selection is owned by the context store. */
+/** A streamed message accumulates in `stream_parts` and seals once. Selection belongs to the context store. */
 export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPayloads> {
   private readonly sources = new WeakMap<ModelMessage, MessageReference>();
 
-  /** The row a message object was read from, or null. A lookup in memory:
-   *  the operation that uses it asserts the actor for the whole request. */
+  /** In-memory lookup; the caller asserts the actor. */
   sourceOf(message: ModelMessage): MessageReference | null {
     return this.sources.get(message) ?? null;
   }
 
-  /**
-   * Bind the provider's own message object to the row that recorded it.
-   *
-   * The row CARRIES the message: same role, same envelope, every part of it in
-   * the same relative order. It may hold MORE — a streamed part the provider's
-   * final message left out is reconciled back in by `SessionStream`, and that
-   * is evidence the client already saw. Byte equality was the assertion here
-   * and it refused exactly that row, so the guard is containment: what the
-   * provider settled on must be readable back out of the record, whole.
-   */
+  /** The row must contain the message; it may hold more (streamed parts `SessionStream` reconciled). */
   async bindSource(message: ModelMessage, reference: MessageReference): Promise<void> {
     const recorded = await this.materialize(reference);
 
@@ -342,8 +298,6 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     return { id, role, contentKind: text ? 'string' : 'parts', envelope, content: await this.prepareContent(parts) };
   }
 
-  /** Media leaves the row for the attachment plane; the parts array then
-   *  follows the payload spill rule. */
   async prepareContent(parts: readonly StoredPart[]): Promise<PreparedContent> {
     const stored: StoredPart[] = [];
 
@@ -372,7 +326,6 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     return { messageId: prepared.id };
   }
 
-  /** A streamed message: its row only. Parts arrive through `stream*`. */
   open(role: 'assistant' | 'tool', id: string, origin: MessageOrigin, stream: StreamedMessage = {}): MessageReference {
     this.actor.assertCurrent();
     this.assertUnrecorded(id);
@@ -388,8 +341,6 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     if (row === undefined || row.sealed_at !== null) throw new KinuError('denied', 'message is missing or sealed');
   }
 
-  /** The descriptor a part opens with: the native part without its text,
-   *  media externalized, through the payload spill rule. */
   async prepareDescriptor(native: JsonObject): Promise<{ readonly descriptor: SessionPayload; readonly text: string | undefined }> {
     const { text, ...rest } = native;
     const descriptor = rest.type === 'image' || rest.type === 'file' ? await this.payloads.externalizeMedia(rest) : rest;
@@ -397,7 +348,6 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     return { descriptor: await this.payloads.prepare(descriptor), text: v.is(v.string(), text) ? text : undefined };
   }
 
-  /** An open part's descriptor with its provider options replaced. */
   async prepareMetadata(messageId: string, partNo: number, providerOptions: JsonObject | undefined): Promise<SessionPayload> {
     this.actor.assertCurrent();
 
@@ -422,8 +372,6 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     if (part.text !== undefined && part.text !== '') this.streamAppend(messageId, part.partNo, part.text);
   }
 
-  /** One window of deltas is one statement on the part's last segment; a
-   *  window the segment cannot hold opens the next one. */
   streamAppend(messageId: string, partNo: number, text: string): void {
     this.actor.assertCurrent();
     const actorId = this.actor.actorId;
@@ -465,7 +413,6 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     return this.row(messageId).sealed_at === null ? this.streamed(messageId) : null;
   }
 
-  /** One transaction: the content row lands, the stream rows go. */
   seal(messageId: string, content: PreparedContent, envelope?: JsonObject): void {
     const row = this.row(messageId);
 
@@ -485,14 +432,7 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
   }
 }
 
-/**
- * Whether `recorded` carries `message` whole: the same role and envelope, and
- * every part of the message present, in order, among the parts of the record.
- *
- * Both sides go through the codec first, so the comparison is of the native
- * encoding and not of two object identities. A string-content message has one
- * part and the walk reduces to equality.
- */
+/** Compares codec encodings: same role and envelope, every message part in order within the record. */
 function carries(recorded: ModelMessage, message: ModelMessage): boolean {
   const { content: recordedContent, ...recordedEnvelope } = encodeModelMessage(recorded);
   const { content: wantedContent, ...wantedEnvelope } = encodeModelMessage(message);

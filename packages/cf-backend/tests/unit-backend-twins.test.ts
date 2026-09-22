@@ -197,20 +197,14 @@ const SHARED_TRANSPORTS = {
   // RPC surface each backend has to expose in its own transport.
   getShellApprovalGrants: 'getShellApprovalGrants',
   getShellApprovalMode: 'getShellApprovalMode',
-  // KINU-N028's instruction-trust surface. Every decision the owner makes and
-  // every byte either side reads is core's: the store (safety/instruction-trust.ts)
-  // holds the digest rule, and read-models/instruction-approvals.ts holds the
-  // paging, the on-demand open and the preview sanitizer. What each backend
-  // spells for itself is only the transport: a cf `@callable` against a stub, a
-  // local method behind LocalSessionControls. Both approve/revoke admit the
-  // owner's request through core's `admitInstructionDecision`, so the two sides
-  // share one rule for what counts as a valid decision rather than sharing only
-  // a name — which is the difference this gate is asking about.
-  approveInstruction: 'admitInstructionDecision',
-  revokeInstruction: 'admitInstructionDecision',
-  listInstructionApprovals: 'listInstructionApprovals',
-  readInstructionApproval: 'openInstructionSource',
-  getSkillsVfs: 'skillsVfsOver',
+  // KINU-N028's instruction-trust surface: one core InstructionApprovalDesk
+  // owns the listing, the opening and the digest re-check. Each backend names
+  // only where AGENTS.md is discovered and its transport (a cf `@callable`, a
+  // local method behind LocalSessionControls).
+  approveInstruction: '.approve',
+  revokeInstruction: '.revoke',
+  listInstructionApprovals: '.list',
+  readInstructionApproval: '.read',
   getStoredModelSpec: 'getStoredModelSpec',
   jobResult: 'jobResult',
   latestAlternateTakes: 'latestAlternateTakeSet',
@@ -220,9 +214,7 @@ const SHARED_TRANSPORTS = {
   listRuns: 'listRuns',
   logActivity: 'writeActivityLog',
   listScaffoldVersions: 'listScaffoldVersions',
-  // `refinementDebt` is the direct call the delegation check can see; the row
-  // view beside it (`refinementRequestView`) is passed by reference into map.
-  listRefinements: 'refinementDebt',
+  listRefinements: 'listRefinements',
 
   makeScaffoldHistory: 'createScaffoldHistory',
 
@@ -238,17 +230,11 @@ const SHARED_TRANSPORTS = {
   pickAlternateTake: 'pickAlternateTake',
   proposeCurriculumTasks: 'proposeCurriculumTasks',
   proposeScaffold: 'proposeScaffold',
-  requestRefinement: 'requestRefinement',
-  runRefinementLane: 'advanceRefinementLane',
+  requestRefinement: 'requestOwnerRefinement',
   recordSystemPromptHash: 'observeSystemPromptHash',
   resumeBackgroundJob: 'resumeBackgroundJob',
   revertChangelogEntry: 'revertChangelogEntryById',
   revokeShellApprovalGrants: 'revokeShellApprovalGrants',
-  // ONE lane per turn, ever started: the tombstone key, its scope and the
-  // fiber's name are core's, so a replay on either backend refuses a second
-  // review by the same rule. Each body keeps only its own carrier — a durable
-  // fiber on the DO, a tracked process fiber on the CLI.
-  reviewTurnInBackground: 'advisorLaneStarted',
   // One review, from a snapshot: the body the live lane and its recovery both
   // run, governed off the TURN's labels. Each backend states only which client
   // answers, where the governor lives, and whether a completion gate exists at
@@ -264,13 +250,10 @@ const SHARED_TRANSPORTS = {
   // backend is only how an IDLE backend starts the turn: the DO's
   // enqueueTurn, the CLI's session-queue pump.
   send: '.send',
-  // Accessors over ONE core object (ModelCatalogSession), three lines each.
-  sessionAcceptedMedia: '.acceptedMedia',
-  sessionContextWindow: '.contextWindow',
   setAlwaysActiveSkills: 'setAlwaysActiveSkills',
   setCurriculumTaskStatus: 'updateProposedTaskStatus',
   setModel: 'setModel',
-  setRole: 'changeActiveRole',
+  setRole: 'changeRoleAsOwner',
   setReasoningEffort: 'setReasoningEffort',
   setShellApprovalMode: 'setShellApprovalMode',
   wrapToolsForBackground: 'wrapToolsForBackground',

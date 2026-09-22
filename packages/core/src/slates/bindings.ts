@@ -12,52 +12,27 @@ export const SlateBindingRequestSchema = v.strictObject({
   member: v.pipe(v.string(), v.minLength(1)),
   args: v.array(JsonValueSchema),
   /**
-   * Which app invocation this call is made from, as the host named it.
-   *
-   * The guest carries this and nothing else about its lineage. An id names an
-   * invocation the host is running, so the chain comes out of
-   * {@link resolveSlateChain} and never off the wire: a chain riding here
-   * directly would let a slate hand back a shorter one and start a shorter
-   * lineage.
-   *
-   * EVERY request a guest can reach carries one. A hop is named by
-   * `ResidentSlateHost.call`, a browser hitting the preview by
-   * `ResidentSlateHost.previewInvocation` through `routePreview`, and both are
-   * released when their request settles — so bindings kept from an earlier
-   * request are refused rather than resolving to a root lineage. `null` is left
-   * for the actor's own direct call, which is not a guest.
+   * Host-issued invocation id; the chain comes from {@link resolveSlateChain}, never off the wire.
+   * `null` only for the actor's own direct call.
    */
   invocation: v.nullable(v.pipe(v.string(), v.minLength(1))),
 });
 
 export type SlateBindingRequest = v.InferOutput<typeof SlateBindingRequestSchema>;
 
-/** One app invocation the host is running: which slate it entered, and the
- *  chain of slates already running above it. `viewer` is set when the
- *  invocation opened through a live share rather than an owner session. */
 export interface SlateInvocation {
   readonly id: string;
   readonly chain: readonly string[];
   readonly viewer?: SlateViewer;
 }
 
-/** Who a live-share invocation belongs to: the share it opened through, the
- *  named account (`user:<id>`) or anonymous opener (`source:<hash>`) the call
- *  is attributed to, and the audit row the request is recorded under. */
 export interface SlateViewer {
   readonly share: string;
   readonly subject: string;
   readonly request: number;
 }
 
-/**
- * The invocation a request names, taken from the host's own record — never
- *  off the wire. Three answers: an unnamed invocation is the root (null);
- *  a named one the host is running is the invocation it was issued as;
- *  anything else is refused by reason. That covers a guest that retains an
- *  older request's bindings and replays them — the id it holds has been
- *  retired — and a guest that presents an id issued to a different slate.
- */
+/** Resolved from the host's own record, never off the wire: retired or foreign ids are refused. */
 export function issuedSlateInvocation(input: {
   readonly invocations: ReadonlyMap<string, SlateInvocation>;
   readonly id: string;
@@ -95,12 +70,9 @@ export type SlateBindingRoute =
     readonly id: string;
     readonly method: string;
     readonly args: readonly JsonValue[];
-    /** The chain the callee runs under: the caller's chain plus the caller. */
     readonly chain: readonly string[];
   };
 
-/** The resolved caller context every kind router reads: the calling slate's
- *  id, the binding's own name for refusals, and the caller's lineage. */
 interface BindingCallContext {
   readonly id: string;
   readonly name: string;
@@ -142,8 +114,7 @@ function routeNamespaceCall(binding: Extract<SlateBinding, { kind: 'namespace' }
     throw new KinuError('denied', `${name} does not offer ${binding.namespace}.${member}`);
   }
 
-  // A `paths`-scoped workspace binding narrows to the file members, and
-  // every call's first argument must resolve inside one declared prefix.
+  // Each call's first argument must resolve inside a declared prefix.
   if (binding.paths !== undefined) {
     const prefixes = binding.paths;
     const FILE_MEMBERS = ['readFile', 'writeFile', 'editFile', 'readdir', 'exists'];
@@ -201,9 +172,7 @@ function routeAiCall(binding: Extract<SlateBinding, { kind: 'ai' }>, request: Sl
 
   if (!parsed.success) throw new KinuError('bad_input', `${name}.run takes one { prompt, system?, tier? } object`);
 
-  // The binding's declared tier is the default a call can override only
-  // when the binding declares none; a declared tier the call tries to
-  // change is refused rather than silently kept.
+  // A declared tier cannot be overridden by the call.
   if (binding.tier !== undefined && parsed.output.tier !== undefined && parsed.output.tier !== binding.tier) {
     throw new KinuError('bad_input', `${name} pins tier ${binding.tier}; the call's tier cannot change it`);
   }
@@ -257,10 +226,7 @@ function routeAppCall(binding: Extract<SlateBinding, { kind: 'app' }>, request: 
     throw new KinuError('bad_input', `"${member}" is not a method name the bridge forwards`);
   }
 
-  // An app hop ends because it must name a slate that is not already
-  // running above it. A workspace holds finitely many slates, so a chain of
-  // distinct ones is finite and no hop count has to bound it. A repeat is a
-  // cycle: the callee is waiting on its own caller and cannot answer.
+  // A repeated slate is a cycle; distinct slates are finite, so no hop bound is needed.
   const chain = [...ctx.chain, id];
 
   if (chain.includes(binding.id)) {
@@ -276,7 +242,6 @@ export function routeSlateBindingCall(input: {
   readonly project: SlateProject;
   readonly name: string;
   readonly request: SlateBindingRequest;
-  /** The caller's lineage, resolved by {@link resolveSlateChain}. Never off the wire. */
   readonly chain: readonly string[];
 }): SlateBindingRoute {
   const { id, name, request } = input;
@@ -300,22 +265,13 @@ export function routeSlateBindingCall(input: {
   }
 }
 
-/** A viewer's binding call resolved to its route and to the grant member it
- *  was admitted under — the (member, effect) pair the audit row records. */
 export interface ViewerBindingCall {
   readonly route: SlateBindingRoute;
   readonly member: string;
   readonly effect: 'read' | 'mutate';
 }
 
-/**
- * A binding call made through a live share: the ordinary route first, so an
- *  undeclared binding refuses exactly as an owner's call does, then the grant
- *  check — every member but an app hop must be named in `grant.members`, and
- *  the hop must name a slate the grant walks. A granted read mcp tool is
- *  routed `readOnly`, and an agent call carries the viewer's subject so the
- *  owner's agent sees who sent it.
- */
+/** Ordinary route first (undeclared bindings refuse as for owners), then the grant check. */
 export function routeViewerBindingCall(input: {
   readonly id: string;
   readonly project: SlateProject;
