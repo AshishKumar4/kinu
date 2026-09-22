@@ -11,12 +11,21 @@
  * `no-non-null-assertion` resolve without type information; they are governed
  * here because the TypeScript block is one policy and one set.
  *
- * Exactly one default type-aware rule stays off. On 2026-09-21, under oxlint
- * 1.78.0 with oxlint-tsgolint 7.0.2001, `await-thenable` fired 1,115 times;
- * 1,077 of those were `await expect(...).rejects.toThrow(...)` in tests, where
- * bun-types declare the matcher chain as `void` while the runtime returns a
- * promise the caller must await. The rule is adoptable the day bun-types type
- * that promise.
+ * Two default type-aware rules stay off, each on a measurement taken on
+ * 2026-09-21 under oxlint 1.78.0 with oxlint-tsgolint 7.0.2001.
+ *
+ * `await-thenable` fired 1,115 times; 1,077 of those were
+ * `await expect(...).rejects.toThrow(...)` in tests, where bun-types declare
+ * the matcher chain as `void` while the runtime returns a promise the caller
+ * must await. The rule is adoptable the day bun-types type that promise.
+ *
+ * `no-implied-eval` fired 18 times. Every product finding is inside the two
+ * executors that run model-written JavaScript — the inline executor in
+ * `packages/core/src/identity/inline-primitives.ts`,
+ * `packages/cli-backend/src/executor.ts` and
+ * `packages/cli-backend/src/codemode-tool-factory.ts` — and the rest are their
+ * test doubles. The rule bans the product's own capability, so the mechanism is
+ * governed structurally instead: one compile helper, counted by a gate.
  *
  * Option shapes carry as much policy as the severities:
  * `consistent-type-assertions` is `assertionStyle: "never"`,
@@ -117,9 +126,9 @@ assert.deepEqual(
 );
 
 // Everything the config turns on beyond the installed defaults. The expected
-// enabled set is derived — defaults minus the one measured exception, plus
-// these — so a default that disappears from a future release cannot silently
-// shrink what this gate demands.
+// enabled set is derived — defaults minus the measured exceptions, plus these —
+// so a default that disappears from a future release cannot silently shrink
+// what this gate demands.
 const explicitAdditions = [
   "typescript/consistent-type-assertions",
   "typescript/no-inferrable-types",
@@ -133,16 +142,25 @@ const explicitAdditions = [
   "typescript/use-unknown-in-catch-callback-variable",
 ] as const;
 
+// The defaults the header's measurements excuse, named once: they are subtracted
+// from the expected enabled set and asserted as the whole of what is off, so a
+// third rule cannot join them quietly and neither of these can carry no fixture
+// while still being enabled.
+const measuredExceptions = [
+  "typescript/await-thenable",
+  "typescript/no-implied-eval",
+] as const;
+
 const expectedEnabled = [
-  ...installedDefaults.filter((name) => name !== "typescript/await-thenable"),
+  ...installedDefaults.filter((name) => !measuredExceptions.some((excused) => excused === name)),
   ...explicitAdditions,
 ].sort();
 
 const disabledDefaults = defaultTypeAwareRules.filter((name) => config.rules[name] === "off");
 assert.deepEqual(
   disabledDefaults,
-  ["typescript/await-thenable"],
-  "await-thenable is the one default the bun-types measurement excuses; nothing else may be off",
+  [...measuredExceptions],
+  "only the defaults the header measures may be off: await-thenable on bun-types, no-implied-eval on the executors that run model-written JavaScript",
 );
 
 const enabledTypeAware = Object.entries(config.rules)
@@ -270,14 +288,6 @@ export function walk(): void {
     String(name);
   }
 }
-`,
-  },
-  {
-    rule: "no-implied-eval",
-    findings: 1,
-    red: `export const compiled = new Function("return 1;");
-`,
-    green: `export const compiled = (): number => 1;
 `,
   },
   {
@@ -619,5 +629,5 @@ try {
 // The live tree is linted once, in live-tree.gate.test.ts, under this same config; these rules run
 // there with every other rule, and an empty report is asserted there.
 process.stdout.write(
-  `type-aware: ${fixtures.length} enabled rules proven red-to-green; await-thenable is the one default left off. Blind spots: return-await governs only error-handling contexts; Promise ownership can still be semantically wrong while syntactically handled; rejection values must still be narrowed before member access; a fixture proves a rule fires, not that the tree is free of the defect.\n`,
+  `type-aware: ${fixtures.length} enabled rules proven red-to-green; ${disabledDefaults.length} measured defaults left off (${disabledDefaults.join(", ")}). Blind spots: return-await governs only error-handling contexts; Promise ownership can still be semantically wrong while syntactically handled; rejection values must still be narrowed before member access; a fixture proves a rule fires, not that the tree is free of the defect.\n`,
 );
